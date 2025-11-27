@@ -28,9 +28,6 @@ jobs:
           - name: backend
             context: ./simorgh-agent/backend
             dockerfile: ./simorgh-agent/backend/Dockerfile
-          - name: cable-api
-            context: ./simorgh-agent/cable_api
-            dockerfile: ./simorgh-agent/cable_api/Dockerfile
           - name: frontend
             context: ./simorgh-agent/frontend
             dockerfile: ./simorgh-agent/frontend/Dockerfile
