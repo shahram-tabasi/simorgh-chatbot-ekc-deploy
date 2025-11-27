@@ -1,4 +1,4 @@
-name: Deploy Simorgh Agent Only
+name: Deploy Simorgh Industrial Assistant
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
       - develop
     paths:
       - 'simorgh-agent/**'
-      - '.github/workflows/deploy-simorgh.yml'
+      - '.github/workflows/simorgh-deploy.yml'
   workflow_dispatch:
 
 env:
@@ -21,20 +21,20 @@ jobs:
     permissions:
       contents: read
       packages: write
-    
+
     strategy:
       matrix:
         service:
-          - name: backend-flask
-            context: ./simorgh-agent/flask
-            dockerfile: ./simorgh-agent/flask/Dockerfile
+          - name: backend
+            context: ./simorgh-agent/backend
+            dockerfile: ./simorgh-agent/backend/Dockerfile
           - name: cable-api
             context: ./simorgh-agent/cable_api
             dockerfile: ./simorgh-agent/cable_api/Dockerfile
           - name: frontend
-            context: ./simorgh-agent/react
-            dockerfile: ./simorgh-agent/react/Dockerfile
-    
+            context: ./simorgh-agent/frontend
+            dockerfile: ./simorgh-agent/frontend/Dockerfile
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -74,7 +74,7 @@ jobs:
     name: Deploy to Central Server (1.68)
     runs-on: [self-hosted, simorgh-hub]
     needs: [build-simorgh-agent]
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -90,36 +90,111 @@ jobs:
       - name: Copy deployment files
         run: |
           cp -r $GITHUB_WORKSPACE/simorgh-agent/* ~/simorgh-deployment/
-          
+
       - name: Create .env file
         run: |
           cd ~/simorgh-deployment
           cat > .env << EOF
-          ARANGODB_PASSWORD=${{ secrets.ARANGODB_PASSWORD }}
-          AI_API_URL_1=http://192.168.1.61/ai
-          AI_API_URL_2=http://192.168.1.62/ai
-          GITHUB_REGISTRY=${{ env.REGISTRY }}
+          # GitHub Registry
           GITHUB_REPOSITORY_OWNER=${{ env.IMAGE_PREFIX }}
           IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
+
+          # Neo4j
+          NEO4J_URI=bolt://neo4j:7687
+          NEO4J_USER=neo4j
+          NEO4J_PASSWORD=${{ secrets.NEO4J_PASSWORD }}
+
+          # Redis
+          REDIS_URL=redis://redis:6379/0
+          REDIS_CHAT_DB=1
+          REDIS_CACHE_DB=2
+          REDIS_AUTH_DB=3
+
+          # Qdrant
+          QDRANT_URL=http://qdrant:6333
+
+          # CocoIndex
+          COCOINDEX_URL=http://cocoindex:8080
+          COCOINDEX_DB_PASSWORD=${{ secrets.COCOINDEX_DB_PASSWORD }}
+
+          # SQL Server (External Authentication)
+          SQL_SERVER_HOST=${{ secrets.SQL_SERVER_HOST }}
+          SQL_SERVER_PORT=${{ secrets.SQL_SERVER_PORT }}
+          SQL_SERVER_USER=${{ secrets.SQL_SERVER_USER }}
+          SQL_SERVER_PASSWORD=${{ secrets.SQL_SERVER_PASSWORD }}
+          SQL_SERVER_DATABASE=${{ secrets.SQL_SERVER_DATABASE }}
+
+          # LLM - OpenAI (Online Mode)
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL=gpt-4o
+
+          # LLM - Local Servers (Offline Mode)
+          LOCAL_LLM_URL_1=http://192.168.1.61/ai
+          LOCAL_LLM_URL_2=http://192.168.1.62/ai
+
+          # Default LLM Mode
+          DEFAULT_LLM_MODE=online
+
+          # Frontend
+          VITE_API_URL=/api
+          CHOKIDAR_USEPOLLING=true
+
+          # Timezone
+          TZ=Asia/Tehran
+
+          # Feature Flags
+          ENABLE_GRAPH_RAG=true
+          ENABLE_DOCUMENT_PROCESSING=true
+          ENABLE_SQL_AUTH=true
+          ENABLE_REDIS_CACHE=true
           EOF
-          
+
           # Verify critical environment variables
           echo "=== Verifying Environment Variables ==="
-          if [ -z "${{ secrets.ARANGODB_PASSWORD }}" ]; then
-            echo "ERROR: ARANGODB_PASSWORD is not set in GitHub secrets!"
-            exit 1
+
+          # Neo4j
+          if [ -z "${{ secrets.NEO4J_PASSWORD }}" ]; then
+            echo "WARNING: NEO4J_PASSWORD not set, using default"
+          else
+            echo "NEO4J_PASSWORD: [SET]"
           fi
-          echo "ARANGODB_PASSWORD: [SET]"
+
+          # CocoIndex
+          if [ -z "${{ secrets.COCOINDEX_DB_PASSWORD }}" ]; then
+            echo "WARNING: COCOINDEX_DB_PASSWORD not set, using default"
+          else
+            echo "COCOINDEX_DB_PASSWORD: [SET]"
+          fi
+
+          # SQL Server (optional - may be disabled)
+          if [ -z "${{ secrets.SQL_SERVER_HOST }}" ]; then
+            echo "INFO: SQL Server auth not configured (optional)"
+          else
+            echo "SQL_SERVER_HOST: [SET]"
+            echo "SQL_SERVER_USER: [SET]"
+            echo "SQL_SERVER_PASSWORD: [SET]"
+          fi
+
+          # OpenAI (optional - may use offline mode)
+          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+            echo "INFO: OpenAI not configured, will use offline mode only"
+          else
+            echo "OPENAI_API_KEY: [SET]"
+          fi
+
           echo "IMAGE_TAG: ${{ github.ref_name }}-${{ github.sha }}"
 
       - name: Verify environment and images
         run: |
           cd ~/simorgh-deployment
-          echo "=== Environment File Content ==="
-          cat .env
+          echo "=== Environment File Created ==="
+          echo "File size: $(wc -l < .env) lines"
           echo ""
           echo "=== Expected Image Tag ==="
           echo "${{ github.ref_name }}-${{ github.sha }}"
+          echo ""
+          echo "=== Docker Compose Configuration ==="
+          docker compose config --services
 
       - name: Stop running containers
         run: |
@@ -130,6 +205,11 @@ jobs:
         run: |
           cd ~/simorgh-deployment
           docker image prune -f || true
+
+          # Remove old Neo4j data if this is a fresh deployment
+          # Uncomment if you want to start fresh:
+          # docker volume rm simorgh-deployment_neo4j_data || true
+          # docker volume rm simorgh-deployment_redis_data || true
 
       - name: Pull latest images
         run: |
@@ -145,7 +225,40 @@ jobs:
         run: |
           cd ~/simorgh-deployment
           echo "Waiting for services to become healthy..."
-          timeout 300 bash -c 'until docker compose ps | grep -q "healthy"; do sleep 5; echo "Still waiting..."; done' || echo "Warning: Some services may not be healthy yet"
+          echo ""
+
+          # Wait up to 5 minutes for health checks
+          for i in {1..60}; do
+            echo "Check $i/60..."
+
+            # Check Neo4j
+            if docker compose ps neo4j | grep -q "healthy"; then
+              echo "✅ Neo4j is healthy"
+            else
+              echo "⏳ Neo4j is starting..."
+            fi
+
+            # Check Redis
+            if docker compose ps redis | grep -q "healthy"; then
+              echo "✅ Redis is healthy"
+            else
+              echo "⏳ Redis is starting..."
+            fi
+
+            # Check Backend
+            if docker compose ps backend | grep -q "healthy"; then
+              echo "✅ Backend is healthy"
+              break
+            else
+              echo "⏳ Backend is starting..."
+            fi
+
+            sleep 5
+          done
+
+          echo ""
+          echo "=== Final Service Status ==="
+          docker compose ps
 
       - name: Show service status
         run: |
@@ -154,7 +267,13 @@ jobs:
           docker compose ps
           echo ""
           echo "=== Container Details ==="
-          docker ps -a --filter "name=simorgh-deployment"
+          docker ps -a --filter "label=com.docker.compose.project=simorgh-deployment"
+          echo ""
+          echo "=== Volume Status ==="
+          docker volume ls | grep simorgh-deployment
+          echo ""
+          echo "=== Network Status ==="
+          docker network ls | grep simorgh-deployment
 
       - name: Show logs on failure
         if: failure()
@@ -163,17 +282,23 @@ jobs:
           echo "=== Docker Compose Status ==="
           docker compose ps
           echo ""
-          echo "=== ArangoDB Logs ==="
-          docker compose logs arangodb --tail=100
+          echo "=== Neo4j Logs ==="
+          docker compose logs neo4j --tail=100
           echo ""
-          echo "=== Backend Flask Logs ==="
-          docker compose logs backend_flask --tail=50
+          echo "=== Redis Logs ==="
+          docker compose logs redis --tail=50
+          echo ""
+          echo "=== Backend Logs ==="
+          docker compose logs backend --tail=100
           echo ""
           echo "=== Frontend Logs ==="
           docker compose logs frontend --tail=50
           echo ""
           echo "=== Nginx Logs ==="
           docker compose logs nginx --tail=50
+          echo ""
+          echo "=== CocoIndex Logs ==="
+          docker compose logs cocoindex --tail=50
           echo ""
           echo "=== All Container Status ==="
           docker ps -a
@@ -182,18 +307,80 @@ jobs:
     name: Simorgh Agent Health Check
     runs-on: [self-hosted, simorgh-hub]
     needs: [deploy-central-server]
-    
+
     steps:
-      - name: Check Central Server
+      - name: Wait for application startup
         run: |
-          echo "Checking Central Server (1.68)..."
-          curl -f http://localhost/health || echo "Warning: Central server health check failed"
+          echo "Waiting 30 seconds for application to fully start..."
+          sleep 30
+
+      - name: Check Central Server Health
+        run: |
+          echo "Checking Central Server (1.68) health endpoint..."
+
+          # Try health check up to 10 times
+          for i in {1..10}; do
+            echo "Attempt $i/10..."
+            if curl -f http://localhost/api/health; then
+              echo ""
+              echo "✅ Health check passed!"
+              exit 0
+            else
+              echo "⏳ Service not ready yet..."
+              sleep 5
+            fi
+          done
+
+          echo ""
+          echo "❌ Health check failed after 10 attempts"
+          exit 1
+
+      - name: Check Service Details
+        run: |
+          echo "=== Service Health Details ==="
+          curl -s http://localhost/api/health | jq '.' || echo "Could not parse health response"
+          echo ""
+          echo "=== Frontend Status ==="
+          curl -f http://localhost/ > /dev/null && echo "✅ Frontend accessible" || echo "❌ Frontend not accessible"
+          echo ""
+          echo "=== Neo4j Browser ==="
+          curl -f http://localhost:7474 > /dev/null && echo "✅ Neo4j Browser accessible" || echo "❌ Neo4j Browser not accessible"
+
+      - name: Test API Endpoints
+        run: |
+          echo "=== Testing API Endpoints ==="
+
+          # Test status endpoint
+          echo "Testing /api/status..."
+          curl -f http://localhost/api/status || echo "❌ Status endpoint failed"
+
+          # Test projects list endpoint
+          echo ""
+          echo "Testing /api/projects..."
+          curl -f http://localhost/api/projects || echo "❌ Projects endpoint failed"
+
+          echo ""
+          echo "✅ API endpoint tests completed"
 
       - name: Deployment Summary
         run: |
-          echo "================================"
-          echo "Simorgh Agent Deployment completed!"
-          echo "================================"
-          echo "Central Server (1.68): http://192.168.1.68"
-          echo "================================"
-          echo "Image Tag Used: ${{ github.ref_name }}-${{ github.sha }}"
+          echo "========================================"
+          echo "Simorgh Industrial Assistant Deployed!"
+          echo "========================================"
+          echo ""
+          echo "🌐 Central Server: http://192.168.1.68"
+          echo "📊 API Docs: http://192.168.1.68/api/docs"
+          echo "🔍 Neo4j Browser: http://192.168.1.68:7474"
+          echo ""
+          echo "========================================"
+          echo "Architecture:"
+          echo "  ✅ Neo4j 5.15 (Knowledge Graph)"
+          echo "  ✅ Redis 7.2 (Multi-DB Caching)"
+          echo "  ✅ Qdrant (Vector Search)"
+          echo "  ✅ CocoIndex (Document Processing)"
+          echo "  ✅ FastAPI Backend"
+          echo "  ✅ React Frontend"
+          echo ""
+          echo "========================================"
+          echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
+          echo "========================================"
