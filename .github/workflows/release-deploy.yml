@@ -1,0 +1,398 @@
+name: Release Deploy Multi-Server
+
+on:
+  release:
+    types: [published, created]
+  push:
+    tags:
+      - 'v*'
+      - 'release-*'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}
+
+jobs:
+  build-simorgh-agent:
+    name: Build Simorgh Agent Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      matrix:
+        service:
+          - name: backend-flask
+            context: ./simorgh-agent/flask
+            dockerfile: ./simorgh-agent/flask/Dockerfile
+          - name: cable-api
+            context: ./simorgh-agent/cable_api
+            dockerfile: ./simorgh-agent/cable_api/Dockerfile
+          - name: frontend
+            context: ./simorgh-agent/react
+            dockerfile: ./simorgh-agent/react/Dockerfile
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/simorgh-${{ matrix.service.name }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+
+  build-llm-services:
+    name: Build LLM Service Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      matrix:
+        service:
+          - name: ai-service
+            context: ./llms/ai
+            dockerfile: ./llms/ai/Dockerfile
+          - name: gpu-monitor
+            context: ./llms/gpu_monitor
+            dockerfile: ./llms/gpu_monitor/Dockerfile
+          - name: model-initializer
+            context: ./llms/initializer
+            dockerfile: ./llms/initializer/Dockerfile
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        if: matrix.service.name == 'ai-service'
+        run: |
+          echo "=== Before cleanup ==="
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          sudo docker system prune -af --volumes
+          echo "=== After cleanup ==="
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/llm-${{ matrix.service.name }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  deploy-central-server:
+    name: Deploy to Central Server (1.68)
+    runs-on: [self-hosted, simorgh-hub]
+    needs: [build-simorgh-agent]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get tag name
+        id: tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Create deployment directory
+        run: |
+          mkdir -p ~/simorgh-deployment
+          cd ~/simorgh-deployment
+
+      - name: Copy deployment files
+        run: |
+          cp -r $GITHUB_WORKSPACE/simorgh-agent/* ~/simorgh-deployment/
+          
+      - name: Create .env file
+        run: |
+          cd ~/simorgh-deployment
+          cat > .env << EOF
+          ARANGODB_PASSWORD=${{ secrets.ARANGODB_PASSWORD }}
+          AI_API_URL_1=http://192.168.1.61/ai
+          AI_API_URL_2=http://192.168.1.62/ai
+          GITHUB_REGISTRY=${{ env.REGISTRY }}
+          GITHUB_REPOSITORY_OWNER=${{ env.IMAGE_PREFIX }}
+          IMAGE_TAG=${{ steps.tag.outputs.tag }}
+          EOF
+          
+          if [ -z "${{ secrets.ARANGODB_PASSWORD }}" ]; then
+            echo "ERROR: ARANGODB_PASSWORD is not set in GitHub secrets!"
+            exit 1
+          fi
+          echo "ARANGODB_PASSWORD: [SET]"
+          echo "IMAGE_TAG: ${{ steps.tag.outputs.tag }}"
+
+      - name: Stop running containers
+        run: |
+          cd ~/simorgh-deployment
+          docker compose down || true
+
+      - name: Clean up old images
+        run: |
+          cd ~/simorgh-deployment
+          docker image prune -f || true
+
+      - name: Pull latest images
+        run: |
+          cd ~/simorgh-deployment
+          docker compose pull
+
+      - name: Start services
+        run: |
+          cd ~/simorgh-deployment
+          docker compose up -d
+
+      - name: Wait for services to be healthy
+        run: |
+          cd ~/simorgh-deployment
+          echo "Waiting for services to become healthy..."
+          timeout 300 bash -c 'until docker compose ps | grep -q "healthy"; do sleep 5; echo "Still waiting..."; done' || echo "Warning: Some services may not be healthy yet"
+
+      - name: Show service status
+        run: |
+          cd ~/simorgh-deployment
+          echo "=== Docker Compose Status ==="
+          docker compose ps
+          echo ""
+          echo "=== Container Details ==="
+          docker ps -a --filter "name=simorgh-deployment"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          cd ~/simorgh-deployment
+          echo "=== Docker Compose Status ==="
+          docker compose ps
+          echo ""
+          echo "=== ArangoDB Logs ==="
+          docker compose logs arangodb --tail=100
+          echo ""
+          echo "=== Backend Flask Logs ==="
+          docker compose logs backend_flask --tail=50
+          echo ""
+          echo "=== Frontend Logs ==="
+          docker compose logs frontend --tail=50
+          echo ""
+          echo "=== Nginx Logs ==="
+          docker compose logs nginx --tail=50
+          echo ""
+          echo "=== All Container Status ==="
+          docker ps -a
+
+  deploy-llm-servers:
+    name: Deploy to LLM Servers (1.61 & 1.62)
+    runs-on: [self-hosted, simorgh-hub]
+    needs: [build-llm-services]
+    
+    strategy:
+      matrix:
+        server:
+          - host: 192.168.1.61
+            name: llm-server-1
+          - host: 192.168.1.62
+            name: llm-server-2
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get tag name
+        id: tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H ${{ matrix.server.host }} >> ~/.ssh/known_hosts
+
+      - name: Test SSH Connection
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} "echo 'SSH connection successful to ${{ matrix.server.name }}'"
+
+      - name: Create deployment and model cache directories
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "mkdir -p ~/llm-deployment ~/models/huggingface"
+
+      - name: Copy deployment files to remote server
+        run: |
+          scp -r $GITHUB_WORKSPACE/llms/* ubuntu@${{ matrix.server.host }}:~/llm-deployment/
+
+      - name: Create .env file on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "cat > ~/llm-deployment/.env << 'EOF'
+          GITHUB_REGISTRY=${{ env.REGISTRY }}
+          GITHUB_REPOSITORY_OWNER=${{ env.IMAGE_PREFIX }}
+          IMAGE_TAG=${{ steps.tag.outputs.tag }}
+          MODEL_CACHE_PATH=/home/ubuntu/models/huggingface
+          EOF"
+
+      - name: Verify environment on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && echo '=== Environment File ===' && cat .env"
+
+      - name: Login to GHCR on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin"
+
+      - name: Stop running containers on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose down || true"
+
+      - name: Clean up old images on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "docker image prune -f || true"
+
+      - name: Pull latest images on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose pull"
+
+      - name: Start services on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose up -d"
+
+      - name: Monitor initializer progress
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "
+            echo '=== Monitoring Model Initializer ==='
+            timeout 1800 bash -c '
+              while docker ps -a | grep -q model_initializer; do
+                STATUS=\$(docker inspect model_initializer --format=\"{{.State.Status}}\" 2>/dev/null || echo \"not_found\")
+                if [ \"\$STATUS\" = \"exited\" ]; then
+                  EXIT_CODE=\$(docker inspect model_initializer --format=\"{{.State.ExitCode}}\" 2>/dev/null)
+                  if [ \"\$EXIT_CODE\" = \"0\" ]; then
+                    echo \"Model initializer completed successfully!\"
+                    break
+                  else
+                    echo \"Model initializer failed with exit code \$EXIT_CODE\"
+                    docker logs model_initializer --tail=50
+                    exit 1
+                  fi
+                fi
+                echo \"Initializer status: \$STATUS - waiting...\"
+                sleep 10
+              done
+            ' || echo 'Warning: Initializer monitoring timed out'
+          "
+
+      - name: Wait for AI service to be healthy
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && timeout 180 bash -c 'until docker compose ps | grep -q \"healthy\"; do sleep 10; echo \"Waiting for services...\"; done' || echo 'Warning: Some services may not be healthy yet'"
+
+      - name: Show service status on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && echo '=== Docker Compose Status ===' && docker compose ps"
+
+      - name: Show model cache info
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "echo '=== Model Cache Status ===' && du -sh ~/models/huggingface/* 2>/dev/null || echo 'No models cached yet'"
+
+      - name: Check GPU availability on remote server
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "nvidia-smi || echo 'nvidia-smi not available'"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment ; \
+            echo '=== Docker Compose Status ===' ; docker compose ps -a ; echo ; \
+            echo '=== Initializer Logs ===' ; docker logs model_initializer --tail=100 2>/dev/null || echo 'model_initializer container not found' ; echo ; \
+            echo '=== AI Service Logs ===' ; docker logs ai_service --tail=100 ; echo ; \
+            echo '=== GPU Monitor Logs ===' ; docker logs gpu_monitor --tail=50 2>/dev/null || echo 'gpu_monitor not started' ; echo ; \
+            echo '=== Nginx Logs ===' ; docker logs nginx_ai --tail=50 2>/dev/null || echo 'nginx_ai not started'"
+
+  health-check:
+    name: Final Health Check
+    runs-on: [self-hosted, simorgh-hub]
+    needs: [deploy-central-server, deploy-llm-servers]
+    
+    steps:
+      - name: Check Central Server
+        run: |
+          echo "Checking Central Server (1.68)..."
+          curl -f http://localhost/health || echo "Warning: Central server health check failed"
+
+      - name: Check LLM Server 1.61
+        run: |
+          echo "Checking LLM Server 1.61..."
+          curl -f http://192.168.1.61/health || echo "Warning: LLM server 1.61 health check failed"
+
+      - name: Check LLM Server 1.62
+        run: |
+          echo "Checking LLM Server 1.62..."
+          curl -f http://192.168.1.62/health || echo "Warning: LLM server 1.62 health check failed"
+
+      - name: Deployment Summary
+        run: |
+          echo "================================"
+          echo "Release Deployment completed!"
+          echo "================================"
+          echo "Release Tag: ${{ github.ref_name }}"
+          echo "Central Server (1.68): http://192.168.1.68"
+          echo "LLM Server 1 (1.61): http://192.168.1.61"
+          echo "LLM Server 2 (1.62): http://192.168.1.62"
+          echo "================================"

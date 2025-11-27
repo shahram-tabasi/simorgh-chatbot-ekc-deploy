@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "electrical_docs_kg"
+version = "2.0.0"
+description = "Multi-level knowledge graph extraction for electrical engineering documents"
+requires-python = ">=3.10"
+dependencies = [
+    "cocoindex>=0.1.32",
+    "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "mypy",
+]
+
+[tool.cocoindex]
+version = "2"
+entrypoint = "main:electrical_docs_to_kg_flow"
+
+[tool.black]
+line-length = 100
+target-version = ['py310']

@@ -1,0 +1,9 @@
+# Text processing (not included in base image)
+regex
+einops
+
+# Monitoring
+psutil
+
+# Note: numpy, scipy, scikit-learn, pandas are already included
+# in the PyTorch base image with compatible versions (NumPy 2.x)

@@ -1,0 +1,119 @@
+##############################################
+# Global ignores for multi-service workspace #
+##############################################
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+
+##############################################
+# Python backend + LLM services              #
+##############################################
+
+# Bytecode + Cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Local dev tools
+pip-log.txt
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+
+# Python compiled libraries
+build/
+dist/
+
+##############################################
+# React frontend (Vite)                      #
+##############################################
+
+# Node modules (ALL)
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+frontend/react/dist/
+frontend/static/temp/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local environment variables
+.env
+.env.local
+.env.*.local
+
+##############################################
+# Docker                                     
+##############################################
+
+# Local-only Docker files
+docker-compose.override.yml
+*.pid
+*.sock
+
+##############################################
+# Nginx                                       #
+##############################################
+# nginx.conf~
+# frontend/nginx_configs/conf.d/*.tmp
+# backend/nginx_configs/conf.d/*.tmp
+# llms/nginx_configs/conf.d/*.tmp
+
+##############################################
+# Vagrant + VirtualBox                        #
+##############################################
+
+.vagrant/
+vagrant/eplan-vms/old/
+*.box
+
+##############################################
+# Logs                                        #
+##############################################
+
+logs/
+*.log
+backend/**/*.log
+llms/**/*.log
+
+##############################################
+# Temporary / misc                             #
+##############################################
+
+tmp/
+temp/
+*.tmp
+*.bak
+*.old
+
+##############################################
+# Project-specific exclusions                  #
+##############################################
+
+# Python parser test caches
+backend/flask/test_pdf_output/
+backend/flask/chunks_temp/
+
+# Frontend static old folder
+frontend/static/old/
+
+##############################################
+# END                                         #
+##############################################

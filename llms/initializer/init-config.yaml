@@ -1,0 +1,12 @@
+# Model Initializer Configuration
+# Add models that need to be downloaded before services start
+
+models:
+  - name: "unsloth/gpt-oss-20b-unsloth-bnb-4bit"
+    type: "huggingface"
+    cache_dir: "/models/huggingface"
+    
+  # Add more models as needed
+  # - name: "another/model"
+  #   type: "huggingface"
+  #   cache_dir: "/models/huggingface"

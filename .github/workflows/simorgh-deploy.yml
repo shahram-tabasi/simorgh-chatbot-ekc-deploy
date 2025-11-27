@@ -1,0 +1,199 @@
+name: Deploy Simorgh Agent Only
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'simorgh-agent/**'
+      - '.github/workflows/deploy-simorgh.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}
+
+jobs:
+  build-simorgh-agent:
+    name: Build Simorgh Agent Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      matrix:
+        service:
+          - name: backend-flask
+            context: ./simorgh-agent/flask
+            dockerfile: ./simorgh-agent/flask/Dockerfile
+          - name: cable-api
+            context: ./simorgh-agent/cable_api
+            dockerfile: ./simorgh-agent/cable_api/Dockerfile
+          - name: frontend
+            context: ./simorgh-agent/react
+            dockerfile: ./simorgh-agent/react/Dockerfile
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/simorgh-${{ matrix.service.name }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=long,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+
+  deploy-central-server:
+    name: Deploy to Central Server (1.68)
+    runs-on: [self-hosted, simorgh-hub]
+    needs: [build-simorgh-agent]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Create deployment directory
+        run: |
+          mkdir -p ~/simorgh-deployment
+          cd ~/simorgh-deployment
+
+      - name: Copy deployment files
+        run: |
+          cp -r $GITHUB_WORKSPACE/simorgh-agent/* ~/simorgh-deployment/
+          
+      - name: Create .env file
+        run: |
+          cd ~/simorgh-deployment
+          cat > .env << EOF
+          ARANGODB_PASSWORD=${{ secrets.ARANGODB_PASSWORD }}
+          AI_API_URL_1=http://192.168.1.61/ai
+          AI_API_URL_2=http://192.168.1.62/ai
+          GITHUB_REGISTRY=${{ env.REGISTRY }}
+          GITHUB_REPOSITORY_OWNER=${{ env.IMAGE_PREFIX }}
+          IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
+          EOF
+          
+          # Verify critical environment variables
+          echo "=== Verifying Environment Variables ==="
+          if [ -z "${{ secrets.ARANGODB_PASSWORD }}" ]; then
+            echo "ERROR: ARANGODB_PASSWORD is not set in GitHub secrets!"
+            exit 1
+          fi
+          echo "ARANGODB_PASSWORD: [SET]"
+          echo "IMAGE_TAG: ${{ github.ref_name }}-${{ github.sha }}"
+
+      - name: Verify environment and images
+        run: |
+          cd ~/simorgh-deployment
+          echo "=== Environment File Content ==="
+          cat .env
+          echo ""
+          echo "=== Expected Image Tag ==="
+          echo "${{ github.ref_name }}-${{ github.sha }}"
+
+      - name: Stop running containers
+        run: |
+          cd ~/simorgh-deployment
+          docker compose down || true
+
+      - name: Clean up old images
+        run: |
+          cd ~/simorgh-deployment
+          docker image prune -f || true
+
+      - name: Pull latest images
+        run: |
+          cd ~/simorgh-deployment
+          docker compose pull
+
+      - name: Start services
+        run: |
+          cd ~/simorgh-deployment
+          docker compose up -d
+
+      - name: Wait for services to be healthy
+        run: |
+          cd ~/simorgh-deployment
+          echo "Waiting for services to become healthy..."
+          timeout 300 bash -c 'until docker compose ps | grep -q "healthy"; do sleep 5; echo "Still waiting..."; done' || echo "Warning: Some services may not be healthy yet"
+
+      - name: Show service status
+        run: |
+          cd ~/simorgh-deployment
+          echo "=== Docker Compose Status ==="
+          docker compose ps
+          echo ""
+          echo "=== Container Details ==="
+          docker ps -a --filter "name=simorgh-deployment"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          cd ~/simorgh-deployment
+          echo "=== Docker Compose Status ==="
+          docker compose ps
+          echo ""
+          echo "=== ArangoDB Logs ==="
+          docker compose logs arangodb --tail=100
+          echo ""
+          echo "=== Backend Flask Logs ==="
+          docker compose logs backend_flask --tail=50
+          echo ""
+          echo "=== Frontend Logs ==="
+          docker compose logs frontend --tail=50
+          echo ""
+          echo "=== Nginx Logs ==="
+          docker compose logs nginx --tail=50
+          echo ""
+          echo "=== All Container Status ==="
+          docker ps -a
+
+  health-check:
+    name: Simorgh Agent Health Check
+    runs-on: [self-hosted, simorgh-hub]
+    needs: [deploy-central-server]
+    
+    steps:
+      - name: Check Central Server
+        run: |
+          echo "Checking Central Server (1.68)..."
+          curl -f http://localhost/health || echo "Warning: Central server health check failed"
+
+      - name: Deployment Summary
+        run: |
+          echo "================================"
+          echo "Simorgh Agent Deployment completed!"
+          echo "================================"
+          echo "Central Server (1.68): http://192.168.1.68"
+          echo "================================"
+          echo "Image Tag Used: ${{ github.ref_name }}-${{ github.sha }}"
