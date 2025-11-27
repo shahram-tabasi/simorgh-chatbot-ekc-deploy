@@ -86,28 +86,6 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # CABLE ANALYSIS API (Existing Service)
-  # ===========================================================================
-  cable_analysis_api:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-cable-api:${IMAGE_TAG:-latest}
-    container_name: cable_analysis_api
-    environment:
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - ./uploads:/app/uploads
-    expose:
-      - "5000"
-    networks:
-      - app_net
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/health | grep -q 'healthy' || exit 1"]
-      interval: 20s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-
-  # ===========================================================================
   # NEO4J - Knowledge Graph Database
   # ===========================================================================
   neo4j:
