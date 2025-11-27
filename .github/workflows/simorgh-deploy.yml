@@ -20,6 +20,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
 
     strategy:
       matrix:
@@ -47,9 +48,11 @@ jobs:
 
       - name: Lowercase repository owner
         id: lowercase
-        run: echo "OWNER_LC=${OWNER,,}" >> $GITHUB_ENV
-        env:
-          OWNER: ${{ github.repository_owner }}
+        run: |
+          OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "OWNER_LC=$OWNER_LC" >> $GITHUB_ENV
+          echo "Repository owner: ${{ github.repository_owner }}"
+          echo "Lowercase owner: $OWNER_LC"
 
       - name: Extract metadata
         id: meta
@@ -60,6 +63,9 @@ jobs:
             type=ref,event=branch
             type=sha,format=long,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=Simorgh Industrial Electrical Assistant - ${{ matrix.service.name }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -69,6 +75,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
 
