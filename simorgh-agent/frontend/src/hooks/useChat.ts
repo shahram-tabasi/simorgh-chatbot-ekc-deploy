@@ -1,28 +1,60 @@
 // src/hooks/useChat.ts
 import { useState, useEffect, useRef } from 'react';
 import { Message, UploadedFile } from '../types';
+import axios from 'axios';
 
-export function useChat(initialMessages: Message[] = [], chatId?: string | null) {
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
+export interface ChatOptions {
+  llmMode?: 'online' | 'offline' | null; // null = use default
+  useGraphContext?: boolean;
+}
+
+export function useChat(
+  initialMessages: Message[] = [],
+  chatId?: string | null,
+  userId?: string,
+  projectNumber?: string | null
+) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [isTyping, setIsTyping] = useState(false);
+  const [llmMode, setLlmMode] = useState<'online' | 'offline' | null>(null);
   const prevChatIdRef = useRef<string | null>(null);
 
-  // CRITICAL: Reset messages when chatId changes (new chat selected)
+  // Load user's LLM preference
   useEffect(() => {
-    // فقط وقتی chatId واقعاً عوض شده باشه
+    const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
+    if (savedMode) {
+      setLlmMode(savedMode);
+    }
+  }, []);
+
+  // Reset messages when chatId changes (new chat selected)
+  useEffect(() => {
     if (chatId !== prevChatIdRef.current) {
       console.log('🔄 Chat switched - ID changed from', prevChatIdRef.current, 'to', chatId);
       console.log('📝 Loading messages:', initialMessages.length);
-      
+
       setMessages(initialMessages);
       setIsTyping(false);
       prevChatIdRef.current = chatId || null;
     }
   }, [chatId, initialMessages]);
 
-  const sendMessage = async (content: string, files?: UploadedFile[]) => {
+  const sendMessage = async (
+    content: string,
+    files?: UploadedFile[],
+    options?: ChatOptions
+  ) => {
+    if (!chatId || !userId) {
+      console.error('❌ Cannot send message: chatId or userId missing');
+      return;
+    }
+
     console.log('📤 Sending message:', content);
-    
+    console.log('🎯 Chat ID:', chatId);
+    console.log('🤖 LLM Mode:', options?.llmMode || llmMode || 'default');
+
     const userMessage: Message = {
       id: Date.now().toString(),
       content,
@@ -35,65 +67,102 @@ export function useChat(initialMessages: Message[] = [], chatId?: string | null)
     setIsTyping(true);
 
     try {
-      // TODO: Replace with real API call
-      // const response = await apiService.sendMessage(content, files);
-      
-      // Simulate AI response
-      setTimeout(() => {
-        const aiMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          content: 'This is a sample response from AI. Real responses will come from the backend.',
-          role: 'assistant',
-          timestamp: new Date()
-        };
+      // Call the new /api/chat/send endpoint
+      const response = await axios.post(`${API_BASE}/chat/send`, {
+        chat_id: chatId,
+        user_id: userId,
+        content: content,
+        llm_mode: options?.llmMode || llmMode,
+        use_graph_context: options?.useGraphContext !== false
+      });
 
-        setMessages(prev => [...prev, aiMessage]);
-        setIsTyping(false);
+      const data = response.data;
 
-        // Browser Notification
-        showNotification('Response Ready!', aiMessage.content);
-        
-        console.log('✅ Message sent successfully');
-      }, 1500);
+      // Create AI message with metadata
+      const aiMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: data.response,
+        role: 'assistant',
+        timestamp: new Date(),
+        metadata: {
+          llm_mode: data.llm_mode,
+          context_used: data.context_used,
+          cached_response: data.cached_response,
+          tokens: data.tokens
+        }
+      };
 
-    } catch (error) {
+      setMessages(prev => [...prev, aiMessage]);
+      setIsTyping(false);
+
+      // Browser Notification
+      showNotification('Response Ready!', data.response);
+
+      console.log('✅ Message sent successfully');
+      console.log('📊 Metadata:', {
+        llm_mode: data.llm_mode,
+        context_used: data.context_used,
+        cached: data.cached_response,
+        tokens: data.tokens
+      });
+
+    } catch (error: any) {
       console.error('❌ Send message failed:', error);
       setIsTyping(false);
-      
+
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: 'Failed to connect to server. Please try again.',
+        content: error.response?.data?.detail || 'Failed to connect to server. Please try again.',
         role: 'assistant',
-        timestamp: new Date()
+        timestamp: new Date(),
+        metadata: {
+          error: true
+        }
       };
-      
+
       setMessages(prev => [...prev, errorMessage]);
     }
+  };
+
+  const toggleLlmMode = () => {
+    const newMode = llmMode === 'online' ? 'offline' : 'online';
+    setLlmMode(newMode);
+    localStorage.setItem('llm_mode', newMode);
+    console.log('🔄 LLM mode changed to:', newMode);
+  };
+
+  const setLlmModeExplicit = (mode: 'online' | 'offline') => {
+    setLlmMode(mode);
+    localStorage.setItem('llm_mode', mode);
+    console.log('🔄 LLM mode set to:', mode);
   };
 
   return {
     messages,
     isTyping,
-    sendMessage
+    sendMessage,
+    llmMode,
+    toggleLlmMode,
+    setLlmMode: setLlmModeExplicit
   };
 }
 
 // Browser Notification Helper
 function showNotification(title: string, body: string) {
   const notifEnabled = localStorage.getItem('notifications_enabled') === 'true';
-  
+
   console.log('🔔 Notification check:', {
     enabled: notifEnabled,
     permission: Notification.permission,
     pageVisible: document.visibilityState === 'visible'
   });
-  
+
   if (!notifEnabled || Notification.permission !== 'granted') {
     console.log('⏭️ Notifications disabled or not granted');
     return;
   }
 
-  // فقط اگر صفحه فوکوس نداره نوتیفیکیشن بفرست
+  // Only send notification if page is not focused
   if (document.visibilityState === 'visible' && document.hasFocus()) {
     console.log('⏭️ Page is focused, skipping notification');
     return;
@@ -118,7 +187,7 @@ function showNotification(title: string, body: string) {
 
     const audio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=');
     audio.play().catch(() => {});
-    
+
     console.log('✅ Notification shown');
   } catch (error) {
     console.error('❌ Notification error:', error);

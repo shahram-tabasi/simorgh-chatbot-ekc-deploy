@@ -68,9 +68,13 @@ export interface Message {
 export interface MessageMetadata {
   sources?: MessageSource[];
   contextUsed?: boolean;
+  context_used?: boolean; // Backend format
   graphPaths?: GraphPath[];
   processingTime?: number;
   model?: string;
+  llm_mode?: 'online' | 'offline'; // LLM mode used
+  cached_response?: boolean; // Whether response was cached
+  error?: boolean; // Error flag
   tokens?: {
     prompt: number;
     completion: number;
