@@ -12,7 +12,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}
 
 jobs:
   build-simorgh-agent:
@@ -46,11 +45,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Lowercase repository owner
+        id: lowercase
+        run: echo "OWNER_LC=${OWNER,,}" >> $GITHUB_ENV
+        env:
+          OWNER: ${{ github.repository_owner }}
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/simorgh-${{ matrix.service.name }}
+          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/simorgh-${{ matrix.service.name }}
           tags: |
             type=ref,event=branch
             type=sha,format=long,prefix={{branch}}-
@@ -76,6 +81,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
@@ -93,7 +101,7 @@ jobs:
           cd ~/simorgh-deployment
           cat > .env << EOF
           # GitHub Registry
-          GITHUB_REPOSITORY_OWNER=${{ env.IMAGE_PREFIX }}
+          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
           IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
 
           # Neo4j
