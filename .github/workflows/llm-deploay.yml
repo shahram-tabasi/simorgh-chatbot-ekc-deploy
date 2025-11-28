@@ -88,7 +88,7 @@ jobs:
 
   deploy-llm-servers:
     name: Deploy to LLM Servers (1.61 & 1.62)
-    runs-on: [self-hosted, simorgh-hub]
+    runs-on: ubuntu-latest
     needs: [build-llm-services]
     
     strategy:
@@ -103,125 +103,158 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup SSH
+      - name: Setup SSH key for central server
         run: |
           mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          ssh-keyscan -H ${{ matrix.server.host }} >> ~/.ssh/known_hosts
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
-      - name: Test SSH Connection
+      - name: Deploy to ${{ matrix.server.name }} via central server
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} "echo 'SSH connection successful to ${{ matrix.server.name }}'"
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          
+          # Ensure SSH key for LLM servers exists on central server
+          if [ ! -f ~/.ssh/id_rsa ]; then
+            echo "ERROR: SSH key for LLM servers not found on central server"
+            echo "Please ensure ~/.ssh/id_rsa exists on 192.168.1.68 with access to LLM servers"
+            exit 1
+          fi
 
-      - name: Create deployment and model cache directories
-        run: |
+          # Add LLM server to known hosts if not already present
+          ssh-keyscan -H ${{ matrix.server.host }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          echo "=== Deploying to ${{ matrix.server.name }} (${{ matrix.server.host }}) ==="
+
+          # Test SSH Connection
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} "echo 'SSH connection successful to ${{ matrix.server.name }}'" || {
+            echo "ERROR: Cannot connect to ${{ matrix.server.host }}"
+            exit 1
+          }
+
+          # Create deployment and model cache directories
           ssh ubuntu@${{ matrix.server.host }} "mkdir -p ~/llm-deployment ~/models/huggingface"
 
-      - name: Copy deployment files to remote server
-        run: |
-          scp -r $GITHUB_WORKSPACE/llms/* ubuntu@${{ matrix.server.host }}:~/llm-deployment/
+          # Copy deployment files to remote server
+          # First, we need to get the files from GitHub (they should be in a temp location)
+          # Since we're on the central server, we need to fetch them first
+          cd /tmp
+          rm -rf llm-deploy-temp
+          git clone --depth 1 --branch ${{ github.ref_name }} https://github.com/${{ github.repository }}.git llm-deploy-temp || {
+            echo "ERROR: Cannot clone repository"
+            exit 1
+          }
 
-      - name: Create .env file on remote server
-        run: |
-          ssh ubuntu@${{ matrix.server.host }} "cat > ~/llm-deployment/.env << 'EOF'
+          # Copy deployment files
+          scp -r /tmp/llm-deploy-temp/llms/* ubuntu@${{ matrix.server.host }}:~/llm-deployment/
+
+          # Create .env file on remote server
+          ssh ubuntu@${{ matrix.server.host }} "cat > ~/llm-deployment/.env << 'ENVEOF'
           GITHUB_REGISTRY=${{ env.REGISTRY }}
           GITHUB_REPOSITORY_OWNER=${{ env.IMAGE_PREFIX }}
           IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
           MODEL_CACHE_PATH=/home/ubuntu/models/huggingface
-          EOF"
+          ENVEOF"
 
-      - name: Verify environment on remote server
-        run: |
+          # Verify environment on remote server
           ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && echo '=== Environment File ===' && cat .env"
 
-      - name: Login to GHCR on remote server
-        run: |
+          # Login to GHCR on remote server
           ssh ubuntu@${{ matrix.server.host }} "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin"
 
-      - name: Stop running containers on remote server
-        run: |
+          # Stop running containers on remote server
           ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose down || true"
 
-      - name: Clean up old images on remote server
-        run: |
+          # Clean up old images on remote server
           ssh ubuntu@${{ matrix.server.host }} "docker image prune -f || true"
 
-      - name: Pull latest images on remote server
-        run: |
+          # Pull latest images on remote server
           ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose pull"
 
-      - name: Start services on remote server
-        run: |
+          # Start services on remote server
           ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose up -d"
 
-      - name: Monitor initializer progress
-        run: |
+          # Monitor initializer progress
           ssh ubuntu@${{ matrix.server.host }} "
             echo '=== Monitoring Model Initializer ==='
             timeout 1800 bash -c '
               while docker ps -a | grep -q model_initializer; do
-                STATUS=\$(docker inspect model_initializer --format=\"{{.State.Status}}\" 2>/dev/null || echo \"not_found\")
-                if [ \"\$STATUS\" = \"exited\" ]; then
-                  EXIT_CODE=\$(docker inspect model_initializer --format=\"{{.State.ExitCode}}\" 2>/dev/null)
-                  if [ \"\$EXIT_CODE\" = \"0\" ]; then
+                STATUS=\\\$(docker inspect model_initializer --format=\"{{.State.Status}}\" 2>/dev/null || echo \"not_found\")
+                if [ \"\\\$STATUS\" = \"exited\" ]; then
+                  EXIT_CODE=\\\$(docker inspect model_initializer --format=\"{{.State.ExitCode}}\" 2>/dev/null)
+                  if [ \"\\\$EXIT_CODE\" = \"0\" ]; then
                     echo \"Model initializer completed successfully!\"
                     break
                   else
-                    echo \"Model initializer failed with exit code \$EXIT_CODE\"
+                    echo \"Model initializer failed with exit code \\\$EXIT_CODE\"
                     docker logs model_initializer --tail=50
                     exit 1
                   fi
                 fi
-                echo \"Initializer status: \$STATUS - waiting...\"
+                echo \"Initializer status: \\\$STATUS - waiting...\"
                 sleep 10
               done
             ' || echo 'Warning: Initializer monitoring timed out'
           "
 
-      - name: Wait for AI service to be healthy
-        run: |
+          # Wait for AI service to be healthy
           ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && timeout 180 bash -c 'until docker compose ps | grep -q \"healthy\"; do sleep 10; echo \"Waiting for services...\"; done' || echo 'Warning: Some services may not be healthy yet'"
 
-      - name: Show service status on remote server
-        run: |
+          # Show service status on remote server
           ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && echo '=== Docker Compose Status ===' && docker compose ps"
 
-      - name: Show model cache info
-        run: |
+          # Show model cache info
           ssh ubuntu@${{ matrix.server.host }} "echo '=== Model Cache Status ===' && du -sh ~/models/huggingface/* 2>/dev/null || echo 'No models cached yet'"
 
-      - name: Check GPU availability on remote server
-        run: |
+          # Check GPU availability on remote server
           ssh ubuntu@${{ matrix.server.host }} "nvidia-smi || echo 'nvidia-smi not available'"
+
+          # Cleanup temp directory
+          rm -rf /tmp/llm-deploy-temp
+
+          echo "=== Deployment to ${{ matrix.server.name }} completed ==="
+
+          ENDSSH
 
       - name: Show logs on failure
         if: failure()
         run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          
           ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment ; \
             echo '=== Docker Compose Status ===' ; docker compose ps -a ; echo ; \
             echo '=== Initializer Logs ===' ; docker logs model_initializer --tail=100 2>/dev/null || echo 'model_initializer container not found' ; echo ; \
             echo '=== AI Service Logs ===' ; docker logs ai_service --tail=100 ; echo ; \
             echo '=== GPU Monitor Logs ===' ; docker logs gpu_monitor --tail=50 2>/dev/null || echo 'gpu_monitor not started' ; echo ; \
             echo '=== Nginx Logs ===' ; docker logs nginx_ai --tail=50 2>/dev/null || echo 'nginx_ai not started'"
+          
+          ENDSSH
 
   health-check:
     name: LLM Services Health Check
-    runs-on: [self-hosted, simorgh-hub]
+    runs-on: ubuntu-latest
     needs: [deploy-llm-servers]
     
     steps:
-      - name: Check LLM Server 1.61
+      - name: Setup SSH key for central server
         run: |
-          echo "Checking LLM Server 1.61..."
-          curl -f http://192.168.1.61/health || echo "Warning: LLM server 1.61 health check failed"
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
-      - name: Check LLM Server 1.62
+      - name: Run health checks via central server
         run: |
-          echo "Checking LLM Server 1.62..."
-          curl -f http://192.168.1.62/health || echo "Warning: LLM server 1.62 health check failed"
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          
+          echo "=== Checking LLM Server 1.61 ==="
+          curl -f http://192.168.1.61/health && echo "✅ LLM Server 1.61 healthy" || echo "⚠️ Warning: LLM server 1.61 health check failed"
 
-      - name: Deployment Summary
-        run: |
+          echo ""
+          echo "=== Checking LLM Server 1.62 ==="
+          curl -f http://192.168.1.62/health && echo "✅ LLM Server 1.62 healthy" || echo "⚠️ Warning: LLM server 1.62 health check failed"
+
+          echo ""
           echo "================================"
           echo "LLM Services Deployment completed!"
           echo "================================"
@@ -229,3 +262,5 @@ jobs:
           echo "LLM Server 2 (1.62): http://192.168.1.62"
           echo "================================"
           echo "Image Tag Used: ${{ github.ref_name }}-${{ github.sha }}"
+          
+          ENDSSH
