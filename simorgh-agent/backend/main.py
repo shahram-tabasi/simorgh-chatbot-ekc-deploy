@@ -32,11 +32,6 @@ from services.sql_auth_service import get_sql_auth_service, SQLAuthService
 from services.llm_service import get_llm_service, LLMService
 from models.ontology import *
 
-# Import CocoIndex flow
-import sys
-sys.path.append('/app/cocoindex_flows')
-from industrial_electrical_flow import process_document
-
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -682,43 +677,32 @@ async def upload_and_process_document(
 
     logger.info(f"File saved: {file_path}")
 
-    # Process document using CocoIndex flow (async in background)
+    # CocoIndex service will automatically process documents in the uploads directory
+    # Note: CocoIndex watches the uploads folder and processes PDFs automatically
     task_id = str(uuid.uuid4())
 
-    def process_in_background():
-        try:
-            result = process_document(
-                project_number=project_number,
-                document_path=str(file_path),
-                document_metadata={
-                    "filename": file.filename,
-                    "upload_time": datetime.now().isoformat()
-                },
-                llm_mode=llm_mode
-            )
-
-            # Store result in Redis
-            redis_service.set(f"task:{task_id}:result", result, ttl=3600, db="cache")
-
-        except Exception as e:
-            logger.error(f"Background processing failed: {e}")
-            redis_service.set(
-                f"task:{task_id}:result",
-                {"status": "error", "error": str(e)},
-                ttl=3600,
-                db="cache"
-            )
-
-    if background_tasks:
-        background_tasks.add_task(process_in_background)
+    # Store upload metadata for tracking
+    if redis_service:
+        redis_service.set(
+            f"upload:{task_id}",
+            json.dumps({
+                "project_number": project_number,
+                "filename": file.filename,
+                "file_path": str(file_path),
+                "upload_time": datetime.now().isoformat(),
+                "status": "uploaded"
+            }),
+            ttl=3600,
+            db="cache"
+        )
 
     return {
-        "status": "processing",
+        "status": "success",
         "task_id": task_id,
         "project_number": project_number,
         "filename": file.filename,
         "file_path": str(file_path),
-        "message": "Document uploaded and processing started"
+        "message": "Document uploaded successfully. CocoIndex will process it automatically."
     }
 
 
