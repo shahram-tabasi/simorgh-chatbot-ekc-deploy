@@ -149,16 +149,16 @@ jobs:
           IMAGE_TAG: ${{ github.ref_name }}-${{ github.sha }}
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && \
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
             echo GITHUB_REGISTRY=${{ env.REGISTRY }} > .env && \
             echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} >> .env && \
             echo IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }} >> .env && \
-            echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env'"
+            echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env\"'"
 
       - name: Verify .env file
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'echo === Environment File === && cat ~/llm-deployment/.env'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"echo === Environment File === && cat ~/llm-deployment/.env\"'"
 
       - name: Login to GHCR on target server
         run: |
@@ -168,7 +168,7 @@ jobs:
       - name: Stop running containers
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && docker compose down || true'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && docker compose down || true\"'"
 
       - name: Clean up old images
         run: |
@@ -178,44 +178,44 @@ jobs:
       - name: Pull latest images
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && docker compose pull'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && docker compose pull\"'"
 
       - name: Start services
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && docker compose up -d'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && docker compose up -d\"'"
 
       - name: Wait for model initializer
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'timeout 1800 bash -c \"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"timeout 1800 bash -c \\\"
               while docker ps -a --format {{.Names}} | grep -q model_initializer; do
-                STATUS=\\\$(docker inspect model_initializer --format={{.State.Status}} 2>/dev/null || echo not_found)
-                if [ \\\$STATUS = exited ]; then
-                  EXIT_CODE=\\\$(docker inspect model_initializer --format={{.State.ExitCode}})
-                  if [ \\\$EXIT_CODE = 0 ]; then
+                STATUS=\\\\\\\$(docker inspect model_initializer --format={{.State.Status}} 2>/dev/null || echo not_found)
+                if [ \\\\\\\$STATUS = exited ]; then
+                  EXIT_CODE=\\\\\\\$(docker inspect model_initializer --format={{.State.ExitCode}})
+                  if [ \\\\\\\$EXIT_CODE = 0 ]; then
                     echo Model initializer completed successfully
                     break
                   else
-                    echo Model initializer failed with exit code \\\$EXIT_CODE
+                    echo Model initializer failed with exit code \\\\\\\$EXIT_CODE
                     docker logs model_initializer --tail=50
                     exit 1
                   fi
                 fi
-                echo Initializer status: \\\$STATUS
+                echo Initializer status: \\\\\\\$STATUS
                 sleep 10
               done
-            \" || echo Warning: Initializer monitoring timed out'"
+            \\\" || echo Warning: Initializer monitoring timed out\"'"
 
       - name: Wait for AI service to be healthy
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && timeout 300 bash -c \"until docker compose ps | grep -q healthy; do sleep 10; echo Waiting for services...; done\" || echo Warning: Some services may not be healthy yet'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && timeout 300 bash -c \\\"until docker compose ps | grep -q healthy; do sleep 10; echo Waiting for services...; done\\\" || echo Warning: Some services may not be healthy yet\"'"
 
       - name: Show service status
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && echo === Docker Compose Status === && docker compose ps'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && echo === Docker Compose Status === && docker compose ps\"'"
 
       - name: Check GPU availability
         run: |
@@ -226,12 +226,12 @@ jobs:
         if: failure()
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && \
-            echo === Docker Compose Status === && docker compose ps -a && \
-            echo === Initializer Logs === && docker logs model_initializer --tail=100 2>/dev/null || echo model_initializer not found && \
-            echo === AI Service Logs === && docker logs ai_service --tail=100 2>/dev/null || echo ai_service not found && \
-            echo === GPU Monitor Logs === && docker logs gpu_monitor --tail=50 2>/dev/null || echo gpu_monitor not found && \
-            echo === Nginx Logs === && docker logs nginx_ai --tail=50 2>/dev/null || echo nginx_ai not found'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
+            echo \\\"=== Docker Compose Status ===\\\" && docker compose ps -a && \
+            echo \\\"=== Initializer Logs ===\\\" && docker logs model_initializer --tail=100 2>/dev/null || echo model_initializer not found && \
+            echo \\\"=== AI Service Logs ===\\\" && docker logs ai_service --tail=100 2>/dev/null || echo ai_service not found && \
+            echo \\\"=== GPU Monitor Logs ===\\\" && docker logs gpu_monitor --tail=50 2>/dev/null || echo gpu_monitor not found && \
+            echo \\\"=== Nginx Logs ===\\\" && docker logs nginx_ai --tail=50 2>/dev/null || echo nginx_ai not found\"'"
 
   health-check:
     name: LLM Services Health Check
