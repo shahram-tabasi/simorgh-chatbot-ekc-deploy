@@ -144,9 +144,9 @@ jobs:
 
   deploy-central-server:
     name: Deploy to Central Server (1.68)
-    runs-on: [self-hosted, simorgh-hub]
+    runs-on: ubuntu-latest
     needs: [build-simorgh-agent]
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -155,93 +155,145 @@ jobs:
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-
-      - name: Create deployment directory
+      - name: Lowercase repository owner
+        id: lowercase
         run: |
-          mkdir -p ~/simorgh-deployment
+          OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "OWNER_LC=$OWNER_LC" >> $GITHUB_ENV
+          echo "Repository owner (lowercase): $OWNER_LC"
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
+
+      - name: Copy deployment files to server
+        run: |
+          scp -P 2324 -i ~/.ssh/deploy_key -r simorgh-agent/* ${{ secrets.SSH_USER }}@217.219.39.212:~/simorgh-deployment/
+
+      - name: Create .env file and deploy
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
           cd ~/simorgh-deployment
 
-      - name: Copy deployment files
-        run: |
-          cp -r $GITHUB_WORKSPACE/simorgh-agent/* ~/simorgh-deployment/
-          
-      - name: Create .env file
-        run: |
-          cd ~/simorgh-deployment
+          # Login to GitHub Container Registry
+          echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          # Create .env file
           cat > .env << EOF
-          ARANGODB_PASSWORD=${{ secrets.ARANGODB_PASSWORD }}
-          AI_API_URL_1=http://192.168.1.61/ai
-          AI_API_URL_2=http://192.168.1.62/ai
-          GITHUB_REGISTRY=${{ env.REGISTRY }}
-          GITHUB_REPOSITORY_OWNER=${{ env.IMAGE_PREFIX }}
+          # GitHub Registry
+          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
           IMAGE_TAG=${{ steps.tag.outputs.tag }}
+
+          # Neo4j
+          NEO4J_URI=bolt://neo4j:7687
+          NEO4J_USER=neo4j
+          NEO4J_PASSWORD=${{ secrets.NEO4J_PASSWORD }}
+
+          # Redis
+          REDIS_URL=redis://redis:6379/0
+          REDIS_CHAT_DB=1
+          REDIS_CACHE_DB=2
+          REDIS_AUTH_DB=3
+
+          # Qdrant
+          QDRANT_URL=http://qdrant:6333
+
+          # CocoIndex
+          COCOINDEX_URL=http://cocoindex:8080
+          COCOINDEX_DB_PASSWORD=${{ secrets.COCOINDEX_DB_PASSWORD }}
+
+          # MySQL (External Authentication)
+          MYSQL_HOST=${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT=${{ secrets.MYSQL_PORT }}
+          MYSQL_USER=${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}
+          SQL_SERVER_HOST=${{ secrets.MYSQL_HOST }}
+          SQL_SERVER_PORT=${{ secrets.MYSQL_PORT }}
+          SQL_SERVER_USER=${{ secrets.MYSQL_USER }}
+          SQL_SERVER_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
+          SQL_SERVER_DATABASE=${{ secrets.MYSQL_DATABASE }}
+
+          # LLM - OpenAI (Online Mode)
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL=gpt-4o
+          LLM_TEMPERATURE=0.7
+          LLM_MAX_TOKENS=2000
+
+          # LLM - Local Servers (Offline Mode)
+          LOCAL_LLM_URL_1=http://192.168.1.61/ai
+          LOCAL_LLM_URL_2=http://192.168.1.62/ai
+
+          # Default LLM Mode
+          DEFAULT_LLM_MODE=auto
+
+          # Timezone
+          TZ=Asia/Tehran
+
+          # Feature Flags
+          ENABLE_GRAPH_RAG=true
+          ENABLE_DOCUMENT_PROCESSING=true
+          ENABLE_SQL_AUTH=true
+          ENABLE_REDIS_CACHE=true
           EOF
-          
-          if [ -z "${{ secrets.ARANGODB_PASSWORD }}" ]; then
-            echo "ERROR: ARANGODB_PASSWORD is not set in GitHub secrets!"
-            exit 1
-          fi
-          echo "ARANGODB_PASSWORD: [SET]"
+
+          # Verify environment
+          echo "=== Environment Variables Set ==="
+          echo "NEO4J_PASSWORD: [SET]"
+          echo "COCOINDEX_DB_PASSWORD: [SET]"
+          [ ! -z "${{ secrets.MYSQL_HOST }}" ] && echo "MYSQL_HOST: [SET]" || echo "MYSQL: [NOT CONFIGURED]"
+          [ ! -z "${{ secrets.OPENAI_API_KEY }}" ] && echo "OPENAI_API_KEY: [SET]" || echo "OPENAI: [NOT CONFIGURED]"
           echo "IMAGE_TAG: ${{ steps.tag.outputs.tag }}"
 
-      - name: Stop running containers
-        run: |
-          cd ~/simorgh-deployment
+          # Stop running containers
+          echo ""
+          echo "=== Stopping running containers ==="
           docker compose down || true
 
-      - name: Clean up old images
-        run: |
-          cd ~/simorgh-deployment
+          # Clean up old images
+          echo ""
+          echo "=== Cleaning up old images ==="
           docker image prune -f || true
 
-      - name: Pull latest images
-        run: |
-          cd ~/simorgh-deployment
+          # Pull latest images
+          echo ""
+          echo "=== Pulling latest images ==="
           docker compose pull
 
-      - name: Start services
-        run: |
-          cd ~/simorgh-deployment
+          # Start services
+          echo ""
+          echo "=== Starting services ==="
           docker compose up -d
 
-      - name: Wait for services to be healthy
-        run: |
-          cd ~/simorgh-deployment
-          echo "Waiting for services to become healthy..."
-          timeout 300 bash -c 'until docker compose ps | grep -q "healthy"; do sleep 5; echo "Still waiting..."; done' || echo "Warning: Some services may not be healthy yet"
+          # Wait for services
+          echo ""
+          echo "=== Waiting for services ==="
+          for i in {1..60}; do
+            echo "Check \$i/60..."
+            if docker compose ps backend | grep -q "healthy"; then
+              echo "✅ Backend is healthy"
+              break
+            fi
+            sleep 5
+          done
 
-      - name: Show service status
-        run: |
-          cd ~/simorgh-deployment
-          echo "=== Docker Compose Status ==="
-          docker compose ps
+          # Show final status
           echo ""
-          echo "=== Container Details ==="
-          docker ps -a --filter "name=simorgh-deployment"
+          echo "=== Service Status ==="
+          docker compose ps
 
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          cd ~/simorgh-deployment
-          echo "=== Docker Compose Status ==="
-          docker compose ps
           echo ""
-          echo "=== ArangoDB Logs ==="
-          docker compose logs arangodb --tail=100
-          echo ""
-          echo "=== Backend Flask Logs ==="
-          docker compose logs backend_flask --tail=50
-          echo ""
-          echo "=== Frontend Logs ==="
-          docker compose logs frontend --tail=50
-          echo ""
-          echo "=== Nginx Logs ==="
-          docker compose logs nginx --tail=50
-          echo ""
-          echo "=== All Container Status ==="
-          docker ps -a
+          echo "========================================"
+          echo "Release Deployment Complete!"
+          echo "========================================"
+          echo "Release Tag: ${{ steps.tag.outputs.tag }}"
+          echo "Central Server: http://192.168.1.68"
+          echo "========================================"
+
+          ENDSSH
 
   deploy-llm-servers:
     name: Deploy to LLM Servers (1.61 & 1.62)
@@ -367,32 +419,58 @@ jobs:
 
   health-check:
     name: Final Health Check
-    runs-on: [self-hosted, simorgh-hub]
-    needs: [deploy-central-server, deploy-llm-servers]
-    
+    runs-on: ubuntu-latest
+    needs: [deploy-central-server]
+
     steps:
-      - name: Check Central Server
+      - name: Setup SSH key
         run: |
-          echo "Checking Central Server (1.68)..."
-          curl -f http://localhost/health || echo "Warning: Central server health check failed"
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
-      - name: Check LLM Server 1.61
+      - name: Run health checks
         run: |
-          echo "Checking LLM Server 1.61..."
-          curl -f http://192.168.1.61/health || echo "Warning: LLM server 1.61 health check failed"
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          echo "Waiting 30 seconds for application to fully start..."
+          sleep 30
 
-      - name: Check LLM Server 1.62
-        run: |
-          echo "Checking LLM Server 1.62..."
-          curl -f http://192.168.1.62/health || echo "Warning: LLM server 1.62 health check failed"
+          echo "=== Checking Central Server (1.68) ==="
+          for i in {1..10}; do
+            echo "Attempt \$i/10..."
+            if curl -f http://localhost/api/health; then
+              echo ""
+              echo "✅ Health check passed!"
+              break
+            else
+              echo "⏳ Service not ready yet..."
+              sleep 5
+            fi
+          done
 
-      - name: Deployment Summary
-        run: |
+          echo ""
+          echo "=== Service Health Details ==="
+          curl -s http://localhost/api/health | jq '.' || echo "Could not parse health response"
+
+          echo ""
+          echo "=== Checking LLM Servers ==="
+          echo "LLM Server 1.61..."
+          curl -f http://192.168.1.61/health || echo "Warning: LLM server 1.61 not reachable"
+          echo ""
+          echo "LLM Server 1.62..."
+          curl -f http://192.168.1.62/health || echo "Warning: LLM server 1.62 not reachable"
+
+          echo ""
           echo "================================"
-          echo "Release Deployment completed!"
+          echo "Release Deployment Summary"
           echo "================================"
           echo "Release Tag: ${{ github.ref_name }}"
-          echo "Central Server (1.68): http://192.168.1.68"
-          echo "LLM Server 1 (1.61): http://192.168.1.61"
-          echo "LLM Server 2 (1.62): http://192.168.1.62"
+          echo "Central Server: http://192.168.1.68"
+          echo "API Docs: http://192.168.1.68/api/docs"
+          echo "Neo4j Browser: http://192.168.1.68:7474"
+          echo "LLM Server 1: http://192.168.1.61"
+          echo "LLM Server 2: http://192.168.1.62"
           echo "================================"
+
+          ENDSSH

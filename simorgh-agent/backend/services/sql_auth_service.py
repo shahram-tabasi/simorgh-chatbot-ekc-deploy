@@ -1,7 +1,7 @@
 """
-SQL Server Authentication Service
-==================================
-Read-only connection to external SQL Server for user authorization.
+MySQL Authentication Service
+=============================
+Read-only connection to external MySQL database for user authorization.
 
 Validates:
 - User access to specific project numbers
@@ -14,7 +14,7 @@ Author: Simorgh Industrial Assistant
 import os
 import logging
 from typing import List, Dict, Any, Optional
-import pymssql
+import pymysql
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
@@ -22,10 +22,10 @@ logger = logging.getLogger(__name__)
 
 class SQLAuthService:
     """
-    SQL Server Authentication Service
+    MySQL Authentication Service
 
     Features:
-    - Read-only connection to external SQL Server
+    - Read-only connection to external MySQL database
     - User authorization validation
     - Project list retrieval per user
     - Connection pooling
@@ -40,19 +40,19 @@ class SQLAuthService:
         password: str = None,
         database: str = None
     ):
-        """Initialize SQL Server connection parameters"""
-        self.host = host or os.getenv("SQL_SERVER_HOST")
-        self.port = port or int(os.getenv("SQL_SERVER_PORT", "1433"))
-        self.user = user or os.getenv("SQL_SERVER_USER")
-        self.password = password or os.getenv("SQL_SERVER_PASSWORD")
-        self.database = database or os.getenv("SQL_SERVER_DATABASE")
+        """Initialize MySQL connection parameters"""
+        self.host = host or os.getenv("MYSQL_HOST", os.getenv("SQL_SERVER_HOST"))
+        self.port = port or int(os.getenv("MYSQL_PORT", os.getenv("SQL_SERVER_PORT", "3306")))
+        self.user = user or os.getenv("MYSQL_USER", os.getenv("SQL_SERVER_USER"))
+        self.password = password or os.getenv("MYSQL_PASSWORD", os.getenv("SQL_SERVER_PASSWORD"))
+        self.database = database or os.getenv("MYSQL_DATABASE", os.getenv("SQL_SERVER_DATABASE"))
 
         if not all([self.host, self.user, self.password, self.database]):
-            logger.warning("⚠️ SQL Server credentials not fully configured")
+            logger.warning("⚠️ MySQL credentials not fully configured")
             self.enabled = False
         else:
             self.enabled = True
-            logger.info(f"✅ SQL Auth Service initialized: {self.host}:{self.port}")
+            logger.info(f"✅ MySQL Auth Service initialized: {self.host}:{self.port}/{self.database}")
 
     @contextmanager
     def get_connection(self):
@@ -61,23 +61,25 @@ class SQLAuthService:
         Ensures connections are properly closed
         """
         if not self.enabled:
-            raise ValueError("SQL Server authentication not configured")
+            raise ValueError("MySQL authentication not configured")
 
         conn = None
         try:
-            conn = pymssql.connect(
-                server=self.host,
+            conn = pymysql.connect(
+                host=self.host,
                 port=self.port,
                 user=self.user,
                 password=self.password,
                 database=self.database,
-                timeout=10,
-                login_timeout=10,
-                as_dict=True  # Return rows as dictionaries
+                connect_timeout=10,
+                read_timeout=10,
+                write_timeout=10,
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor  # Return rows as dictionaries
             )
             yield conn
-        except pymssql.Error as e:
-            logger.error(f"SQL Server connection error: {e}")
+        except pymysql.Error as e:
+            logger.error(f"MySQL connection error: {e}")
             raise
         finally:
             if conn:

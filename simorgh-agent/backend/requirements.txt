@@ -31,8 +31,8 @@ neo4j>=5.15.0
 # Redis (Caching & Session Store) - NEW Architecture
 redis>=5.0.0
 
-# SQL Server (External Authentication) - NEW Architecture
-pymssql>=2.2.0
+# MySQL (External Authentication) - NEW Architecture
+pymysql>=1.1.0
 
 # ArangoDB (Graph Database) - Legacy (backward compatibility)
 pyArango==2.1.1
