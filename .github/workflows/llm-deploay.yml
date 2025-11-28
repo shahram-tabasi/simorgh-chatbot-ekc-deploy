@@ -108,18 +108,28 @@ jobs:
           ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
       - name: Deploy to ${{ matrix.server.name }} via central server
+        env:
+          TARGET_HOST: ${{ matrix.server.host }}
+          SERVER_NAME: ${{ matrix.server.name }}
+          GH_REGISTRY: ${{ env.REGISTRY }}
+          GH_REPO_OWNER: ${{ env.IMAGE_PREFIX }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          GH_SHA: ${{ github.sha }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << ENDSSH
           set -euo pipefail
 
           echo "==================================================================="
-          echo "Deploying to ${{ matrix.server.name }} (${{ matrix.server.host }})"
+          echo "Deploying to ${SERVER_NAME} (${TARGET_HOST})"
           echo "==================================================================="
 
           # Test SSH to target server
           echo "=== Testing SSH connection ==="
-          if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@${{ matrix.server.host }} "echo 'SSH OK'"; then
-            echo "❌ ERROR: Cannot SSH to ${{ matrix.server.host }}"
+          if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@${TARGET_HOST} "echo 'SSH OK'"; then
+            echo "❌ ERROR: Cannot SSH to ${TARGET_HOST}"
             exit 1
           fi
           echo "✓ SSH connection successful"
@@ -127,7 +137,7 @@ jobs:
           # Prepare directories
           echo ""
           echo "=== Preparing directories ==="
-          ssh ubuntu@${{ matrix.server.host }} "mkdir -p ~/llm-deployment ~/models/huggingface"
+          ssh ubuntu@${TARGET_HOST} "mkdir -p ~/llm-deployment ~/models/huggingface"
           echo "✓ Directories created"
 
           # Clone repo temporarily on central server
@@ -135,7 +145,7 @@ jobs:
           echo "=== Cloning repository ==="
           cd /tmp
           rm -rf llm-deploy-temp
-          if ! git clone --depth 1 --branch ${{ github.ref_name }} https://github.com/${{ github.repository }}.git llm-deploy-temp; then
+          if ! git clone --depth 1 --branch ${GH_REF_NAME} https://github.com/${GH_REPOSITORY}.git llm-deploy-temp; then
             echo "❌ ERROR: Failed to clone repository"
             exit 1
           fi
@@ -162,7 +172,7 @@ jobs:
           # Copy deployment files
           echo ""
           echo "=== Copying deployment files to target ==="
-          if ! scp -r /tmp/llm-deploy-temp/llms/* ubuntu@${{ matrix.server.host }}:~/llm-deployment/; then
+          if ! scp -r /tmp/llm-deploy-temp/llms/* ubuntu@${TARGET_HOST}:~/llm-deployment/; then
             echo "❌ ERROR: Failed to copy files to target server"
             exit 1
           fi
@@ -171,44 +181,42 @@ jobs:
           # Verify files were copied correctly
           echo ""
           echo "=== Verifying files on target server ==="
-          ssh ubuntu@${{ matrix.server.host }} "
+          ssh ubuntu@${TARGET_HOST} '
             cd ~/llm-deployment
             
-            [ -f docker-compose.yml ] || { echo '❌ docker-compose.yml missing'; exit 1; }
-            [ -f nginx_configs/nginx.conf ] || { echo '❌ nginx.conf missing'; exit 1; }
-            [ -f nginx_configs/conf.d/default.conf ] || { echo '❌ default.conf missing'; exit 1; }
+            [ -f docker-compose.yml ] || { echo "❌ docker-compose.yml missing"; exit 1; }
+            [ -f nginx_configs/nginx.conf ] || { echo "❌ nginx.conf missing"; exit 1; }
+            [ -f nginx_configs/conf.d/default.conf ] || { echo "❌ default.conf missing"; exit 1; }
             
-            echo '✓ docker-compose.yml present'
-            echo '✓ nginx.conf present'
-            echo '✓ default.conf present'
+            echo "✓ docker-compose.yml present"
+            echo "✓ nginx.conf present"
+            echo "✓ default.conf present"
             
-            echo ''
-            echo 'Deployment directory structure:'
+            echo ""
+            echo "Deployment directory structure:"
             ls -la
-            echo ''
-            echo 'Nginx configs:'
+            echo ""
+            echo "Nginx configs:"
             ls -la nginx_configs/conf.d/
-          "
+          '
 
           # Create .env with exact tag
           echo ""
           echo "=== Creating .env file ==="
-          ssh ubuntu@${{ matrix.server.host }} << 'ENVEOF'
-          cat > ~/llm-deployment/.env << EOF
-GITHUB_REGISTRY=${{ env.REGISTRY }}
-GITHUB_REPOSITORY_OWNER=${{ env.IMAGE_PREFIX }}
-IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
-MODEL_CACHE_PATH=/home/ubuntu/models/huggingface
-EOF
-ENVEOF
+          ssh ubuntu@${TARGET_HOST} "cat > ~/llm-deployment/.env << EOF
+          GITHUB_REGISTRY=${GH_REGISTRY}
+          GITHUB_REPOSITORY_OWNER=${GH_REPO_OWNER}
+          IMAGE_TAG=${GH_REF_NAME}-${GH_SHA}
+          MODEL_CACHE_PATH=/home/ubuntu/models/huggingface
+          EOF"
 
-          ssh ubuntu@${{ matrix.server.host }} "cat ~/llm-deployment/.env"
+          ssh ubuntu@${TARGET_HOST} "cat ~/llm-deployment/.env"
           echo "✓ .env file created"
 
           # Docker login
           echo ""
           echo "=== Logging into GitHub Container Registry ==="
-          if ! ssh ubuntu@${{ matrix.server.host }} "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin 2>&1 | grep -v 'WARNING'"; then
+          if ! ssh ubuntu@${TARGET_HOST} "echo '${GH_TOKEN}' | docker login ${GH_REGISTRY} -u ${GH_ACTOR} --password-stdin 2>&1 | grep -v 'WARNING'"; then
             echo "❌ ERROR: Docker login failed"
             exit 1
           fi
@@ -217,22 +225,22 @@ ENVEOF
           # Stop old containers
           echo ""
           echo "=== Stopping old services ==="
-          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose down 2>&1" || true
+          ssh ubuntu@${TARGET_HOST} "cd ~/llm-deployment && docker compose down 2>&1" || true
           echo "✓ Old services stopped"
 
           # Clean up old images
           echo ""
           echo "=== Cleaning up old images ==="
-          ssh ubuntu@${{ matrix.server.host }} "docker image prune -f 2>&1 | head -5"
+          ssh ubuntu@${TARGET_HOST} "docker image prune -f 2>&1 | head -5"
 
           # Pull new images
           echo ""
-          echo "=== Pulling images (tag: ${{ github.ref_name }}-${{ github.sha }}) ==="
-          if ! ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose pull 2>&1"; then
+          echo "=== Pulling images (tag: ${GH_REF_NAME}-${GH_SHA}) ==="
+          if ! ssh ubuntu@${TARGET_HOST} "cd ~/llm-deployment && docker compose pull 2>&1"; then
             echo "❌ ERROR: Failed to pull images"
             echo ""
             echo "Current images on server:"
-            ssh ubuntu@${{ matrix.server.host }} "docker images | grep -E 'REPOSITORY|llm-'"
+            ssh ubuntu@${TARGET_HOST} "docker images | grep -E 'REPOSITORY|llm-'"
             exit 1
           fi
           echo "✓ Images pulled successfully"
@@ -240,48 +248,48 @@ ENVEOF
           # Verify all required images are present
           echo ""
           echo "=== Verifying images ==="
-          ssh ubuntu@${{ matrix.server.host }} "
-            echo 'Checking for required images...'
+          ssh ubuntu@${TARGET_HOST} '
+            echo "Checking for required images..."
             missing=0
             
-            if docker images | grep -q 'llm-ai-service.*${{ github.ref_name }}-${{ github.sha }}'; then
-              echo '✓ llm-ai-service found'
+            if docker images | grep -q "llm-ai-service"; then
+              echo "✓ llm-ai-service found"
             else
-              echo '❌ llm-ai-service NOT found'
+              echo "❌ llm-ai-service NOT found"
               missing=1
             fi
             
-            if docker images | grep -q 'llm-gpu-monitor.*${{ github.ref_name }}-${{ github.sha }}'; then
-              echo '✓ llm-gpu-monitor found'
+            if docker images | grep -q "llm-gpu-monitor"; then
+              echo "✓ llm-gpu-monitor found"
             else
-              echo '❌ llm-gpu-monitor NOT found'
+              echo "❌ llm-gpu-monitor NOT found"
               missing=1
             fi
             
-            if docker images | grep -q 'llm-model-initializer.*${{ github.ref_name }}-${{ github.sha }}'; then
-              echo '✓ llm-model-initializer found'
+            if docker images | grep -q "llm-model-initializer"; then
+              echo "✓ llm-model-initializer found"
             else
-              echo '❌ llm-model-initializer NOT found'
+              echo "❌ llm-model-initializer NOT found"
               missing=1
             fi
             
-            if [ \$missing -eq 1 ]; then
-              echo ''
-              echo 'Available llm images:'
+            if [ $missing -eq 1 ]; then
+              echo ""
+              echo "Available llm images:"
               docker images | grep llm-
               exit 1
             fi
             
-            echo ''
-            echo '✓ All required images present'
-          "
+            echo ""
+            echo "✓ All required images present"
+          '
 
           # Start services
           echo ""
           echo "=== Starting services ==="
-          if ! ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose up -d 2>&1"; then
+          if ! ssh ubuntu@${TARGET_HOST} "cd ~/llm-deployment && docker compose up -d 2>&1"; then
             echo "❌ ERROR: Failed to start services"
-            ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose logs --tail 50"
+            ssh ubuntu@${TARGET_HOST} "cd ~/llm-deployment && docker compose logs --tail 50"
             exit 1
           fi
           echo "✓ Services started"
@@ -289,28 +297,28 @@ ENVEOF
           # Show initial status
           echo ""
           echo "=== Initial container status ==="
-          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose ps"
+          ssh ubuntu@${TARGET_HOST} "cd ~/llm-deployment && docker compose ps"
 
           # Wait for model_initializer
           echo ""
           echo "=== Waiting for model_initializer to complete ==="
-          ssh ubuntu@${{ matrix.server.host }} "
-            timeout 1800 bash -c '
-              while docker ps -a --format \"{{.Name}}\" | grep -q model_initializer; do
-                status=\$(docker inspect --format=\"{{.State.Status}}\" model_initializer 2>/dev/null || echo \"missing\")
+          ssh ubuntu@${TARGET_HOST} '
+            timeout 1800 bash -c '\''
+              while docker ps -a --format "{{.Name}}" | grep -q model_initializer; do
+                status=$(docker inspect --format="{{.State.Status}}" model_initializer 2>/dev/null || echo "missing")
                 
-                if [ "\$status" = "missing" ]; then
+                if [ "$status" = "missing" ]; then
                   echo "❌ ERROR: model_initializer container disappeared"
                   exit 1
                 fi
                 
-                if [ "\$status" = "exited" ]; then
-                  code=\$(docker inspect --format=\"{{.State.ExitCode}}\" model_initializer)
-                  if [ "\$code" = "0" ]; then
+                if [ "$status" = "exited" ]; then
+                  code=$(docker inspect --format="{{.State.ExitCode}}" model_initializer)
+                  if [ "$code" = "0" ]; then
                     echo "✓ model_initializer completed successfully (exit code 0)"
                     break
                   else
-                    echo "❌ ERROR: model_initializer failed with exit code \$code"
+                    echo "❌ ERROR: model_initializer failed with exit code $code"
                     echo ""
                     echo "Last 100 lines of logs:"
                     docker logs model_initializer --tail 100
@@ -318,16 +326,17 @@ ENVEOF
                   fi
                 fi
                 
-                if [ "\$status" = "running" ]; then
+                if [ "$status" = "running" ]; then
                   echo "⏳ model_initializer still running..."
-                  docker logs model_initializer --tail 3 2>&1 | grep -v \"^$\" || true
+                  docker logs model_initializer --tail 3 2>&1 | grep -v "^$" || true
                 fi
                 
                 sleep 10
               done
-            '
-          "
-          if [ $? -ne 0 ]; then
+            '\''
+          '
+          init_result=\$?
+          if [ \$init_result -ne 0 ]; then
             echo "❌ model_initializer failed or timed out"
             exit 1
           fi
@@ -335,38 +344,38 @@ ENVEOF
           # Wait for ai_service healthy
           echo ""
           echo "=== Waiting for ai_service to become healthy ==="
-          ssh ubuntu@${{ matrix.server.host }} "
+          ssh ubuntu@${TARGET_HOST} '
             cd ~/llm-deployment
-            timeout 600 bash -c '
+            timeout 600 bash -c '\''
               attempt=1
               max_attempts=60
               
-              while [ \$attempt -le \$max_attempts ]; do
-                status=\$(docker compose ps ai_service 2>&1)
+              while [ $attempt -le $max_attempts ]; do
+                status=$(docker compose ps ai_service 2>&1)
                 
-                if echo "\$status" | grep -q "healthy"; then
+                if echo "$status" | grep -q "healthy"; then
                   echo "✓ ai_service is healthy!"
                   break
                 fi
                 
-                if echo "\$status" | grep -qE "Exit|Exited"; then
+                if echo "$status" | grep -qE "Exit|Exited"; then
                   echo "❌ ERROR: ai_service exited unexpectedly"
                   docker compose logs ai_service --tail 50
                   exit 1
                 fi
                 
-                if [ \$attempt -eq 1 ] || [ \$((attempt % 6)) -eq 0 ]; then
-                  echo "⏳ Attempt \$attempt/\$max_attempts: Waiting for ai_service to be healthy..."
+                if [ $attempt -eq 1 ] || [ $((attempt % 6)) -eq 0 ]; then
+                  echo "⏳ Attempt $attempt/$max_attempts: Waiting for ai_service to be healthy..."
                   docker compose ps ai_service | grep ai_service || true
-                  docker logs ai_service --tail 5 2>&1 | grep -v \"^$\" || true
+                  docker logs ai_service --tail 5 2>&1 | grep -v "^$" || true
                 fi
                 
                 sleep 10
-                attempt=\$((attempt + 1))
+                attempt=$((attempt + 1))
               done
               
-              if [ \$attempt -gt \$max_attempts ]; then
-                echo "❌ ERROR: ai_service failed to become healthy after \$max_attempts attempts"
+              if [ $attempt -gt $max_attempts ]; then
+                echo "❌ ERROR: ai_service failed to become healthy after $max_attempts attempts"
                 echo ""
                 echo "Container status:"
                 docker compose ps ai_service
@@ -375,9 +384,10 @@ ENVEOF
                 docker compose logs ai_service --tail 100
                 exit 1
               fi
-            '
-          "
-          if [ $? -ne 0 ]; then
+            '\''
+          '
+          health_result=\$?
+          if [ \$health_result -ne 0 ]; then
             echo "❌ ai_service health check failed or timed out"
             exit 1
           fi
@@ -385,12 +395,12 @@ ENVEOF
           # Final status
           echo ""
           echo "=== Final container status ==="
-          ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment && docker compose ps"
+          ssh ubuntu@${TARGET_HOST} "cd ~/llm-deployment && docker compose ps"
 
           # Verify GPU access
           echo ""
           echo "=== GPU status ==="
-          if ssh ubuntu@${{ matrix.server.host }} "nvidia-smi 2>&1 | head -20"; then
+          if ssh ubuntu@${TARGET_HOST} "nvidia-smi 2>&1 | head -20"; then
             echo "✓ GPU accessible"
           else
             echo "⚠️  WARNING: nvidia-smi failed - GPU may not be accessible to containers"
@@ -400,7 +410,7 @@ ENVEOF
           echo ""
           echo "=== Testing health endpoint ==="
           sleep 5
-          if ssh ubuntu@${{ matrix.server.host }} "curl -f -s --max-time 10 http://localhost/health"; then
+          if ssh ubuntu@${TARGET_HOST} "curl -f -s --max-time 10 http://localhost/health"; then
             echo ""
             echo "✓ Health endpoint responding"
           else
@@ -414,68 +424,70 @@ ENVEOF
           echo ""
           echo "==================================================================="
           echo "✓✓✓ DEPLOYMENT COMPLETED SUCCESSFULLY ✓✓✓"
-          echo "Server: ${{ matrix.server.name }} (${{ matrix.server.host }})"
-          echo "Tag: ${{ github.ref_name }}-${{ github.sha }}"
+          echo "Server: ${SERVER_NAME} (${TARGET_HOST})"
+          echo "Tag: ${GH_REF_NAME}-${GH_SHA}"
           echo "==================================================================="
           ENDSSH
 
       - name: Show detailed logs on failure
         if: failure()
+        env:
+          TARGET_HOST: ${{ matrix.server.host }}
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << ENDSSH
           echo ""
           echo "==================================================================="
-          echo "FAILURE DIAGNOSTICS FOR ${{ matrix.server.host }}"
+          echo "FAILURE DIAGNOSTICS FOR ${TARGET_HOST}"
           echo "==================================================================="
           
-          ssh ubuntu@${{ matrix.server.host }} "
-            cd ~/llm-deployment 2>/dev/null || { echo 'Deployment directory does not exist'; exit 0; }
+          ssh ubuntu@${TARGET_HOST} '
+            cd ~/llm-deployment 2>/dev/null || { echo "Deployment directory does not exist"; exit 0; }
             
-            echo ''
-            echo '=== Container Status ==='
+            echo ""
+            echo "=== Container Status ==="
             docker compose ps -a
             
-            echo ''
-            echo '=== Docker Images ==='
-            docker images | grep -E 'REPOSITORY|llm-'
+            echo ""
+            echo "=== Docker Images ==="
+            docker images | grep -E "REPOSITORY|llm-"
             
-            echo ''
-            echo '=== .env File ==='
-            cat .env 2>/dev/null || echo '.env not found'
+            echo ""
+            echo "=== .env File ==="
+            cat .env 2>/dev/null || echo ".env not found"
             
-            echo ''
-            echo '=== Disk Space ==='
+            echo ""
+            echo "=== Disk Space ==="
             df -h /
             df -h ~/models 2>/dev/null || true
             
-            echo ''
-            echo '=== model_initializer logs (last 150 lines) ==='
-            docker logs model_initializer --tail 150 2>/dev/null || echo 'Container not found'
+            echo ""
+            echo "=== model_initializer logs (last 150 lines) ==="
+            docker logs model_initializer --tail 150 2>/dev/null || echo "Container not found"
             
-            echo ''
-            echo '=== ai_service logs (last 150 lines) ==='
-            docker logs ai_service --tail 150 2>/dev/null || echo 'Container not found'
+            echo ""
+            echo "=== ai_service logs (last 150 lines) ==="
+            docker logs ai_service --tail 150 2>/dev/null || echo "Container not found"
             
-            echo ''
-            echo '=== nginx logs (last 100 lines) ==='
-            docker logs nginx_ai --tail 100 2>/dev/null || echo 'Container not found'
+            echo ""
+            echo "=== nginx logs (last 100 lines) ==="
+            docker logs nginx_ai --tail 100 2>/dev/null || echo "Container not found"
             
-            echo ''
-            echo '=== gpu_monitor logs (last 50 lines) ==='
-            docker logs gpu_monitor --tail 50 2>/dev/null || echo 'Container not found'
+            echo ""
+            echo "=== gpu_monitor logs (last 50 lines) ==="
+            docker logs gpu_monitor --tail 50 2>/dev/null || echo "Container not found"
             
-            echo ''
-            echo '=== GPU Status ==='
-            nvidia-smi 2>&1 | head -20 || echo 'nvidia-smi failed'
+            echo ""
+            echo "=== GPU Status ==="
+            nvidia-smi 2>&1 | head -20 || echo "nvidia-smi failed"
             
-            echo ''
-            echo '=== Network Status ==='
+            echo ""
+            echo "=== Network Status ==="
             docker network ls
-            docker network inspect ai_network 2>/dev/null || echo 'ai_network not found'
+            docker network inspect ai_net 2>/dev/null || echo "ai_net not found"
             
-            echo ''
-            echo '==================================================================='
-          "
+            echo ""
+            echo "==================================================================="
+          '
           ENDSSH
 
   health-check:
@@ -492,8 +504,11 @@ ENVEOF
           ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
       - name: Perform health checks
+        env:
+          GH_REF_NAME: ${{ github.ref_name }}
+          GH_SHA: ${{ github.sha }}
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << ENDSSH
           set -euo pipefail
 
           echo "==================================================================="
@@ -506,23 +521,23 @@ ENVEOF
 
           echo ""
           echo "=== Checking Server 1 (192.168.1.61) ==="
-          if response=$(curl -f -s --max-time 15 http://192.168.1.61/health 2>&1); then
+          if response=\$(curl -f -s --max-time 15 http://192.168.1.61/health 2>&1); then
             echo "✓ Server 1 health check PASSED"
-            echo "Response: $response"
+            echo "Response: \$response"
           else
             echo "❌ Server 1 health check FAILED"
-            echo "Response: $response"
+            echo "Response: \$response"
             exit 1
           fi
 
           echo ""
           echo "=== Checking Server 2 (192.168.1.62) ==="
-          if response=$(curl -f -s --max-time 15 http://192.168.1.62/health 2>&1); then
+          if response=\$(curl -f -s --max-time 15 http://192.168.1.62/health 2>&1); then
             echo "✓ Server 2 health check PASSED"
-            echo "Response: $response"
+            echo "Response: \$response"
           else
             echo "❌ Server 2 health check FAILED"
-            echo "Response: $response"
+            echo "Response: \$response"
             exit 1
           fi
 
@@ -533,6 +548,6 @@ ENVEOF
           echo "Server 1: http://192.168.1.61"
           echo "Server 2: http://192.168.1.62"
           echo ""
-          echo "Deployed Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
+          echo "Deployed Image Tag: ${GH_REF_NAME}-${GH_SHA}"
           echo "==================================================================="
           ENDSSH
