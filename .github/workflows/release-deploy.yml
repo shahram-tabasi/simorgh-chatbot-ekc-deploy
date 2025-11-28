@@ -328,10 +328,19 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
           
           # Ensure SSH key for LLM servers exists on central server
-          if [ ! -f ~/.ssh/id_rsa ]; then
+          if [ ! -f ~/.ssh/id_ed25519 ] && [ ! -f ~/.ssh/id_rsa ]; then
             echo "ERROR: SSH key for LLM servers not found on central server"
-            echo "Please ensure ~/.ssh/id_rsa exists on 192.168.1.68 with access to LLM servers"
+            echo "Please ensure ~/.ssh/id_ed25519 or ~/.ssh/id_rsa exists on 192.168.1.68 with access to LLM servers"
             exit 1
+          fi
+          
+          # Determine which key to use
+          if [ -f ~/.ssh/id_ed25519 ]; then
+            SSH_KEY="~/.ssh/id_ed25519"
+            echo "Using Ed25519 key for LLM server connections"
+          else
+            SSH_KEY="~/.ssh/id_rsa"
+            echo "Using RSA key for LLM server connections"
           fi
 
           # Add LLM server to known hosts if not already present
