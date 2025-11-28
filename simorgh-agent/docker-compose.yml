@@ -6,24 +6,18 @@
 
 services:
   # ===========================================================================
-  # FRONTEND - React Vite Application
+  # FRONTEND - React Vite Application (Production Build)
   # ===========================================================================
   frontend:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-frontend:${IMAGE_TAG:-latest}
     container_name: frontend
     expose:
-      - "5173"
-    environment:
-      - CHOKIDAR_USEPOLLING=true
-      - VITE_API_URL=/api
+      - "80"
     networks:
       - app_net
     restart: unless-stopped
-    command: >
-      sh -c "npx vite --host 0.0.0.0 --port 5173 --clearScreen false || 
-             npm run dev -- --host 0.0.0.0 --port 5173"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5173"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
       interval: 10s
       timeout: 5s
       retries: 10
