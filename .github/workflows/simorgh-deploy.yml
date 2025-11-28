@@ -135,23 +135,30 @@ jobs:
           COCOINDEX_URL=http://cocoindex:8080
           COCOINDEX_DB_PASSWORD=${{ secrets.COCOINDEX_DB_PASSWORD }}
 
-          # SQL Server (External Authentication)
-          SQL_SERVER_HOST=${{ secrets.SQL_SERVER_HOST }}
-          SQL_SERVER_PORT=${{ secrets.SQL_SERVER_PORT }}
-          SQL_SERVER_USER=${{ secrets.SQL_SERVER_USER }}
-          SQL_SERVER_PASSWORD=${{ secrets.SQL_SERVER_PASSWORD }}
-          SQL_SERVER_DATABASE=${{ secrets.SQL_SERVER_DATABASE }}
+          # MySQL (External Authentication) - Supports both MYSQL_* and SQL_SERVER_*
+          MYSQL_HOST=${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT=${{ secrets.MYSQL_PORT }}
+          MYSQL_USER=${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}
+          SQL_SERVER_HOST=${{ secrets.MYSQL_HOST }}
+          SQL_SERVER_PORT=${{ secrets.MYSQL_PORT }}
+          SQL_SERVER_USER=${{ secrets.MYSQL_USER }}
+          SQL_SERVER_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
+          SQL_SERVER_DATABASE=${{ secrets.MYSQL_DATABASE }}
 
           # LLM - OpenAI (Online Mode)
           OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL=gpt-4o
+          LLM_TEMPERATURE=0.7
+          LLM_MAX_TOKENS=2000
 
           # LLM - Local Servers (Offline Mode)
           LOCAL_LLM_URL_1=http://192.168.1.61/ai
           LOCAL_LLM_URL_2=http://192.168.1.62/ai
 
-          # Default LLM Mode
-          DEFAULT_LLM_MODE=online
+          # Default LLM Mode (auto tries online first, falls back to offline)
+          DEFAULT_LLM_MODE=auto
 
           # Frontend
           VITE_API_URL=/api
@@ -184,13 +191,14 @@ jobs:
             echo "COCOINDEX_DB_PASSWORD: [SET]"
           fi
 
-          # SQL Server (optional - may be disabled)
-          if [ -z "${{ secrets.SQL_SERVER_HOST }}" ]; then
-            echo "INFO: SQL Server auth not configured (optional)"
+          # MySQL (optional - may be disabled)
+          if [ -z "${{ secrets.MYSQL_HOST }}" ]; then
+            echo "INFO: MySQL auth not configured (optional)"
           else
-            echo "SQL_SERVER_HOST: [SET]"
-            echo "SQL_SERVER_USER: [SET]"
-            echo "SQL_SERVER_PASSWORD: [SET]"
+            echo "MYSQL_HOST: [SET]"
+            echo "MYSQL_USER: [SET]"
+            echo "MYSQL_PASSWORD: [SET]"
+            echo "MYSQL_DATABASE: [SET]"
           fi
 
           # OpenAI (optional - may use offline mode)
