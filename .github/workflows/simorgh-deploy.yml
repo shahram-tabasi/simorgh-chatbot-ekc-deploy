@@ -44,7 +44,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Lowercase repository owner
         id: lowercase
@@ -82,7 +82,7 @@ jobs:
 
   deploy-central-server:
     name: Deploy to Central Server (1.68)
-    runs-on: [self-hosted, simorgh-hub]
+    runs-on: ubuntu-latest
     needs: [build-simorgh-agent]
 
     steps:
@@ -92,21 +92,26 @@ jobs:
       - name: Lowercase repository owner
         run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-
-      - name: Create deployment directory
+      - name: Setup SSH key
         run: |
-          mkdir -p ~/simorgh-deployment
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
+
+      - name: Copy deployment files to server
+        run: |
+          scp -P 2324 -i ~/.ssh/deploy_key -r simorgh-agent/* ${{ secrets.SSH_USER }}@217.219.39.212:~/simorgh-deployment/
+
+      - name: Create .env file and deploy
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
           cd ~/simorgh-deployment
 
-      - name: Copy deployment files
-        run: |
-          cp -r $GITHUB_WORKSPACE/simorgh-agent/* ~/simorgh-deployment/
+          # Login to GitHub Container Registry
+          echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Create .env file
-        run: |
-          cd ~/simorgh-deployment
+          # Create .env file
           cat > .env << EOF
           # GitHub Registry
           GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
@@ -197,52 +202,38 @@ jobs:
 
           echo "IMAGE_TAG: ${{ github.ref_name }}-${{ github.sha }}"
 
-      - name: Verify environment and images
-        run: |
-          cd ~/simorgh-deployment
+          # Verify environment
           echo "=== Environment File Created ==="
-          echo "File size: $(wc -l < .env) lines"
+          echo "File size: \$(wc -l < .env) lines"
           echo ""
           echo "=== Expected Image Tag ==="
           echo "${{ github.ref_name }}-${{ github.sha }}"
-          echo ""
-          echo "=== Docker Compose Configuration ==="
-          docker compose config --services
 
-      - name: Stop running containers
-        run: |
-          cd ~/simorgh-deployment
+          # Stop running containers
+          echo ""
+          echo "=== Stopping running containers ==="
           docker compose down || true
 
-      - name: Clean up old images
-        run: |
-          cd ~/simorgh-deployment
+          # Clean up old images
+          echo ""
+          echo "=== Cleaning up old images ==="
           docker image prune -f || true
 
-          # Remove old Neo4j data if this is a fresh deployment
-          # Uncomment if you want to start fresh:
-          # docker volume rm simorgh-deployment_neo4j_data || true
-          # docker volume rm simorgh-deployment_redis_data || true
-
-      - name: Pull latest images
-        run: |
-          cd ~/simorgh-deployment
+          # Pull latest images
+          echo ""
+          echo "=== Pulling latest images ==="
           docker compose pull
 
-      - name: Start services
-        run: |
-          cd ~/simorgh-deployment
+          # Start services
+          echo ""
+          echo "=== Starting services ==="
           docker compose up -d
 
-      - name: Wait for services to be healthy
-        run: |
-          cd ~/simorgh-deployment
-          echo "Waiting for services to become healthy..."
+          # Wait for services to be healthy
           echo ""
-
-          # Wait up to 5 minutes for health checks
+          echo "=== Waiting for services to become healthy ==="
           for i in {1..60}; do
-            echo "Check $i/60..."
+            echo "Check \$i/60..."
 
             # Check Neo4j
             if docker compose ps neo4j | grep -q "healthy"; then
@@ -269,75 +260,53 @@ jobs:
             sleep 5
           done
 
+          # Show final status
           echo ""
           echo "=== Final Service Status ==="
           docker compose ps
 
-      - name: Show service status
-        run: |
-          cd ~/simorgh-deployment
-          echo "=== Docker Compose Status ==="
-          docker compose ps
           echo ""
-          echo "=== Container Details ==="
-          docker ps -a --filter "label=com.docker.compose.project=simorgh-deployment"
+          echo "========================================"
+          echo "Simorgh Industrial Assistant Deployed!"
+          echo "========================================"
           echo ""
-          echo "=== Volume Status ==="
-          docker volume ls | grep simorgh-deployment
+          echo "🌐 Central Server: http://192.168.1.68"
+          echo "📊 API Docs: http://192.168.1.68/api/docs"
+          echo "🔍 Neo4j Browser: http://192.168.1.68:7474"
           echo ""
-          echo "=== Network Status ==="
-          docker network ls | grep simorgh-deployment
+          echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
+          echo "========================================"
 
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          cd ~/simorgh-deployment
-          echo "=== Docker Compose Status ==="
-          docker compose ps
-          echo ""
-          echo "=== Neo4j Logs ==="
-          docker compose logs neo4j --tail=100
-          echo ""
-          echo "=== Redis Logs ==="
-          docker compose logs redis --tail=50
-          echo ""
-          echo "=== Backend Logs ==="
-          docker compose logs backend --tail=100
-          echo ""
-          echo "=== Frontend Logs ==="
-          docker compose logs frontend --tail=50
-          echo ""
-          echo "=== Nginx Logs ==="
-          docker compose logs nginx --tail=50
-          echo ""
-          echo "=== CocoIndex Logs ==="
-          docker compose logs cocoindex --tail=50
-          echo ""
-          echo "=== All Container Status ==="
-          docker ps -a
+          ENDSSH
 
   health-check:
     name: Simorgh Agent Health Check
-    runs-on: [self-hosted, simorgh-hub]
+    runs-on: ubuntu-latest
     needs: [deploy-central-server]
 
     steps:
-      - name: Wait for application startup
+      - name: Setup SSH key
         run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
+
+      - name: Run health checks
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
           echo "Waiting 30 seconds for application to fully start..."
           sleep 30
 
-      - name: Check Central Server Health
-        run: |
           echo "Checking Central Server (1.68) health endpoint..."
 
           # Try health check up to 10 times
           for i in {1..10}; do
-            echo "Attempt $i/10..."
+            echo "Attempt \$i/10..."
             if curl -f http://localhost/api/health; then
               echo ""
               echo "✅ Health check passed!"
-              exit 0
+              break
             else
               echo "⏳ Service not ready yet..."
               sleep 5
@@ -345,38 +314,27 @@ jobs:
           done
 
           echo ""
-          echo "❌ Health check failed after 10 attempts"
-          exit 1
-
-      - name: Check Service Details
-        run: |
           echo "=== Service Health Details ==="
           curl -s http://localhost/api/health | jq '.' || echo "Could not parse health response"
-          echo ""
-          echo "=== Frontend Status ==="
-          curl -f http://localhost/ > /dev/null && echo "✅ Frontend accessible" || echo "❌ Frontend not accessible"
-          echo ""
-          echo "=== Neo4j Browser ==="
-          curl -f http://localhost:7474 > /dev/null && echo "✅ Neo4j Browser accessible" || echo "❌ Neo4j Browser not accessible"
 
-      - name: Test API Endpoints
-        run: |
+          echo ""
           echo "=== Testing API Endpoints ==="
-
-          # Test status endpoint
           echo "Testing /api/status..."
           curl -f http://localhost/api/status || echo "❌ Status endpoint failed"
 
-          # Test projects list endpoint
           echo ""
           echo "Testing /api/projects..."
           curl -f http://localhost/api/projects || echo "❌ Projects endpoint failed"
 
           echo ""
-          echo "✅ API endpoint tests completed"
+          echo "=== Frontend Status ==="
+          curl -f http://localhost/ > /dev/null && echo "✅ Frontend accessible" || echo "❌ Frontend not accessible"
 
-      - name: Deployment Summary
-        run: |
+          echo ""
+          echo "=== Neo4j Browser ==="
+          curl -f http://localhost:7474 > /dev/null && echo "✅ Neo4j Browser accessible" || echo "❌ Neo4j Browser not accessible"
+
+          echo ""
           echo "========================================"
           echo "Simorgh Industrial Assistant Deployed!"
           echo "========================================"
@@ -397,3 +355,5 @@ jobs:
           echo "========================================"
           echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
           echo "========================================"
+
+          ENDSSH
