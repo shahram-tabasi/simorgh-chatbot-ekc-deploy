@@ -213,14 +213,15 @@ jobs:
           # Create .env with exact tag
           echo ""
           echo "=== Creating .env file ==="
-          ssh ubuntu@${TARGET_HOST} "cat > ~/llm-deployment/.env" << EOF
+          ssh ubuntu@${TARGET_HOST} << ENVEOF
+cat > ~/llm-deployment/.env << EOF
 GITHUB_REGISTRY=${GH_REGISTRY}
 GITHUB_REPOSITORY_OWNER=${GH_REPO_OWNER}
 IMAGE_TAG=${GH_REF_NAME}-${GH_SHA}
 MODEL_CACHE_PATH=/home/ubuntu/models/huggingface
 EOF
-
-          ssh ubuntu@${TARGET_HOST} "cat ~/llm-deployment/.env"
+cat ~/llm-deployment/.env
+ENVEOF
           echo "✓ .env file created"
 
           # Docker login
