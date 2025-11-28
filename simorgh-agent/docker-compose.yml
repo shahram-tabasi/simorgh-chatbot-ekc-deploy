@@ -47,8 +47,8 @@ services:
       - REDIS_CACHE_DB=2
       # Qdrant
       - QDRANT_URL=http://qdrant:6333
-      # CocoIndex
-      - COCOINDEX_URL=http://cocoindex:8080
+      # CocoIndex (builds from source)
+      - COCOINDEX_PIPELINE_DIR=/app/cocoindex_flows
       # SQL Server (Auth) - Read Only
       - SQL_SERVER_HOST=${SQL_SERVER_HOST}
       - SQL_SERVER_PORT=${SQL_SERVER_PORT:-1433}
@@ -75,7 +75,7 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-      cocoindex:
+      cocoindex_db:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8890/health | grep -q 'healthy' || exit 1"]
@@ -161,42 +161,50 @@ services:
 
   # ===========================================================================
   # COCOINDEX - Data Framework for Graph Building
+  # Builds from source using python:3.11-bookworm base image
   # ===========================================================================
   cocoindex:
-    image: cocoindex/cocoindex:latest
+    image: python:3.11-bookworm
     container_name: cocoindex
-    environment:
-      - COCOINDEX_DATABASE_URL=postgresql://cocoindex:${COCOINDEX_DB_PASSWORD:-cocoindex_2024}@cocoindex_db:5432/cocoindex
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-simorgh_secure_2024}
-    volumes:
-      - ./cocoindex_flows:/app/flows
-      - ./uploads:/docs:ro
-    expose:
-      - "8080"
-    networks:
-      - app_net
+    restart: unless-stopped
     depends_on:
       cocoindex_db:
         condition: service_healthy
       neo4j:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
+    volumes:
+      - ./uploads:/docs:ro
+      - ./cocoindex_flows:/app
+    working_dir: /app
+    command: >
+      sh -c "
+        apt-get update && apt-get install -y git build-essential curl &&
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y &&
+        . /root/.cargo/env &&
+        rm -rf /tmp/coco || true &&
+        git clone --depth 1 https://github.com/cocoindex-io/cocoindex.git /tmp/coco &&
+        cd /tmp/coco &&
+        pip install --no-cache-dir . openai &&
+        cd /app &&
+        sleep 15 &&
+        cocoindex update pipeline --force
+      "
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - COCOINDEX_DATABASE_URL=postgresql://cocoindex:${COCOINDEX_DB_PASSWORD:-cocoindex_2024}@cocoindex_db:5432/cocoindex
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-simorgh_secure_2024}
+    networks:
+      - app_net
 
   # ===========================================================================
-  # COCOINDEX DATABASE - PostgreSQL for CocoIndex metadata
+  # COCOINDEX DATABASE - PostgreSQL with pgvector for CocoIndex
   # ===========================================================================
   cocoindex_db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg17
     container_name: cocoindex_db
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=cocoindex
       - POSTGRES_PASSWORD=${COCOINDEX_DB_PASSWORD:-cocoindex_2024}
