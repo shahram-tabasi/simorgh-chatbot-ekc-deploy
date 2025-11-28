@@ -25,7 +25,16 @@ aiofiles==23.2.1
 # MongoDB (for backward compatibility)
 pymongo==4.6.1
 
-# ArangoDB (Graph Database) - REQUIRED for Graph RAG
+# Neo4j (Graph Database) - NEW Architecture
+neo4j>=5.15.0
+
+# Redis (Caching & Session Store) - NEW Architecture
+redis>=5.0.0
+
+# SQL Server (External Authentication) - NEW Architecture
+pymssql>=2.2.0
+
+# ArangoDB (Graph Database) - Legacy (backward compatibility)
 pyArango==2.1.1
 python-arango==8.2.2
 

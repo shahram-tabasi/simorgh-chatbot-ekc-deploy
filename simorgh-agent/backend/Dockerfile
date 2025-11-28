@@ -133,7 +133,12 @@ RUN echo "=== Verifying installations ===" && \
 # -------------------------------------------------
 #  Application files
 # -------------------------------------------------
+# Copy new architecture files
 COPY main.py .
+COPY services/ ./services/
+COPY models/ ./models/
+
+# Copy legacy files (for backward compatibility if needed)
 COPY enhanced_pdf_parser_v4_universal.py .
 COPY graph_rag_system.py .
 COPY arango_graph_manager.py .
