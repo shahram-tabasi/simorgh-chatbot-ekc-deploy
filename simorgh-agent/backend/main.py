@@ -218,14 +218,30 @@ async def health_check(
     }
 
     # Determine overall status
-    all_healthy = all(
+    # Critical services: Neo4j, Redis
+    # Optional services: SQL Auth (can be disabled), LLM (can be degraded/unhealthy)
+    critical_services_healthy = all(
+        health["services"][svc].get("status") in ["healthy", "disabled"]
+        for svc in ["neo4j", "redis"]
+    )
+
+    all_services_healthy = all(
         svc.get("status") in ["healthy", "disabled"]
         for svc in health["services"].values()
     )
 
-    health["status"] = "healthy" if all_healthy else "degraded"
+    # System is healthy if critical services are up
+    # Even if LLM is temporarily unavailable, the system can still function
+    if all_services_healthy:
+        health["status"] = "healthy"
+        status_code = 200
+    elif critical_services_healthy:
+        health["status"] = "degraded"
+        status_code = 200  # Still return 200 for degraded state
+    else:
+        health["status"] = "unhealthy"
+        status_code = 503
 
-    status_code = 200 if all_healthy else 503
     return JSONResponse(content=health, status_code=status_code)
 
 
