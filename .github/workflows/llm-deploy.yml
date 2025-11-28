@@ -134,14 +134,27 @@ jobs:
 
       - name: Copy deployment files via central server
         run: |
+          # Create tarball of llms directory
+          tar -czf /tmp/llms-deploy.tar.gz -C ./llms .
+          
+          # Copy tarball to central server
+          scp -P 2324 -i ~/.ssh/deploy_key /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/
+          
+          # Extract on target server via central server
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
           set -e
-          cd /tmp
-          rm -rf llm-deploy-temp
-          git clone --depth 1 --branch ${{ github.ref_name }} https://github.com/${{ github.repository }}.git llm-deploy-temp
-          scp -r llm-deploy-temp/llms/* ubuntu@${{ matrix.server.host }}:~/llm-deployment/
-          rm -rf llm-deploy-temp
+          # Copy tarball to target server
+          scp /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/
+          
+          # Extract on target server
+          ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'
+          
+          # Clean up central server
+          rm /tmp/llms-deploy.tar.gz
           ENDSSH
+          
+          # Clean up local
+          rm /tmp/llms-deploy.tar.gz
 
       - name: Create .env file on target server
         env:
