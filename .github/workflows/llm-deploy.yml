@@ -12,7 +12,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}
 
 jobs:
   build-llm-services:
@@ -39,6 +38,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Lowercase repository owner
+        id: lowercase
+        run: |
+          OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "OWNER_LC=$OWNER_LC" >> $GITHUB_ENV
+          echo "Repository owner: ${{ github.repository_owner }}"
+          echo "Lowercase owner: $OWNER_LC"
+
       - name: Free Disk Space (only for large ai-service build)
         if: matrix.service.name == 'ai-service'
         run: |
@@ -64,7 +71,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/llm-${{ matrix.service.name }}
+          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}
           tags: |
             type=ref,event=branch
             type=sha,format=long,prefix={{branch}}-
@@ -100,6 +107,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Setup SSH key for central server
         run: |
           mkdir -p ~/.ssh
@@ -112,7 +122,7 @@ jobs:
           TARGET_HOST: ${{ matrix.server.host }}
           SERVER_NAME: ${{ matrix.server.name }}
           GH_REGISTRY: ${{ env.REGISTRY }}
-          GH_REPO_OWNER: ${{ env.IMAGE_PREFIX }}
+          GH_REPO_OWNER: ${{ env.OWNER_LC }}
           GH_REF_NAME: ${{ github.ref_name }}
           GH_SHA: ${{ github.sha }}
           GH_REPOSITORY: ${{ github.repository }}
