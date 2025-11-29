@@ -829,6 +829,201 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 
 
 # =============================================================================
+# BACKWARD COMPATIBLE CHAT ENDPOINT (for frontend)
+# =============================================================================
+
+@app.post("/chat/message")
+async def send_chat_message_legacy(
+    content: str = Form(...),
+    projectId: Optional[str] = Form(None),
+    chatId: Optional[str] = Form(None),
+    isGeneral: Optional[str] = Form(None),
+    files: Optional[list[UploadFile]] = File(None),
+    neo4j: Neo4jService = Depends(get_neo4j),
+    redis: RedisService = Depends(get_redis),
+    llm: LLMService = Depends(get_llm)
+):
+    """
+    Legacy endpoint for frontend compatibility
+
+    This endpoint accepts form data from the frontend and converts it
+    to work with the new chat architecture.
+    """
+    try:
+        # Create or get chat
+        if chatId:
+            # Use existing chat
+            chat_id = chatId
+        else:
+            # Create new chat
+            is_general_chat = isGeneral == "true"
+
+            if is_general_chat:
+                # Create general chat
+                chat_data = {
+                    "chat_id": str(uuid.uuid4()),
+                    "chat_name": "General Chat",
+                    "user_id": "default_user",  # TODO: Get from auth headers
+                    "chat_type": "general",
+                    "project_number": None,
+                    "created_at": datetime.now().isoformat(),
+                    "message_count": 0
+                }
+                redis.set(f"chat:{chat_data['chat_id']}:metadata", chat_data, db="chat")
+                chat_id = chat_data['chat_id']
+            else:
+                # Create project chat
+                if not projectId:
+                    raise HTTPException(status_code=400, detail="projectId required for project chat")
+
+                chat_data = {
+                    "chat_id": str(uuid.uuid4()),
+                    "chat_name": "Project Chat",
+                    "user_id": "default_user",  # TODO: Get from auth headers
+                    "chat_type": "project",
+                    "project_number": projectId,
+                    "created_at": datetime.now().isoformat(),
+                    "message_count": 0
+                }
+                redis.set(f"chat:{chat_data['chat_id']}:metadata", chat_data, db="chat")
+                chat_id = chat_data['chat_id']
+
+        # Build message object
+        message = ChatMessage(
+            chat_id=chat_id,
+            user_id="default_user",  # TODO: Get from auth headers
+            content=content,
+            llm_mode=None,  # Use default
+            use_graph_context=True
+        )
+
+        # Get chat metadata
+        chat_metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
+        if not chat_metadata:
+            raise HTTPException(status_code=404, detail="Chat not found")
+
+        project_number = chat_metadata.get("project_number")
+
+        # Build context from knowledge graph if project chat
+        graph_context = ""
+        context_used = False
+
+        if project_number and message.use_graph_context:
+            try:
+                entities = neo4j.semantic_search(
+                    project_number=project_number,
+                    filters=None,
+                    limit=10
+                )
+
+                if entities:
+                    graph_context = "\n\nRelevant project information:\n"
+                    for entity in entities[:5]:
+                        graph_context += f"- {entity.get('entity_type')}: {entity.get('description', 'N/A')}\n"
+                    context_used = True
+
+            except Exception as e:
+                logger.warning(f"Graph context retrieval failed: {e}")
+
+        # Build LLM messages
+        system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
+You help users with electrical panel specifications, power distribution, protection devices, and system design.
+Provide accurate, technical responses based on IEC and IEEE standards."""
+
+        if graph_context:
+            system_prompt += f"\n\n{graph_context}"
+
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content}
+        ]
+
+        # Generate response
+        result = llm.generate(
+            messages=llm_messages,
+            mode=None,
+            temperature=0.7,
+            use_cache=True
+        )
+
+        ai_response = result["response"]
+
+        # Cache messages
+        user_msg = {
+            "role": "user",
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            "user_id": "default_user"
+        }
+
+        assistant_msg = {
+            "role": "assistant",
+            "content": ai_response,
+            "timestamp": datetime.now().isoformat(),
+            "llm_mode": result.get("mode"),
+            "context_used": context_used,
+            "cached": result.get("cached", False)
+        }
+
+        redis.cache_chat_message(chat_id, user_msg)
+        redis.cache_chat_message(chat_id, assistant_msg)
+
+        # Return in format expected by frontend
+        return {
+            "chatId": chat_id,
+            "response": ai_response,
+            "assistantMessage": {
+                "id": str(uuid.uuid4()),
+                "content": ai_response,
+                "role": "assistant",
+                "timestamp": datetime.now().isoformat()
+            },
+            "userMessage": {
+                "id": str(uuid.uuid4()),
+                "content": content,
+                "role": "user",
+                "timestamp": datetime.now().isoformat()
+            }
+        }
+
+    except HTTPException:
+        raise
+    except LLMOfflineError as e:
+        logger.error(f"Offline LLM unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "offline_unavailable",
+                "message": "Local LLM servers are unavailable. Please try online mode.",
+                "technical_error": str(e)
+            }
+        )
+    except LLMOnlineError as e:
+        logger.error(f"Online LLM unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "online_unavailable",
+                "message": "OpenAI API is unavailable. Please try offline mode.",
+                "technical_error": str(e)
+            }
+        )
+    except LLMTimeoutError as e:
+        logger.error(f"LLM timeout: {e}")
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error": "timeout",
+                "message": "LLM request timed out. Please try again.",
+                "technical_error": str(e)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
 # DOCUMENT PROCESSING
 # =============================================================================
 
