@@ -1,8 +1,9 @@
 # =============================================================================
-# Dockerfile for Graph RAG System with Multi-Document Support
+# Dockerfile for Simorgh Industrial Electrical Assistant - Backend
 # =============================================================================
 # Base: PyTorch 2.5 + CUDA 12.4 + cuDNN 9 (runtime)
 # Python: 3.11
+# Architecture: Neo4j + Redis + Hybrid LLM + SQL Server Auth
 # Total size: ~15-20GB (includes all models and dependencies)
 # =============================================================================
 
@@ -15,8 +16,8 @@ FROM pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
 #  Metadata
 # -------------------------------------------------
 LABEL maintainer="Simorgh Development Team"
-LABEL description="Graph RAG System with Multi-Document Chatbot Support"
-LABEL version="3.1.0"
+LABEL description="Simorgh Industrial Electrical Assistant - Backend API"
+LABEL version="2.0.0"
 
 # -------------------------------------------------
 #  Environment Variables
@@ -121,10 +122,8 @@ RUN echo "=== Downloading NLTK data ===" && \
 RUN echo "=== Verifying installations ===" && \
     python3.11 -c "import fastapi; print('✓ FastAPI')" && \
     python3.11 -c "import torch; print('✓ PyTorch')" && \
-    python3.11 -c "import qdrant_client; print('✓ Qdrant')" && \
-    python3.11 -c "import pyArango; print('✓ pyArango')" && \
-    python3.11 -c "from pyArango.connection import Connection; print('✓ pyArango.connection')" && \
-    python3.11 -c "from pyArango.collection import Collection, Edges; print('✓ pyArango.collection')" && \
+    python3.11 -c "import neo4j; print('✓ Neo4j')" && \
+    python3.11 -c "import redis; print('✓ Redis')" && \
     python3.11 -c "from sentence_transformers import SentenceTransformer; print('✓ SentenceTransformers')" && \
     python3.11 -c "import unstructured; print('✓ Unstructured')" && \
     python3.11 -c "from pdfminer.pdfparser import PSSyntaxError; print('✓ pdfminer.six (with PSSyntaxError)')" && \
@@ -137,16 +136,6 @@ RUN echo "=== Verifying installations ===" && \
 COPY main.py .
 COPY services/ ./services/
 COPY models/ ./models/
-
-# Copy legacy files (for backward compatibility if needed)
-COPY enhanced_pdf_parser_v4_universal.py .
-COPY graph_rag_system.py .
-COPY arango_graph_manager.py .
-COPY edge_vector_store.py .
-COPY graph_extractor.py .
-COPY electrical_ontology.py .
-COPY conversation_document_manager.py .
-COPY migration_tool.py .
 
 # -------------------------------------------------
 #  Create necessary directories
@@ -175,7 +164,7 @@ CMD ["python3.11", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "
 # Build & Run Information
 # =============================================================================
 # Build command:
-#   docker build -t simorgh-graph-rag:latest .
+#   docker build -t simorgh-backend:latest .
 #
 # Run command:
 #   docker run -d \
@@ -183,13 +172,15 @@ CMD ["python3.11", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "
 #     --gpus all \
 #     -p 8890:8890 \
 #     -v $(pwd)/uploads:/app/uploads \
-#     -e ENABLE_GRAPH_RAG=true \
-#     -e ARANGODB_URL=http://arangodb:8529 \
-#     -e ARANGODB_USERNAME=root \
-#     -e ARANGODB_PASSWORD=changeme \
-#     -e QDRANT_URL=http://qdrant:6333 \
-#     -e AI_API_URL_1=http://192.168.1.61/ai \
-#     simorgh-graph-rag:latest
+#     -e NEO4J_URI=bolt://neo4j:7687 \
+#     -e NEO4J_USER=neo4j \
+#     -e NEO4J_PASSWORD=changeme \
+#     -e REDIS_HOST=redis \
+#     -e REDIS_PORT=6379 \
+#     -e OPENAI_API_KEY=sk-... \
+#     -e LOCAL_LLM_URL_1=http://192.168.1.61/ai \
+#     -e LOCAL_LLM_URL_2=http://192.168.1.62/ai \
+#     simorgh-backend:latest
 #
 # Build time: ~25-35 minutes (first time)
 # Image size: ~15-20GB (with all dependencies)
