@@ -29,7 +29,13 @@ import json
 from services.neo4j_service import get_neo4j_service, Neo4jService
 from services.redis_service import get_redis_service, RedisService
 from services.sql_auth_service import get_sql_auth_service, SQLAuthService
-from services.llm_service import get_llm_service, LLMService
+from services.llm_service import (
+    get_llm_service,
+    LLMService,
+    LLMOfflineError,
+    LLMOnlineError,
+    LLMTimeoutError
+)
 from models.ontology import *
 
 # Logging
@@ -646,9 +652,177 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 
     except HTTPException:
         raise
+    except LLMOfflineError as e:
+        logger.error(f"Offline LLM unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "offline_unavailable",
+                "message": "Local LLM servers are unavailable. Please try online mode or check server status.",
+                "servers_tried": [
+                    os.getenv("LOCAL_LLM_URL_1", "http://192.168.1.61/ai"),
+                    os.getenv("LOCAL_LLM_URL_2", "http://192.168.1.62/ai")
+                ],
+                "technical_error": str(e)
+            }
+        )
+    except LLMOnlineError as e:
+        logger.error(f"Online LLM unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "online_unavailable",
+                "message": "OpenAI API is unavailable. Please try offline mode or check your API key.",
+                "api_model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+                "technical_error": str(e)
+            }
+        )
+    except LLMTimeoutError as e:
+        logger.error(f"LLM timeout: {e}")
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error": "timeout",
+                "message": "LLM request timed out. The query may be too complex or the server is overloaded.",
+                "mode": message.llm_mode or "default",
+                "technical_error": str(e)
+            }
+        )
     except Exception as e:
-        logger.error(f"Chat error: {e}")
+        logger.error(f"Unexpected chat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/chat/stream")
+async def send_chat_message_stream(
+    message: ChatMessage,
+    neo4j: Neo4jService = Depends(get_neo4j),
+    redis: RedisService = Depends(get_redis),
+    llm: LLMService = Depends(get_llm)
+):
+    """
+    Send a chat message and get AI response via Server-Sent Events streaming
+
+    Uses graph context if available and requested
+    Returns chunks in real-time as the LLM generates them
+    """
+    def event_stream():
+        try:
+            # Get chat metadata
+            chat_metadata = redis.get(f"chat:{message.chat_id}:metadata", db="chat")
+
+            if not chat_metadata:
+                yield f"data: {json.dumps({'error': 'Chat not found'})}\n\n"
+                return
+
+            project_number = chat_metadata.get("project_number")
+
+            # Build context from knowledge graph if project chat
+            graph_context = ""
+            context_used = False
+
+            if project_number and message.use_graph_context:
+                try:
+                    entities = neo4j.semantic_search(
+                        project_number=project_number,
+                        filters=None,
+                        limit=10
+                    )
+
+                    if entities:
+                        graph_context = "\n\nRelevant project information:\n"
+                        for entity in entities[:5]:
+                            graph_context += f"- {entity.get('entity_type')}: {entity.get('description', 'N/A')}\n"
+                        context_used = True
+
+                except Exception as e:
+                    logger.warning(f"Graph context retrieval failed: {e}")
+
+            # Build LLM messages
+            system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
+You help users with electrical panel specifications, power distribution, protection devices, and system design.
+Provide accurate, technical responses based on IEC and IEEE standards."""
+
+            if graph_context:
+                system_prompt += f"\n\n{graph_context}"
+
+            llm_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message.content}
+            ]
+
+            # Send metadata first
+            yield f"data: {json.dumps({'context_used': context_used, 'streaming': True})}\n\n"
+
+            # Stream response chunks
+            full_response = ""
+            llm_mode = message.llm_mode or None
+
+            for chunk in llm.generate_stream(
+                messages=llm_messages,
+                mode=llm_mode,
+                temperature=0.7
+            ):
+                full_response += chunk
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+            # Cache messages after completion
+            user_msg = {
+                "role": "user",
+                "content": message.content,
+                "timestamp": datetime.now().isoformat(),
+                "user_id": message.user_id
+            }
+
+            assistant_msg = {
+                "role": "assistant",
+                "content": full_response,
+                "timestamp": datetime.now().isoformat(),
+                "llm_mode": llm_mode,
+                "context_used": context_used,
+                "cached": False
+            }
+
+            redis.cache_chat_message(message.chat_id, user_msg)
+            redis.cache_chat_message(message.chat_id, assistant_msg)
+
+            # Signal completion
+            yield f"data: {json.dumps({'done': True, 'llm_mode': llm_mode})}\n\n"
+
+        except LLMOfflineError as e:
+            logger.error(f"Offline LLM unavailable: {e}")
+            yield f"data: {json.dumps({
+                'error': 'offline_unavailable',
+                'message': 'Local LLM servers are unavailable. Please try online mode.',
+                'technical_error': str(e)
+            })}\n\n"
+        except LLMOnlineError as e:
+            logger.error(f"Online LLM unavailable: {e}")
+            yield f"data: {json.dumps({
+                'error': 'online_unavailable',
+                'message': 'OpenAI API is unavailable. Please try offline mode.',
+                'technical_error': str(e)
+            })}\n\n"
+        except LLMTimeoutError as e:
+            logger.error(f"LLM timeout: {e}")
+            yield f"data: {json.dumps({
+                'error': 'timeout',
+                'message': 'LLM request timed out. Please try again.',
+                'technical_error': str(e)
+            })}\n\n"
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive"
+        }
+    )
 
 
 # =============================================================================
@@ -661,10 +835,11 @@ async def upload_and_process_document(
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = None,
     llm_mode: str = Form("online"),
-    neo4j: Neo4jService = Depends(get_neo4j)
+    neo4j: Neo4jService = Depends(get_neo4j),
+    redis: RedisService = Depends(get_redis)
 ):
     """
-    Upload and process a document
+    Upload and actively process a document through CocoIndex
 
     Extracts entities and relationships using CocoIndex flow
     """
@@ -693,33 +868,77 @@ async def upload_and_process_document(
 
     logger.info(f"File saved: {file_path}")
 
-    # CocoIndex service will automatically process documents in the uploads directory
-    # Note: CocoIndex watches the uploads folder and processes PDFs automatically
-    task_id = str(uuid.uuid4())
+    # Import and call CocoIndex flow to actively process document
+    try:
+        # Import process_document from CocoIndex flow
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from cocoindex_flows.industrial_electrical_flow import process_document
 
-    # Store upload metadata for tracking
-    if redis_service:
-        redis_service.set(
-            f"upload:{task_id}",
-            json.dumps({
-                "project_number": project_number,
+        # Process document synchronously
+        start_time = datetime.now()
+        result = process_document(
+            project_number=project_number,
+            document_path=str(file_path),
+            document_metadata={
                 "filename": file.filename,
-                "file_path": str(file_path),
-                "upload_time": datetime.now().isoformat(),
-                "status": "uploaded"
-            }),
+                "upload_time": start_time.isoformat()
+            },
+            llm_mode=llm_mode
+        )
+        processing_time = (datetime.now() - start_time).total_seconds()
+
+        # Cache result
+        task_id = str(uuid.uuid4())
+        result["task_id"] = task_id
+        result["processing_time"] = processing_time
+
+        redis.set(
+            f"task:{task_id}:result",
+            result,
             ttl=3600,
             db="cache"
         )
 
-    return {
-        "status": "success",
-        "task_id": task_id,
-        "project_number": project_number,
-        "filename": file.filename,
-        "file_path": str(file_path),
-        "message": "Document uploaded successfully. CocoIndex will process it automatically."
-    }
+        if result["status"] == "success":
+            return {
+                "status": "success",
+                "task_id": task_id,
+                "project_number": project_number,
+                "filename": file.filename,
+                "file_path": str(file_path),
+                "entities_extracted": result.get("entities_extracted", 0),
+                "relationships_extracted": result.get("relationships_extracted", 0),
+                "processing_time": processing_time,
+                "message": "Document processed successfully"
+            }
+        elif result["status"] == "skipped":
+            return {
+                "status": "skipped",
+                "task_id": task_id,
+                "project_number": project_number,
+                "filename": file.filename,
+                "reason": result.get("reason", "unknown"),
+                "message": "Document processing skipped"
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Document processing failed: {result.get('error', 'Unknown error')}"
+            )
+
+    except ImportError as e:
+        logger.error(f"CocoIndex import failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="CocoIndex processing unavailable. Please check CocoIndex container."
+        )
+    except Exception as e:
+        logger.error(f"Document processing failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Document processing error: {str(e)}"
+        )
 
 
 @app.get("/api/documents/task/{task_id}")

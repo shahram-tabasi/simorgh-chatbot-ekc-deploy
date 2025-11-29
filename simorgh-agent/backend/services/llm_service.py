@@ -27,6 +27,34 @@ from requests.exceptions import RequestException, Timeout
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# CUSTOM EXCEPTIONS
+# =============================================================================
+
+class LLMError(Exception):
+    """Base exception for LLM-related errors"""
+    pass
+
+
+class LLMOfflineError(LLMError):
+    """Raised when local LLM servers are unavailable"""
+    pass
+
+
+class LLMOnlineError(LLMError):
+    """Raised when OpenAI API is unavailable"""
+    pass
+
+
+class LLMTimeoutError(LLMError):
+    """Raised when LLM request times out"""
+    pass
+
+
+# =============================================================================
+# ENUMS
+# =============================================================================
+
 class LLMMode(str, Enum):
     """LLM operation modes"""
     ONLINE = "online"
@@ -288,9 +316,12 @@ class LLMService:
                 "finish_reason": response.choices[0].finish_reason
             }
 
+        except openai.APITimeoutError as e:
+            logger.error(f"OpenAI API timeout: {e}")
+            raise LLMTimeoutError(f"OpenAI API request timed out: {str(e)}")
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
-            raise
+            raise LLMOnlineError(f"OpenAI API unavailable: {str(e)}")
 
     def _generate_offline(
         self,
@@ -322,7 +353,7 @@ class LLMService:
                 )
             except Exception as e2:
                 logger.error(f"Both LLM servers failed: {e2}")
-                raise Exception("All local LLM servers unavailable")
+                raise LLMOfflineError(f"All local LLM servers unavailable (tried {self.local_llm_url_1} and {self.local_llm_url_2})")
 
     def _call_local_llm(
         self,
@@ -364,9 +395,9 @@ class LLMService:
             }
 
         except Timeout:
-            raise Exception(f"Local LLM timeout: {url}")
+            raise LLMTimeoutError(f"Local LLM server timed out: {url}")
         except RequestException as e:
-            raise Exception(f"Local LLM request failed: {e}")
+            raise Exception(f"Local LLM request failed: {url} - {str(e)}")
 
     # =========================================================================
     # STREAMING SUPPORT

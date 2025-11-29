@@ -180,8 +180,8 @@ services:
         cd /tmp/coco &&
         pip install --no-cache-dir . openai &&
         cd /app &&
-        sleep 15 &&
-        cocoindex update pipeline --force
+        echo 'CocoIndex ready - waiting for backend calls' &&
+        tail -f /dev/null
       "
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
