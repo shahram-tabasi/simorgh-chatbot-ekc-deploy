@@ -7,7 +7,7 @@ on:
       - develop
     paths:
       - 'llms/**'
-      - '.github/workflows/llm-deploy-new.yml'
+      - '.github/workflows/llm-deploy.yml'
   workflow_dispatch:
 
 env:
