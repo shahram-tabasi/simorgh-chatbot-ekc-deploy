@@ -52,8 +52,7 @@ services:
       # LLM Configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
-      - LOCAL_LLM_URL_1=${LOCAL_LLM_URL_1:-http://192.168.1.61/ai}
-      - LOCAL_LLM_URL_2=${LOCAL_LLM_URL_2:-http://192.168.1.62/ai}
+      - LOCAL_LLM_URL=http://nginx/api/llm
       - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
     volumes:
       - ./uploads:/app/uploads

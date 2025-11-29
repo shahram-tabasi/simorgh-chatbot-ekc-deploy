@@ -95,15 +95,13 @@ class LLMService:
         else:
             logger.warning("⚠️ OpenAI API key not configured")
 
-        # Local LLM configuration
-        self.local_llm_url_1 = local_llm_url_1 or os.getenv(
-            "LOCAL_LLM_URL_1", "http://192.168.1.61/ai"
-        )
-        self.local_llm_url_2 = local_llm_url_2 or os.getenv(
-            "LOCAL_LLM_URL_2", "http://192.168.1.62/ai"
+        # Local LLM configuration - via nginx load balancer
+        # Backend sends offline traffic to /api/llm which nginx load balances to .61/.62
+        self.local_llm_url = local_llm_url_1 or os.getenv(
+            "LOCAL_LLM_URL", "http://localhost/api/llm"
         )
 
-        logger.info(f"✅ Local LLM servers: {self.local_llm_url_1}, {self.local_llm_url_2}")
+        logger.info(f"✅ Local LLM endpoint (load-balanced): {self.local_llm_url}")
 
         # Default mode
         self.default_mode = LLMMode(
@@ -126,16 +124,14 @@ class LLMService:
         """Check health of all LLM endpoints"""
         health = {
             "openai": self._check_openai_health(),
-            "local_llm_1": self._check_local_llm_health(self.local_llm_url_1),
-            "local_llm_2": self._check_local_llm_health(self.local_llm_url_2),
+            "local_llm": self._check_local_llm_health(self.local_llm_url),
             "stats": self.stats
         }
 
         overall_status = "healthy" if any(
             h["status"] == "healthy" for h in [
                 health["openai"],
-                health["local_llm_1"],
-                health["local_llm_2"]
+                health["local_llm"]
             ]
         ) else "unhealthy"
 
@@ -329,31 +325,19 @@ class LLMService:
         temperature: float,
         max_tokens: Optional[int]
     ) -> Dict[str, Any]:
-        """Generate response using local LLM servers with fallback"""
+        """Generate response using local LLM via nginx load balancer"""
 
-        # Try primary server first
+        # Call load-balanced endpoint (nginx handles failover between .61/.62)
         try:
             return self._call_local_llm(
-                self.local_llm_url_1,
+                self.local_llm_url,
                 messages,
                 temperature,
                 max_tokens
             )
         except Exception as e:
-            logger.warning(f"Primary LLM server failed: {e}")
-
-            # Fallback to secondary server
-            try:
-                logger.info("Trying fallback LLM server...")
-                return self._call_local_llm(
-                    self.local_llm_url_2,
-                    messages,
-                    temperature,
-                    max_tokens
-                )
-            except Exception as e2:
-                logger.error(f"Both LLM servers failed: {e2}")
-                raise LLMOfflineError(f"All local LLM servers unavailable (tried {self.local_llm_url_1} and {self.local_llm_url_2})")
+            logger.error(f"Local LLM endpoint failed: {e}")
+            raise LLMOfflineError(f"Local LLM unavailable (load-balanced endpoint: {self.local_llm_url})")
 
     def _call_local_llm(
         self,
@@ -462,7 +446,7 @@ class LLMService:
         temperature: float,
         max_tokens: Optional[int]
     ) -> Iterator[str]:
-        """Stream from local LLM server"""
+        """Stream from local LLM via nginx load balancer"""
 
         payload = {
             "messages": messages,
@@ -471,11 +455,10 @@ class LLMService:
             "stream": True
         }
 
-        # Try primary server
+        # Call load-balanced endpoint (nginx handles failover between .61/.62)
         try:
-            url = self.local_llm_url_1
             response = requests.post(
-                f"{url}/chat",
+                f"{self.local_llm_url}/chat",
                 json=payload,
                 stream=True,
                 timeout=120
@@ -492,31 +475,8 @@ class LLMService:
                         continue
 
         except Exception as e:
-            logger.warning(f"Primary streaming failed: {e}, trying fallback...")
-
-            # Fallback to secondary server
-            try:
-                url = self.local_llm_url_2
-                response = requests.post(
-                    f"{url}/chat",
-                    json=payload,
-                    stream=True,
-                    timeout=120
-                )
-                response.raise_for_status()
-
-                for line in response.iter_lines():
-                    if line:
-                        try:
-                            data = json.loads(line.decode('utf-8'))
-                            if "chunk" in data:
-                                yield data["chunk"]
-                        except json.JSONDecodeError:
-                            continue
-
-            except Exception as e2:
-                logger.error(f"All streaming servers failed: {e2}")
-                raise
+            logger.error(f"Local LLM streaming failed: {e}")
+            raise
 
     # =========================================================================
     # SPECIALIZED METHODS

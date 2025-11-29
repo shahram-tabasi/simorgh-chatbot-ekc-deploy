@@ -67,13 +67,17 @@ export function useChat(
     setIsTyping(true);
 
     try {
-      // Call the new /api/chat/send endpoint
+      // Call the /api/chat/send endpoint
       const response = await axios.post(`${API_BASE}/chat/send`, {
         chat_id: chatId,
         user_id: userId,
         content: content,
         llm_mode: options?.llmMode || llmMode,
         use_graph_context: options?.useGraphContext !== false
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
       });
 
       const data = response.data;
