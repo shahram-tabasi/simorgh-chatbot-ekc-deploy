@@ -791,25 +791,28 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 
         except LLMOfflineError as e:
             logger.error(f"Offline LLM unavailable: {e}")
-            yield f"data: {json.dumps({
+            error_data = {
                 'error': 'offline_unavailable',
                 'message': 'Local LLM servers are unavailable. Please try online mode.',
                 'technical_error': str(e)
-            })}\n\n"
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
         except LLMOnlineError as e:
             logger.error(f"Online LLM unavailable: {e}")
-            yield f"data: {json.dumps({
+            error_data = {
                 'error': 'online_unavailable',
                 'message': 'OpenAI API is unavailable. Please try offline mode.',
                 'technical_error': str(e)
-            })}\n\n"
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
         except LLMTimeoutError as e:
             logger.error(f"LLM timeout: {e}")
-            yield f"data: {json.dumps({
+            error_data = {
                 'error': 'timeout',
                 'message': 'LLM request timed out. Please try again.',
                 'technical_error': str(e)
-            })}\n\n"
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
         except Exception as e:
             logger.error(f"Streaming error: {e}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
