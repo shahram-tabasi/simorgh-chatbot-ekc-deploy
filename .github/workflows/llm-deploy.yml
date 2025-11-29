@@ -227,11 +227,11 @@ jobs:
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
             "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && \
-            echo === Docker Compose Status === && docker compose ps -a && \
-            echo === Initializer Logs === && docker logs model_initializer --tail=100 2>/dev/null || echo model_initializer not found && \
-            echo === AI Service Logs === && docker logs ai_service --tail=100 2>/dev/null || echo ai_service not found && \
-            echo === GPU Monitor Logs === && docker logs gpu_monitor --tail=50 2>/dev/null || echo gpu_monitor not found && \
-            echo === Nginx Logs === && docker logs nginx_ai --tail=50 2>/dev/null || echo nginx_ai not found'"
+            echo \"=== Docker Compose Status ===\" && docker compose ps -a && \
+            echo \"=== Initializer Logs ===\" && docker logs model_initializer --tail=100 2>/dev/null || echo \"model_initializer not found\" && \
+            echo \"=== AI Service Logs ===\" && docker logs ai_service --tail=100 2>/dev/null || echo \"ai_service not found\" && \
+            echo \"=== GPU Monitor Logs ===\" && docker logs gpu_monitor --tail=50 2>/dev/null || echo \"gpu_monitor not found\" && \
+            echo \"=== Nginx Logs ===\" && docker logs nginx_ai --tail=50 2>/dev/null || echo \"nginx_ai not found\"'"
 
   health-check:
     name: LLM Services Health Check
