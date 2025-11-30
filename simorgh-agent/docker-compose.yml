@@ -49,6 +49,14 @@ services:
       - SQL_SERVER_USER=${SQL_SERVER_USER}
       - SQL_SERVER_PASSWORD=${SQL_SERVER_PASSWORD}
       - SQL_SERVER_DATABASE=${SQL_SERVER_DATABASE}
+      # MySQL TPMS (Auth) - Read Only
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      # JWT Configuration
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
       # LLM Configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
