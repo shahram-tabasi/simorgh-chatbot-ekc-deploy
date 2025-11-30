@@ -136,6 +136,7 @@ RUN echo "=== Verifying installations ===" && \
 COPY main.py .
 COPY services/ ./services/
 COPY models/ ./models/
+COPY routes/ ./routes/
 
 # -------------------------------------------------
 #  Create necessary directories
