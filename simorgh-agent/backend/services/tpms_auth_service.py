@@ -4,7 +4,7 @@ TPMS Database Authentication Service
 Connection to TPMS MySQL database for user authentication and authorization.
 
 Tables:
-- technical_user: User credentials
+- technical_users: User credentials
 - draft.permission: Project access control
 
 Author: Simorgh Industrial Assistant
@@ -25,7 +25,7 @@ class TPMSAuthService:
     TPMS MySQL Authentication Service
 
     Features:
-    - User login verification against technical_user table
+    - User login verification against technical_users table
     - Auto-detects password hash type (SHA-256, MD5, bcrypt)
     - Password verification with HashDetector
     - Project permission checking via draft.permission table
@@ -122,7 +122,7 @@ class TPMSAuthService:
         password: str
     ) -> Optional[Dict[str, Any]]:
         """
-        Authenticate user against technical_user table
+        Authenticate user against technical_users table
 
         Args:
             username: User's EMPUSERNAME
@@ -146,10 +146,10 @@ class TPMSAuthService:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Query technical_user table
+                # Query technical_users table
                 query = """
                 SELECT ID, EMPUSERNAME, USER_UID, DraftPassword
-                FROM technical_user
+                FROM technical_users
                 WHERE EMPUSERNAME = %s
                 LIMIT 1
                 """
@@ -211,7 +211,7 @@ class TPMSAuthService:
 
                 query = """
                 SELECT ID, EMPUSERNAME, USER_UID
-                FROM technical_user
+                FROM technical_users
                 WHERE EMPUSERNAME = %s
                 LIMIT 1
                 """
