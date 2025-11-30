@@ -15,7 +15,7 @@ import logging
 from typing import Optional, Dict, Any
 import pymysql
 from contextlib import contextmanager
-from services.auth_utils import verify_password
+from services.hash_detector import HashDetector
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,8 @@ class TPMSAuthService:
 
     Features:
     - User login verification against technical_user table
-    - Password verification with bcrypt
+    - Auto-detects password hash type (SHA-256, MD5, bcrypt)
+    - Password verification with HashDetector
     - Project permission checking via draft.permission table
     - Secure, read-only database access
     """
@@ -160,15 +161,25 @@ class TPMSAuthService:
                     logger.warning(f"User not found: {username}")
                     return None
 
-                # Verify password using bcrypt
+                # Get stored password hash
                 stored_password = user.get("DraftPassword")
                 if not stored_password:
                     logger.error(f"No password hash found for user: {username}")
                     return None
 
-                if not verify_password(password, stored_password):
-                    logger.warning(f"Invalid password for user: {username}")
+                # Convert binary/bytes to hex string if needed
+                if isinstance(stored_password, bytes):
+                    stored_password = stored_password.hex()
+
+                # Auto-detect hash type and verify
+                hash_detector = HashDetector()
+                is_valid, hash_type = hash_detector.verify_password(password, stored_password)
+
+                if not is_valid:
+                    logger.warning(f"Invalid password for user: {username} (hash type: {hash_type})")
                     return None
+
+                logger.info(f"Authentication successful for {username} (hash type: {hash_type})")
 
                 # Authentication successful - return user info (without password)
                 return {
