@@ -7,12 +7,16 @@ import { ChatArea } from './components/ChatArea';
 import SettingsPanel from './components/SettingsPanel';
 import CreateProjectModal from './components/CreateProjectModal';
 import CreateChatModal from './components/CreateChatModal';
+import Login from './components/Login';
 import { useSidebar } from './hooks/useSidebar';
 import { useProjects } from './hooks/useProjects';
 import { useChat } from './hooks/useChat';
 import { LanguageProvider } from './context/LanguageContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 
-export function App() {
+// Main app content component (uses auth context)
+function AppContent() {
+  const { isAuthenticated, isLoading } = useAuth();
   const rightSidebar = useSidebar(true);
   const leftSidebar = useSidebar(true);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
@@ -34,7 +38,7 @@ export function App() {
   } = useProjects();
 
   const { messages, isTyping, sendMessage } = useChat(
-    activeChat?.messages || [], 
+    activeChat?.messages || [],
     activeChatId
   );
 
@@ -74,6 +78,20 @@ export function App() {
         }]
       : [])
   ];
+
+  // Show loading state while checking authentication
+  if (isLoading) {
+    return (
+      <div className="w-full h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-black">
+        <div className="text-white text-xl">Loading...</div>
+      </div>
+    );
+  }
+
+  // Show login if not authenticated
+  if (!isAuthenticated) {
+    return <Login />;
+  }
 
   return (
     <LanguageProvider>
@@ -127,7 +145,7 @@ export function App() {
         <CreateProjectModal
           isOpen={showCreateModal}
           onClose={() => setShowCreateModal(false)}
-          onCreate={(projectName, firstPageTitle) => {
+          onCreate={(projectId, projectName, firstPageTitle) => {
             createProject(projectName, firstPageTitle);
             setShowCreateModal(false);
           }}
@@ -144,6 +162,17 @@ export function App() {
         />
       </div>
     </LanguageProvider>
+  );
+}
+
+// Main App wrapper with providers
+export function App() {
+  return (
+    <AuthProvider>
+      <LanguageProvider>
+        <AppContent />
+      </LanguageProvider>
+    </AuthProvider>
   );
 }
 

@@ -38,6 +38,9 @@ from services.llm_service import (
 )
 from models.ontology import *
 
+# Import authentication routes
+from routes.auth import router as auth_router
+
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,6 +51,9 @@ app = FastAPI(
     version="2.0.0",
     description="Neo4j-based electrical engineering chatbot with hybrid LLM support"
 )
+
+# Include authentication routes
+app.include_router(auth_router)
 
 # CORS
 app.add_middleware(

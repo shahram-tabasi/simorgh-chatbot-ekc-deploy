@@ -1,12 +1,12 @@
 // src/components/SettingsPanel.tsx
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Settings, 
-  X, 
-  Wifi, 
-  WifiOff, 
-  Palette, 
+import {
+  Settings,
+  X,
+  Wifi,
+  WifiOff,
+  Palette,
   LogOut,
   Sparkles,
   Zap,
@@ -18,6 +18,7 @@ import {
   BellOff
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { useAuth } from '../context/AuthContext';
 
 const languages = [
   { code: 'en', name: 'English', flag: '🇺🇸' },
@@ -41,7 +42,12 @@ export default function SettingsPanel() {
   const [notifEnabled, setNotifEnabled] = React.useState(false);
 
   const { language, setLanguage } = useLanguage();
+  const { user, logout } = useAuth();
   const currentLang = languages.find(l => l.code === language) || languages[0];
+
+  // Get display name from user
+  const displayName = user?.EMPUSERNAME || 'Guest User';
+  const userStatus = user ? 'Pro Member • Online' : 'Guest';
 
   // چک کردن وضعیت نوتیفیکیشن از localStorage
   React.useEffect(() => {
@@ -131,15 +137,18 @@ export default function SettingsPanel() {
                 <div className="bg-white/5 rounded-2xl p-5 border border-white/10">
                   <div className="flex items-center gap-4">
                     <div className="w-14 h-14 rounded-full overflow-hidden border-4 border-white/20 shadow-xl">
-                      <img 
-                        src="https://ui-avatars.com/api/?name=Ali+Rezaei&background=6366f1&color=fff&bold=true" 
-                        alt="User" 
+                      <img
+                        src={`https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=6366f1&color=fff&bold=true`}
+                        alt="User"
                         className="w-full h-full object-cover"
                       />
                     </div>
                     <div>
-                      <p className="text-white font-bold text-lg">Ali Rezaei</p>
-                      <p className="text-gray-400 text-sm">Pro Member • Online</p>
+                      <p className="text-white font-bold text-lg">{displayName}</p>
+                      <p className="text-gray-400 text-sm">{userStatus}</p>
+                      {user?.USER_UID && (
+                        <p className="text-gray-500 text-xs mt-0.5">ID: {user.USER_UID}</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -279,7 +288,10 @@ export default function SettingsPanel() {
                 </div>
 
                 {/* خروج */}
-                <button className="w-full py-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 font-medium hover:bg-red-500/20 transition">
+                <button
+                  onClick={logout}
+                  className="w-full py-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 font-medium hover:bg-red-500/20 transition"
+                >
                   <LogOut className="w-5 h-5 inline mr-2" />
                   Logout
                 </button>
