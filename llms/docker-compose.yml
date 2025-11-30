@@ -22,10 +22,8 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - CUDA_VISIBLE_DEVICES=0
-      # HuggingFace offline mode - models are pre-downloaded
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
-      - HF_HUB_DISABLE_TELEMETRY=1
+      # NOTE: Do NOT use HF_HUB_OFFLINE - Unsloth requires network access for metadata
+
     expose:
       - "9000"
     volumes:
