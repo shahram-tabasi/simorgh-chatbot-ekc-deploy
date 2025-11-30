@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - develop
+      - claude/continue-session-01TUKsz9Aiv9Gfr3BCno3F8U
     paths:
       - 'llms/**'
       - '.github/workflows/llm-deploy.yml'
@@ -41,6 +42,9 @@ jobs:
       - name: Lowercase repository owner
         run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
+      - name: Sanitize branch name for Docker tag
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+
       - name: Free Disk Space
         if: matrix.service.name == 'ai-service'
         run: |
@@ -68,8 +72,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}
           tags: |
-            type=ref,event=branch
-            type=sha,format=long,prefix={{branch}}-
+            type=raw,value=${{ env.BRANCH_SAFE }}
+            type=raw,value=${{ env.BRANCH_SAFE }}-${{ github.sha }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
@@ -104,6 +108,9 @@ jobs:
 
       - name: Lowercase repository owner
         run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Sanitize branch name for Docker tag
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
 
       - name: Setup SSH key for central server
         run: |
@@ -159,13 +166,14 @@ jobs:
       - name: Create .env file on target server
         env:
           OWNER_LC: ${{ env.OWNER_LC }}
-          IMAGE_TAG: ${{ github.ref_name }}-${{ github.sha }}
+          BRANCH_SAFE: ${{ env.BRANCH_SAFE }}
+          IMAGE_TAG: ${{ env.BRANCH_SAFE }}-${{ github.sha }}
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
             "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
             echo GITHUB_REGISTRY=${{ env.REGISTRY }} > .env && \
             echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} >> .env && \
-            echo IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }} >> .env && \
+            echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
             echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env\"'"
 
       - name: Verify .env file
@@ -253,6 +261,9 @@ jobs:
     needs: [deploy-llm-servers]
 
     steps:
+      - name: Sanitize branch name for display
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
@@ -261,8 +272,10 @@ jobs:
           ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
       - name: Health check from central server
+        env:
+          IMAGE_TAG: ${{ env.BRANCH_SAFE }}-${{ github.sha }}
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << ENDSSH
           echo "================================"
           echo "LLM Services Health Check"
           echo "================================"
@@ -289,6 +302,6 @@ jobs:
           echo "================================"
           echo "LLM Server 1: http://192.168.1.61"
           echo "LLM Server 2: http://192.168.1.62"
-          echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
+          echo "Image Tag: $IMAGE_TAG"
           echo "================================"
           ENDSSH
