@@ -5,7 +5,7 @@ Connection to TPMS MySQL database for user authentication and authorization.
 
 Tables:
 - technical_users: User credentials
-- draft.permission: Project access control
+- draft_permission: Project access control
 
 Author: Simorgh Industrial Assistant
 """
@@ -28,7 +28,7 @@ class TPMSAuthService:
     - User login verification against technical_users table
     - Auto-detects password hash type (SHA-256, MD5, bcrypt)
     - Password verification with HashDetector
-    - Project permission checking via draft.permission table
+    - Project permission checking via draft_permission table
     - Secure, read-only database access
     """
 
@@ -244,7 +244,7 @@ class TPMSAuthService:
         Returns:
             True if user has access, False otherwise
 
-        Checks draft.permission table for (project_ID, user) match
+        Checks draft_permission table for (project_ID, user) match
         """
         if not self.enabled:
             logger.warning("TPMS auth disabled, allowing access")
@@ -254,10 +254,10 @@ class TPMSAuthService:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Query draft.permission table
+                # Query draft_permission table
                 query = """
                 SELECT COUNT(*) as has_access
-                FROM draft.permission
+                FROM draft_permission
                 WHERE project_ID = %s
                   AND user = %s
                 """
@@ -296,7 +296,7 @@ class TPMSAuthService:
 
                 query = """
                 SELECT project_ID
-                FROM draft.permission
+                FROM draft_permission
                 WHERE user = %s
                 ORDER BY project_ID
                 """
