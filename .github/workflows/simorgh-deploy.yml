@@ -162,8 +162,7 @@ jobs:
           DEFAULT_LLM_MODE=auto
 
           # Frontend
-          #VITE_API_URL=/api
-          REACT_APP_API_BASE=/api
+          VITE_API_URL=/api          
           CHOKIDAR_USEPOLLING=true
 
           # Timezone

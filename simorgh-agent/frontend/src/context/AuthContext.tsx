@@ -2,7 +2,7 @@
 import React, { createContext, useState, useEffect, useContext, ReactNode } from 'react';
 import axios from 'axios';
 
-const API_BASE = process.env.REACT_APP_API_BASE || 'http://192.168.1.68/api';
+const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:8000';
 
 // User interface matching backend response
 export interface User {
