@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - main
-      - develop
-      - claude/continue-session-01TUKsz9Aiv9Gfr3BCno3F8U
+      - develop    
     paths:
       - 'llms/**'
       - '.github/workflows/llm-deploy.yml'

@@ -55,9 +55,9 @@ yarn-debug.log*
 yarn-error.log*
 
 # Local environment variables
-.env
-.env.local
-.env.*.local
+# .env
+# .env.local
+# .env.*.local
 
 ##############################################
 # Docker                                     
@@ -117,19 +117,7 @@ frontend/static/old/
 ##############################################
 # END                                         #
 ##############################################
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
 
 # Editor directories and files
 .vscode/*
