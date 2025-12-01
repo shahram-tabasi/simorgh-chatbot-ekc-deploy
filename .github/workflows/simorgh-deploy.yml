@@ -70,7 +70,7 @@ jobs:
       - name: Create frontend .env.production
         if: matrix.service.name == 'frontend'
         run: |
-          echo "VITE_API_BASE_URL=/api" > simorgh-agent/frontend/.env.production
+          echo "REACT_APP_API_BASE=/api" > simorgh-agent/frontend/.env.production
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
