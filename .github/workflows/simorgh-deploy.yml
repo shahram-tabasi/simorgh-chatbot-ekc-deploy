@@ -67,7 +67,10 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.description=Simorgh Industrial Electrical Assistant - ${{ matrix.service.name }}
-
+      - name: Create frontend .env.production
+        if: matrix.service.name == 'frontend'
+        run: |
+          echo "VITE_API_BASE_URL=/api" > simorgh-agent/frontend/.env.production
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
