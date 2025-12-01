@@ -1,18 +1,18 @@
 // src/services/apiService.ts
-import { 
-  ChatRequest, 
-  ChatResponse, 
-  Project, 
-  Chat, 
+import {
+  ChatRequest,
+  ChatResponse,
+  Project,
+  Chat,
   Message,
-  ApiResponse 
+  ApiResponse
 } from '../types';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://192.168.1.68/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE || 'http://192.168.1.68/api';
 
 class ApiService {
   private async request<T>(
-    endpoint: string, 
+    endpoint: string,
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
     try {
@@ -51,11 +51,11 @@ class ApiService {
   ): Promise<ChatResponse> {
     const formData = new FormData();
     formData.append('content', content);
-    
+
     if (options.projectId) formData.append('projectId', options.projectId);
     if (options.chatId) formData.append('chatId', options.chatId);
     if (options.isGeneral) formData.append('isGeneral', 'true');
-    
+
     options.files?.forEach(file => {
       formData.append('files', file);
     });
