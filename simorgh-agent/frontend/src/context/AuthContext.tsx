@@ -87,9 +87,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       const { access_token, user: userData } = response.data;
 
-      // CRITICAL: Clear any previous user's data from localStorage
-      // This prevents new users from seeing old user's chats
-      clearAllUserData();
+      // CRITICAL: Only clear data if switching to a DIFFERENT user
+      // Check if there's a previous user stored
+      const previousUser = localStorage.getItem('simorgh_user');
+      if (previousUser) {
+        const previousUserData = JSON.parse(previousUser);
+        // Only clear if logging in as a different user
+        if (previousUserData.EMPUSERNAME !== userData.EMPUSERNAME) {
+          console.log('🔄 Switching users, clearing previous user data...');
+          clearUserData(previousUserData.EMPUSERNAME);
+        } else {
+          console.log('👤 Same user logging in, keeping existing data');
+        }
+      }
 
       // Store in state
       setToken(access_token);
@@ -115,29 +125,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Logout function
   const logout = () => {
+    // Clear the current user's data
+    if (user) {
+      console.log('🚪 Logging out user:', user.EMPUSERNAME);
+      clearUserData(user.EMPUSERNAME);
+    }
+
     setUser(null);
     setToken(null);
     setError(null);
 
-    // Clear ALL user-specific data
-    clearAllUserData();
     localStorage.removeItem('simorgh_token');
     localStorage.removeItem('simorgh_user');
   };
 
-  // Helper function to clear all user-specific localStorage data
-  const clearAllUserData = () => {
-    // Get all localStorage keys
-    const keys = Object.keys(localStorage);
-
-    // Remove all user-specific keys (projects and chats)
-    keys.forEach(key => {
-      if (key.startsWith('simorgh_projects_') || key.startsWith('simorgh_general_chats_')) {
-        localStorage.removeItem(key);
-      }
-    });
-
-    console.log('🧹 Cleared all user-specific chat data');
+  // Helper function to clear specific user's localStorage data
+  const clearUserData = (username: string) => {
+    console.log('🧹 Clearing data for user:', username);
+    localStorage.removeItem(`simorgh_projects_${username}`);
+    localStorage.removeItem(`simorgh_general_chats_${username}`);
   };
 
   // Check project permission
