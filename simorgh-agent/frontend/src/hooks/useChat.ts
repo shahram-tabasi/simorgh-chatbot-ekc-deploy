@@ -30,16 +30,25 @@ export function useChat(
   }, []);
 
   // Reset messages when chatId changes (new chat selected)
-  useEffect(() => {
-    if (chatId !== prevChatIdRef.current) {
-      console.log('🔄 Chat switched - ID changed from', prevChatIdRef.current, 'to', chatId);
-      console.log('📝 Loading messages:', initialMessages.length);
+  // useEffect(() => {
+  //   if (chatId !== prevChatIdRef.current) {
+  //     console.log('🔄 Chat switched - ID changed from', prevChatIdRef.current, 'to', chatId);
+  //     console.log('📝 Loading messages:', initialMessages.length);
 
+  //     setMessages(initialMessages);
+  //     setIsTyping(false);
+  //     prevChatIdRef.current = chatId || null;
+  //   }
+  // }, [chatId, initialMessages]);
+
+  useEffect(() => {
+    if (chatId && chatId !== prevChatIdRef.current) {
+      console.log('Chat switched to:', chatId);
       setMessages(initialMessages);
       setIsTyping(false);
-      prevChatIdRef.current = chatId || null;
     }
-  }, [chatId, initialMessages]);
+    prevChatIdRef.current = chatId || null;
+  }, [chatId]); // ← ONLY chatId here!
 
   const sendMessage = async (
     content: string,
@@ -190,7 +199,7 @@ function showNotification(title: string, body: string) {
     setTimeout(() => notification.close(), 5000);
 
     const audio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=');
-    audio.play().catch(() => {});
+    audio.play().catch(() => { });
 
     console.log('✅ Notification shown');
   } catch (error) {

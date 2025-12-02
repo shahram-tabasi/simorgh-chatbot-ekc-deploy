@@ -17,8 +17,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 // Main app content component (uses auth context)
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
-  const rightSidebar = useSidebar(true);
-  const leftSidebar = useSidebar(true);
+  const rightSidebar = useSidebar(false);
+  const leftSidebar = useSidebar(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
   const [showChatModal, setShowChatModal] = React.useState(false);
 
@@ -70,12 +70,12 @@ function AppContent() {
     ...projects,
     ...(generalChats.length > 0
       ? [{
-          id: 'general',
-          name: 'General Chats',
-          chats: generalChats,
-          createdAt: new Date(),
-          isExpanded: true
-        }]
+        id: 'general',
+        name: 'General Chats',
+        chats: generalChats,
+        createdAt: new Date(),
+        isExpanded: true
+      }]
       : [])
   ];
 
