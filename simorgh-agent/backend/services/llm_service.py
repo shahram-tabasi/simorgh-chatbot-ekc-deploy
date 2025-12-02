@@ -457,11 +457,20 @@ class LLMService:
 
         # Call load-balanced endpoint (nginx handles failover between .61/.62)
         try:
+            url = f"{self.local_llm_url.rstrip('/')}/generate-stream"
+
+            payload = {
+                "system_prompt": "You are Simorgh, an expert industrial electrical engineering assistant.",
+                "user_prompt": messages[-1]["content"],  # فقط آخرین پیام کاربر
+                "thinking_level": "medium",
+                "stream": True
+            }
+
             response = requests.post(
-                f"{self.local_llm_url}/chat",
+                url,
                 json=payload,
                 stream=True,
-                timeout=120
+                timeout=180  # چون local کندتره
             )
             response.raise_for_status()
 
