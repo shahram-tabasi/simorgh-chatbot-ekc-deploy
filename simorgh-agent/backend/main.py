@@ -765,19 +765,22 @@ async def send_chat_message_stream(
         try:
             # Security: Verify the user_id in the message matches the authenticated user
             if message.user_id != current_user:
-                yield f"data: {json.dumps({'error': 'Cannot send messages as another user'})}\n\n"
+                error_data = json.dumps({'error': 'Cannot send messages as another user'})
+                yield f"data: {error_data}\n\n"
                 return
 
             # Get chat metadata
             chat_metadata = redis.get(f"chat:{message.chat_id}:metadata", db="chat")
 
             if not chat_metadata:
-                yield f"data: {json.dumps({'error': 'Chat not found'})}\n\n"
+                error_data = json.dumps({'error': 'Chat not found'})
+                yield f"data: {error_data}\n\n"
                 return
 
             # Security: Verify the chat belongs to the requesting user
             if chat_metadata.get("user_id") != current_user:
-                yield f"data: {json.dumps({'error': 'Access denied: You don\\'t have permission to send messages in this chat'})}\n\n"
+                error_data = json.dumps({'error': 'Access denied: You do not have permission to send messages in this chat'})
+                yield f"data: {error_data}\n\n"
                 return
 
             project_number = chat_metadata.get("project_number")
