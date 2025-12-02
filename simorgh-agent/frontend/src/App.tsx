@@ -48,29 +48,6 @@ function AppContent() {
     projectNumber
   );
 
-  // Wrapper to auto-create chat if none selected
-  const handleSendMessage = async (content: string, files?: any, options?: any) => {
-    // If no chat is selected, create a new general chat first
-    if (!activeChatId && userId) {
-      console.log('📝 No chat selected, creating new general chat...');
-      const newChatId = await createGeneralChat('New Chat');
-
-      if (newChatId) {
-        console.log('✅ Chat created, sending message...');
-        // The state will be updated by createGeneralChat, and React will re-render
-        // On next render, activeChatId will be set and message can be sent
-        // We'll queue the message to be sent after state updates
-        setTimeout(() => {
-          sendMessage(content, files, options);
-        }, 200);
-      } else {
-        console.error('❌ Failed to create chat');
-      }
-    } else {
-      sendMessage(content, files, options);
-    }
-  };
-
   const handleCreateProject = () => setShowCreateModal(true);
 
   const handleCreateChat = (projectId: string, title: string) => {
@@ -156,8 +133,8 @@ function AppContent() {
             <ChatArea
               messages={messages}
               isTyping={isTyping}
-              onSendMessage={handleSendMessage}
-              disabled={false}
+              onSendMessage={sendMessage}
+              disabled={!activeChatId}
             />
           </div>
 

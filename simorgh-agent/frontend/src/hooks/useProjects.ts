@@ -13,8 +13,21 @@ export function useProjects(userId?: string) {
   const [showGeneralChats, setShowGeneralChats] = useState(true);
 
   // Load data from localStorage on mount (per user)
+  // CRITICAL: Reset state when userId changes (user logout/login)
   useEffect(() => {
-    if (!userId) return;
+    // Reset all state when userId changes or becomes null
+    setProjects([]);
+    setGeneralChats([]);
+    setActiveProjectId(null);
+    setActiveChatId(null);
+    setShowGeneralChats(true);
+
+    if (!userId) {
+      console.log('🔄 No userId - state cleared');
+      return;
+    }
+
+    console.log('👤 Loading data for user:', userId);
 
     const savedProjects = localStorage.getItem(`simorgh_projects_${userId}`);
     const savedGeneralChats = localStorage.getItem(`simorgh_general_chats_${userId}`);

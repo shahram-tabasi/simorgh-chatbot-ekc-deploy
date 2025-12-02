@@ -455,6 +455,20 @@ async def create_chat(
             detail="Cannot create chat for another user"
         )
 
+    # Validation: Project chats MUST have a project_number
+    if chat.chat_type == "project" and not chat.project_number:
+        raise HTTPException(
+            status_code=400,
+            detail="Project chats must have a project_number"
+        )
+
+    # Validation: General chats must NOT have a project_number
+    if chat.chat_type == "general" and chat.project_number:
+        raise HTTPException(
+            status_code=400,
+            detail="General chats cannot have a project_number"
+        )
+
     chat_id = str(uuid.uuid4())
 
     chat_data = {
