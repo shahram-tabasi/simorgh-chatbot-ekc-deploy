@@ -1,20 +1,24 @@
 import { useState, useEffect } from 'react';
 import { Project, Chat, Message } from '../types';
+import axios from 'axios';
 
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const initialProjects: Project[] = [];
 
-export function useProjects() {
+export function useProjects(userId?: string) {
   const [projects, setProjects] = useState<Project[]>(initialProjects);
   const [generalChats, setGeneralChats] = useState<Chat[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [showGeneralChats, setShowGeneralChats] = useState(true);
 
-  // Load data from localStorage on mount
+  // Load data from localStorage on mount (per user)
   useEffect(() => {
-    const savedProjects = localStorage.getItem('simorgh_projects');
-    const savedGeneralChats = localStorage.getItem('simorgh_general_chats');
-    
+    if (!userId) return;
+
+    const savedProjects = localStorage.getItem(`simorgh_projects_${userId}`);
+    const savedGeneralChats = localStorage.getItem(`simorgh_general_chats_${userId}`);
+
     if (savedProjects) {
       try {
         const parsed = JSON.parse(savedProjects);
@@ -53,21 +57,23 @@ export function useProjects() {
         console.error('Failed to load general chats:', e);
       }
     }
-  }, []);
+  }, [userId]);
 
-  // Save projects to localStorage
+  // Save projects to localStorage (per user)
   useEffect(() => {
+    if (!userId) return;
     if (projects.length > 0) {
-      localStorage.setItem('simorgh_projects', JSON.stringify(projects));
+      localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(projects));
     }
-  }, [projects]);
+  }, [projects, userId]);
 
-  // Save general chats to localStorage
+  // Save general chats to localStorage (per user)
   useEffect(() => {
+    if (!userId) return;
     if (generalChats.length > 0) {
-      localStorage.setItem('simorgh_general_chats', JSON.stringify(generalChats));
+      localStorage.setItem(`simorgh_general_chats_${userId}`, JSON.stringify(generalChats));
     }
-  }, [generalChats]);
+  }, [generalChats, userId]);
 
   const createProject = (name: string, firstPageTitle: string) => {
     const projectId = `proj-${Date.now()}`;
@@ -95,43 +101,118 @@ export function useProjects() {
     setActiveChatId(chatId);
   };
 
-  const createChat = (projectId: string, title: string) => {
-    const chatId = `chat-${Date.now()}`;
-    const newChat: Chat = {
-      id: chatId,
-      title,
-      messages: [],
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      projectId: projectId
-    };
+  const createChat = async (projectId: string, title: string) => {
+    if (!userId) {
+      console.error('Cannot create chat: userId missing');
+      return;
+    }
 
-    setProjects(prev =>
-      prev.map(p =>
-        p.id === projectId
-          ? { ...p, chats: [newChat, ...p.chats], updatedAt: new Date() }
-          : p
-      )
-    );
+    try {
+      // Create chat in backend
+      const response = await axios.post(`${API_BASE}/chats`, {
+        chat_name: title,
+        user_id: userId,
+        chat_type: 'project',
+        project_number: projectId
+      });
 
-    setActiveProjectId(projectId);
-    setActiveChatId(chatId);
+      const backendChatId = response.data.chat.chat_id;
+
+      const newChat: Chat = {
+        id: backendChatId,
+        title,
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        projectId: projectId
+      };
+
+      setProjects(prev =>
+        prev.map(p =>
+          p.id === projectId
+            ? { ...p, chats: [newChat, ...p.chats], updatedAt: new Date() }
+            : p
+        )
+      );
+
+      setActiveProjectId(projectId);
+      setActiveChatId(backendChatId);
+
+      console.log('✅ Project chat created:', backendChatId);
+    } catch (error) {
+      console.error('❌ Failed to create project chat:', error);
+      // Fallback to local-only chat if backend fails
+      const chatId = `chat-${Date.now()}`;
+      const newChat: Chat = {
+        id: chatId,
+        title,
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        projectId: projectId
+      };
+
+      setProjects(prev =>
+        prev.map(p =>
+          p.id === projectId
+            ? { ...p, chats: [newChat, ...p.chats], updatedAt: new Date() }
+            : p
+        )
+      );
+
+      setActiveProjectId(projectId);
+      setActiveChatId(chatId);
+    }
   };
 
-  const createGeneralChat = (title: string = 'New Chat') => {
-    const chatId = `gen-${Date.now()}`;
-    const newChat: Chat = {
-      id: chatId,
-      title,
-      messages: [],
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      isGeneral: true
-    };
+  const createGeneralChat = async (title: string = 'New Chat') => {
+    if (!userId) {
+      console.error('Cannot create chat: userId missing');
+      return;
+    }
 
-    setGeneralChats(prev => [newChat, ...prev]);
-    setActiveChatId(chatId);
-    setActiveProjectId(null);
+    try {
+      // Create chat in backend
+      const response = await axios.post(`${API_BASE}/chats`, {
+        chat_name: title,
+        user_id: userId,
+        chat_type: 'general',
+        project_number: null
+      });
+
+      const backendChatId = response.data.chat.chat_id;
+
+      const newChat: Chat = {
+        id: backendChatId,
+        title,
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        isGeneral: true
+      };
+
+      setGeneralChats(prev => [newChat, ...prev]);
+      setActiveChatId(backendChatId);
+      setActiveProjectId(null);
+
+      console.log('✅ General chat created:', backendChatId);
+    } catch (error) {
+      console.error('❌ Failed to create general chat:', error);
+      // Fallback to local-only chat if backend fails
+      const chatId = `gen-${Date.now()}`;
+      const newChat: Chat = {
+        id: chatId,
+        title,
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        isGeneral: true
+      };
+
+      setGeneralChats(prev => [newChat, ...prev]);
+      setActiveChatId(chatId);
+      setActiveProjectId(null);
+    }
   };
 
   const updateChatMessages = (chatId: string, messages: Message[]) => {
