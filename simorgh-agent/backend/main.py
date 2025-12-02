@@ -264,6 +264,59 @@ async def status():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
 
+@app.get("/api/llm/diagnostics")
+async def llm_diagnostics(
+    llm: LLMService = Depends(get_llm)
+):
+    """
+    Detailed LLM diagnostics endpoint
+
+    Helps troubleshoot LLM connectivity issues by testing:
+    - OpenAI API availability
+    - Local LLM server availability
+    - Configuration status
+    """
+    import os
+
+    diagnostics = {
+        "timestamp": datetime.now().isoformat(),
+        "configuration": {
+            "default_mode": os.getenv("DEFAULT_LLM_MODE", "online"),
+            "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+            "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+            "local_llm_url": os.getenv("LOCAL_LLM_URL", "http://nginx/api/llm"),
+        },
+        "health": llm.health_check(),
+        "statistics": llm.get_stats()
+    }
+
+    # Test connectivity
+    try:
+        # Try a minimal request to test online mode
+        test_result_online = None
+        if os.getenv("OPENAI_API_KEY"):
+            try:
+                test_result_online = llm._check_openai_health()
+            except Exception as e:
+                test_result_online = {"status": "error", "error": str(e)}
+        else:
+            test_result_online = {"status": "not_configured", "message": "OpenAI API key not set"}
+
+        # Try a minimal request to test offline mode
+        test_result_offline = llm._check_local_llm_health(llm.local_llm_url)
+
+        diagnostics["connectivity_tests"] = {
+            "online": test_result_online,
+            "offline": test_result_offline
+        }
+    except Exception as e:
+        diagnostics["connectivity_tests"] = {
+            "error": str(e)
+        }
+
+    return diagnostics
+
+
 # =============================================================================
 # AUTHENTICATION ENDPOINTS
 # =============================================================================
