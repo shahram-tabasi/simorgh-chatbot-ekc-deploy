@@ -38,7 +38,7 @@ export default function SettingsPanel() {
   const [isOpen, setIsOpen] = React.useState(false);
   const [langOpen, setLangOpen] = React.useState(false);
   const [selectedTheme, setSelectedTheme] = React.useState('midnight');
-  const [aiMode, setAiMode] = React.useState<'online' | 'local'>('online');
+  const [aiMode, setAiMode] = React.useState<'online' | 'offline'>('online');
   const [notifEnabled, setNotifEnabled] = React.useState(false);
 
   const { language, setLanguage } = useLanguage();
@@ -49,11 +49,27 @@ export default function SettingsPanel() {
   const displayName = user?.EMPUSERNAME || 'Guest User';
   const userStatus = user ? 'Pro Member • Online' : 'Guest';
 
+  // Load AI mode from localStorage on mount
+  React.useEffect(() => {
+    const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
+    if (savedMode) {
+      setAiMode(savedMode);
+      console.log('🔄 Loaded AI mode from storage:', savedMode);
+    }
+  }, []);
+
   // چک کردن وضعیت نوتیفیکیشن از localStorage
   React.useEffect(() => {
     const saved = localStorage.getItem('notifications_enabled') === 'true';
     setNotifEnabled(saved && Notification.permission === 'granted');
   }, []);
+
+  // Handle AI mode change
+  const handleAiModeChange = (mode: 'online' | 'offline') => {
+    setAiMode(mode);
+    localStorage.setItem('llm_mode', mode);
+    console.log('✅ AI mode changed to:', mode);
+  };
 
   // فعال‌سازی نوتیفیکیشن
   const handleEnableNotifications = async () => {
@@ -66,7 +82,7 @@ export default function SettingsPanel() {
       const newState = !notifEnabled;
       setNotifEnabled(newState);
       localStorage.setItem('notifications_enabled', String(newState));
-      
+
       if (newState) {
         new Notification('✅ اعلان‌ها فعال شد!', {
           body: 'از این به بعد پیام‌های جدید را اعلام می‌کنیم',
@@ -80,7 +96,7 @@ export default function SettingsPanel() {
     if (permission === 'granted') {
       setNotifEnabled(true);
       localStorage.setItem('notifications_enabled', 'true');
-      
+
       new Notification('🎉 اعلان‌ها فعال شد!', {
         body: 'از این به بعد پیام‌های جدید را اعلام می‌کنیم',
         icon: '/favicon.ico'
@@ -203,10 +219,10 @@ export default function SettingsPanel() {
                   <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">AI Mode</h3>
                   <div className="space-y-3">
                     <button
-                      onClick={() => setAiMode('online')}
+                      onClick={() => handleAiModeChange('online')}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        aiMode === 'online' 
-                          ? 'border-blue-500 bg-blue-500/10' 
+                        aiMode === 'online'
+                          ? 'border-blue-500 bg-blue-500/10'
                           : 'border-white/10 hover:border-white/30'
                       }`}
                     >
@@ -217,17 +233,17 @@ export default function SettingsPanel() {
                       </div>
                     </button>
                     <button
-                      onClick={() => setAiMode('local')}
+                      onClick={() => handleAiModeChange('offline')}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        aiMode === 'local' 
-                          ? 'border-purple-500 bg-purple-500/10' 
+                        aiMode === 'offline'
+                          ? 'border-purple-500 bg-purple-500/10'
                           : 'border-white/10 hover:border-white/30'
                       }`}
                     >
                       <WifiOff className="w-6 h-6 text-purple-400" />
                       <div className="text-left">
                         <div className="text-white font-medium">Local AI</div>
-                        <div className="text-xs text-gray-400">On-device • Private • Fast</div>
+                        <div className="text-xs text-gray-400">On-premise • 192.168.1.61/62 • Private</div>
                       </div>
                     </button>
                   </div>

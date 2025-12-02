@@ -125,12 +125,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Logout function
   const logout = () => {
-    // Clear the current user's data
-    if (user) {
-      console.log('🚪 Logging out user:', user.EMPUSERNAME);
-      clearUserData(user.EMPUSERNAME);
-    }
+    console.log('🚪 Logging out user:', user?.EMPUSERNAME);
 
+    // IMPORTANT: Do NOT clear user data on logout
+    // Only clear authentication tokens
+    // User data persists so they can log back in and see their chats
     setUser(null);
     setToken(null);
     setError(null);
