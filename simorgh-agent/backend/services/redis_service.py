@@ -591,6 +591,151 @@ class RedisService:
         from datetime import datetime
         return datetime.now().isoformat()
 
+    # =========================================================================
+    # ENHANCED CHAT SESSION MANAGEMENT (DB 1)
+    # =========================================================================
+
+    def add_chat_to_user_index(
+        self,
+        user_id: str,
+        chat_id: str,
+        chat_type: str,
+        project_number: Optional[str] = None
+    ) -> bool:
+        """
+        Add chat to user's chat index (organized by type and project)
+
+        Args:
+            user_id: User identifier
+            chat_id: Chat identifier
+            chat_type: "general" or "project"
+            project_number: Project number (for project chats)
+        """
+        try:
+            if chat_type == "general":
+                # Add to general chats set
+                key = f"user:{user_id}:chats:general"
+                self.chat_client.sadd(key, chat_id)
+            elif chat_type == "project" and project_number:
+                # Add to project-specific chats set
+                key = f"user:{user_id}:chats:project:{project_number}"
+                self.chat_client.sadd(key, chat_id)
+
+            # Also add to global user chats set
+            global_key = f"user:{user_id}:chats:all"
+            self.chat_client.sadd(global_key, chat_id)
+
+            logger.debug(f"Chat {chat_id} added to user {user_id} index ({chat_type})")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to add chat to user index: {e}")
+            return False
+
+    def get_user_general_chats(self, user_id: str) -> List[str]:
+        """Get all general chat IDs for a user"""
+        try:
+            key = f"user:{user_id}:chats:general"
+            chat_ids = self.chat_client.smembers(key)
+            return list(chat_ids) if chat_ids else []
+        except RedisError as e:
+            logger.error(f"Failed to get user general chats: {e}")
+            return []
+
+    def get_user_project_chats(self, user_id: str, project_number: str) -> List[str]:
+        """Get all project chat IDs for a user and project"""
+        try:
+            key = f"user:{user_id}:chats:project:{project_number}"
+            chat_ids = self.chat_client.smembers(key)
+            return list(chat_ids) if chat_ids else []
+        except RedisError as e:
+            logger.error(f"Failed to get user project chats: {e}")
+            return []
+
+    def get_user_all_chats(self, user_id: str) -> List[str]:
+        """Get all chat IDs for a user"""
+        try:
+            key = f"user:{user_id}:chats:all"
+            chat_ids = self.chat_client.smembers(key)
+            return list(chat_ids) if chat_ids else []
+        except RedisError as e:
+            logger.error(f"Failed to get all user chats: {e}")
+            return []
+
+    def update_chat_metadata(
+        self,
+        chat_id: str,
+        updates: Dict[str, Any]
+    ) -> bool:
+        """
+        Update chat metadata fields
+
+        Args:
+            chat_id: Chat identifier
+            updates: Dictionary of fields to update
+        """
+        try:
+            key = f"chat:{chat_id}:metadata"
+            # Get existing metadata
+            existing = self.chat_client.get(key)
+            if existing:
+                metadata = json.loads(existing)
+                metadata.update(updates)
+                metadata['updated_at'] = self._now()
+                self.chat_client.set(key, json.dumps(metadata))
+                logger.debug(f"Chat metadata updated: {chat_id}")
+                return True
+            return False
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to update chat metadata: {e}")
+            return False
+
+    def get_chat_metadata_list(self, chat_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Get metadata for multiple chats
+
+        Args:
+            chat_ids: List of chat identifiers
+
+        Returns:
+            List of chat metadata dictionaries
+        """
+        metadata_list = []
+        for chat_id in chat_ids:
+            metadata = self.get(f"chat:{chat_id}:metadata", db="chat")
+            if metadata:
+                metadata_list.append(metadata)
+        return metadata_list
+
+    def delete_chat(self, chat_id: str, user_id: str) -> bool:
+        """
+        Delete a chat and all its data
+
+        Args:
+            chat_id: Chat identifier
+            user_id: User identifier (for index cleanup)
+        """
+        try:
+            # Delete metadata
+            self.chat_client.delete(f"chat:{chat_id}:metadata")
+
+            # Delete message history
+            self.clear_chat_history(chat_id)
+
+            # Remove from user indices
+            self.chat_client.srem(f"user:{user_id}:chats:all", chat_id)
+            self.chat_client.srem(f"user:{user_id}:chats:general", chat_id)
+
+            # Remove from all project indices (scan and clean)
+            pattern = f"user:{user_id}:chats:project:*"
+            for key in self.chat_client.scan_iter(match=pattern):
+                self.chat_client.srem(key, chat_id)
+
+            logger.info(f"Chat deleted: {chat_id}")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to delete chat: {e}")
+            return False
+
     def close(self):
         """Close all Redis connections"""
         try:

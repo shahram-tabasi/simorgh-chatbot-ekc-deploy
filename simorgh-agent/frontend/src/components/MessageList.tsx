@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { UserIcon, SparklesIcon, FileIcon } from 'lucide-react';
 import { Message } from '../types';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface MessageListProps {
   messages: Message[];
@@ -17,13 +18,34 @@ function detectTextDirection(text: string): 'rtl' | 'ltr' {
 
 export function MessageList({ messages, isTyping }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
 
+  // Check if user is near bottom of scroll
+  const isNearBottom = () => {
+    if (!containerRef.current) return true;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    return scrollHeight - scrollTop - clientHeight < 100;
+  };
+
+  // Handle scroll events to detect manual scrolling
+  const handleScroll = () => {
+    setShouldAutoScroll(isNearBottom());
+  };
+
+  // Auto-scroll to bottom when new messages arrive (only if user is near bottom)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping]);
+    if (shouldAutoScroll && messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isTyping, shouldAutoScroll]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+    <div
+      ref={containerRef}
+      className="flex-1 overflow-y-auto px-4 py-6 space-y-6"
+      onScroll={handleScroll}
+    >
       {messages.map((message, index) => {
         // Detect text direction for this specific message
         const textDir = detectTextDirection(message.content);
@@ -62,9 +84,13 @@ export function MessageList({ messages, isTyping }: MessageListProps) {
                   ))}
                 </div>
               )}
-              <p className="text-sm leading-relaxed whitespace-pre-wrap" dir={textDir}>
-                {message.content}
-              </p>
+              {message.role === 'assistant' ? (
+                <MarkdownRenderer content={message.content} dir={textDir} />
+              ) : (
+                <p className="text-sm leading-relaxed whitespace-pre-wrap" dir={textDir}>
+                  {message.content}
+                </p>
+              )}
             </div>
 
             {message.role === 'user' && (
