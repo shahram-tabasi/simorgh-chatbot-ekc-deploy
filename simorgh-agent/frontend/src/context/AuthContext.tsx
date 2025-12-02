@@ -2,7 +2,7 @@
 import React, { createContext, useState, useEffect, useContext, ReactNode } from 'react';
 import axios from 'axios';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const API_BASE_react = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
 
 
@@ -59,7 +59,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Validate token
   const validateToken = async (authToken: string) => {
     try {
-      const response = await axios.get(`${API_BASE}/auth/me`, {
+      const response = await axios.get(`${API_BASE_react}/auth/me`, {
         headers: {
           'Authorization': `Bearer ${authToken}`
         }
@@ -80,7 +80,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setError(null);
       setIsLoading(true);
 
-      const response = await axios.post(`${API_BASE}/auth/login`, {
+      const response = await axios.post(`${API_BASE_react}/auth/login`, {
         username,
         password
       });
@@ -127,7 +127,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     try {
       const response = await axios.post(
-        `${API_BASE}/auth/check-project-access`,
+        `${API_BASE_react}/auth/check-project-access`,
         { project_id: projectId },
         {
           headers: {
