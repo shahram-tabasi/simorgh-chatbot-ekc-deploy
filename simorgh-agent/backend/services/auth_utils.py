@@ -124,3 +124,47 @@ def get_current_username_from_token(token: str) -> Optional[str]:
     if payload:
         return payload.get("sub")
     return None
+
+
+# =============================================================================
+# FASTAPI DEPENDENCIES
+# =============================================================================
+
+from fastapi import Header, HTTPException
+
+
+async def get_current_user(authorization: str = Header(None)) -> str:
+    """
+    FastAPI dependency to get current authenticated user from JWT token
+
+    Args:
+        authorization: Authorization header (Bearer token)
+
+    Returns:
+        Username of authenticated user
+
+    Raises:
+        HTTPException: If token is missing, invalid, or expired
+    """
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing authentication token"
+        )
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication token format"
+        )
+
+    token = authorization.replace("Bearer ", "")
+    username = get_current_username_from_token(token)
+
+    if not username:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token"
+        )
+
+    return username

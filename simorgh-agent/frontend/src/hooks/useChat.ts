@@ -78,6 +78,22 @@ export function useChat(
     setIsTyping(true);
 
     try {
+      // Get auth token
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        const errorMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          content: 'Authentication required. Please log in again.',
+          role: 'assistant',
+          timestamp: new Date(),
+          metadata: { error: true }
+        };
+        setMessages(prev => [...prev, errorMessage]);
+        setIsTyping(false);
+        return;
+      }
+
       // Call the /api/chat/send endpoint
       const response = await axios.post(`${API_BASE}/chat/send`, {
         chat_id: chatId,
@@ -87,7 +103,8 @@ export function useChat(
         use_graph_context: options?.useGraphContext !== false
       }, {
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         }
       });
 

@@ -108,12 +108,23 @@ export function useProjects(userId?: string) {
     }
 
     try {
+      // Get auth token
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        return;
+      }
+
       // Create chat in backend
       const response = await axios.post(`${API_BASE}/chats`, {
         chat_name: title,
         user_id: userId,
         chat_type: 'project',
         project_number: projectId
+      }, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
 
       const backendChatId = response.data.chat.chat_id;
@@ -165,19 +176,30 @@ export function useProjects(userId?: string) {
     }
   };
 
-  const createGeneralChat = async (title: string = 'New Chat') => {
+  const createGeneralChat = async (title: string = 'New Chat'): Promise<string | null> => {
     if (!userId) {
       console.error('Cannot create chat: userId missing');
-      return;
+      return null;
     }
 
     try {
+      // Get auth token
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        return null;
+      }
+
       // Create chat in backend
       const response = await axios.post(`${API_BASE}/chats`, {
         chat_name: title,
         user_id: userId,
         chat_type: 'general',
         project_number: null
+      }, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
 
       const backendChatId = response.data.chat.chat_id;
@@ -196,6 +218,7 @@ export function useProjects(userId?: string) {
       setActiveProjectId(null);
 
       console.log('✅ General chat created:', backendChatId);
+      return backendChatId;
     } catch (error) {
       console.error('❌ Failed to create general chat:', error);
       // Fallback to local-only chat if backend fails
@@ -212,6 +235,7 @@ export function useProjects(userId?: string) {
       setGeneralChats(prev => [newChat, ...prev]);
       setActiveChatId(chatId);
       setActiveProjectId(null);
+      return chatId;
     }
   };
 
