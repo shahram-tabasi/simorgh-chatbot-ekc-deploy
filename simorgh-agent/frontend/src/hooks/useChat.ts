@@ -21,12 +21,33 @@ export function useChat(
   const [llmMode, setLlmMode] = useState<'online' | 'offline' | null>(null);
   const prevChatIdRef = useRef<string | null>(null);
 
-  // Load user's LLM preference
+  // Load user's LLM preference on mount and when localStorage changes
   useEffect(() => {
-    const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
-    if (savedMode) {
-      setLlmMode(savedMode);
-    }
+    const loadLlmMode = () => {
+      const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
+      if (savedMode) {
+        setLlmMode(savedMode);
+        console.log('🔄 Loaded LLM mode from storage:', savedMode);
+      } else {
+        // Default to online if not set
+        setLlmMode('online');
+        localStorage.setItem('llm_mode', 'online');
+        console.log('✅ Set default LLM mode: online');
+      }
+    };
+
+    loadLlmMode();
+
+    // Listen for storage changes from SettingsPanel
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'llm_mode' && e.newValue) {
+        setLlmMode(e.newValue as 'online' | 'offline');
+        console.log('🔄 LLM mode changed via storage event:', e.newValue);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Reset messages when chatId changes (new chat selected)
@@ -126,6 +147,25 @@ export function useChat(
 
       setMessages(prev => [...prev, aiMessage]);
       setIsTyping(false);
+
+      // Auto-generate chat title if this is the first message
+      if (messages.length === 0) {
+        try {
+          console.log('🎯 Generating chat title for first message...');
+          const formData = new FormData();
+          formData.append('first_message', content);
+
+          await axios.post(`${API_BASE}/chats/${chatId}/generate-title`, formData, {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          console.log('✅ Chat title generated successfully');
+        } catch (titleError) {
+          console.warn('⚠️ Failed to generate chat title:', titleError);
+          // Non-critical error, continue anyway
+        }
+      }
 
       // Browser Notification
       showNotification('Response Ready!', data.response);

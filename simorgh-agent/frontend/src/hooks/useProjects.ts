@@ -12,7 +12,7 @@ export function useProjects(userId?: string) {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [showGeneralChats, setShowGeneralChats] = useState(true);
 
-  // Load data from localStorage on mount (per user)
+  // Load data from backend and localStorage on mount (per user)
   // CRITICAL: Reset state when userId changes (user logout/login)
   useEffect(() => {
     // Reset all state when userId changes or becomes null
@@ -29,9 +29,61 @@ export function useProjects(userId?: string) {
 
     console.log('👤 Loading data for user:', userId);
 
-    const savedProjects = localStorage.getItem(`simorgh_projects_${userId}`);
-    const savedGeneralChats = localStorage.getItem(`simorgh_general_chats_${userId}`);
+    // Fetch general chats from backend
+    const fetchGeneralChats = async () => {
+      try {
+        const token = localStorage.getItem('simorgh_token');
+        if (!token) {
+          console.warn('⚠️ No auth token, skipping backend sync');
+          return;
+        }
 
+        const response = await axios.get(`${API_BASE}/users/${userId}/general-chats`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        const backendChats = response.data.chats.map((chat: any) => ({
+          id: chat.chat_id,
+          title: chat.chat_name,
+          messages: [], // Messages loaded on demand
+          createdAt: new Date(chat.created_at),
+          updatedAt: new Date(chat.created_at),
+          isGeneral: true
+        }));
+
+        setGeneralChats(backendChats);
+        console.log(`✅ Loaded ${backendChats.length} general chats from backend`);
+
+        // Save to localStorage as backup
+        localStorage.setItem(`simorgh_general_chats_${userId}`, JSON.stringify(backendChats));
+      } catch (error) {
+        console.error('❌ Failed to fetch general chats from backend:', error);
+
+        // Fallback to localStorage
+        const savedGeneralChats = localStorage.getItem(`simorgh_general_chats_${userId}`);
+        if (savedGeneralChats) {
+          try {
+            const parsed = JSON.parse(savedGeneralChats);
+            setGeneralChats(parsed.map((c: any) => ({
+              ...c,
+              createdAt: new Date(c.createdAt),
+              updatedAt: new Date(c.updatedAt),
+              messages: []
+            })));
+            console.log('✅ Loaded general chats from localStorage (fallback)');
+          } catch (e) {
+            console.error('Failed to load general chats from localStorage:', e);
+          }
+        }
+      }
+    };
+
+    fetchGeneralChats();
+
+    // Load projects from localStorage (for now - can be enhanced to fetch from backend)
+    const savedProjects = localStorage.getItem(`simorgh_projects_${userId}`);
     if (savedProjects) {
       try {
         const parsed = JSON.parse(savedProjects);
@@ -43,31 +95,11 @@ export function useProjects(userId?: string) {
             ...c,
             createdAt: new Date(c.createdAt),
             updatedAt: new Date(c.updatedAt),
-            messages: c.messages.map((m: any) => ({
-              ...m,
-              timestamp: new Date(m.timestamp)
-            }))
+            messages: []
           }))
         })));
       } catch (e) {
         console.error('Failed to load projects:', e);
-      }
-    }
-
-    if (savedGeneralChats) {
-      try {
-        const parsed = JSON.parse(savedGeneralChats);
-        setGeneralChats(parsed.map((c: any) => ({
-          ...c,
-          createdAt: new Date(c.createdAt),
-          updatedAt: new Date(c.updatedAt),
-          messages: c.messages.map((m: any) => ({
-            ...m,
-            timestamp: new Date(m.timestamp)
-          }))
-        })));
-      } catch (e) {
-        console.error('Failed to load general chats:', e);
       }
     }
   }, [userId]);
@@ -229,6 +261,10 @@ export function useProjects(userId?: string) {
       setGeneralChats(prev => [newChat, ...prev]);
       setActiveChatId(backendChatId);
       setActiveProjectId(null);
+
+      // Update localStorage
+      const updatedChats = [newChat, ...generalChats];
+      localStorage.setItem(`simorgh_general_chats_${userId}`, JSON.stringify(updatedChats));
 
       console.log('✅ General chat created:', backendChatId);
       return backendChatId;

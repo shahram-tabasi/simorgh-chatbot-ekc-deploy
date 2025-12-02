@@ -64,13 +64,13 @@ export function ChatArea({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.3 }}
-          className="flex-1 flex flex-col h-full"
+          className="flex-1 flex flex-col h-full overflow-hidden"
         >
-          <div className="flex-1 overflow-hidden pl-20 pr-20 pt-4">
+          <div className="flex-1 overflow-y-auto pl-20 pr-20 pt-4">
             <MessageList messages={messages} isTyping={isTyping} />
           </div>
 
-          <div className="w-full flex justify-center pb-6">
+          <div className="w-full flex justify-center pb-6 flex-shrink-0">
             <div className="w-full max-w-4xl px-4">
               <ChatInput
                 onSend={onSendMessage}

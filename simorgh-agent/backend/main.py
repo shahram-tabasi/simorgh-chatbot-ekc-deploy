@@ -484,13 +484,15 @@ async def create_chat(
     # Store in Redis
     redis.set(f"chat:{chat_id}:metadata", chat_data, db="chat")
 
-    # Add to user's chat list
-    user_chats_key = f"user:{chat.user_id}:chats"
-    existing = redis.get(user_chats_key, default=[], db="chat")
-    existing.append(chat_id)
-    redis.set(user_chats_key, existing, db="chat")
+    # Add to user's chat indices (new enhanced indexing)
+    redis.add_chat_to_user_index(
+        user_id=chat.user_id,
+        chat_id=chat_id,
+        chat_type=chat.chat_type,
+        project_number=chat.project_number
+    )
 
-    logger.info(f"✅ Chat created: {chat_id} for user: {chat.user_id}")
+    logger.info(f"✅ Chat created: {chat_id} for user: {chat.user_id} (type: {chat.chat_type})")
 
     return {
         "status": "success",
@@ -569,13 +571,14 @@ async def get_user_general_chats(
             detail="Access denied: Cannot view other users' chats"
         )
 
-    chat_ids = redis.get(f"user:{user_id}:chats", default=[], db="chat")
+    # Use new enhanced indexing method
+    chat_ids = redis.get_user_general_chats(user_id)
 
-    chats = []
-    for chat_id in chat_ids:
-        metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
-        if metadata and metadata.get("chat_type") == "general":
-            chats.append(metadata)
+    # Get metadata for all general chats
+    chats = redis.get_chat_metadata_list(chat_ids)
+
+    # Sort by creation date (newest first)
+    chats.sort(key=lambda x: x.get("created_at", ""), reverse=True)
 
     return {
         "user_id": user_id,
@@ -598,6 +601,83 @@ async def search_chats(
         "results": [],
         "message": "Chat search not yet implemented"
     }
+
+
+@app.post("/api/chats/{chat_id}/generate-title")
+async def generate_chat_title(
+    chat_id: str,
+    first_message: str = Form(...),
+    current_user: str = Depends(get_current_user),
+    redis: RedisService = Depends(get_redis),
+    llm: LLMService = Depends(get_llm)
+):
+    """
+    Generate a short, semantic title for a chat based on the first message
+
+    Uses online AI (OpenAI) only to ensure quality and speed
+    """
+    try:
+        # Get chat metadata to verify ownership
+        metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
+        if not metadata:
+            raise HTTPException(status_code=404, detail="Chat not found")
+
+        # Security: Verify ownership
+        if metadata.get("user_id") != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Generate title using LLM (online mode only, temperature=0 for consistency)
+        title_prompt = f"""Generate a very short, concise title (3-6 words max) for a chat conversation that starts with this message:
+
+"{first_message}"
+
+Rules:
+- Maximum 6 words
+- No quotes or special characters
+- Descriptive and specific
+- Professional tone
+
+Title:"""
+
+        result = llm.generate(
+            messages=[
+                {"role": "system", "content": "You are an expert at creating concise, descriptive titles."},
+                {"role": "user", "content": title_prompt}
+            ],
+            mode="online",  # Force online for quality
+            temperature=0.3,
+            max_tokens=20,
+            use_cache=False
+        )
+
+        title = result["response"].strip().strip('"').strip("'")
+
+        # Fallback if title is too long or empty
+        if not title or len(title) > 60:
+            title = first_message[:50] + "..." if len(first_message) > 50 else first_message
+
+        # Update chat metadata with new title
+        redis.update_chat_metadata(chat_id, {"chat_name": title})
+
+        logger.info(f"✅ Chat title generated: {chat_id} -> '{title}'")
+
+        return {
+            "status": "success",
+            "chat_id": chat_id,
+            "title": title
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate chat title: {e}")
+        # Return first message as fallback
+        fallback_title = first_message[:50] + "..." if len(first_message) > 50 else first_message
+        return {
+            "status": "fallback",
+            "chat_id": chat_id,
+            "title": fallback_title
+        }
 
 
 # =============================================================================
@@ -680,6 +760,8 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 
         # Generate response
         llm_mode = message.llm_mode or None
+        logger.info(f"💬 Generating LLM response - Mode: {llm_mode or 'default'}, Chat: {message.chat_id}")
+
         result = llm.generate(
             messages=llm_messages,
             mode=llm_mode,
@@ -687,6 +769,7 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             use_cache=True
         )
 
+        logger.info(f"✅ LLM response generated - Actual mode used: {result.get('mode')}, Tokens: {result.get('tokens', {}).get('total', 0)}")
         ai_response = result["response"]
 
         # Cache messages
