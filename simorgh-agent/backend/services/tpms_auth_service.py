@@ -254,26 +254,51 @@ class TPMSAuthService:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
+                # DEBUG: Check all permissions for this user
+                debug_query = """
+                SELECT project_ID, user
+                FROM draft_permission
+                WHERE user = %s
+                LIMIT 10
+                """
+                cursor.execute(debug_query, (username,))
+                user_perms = cursor.fetchall()
+                logger.info(f"📋 User {username} has {len(user_perms)} permissions: {[p['project_ID'] for p in user_perms]}")
+
                 # Query draft_permission table
+                # Try both as string and as integer to handle type variations
                 query = """
                 SELECT COUNT(*) as has_access
                 FROM draft_permission
-                WHERE project_ID = %s
+                WHERE (project_ID = %s OR project_ID = CAST(%s AS CHAR))
                   AND user = %s
                 """
 
-                cursor.execute(query, (project_id, username))
+                cursor.execute(query, (project_id, project_id, username))
                 result = cursor.fetchone()
 
                 has_access = result["has_access"] > 0 if result else False
 
                 logger.info(
-                    f"Project permission check: {username} -> {project_id} = {has_access}"
+                    f"🔐 Permission check: user={username}, project={project_id}, access={has_access}"
                 )
+
+                # DEBUG: If no access, try to find why
+                if not has_access:
+                    # Check if project exists with different user
+                    check_project = """
+                    SELECT user FROM draft_permission WHERE project_ID = %s OR project_ID = CAST(%s AS CHAR) LIMIT 5
+                    """
+                    cursor.execute(check_project, (project_id, project_id))
+                    project_users = cursor.fetchall()
+                    logger.warning(f"⚠️ Project {project_id} has users: {[u['user'] for u in project_users]}")
+
                 return has_access
 
         except Exception as e:
-            logger.error(f"Error checking project permission: {e}")
+            logger.error(f"❌ Error checking project permission: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             # Fail closed - deny access on error
             return False
 
