@@ -180,11 +180,45 @@ export function useChat(
 
     } catch (error: any) {
       console.error('❌ Send message failed:', error);
+      console.error('Error details:', error.response?.data);
       setIsTyping(false);
+
+      // Extract detailed error message
+      let errorContent = 'Failed to connect to server. Please try again.';
+
+      if (error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+
+        // Check if detail is an object with structured error info
+        if (typeof detail === 'object' && detail.message) {
+          errorContent = `❌ ${detail.error || 'Error'}: ${detail.message}`;
+
+          // Add technical details if available
+          if (detail.technical_error) {
+            errorContent += `\n\n🔧 Technical details: ${detail.technical_error}`;
+          }
+
+          // Add server info for offline errors
+          if (detail.servers_tried) {
+            errorContent += `\n\n🖥️ Servers tried:\n${detail.servers_tried.map((s: string) => `- ${s}`).join('\n')}`;
+          }
+
+          // Add model info for online errors
+          if (detail.api_model) {
+            errorContent += `\n\n🤖 Model: ${detail.api_model}`;
+          }
+        } else if (typeof detail === 'string') {
+          errorContent = detail;
+        }
+      } else if (error.response?.data?.message) {
+        errorContent = error.response.data.message;
+      } else if (error.message) {
+        errorContent = `Network error: ${error.message}`;
+      }
 
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: error.response?.data?.detail || 'Failed to connect to server. Please try again.',
+        content: errorContent,
         role: 'assistant',
         timestamp: new Date(),
         metadata: {
