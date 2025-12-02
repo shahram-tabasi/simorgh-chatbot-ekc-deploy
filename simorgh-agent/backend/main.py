@@ -38,8 +38,9 @@ from services.llm_service import (
 )
 from models.ontology import *
 
-# Import authentication routes
+# Import authentication routes and utilities
 from routes.auth import router as auth_router
+from services.auth_utils import get_current_user
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -439,11 +440,21 @@ async def list_projects(
 @app.post("/api/chats")
 async def create_chat(
     chat: ChatCreate,
+    current_user: str = Depends(get_current_user),
     redis: RedisService = Depends(get_redis)
 ):
     """
-    Create a new chat session
+    Create a new chat session (requires authentication)
+
+    Validates that the requesting user matches the chat owner
     """
+    # Security: Ensure the user_id in the request matches the authenticated user
+    if chat.user_id != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot create chat for another user"
+        )
+
     chat_id = str(uuid.uuid4())
 
     chat_data = {
@@ -465,6 +476,8 @@ async def create_chat(
     existing.append(chat_id)
     redis.set(user_chats_key, existing, db="chat")
 
+    logger.info(f"✅ Chat created: {chat_id} for user: {chat.user_id}")
+
     return {
         "status": "success",
         "chat": chat_data
@@ -476,16 +489,26 @@ async def get_chat(
     chat_id: str,
     limit: int = 50,
     offset: int = 0,
+    current_user: str = Depends(get_current_user),
     redis: RedisService = Depends(get_redis)
 ):
     """
-    Get chat with message history
+    Get chat with message history (requires authentication)
+
+    Validates that the requesting user owns this chat
     """
     # Get metadata
     metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
 
     if not metadata:
         raise HTTPException(status_code=404, detail="Chat not found")
+
+    # Security: Verify the chat belongs to the requesting user
+    if metadata.get("user_id") != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: You don't have permission to view this chat"
+        )
 
     # Get messages
     messages = redis.get_chat_history(chat_id, limit=limit, offset=offset)
@@ -517,11 +540,21 @@ async def get_project_chats(
 @app.get("/api/users/{user_id}/general-chats")
 async def get_user_general_chats(
     user_id: str,
+    current_user: str = Depends(get_current_user),
     redis: RedisService = Depends(get_redis)
 ):
     """
-    Get all general (non-project) chats for a user
+    Get all general (non-project) chats for a user (requires authentication)
+
+    Validates that the requesting user matches the user_id
     """
+    # Security: Ensure users can only access their own chats
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Cannot view other users' chats"
+        )
+
     chat_ids = redis.get(f"user:{user_id}:chats", default=[], db="chat")
 
     chats = []
@@ -560,21 +593,36 @@ async def search_chats(
 @app.post("/api/chat/send")
 async def send_chat_message(
     message: ChatMessage,
+    current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j),
     redis: RedisService = Depends(get_redis),
     llm: LLMService = Depends(get_llm)
 ):
     """
-    Send a chat message and get AI response
+    Send a chat message and get AI response (requires authentication)
 
-    Uses graph context if available and requested
+    Validates that the requesting user owns the chat and matches the message user_id
     """
     try:
+        # Security: Verify the user_id in the message matches the authenticated user
+        if message.user_id != current_user:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot send messages as another user"
+            )
+
         # Get chat metadata
         chat_metadata = redis.get(f"chat:{message.chat_id}:metadata", db="chat")
 
         if not chat_metadata:
             raise HTTPException(status_code=404, detail="Chat not found")
+
+        # Security: Verify the chat belongs to the requesting user
+        if chat_metadata.get("user_id") != current_user:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You don't have permission to send messages in this chat"
+            )
 
         project_number = chat_metadata.get("project_number")
 
@@ -702,23 +750,34 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 @app.post("/api/chat/stream")
 async def send_chat_message_stream(
     message: ChatMessage,
+    current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j),
     redis: RedisService = Depends(get_redis),
     llm: LLMService = Depends(get_llm)
 ):
     """
-    Send a chat message and get AI response via Server-Sent Events streaming
+    Send a chat message and get AI response via Server-Sent Events streaming (requires authentication)
 
-    Uses graph context if available and requested
+    Validates that the requesting user owns the chat and matches the message user_id
     Returns chunks in real-time as the LLM generates them
     """
     def event_stream():
         try:
+            # Security: Verify the user_id in the message matches the authenticated user
+            if message.user_id != current_user:
+                yield f"data: {json.dumps({'error': 'Cannot send messages as another user'})}\n\n"
+                return
+
             # Get chat metadata
             chat_metadata = redis.get(f"chat:{message.chat_id}:metadata", db="chat")
 
             if not chat_metadata:
                 yield f"data: {json.dumps({'error': 'Chat not found'})}\n\n"
+                return
+
+            # Security: Verify the chat belongs to the requesting user
+            if chat_metadata.get("user_id") != current_user:
+                yield f"data: {json.dumps({'error': 'Access denied: You don\\'t have permission to send messages in this chat'})}\n\n"
                 return
 
             project_number = chat_metadata.get("project_number")
