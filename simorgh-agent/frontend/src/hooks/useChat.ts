@@ -56,8 +56,8 @@ export function useChat(
     options?: ChatOptions
   ) => {
     if (!chatId || !userId) {
-      console.error(chatId);
-      console.error(userId);
+      console.log(chatId);
+      console.log(userId);
       console.error('❌ Cannot send message: chatId or userId missing');
       return;
     }
