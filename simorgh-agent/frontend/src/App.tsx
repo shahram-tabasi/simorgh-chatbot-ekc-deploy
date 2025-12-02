@@ -16,7 +16,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 
 // Main app content component (uses auth context)
 function AppContent() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const rightSidebar = useSidebar(true);
   const leftSidebar = useSidebar(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
@@ -35,11 +35,17 @@ function AppContent() {
     toggleProject,
     toggleGeneralChats,
     selectChat
-  } = useProjects();
+  } = useProjects(user?.EMPUSERNAME);
+
+  // Get userId and projectNumber for chat
+  const userId = user?.EMPUSERNAME;
+  const projectNumber = activeProjectId || null;
 
   const { messages, isTyping, sendMessage } = useChat(
     activeChat?.messages || [],
-    activeChatId
+    activeChatId,
+    userId,
+    projectNumber
   );
 
   const handleCreateProject = () => setShowCreateModal(true);

@@ -127,7 +127,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     try {
       const response = await axios.post(
-        `${API_BASE_react}/auth/check-project-access`,
+        `${API_BASE_react}/auth/check-permission`,
         { project_id: projectId },
         {
           headers: {
