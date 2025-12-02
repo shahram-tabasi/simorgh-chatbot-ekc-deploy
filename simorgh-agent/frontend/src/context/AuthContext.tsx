@@ -87,6 +87,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       const { access_token, user: userData } = response.data;
 
+      // CRITICAL: Clear any previous user's data from localStorage
+      // This prevents new users from seeing old user's chats
+      clearAllUserData();
+
       // Store in state
       setToken(access_token);
       setUser(userData);
@@ -115,8 +119,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setToken(null);
     setError(null);
 
+    // Clear ALL user-specific data
+    clearAllUserData();
     localStorage.removeItem('simorgh_token');
     localStorage.removeItem('simorgh_user');
+  };
+
+  // Helper function to clear all user-specific localStorage data
+  const clearAllUserData = () => {
+    // Get all localStorage keys
+    const keys = Object.keys(localStorage);
+
+    // Remove all user-specific keys (projects and chats)
+    keys.forEach(key => {
+      if (key.startsWith('simorgh_projects_') || key.startsWith('simorgh_general_chats_')) {
+        localStorage.removeItem(key);
+      }
+    });
+
+    console.log('🧹 Cleared all user-specific chat data');
   };
 
   // Check project permission

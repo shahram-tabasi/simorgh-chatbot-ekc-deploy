@@ -248,10 +248,10 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
                 handleSend();
               }
             }}
-            placeholder="Ask Simorgh anything..."
+            placeholder={disabled ? "Please create or select a project and chat to start messaging..." : "Ask Simorgh anything..."}
             disabled={disabled}
             rows={1}
-            className="w-full px-4 py-3 rounded-lg bg-transparent text-white placeholder-gray-500 focus:outline-none resize-none"
+            className="w-full px-4 py-3 rounded-lg bg-transparent text-white placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed"
             style={{ minHeight: '48px', maxHeight: '200px' }}
           />
         </div>
