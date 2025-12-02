@@ -17,8 +17,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 // Main app content component (uses auth context)
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
-  const rightSidebar = useSidebar(false);
-  const leftSidebar = useSidebar(true);
+  const rightSidebar = useSidebar(true);
+  const leftSidebar = useSidebar(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
   const [showChatModal, setShowChatModal] = React.useState(false);
 

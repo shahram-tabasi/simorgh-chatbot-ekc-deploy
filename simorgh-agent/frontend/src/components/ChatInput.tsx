@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
+import {
   SendIcon, PaperclipIcon, MicIcon, StopCircleIcon,
-  FileTextIcon, XIcon, LoaderIcon 
+  FileTextIcon, XIcon, LoaderIcon
 } from 'lucide-react';
 import { UploadedFile } from '../types';
 
@@ -17,7 +17,7 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
   const [isRecording, setIsRecording] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -40,12 +40,13 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
+  // const handleKeyPress = (e: React.KeyboardEvent) => {
+  //   if (e.key === 'Enter' && !e.shiftKey) {
+  //     e.preventDefault();
+  //     handleSend();
+  //   }
+  // };
+
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = e.target.files;
@@ -59,7 +60,7 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
 
       for (let i = 0; i < selectedFiles.length; i++) {
         const file = selectedFiles[i];
-        
+
         // Simulate upload progress (replace with real upload)
         const uploadedFile: UploadedFile = {
           id: Date.now().toString() + i,
@@ -211,11 +212,10 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
         <button
           onClick={isRecording ? stopRecording : startRecording}
           disabled={disabled}
-          className={`p-3 rounded-lg transition-colors ${
-            isRecording
+          className={`p-3 rounded-lg transition-colors ${isRecording
               ? 'bg-red-500/20 hover:bg-red-500/30'
               : 'hover:bg-white/10'
-          }`}
+            }`}
           title={isRecording ? 'Stop recording' : 'Start voice recording'}
         >
           {isRecording ? (
@@ -227,11 +227,27 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
 
         {/* Text input */}
         <div className="flex-1 relative">
-          <textarea
+          {/* <textarea
             ref={textareaRef}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyPress={handleKeyPress}
+            placeholder="Ask Simorgh anything..."
+            disabled={disabled}
+            rows={1}
+            className="w-full px-4 py-3 rounded-lg bg-transparent text-white placeholder-gray-500 focus:outline-none resize-none"
+            style={{ minHeight: '48px', maxHeight: '200px' }}
+          /> */}
+          <textarea
+            ref={textareaRef}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
             placeholder="Ask Simorgh anything..."
             disabled={disabled}
             rows={1}
