@@ -24,15 +24,25 @@ export function useChat(
   // Load user's LLM preference on mount and when localStorage changes
   useEffect(() => {
     const loadLlmMode = () => {
-      const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
-      if (savedMode) {
+      // const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
+      // if (savedMode) {
+      //   setLlmMode(savedMode);
+      //   console.log('🔄 Loaded LLM mode from storage:', savedMode);
+      // } else {
+      //   // Default to online if not set
+      //   setLlmMode('online');
+      //   localStorage.setItem('llm_mode', 'online');
+      //   console.log('✅ Set default LLM mode: online');
+      // }
+      const savedMode = localStorage.getItem('llm_mode');
+      if (savedMode === 'online' || savedMode === 'offline') {
         setLlmMode(savedMode);
-        console.log('🔄 Loaded LLM mode from storage:', savedMode);
+        console.log('Loaded LLM mode from storage:', savedMode);
       } else {
-        // Default to online if not set
+        // اگر هیچی نبود یا مقدار اشتباه بود → پیش‌فرض رو بذار online
         setLlmMode('online');
         localStorage.setItem('llm_mode', 'online');
-        console.log('✅ Set default LLM mode: online');
+        console.log('Set default LLM mode: online');
       }
     };
 
@@ -120,7 +130,8 @@ export function useChat(
         chat_id: chatId,
         user_id: userId,
         content: content,
-        llm_mode: options?.llmMode || llmMode,
+        // llm_mode: options?.llmMode || llmMode,
+        llm_mode: llmMode || undefined,   // یا فقط: llmMode
         use_graph_context: options?.useGraphContext !== false
       }, {
         headers: {
