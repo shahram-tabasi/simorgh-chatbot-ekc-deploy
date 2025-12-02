@@ -8,7 +8,7 @@ import {
   ApiResponse
 } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE || 'http://192.168.1.68/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
 class ApiService {
   private async request<T>(
@@ -60,7 +60,7 @@ class ApiService {
       formData.append('files', file);
     });
 
-    const response = await fetch(`${API_BASE_URL}/api/chat/message`, {
+    const response = await fetch(`${API_BASE_URL}/chat/send`, {
       method: 'POST',
       body: formData,
     });
