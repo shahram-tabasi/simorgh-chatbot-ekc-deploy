@@ -30,25 +30,25 @@ export function useChat(
   }, []);
 
   // Reset messages when chatId changes (new chat selected)
-  useEffect(() => {
-    if (chatId !== prevChatIdRef.current) {
-      console.log('🔄 Chat switched - ID changed from', prevChatIdRef.current, 'to', chatId);
-      console.log('📝 Loading messages:', initialMessages.length);
-
-      setMessages(initialMessages);
-      setIsTyping(false);
-      prevChatIdRef.current = chatId || null;
-    }
-  }, [chatId, initialMessages]);
-
   // useEffect(() => {
-  //   if (chatId && chatId !== prevChatIdRef.current) {
-  //     console.log('Chat switched to:', chatId);
+  //   if (chatId !== prevChatIdRef.current) {
+  //     console.log('🔄 Chat switched - ID changed from', prevChatIdRef.current, 'to', chatId);
+  //     console.log('📝 Loading messages:', initialMessages.length);
+
   //     setMessages(initialMessages);
   //     setIsTyping(false);
+  //     prevChatIdRef.current = chatId || null;
   //   }
-  //   prevChatIdRef.current = chatId || null;
-  // }, [chatId]); // ← ONLY chatId here!
+  // }, [chatId, initialMessages]);
+
+  useEffect(() => {
+    if (chatId && chatId !== prevChatIdRef.current) {
+      console.log('Chat switched to:', chatId);
+      setMessages(initialMessages);
+      setIsTyping(false);
+    }
+    prevChatIdRef.current = chatId || null;
+  }, [chatId]); // ← ONLY chatId here!
 
   const sendMessage = async (
     content: string,
