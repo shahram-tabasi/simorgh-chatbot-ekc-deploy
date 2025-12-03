@@ -35,6 +35,8 @@ function AppContent() {
     createProject,
     createChat,
     createGeneralChat,
+    updateChatTitle,
+    deleteChat,
     toggleProject,
     toggleGeneralChats,
     selectChat
@@ -48,7 +50,8 @@ function AppContent() {
     activeChat?.messages || [],
     activeChatId,
     userId,
-    projectNumber
+    projectNumber,
+    updateChatTitle
   );
 
   const handleCreateProject = () => setShowCreateModal(true);

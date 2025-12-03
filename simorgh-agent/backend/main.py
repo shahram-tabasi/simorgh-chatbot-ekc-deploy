@@ -738,6 +738,46 @@ async def get_chat(
     }
 
 
+@app.delete("/api/chats/{chat_id}")
+async def delete_chat(
+    chat_id: str,
+    current_user: str = Depends(get_current_user),
+    redis: RedisService = Depends(get_redis)
+):
+    """
+    Delete a chat session (requires authentication)
+
+    Validates that the requesting user owns this chat
+    """
+    # Get metadata
+    metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
+
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    # Security: Verify the chat belongs to the requesting user
+    if metadata.get("user_id") != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: You don't have permission to delete this chat"
+        )
+
+    # Delete the chat
+    user_id = metadata.get("user_id")
+    success = redis.delete_chat(chat_id, user_id)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete chat")
+
+    logger.info(f"✅ Chat deleted: {chat_id} by user: {current_user}")
+
+    return {
+        "status": "success",
+        "message": "Chat deleted successfully",
+        "chat_id": chat_id
+    }
+
+
 @app.get("/api/projects/{project_number}/chats")
 async def get_project_chats(
     project_number: str,

@@ -318,9 +318,162 @@ export function useProjects(userId?: string) {
     setShowGeneralChats(prev => !prev);
   };
 
-  const selectChat = (projectId: string | null, chatId: string) => {
+  const selectChat = async (projectId: string | null, chatId: string) => {
     setActiveProjectId(projectId);
     setActiveChatId(chatId);
+
+    // Fetch chat history from backend when selecting a chat
+    if (!userId || !chatId) return;
+
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.warn('⚠️ No auth token, skipping chat history fetch');
+        return;
+      }
+
+      console.log('📥 Loading chat history for:', chatId);
+
+      const response = await axios.get(`${API_BASE}/chats/${chatId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      const messages = response.data.messages || [];
+      const chatMetadata = response.data.chat || {};
+
+      console.log(`✅ Loaded ${messages.length} messages for chat ${chatId}`);
+
+      // Update chat with loaded messages and latest metadata
+      if (projectId !== null) {
+        // Project chat
+        setProjects(prev =>
+          prev.map(p =>
+            p.id === projectId
+              ? {
+                  ...p,
+                  chats: p.chats.map(c =>
+                    c.id === chatId
+                      ? {
+                          ...c,
+                          title: chatMetadata.chat_name || c.title,
+                          messages: messages.map((m: any) => ({
+                            id: m.timestamp || Date.now().toString(),
+                            content: m.content,
+                            role: m.role,
+                            timestamp: new Date(m.timestamp),
+                            metadata: m.metadata
+                          })),
+                          updatedAt: new Date()
+                        }
+                      : c
+                  )
+                }
+              : p
+          )
+        );
+      } else {
+        // General chat
+        setGeneralChats(prev =>
+          prev.map(c =>
+            c.id === chatId
+              ? {
+                  ...c,
+                  title: chatMetadata.chat_name || c.title,
+                  messages: messages.map((m: any) => ({
+                    id: m.timestamp || Date.now().toString(),
+                    content: m.content,
+                    role: m.role,
+                    timestamp: new Date(m.timestamp),
+                    metadata: m.metadata
+                  })),
+                  updatedAt: new Date()
+                }
+              : c
+          )
+        );
+      }
+    } catch (error) {
+      console.error('❌ Failed to load chat history:', error);
+    }
+  };
+
+  const updateChatTitle = (chatId: string, newTitle: string) => {
+    // Update title in general chats
+    setGeneralChats(prev =>
+      prev.map(c =>
+        c.id === chatId
+          ? { ...c, title: newTitle, updatedAt: new Date() }
+          : c
+      )
+    );
+
+    // Update title in project chats
+    setProjects(prev =>
+      prev.map(p => ({
+        ...p,
+        chats: p.chats.map(c =>
+          c.id === chatId
+            ? { ...c, title: newTitle, updatedAt: new Date() }
+            : c
+        )
+      }))
+    );
+
+    console.log(`✅ Updated chat title: ${chatId} -> "${newTitle}"`);
+  };
+
+  const deleteChat = async (chatId: string, projectId: string | null) => {
+    if (!userId) {
+      console.error('Cannot delete chat: userId missing');
+      return;
+    }
+
+    if (!confirm('Are you sure you want to delete this chat? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        return;
+      }
+
+      // Call backend delete endpoint
+      await axios.delete(`${API_BASE}/chats/${chatId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      // Remove from UI
+      if (projectId !== null) {
+        // Project chat
+        setProjects(prev =>
+          prev.map(p =>
+            p.id === projectId
+              ? { ...p, chats: p.chats.filter(c => c.id !== chatId) }
+              : p
+          )
+        );
+      } else {
+        // General chat
+        setGeneralChats(prev => prev.filter(c => c.id !== chatId));
+      }
+
+      // Clear active chat if it was deleted
+      if (activeChatId === chatId) {
+        setActiveChatId(null);
+        setActiveProjectId(null);
+      }
+
+      console.log('✅ Chat deleted:', chatId);
+    } catch (error: any) {
+      console.error('❌ Failed to delete chat:', error);
+      alert(error.response?.data?.detail || 'Failed to delete chat');
+    }
   };
 
   const activeChat =
@@ -341,6 +494,8 @@ export function useProjects(userId?: string) {
     createChat,
     createGeneralChat,
     updateChatMessages,
+    updateChatTitle,
+    deleteChat,
     toggleProject,
     toggleGeneralChats,
     selectChat

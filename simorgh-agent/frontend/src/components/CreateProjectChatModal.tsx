@@ -1,10 +1,7 @@
 // src/components/CreateProjectChatModal.tsx
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, FolderOpen, FileText, AlertCircle, CheckCircle } from 'lucide-react';
-import axios from 'axios';
-
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+import { X, FolderOpen, FileText, AlertCircle } from 'lucide-react';
 
 interface CreateProjectChatModalProps {
   isOpen: boolean;
@@ -21,68 +18,13 @@ export default function CreateProjectChatModal({
 }: CreateProjectChatModalProps) {
   const [projectId, setProjectId] = useState('');
   const [pageName, setPageName] = useState('');
-  const [projectName, setProjectName] = useState('');
-  const [isValidating, setIsValidating] = useState(false);
-  const [isValidated, setIsValidated] = useState(false);
   const [error, setError] = useState('');
-
-  const handleValidateProject = async () => {
-    if (!projectId.trim()) {
-      setError('Please enter a Project ID');
-      return;
-    }
-
-    if (!userId) {
-      setError('User not authenticated');
-      return;
-    }
-
-    setIsValidating(true);
-    setError('');
-
-    try {
-      const token = localStorage.getItem('simorgh_token');
-      if (!token) {
-        throw new Error('Authentication required');
-      }
-
-      // Call backend to validate project and permission
-      // This simulates the validation - in real implementation, you'd call a dedicated endpoint
-      // For now, we'll just set validated to true
-      // In production, you should call the TPMS service endpoint
-
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // TODO: Replace with actual API call
-      // const response = await axios.get(
-      //   `${API_BASE}/validate-project/${projectId}`,
-      //   { headers: { 'Authorization': `Bearer ${token}` } }
-      // );
-
-      // For now, assume validation succeeds
-      setProjectName(`Project ${projectId}`); // Would come from backend
-      setIsValidated(true);
-      setError('');
-    } catch (err: any) {
-      if (err.response?.status === 404) {
-        setError(`Project ID ${projectId} not found`);
-      } else if (err.response?.status === 403) {
-        setError(`Access denied for project ${projectId}`);
-      } else {
-        setError(err.response?.data?.message || 'Failed to validate project');
-      }
-      setIsValidated(false);
-    } finally {
-      setIsValidating(false);
-    }
-  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!isValidated) {
-      setError('Please validate the Project ID first');
+    if (!projectId.trim()) {
+      setError('Please enter a Project ID');
       return;
     }
 
@@ -91,15 +33,15 @@ export default function CreateProjectChatModal({
       return;
     }
 
-    onCreate(projectId, projectName, pageName.trim());
+    // Backend will validate project access
+    // Project name will be auto-filled by backend
+    onCreate(projectId, '', pageName.trim());
     handleClose();
   };
 
   const handleClose = () => {
     setProjectId('');
     setPageName('');
-    setProjectName('');
-    setIsValidated(false);
     setError('');
     onClose();
   };
@@ -154,40 +96,21 @@ export default function CreateProjectChatModal({
                   <label className="block text-sm font-medium text-gray-300 mb-2">
                     Project ID
                   </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={projectId}
-                      onChange={(e) => {
-                        setProjectId(e.target.value);
-                        setIsValidated(false);
-                        setError('');
-                      }}
-                      placeholder="e.g., 12345"
-                      className="flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
-                      disabled={isValidated}
-                    />
-                    <button
-                      type="button"
-                      onClick={handleValidateProject}
-                      disabled={isValidating || isValidated || !projectId.trim()}
-                      className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-xl text-white font-medium transition"
-                    >
-                      {isValidating ? 'Checking...' : isValidated ? 'Valid' : 'Validate'}
-                    </button>
-                  </div>
+                  <input
+                    type="text"
+                    value={projectId}
+                    onChange={(e) => {
+                      setProjectId(e.target.value);
+                      setError('');
+                    }}
+                    placeholder="e.g., 12345"
+                    className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+                    autoFocus
+                  />
+                  <p className="mt-2 text-xs text-gray-500">
+                    Enter the Project ID from TPMS database
+                  </p>
                 </div>
-
-                {/* Project Name (Auto-filled) */}
-                {isValidated && projectName && (
-                  <div className="flex items-center gap-2 px-4 py-3 bg-green-500/10 border border-green-500/20 rounded-xl">
-                    <CheckCircle className="w-5 h-5 text-green-400" />
-                    <div>
-                      <p className="text-sm text-gray-400">Project Name:</p>
-                      <p className="text-white font-medium">{projectName}</p>
-                    </div>
-                  </div>
-                )}
 
                 {/* Page Name Input */}
                 <div>
@@ -205,7 +128,6 @@ export default function CreateProjectChatModal({
                       }}
                       placeholder="e.g., Panel Analysis"
                       className="flex-1 bg-transparent text-white placeholder-gray-500 focus:outline-none"
-                      disabled={!isValidated}
                     />
                   </div>
                   <p className="mt-2 text-xs text-gray-500">
@@ -232,7 +154,7 @@ export default function CreateProjectChatModal({
                   </button>
                   <button
                     type="submit"
-                    disabled={!isValidated || !pageName.trim()}
+                    disabled={!projectId.trim() || !pageName.trim()}
                     className="flex-1 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-white font-medium transition"
                   >
                     Create Chat

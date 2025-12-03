@@ -14,7 +14,8 @@ export function useChat(
   initialMessages: Message[] = [],
   chatId?: string | null,
   userId?: string,
-  projectNumber?: string | null
+  projectNumber?: string | null,
+  onTitleGenerated?: (chatId: string, title: string) => void
 ) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [isTyping, setIsTyping] = useState(false);
@@ -178,12 +179,19 @@ export function useChat(
           const formData = new FormData();
           formData.append('first_message', content);
 
-          await axios.post(`${API_BASE}/chats/${chatId}/generate-title`, formData, {
+          const titleResponse = await axios.post(`${API_BASE}/chats/${chatId}/generate-title`, formData, {
             headers: {
               'Authorization': `Bearer ${token}`
             }
           });
-          console.log('✅ Chat title generated successfully');
+
+          const generatedTitle = titleResponse.data.title;
+          console.log('✅ Chat title generated:', generatedTitle);
+
+          // Notify parent component to update the chat list
+          if (onTitleGenerated && generatedTitle) {
+            onTitleGenerated(chatId, generatedTitle);
+          }
         } catch (titleError) {
           console.warn('⚠️ Failed to generate chat title:', titleError);
           // Non-critical error, continue anyway
