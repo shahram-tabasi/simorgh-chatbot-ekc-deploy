@@ -90,6 +90,11 @@ class UserAuth(BaseModel):
     project_number: str
 
 
+class OenumValidation(BaseModel):
+    """OENUM validation request"""
+    oenum: str
+
+
 class ProjectCreate(BaseModel):
     """Project creation request"""
     project_number: str
@@ -421,6 +426,81 @@ async def get_user_projects(
         "count": len(projects),
         "cached": False
     }
+
+
+@app.post("/api/auth/validate-project-by-oenum")
+async def validate_project_by_oenum(
+    request: OenumValidation,
+    current_user: str = Depends(get_current_user),
+    tpms: TPMSAuthService = Depends(get_tpms_auth)
+):
+    """
+    Validate project by OENUM and check user permission
+
+    Steps:
+    1. Query View_Project_Main WHERE OENUM = @oenum to get IDProjectMain and Project_Name
+    2. Check draft_permission WHERE user = @current_user AND Project_ID = @IDProjectMain
+    3. Return project info if permission granted
+
+    Returns:
+        200: Project found and user has permission
+        404: Project not found
+        403: User doesn't have permission
+    """
+    try:
+        oenum = request.oenum
+
+        # Step 1: Lookup project by OENUM
+        project = tpms.get_project_by_oenum(oenum)
+
+        if not project:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project not found with OENUM: {oenum}"
+            )
+
+        id_project_main = str(project["IDProjectMain"])
+        project_name = project["Project_Name"]
+
+        # Step 2: Check user permission
+        has_access, error_code, error_message = tpms.validate_project_access(
+            username=current_user,
+            project_id=id_project_main
+        )
+
+        if not has_access:
+            if error_code == "access_denied":
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Access denied: You don't have permission for this project"
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=error_message or "Permission check failed"
+                )
+
+        # Success - return project info
+        return {
+            "status": "success",
+            "project": {
+                "oenum": oenum,
+                "id_project_main": id_project_main,
+                "project_name": project_name
+            },
+            "has_access": True
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error validating project by OENUM: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Server error: {str(e)}"
+        )
 
 
 # =============================================================================

@@ -394,6 +394,60 @@ class TPMSAuthService:
             logger.error(traceback.format_exc())
             return None
 
+    def get_project_by_oenum(self, oenum: str) -> Optional[Dict[str, Any]]:
+        """
+        Get project details from View_Project_Main table by OENUM
+
+        Args:
+            oenum: OENUM value entered by user
+
+        Returns:
+            Project info dict with IDProjectMain, Project_Name, and OENUM, or None if not found
+
+        Example return:
+        {
+            "IDProjectMain": 12345,
+            "Project_Name": "Industrial Plant XYZ",
+            "OENUM": "P-2024-001"
+        }
+        """
+        if not self.enabled:
+            logger.warning("TPMS database disabled, cannot lookup project")
+            return None
+
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Query View_Project_Main by OENUM
+                query = """
+                SELECT IDProjectMain, Project_Name, OENUM
+                FROM View_Project_Main
+                WHERE OENUM = %s
+                LIMIT 1
+                """
+
+                cursor.execute(query, (oenum,))
+                project = cursor.fetchone()
+
+                if not project:
+                    logger.warning(f"Project not found with OENUM: {oenum}")
+                    return None
+
+                logger.info(f"✅ Project found by OENUM {oenum}: IDProjectMain={project.get('IDProjectMain')}, Name={project.get('Project_Name', 'N/A')}")
+
+                return {
+                    "IDProjectMain": project["IDProjectMain"],
+                    "Project_Name": project["Project_Name"],
+                    "OENUM": project["OENUM"]
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Error looking up project by OENUM: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+
     def validate_project_access(
         self,
         username: str,
