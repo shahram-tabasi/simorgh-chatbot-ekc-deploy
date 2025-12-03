@@ -222,6 +222,7 @@ class LLMService:
 
         # Determine mode
         effective_mode = LLMMode(mode) if mode else self.default_mode
+        logger.info(f"🎯 LLM Generate - Input mode: {mode}, Effective mode: {effective_mode.value}, Default mode: {self.default_mode.value}")
 
         # Check cache
         if use_cache and self.redis_service:
@@ -239,10 +240,12 @@ class LLMService:
         # Generate response based on mode
         try:
             if effective_mode == LLMMode.ONLINE:
+                logger.info(f"🌐 Calling ONLINE LLM (OpenAI {self.openai_model})")
                 result = self._generate_online(messages, temperature, max_tokens)
                 self.stats["online_requests"] += 1
 
             elif effective_mode == LLMMode.OFFLINE:
+                logger.info(f"💻 Calling OFFLINE LLM (Local server: {self.local_llm_url})")
                 result = self._generate_offline(messages, temperature, max_tokens)
                 self.stats["offline_requests"] += 1
 
@@ -288,6 +291,8 @@ class LLMService:
         max_tokens: Optional[int]
     ) -> Dict[str, Any]:
         """Generate response using OpenAI API"""
+        logger.info(f"🌐 _generate_online called - Model: {self.openai_model}")
+
         if not self.openai_api_key:
             raise ValueError("OpenAI API key not configured")
 
@@ -299,6 +304,8 @@ class LLMService:
                 max_tokens=max_tokens,
                 timeout=60
             )
+
+            logger.info(f"✅ OpenAI response received - Tokens: {response.usage.total_tokens}, Finish reason: {response.choices[0].finish_reason}")
 
             return {
                 "response": response.choices[0].message.content,
@@ -327,6 +334,8 @@ class LLMService:
     ) -> Dict[str, Any]:
         """Generate response using local LLM via nginx load balancer"""
 
+        logger.info(f"📡 _generate_offline called - URL: {self.local_llm_url}")
+
         # Call load-balanced endpoint (nginx handles failover between .61/.62)
         try:
             return self._call_local_llm(
@@ -336,7 +345,7 @@ class LLMService:
                 max_tokens
             )
         except Exception as e:
-            logger.error(f"Local LLM endpoint failed: {e}")
+            logger.error(f"❌ Local LLM endpoint failed: {e}")
             raise LLMOfflineError(f"Local LLM unavailable (load-balanced endpoint: {self.local_llm_url})")
 
     def _call_local_llm(
@@ -346,18 +355,30 @@ class LLMService:
         temperature: float,
         max_tokens: Optional[int]
     ) -> Dict[str, Any]:
-        """Call a local LLM server endpoint"""
+        """Call a local LLM server endpoint (non-streaming)"""
+
+        # Extract system and user prompts from messages
+        system_prompt = "You are Simorgh, an expert industrial electrical engineering assistant."
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_prompt = msg.get("content", system_prompt)
+
+        user_prompt = messages[-1].get("content", "") if messages else ""
 
         payload = {
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens or 2000,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "thinking_level": "medium",
             "stream": False
         }
 
+        full_url = f"{url.rstrip('/')}/generate-stream"
+        logger.info(f"🔧 _call_local_llm - Full URL: {full_url}")
+        logger.info(f"🔧 Payload: system_prompt length={len(system_prompt)}, user_prompt={user_prompt[:50]}...")
+
         try:
             response = requests.post(
-                f"{url}/chat",
+                full_url,
                 json=payload,
                 timeout=120,
                 headers={"Content-Type": "application/json"}
@@ -365,6 +386,8 @@ class LLMService:
 
             response.raise_for_status()
             data = response.json()
+
+            logger.info(f"✅ Local LLM response received - Status: {response.status_code}, Response length: {len(data.get('response', ''))}")
 
             return {
                 "response": data.get("response", data.get("message", "")),
