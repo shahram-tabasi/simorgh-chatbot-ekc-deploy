@@ -389,16 +389,29 @@ class LLMService:
 
             # Consume the entire stream and aggregate chunks
             full_response = ""
+            line_count = 0
+            chunk_count = 0
+
             for line in response.iter_lines():
                 if line:
+                    line_count += 1
                     try:
-                        data = json.loads(line.decode('utf-8'))
+                        decoded_line = line.decode('utf-8')
+                        logger.debug(f"📥 Stream line {line_count}: {decoded_line[:100]}...")
+
+                        data = json.loads(decoded_line)
+                        logger.debug(f"📦 Parsed JSON keys: {list(data.keys())}")
+
                         if "chunk" in data:
+                            chunk_count += 1
                             full_response += data["chunk"]
-                    except json.JSONDecodeError:
+                        else:
+                            logger.warning(f"⚠️ No 'chunk' key in data. Keys: {list(data.keys())}, Data: {data}")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"⚠️ JSON decode error on line {line_count}: {e}, Raw: {line[:100]}")
                         continue
 
-            logger.info(f"✅ Local LLM response received - Response length: {len(full_response)}")
+            logger.info(f"✅ Local LLM response received - Lines: {line_count}, Chunks: {chunk_count}, Response length: {len(full_response)}")
 
             return {
                 "response": full_response,
