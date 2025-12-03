@@ -146,7 +146,7 @@ export function useProjects(userId?: string) {
     setActiveChatId(chatId);
   };
 
-  const createChat = async (projectId: string, title: string) => {
+  const createChat = async (projectId: string, pageName: string) => {
     if (!userId) {
       console.error('Cannot create chat: userId missing');
       return;
@@ -160,12 +160,13 @@ export function useProjects(userId?: string) {
         return;
       }
 
-      // Create chat in backend
+      // Create project chat in backend with page_name
       const response = await axios.post(`${API_BASE}/chats`, {
-        chat_name: title,
+        chat_name: pageName,  // Use page_name as chat_name
         user_id: userId,
         chat_type: 'project',
-        project_number: projectId
+        project_number: projectId,
+        page_name: pageName  // New required field for project sessions
       }, {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -173,10 +174,11 @@ export function useProjects(userId?: string) {
       });
 
       const backendChatId = response.data.chat.chat_id;
+      const projectName = response.data.chat.project_name || `Project ${projectId}`;
 
       const newChat: Chat = {
         id: backendChatId,
-        title,
+        title: pageName,  // Use page_name as title
         messages: [],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -194,30 +196,18 @@ export function useProjects(userId?: string) {
       setActiveProjectId(projectId);
       setActiveChatId(backendChatId);
 
-      console.log('✅ Project chat created:', backendChatId);
-    } catch (error) {
+      console.log('✅ Project chat created:', backendChatId, 'Project:', projectName, 'Page:', pageName);
+    } catch (error: any) {
       console.error('❌ Failed to create project chat:', error);
-      // Fallback to local-only chat if backend fails
-      const chatId = `chat-${Date.now()}`;
-      const newChat: Chat = {
-        id: chatId,
-        title,
-        messages: [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        projectId: projectId
-      };
 
-      setProjects(prev =>
-        prev.map(p =>
-          p.id === projectId
-            ? { ...p, chats: [newChat, ...p.chats], updatedAt: new Date() }
-            : p
-        )
-      );
-
-      setActiveProjectId(projectId);
-      setActiveChatId(chatId);
+      // Show error to user
+      if (error.response?.status === 404) {
+        alert(`Project ID ${projectId} not found in database`);
+      } else if (error.response?.status === 403) {
+        alert(`Access denied for project ${projectId}`);
+      } else {
+        alert(error.response?.data?.detail || 'Failed to create project chat');
+      }
     }
   };
 
