@@ -394,22 +394,24 @@ class TPMSAuthService:
             logger.error(traceback.format_exc())
             return None
 
-    def get_project_by_oenum(self, oenum: str) -> Optional[Dict[str, Any]]:
+    def get_project_by_oenum(self, oenum_suffix: str) -> Optional[Dict[str, Any]]:
         """
-        Get project details from View_Project_Main table by OENUM
+        Get project details from View_Project_Main table by last 5 digits of OENUM
 
         Args:
-            oenum: OENUM value entered by user
+            oenum_suffix: Last 5 digits of OENUM (e.g., "12065" for "04A12065")
 
         Returns:
             Project info dict with IDProjectMain, Project_Name, and OENUM, or None if not found
 
-        Example return:
-        {
-            "IDProjectMain": 12345,
-            "Project_Name": "Industrial Plant XYZ",
-            "OENUM": "P-2024-001"
-        }
+        Example:
+            Input: "12065"
+            Finds: OENUM "04A12065"
+            Returns: {
+                "IDProjectMain": 12345,
+                "Project_Name": "Industrial Plant XYZ",
+                "OENUM": "04A12065"
+            }
         """
         if not self.enabled:
             logger.warning("TPMS database disabled, cannot lookup project")
@@ -419,22 +421,22 @@ class TPMSAuthService:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Query View_Project_Main by OENUM
+                # Query View_Project_Main by last 5 digits of OENUM using RIGHT()
                 query = """
-                SELECT IDProjectMain, Project_Name, OENUM
+                SELECT TOP 1 IDProjectMain, Project_Name, OENUM
                 FROM View_Project_Main
-                WHERE OENUM = %s
-                LIMIT 1
+                WHERE RIGHT(OENUM, 5) = %s
+                ORDER BY IDProjectMain DESC
                 """
 
-                cursor.execute(query, (oenum,))
+                cursor.execute(query, (oenum_suffix,))
                 project = cursor.fetchone()
 
                 if not project:
-                    logger.warning(f"Project not found with OENUM: {oenum}")
+                    logger.warning(f"Project not found with OENUM ending in: {oenum_suffix}")
                     return None
 
-                logger.info(f"✅ Project found by OENUM {oenum}: IDProjectMain={project.get('IDProjectMain')}, Name={project.get('Project_Name', 'N/A')}")
+                logger.info(f"✅ Project found by OENUM suffix '{oenum_suffix}': Full OENUM={project.get('OENUM')}, IDProjectMain={project.get('IDProjectMain')}, Name={project.get('Project_Name', 'N/A')}")
 
                 return {
                     "IDProjectMain": project["IDProjectMain"],

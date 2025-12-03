@@ -12,10 +12,11 @@ interface Props {
 }
 
 export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props) {
-  // Field 1: Project ID (OENUM)
-  const [oenum, setOenum] = useState('');
+  // Field 1: Last 5 digits of OENUM
+  const [oenumSuffix, setOenumSuffix] = useState('');
   // Field 2: Project Name (auto-filled, read-only)
   const [projectName, setProjectName] = useState('');
+  const [fullOenum, setFullOenum] = useState('');
   const [idProjectMain, setIdProjectMain] = useState('');
   // Field 3: First Page Name
   const [pageTitle, setPageTitle] = useState('New Page');
@@ -26,9 +27,22 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
 
   if (!isOpen) return null;
 
+  const handleOenumChange = (value: string) => {
+    // Only allow digits, max 5 characters
+    const cleaned = value.replace(/\D/g, '').slice(0, 5);
+    setOenumSuffix(cleaned);
+    setIsValidated(false);
+    setError('');
+  };
+
   const handleValidateOenum = async () => {
-    if (!oenum.trim()) {
-      setError('Please enter Project ID (OENUM)');
+    if (!oenumSuffix.trim()) {
+      setError('Please enter last 5 digits of OENUM');
+      return;
+    }
+
+    if (oenumSuffix.length !== 5) {
+      setError('OENUM must be exactly 5 digits');
       return;
     }
 
@@ -41,15 +55,16 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
         throw new Error('Authentication required');
       }
 
-      // Call backend to validate OENUM and check permission
+      // Call backend to validate OENUM suffix and check permission
       const response = await axios.post(
         `${API_BASE}/auth/validate-project-by-oenum`,
-        { oenum: oenum.trim() },
+        { oenum: oenumSuffix.trim() },
         { headers: { 'Authorization': `Bearer ${token}` } }
       );
 
-      // Auto-fill project name (read-only)
+      // Auto-fill project name and full OENUM (read-only)
       setProjectName(response.data.project.project_name);
+      setFullOenum(response.data.project.oenum);
       setIdProjectMain(response.data.project.id_project_main);
       setIsValidated(true);
       setError('');
@@ -58,7 +73,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
     } catch (err: any) {
       setIsValidated(false);
       if (err.response?.status === 404) {
-        setError('Project not found with this OENUM in database');
+        setError('Project not found with OENUM ending in "' + oenumSuffix + '"');
       } else if (err.response?.status === 403) {
         setError('Access denied: You don\'t have permission for this project');
       } else {
@@ -76,17 +91,16 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
       return;
     }
 
-    if (!pageTitle.trim()) {
-      setError('First Page Name cannot be empty');
-      return;
-    }
+    // Use default "New Page" if page title is empty
+    const finalPageTitle = pageTitle.trim() || 'New Page';
 
     // Pass IDProjectMain (not OENUM) to onCreate
-    onCreate(idProjectMain, projectName, pageTitle.trim());
+    onCreate(idProjectMain, projectName, finalPageTitle);
 
     // Reset form
-    setOenum('');
+    setOenumSuffix('');
     setProjectName('');
+    setFullOenum('');
     setIdProjectMain('');
     setPageTitle('New Page');
     setIsValidated(false);
@@ -95,8 +109,9 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
   };
 
   const handleClose = () => {
-    setOenum('');
+    setOenumSuffix('');
     setProjectName('');
+    setFullOenum('');
     setIdProjectMain('');
     setPageTitle('New Page');
     setIsValidated(false);
@@ -132,28 +147,26 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
           </div>
 
           <div className="space-y-6">
-            {/* Field 1: Project ID (OENUM) */}
+            {/* Field 1: Last 5 Digits of OENUM */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
-                Project ID (OENUM)
+                Project ID (Last 5 Digits of OENUM)
               </label>
               <div className="flex gap-2">
                 <input
                   type="text"
-                  value={oenum}
-                  onChange={(e) => {
-                    setOenum(e.target.value);
-                    setIsValidated(false);
-                    setError('');
-                  }}
-                  placeholder="e.g., 11849 or P-2024-001"
-                  className="flex-1 px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
+                  inputMode="numeric"
+                  value={oenumSuffix}
+                  onChange={(e) => handleOenumChange(e.target.value)}
+                  placeholder="12065"
+                  maxLength={5}
+                  className="flex-1 px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition text-lg font-mono tracking-wider"
                   autoFocus
                   disabled={isValidated || isValidating}
                 />
                 <button
                   onClick={handleValidateOenum}
-                  disabled={isValidating || isValidated || !oenum.trim()}
+                  disabled={isValidating || isValidated || oenumSuffix.length !== 5}
                   className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-xl text-white font-medium transition flex items-center gap-2 min-w-[120px] justify-center"
                 >
                   {isValidating && <Loader className="w-4 h-4 animate-spin" />}
@@ -162,11 +175,23 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
                 </button>
               </div>
               <p className="mt-2 text-xs text-gray-500">
-                Enter the OENUM from TPMS database
+                Enter exactly 5 digits (e.g., "12065" for OENUM "04A12065")
               </p>
             </div>
 
-            {/* Field 2: Project Name (Auto-filled, Read-only) */}
+            {/* Field 2: Full OENUM (Read-only) */}
+            {isValidated && fullOenum && (
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Full OENUM (Found)
+                </label>
+                <div className="px-4 py-3 bg-blue-500/10 border border-blue-500/30 rounded-xl">
+                  <p className="text-blue-300 font-mono text-lg">{fullOenum}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Field 3: Project Name (Auto-filled, Read-only) */}
             {isValidated && projectName && (
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -184,7 +209,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
               </div>
             )}
 
-            {/* Field 3: First Page Name */}
+            {/* Field 4: First Page Name */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
                 First Page Name
@@ -194,11 +219,13 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
                 value={pageTitle}
                 onChange={(e) => setPageTitle(e.target.value)}
                 placeholder="New Page"
-                className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
+                className={`w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition ${
+                  !isValidated ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
                 disabled={!isValidated}
               />
               <p className="mt-2 text-xs text-gray-500">
-                Default: "New Page" - can be changed
+                Default: "New Page" - can be changed after validation
               </p>
             </div>
 
@@ -214,7 +241,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
             <div className="flex gap-3">
               <button
                 onClick={handleSubmit}
-                disabled={!isValidated || !pageTitle.trim()}
+                disabled={!isValidated}
                 className="flex-1 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl font-bold text-white hover:from-emerald-600 hover:to-teal-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Create Project
