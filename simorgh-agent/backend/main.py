@@ -29,6 +29,7 @@ import json
 from services.neo4j_service import get_neo4j_service, Neo4jService
 from services.redis_service import get_redis_service, RedisService
 from services.sql_auth_service import get_sql_auth_service, SQLAuthService
+from services.tpms_auth_service import get_tpms_auth_service, TPMSAuthService
 from services.llm_service import (
     get_llm_service,
     LLMService,
@@ -36,6 +37,7 @@ from services.llm_service import (
     LLMOnlineError,
     LLMTimeoutError
 )
+from services.session_id_service import create_session_id_service, SessionIDService
 from models.ontology import *
 
 # Import authentication routes and utilities
@@ -73,7 +75,9 @@ Path(UPLOAD_FOLDER).mkdir(exist_ok=True, parents=True)
 neo4j_service: Optional[Neo4jService] = None
 redis_service: Optional[RedisService] = None
 sql_auth_service: Optional[SQLAuthService] = None
+tpms_auth_service: Optional[TPMSAuthService] = None
 llm_service: Optional[LLMService] = None
+session_id_service: Optional[SessionIDService] = None
 
 
 # =============================================================================
@@ -99,7 +103,8 @@ class ProjectCreate(BaseModel):
 class ChatCreate(BaseModel):
     """Chat creation request"""
     chat_name: str
-    project_number: Optional[str] = None
+    project_number: Optional[str] = None  # Required for project sessions (IDProjectMain)
+    page_name: Optional[str] = None  # Required for project sessions (user-provided page name)
     user_id: str
     chat_type: str = "general"  # "general" or "project"
 
@@ -136,11 +141,11 @@ class PowerPathQuery(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global neo4j_service, redis_service, sql_auth_service, llm_service
+    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service
 
     logger.info("🚀 Starting Simorgh Industrial Assistant...")
 
-    # Initialize Redis first (needed by LLM service)
+    # Initialize Redis first (needed by LLM service and session ID service)
     redis_service = get_redis_service()
     logger.info("✅ Redis service initialized")
 
@@ -148,13 +153,21 @@ async def startup_event():
     neo4j_service = get_neo4j_service()
     logger.info("✅ Neo4j service initialized")
 
-    # Initialize SQL Auth
+    # Initialize SQL Auth (legacy)
     sql_auth_service = get_sql_auth_service()
     logger.info("✅ SQL Auth service initialized")
+
+    # Initialize TPMS Auth (MySQL)
+    tpms_auth_service = get_tpms_auth_service()
+    logger.info("✅ TPMS Auth service initialized")
 
     # Initialize LLM with Redis
     llm_service = get_llm_service(redis_service=redis_service)
     logger.info("✅ LLM service initialized")
+
+    # Initialize Session ID Service
+    session_id_service = create_session_id_service(redis_service)
+    logger.info("✅ Session ID service initialized")
 
     logger.info("🎉 All services ready!")
 
@@ -198,11 +211,25 @@ def get_sql_auth() -> SQLAuthService:
     return sql_auth_service
 
 
+def get_tpms_auth() -> TPMSAuthService:
+    """Get TPMS Auth service instance"""
+    if tpms_auth_service is None:
+        raise HTTPException(status_code=503, detail="TPMS Auth service not available")
+    return tpms_auth_service
+
+
 def get_llm() -> LLMService:
     """Get LLM service instance"""
     if llm_service is None:
         raise HTTPException(status_code=503, detail="LLM service not available")
     return llm_service
+
+
+def get_session_id_service() -> SessionIDService:
+    """Get Session ID service instance"""
+    if session_id_service is None:
+        raise HTTPException(status_code=503, detail="Session ID service not available")
+    return session_id_service
 
 
 # =============================================================================
@@ -494,12 +521,27 @@ async def list_projects(
 async def create_chat(
     chat: ChatCreate,
     current_user: str = Depends(get_current_user),
-    redis: RedisService = Depends(get_redis)
+    redis: RedisService = Depends(get_redis),
+    tpms: TPMSAuthService = Depends(get_tpms_auth),
+    session_id_svc: SessionIDService = Depends(get_session_id_service)
 ):
     """
-    Create a new chat session (requires authentication)
+    Create a new chat session with robust validation (requires authentication)
 
-    Validates that the requesting user matches the chat owner
+    For GENERAL sessions:
+    - Creates session immediately with temporary title "New conversation"
+    - Returns session ID to frontend
+    - Frontend should call /api/chats/{chat_id}/generate-title after first message
+
+    For PROJECT sessions:
+    - Validates project exists in View_Project_Main
+    - Checks user permission in draft_permission table
+    - Requires page_name to be provided
+    - Auto-fills project name from database
+
+    Session ID formats:
+    - General: G-yyyyMM-nnnnnn (e.g., G-202512-000123)
+    - Project: P-ProjectID-nnnnnn (e.g., P-12345-000123)
     """
     # Security: Ensure the user_id in the request matches the authenticated user
     if chat.user_id != current_user:
@@ -508,49 +550,156 @@ async def create_chat(
             detail="Cannot create chat for another user"
         )
 
-    # Validation: Project chats MUST have a project_number
-    if chat.chat_type == "project" and not chat.project_number:
+    # ==========================================================================
+    # GENERAL SESSION CREATION
+    # ==========================================================================
+    if chat.chat_type == "general":
+        # Validation: General chats must NOT have project_number or page_name
+        if chat.project_number or chat.page_name:
+            raise HTTPException(
+                status_code=400,
+                detail="General chats cannot have a project_number or page_name"
+            )
+
+        try:
+            # Generate unique session ID with monthly counter
+            chat_id = session_id_svc.generate_general_session_id()
+
+            # Use temporary title if provided, otherwise use default
+            # Frontend will call generate-title endpoint after first message
+            title = chat.chat_name if chat.chat_name and chat.chat_name != "New Chat" else "New conversation"
+
+            chat_data = {
+                "chat_id": chat_id,
+                "chat_name": title,
+                "user_id": chat.user_id,
+                "chat_type": "general",
+                "project_number": None,
+                "project_name": None,
+                "page_name": None,
+                "created_at": datetime.now().isoformat(),
+                "message_count": 0,
+                "status": "active"
+            }
+
+            # Store in Redis (atomic operation)
+            redis.set(f"chat:{chat_id}:metadata", chat_data, db="chat")
+
+            # Add to user's chat indices
+            redis.add_chat_to_user_index(
+                user_id=chat.user_id,
+                chat_id=chat_id,
+                chat_type="general",
+                project_number=None
+            )
+
+            logger.info(f"✅ General chat created: {chat_id} for user: {chat.user_id}")
+
+            return {
+                "status": "success",
+                "chat": chat_data,
+                "message": "General session created. Call /api/chats/{chat_id}/generate-title after first message."
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Failed to create general chat: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
+
+    # ==========================================================================
+    # PROJECT SESSION CREATION
+    # ==========================================================================
+    elif chat.chat_type == "project":
+        # Validation: Project chats MUST have project_number and page_name
+        if not chat.project_number:
+            raise HTTPException(
+                status_code=400,
+                detail="Project chats must have a project_number"
+            )
+
+        if not chat.page_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Project chats must have a page_name"
+            )
+
+        try:
+            # Step 1: Validate project access (lookup + permission check)
+            has_access, error_code, error_message = tpms.validate_project_access(
+                username=current_user,
+                project_id=chat.project_number
+            )
+
+            if not has_access:
+                if error_code == "project_not_found":
+                    raise HTTPException(status_code=404, detail=error_message)
+                elif error_code == "access_denied":
+                    raise HTTPException(status_code=403, detail=error_message)
+                else:
+                    raise HTTPException(status_code=500, detail=error_message)
+
+            # Step 2: Get project details from View_Project_Main
+            project = tpms.get_project_by_id(chat.project_number)
+            if not project:
+                # This should not happen after validate_project_access, but safety check
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Project {chat.project_number} not found"
+                )
+
+            project_name = project["Project_Name"]
+
+            # Step 3: Generate unique session ID with project-specific counter
+            chat_id = session_id_svc.generate_project_session_id(chat.project_number)
+
+            # Step 4: Create session data
+            chat_data = {
+                "chat_id": chat_id,
+                "chat_name": chat.page_name,  # Use user-provided page name as title
+                "user_id": chat.user_id,
+                "chat_type": "project",
+                "project_number": chat.project_number,
+                "project_name": project_name,  # Auto-filled from database
+                "page_name": chat.page_name,
+                "created_at": datetime.now().isoformat(),
+                "message_count": 0,
+                "status": "active"
+            }
+
+            # Step 5: Store in Redis (atomic operation)
+            redis.set(f"chat:{chat_id}:metadata", chat_data, db="chat")
+
+            # Step 6: Add to user's chat indices
+            redis.add_chat_to_user_index(
+                user_id=chat.user_id,
+                chat_id=chat_id,
+                chat_type="project",
+                project_number=chat.project_number
+            )
+
+            logger.info(
+                f"✅ Project chat created: {chat_id} for user: {chat.user_id}, "
+                f"project: {chat.project_number} ({project_name}), page: {chat.page_name}"
+            )
+
+            return {
+                "status": "success",
+                "chat": chat_data,
+                "message": f"Project session created for {project_name}"
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Failed to create project chat: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=f"Failed to create project session: {str(e)}")
+
+    else:
         raise HTTPException(
             status_code=400,
-            detail="Project chats must have a project_number"
+            detail=f"Invalid chat_type: {chat.chat_type}. Must be 'general' or 'project'."
         )
-
-    # Validation: General chats must NOT have a project_number
-    if chat.chat_type == "general" and chat.project_number:
-        raise HTTPException(
-            status_code=400,
-            detail="General chats cannot have a project_number"
-        )
-
-    chat_id = str(uuid.uuid4())
-
-    chat_data = {
-        "chat_id": chat_id,
-        "chat_name": chat.chat_name,
-        "user_id": chat.user_id,
-        "chat_type": chat.chat_type,
-        "project_number": chat.project_number,
-        "created_at": datetime.now().isoformat(),
-        "message_count": 0
-    }
-
-    # Store in Redis
-    redis.set(f"chat:{chat_id}:metadata", chat_data, db="chat")
-
-    # Add to user's chat indices (new enhanced indexing)
-    redis.add_chat_to_user_index(
-        user_id=chat.user_id,
-        chat_id=chat_id,
-        chat_type=chat.chat_type,
-        project_number=chat.project_number
-    )
-
-    logger.info(f"✅ Chat created: {chat_id} for user: {chat.user_id} (type: {chat.chat_type})")
-
-    return {
-        "status": "success",
-        "chat": chat_data
-    }
 
 
 @app.get("/api/chats/{chat_id}")

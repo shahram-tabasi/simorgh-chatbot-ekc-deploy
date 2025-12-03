@@ -7,6 +7,7 @@ import { ChatArea } from './components/ChatArea';
 import SettingsPanel from './components/SettingsPanel';
 import CreateProjectModal from './components/CreateProjectModal';
 import CreateChatModal from './components/CreateChatModal';
+import CreateProjectChatModal from './components/CreateProjectChatModal';
 import Login from './components/Login';
 import { useSidebar } from './hooks/useSidebar';
 import { useProjects } from './hooks/useProjects';
@@ -21,6 +22,8 @@ function AppContent() {
   const leftSidebar = useSidebar(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
   const [showChatModal, setShowChatModal] = React.useState(false);
+  const [showProjectChatModal, setShowProjectChatModal] = React.useState(false);
+  const [selectedProjectForChat, setSelectedProjectForChat] = React.useState<string | null>(null);
 
   const {
     projects,
@@ -50,12 +53,20 @@ function AppContent() {
 
   const handleCreateProject = () => setShowCreateModal(true);
 
-  const handleCreateChat = (projectId: string, title: string) => {
-    createChat(projectId, title);
+  const handleCreateChat = (projectId: string, projectName: string, pageName: string) => {
+    // projectName is for display/validation only, not passed to createChat
+    createChat(projectId, pageName);
   };
 
-  const handleCreateGeneralChat = (title: string) => {
-    createGeneralChat(title);
+  const handleShowProjectChatModal = (projectId: string) => {
+    setSelectedProjectForChat(projectId);
+    setShowProjectChatModal(true);
+  };
+
+  const handleCreateGeneralChat = () => {
+    // Create general chat immediately without asking for title
+    // The title will be auto-generated from the first message
+    createGeneralChat("New conversation");
   };
 
   // هدر ثابت + پروژه‌ها
@@ -111,7 +122,7 @@ function AppContent() {
             onToggle={rightSidebar.toggle}
             side="right"
             onNewProject={handleCreateProject}
-            onNewGeneralChat={() => setShowChatModal(true)}
+            onNewGeneralChat={handleCreateGeneralChat}
           >
             <ProjectTree
               projects={displayProjects}
@@ -124,7 +135,7 @@ function AppContent() {
               onSelectChat={selectChat}
               onCreateProject={handleCreateProject}
               onCreateChat={handleCreateChat}
-              onCreateGeneralChat={() => setShowChatModal(true)}
+              onCreateGeneralChat={handleCreateGeneralChat}
             />
           </Sidebar>
 
@@ -157,14 +168,29 @@ function AppContent() {
           }}
         />
 
-        {/* مودال ساخت چت جدید */}
-        <CreateChatModal
+        {/* مودال ساخت چت جدید (Not used - general chats are created immediately) */}
+        {/* <CreateChatModal
           isOpen={showChatModal}
           onClose={() => setShowChatModal(false)}
           onCreate={(title) => {
-            handleCreateGeneralChat(title);
+            handleCreateGeneralChat();
             setShowChatModal(false);
           }}
+        /> */}
+
+        {/* مودال ساخت چت پروژه */}
+        <CreateProjectChatModal
+          isOpen={showProjectChatModal}
+          onClose={() => {
+            setShowProjectChatModal(false);
+            setSelectedProjectForChat(null);
+          }}
+          onCreate={(projectId, projectName, pageName) => {
+            handleCreateChat(projectId, projectName, pageName);
+            setShowProjectChatModal(false);
+            setSelectedProjectForChat(null);
+          }}
+          userId={userId}
         />
       </div>
     </LanguageProvider>

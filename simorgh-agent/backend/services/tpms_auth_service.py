@@ -12,7 +12,7 @@ Author: Simorgh Industrial Assistant
 
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import pymysql
 from contextlib import contextmanager
 from services.hash_detector import HashDetector
@@ -337,6 +337,123 @@ class TPMSAuthService:
         except Exception as e:
             logger.error(f"Error getting user projects: {e}")
             return []
+
+    # =========================================================================
+    # PROJECT LOOKUP
+    # =========================================================================
+
+    def get_project_by_id(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get project details from View_Project_Main table
+
+        Args:
+            project_id: Project ID (IDProjectMain) to look up
+
+        Returns:
+            Project info dict with IDProjectMain and Project_Name, or None if not found
+
+        Example return:
+        {
+            "IDProjectMain": 12345,
+            "Project_Name": "Industrial Plant XYZ"
+        }
+        """
+        if not self.enabled:
+            logger.warning("TPMS database disabled, cannot lookup project")
+            return None
+
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Query View_Project_Main to get project details
+                query = """
+                SELECT IDProjectMain, Project_Name
+                FROM View_Project_Main
+                WHERE IDProjectMain = %s
+                LIMIT 1
+                """
+
+                cursor.execute(query, (project_id,))
+                project = cursor.fetchone()
+
+                if not project:
+                    logger.warning(f"Project not found in View_Project_Main: {project_id}")
+                    return None
+
+                logger.info(f"✅ Project found: {project_id} -> {project.get('Project_Name', 'N/A')}")
+
+                return {
+                    "IDProjectMain": project["IDProjectMain"],
+                    "Project_Name": project["Project_Name"]
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Error looking up project: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+
+    def validate_project_access(
+        self,
+        username: str,
+        project_id: str
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Validate project access with detailed error messages
+
+        Combines project lookup and permission check into one call.
+
+        Args:
+            username: User's EMPUSERNAME
+            project_id: Project ID to validate
+
+        Returns:
+            Tuple of (has_access, error_code, error_message)
+            - (True, None, None) if access granted
+            - (False, "project_not_found", "Project ID not found") if project doesn't exist
+            - (False, "access_denied", "Access denied for project X") if no permission
+            - (False, "error", "Error message") if database error
+
+        Example:
+            has_access, error_code, error_msg = validate_project_access("john", "12345")
+            if not has_access:
+                return {"error": error_code, "message": error_msg}, 403
+        """
+        if not self.enabled:
+            # If auth is disabled, allow all access (development mode)
+            logger.warning("TPMS auth disabled, allowing access")
+            return (True, None, None)
+
+        try:
+            # Step 1: Check if project exists
+            project = self.get_project_by_id(project_id)
+            if not project:
+                return (
+                    False,
+                    "project_not_found",
+                    f"Project ID {project_id} not found in database"
+                )
+
+            # Step 2: Check user permission
+            has_permission = self.check_project_permission(username, project_id)
+            if not has_permission:
+                return (
+                    False,
+                    "access_denied",
+                    f"Access denied for project {project_id}"
+                )
+
+            # Access granted
+            return (True, None, None)
+
+        except Exception as e:
+            logger.error(f"❌ Error validating project access: {e}")
+            return (
+                False,
+                "error",
+                f"Database error: {str(e)}"
+            )
 
 
 # =============================================================================
