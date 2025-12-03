@@ -48,7 +48,7 @@ export function useChat(
 
     loadLlmMode();
 
-    // Listen for storage changes from SettingsPanel
+    // Listen for storage changes from other tabs/windows
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'llm_mode' && e.newValue) {
         setLlmMode(e.newValue as 'online' | 'offline');
@@ -56,8 +56,20 @@ export function useChat(
       }
     };
 
+    // Listen for custom event from same window (SettingsPanel)
+    const handleCustomModeChange = (e: Event) => {
+      const customEvent = e as CustomEvent<'online' | 'offline'>;
+      setLlmMode(customEvent.detail);
+      console.log('🔄 LLM mode changed via custom event:', customEvent.detail);
+    };
+
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    window.addEventListener('llm-mode-changed', handleCustomModeChange);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('llm-mode-changed', handleCustomModeChange);
+    };
   }, []);
 
   // Reset messages when chatId changes (new chat selected)

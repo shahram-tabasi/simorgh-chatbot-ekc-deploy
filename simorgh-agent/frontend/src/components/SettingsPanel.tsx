@@ -69,6 +69,9 @@ export default function SettingsPanel() {
     setAiMode(mode);
     localStorage.setItem('llm_mode', mode);
     console.log('✅ AI mode changed to:', mode);
+
+    // Dispatch custom event for same-window communication
+    window.dispatchEvent(new CustomEvent('llm-mode-changed', { detail: mode }));
   };
 
   // فعال‌سازی نوتیفیکیشن
