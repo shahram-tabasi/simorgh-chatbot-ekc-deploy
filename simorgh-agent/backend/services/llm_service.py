@@ -355,7 +355,7 @@ class LLMService:
         temperature: float,
         max_tokens: Optional[int]
     ) -> Dict[str, Any]:
-        """Call a local LLM server endpoint (non-streaming)"""
+        """Call a local LLM server endpoint (non-streaming - consumes stream internally)"""
 
         # Extract system and user prompts from messages
         system_prompt = "You are Simorgh, an expert industrial electrical engineering assistant."
@@ -369,7 +369,7 @@ class LLMService:
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "thinking_level": "medium",
-            "stream": False
+            "stream": True  # Must be True for /generate-stream endpoint
         }
 
         full_url = f"{url.rstrip('/')}/generate-stream"
@@ -380,24 +380,35 @@ class LLMService:
             response = requests.post(
                 full_url,
                 json=payload,
-                timeout=120,
-                headers={"Content-Type": "application/json"}
+                timeout=180,
+                headers={"Content-Type": "application/json"},
+                stream=True  # Enable streaming
             )
 
             response.raise_for_status()
-            data = response.json()
 
-            logger.info(f"✅ Local LLM response received - Status: {response.status_code}, Response length: {len(data.get('response', ''))}")
+            # Consume the entire stream and aggregate chunks
+            full_response = ""
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        data = json.loads(line.decode('utf-8'))
+                        if "chunk" in data:
+                            full_response += data["chunk"]
+                    except json.JSONDecodeError:
+                        continue
+
+            logger.info(f"✅ Local LLM response received - Response length: {len(full_response)}")
 
             return {
-                "response": data.get("response", data.get("message", "")),
+                "response": full_response,
                 "mode": "offline",
-                "model": data.get("model", "local-llm"),
-                "tokens": data.get("tokens", {
+                "model": "local-llm",
+                "tokens": {
                     "prompt": 0,
                     "completion": 0,
                     "total": 0
-                }),
+                },
                 "server": url
             }
 
