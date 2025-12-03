@@ -424,6 +424,58 @@ export function useProjects(userId?: string) {
     console.log(`✅ Updated chat title: ${chatId} -> "${newTitle}"`);
   };
 
+  const renameChat = async (chatId: string, newName: string, projectId: string | null) => {
+    if (!userId) {
+      console.error('Cannot rename chat: userId missing');
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        return;
+      }
+
+      // Call backend rename endpoint (if exists, otherwise just update locally)
+      // For now, update locally and in backend metadata
+      await axios.patch(
+        `${API_BASE}/chats/${chatId}`,
+        { chat_name: newName },
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+
+      // Update UI
+      if (projectId !== null) {
+        // Project chat
+        setProjects(prev =>
+          prev.map(p =>
+            p.id === projectId
+              ? {
+                  ...p,
+                  chats: p.chats.map(c =>
+                    c.id === chatId ? { ...c, title: newName } : c
+                  )
+                }
+              : p
+          )
+        );
+      } else {
+        // General chat
+        setGeneralChats(prev =>
+          prev.map(c =>
+            c.id === chatId ? { ...c, title: newName } : c
+          )
+        );
+      }
+
+      console.log('✅ Chat renamed:', chatId, '->', newName);
+    } catch (error: any) {
+      console.error('❌ Failed to rename chat:', error);
+      alert(error.response?.data?.detail || 'Failed to rename chat');
+    }
+  };
+
   const deleteChat = async (chatId: string, projectId: string | null) => {
     if (!userId) {
       console.error('Cannot delete chat: userId missing');
@@ -495,6 +547,7 @@ export function useProjects(userId?: string) {
     createGeneralChat,
     updateChatMessages,
     updateChatTitle,
+    renameChat,
     deleteChat,
     toggleProject,
     toggleGeneralChats,

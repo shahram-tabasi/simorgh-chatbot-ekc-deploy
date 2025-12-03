@@ -36,6 +36,7 @@ function AppContent() {
     createChat,
     createGeneralChat,
     updateChatTitle,
+    renameChat,
     deleteChat,
     toggleProject,
     toggleGeneralChats,
@@ -139,6 +140,8 @@ function AppContent() {
               onCreateProject={handleCreateProject}
               onCreateChat={handleCreateChat}
               onCreateGeneralChat={handleCreateGeneralChat}
+              onRenameChat={renameChat}
+              onDeleteChat={deleteChat}
             />
           </Sidebar>
 

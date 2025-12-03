@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, X, Loader } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import AccessDeniedAlert from './AccessDeniedAlert';
+import { Plus, X, Loader, CheckCircle, AlertCircle } from 'lucide-react';
+import axios from 'axios';
+
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 interface Props {
   isOpen: boolean;
@@ -11,46 +12,96 @@ interface Props {
 }
 
 export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props) {
-  const [projectId, setProjectId] = useState('');
+  // Field 1: Project ID (OENUM)
+  const [oenum, setOenum] = useState('');
+  // Field 2: Project Name (auto-filled, read-only)
   const [projectName, setProjectName] = useState('');
-  const [pageTitle, setPageTitle] = useState('');
-  const [isChecking, setIsChecking] = useState(false);
-  const [showAccessDenied, setShowAccessDenied] = useState(false);
+  const [idProjectMain, setIdProjectMain] = useState('');
+  // Field 3: First Page Name
+  const [pageTitle, setPageTitle] = useState('New Page');
 
-  const { checkPermission, user } = useAuth();
+  const [isValidating, setIsValidating] = useState(false);
+  const [isValidated, setIsValidated] = useState(false);
+  const [error, setError] = useState('');
 
   if (!isOpen) return null;
 
-  const handleSubmit = async () => {
-    if (!projectId.trim()) return alert('شماره پروژه را وارد کنید');
-    if (!projectName.trim()) return alert('نام پروژه را وارد کنید');
-    if (!pageTitle.trim()) return alert('نام صفحه اول الزامی است');
+  const handleValidateOenum = async () => {
+    if (!oenum.trim()) {
+      setError('Please enter Project ID (OENUM)');
+      return;
+    }
+
+    setIsValidating(true);
+    setError('');
 
     try {
-      setIsChecking(true);
-
-      // Check permission
-      const hasAccess = await checkPermission(projectId.trim());
-
-      if (!hasAccess) {
-        // Show access denied alert
-        setShowAccessDenied(true);
-        setIsChecking(false);
-        return;
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        throw new Error('Authentication required');
       }
 
-      // Permission granted - proceed with creation
-      onCreate(projectId.trim(), projectName.trim(), pageTitle.trim());
-      setProjectId('');
-      setProjectName('');
-      setPageTitle('');
-      onClose();
-    } catch (error) {
-      console.error('Permission check failed:', error);
-      alert('خطا در بررسی دسترسی. لطفا دوباره تلاش کنید.');
+      // Call backend to validate OENUM and check permission
+      const response = await axios.post(
+        `${API_BASE}/auth/validate-project-by-oenum`,
+        { oenum: oenum.trim() },
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+
+      // Auto-fill project name (read-only)
+      setProjectName(response.data.project.project_name);
+      setIdProjectMain(response.data.project.id_project_main);
+      setIsValidated(true);
+      setError('');
+
+      console.log('✅ Project validated:', response.data.project);
+    } catch (err: any) {
+      setIsValidated(false);
+      if (err.response?.status === 404) {
+        setError('Project not found with this OENUM in database');
+      } else if (err.response?.status === 403) {
+        setError('Access denied: You don\'t have permission for this project');
+      } else {
+        setError(err.response?.data?.detail || 'Validation failed. Please try again.');
+      }
+      console.error('❌ Validation failed:', err);
     } finally {
-      setIsChecking(false);
+      setIsValidating(false);
     }
+  };
+
+  const handleSubmit = async () => {
+    if (!isValidated) {
+      setError('Please validate the Project ID first');
+      return;
+    }
+
+    if (!pageTitle.trim()) {
+      setError('First Page Name cannot be empty');
+      return;
+    }
+
+    // Pass IDProjectMain (not OENUM) to onCreate
+    onCreate(idProjectMain, projectName, pageTitle.trim());
+
+    // Reset form
+    setOenum('');
+    setProjectName('');
+    setIdProjectMain('');
+    setPageTitle('New Page');
+    setIsValidated(false);
+    setError('');
+    onClose();
+  };
+
+  const handleClose = () => {
+    setOenum('');
+    setProjectName('');
+    setIdProjectMain('');
+    setPageTitle('New Page');
+    setIsValidated(false);
+    setError('');
+    onClose();
   };
 
   return (
@@ -59,7 +110,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        onClick={onClose}
+        onClick={handleClose}
         className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50"
       />
 
@@ -73,85 +124,111 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
           <div className="flex items-center justify-between mb-8">
             <h2 className="text-2xl font-bold text-white flex items-center gap-3">
               <Plus className="w-8 h-8 text-emerald-400" />
-              پروژه جدید
+              New Project
             </h2>
-            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition">
+            <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-lg transition">
               <X className="w-6 h-6 text-gray-400" />
             </button>
           </div>
 
           <div className="space-y-6">
+            {/* Field 1: Project ID (OENUM) */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">شماره پروژه (Project ID)</label>
-              <input
-                type="text"
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                placeholder="مثال: 11849"
-                className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
-                autoFocus
-                disabled={isChecking}
-              />
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Project ID (OENUM)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={oenum}
+                  onChange={(e) => {
+                    setOenum(e.target.value);
+                    setIsValidated(false);
+                    setError('');
+                  }}
+                  placeholder="e.g., 11849 or P-2024-001"
+                  className="flex-1 px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
+                  autoFocus
+                  disabled={isValidated || isValidating}
+                />
+                <button
+                  onClick={handleValidateOenum}
+                  disabled={isValidating || isValidated || !oenum.trim()}
+                  className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-xl text-white font-medium transition flex items-center gap-2 min-w-[120px] justify-center"
+                >
+                  {isValidating && <Loader className="w-4 h-4 animate-spin" />}
+                  {isValidated && <CheckCircle className="w-4 h-4" />}
+                  {isValidating ? 'Checking...' : isValidated ? 'Valid' : 'Validate'}
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-gray-500">
+                Enter the OENUM from TPMS database
+              </p>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">نام پروژه</label>
-              <input
-                type="text"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                placeholder="مثال: وب‌سایت شرکتی"
-                className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
-                disabled={isChecking}
-              />
-            </div>
+            {/* Field 2: Project Name (Auto-filled, Read-only) */}
+            {isValidated && projectName && (
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Project Name (Auto-filled)
+                </label>
+                <div className="flex items-center gap-2 px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-xl">
+                  <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
+                  <input
+                    type="text"
+                    value={projectName}
+                    readOnly
+                    className="flex-1 bg-transparent text-green-300 cursor-not-allowed focus:outline-none"
+                  />
+                </div>
+              </div>
+            )}
 
+            {/* Field 3: First Page Name */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">نام صفحه اول</label>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                First Page Name
+              </label>
               <input
                 type="text"
                 value={pageTitle}
                 onChange={(e) => setPageTitle(e.target.value)}
-                placeholder="مثال: صفحه اصلی"
+                placeholder="New Page"
                 className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
-                disabled={isChecking}
+                disabled={!isValidated}
               />
+              <p className="mt-2 text-xs text-gray-500">
+                Default: "New Page" - can be changed
+              </p>
             </div>
 
+            {/* Error Message */}
+            {error && (
+              <div className="flex items-center gap-2 px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl">
+                <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+                <p className="text-sm text-red-400">{error}</p>
+              </div>
+            )}
+
+            {/* Buttons */}
             <div className="flex gap-3">
               <button
                 onClick={handleSubmit}
-                disabled={isChecking}
-                className="flex-1 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl font-bold text-white hover:from-emerald-600 hover:to-teal-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                disabled={!isValidated || !pageTitle.trim()}
+                className="flex-1 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl font-bold text-white hover:from-emerald-600 hover:to-teal-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isChecking ? (
-                  <>
-                    <Loader className="w-5 h-5 animate-spin" />
-                    <span>در حال بررسی دسترسی...</span>
-                  </>
-                ) : (
-                  'ساخت پروژه'
-                )}
+                Create Project
               </button>
               <button
-                onClick={onClose}
-                disabled={isChecking}
-                className="px-6 py-3 bg-white/10 border border-white/20 rounded-xl text-white hover:bg-white/20 transition disabled:opacity-50"
+                onClick={handleClose}
+                className="px-6 py-3 bg-white/10 border border-white/20 rounded-xl text-white hover:bg-white/20 transition"
               >
-                لغو
+                Cancel
               </button>
             </div>
           </div>
         </div>
       </motion.div>
-
-      {/* Access Denied Alert */}
-      <AccessDeniedAlert
-        isOpen={showAccessDenied}
-        onClose={() => setShowAccessDenied(false)}
-        projectId={projectId}
-        username={user?.EMPUSERNAME}
-      />
     </>
   );
 }

@@ -272,23 +272,28 @@ class RedisService:
         Args:
             chat_id: Chat identifier
             limit: Number of messages to retrieve
-            offset: Offset from most recent (0 = most recent)
+            offset: Offset from oldest (0 = start from oldest)
 
         Returns:
-            List of messages (newest first)
+            List of messages sorted by CreatedAt ASC (oldest first)
         """
         try:
             key = f"chat:history:{chat_id}"
 
-            # Get messages (negative indices for recent messages)
-            start = -(offset + limit)
-            end = -offset - 1 if offset > 0 else -1
+            # Get all messages or limited range (0 = start, -1 = end)
+            if limit <= 0:
+                messages_raw = self.chat_client.lrange(key, 0, -1)
+            else:
+                # Get messages with offset from beginning
+                start = offset
+                end = offset + limit - 1
+                messages_raw = self.chat_client.lrange(key, start, end)
 
-            messages_raw = self.chat_client.lrange(key, start, end)
-
-            # Parse and reverse (newest first)
+            # Parse messages (maintain insertion order = CreatedAt ASC)
             messages = [json.loads(msg) for msg in messages_raw]
-            messages.reverse()
+
+            # Sort by timestamp to ensure CreatedAt ASC order
+            messages.sort(key=lambda m: m.get('timestamp', ''))
 
             return messages
         except (RedisError, json.JSONDecodeError) as e:
