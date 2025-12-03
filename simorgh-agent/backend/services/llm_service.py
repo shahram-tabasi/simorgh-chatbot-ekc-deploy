@@ -428,8 +428,12 @@ class LLMService:
 
             logger.info(f"✅ Local LLM response received - Lines: {line_count}, Chunks: {chunk_count}, Response length: {len(full_response)}")
 
+            # Extract only the final answer (strip reasoning/analysis)
+            clean_response = self._extract_final_answer(full_response)
+            logger.info(f"🎯 Extracted final answer - Original: {len(full_response)} chars, Clean: {len(clean_response)} chars")
+
             return {
-                "response": full_response,
+                "response": clean_response,
                 "mode": "offline",
                 "model": "local-llm",
                 "tokens": {
@@ -444,6 +448,33 @@ class LLMService:
             raise LLMTimeoutError(f"Local LLM server timed out: {url}")
         except RequestException as e:
             raise Exception(f"Local LLM request failed: {url} - {str(e)}")
+
+    def _extract_final_answer(self, raw_response: str) -> str:
+        """
+        Extract only the final user-facing answer from local LLM response.
+
+        Local LLM returns format like:
+        system...developer...user...assistantanalysis...assistantfinal<ACTUAL ANSWER>
+
+        We want to extract only the content after 'assistantfinal'.
+        """
+        if not raw_response:
+            return raw_response
+
+        # Look for the final answer marker
+        final_marker = "assistantfinal"
+
+        if final_marker in raw_response:
+            # Extract everything after the marker
+            parts = raw_response.split(final_marker, 1)
+            if len(parts) > 1:
+                final_answer = parts[1].strip()
+                logger.debug(f"📝 Extracted final answer after '{final_marker}' marker")
+                return final_answer
+
+        # Fallback: if no marker found, return original response
+        logger.warning(f"⚠️ No '{final_marker}' marker found, returning full response")
+        return raw_response
 
     # =========================================================================
     # STREAMING SUPPORT
@@ -552,8 +583,10 @@ class LLMService:
                             # Incremental chunk format
                             yield data["chunk"]
                         elif "output" in data:
-                            # Complete output format - yield entire response
-                            yield data["output"]
+                            # Complete output format - extract final answer and yield
+                            raw_output = data["output"]
+                            clean_output = self._extract_final_answer(raw_output)
+                            yield clean_output
                         elif "text" in data:
                             # Alternative chunk format
                             yield data["text"]
