@@ -16,6 +16,47 @@ function detectTextDirection(text: string): 'rtl' | 'ltr' {
   return persianArabicRegex.test(text) ? 'rtl' : 'ltr';
 }
 
+// Format timestamp for display (Telegram/WhatsApp style)
+function formatTimestamp(timestamp: Date | string): string {
+  const date = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  // Just now (< 1 minute)
+  if (diffMins < 1) return 'Just now';
+
+  // X minutes ago (< 60 minutes)
+  if (diffMins < 60) return `${diffMins} min ago`;
+
+  // Today: show time only
+  const isToday = date.toDateString() === now.toDateString();
+  if (isToday) {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
+  }
+
+  // Yesterday
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `Yesterday ${hours}:${minutes}`;
+  }
+
+  // Older: show full date
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
+}
+
 export function MessageList({ messages, isTyping }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -64,32 +105,44 @@ export function MessageList({ messages, isTyping }: MessageListProps) {
               </div>
             )}
 
-            <div
-              className={`max-w-2xl rounded-2xl px-4 py-3 ${
-                message.role === 'user'
-                  ? 'bg-gradient-to-br from-blue-500 to-purple-500 text-white'
-                  : 'bg-white/5 border border-white/10 text-gray-200'
-              }`}
-            >
-              {message.files && message.files.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {message.files.map((file) => (
-                    <div
-                      key={file.id}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/20 text-xs"
-                    >
-                      <FileIcon className="w-3 h-3" />
-                      <span className="truncate max-w-[150px]">{file.name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {message.role === 'assistant' ? (
-                <MarkdownRenderer content={message.content} dir={textDir} />
-              ) : (
-                <p className="text-sm leading-relaxed whitespace-pre-wrap" dir={textDir}>
-                  {message.content}
-                </p>
+            <div className="flex flex-col gap-1">
+              <div
+                className={`max-w-2xl rounded-2xl px-4 py-3 ${
+                  message.role === 'user'
+                    ? 'bg-gradient-to-br from-blue-500 to-purple-500 text-white'
+                    : 'bg-white/5 border border-white/10 text-gray-200'
+                }`}
+              >
+                {message.files && message.files.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {message.files.map((file) => (
+                      <div
+                        key={file.id}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/20 text-xs"
+                      >
+                        <FileIcon className="w-3 h-3" />
+                        <span className="truncate max-w-[150px]">{file.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {message.role === 'assistant' ? (
+                  <MarkdownRenderer content={message.content} dir={textDir} />
+                ) : (
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap" dir={textDir}>
+                    {message.content}
+                  </p>
+                )}
+              </div>
+              {/* Timestamp */}
+              {message.timestamp && (
+                <span
+                  className={`text-xs text-gray-500 px-2 ${
+                    message.role === 'user' ? 'text-right' : 'text-left'
+                  }`}
+                >
+                  {formatTimestamp(message.timestamp)}
+                </span>
               )}
             </div>
 

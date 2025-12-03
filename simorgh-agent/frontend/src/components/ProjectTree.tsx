@@ -9,6 +9,8 @@ import {
   Sparkles
 } from 'lucide-react';
 import { Project, Chat } from '../types';
+import ContextMenu from './ContextMenu';
+import RenameModal from './RenameModal';
 
 interface ProjectTreeProps {
   projects: Project[];
@@ -22,6 +24,8 @@ interface ProjectTreeProps {
   onCreateProject: () => void;
   onCreateChat: (projectId: string, title: string) => void;
   onCreateGeneralChat: () => void;
+  onRenameChat: (chatId: string, newName: string, projectId: string | null) => void;
+  onDeleteChat: (chatId: string, projectId: string | null) => void;
 }
 
 export function ProjectTree({
@@ -35,10 +39,28 @@ export function ProjectTree({
   onSelectChat,
   onCreateProject,
   onCreateChat,
-  onCreateGeneralChat
+  onCreateGeneralChat,
+  onRenameChat,
+  onDeleteChat
 }: ProjectTreeProps) {
   const [showPageModal, setShowPageModal] = React.useState(false);
   const [selectedProjectId, setSelectedProjectId] = React.useState<string | null>(null);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = React.useState<{
+    x: number;
+    y: number;
+    chatId: string;
+    chatName: string;
+    projectId: string | null;
+  } | null>(null);
+
+  // Rename modal state
+  const [renameModal, setRenameModal] = React.useState<{
+    chatId: string;
+    currentName: string;
+    projectId: string | null;
+  } | null>(null);
 
   // فقط پروژه‌های واقعی (نه هدر)
   const realProjects = projects.filter((p) => !(p as any).isHeader);
@@ -46,6 +68,63 @@ export function ProjectTree({
   const handleAddPage = (projectId: string) => {
     setSelectedProjectId(projectId);
     setShowPageModal(true);
+  };
+
+  // Context menu handlers
+  const handleContextMenu = (
+    e: React.MouseEvent,
+    chatId: string,
+    chatName: string,
+    projectId: string | null
+  ) => {
+    e.preventDefault();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      chatId,
+      chatName,
+      projectId
+    });
+  };
+
+  const handleCloseContextMenu = () => {
+    setContextMenu(null);
+  };
+
+  const handleRename = () => {
+    if (contextMenu) {
+      setRenameModal({
+        chatId: contextMenu.chatId,
+        currentName: contextMenu.chatName,
+        projectId: contextMenu.projectId
+      });
+      setContextMenu(null);
+    }
+  };
+
+  const handleDelete = () => {
+    if (contextMenu) {
+      onDeleteChat(contextMenu.chatId, contextMenu.projectId);
+      setContextMenu(null);
+    }
+  };
+
+  const handleCreateNew = () => {
+    if (contextMenu && contextMenu.projectId) {
+      handleAddPage(contextMenu.projectId);
+      setContextMenu(null);
+    } else {
+      // General chat
+      onCreateGeneralChat();
+      setContextMenu(null);
+    }
+  };
+
+  const handleRenameSubmit = (newName: string) => {
+    if (renameModal) {
+      onRenameChat(renameModal.chatId, newName, renameModal.projectId);
+      setRenameModal(null);
+    }
   };
 
   return (
@@ -92,6 +171,7 @@ export function ProjectTree({
                 <button
                   key={chat.id}
                   onClick={() => onSelectChat(null, chat.id)}
+                  onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, null)}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition ${
                     activeChatId === chat.id && !activeProjectId
                       ? 'bg-emerald-500/20 text-emerald-400'
@@ -155,6 +235,7 @@ export function ProjectTree({
                       <button
                         key={chat.id}
                         onClick={() => onSelectChat(project.id, chat.id)}
+                        onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, project.id)}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition ${
                           activeChatId === chat.id
                             ? 'bg-emerald-500/20 text-emerald-400'
@@ -184,6 +265,30 @@ export function ProjectTree({
             setShowPageModal(false);
             setSelectedProjectId(null);
           }}
+        />
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={handleCloseContextMenu}
+          onRename={handleRename}
+          onDelete={handleDelete}
+          onCreateNew={handleCreateNew}
+          target={contextMenu.projectId ? 'page' : 'project'}
+        />
+      )}
+
+      {/* Rename Modal */}
+      {renameModal && (
+        <RenameModal
+          isOpen={true}
+          onClose={() => setRenameModal(null)}
+          onRename={handleRenameSubmit}
+          currentName={renameModal.currentName}
+          type={renameModal.projectId ? 'page' : 'project'}
         />
       )}
     </div>

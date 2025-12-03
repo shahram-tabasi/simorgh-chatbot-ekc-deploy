@@ -818,6 +818,49 @@ async def get_chat(
     }
 
 
+class ChatRename(BaseModel):
+    """Chat rename request"""
+    chat_name: str
+
+
+@app.patch("/api/chats/{chat_id}")
+async def rename_chat(
+    chat_id: str,
+    rename_request: ChatRename,
+    current_user: str = Depends(get_current_user),
+    redis: RedisService = Depends(get_redis)
+):
+    """
+    Rename a chat session (requires authentication)
+
+    Validates that the requesting user owns this chat
+    """
+    # Get metadata
+    metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
+
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    # Security: Verify the chat belongs to the requesting user
+    if metadata.get("user_id") != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: You don't have permission to rename this chat"
+        )
+
+    # Update chat name
+    metadata["chat_name"] = rename_request.chat_name
+    redis.set(f"chat:{chat_id}:metadata", metadata, db="chat")
+
+    logger.info(f"✅ Chat renamed: {chat_id} -> {rename_request.chat_name} by user: {current_user}")
+
+    return {
+        "status": "success",
+        "message": "Chat renamed successfully",
+        "chat": metadata
+    }
+
+
 @app.delete("/api/chats/{chat_id}")
 async def delete_chat(
     chat_id: str,
@@ -1094,18 +1137,36 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
         logger.info(f"✅ LLM response generated - Actual mode used: {result.get('mode')}, Tokens: {result.get('tokens', {}).get('total', 0)}")
         ai_response = result["response"]
 
-        # Cache messages
+        # Generate unique message IDs
+        import uuid
+        created_at = datetime.now().isoformat()
+
+        # Cache messages with complete metadata structure
         user_msg = {
+            "message_id": str(uuid.uuid4()),
+            "chat_id": message.chat_id,
+            "project_id": project_number,  # None for general chats
+            "page_id": message.chat_id,  # Chat ID represents the page
             "role": "user",
+            "sender": "user",
             "content": message.content,
-            "timestamp": datetime.now().isoformat(),
+            "text": message.content,  # Explicit text field as per requirements
+            "timestamp": created_at,
+            "created_at": created_at,  # Explicit CreatedAt as per requirements
             "user_id": message.user_id
         }
 
         assistant_msg = {
+            "message_id": str(uuid.uuid4()),
+            "chat_id": message.chat_id,
+            "project_id": project_number,  # None for general chats
+            "page_id": message.chat_id,  # Chat ID represents the page
             "role": "assistant",
+            "sender": "assistant",
             "content": ai_response,
-            "timestamp": datetime.now().isoformat(),
+            "text": ai_response,  # Explicit text field as per requirements
+            "timestamp": created_at,
+            "created_at": created_at,  # Explicit CreatedAt as per requirements
             "llm_mode": result.get("mode"),
             "context_used": context_used,
             "cached": result.get("cached", False)
@@ -1253,18 +1314,35 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                 full_response += chunk
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
 
-            # Cache messages after completion
+            # Cache messages after completion with complete metadata structure
+            import uuid
+            created_at = datetime.now().isoformat()
+
             user_msg = {
+                "message_id": str(uuid.uuid4()),
+                "chat_id": message.chat_id,
+                "project_id": project_number,  # None for general chats
+                "page_id": message.chat_id,  # Chat ID represents the page
                 "role": "user",
+                "sender": "user",
                 "content": message.content,
-                "timestamp": datetime.now().isoformat(),
+                "text": message.content,  # Explicit text field as per requirements
+                "timestamp": created_at,
+                "created_at": created_at,  # Explicit CreatedAt as per requirements
                 "user_id": message.user_id
             }
 
             assistant_msg = {
+                "message_id": str(uuid.uuid4()),
+                "chat_id": message.chat_id,
+                "project_id": project_number,  # None for general chats
+                "page_id": message.chat_id,  # Chat ID represents the page
                 "role": "assistant",
+                "sender": "assistant",
                 "content": full_response,
-                "timestamp": datetime.now().isoformat(),
+                "text": full_response,  # Explicit text field as per requirements
+                "timestamp": created_at,
+                "created_at": created_at,  # Explicit CreatedAt as per requirements
                 "llm_mode": llm_mode,
                 "context_used": context_used,
                 "cached": False
