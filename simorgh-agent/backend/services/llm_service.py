@@ -387,7 +387,7 @@ class LLMService:
 
             response.raise_for_status()
 
-            # Consume the entire stream and aggregate chunks
+            # Consume the entire stream and aggregate chunks (SSE format)
             full_response = ""
             line_count = 0
             chunk_count = 0
@@ -397,16 +397,31 @@ class LLMService:
                     line_count += 1
                     try:
                         decoded_line = line.decode('utf-8')
+
+                        # Handle SSE format: strip "data: " prefix
+                        if decoded_line.startswith('data: '):
+                            decoded_line = decoded_line[6:]  # Remove "data: " prefix
+
                         logger.debug(f"📥 Stream line {line_count}: {decoded_line[:100]}...")
 
                         data = json.loads(decoded_line)
                         logger.debug(f"📦 Parsed JSON keys: {list(data.keys())}")
 
+                        # Handle different response formats
                         if "chunk" in data:
+                            # Incremental chunk format
                             chunk_count += 1
                             full_response += data["chunk"]
+                        elif "output" in data:
+                            # Complete output format (status: completed)
+                            full_response = data["output"]
+                            logger.info(f"✅ Received complete output (length: {len(full_response)})")
+                        elif "text" in data:
+                            # Alternative chunk format
+                            chunk_count += 1
+                            full_response += data["text"]
                         else:
-                            logger.warning(f"⚠️ No 'chunk' key in data. Keys: {list(data.keys())}, Data: {data}")
+                            logger.debug(f"ℹ️ Status update: {data.get('status', 'unknown')}")
                     except json.JSONDecodeError as e:
                         logger.warning(f"⚠️ JSON decode error on line {line_count}: {e}, Raw: {line[:100]}")
                         continue
@@ -524,9 +539,25 @@ class LLMService:
             for line in response.iter_lines():
                 if line:
                     try:
-                        data = json.loads(line.decode('utf-8'))
+                        decoded_line = line.decode('utf-8')
+
+                        # Handle SSE format: strip "data: " prefix
+                        if decoded_line.startswith('data: '):
+                            decoded_line = decoded_line[6:]
+
+                        data = json.loads(decoded_line)
+
+                        # Handle different response formats
                         if "chunk" in data:
+                            # Incremental chunk format
                             yield data["chunk"]
+                        elif "output" in data:
+                            # Complete output format - yield entire response
+                            yield data["output"]
+                        elif "text" in data:
+                            # Alternative chunk format
+                            yield data["text"]
+                        # Skip status updates without content
                     except json.JSONDecodeError:
                         continue
 
