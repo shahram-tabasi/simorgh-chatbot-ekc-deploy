@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Plus, X, Loader, CheckCircle, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Plus, X, Loader, CheckCircle, AlertCircle, Search, ChevronDown } from 'lucide-react';
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -11,42 +11,77 @@ interface Props {
   onCreate: (projectId: string, projectName: string, firstPageTitle: string) => void;
 }
 
+interface ProjectOption {
+  OENUM: string;
+  Project_Name: string;
+  IDProjectMain: number;
+}
+
 export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props) {
-  // Field 1: Last 5 digits of OENUM
-  const [oenumSuffix, setOenumSuffix] = useState('');
-  // Field 2: Project Name (auto-filled, read-only)
-  const [projectName, setProjectName] = useState('');
-  const [fullOenum, setFullOenum] = useState('');
-  const [idProjectMain, setIdProjectMain] = useState('');
-  // Field 3: First Page Name
+  // Step 1: OENUM Search Input
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<ProjectOption[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+
+  // Step 2: Selected Project
+  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
+
+  // Step 3: Permission Validation
+  const [isValidatingPermission, setIsValidatingPermission] = useState(false);
+  const [hasPermission, setHasPermission] = useState(false);
+  const [permissionError, setPermissionError] = useState('');
+
+  // First Page Name
   const [pageTitle, setPageTitle] = useState('New Page');
 
-  const [isValidating, setIsValidating] = useState(false);
-  const [isValidated, setIsValidated] = useState(false);
+  // General error state
   const [error, setError] = useState('');
+
+  // Refs for click-outside detection
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
-  const handleOenumChange = (value: string) => {
-    // Only allow digits, max 5 characters
-    const cleaned = value.replace(/\D/g, '').slice(0, 5);
-    setOenumSuffix(cleaned);
-    setIsValidated(false);
-    setError('');
-  };
-
-  const handleValidateOenum = async () => {
-    if (!oenumSuffix.trim()) {
-      setError('Please enter last 5 digits of OENUM');
+  // Debounced search effect
+  useEffect(() => {
+    // Clear results if query is too short
+    if (!searchQuery || searchQuery.trim().length < 1) {
+      setSearchResults([]);
+      setShowDropdown(false);
       return;
     }
 
-    if (oenumSuffix.length !== 5) {
-      setError('OENUM must be exactly 5 digits');
-      return;
-    }
+    const debounceTimer = setTimeout(async () => {
+      await performSearch(searchQuery.trim());
+    }, 300); // 300ms debounce
 
-    setIsValidating(true);
+    return () => clearTimeout(debounceTimer);
+  }, [searchQuery]);
+
+  // Click outside to close dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node) &&
+        inputRef.current &&
+        !inputRef.current.contains(event.target as Node)
+      ) {
+        setShowDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  /**
+   * Step 1: Search OENUMs via autocomplete
+   */
+  const performSearch = async (query: string) => {
+    setIsSearching(true);
     setError('');
 
     try {
@@ -55,72 +90,121 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
         throw new Error('Authentication required');
       }
 
-      // Call backend to validate OENUM suffix and check permission
-      const response = await axios.post(
-        `${API_BASE}/auth/validate-project-by-oenum`,
-        { oenum: oenumSuffix.trim() },
-        { headers: { 'Authorization': `Bearer ${token}` } }
-      );
+      // Call autocomplete endpoint
+      const response = await axios.get(`${API_BASE}/auth/search-oenum`, {
+        params: { query },
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
-      // Auto-fill project name and full OENUM (read-only)
-      setProjectName(response.data.project.project_name);
-      setFullOenum(response.data.project.oenum);
-      setIdProjectMain(response.data.project.id_project_main);
-      setIsValidated(true);
-      setError('');
+      setSearchResults(response.data.results || []);
+      setShowDropdown(true);
 
-      console.log('✅ Project validated:', response.data.project);
-    } catch (err: any) {
-      setIsValidated(false);
-      if (err.response?.status === 404) {
-        setError('Project not found with OENUM ending in "' + oenumSuffix + '"');
-      } else if (err.response?.status === 403) {
-        setError('Access denied: You don\'t have permission for this project');
-      } else {
-        setError(err.response?.data?.detail || 'Validation failed. Please try again.');
+      if (response.data.results.length === 0) {
+        setError(`No projects found with OENUM ending in "${query}"`);
       }
-      console.error('❌ Validation failed:', err);
+    } catch (err: any) {
+      console.error('❌ Search failed:', err);
+      setError('Failed to search projects. Please try again.');
+      setSearchResults([]);
     } finally {
-      setIsValidating(false);
+      setIsSearching(false);
     }
   };
 
-  const handleSubmit = async () => {
-    if (!isValidated) {
-      setError('Please validate the Project ID first');
+  /**
+   * Step 2: Handle project selection from dropdown
+   */
+  const handleSelectProject = async (project: ProjectOption) => {
+    setSelectedProject(project);
+    setSearchQuery(project.OENUM); // Show selected OENUM in input
+    setShowDropdown(false);
+    setError('');
+    setPermissionError('');
+    setHasPermission(false);
+
+    // Immediately validate permission
+    await validatePermission(project.IDProjectMain);
+  };
+
+  /**
+   * Step 3: Validate user permission for selected project
+   */
+  const validatePermission = async (idProjectMain: number) => {
+    setIsValidatingPermission(true);
+    setPermissionError('');
+
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        throw new Error('Authentication required');
+      }
+
+      // Call permission validation endpoint
+      const response = await axios.post(
+        `${API_BASE}/auth/validate-project-permission`,
+        { id_project_main: String(idProjectMain) },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (response.data.has_access) {
+        setHasPermission(true);
+        setPermissionError('');
+        console.log('✅ Permission granted for project:', idProjectMain);
+      }
+    } catch (err: any) {
+      setHasPermission(false);
+      if (err.response?.status === 403) {
+        setPermissionError('Access denied: You don\'t have permission for this project');
+      } else {
+        setPermissionError('Failed to validate permission. Please try again.');
+      }
+      console.error('❌ Permission validation failed:', err);
+    } finally {
+      setIsValidatingPermission(false);
+    }
+  };
+
+  /**
+   * Submit: Create project
+   */
+  const handleSubmit = () => {
+    if (!selectedProject || !hasPermission) {
+      setError('Please select a project and ensure you have permission');
       return;
     }
 
-    // Use default "New Page" if page title is empty
+    // Use default "New Page" if empty
     const finalPageTitle = pageTitle.trim() || 'New Page';
 
-    // Pass IDProjectMain (not OENUM) to onCreate
-    onCreate(idProjectMain, projectName, finalPageTitle);
+    // Pass IDProjectMain to parent
+    onCreate(
+      String(selectedProject.IDProjectMain),
+      selectedProject.Project_Name,
+      finalPageTitle
+    );
 
     // Reset form
-    setOenumSuffix('');
-    setProjectName('');
-    setFullOenum('');
-    setIdProjectMain('');
-    setPageTitle('New Page');
-    setIsValidated(false);
-    setError('');
-    onClose();
+    handleClose();
   };
 
+  /**
+   * Close modal and reset state
+   */
   const handleClose = () => {
-    setOenumSuffix('');
-    setProjectName('');
-    setFullOenum('');
-    setIdProjectMain('');
+    setSearchQuery('');
+    setSearchResults([]);
+    setShowDropdown(false);
+    setSelectedProject(null);
+    setHasPermission(false);
+    setPermissionError('');
     setPageTitle('New Page');
-    setIsValidated(false);
     setError('');
     onClose();
   };
 
   return (
     <>
+      {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -129,6 +213,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
         className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50"
       />
 
+      {/* Modal */}
       <motion.div
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -136,6 +221,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
         className="fixed inset-0 z-50 flex items-center justify-center p-4"
       >
         <div className="bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-2xl shadow-2xl w-full max-w-md p-8">
+          {/* Header */}
           <div className="flex items-center justify-between mb-8">
             <h2 className="text-2xl font-bold text-white flex items-center gap-3">
               <Plus className="w-8 h-8 text-emerald-400" />
@@ -147,69 +233,136 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
           </div>
 
           <div className="space-y-6">
-            {/* Field 1: Last 5 Digits of OENUM */}
-            <div>
+            {/* Step 1: OENUM Search with Autocomplete */}
+            <div className="relative">
               <label className="block text-sm font-medium text-gray-300 mb-2">
-                Project ID (Last 5 Digits of OENUM)
+                Project ID (OENUM) - Search
               </label>
-              <div className="flex gap-2">
+              <div className="relative">
                 <input
+                  ref={inputRef}
                   type="text"
-                  inputMode="numeric"
-                  value={oenumSuffix}
-                  onChange={(e) => handleOenumChange(e.target.value)}
-                  placeholder="12065"
-                  maxLength={5}
-                  className="flex-1 px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition text-lg font-mono tracking-wider"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setSelectedProject(null);
+                    setHasPermission(false);
+                    setPermissionError('');
+                  }}
+                  onFocus={() => {
+                    if (searchResults.length > 0) {
+                      setShowDropdown(true);
+                    }
+                  }}
+                  placeholder="Type digits (e.g., 120, 12065)..."
+                  className="w-full px-4 py-3 pr-10 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
                   autoFocus
-                  disabled={isValidated || isValidating}
                 />
-                <button
-                  onClick={handleValidateOenum}
-                  disabled={isValidating || isValidated || oenumSuffix.length !== 5}
-                  className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-xl text-white font-medium transition flex items-center gap-2 min-w-[120px] justify-center"
-                >
-                  {isValidating && <Loader className="w-4 h-4 animate-spin" />}
-                  {isValidated && <CheckCircle className="w-4 h-4" />}
-                  {isValidating ? 'Checking...' : isValidated ? 'Valid' : 'Validate'}
-                </button>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  {isSearching ? (
+                    <Loader className="w-5 h-5 text-gray-400 animate-spin" />
+                  ) : (
+                    <Search className="w-5 h-5 text-gray-400" />
+                  )}
+                </div>
               </div>
               <p className="mt-2 text-xs text-gray-500">
-                Enter exactly 5 digits (e.g., "12065" for OENUM "04A12065")
+                Type any part of the OENUM to search (e.g., "120" finds "04A12065")
               </p>
+
+              {/* Dropdown Results */}
+              <AnimatePresence>
+                {showDropdown && searchResults.length > 0 && (
+                  <motion.div
+                    ref={dropdownRef}
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="absolute z-10 w-full mt-2 bg-gray-800 border border-white/20 rounded-xl shadow-2xl max-h-64 overflow-y-auto"
+                  >
+                    {searchResults.map((project, index) => (
+                      <button
+                        key={`${project.IDProjectMain}-${index}`}
+                        onClick={() => handleSelectProject(project)}
+                        className="w-full px-4 py-3 text-left hover:bg-white/10 transition border-b border-white/10 last:border-b-0"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-emerald-400 font-mono font-semibold text-sm">
+                              {project.OENUM}
+                            </p>
+                            <p className="text-gray-300 text-sm mt-1 truncate">
+                              {project.Project_Name}
+                            </p>
+                          </div>
+                          <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 mt-1" />
+                        </div>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
-            {/* Field 2: Full OENUM (Read-only) */}
-            {isValidated && fullOenum && (
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Full OENUM (Found)
-                </label>
-                <div className="px-4 py-3 bg-blue-500/10 border border-blue-500/30 rounded-xl">
-                  <p className="text-blue-300 font-mono text-lg">{fullOenum}</p>
+            {/* Step 2: Selected Project Info (Read-only) */}
+            {selectedProject && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Selected OENUM
+                  </label>
+                  <div className="px-4 py-3 bg-blue-500/10 border border-blue-500/30 rounded-xl">
+                    <p className="text-blue-300 font-mono text-lg font-semibold">
+                      {selectedProject.OENUM}
+                    </p>
+                  </div>
                 </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Project Name (Auto-filled)
+                  </label>
+                  <div className="flex items-center gap-2 px-4 py-3 bg-gray-700/50 border border-white/10 rounded-xl">
+                    <input
+                      type="text"
+                      value={selectedProject.Project_Name}
+                      readOnly
+                      className="flex-1 bg-transparent text-gray-300 cursor-not-allowed focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Step 3: Permission Validation Status */}
+            {selectedProject && (
+              <div>
+                {isValidatingPermission && (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl">
+                    <Loader className="w-5 h-5 text-yellow-400 animate-spin flex-shrink-0" />
+                    <p className="text-sm text-yellow-400">Checking your permission...</p>
+                  </div>
+                )}
+
+                {!isValidatingPermission && hasPermission && (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-xl">
+                    <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
+                    <p className="text-sm text-green-400 font-semibold">
+                      ✅ Permission granted - You can create this project
+                    </p>
+                  </div>
+                )}
+
+                {!isValidatingPermission && permissionError && (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl">
+                    <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+                    <p className="text-sm text-red-400">{permissionError}</p>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Field 3: Project Name (Auto-filled, Read-only) */}
-            {isValidated && projectName && (
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Project Name (Auto-filled)
-                </label>
-                <div className="flex items-center gap-2 px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-xl">
-                  <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
-                  <input
-                    type="text"
-                    value={projectName}
-                    readOnly
-                    className="flex-1 bg-transparent text-green-300 cursor-not-allowed focus:outline-none"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Field 4: First Page Name */}
+            {/* First Page Name (enabled only after permission granted) */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
                 First Page Name
@@ -219,17 +372,17 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
                 value={pageTitle}
                 onChange={(e) => setPageTitle(e.target.value)}
                 placeholder="New Page"
+                disabled={!hasPermission}
                 className={`w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition ${
-                  !isValidated ? 'opacity-50 cursor-not-allowed' : ''
+                  !hasPermission ? 'opacity-50 cursor-not-allowed' : ''
                 }`}
-                disabled={!isValidated}
               />
               <p className="mt-2 text-xs text-gray-500">
-                Default: "New Page" - can be changed after validation
+                Default: "New Page" - can be changed after permission is granted
               </p>
             </div>
 
-            {/* Error Message */}
+            {/* General Error Message */}
             {error && (
               <div className="flex items-center gap-2 px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl">
                 <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
@@ -237,14 +390,14 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
               </div>
             )}
 
-            {/* Buttons */}
+            {/* Action Buttons */}
             <div className="flex gap-3">
               <button
                 onClick={handleSubmit}
-                disabled={!isValidated}
+                disabled={!selectedProject || !hasPermission || isValidatingPermission}
                 className="flex-1 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl font-bold text-white hover:from-emerald-600 hover:to-teal-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Create Project
+                {isValidatingPermission ? 'Validating...' : 'Create Project'}
               </button>
               <button
                 onClick={handleClose}
