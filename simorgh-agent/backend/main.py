@@ -95,6 +95,11 @@ class OenumValidation(BaseModel):
     oenum: str
 
 
+class ProjectPermissionCheck(BaseModel):
+    """Project permission check request"""
+    id_project_main: str
+
+
 class ProjectCreate(BaseModel):
     """Project creation request"""
     project_number: str
@@ -428,6 +433,111 @@ async def get_user_projects(
     }
 
 
+@app.get("/api/auth/search-oenum")
+async def search_oenum(
+    query: str,
+    current_user: str = Depends(get_current_user),
+    tpms: TPMSAuthService = Depends(get_tpms_auth)
+):
+    """
+    Search OENUMs for autocomplete (returns all OENUMs ending with the query)
+
+    Query parameter:
+        query: Partial OENUM digits (e.g., "120", "12065")
+
+    Returns:
+        List of matching projects with OENUM, Project_Name, and IDProjectMain
+
+    Example response:
+        {
+            "results": [
+                {"OENUM": "04A12065", "Project_Name": "Plant A", "IDProjectMain": 123},
+                {"OENUM": "06B12045", "Project_Name": "Plant B", "IDProjectMain": 456}
+            ],
+            "count": 2
+        }
+    """
+    try:
+        if not query or not query.strip():
+            return {"results": [], "count": 0}
+
+        # Search OENUMs using LIKE '%query' pattern
+        results = tpms.search_oenum_autocomplete(query.strip(), limit=20)
+
+        return {
+            "results": results,
+            "count": len(results)
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error searching OENUMs: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to search OENUMs. Please try again."
+        )
+
+
+@app.post("/api/auth/validate-project-permission")
+async def validate_project_permission(
+    request: ProjectPermissionCheck,
+    current_user: str = Depends(get_current_user),
+    tpms: TPMSAuthService = Depends(get_tpms_auth)
+):
+    """
+    Validate user permission for a project by IDProjectMain
+
+    This is step 3 of the new project creation flow:
+    1. User types digits → autocomplete searches OENUM
+    2. User selects OENUM → gets IDProjectMain and Project_Name
+    3. Backend validates permission in draft_permission table
+
+    Returns:
+        200: User has permission
+        403: User doesn't have permission
+        500: Permission check failed
+    """
+    try:
+        id_project_main = request.id_project_main
+
+        # Check user permission in draft_permission table
+        has_access, error_code, error_message = tpms.validate_project_access(
+            username=current_user,
+            project_id=id_project_main
+        )
+
+        if not has_access:
+            if error_code == "access_denied":
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Access denied: You don't have permission for this project (Project ID: {id_project_main})"
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=error_message or "Permission check failed"
+                )
+
+        # Success - user has permission
+        return {
+            "status": "success",
+            "has_access": True,
+            "id_project_main": id_project_main
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error validating project permission: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to validate permission. Please try again."
+        )
+
+
 @app.post("/api/auth/validate-project-by-oenum")
 async def validate_project_by_oenum(
     request: OenumValidation,
@@ -435,6 +545,8 @@ async def validate_project_by_oenum(
     tpms: TPMSAuthService = Depends(get_tpms_auth)
 ):
     """
+    [DEPRECATED] Use /api/auth/search-oenum + /api/auth/validate-project-permission instead
+
     Validate project by OENUM and check user permission
 
     Steps:

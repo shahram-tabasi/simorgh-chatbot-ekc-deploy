@@ -450,6 +450,72 @@ class TPMSAuthService:
             logger.error(traceback.format_exc())
             return None
 
+    def search_oenum_autocomplete(self, search_query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Search OENUMs for autocomplete - finds all OENUMs ending with the search query
+
+        Args:
+            search_query: Partial OENUM digits to search for (e.g., "120", "12065")
+            limit: Maximum number of results to return (default 20)
+
+        Returns:
+            List of matching projects with OENUM, Project_Name, and IDProjectMain
+
+        Example:
+            Input: "120"
+            Returns: [
+                {"OENUM": "04A12065", "Project_Name": "Plant A", "IDProjectMain": 123},
+                {"OENUM": "06B12045", "Project_Name": "Plant B", "IDProjectMain": 456},
+                ...
+            ]
+        """
+        if not self.enabled:
+            logger.warning("TPMS database disabled, cannot search OENUMs")
+            return []
+
+        if not search_query or not search_query.strip():
+            return []
+
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Search for OENUMs ending with the search query using LIKE '%query'
+                query = """
+                SELECT TOP %s OENUM, Project_Name, IDProjectMain
+                FROM View_Project_Main
+                WHERE OENUM LIKE %s
+                ORDER BY OENUM DESC
+                """
+
+                # SQL Server uses '%' + @param for LIKE patterns
+                search_pattern = f"%{search_query.strip()}"
+
+                cursor.execute(query, (limit, search_pattern))
+                results = cursor.fetchall()
+
+                if not results:
+                    logger.info(f"No OENUMs found matching: {search_query}")
+                    return []
+
+                # Convert to list of dicts
+                projects = []
+                for row in results:
+                    projects.append({
+                        "OENUM": row["OENUM"],
+                        "Project_Name": row["Project_Name"],
+                        "IDProjectMain": row["IDProjectMain"]
+                    })
+
+                logger.info(f"✅ Found {len(projects)} OENUMs matching '{search_query}'")
+                return projects
+
+        except Exception as e:
+            logger.error(f"❌ Error searching OENUMs: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
+
     def validate_project_access(
         self,
         username: str,
