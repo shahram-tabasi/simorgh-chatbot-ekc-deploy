@@ -44,24 +44,63 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
 
   if (!isOpen) return null;
 
+  /**
+   * Step 1: Search OENUMs via autocomplete
+   */
+  const performSearch = React.useCallback(async (query: string) => {
+    if (!query || query.trim().length < 1) {
+      setSearchResults([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    setIsSearching(true);
+    setError('');
+
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        throw new Error('Authentication required');
+      }
+
+      // Call autocomplete endpoint
+      const response = await axios.get(`${API_BASE}/auth/search-oenum`, {
+        params: { query: query.trim() },
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSearchResults(response.data.results || []);
+      setShowDropdown(true);
+
+      if (response.data.results.length === 0) {
+        setError(`No projects found with OENUM containing "${query}"`);
+      }
+    } catch (err: any) {
+      console.error('❌ Search failed:', err);
+      setError('Failed to search projects. Please try again.');
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
+
   // Debounced search effect
-  useEffect(() => {
-    // Clear results if query is too short
+  React.useEffect(() => {
     if (!searchQuery || searchQuery.trim().length < 1) {
       setSearchResults([]);
       setShowDropdown(false);
       return;
     }
 
-    const debounceTimer = setTimeout(async () => {
-      await performSearch(searchQuery.trim());
+    const debounceTimer = setTimeout(() => {
+      performSearch(searchQuery.trim());
     }, 300); // 300ms debounce
 
     return () => clearTimeout(debounceTimer);
-  }, [searchQuery]);
+  }, [searchQuery, performSearch]);
 
   // Click outside to close dropdown
-  useEffect(() => {
+  React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
         dropdownRef.current &&
@@ -76,40 +115,6 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  /**
-   * Step 1: Search OENUMs via autocomplete
-   */
-  const performSearch = async (query: string) => {
-    setIsSearching(true);
-    setError('');
-
-    try {
-      const token = localStorage.getItem('simorgh_token');
-      if (!token) {
-        throw new Error('Authentication required');
-      }
-
-      // Call autocomplete endpoint
-      const response = await axios.get(`${API_BASE}/auth/search-oenum`, {
-        params: { query },
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      setSearchResults(response.data.results || []);
-      setShowDropdown(true);
-
-      if (response.data.results.length === 0) {
-        setError(`No projects found with OENUM ending in "${query}"`);
-      }
-    } catch (err: any) {
-      console.error('❌ Search failed:', err);
-      setError('Failed to search projects. Please try again.');
-      setSearchResults([]);
-    } finally {
-      setIsSearching(false);
-    }
-  };
 
   /**
    * Step 2: Handle project selection from dropdown

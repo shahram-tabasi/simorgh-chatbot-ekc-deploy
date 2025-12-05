@@ -452,10 +452,10 @@ class TPMSAuthService:
 
     def search_oenum_autocomplete(self, search_query: str, limit: int = 20) -> List[Dict[str, Any]]:
         """
-        Search OENUMs for autocomplete - finds all OENUMs ending with the search query
+        Search OENUMs for autocomplete - finds all OENUMs containing the search query
 
         Args:
-            search_query: Partial OENUM digits to search for (e.g., "120", "12065")
+            search_query: Partial OENUM to search for (e.g., "120", "12065", "04A")
             limit: Maximum number of results to return (default 20)
 
         Returns:
@@ -463,6 +463,7 @@ class TPMSAuthService:
 
         Example:
             Input: "120"
+            Finds: OENUMs containing "120" anywhere (e.g., "04A12065", "12045B", "W120-45")
             Returns: [
                 {"OENUM": "04A12065", "Project_Name": "Plant A", "IDProjectMain": 123},
                 {"OENUM": "06B12045", "Project_Name": "Plant B", "IDProjectMain": 456},
@@ -480,7 +481,8 @@ class TPMSAuthService:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Search for OENUMs ending with the search query using LIKE '%query'
+                # Search for OENUMs containing the search query using LIKE '%query%'
+                # This matches the query anywhere in the OENUM field
                 query = """
                 SELECT TOP %s OENUM, Project_Name, IDProjectMain
                 FROM View_Project_Main
@@ -488,14 +490,14 @@ class TPMSAuthService:
                 ORDER BY OENUM DESC
                 """
 
-                # SQL Server uses '%' + @param for LIKE patterns
-                search_pattern = f"%{search_query.strip()}"
+                # Use %query% pattern to search anywhere in OENUM
+                search_pattern = f"%{search_query.strip()}%"
 
                 cursor.execute(query, (limit, search_pattern))
                 results = cursor.fetchall()
 
                 if not results:
-                    logger.info(f"No OENUMs found matching: {search_query}")
+                    logger.info(f"No OENUMs found containing: {search_query}")
                     return []
 
                 # Convert to list of dicts
@@ -507,7 +509,7 @@ class TPMSAuthService:
                         "IDProjectMain": row["IDProjectMain"]
                     })
 
-                logger.info(f"✅ Found {len(projects)} OENUMs matching '{search_query}'")
+                logger.info(f"✅ Found {len(projects)} OENUMs containing '{search_query}'")
                 return projects
 
         except Exception as e:
