@@ -12,7 +12,7 @@ Author: Simorgh Industrial Assistant
 
 import os
 import logging
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import pymysql
 from contextlib import contextmanager
 from services.hash_detector import HashDetector
