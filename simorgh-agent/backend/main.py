@@ -355,83 +355,11 @@ async def llm_diagnostics(
 
 
 # =============================================================================
-# AUTHENTICATION ENDPOINTS
+# AUTHENTICATION & AUTHORIZATION ENDPOINTS
 # =============================================================================
-
-@app.post("/api/auth/check-project-access")
-async def check_project_access(
-    auth: UserAuth,
-    sql_auth: SQLAuthService = Depends(get_sql_auth),
-    redis: RedisService = Depends(get_redis)
-):
-    """
-    Check if a user has access to a specific project
-
-    Uses SQL Server for authorization with Redis caching
-    """
-    username = auth.username
-    project_number = auth.project_number
-
-    # Check cache first
-    cached_result = redis.get_cached_authorization(username, project_number)
-    if cached_result is not None:
-        return {
-            "username": username,
-            "project_number": project_number,
-            "has_access": cached_result,
-            "cached": True
-        }
-
-    # Query SQL Server
-    has_access = sql_auth.check_project_access(username, project_number)
-
-    # Cache result (1 hour TTL)
-    redis.cache_project_authorization(username, project_number, has_access, ttl=3600)
-
-    return {
-        "username": username,
-        "project_number": project_number,
-        "has_access": has_access,
-        "cached": False
-    }
-
-
-@app.get("/api/auth/user-projects/{username}")
-async def get_user_projects(
-    username: str,
-    sql_auth: SQLAuthService = Depends(get_sql_auth),
-    redis: RedisService = Depends(get_redis)
-):
-    """
-    Get all projects a user has access to
-
-    Uses SQL Server with Redis caching
-    """
-    # Check cache
-    cached_projects = redis.get_cached_user_projects(username)
-    if cached_projects is not None:
-        return {
-            "username": username,
-            "projects": cached_projects,
-            "cached": True
-        }
-
-    # Query SQL Server
-    projects = sql_auth.get_user_projects(username)
-
-    # Extract project numbers for caching
-    project_numbers = [p["project_number"] for p in projects]
-
-    # Cache result
-    redis.cache_user_projects(username, project_numbers, ttl=3600)
-
-    return {
-        "username": username,
-        "projects": projects,
-        "count": len(projects),
-        "cached": False
-    }
-
+# Note: Basic auth endpoints (login, /me) are in routes/auth.py
+# These are project-specific endpoints for OENUM search and permission validation
+# =============================================================================
 
 @app.get("/api/auth/search-oenum")
 async def search_oenum(
@@ -535,83 +463,6 @@ async def validate_project_permission(
         raise HTTPException(
             status_code=500,
             detail="Failed to validate permission. Please try again."
-        )
-
-
-@app.post("/api/auth/validate-project-by-oenum")
-async def validate_project_by_oenum(
-    request: OenumValidation,
-    current_user: str = Depends(get_current_user),
-    tpms: TPMSAuthService = Depends(get_tpms_auth)
-):
-    """
-    [DEPRECATED] Use /api/auth/search-oenum + /api/auth/validate-project-permission instead
-
-    Validate project by OENUM and check user permission
-
-    Steps:
-    1. Query View_Project_Main WHERE OENUM = @oenum to get IDProjectMain and Project_Name
-    2. Check draft_permission WHERE user = @current_user AND Project_ID = @IDProjectMain
-    3. Return project info if permission granted
-
-    Returns:
-        200: Project found and user has permission
-        404: Project not found
-        403: User doesn't have permission
-    """
-    try:
-        oenum = request.oenum
-
-        # Step 1: Lookup project by OENUM
-        project = tpms.get_project_by_oenum(oenum)
-
-        if not project:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Project not found with OENUM: {oenum}"
-            )
-
-        id_project_main = str(project["IDProjectMain"])
-        project_name = project["Project_Name"]
-
-        # Step 2: Check user permission
-        has_access, error_code, error_message = tpms.validate_project_access(
-            username=current_user,
-            project_id=id_project_main
-        )
-
-        if not has_access:
-            if error_code == "access_denied":
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Access denied: You don't have permission for this project"
-                )
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=error_message or "Permission check failed"
-                )
-
-        # Success - return project info
-        return {
-            "status": "success",
-            "project": {
-                "oenum": oenum,
-                "id_project_main": id_project_main,
-                "project_name": project_name
-            },
-            "has_access": True
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Error validating project by OENUM: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        raise HTTPException(
-            status_code=500,
-            detail=f"Server error: {str(e)}"
         )
 
 
