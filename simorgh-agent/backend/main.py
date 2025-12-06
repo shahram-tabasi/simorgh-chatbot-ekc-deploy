@@ -363,28 +363,43 @@ async def llm_diagnostics(
 @app.post("/api/projects")
 async def create_project(
     project: ProjectCreate,
+    current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j)
 ):
     """
-    Create a new project
+    Create a new project (requires authentication)
 
-    Creates the root Project node in Neo4j
+    Creates the root Project node in Neo4j with owner information.
+    Validates that project name is unique for this user.
     """
     try:
+        # Check for duplicate project name
+        if neo4j.check_duplicate_project(current_user, project.project_name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Project with name '{project.project_name}' already exists. Please choose a different name."
+            )
+
+        # Create project with owner_id
         project_node = neo4j.create_project(
             project_number=project.project_number,
             project_name=project.project_name,
+            owner_id=current_user,
             client=project.client or "",
             contract_number=project.contract_number or "",
             contract_date=project.contract_date or "",
             description=project.description or ""
         )
 
+        logger.info(f"✅ User {current_user} created project: {project.project_name}")
+
         return {
             "status": "success",
             "project": project_node
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating project: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -433,12 +448,17 @@ async def get_project_graph(
 
 @app.get("/api/projects")
 async def list_projects(
+    current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j)
 ):
     """
-    List all projects
+    List all projects for the current user (requires authentication)
+
+    Returns only projects owned by the authenticated user.
     """
-    projects = neo4j.list_all_projects()
+    projects = neo4j.list_all_projects(owner_id=current_user)
+
+    logger.info(f"✅ User {current_user} listed {len(projects)} projects")
 
     return {
         "projects": projects,
