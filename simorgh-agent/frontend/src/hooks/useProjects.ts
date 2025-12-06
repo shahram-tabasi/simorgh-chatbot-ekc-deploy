@@ -161,6 +161,14 @@ export function useProjects(userId?: string) {
   }, [generalChats, userId]);
 
   const createProject = (name: string, firstPageTitle: string) => {
+    // Check for duplicate project name in local state
+    const duplicateProject = projects.find(p => p.name.toLowerCase() === name.toLowerCase());
+    if (duplicateProject) {
+      alert(`A project named "${duplicateProject.name}" already exists in local memory. Please choose a different name.`);
+      console.warn('⚠️ Duplicate project name:', name);
+      return;
+    }
+
     const projectId = `proj-${Date.now()}`;
     const chatId = `chat-${Date.now()}`;
 
@@ -184,6 +192,7 @@ export function useProjects(userId?: string) {
     setProjects(prev => [newProject, ...prev]);
     setActiveProjectId(projectId);
     setActiveChatId(chatId);
+    console.log('✅ Project created in local memory:', name);
   };
 
   const createChat = async (projectId: string, pageName: string) => {
@@ -568,7 +577,7 @@ export function useProjects(userId?: string) {
     }
   };
 
-  const deleteProject = async (projectId: string) => {
+  const deleteProject = (projectId: string) => {
     if (!userId) {
       console.error('Cannot delete project: userId missing');
       return;
@@ -582,39 +591,25 @@ export function useProjects(userId?: string) {
     }
 
     // Confirmation dialog
-    if (!confirm(`Are you sure you want to delete project "${project.name}"?\n\nThis will permanently delete:\n- All project pages and chats\n- All project messages\n- All project files\n- All project data\n\nThis action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to delete project "${project.name}" from local memory?\n\nThis will remove it from the chatbot but NOT from TPMS database.\n\nThis action cannot be undone.`)) {
       return;
     }
 
-    try {
-      const token = localStorage.getItem('simorgh_token');
-      if (!token) {
-        console.error('❌ No auth token found');
-        return;
-      }
+    // Remove from local state
+    const updatedProjects = projects.filter(p => p.id !== projectId);
+    setProjects(updatedProjects);
 
-      // Call backend delete endpoint
-      await axios.delete(`${API_BASE}/projects/${projectId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+    // Update localStorage to persist deletion
+    localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(updatedProjects));
 
-      // Remove from UI
-      setProjects(prev => prev.filter(p => p.id !== projectId));
-
-      // Clear active project if it was deleted
-      if (activeProjectId === projectId) {
-        setActiveChatId(null);
-        setActiveProjectId(null);
-      }
-
-      console.log('✅ Project deleted:', projectId);
-      alert(`Project "${project.name}" has been successfully deleted.`);
-    } catch (error: any) {
-      console.error('❌ Failed to delete project:', error);
-      alert(error.response?.data?.detail || 'Failed to delete project');
+    // Clear active project if it was deleted
+    if (activeProjectId === projectId) {
+      setActiveChatId(null);
+      setActiveProjectId(null);
     }
+
+    console.log('✅ Project deleted from local memory:', projectId);
+    alert(`Project "${project.name}" has been removed from local memory.`);
   };
 
   const activeChat =

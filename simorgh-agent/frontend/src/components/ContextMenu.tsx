@@ -5,7 +5,7 @@ interface ContextMenuProps {
   x: number;
   y: number;
   onClose: () => void;
-  onRename: () => void;
+  onRename?: () => void;
   onDelete: () => void;
   onCreateNew?: () => void;
   target: 'project' | 'page';
@@ -73,16 +73,18 @@ export default function ContextMenu({
       style={{ left: x, top: y }}
       className="fixed z-[9999] bg-gradient-to-br from-gray-900 to-black border border-white/20 rounded-lg shadow-2xl py-2 min-w-[200px] backdrop-blur-xl"
     >
-      <button
-        onClick={() => {
-          onRename();
-          onClose();
-        }}
-        className="w-full px-4 py-2 text-left text-white hover:bg-white/10 flex items-center gap-3 transition group"
-      >
-        <Edit2 className="w-4 h-4 text-blue-400 group-hover:text-blue-300" />
-        <span>Rename {target === 'project' ? 'Project' : 'Page'}</span>
-      </button>
+      {onRename && (
+        <button
+          onClick={() => {
+            onRename();
+            onClose();
+          }}
+          className="w-full px-4 py-2 text-left text-white hover:bg-white/10 flex items-center gap-3 transition group"
+        >
+          <Edit2 className="w-4 h-4 text-blue-400 group-hover:text-blue-300" />
+          <span>Rename {target === 'project' ? 'Project' : 'Page'}</span>
+        </button>
+      )}
 
       <button
         onClick={() => {

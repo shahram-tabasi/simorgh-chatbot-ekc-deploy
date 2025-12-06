@@ -327,11 +327,6 @@ export function ProjectTree({
           x={projectContextMenu.x}
           y={projectContextMenu.y}
           onClose={handleCloseProjectContextMenu}
-          onRename={() => {
-            // TODO: Implement project rename functionality
-            alert('Project rename feature coming soon!');
-            handleCloseProjectContextMenu();
-          }}
           onDelete={handleDeleteProject}
           onCreateNew={() => {
             if (projectContextMenu) {
