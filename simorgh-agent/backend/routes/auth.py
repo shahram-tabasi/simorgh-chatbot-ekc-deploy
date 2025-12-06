@@ -48,6 +48,11 @@ class PermissionCheckResponse(BaseModel):
     message: Optional[str] = None
 
 
+class ProjectPermissionCheck(BaseModel):
+    """Project permission validation by IDProjectMain"""
+    id_project_main: str
+
+
 # =============================================================================
 # AUTHENTICATION ENDPOINTS
 # =============================================================================
@@ -245,3 +250,134 @@ async def get_my_projects(
         "username": username,
         "projects": projects
     }
+
+
+# =============================================================================
+# PROJECT-SPECIFIC ENDPOINTS
+# =============================================================================
+
+@router.get("/search-oenum")
+async def search_oenum(
+    query: str = "",
+    authorization: str = Header(None),
+    tpms_auth: TPMSAuthService = Depends(get_tpms_auth_service)
+):
+    """
+    Search OENUMs for autocomplete or load all OENUMs
+
+    Query parameter:
+        query: Optional partial OENUM to search for (e.g., "120", "12065")
+               If empty or not provided, returns ALL OENUMs
+
+    Returns:
+        List of matching projects with OENUM, Project_Name, and IDProjectMain
+
+    Example response:
+        {
+            "results": [
+                {"OENUM": "04A12065", "Project_Name": "Plant A", "IDProjectMain": 123},
+                {"OENUM": "06B12045", "Project_Name": "Plant B", "IDProjectMain": 456}
+            ],
+            "count": 2
+        }
+    """
+    # Verify authentication
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+    token = authorization.replace("Bearer ", "")
+    username = get_current_username_from_token(token)
+
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    try:
+        # If query is empty, fetch all OENUMs; otherwise search with filter
+        results = tpms_auth.search_oenum_autocomplete(query.strip() if query else "", limit=0)
+
+        logger.info(f"✅ User {username} searched OENUMs: query='{query}', found={len(results)}")
+
+        return {
+            "results": results,
+            "count": len(results)
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error searching OENUMs: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to search OENUMs. Please try again."
+        )
+
+
+@router.post("/validate-project-permission")
+async def validate_project_permission(
+    request: ProjectPermissionCheck,
+    authorization: str = Header(None),
+    tpms_auth: TPMSAuthService = Depends(get_tpms_auth_service)
+):
+    """
+    Validate user permission for a project by IDProjectMain
+
+    This is step 3 of the new project creation flow:
+    1. User types digits → autocomplete searches OENUM
+    2. User selects OENUM → gets IDProjectMain and Project_Name
+    3. Backend validates permission in draft_permission table
+
+    Returns:
+        200: User has permission
+        403: User doesn't have permission
+        500: Permission check failed
+    """
+    # Verify authentication
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+    token = authorization.replace("Bearer ", "")
+    username = get_current_username_from_token(token)
+
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    try:
+        id_project_main = request.id_project_main
+
+        # Check user permission in draft_permission table
+        has_access, error_code, error_message = tpms_auth.validate_project_access(
+            username=username,
+            project_id=id_project_main
+        )
+
+        if not has_access:
+            if error_code == "access_denied":
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Access denied: You don't have permission for this project (Project ID: {id_project_main})"
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=error_message or "Permission check failed"
+                )
+
+        # Success - user has permission
+        logger.info(f"✅ User {username} validated permission for project {id_project_main}")
+
+        return {
+            "status": "success",
+            "has_access": True,
+            "id_project_main": id_project_main
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error validating project permission: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to validate permission. Please try again."
+        )
