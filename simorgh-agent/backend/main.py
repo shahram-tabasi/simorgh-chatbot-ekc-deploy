@@ -363,15 +363,16 @@ async def llm_diagnostics(
 
 @app.get("/api/auth/search-oenum")
 async def search_oenum(
-    query: str,
+    query: str = "",
     current_user: str = Depends(get_current_user),
     tpms: TPMSAuthService = Depends(get_tpms_auth)
 ):
     """
-    Search OENUMs for autocomplete (returns all OENUMs ending with the query)
+    Search OENUMs for autocomplete or load all OENUMs
 
     Query parameter:
-        query: Partial OENUM digits (e.g., "120", "12065")
+        query: Optional partial OENUM to search for (e.g., "120", "12065")
+               If empty or not provided, returns ALL OENUMs
 
     Returns:
         List of matching projects with OENUM, Project_Name, and IDProjectMain
@@ -386,11 +387,8 @@ async def search_oenum(
         }
     """
     try:
-        if not query or not query.strip():
-            return {"results": [], "count": 0}
-
-        # Search OENUMs using LIKE '%query' pattern
-        results = tpms.search_oenum_autocomplete(query.strip(), limit=20)
+        # If query is empty, fetch all OENUMs; otherwise search with filter
+        results = tpms.search_oenum_autocomplete(query.strip() if query else "", limit=0)
 
         return {
             "results": results,

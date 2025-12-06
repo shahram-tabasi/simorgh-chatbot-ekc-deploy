@@ -450,13 +450,15 @@ class TPMSAuthService:
             logger.error(traceback.format_exc())
             return None
 
-    def search_oenum_autocomplete(self, search_query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def search_oenum_autocomplete(self, search_query: str = "", limit: int = 0) -> List[Dict[str, Any]]:
         """
         Search OENUMs for autocomplete - finds all OENUMs containing the search query
+        If search_query is empty, returns ALL OENUMs
 
         Args:
             search_query: Partial OENUM to search for (e.g., "120", "12065", "04A")
-            limit: Maximum number of results to return (default 20)
+                         If empty, returns all OENUMs
+            limit: Maximum number of results to return (default 0 = no limit)
 
         Returns:
             List of matching projects with OENUM, Project_Name, and IDProjectMain
@@ -474,30 +476,56 @@ class TPMSAuthService:
             logger.warning("TPMS database disabled, cannot search OENUMs")
             return []
 
-        if not search_query or not search_query.strip():
-            return []
-
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Search for OENUMs containing the search query using LIKE '%query%'
-                # This matches the query anywhere in the OENUM field
-                query = """
-                SELECT TOP %s OENUM, Project_Name, IDProjectMain
-                FROM View_Project_Main
-                WHERE OENUM LIKE %s
-                ORDER BY OENUM DESC
-                """
+                # If search_query is empty, fetch ALL OENUMs
+                # Otherwise, search for OENUMs containing the search query
+                if not search_query or not search_query.strip():
+                    # Fetch all OENUMs
+                    if limit > 0:
+                        query = """
+                        SELECT TOP %s OENUM, Project_Name, IDProjectMain
+                        FROM View_Project_Main
+                        ORDER BY OENUM DESC
+                        """
+                        cursor.execute(query, (limit,))
+                    else:
+                        query = """
+                        SELECT OENUM, Project_Name, IDProjectMain
+                        FROM View_Project_Main
+                        ORDER BY OENUM DESC
+                        """
+                        cursor.execute(query)
+                else:
+                    # Search for OENUMs containing the search query using LIKE '%query%'
+                    search_pattern = f"%{search_query.strip()}%"
 
-                # Use %query% pattern to search anywhere in OENUM
-                search_pattern = f"%{search_query.strip()}%"
+                    if limit > 0:
+                        query = """
+                        SELECT TOP %s OENUM, Project_Name, IDProjectMain
+                        FROM View_Project_Main
+                        WHERE OENUM LIKE %s
+                        ORDER BY OENUM DESC
+                        """
+                        cursor.execute(query, (limit, search_pattern))
+                    else:
+                        query = """
+                        SELECT OENUM, Project_Name, IDProjectMain
+                        FROM View_Project_Main
+                        WHERE OENUM LIKE %s
+                        ORDER BY OENUM DESC
+                        """
+                        cursor.execute(query, (search_pattern,))
 
-                cursor.execute(query, (limit, search_pattern))
                 results = cursor.fetchall()
 
                 if not results:
-                    logger.info(f"No OENUMs found containing: {search_query}")
+                    if search_query and search_query.strip():
+                        logger.info(f"No OENUMs found containing: {search_query}")
+                    else:
+                        logger.info("No OENUMs found in View_Project_Main")
                     return []
 
                 # Convert to list of dicts
@@ -509,7 +537,10 @@ class TPMSAuthService:
                         "IDProjectMain": row["IDProjectMain"]
                     })
 
-                logger.info(f"✅ Found {len(projects)} OENUMs containing '{search_query}'")
+                if search_query and search_query.strip():
+                    logger.info(f"✅ Found {len(projects)} OENUMs containing '{search_query}'")
+                else:
+                    logger.info(f"✅ Loaded {len(projects)} OENUMs from View_Project_Main")
                 return projects
 
         except Exception as e:
