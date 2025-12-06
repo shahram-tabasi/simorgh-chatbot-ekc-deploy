@@ -568,6 +568,55 @@ export function useProjects(userId?: string) {
     }
   };
 
+  const deleteProject = async (projectId: string) => {
+    if (!userId) {
+      console.error('Cannot delete project: userId missing');
+      return;
+    }
+
+    // Find project name for confirmation
+    const project = projects.find(p => p.id === projectId);
+    if (!project) {
+      console.error('Project not found:', projectId);
+      return;
+    }
+
+    // Confirmation dialog
+    if (!confirm(`Are you sure you want to delete project "${project.name}"?\n\nThis will permanently delete:\n- All project pages and chats\n- All project messages\n- All project files\n- All project data\n\nThis action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        return;
+      }
+
+      // Call backend delete endpoint
+      await axios.delete(`${API_BASE}/projects/${projectId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      // Remove from UI
+      setProjects(prev => prev.filter(p => p.id !== projectId));
+
+      // Clear active project if it was deleted
+      if (activeProjectId === projectId) {
+        setActiveChatId(null);
+        setActiveProjectId(null);
+      }
+
+      console.log('✅ Project deleted:', projectId);
+      alert(`Project "${project.name}" has been successfully deleted.`);
+    } catch (error: any) {
+      console.error('❌ Failed to delete project:', error);
+      alert(error.response?.data?.detail || 'Failed to delete project');
+    }
+  };
+
   const activeChat =
     activeProjectId !== null
       ? projects
@@ -589,6 +638,7 @@ export function useProjects(userId?: string) {
     updateChatTitle,
     renameChat,
     deleteChat,
+    deleteProject,
     toggleProject,
     toggleGeneralChats,
     selectChat

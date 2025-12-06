@@ -259,6 +259,53 @@ class Neo4jService:
             record = result.single()
             return record["exists"] if record else False
 
+    def delete_project(self, project_number: str, owner_id: str) -> bool:
+        """
+        Delete a project and all its related entities
+
+        Args:
+            project_number: Project identifier to delete
+            owner_id: Username of the project owner (for authorization)
+
+        Returns:
+            True if project was deleted, False if not found or not authorized
+        """
+        with self.driver.session() as session:
+            # First verify ownership
+            verify_query = """
+            MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
+            RETURN p
+            """
+            result = session.run(verify_query, {
+                "project_number": project_number,
+                "owner_id": owner_id
+            })
+
+            if not result.single():
+                logger.warning(f"⚠️ Project {project_number} not found or access denied for user {owner_id}")
+                return False
+
+            # Delete project and all related entities
+            delete_query = """
+            MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
+            OPTIONAL MATCH (p)<-[:BELONGS_TO_PROJECT]-(entity)
+            DETACH DELETE entity, p
+            RETURN count(p) as deleted_count
+            """
+
+            result = session.run(delete_query, {
+                "project_number": project_number,
+                "owner_id": owner_id
+            })
+
+            record = result.single()
+            deleted = record["deleted_count"] > 0 if record else False
+
+            if deleted:
+                logger.info(f"✅ Project deleted: {project_number} (owner: {owner_id})")
+
+            return deleted
+
     # =========================================================================
     # ENTITY MANAGEMENT (with Project Isolation)
     # =========================================================================

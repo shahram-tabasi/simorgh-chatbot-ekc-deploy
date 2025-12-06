@@ -26,6 +26,7 @@ interface ProjectTreeProps {
   onCreateGeneralChat: () => void;
   onRenameChat: (chatId: string, newName: string, projectId: string | null) => void;
   onDeleteChat: (chatId: string, projectId: string | null) => void;
+  onDeleteProject: (projectId: string) => void;
 }
 
 export function ProjectTree({
@@ -41,18 +42,27 @@ export function ProjectTree({
   onCreateChat,
   onCreateGeneralChat,
   onRenameChat,
-  onDeleteChat
+  onDeleteChat,
+  onDeleteProject
 }: ProjectTreeProps) {
   const [showPageModal, setShowPageModal] = React.useState(false);
   const [selectedProjectId, setSelectedProjectId] = React.useState<string | null>(null);
 
-  // Context menu state
+  // Context menu state for chats
   const [contextMenu, setContextMenu] = React.useState<{
     x: number;
     y: number;
     chatId: string;
     chatName: string;
     projectId: string | null;
+  } | null>(null);
+
+  // Context menu state for projects
+  const [projectContextMenu, setProjectContextMenu] = React.useState<{
+    x: number;
+    y: number;
+    projectId: string;
+    projectName: string;
   } | null>(null);
 
   // Rename modal state
@@ -124,6 +134,33 @@ export function ProjectTree({
     if (renameModal) {
       onRenameChat(renameModal.chatId, newName, renameModal.projectId);
       setRenameModal(null);
+    }
+  };
+
+  // Project context menu handlers
+  const handleProjectContextMenu = (
+    e: React.MouseEvent,
+    projectId: string,
+    projectName: string
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setProjectContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      projectId,
+      projectName
+    });
+  };
+
+  const handleCloseProjectContextMenu = () => {
+    setProjectContextMenu(null);
+  };
+
+  const handleDeleteProject = () => {
+    if (projectContextMenu) {
+      onDeleteProject(projectContextMenu.projectId);
+      setProjectContextMenu(null);
     }
   };
 
@@ -199,7 +236,10 @@ export function ProjectTree({
             realProjects.map((project) => (
               <div key={project.id} className="mt-4">
                 {/* Project Row */}
-                <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition">
+                <div
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition"
+                  onContextMenu={(e) => handleProjectContextMenu(e, project.id, project.name)}
+                >
                   <button
                     onClick={() => onToggleProject(project.id)}
                     className="flex items-center gap-3 flex-1 text-left"
@@ -268,7 +308,7 @@ export function ProjectTree({
         />
       )}
 
-      {/* Context Menu */}
+      {/* Context Menu for Chats/Pages */}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -278,6 +318,28 @@ export function ProjectTree({
           onDelete={handleDelete}
           onCreateNew={handleCreateNew}
           target={contextMenu.projectId ? 'page' : 'project'}
+        />
+      )}
+
+      {/* Context Menu for Projects */}
+      {projectContextMenu && (
+        <ContextMenu
+          x={projectContextMenu.x}
+          y={projectContextMenu.y}
+          onClose={handleCloseProjectContextMenu}
+          onRename={() => {
+            // TODO: Implement project rename functionality
+            alert('Project rename feature coming soon!');
+            handleCloseProjectContextMenu();
+          }}
+          onDelete={handleDeleteProject}
+          onCreateNew={() => {
+            if (projectContextMenu) {
+              handleAddPage(projectContextMenu.projectId);
+              handleCloseProjectContextMenu();
+            }
+          }}
+          target='project'
         />
       )}
 
