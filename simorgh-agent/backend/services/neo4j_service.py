@@ -101,6 +101,7 @@ class Neo4jService:
         self,
         project_number: str,
         project_name: str,
+        owner_id: str,
         client: str = "",
         contract_number: str = "",
         contract_date: str = "",
@@ -113,6 +114,7 @@ class Neo4jService:
         Args:
             project_number: Unique project identifier (e.g., "P-2024-001")
             project_name: Human-readable project name
+            owner_id: Username of the project owner
             client: Client company name
             contract_number: Contract reference
             contract_date: Contract signing date (ISO format)
@@ -127,6 +129,7 @@ class Neo4jService:
             MERGE (p:Project {project_number: $project_number})
             ON CREATE SET
                 p.project_name = $project_name,
+                p.owner_id = $owner_id,
                 p.client = $client,
                 p.contract_number = $contract_number,
                 p.contract_date = $contract_date,
@@ -142,6 +145,7 @@ class Neo4jService:
             result = session.run(query, {
                 "project_number": project_number,
                 "project_name": project_name,
+                "owner_id": owner_id,
                 "client": client,
                 "contract_number": contract_number,
                 "contract_date": contract_date,
@@ -150,7 +154,7 @@ class Neo4jService:
             })
 
             project = result.single()["p"]
-            logger.info(f"✅ Project created/updated: {project_number}")
+            logger.info(f"✅ Project created/updated: {project_number} (owner: {owner_id})")
             return dict(project)
 
     def get_project(self, project_number: str) -> Optional[Dict[str, Any]]:
@@ -193,17 +197,35 @@ class Neo4jService:
                 }
             return {}
 
-    def list_all_projects(self) -> List[Dict[str, Any]]:
-        """List all projects in the database"""
+    def list_all_projects(self, owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        List all projects in the database
+
+        Args:
+            owner_id: If provided, filter projects by owner. If None, return all projects.
+
+        Returns:
+            List of project dictionaries with entity counts
+        """
         with self.driver.session() as session:
-            query = """
-            MATCH (p:Project)
-            OPTIONAL MATCH (p)<-[:BELONGS_TO_PROJECT]-(entity)
-            WITH p, count(entity) as entity_count
-            RETURN p, entity_count
-            ORDER BY p.created_at DESC
-            """
-            result = session.run(query)
+            if owner_id:
+                query = """
+                MATCH (p:Project {owner_id: $owner_id})
+                OPTIONAL MATCH (p)<-[:BELONGS_TO_PROJECT]-(entity)
+                WITH p, count(entity) as entity_count
+                RETURN p, entity_count
+                ORDER BY p.created_at DESC
+                """
+                result = session.run(query, {"owner_id": owner_id})
+            else:
+                query = """
+                MATCH (p:Project)
+                OPTIONAL MATCH (p)<-[:BELONGS_TO_PROJECT]-(entity)
+                WITH p, count(entity) as entity_count
+                RETURN p, entity_count
+                ORDER BY p.created_at DESC
+                """
+                result = session.run(query)
 
             projects = []
             for record in result:
@@ -212,6 +234,77 @@ class Neo4jService:
                 projects.append(project)
 
             return projects
+
+    def check_duplicate_project(self, owner_id: str, project_name: str) -> bool:
+        """
+        Check if a project with the same name already exists for this owner
+
+        Args:
+            owner_id: Username of the project owner
+            project_name: Project name to check
+
+        Returns:
+            True if duplicate exists, False otherwise
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (p:Project {owner_id: $owner_id})
+            WHERE toLower(p.project_name) = toLower($project_name)
+            RETURN count(p) > 0 as exists
+            """
+            result = session.run(query, {
+                "owner_id": owner_id,
+                "project_name": project_name
+            })
+            record = result.single()
+            return record["exists"] if record else False
+
+    def delete_project(self, project_number: str, owner_id: str) -> bool:
+        """
+        Delete a project and all its related entities
+
+        Args:
+            project_number: Project identifier to delete
+            owner_id: Username of the project owner (for authorization)
+
+        Returns:
+            True if project was deleted, False if not found or not authorized
+        """
+        with self.driver.session() as session:
+            # First verify ownership
+            verify_query = """
+            MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
+            RETURN p
+            """
+            result = session.run(verify_query, {
+                "project_number": project_number,
+                "owner_id": owner_id
+            })
+
+            if not result.single():
+                logger.warning(f"⚠️ Project {project_number} not found or access denied for user {owner_id}")
+                return False
+
+            # Delete project and all related entities
+            delete_query = """
+            MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
+            OPTIONAL MATCH (p)<-[:BELONGS_TO_PROJECT]-(entity)
+            DETACH DELETE entity, p
+            RETURN count(p) as deleted_count
+            """
+
+            result = session.run(delete_query, {
+                "project_number": project_number,
+                "owner_id": owner_id
+            })
+
+            record = result.single()
+            deleted = record["deleted_count"] > 0 if record else False
+
+            if deleted:
+                logger.info(f"✅ Project deleted: {project_number} (owner: {owner_id})")
+
+            return deleted
 
     # =========================================================================
     # ENTITY MANAGEMENT (with Project Isolation)

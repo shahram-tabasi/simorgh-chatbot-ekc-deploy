@@ -47,7 +47,7 @@ export function useProjects(userId?: string) {
         const backendChats = response.data.chats.map((chat: any) => ({
           id: chat.chat_id,
           title: chat.chat_name,
-          messages: [], // Messages loaded on demand
+          messages: [], // Messages will be loaded below
           createdAt: new Date(chat.created_at),
           updatedAt: new Date(chat.created_at),
           isGeneral: true
@@ -58,6 +58,46 @@ export function useProjects(userId?: string) {
 
         // Save to localStorage as backup
         localStorage.setItem(`simorgh_general_chats_${userId}`, JSON.stringify(backendChats));
+
+        // 🔥 AUTO-LOAD MOST RECENT CHAT
+        if (backendChats.length > 0) {
+          const mostRecentChat = backendChats[0]; // Already sorted by backend
+          console.log('🚀 Auto-loading most recent chat:', mostRecentChat.id);
+
+          // Set as active immediately
+          setActiveChatId(mostRecentChat.id);
+          setActiveProjectId(null);
+
+          // Load chat history
+          try {
+            const chatResponse = await axios.get(`${API_BASE}/chats/${mostRecentChat.id}`, {
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            const messages = chatResponse.data.messages || [];
+            console.log(`✅ Auto-loaded ${messages.length} messages for chat ${mostRecentChat.id}`);
+
+            // Update chat with messages
+            setGeneralChats(prev =>
+              prev.map(c =>
+                c.id === mostRecentChat.id
+                  ? {
+                      ...c,
+                      messages: messages.map((m: any) => ({
+                        id: m.timestamp || Date.now().toString(),
+                        content: m.content,
+                        role: m.role,
+                        timestamp: new Date(m.timestamp),
+                        metadata: m.metadata
+                      }))
+                    }
+                  : c
+              )
+            );
+          } catch (error) {
+            console.error('❌ Failed to auto-load chat history:', error);
+          }
+        }
       } catch (error) {
         console.error('❌ Failed to fetch general chats from backend:', error);
 
@@ -528,6 +568,55 @@ export function useProjects(userId?: string) {
     }
   };
 
+  const deleteProject = async (projectId: string) => {
+    if (!userId) {
+      console.error('Cannot delete project: userId missing');
+      return;
+    }
+
+    // Find project name for confirmation
+    const project = projects.find(p => p.id === projectId);
+    if (!project) {
+      console.error('Project not found:', projectId);
+      return;
+    }
+
+    // Confirmation dialog
+    if (!confirm(`Are you sure you want to delete project "${project.name}"?\n\nThis will permanently delete:\n- All project pages and chats\n- All project messages\n- All project files\n- All project data\n\nThis action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        return;
+      }
+
+      // Call backend delete endpoint
+      await axios.delete(`${API_BASE}/projects/${projectId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      // Remove from UI
+      setProjects(prev => prev.filter(p => p.id !== projectId));
+
+      // Clear active project if it was deleted
+      if (activeProjectId === projectId) {
+        setActiveChatId(null);
+        setActiveProjectId(null);
+      }
+
+      console.log('✅ Project deleted:', projectId);
+      alert(`Project "${project.name}" has been successfully deleted.`);
+    } catch (error: any) {
+      console.error('❌ Failed to delete project:', error);
+      alert(error.response?.data?.detail || 'Failed to delete project');
+    }
+  };
+
   const activeChat =
     activeProjectId !== null
       ? projects
@@ -549,6 +638,7 @@ export function useProjects(userId?: string) {
     updateChatTitle,
     renameChat,
     deleteChat,
+    deleteProject,
     toggleProject,
     toggleGeneralChats,
     selectChat
