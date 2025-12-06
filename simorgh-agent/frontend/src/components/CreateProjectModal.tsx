@@ -20,8 +20,9 @@ interface ProjectOption {
 export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props) {
   // Step 1: OENUM Search Input
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<ProjectOption[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [allOENUMs, setAllOENUMs] = useState<ProjectOption[]>([]); // Store ALL loaded OENUMs
+  const [filteredResults, setFilteredResults] = useState<ProjectOption[]>([]); // Client-side filtered results
+  const [isLoadingOENUMs, setIsLoadingOENUMs] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
 
   // Step 2: Selected Project
@@ -43,16 +44,10 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
   const inputRef = useRef<HTMLInputElement>(null);
 
   /**
-   * Step 1: Search OENUMs via autocomplete
+   * Load ALL OENUMs from the database when modal opens
    */
-  const performSearch = React.useCallback(async (query: string) => {
-    if (!query || query.trim().length < 1) {
-      setSearchResults([]);
-      setShowDropdown(false);
-      return;
-    }
-
-    setIsSearching(true);
+  const loadAllOENUMs = React.useCallback(async () => {
+    setIsLoadingOENUMs(true);
     setError('');
 
     try {
@@ -61,41 +56,63 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
         throw new Error('Authentication required');
       }
 
-      // Call autocomplete endpoint
+      // Fetch ALL OENUMs (no query parameter = fetch all)
       const response = await axios.get(`${API_BASE}/auth/search-oenum`, {
-        params: { query: query.trim() },
+        params: { query: '' }, // Empty query returns all OENUMs
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      setSearchResults(response.data.results || []);
-      setShowDropdown(true);
+      const allProjects = response.data.results || [];
+      setAllOENUMs(allProjects);
+      setFilteredResults(allProjects); // Initially show all
 
-      if (response.data.results.length === 0) {
-        setError(`No projects found with OENUM containing "${query}"`);
+      if (allProjects.length === 0) {
+        setError('No projects found in the database');
       }
     } catch (err: any) {
-      console.error('❌ Search failed:', err);
-      setError('Failed to search projects. Please try again.');
-      setSearchResults([]);
+      console.error('❌ Failed to load OENUMs:', err);
+      setError('Failed to load projects. Please try again.');
+      setAllOENUMs([]);
+      setFilteredResults([]);
     } finally {
-      setIsSearching(false);
+      setIsLoadingOENUMs(false);
     }
   }, []);
 
-  // Debounced search effect
+  /**
+   * Client-side filtering of OENUMs based on search query
+   */
   React.useEffect(() => {
-    if (!searchQuery || searchQuery.trim().length < 1) {
-      setSearchResults([]);
-      setShowDropdown(false);
+    if (!searchQuery || searchQuery.trim().length === 0) {
+      // Show all OENUMs when search is empty
+      setFilteredResults(allOENUMs);
       return;
     }
 
-    const debounceTimer = setTimeout(() => {
-      performSearch(searchQuery.trim());
-    }, 300); // 300ms debounce
+    // Filter client-side for better performance
+    const query = searchQuery.trim().toLowerCase();
+    const filtered = allOENUMs.filter(project =>
+      project.OENUM.toLowerCase().includes(query) ||
+      project.Project_Name.toLowerCase().includes(query)
+    );
 
-    return () => clearTimeout(debounceTimer);
-  }, [searchQuery, performSearch]);
+    setFilteredResults(filtered);
+
+    if (filtered.length === 0) {
+      setError(`No projects found matching "${searchQuery}"`);
+    } else {
+      setError('');
+    }
+  }, [searchQuery, allOENUMs]);
+
+  /**
+   * Load all OENUMs when modal opens
+   */
+  React.useEffect(() => {
+    if (isOpen && allOENUMs.length === 0) {
+      loadAllOENUMs();
+    }
+  }, [isOpen, allOENUMs.length, loadAllOENUMs]);
 
   // Click outside to close dropdown
   React.useEffect(() => {
@@ -195,13 +212,13 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
    */
   const handleClose = React.useCallback(() => {
     setSearchQuery('');
-    setSearchResults([]);
     setShowDropdown(false);
     setSelectedProject(null);
     setHasPermission(false);
     setPermissionError('');
     setPageTitle('New Page');
     setError('');
+    // Note: Keep allOENUMs and filteredResults cached for performance
     onClose();
   }, [onClose]);
 
@@ -256,37 +273,37 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
                     setPermissionError('');
                   }}
                   onFocus={() => {
-                    if (searchResults.length > 0) {
+                    if (filteredResults.length > 0) {
                       setShowDropdown(true);
                     }
                   }}
-                  placeholder="Type digits (e.g., 120, 12065)..."
+                  placeholder="Click to browse or type to search..."
                   className="w-full px-4 py-3 pr-10 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
                   autoFocus
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  {isSearching ? (
+                  {isLoadingOENUMs ? (
                     <Loader className="w-5 h-5 text-gray-400 animate-spin" />
                   ) : (
-                    <Search className="w-5 h-5 text-gray-400" />
+                    <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${showDropdown ? 'rotate-180' : ''}`} />
                   )}
                 </div>
               </div>
               <p className="mt-2 text-xs text-gray-500">
-                Type any part of the OENUM to search (e.g., "120" finds "04A12065")
+                {isLoadingOENUMs ? 'Loading all projects...' : `${allOENUMs.length} projects loaded. Type to filter or scroll to browse.`}
               </p>
 
               {/* Dropdown Results */}
               <AnimatePresence>
-                {showDropdown && searchResults.length > 0 && (
+                {showDropdown && filteredResults.length > 0 && (
                   <motion.div
                     ref={dropdownRef}
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
-                    className="absolute z-10 w-full mt-2 bg-gray-800 border border-white/20 rounded-xl shadow-2xl max-h-64 overflow-y-auto"
+                    className="absolute z-10 w-full mt-2 bg-gray-800 border border-white/20 rounded-xl shadow-2xl max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800"
                   >
-                    {searchResults.map((project, index) => (
+                    {filteredResults.map((project, index) => (
                       <button
                         key={`${project.IDProjectMain}-${index}`}
                         onClick={() => handleSelectProject(project)}
@@ -301,7 +318,6 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
                               {project.Project_Name}
                             </p>
                           </div>
-                          <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0 mt-1" />
                         </div>
                       </button>
                     ))}
