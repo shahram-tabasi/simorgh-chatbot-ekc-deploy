@@ -201,6 +201,60 @@ export function useProjects(userId?: string) {
       return;
     }
 
+    // Check if this is a local project (ID starts with "proj-") or a TPMS project
+    const isLocalProject = projectId.startsWith('proj-');
+
+    if (isLocalProject) {
+      // Handle local project - create page locally without backend call
+      const pageId = `page-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const now = new Date();
+
+      const newPage: Chat = {
+        id: pageId,
+        title: pageName,
+        messages: [],
+        createdAt: now,
+        updatedAt: now,
+        projectId: projectId
+      };
+
+      // Update projects state
+      setProjects(prev =>
+        prev.map(p =>
+          p.id === projectId
+            ? { ...p, chats: [newPage, ...p.chats], updatedAt: now }
+            : p
+        )
+      );
+
+      // Save page to localStorage with file-based structure
+      const pageData = {
+        id: pageId,
+        projectId: projectId,
+        name: pageName,
+        createdAt: now.toISOString(),
+        content: "",
+        messages: []
+      };
+
+      // Store in file-based structure: /projects/{projectId}/pages/{pageId}.json
+      const pageStorageKey = `simorgh_project_${projectId}_page_${pageId}`;
+      localStorage.setItem(pageStorageKey, JSON.stringify(pageData));
+
+      // Update project's page list
+      const projectPagesKey = `simorgh_project_${projectId}_pages`;
+      const existingPages = JSON.parse(localStorage.getItem(projectPagesKey) || '[]');
+      existingPages.push(pageId);
+      localStorage.setItem(projectPagesKey, JSON.stringify(existingPages));
+
+      setActiveProjectId(projectId);
+      setActiveChatId(pageId);
+
+      console.log('✅ Local project page created:', pageId, 'Project:', projectId, 'Page:', pageName);
+      return;
+    }
+
+    // Handle TPMS project - use backend API
     try {
       // Get auth token
       const token = localStorage.getItem('simorgh_token');
@@ -344,6 +398,22 @@ export function useProjects(userId?: string) {
             : p
         )
       );
+
+      // If local project page, also update the individual page file
+      if (activeProjectId.startsWith('proj-') && chatId.startsWith('page-')) {
+        const pageStorageKey = `simorgh_project_${activeProjectId}_page_${chatId}`;
+        const existingPageData = localStorage.getItem(pageStorageKey);
+        if (existingPageData) {
+          try {
+            const pageData = JSON.parse(existingPageData);
+            pageData.messages = messages;
+            pageData.updatedAt = new Date().toISOString();
+            localStorage.setItem(pageStorageKey, JSON.stringify(pageData));
+          } catch (e) {
+            console.error('Failed to update page file:', e);
+          }
+        }
+      }
     } else {
       setGeneralChats(prev =>
         prev.map(c =>
