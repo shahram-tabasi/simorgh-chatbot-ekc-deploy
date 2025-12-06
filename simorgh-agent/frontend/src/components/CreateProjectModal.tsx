@@ -42,8 +42,6 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
   const dropdownRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  if (!isOpen) return null;
-
   /**
    * Step 1: Search OENUMs via autocomplete
    */
@@ -119,7 +117,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
   /**
    * Step 2: Handle project selection from dropdown
    */
-  const handleSelectProject = async (project: ProjectOption) => {
+  const handleSelectProject = React.useCallback(async (project: ProjectOption) => {
     setSelectedProject(project);
     setSearchQuery(project.OENUM); // Show selected OENUM in input
     setShowDropdown(false);
@@ -129,12 +127,12 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
 
     // Immediately validate permission
     await validatePermission(project.IDProjectMain);
-  };
+  }, []);
 
   /**
    * Step 3: Validate user permission for selected project
    */
-  const validatePermission = async (idProjectMain: number) => {
+  const validatePermission = React.useCallback(async (idProjectMain: number) => {
     setIsValidatingPermission(true);
     setPermissionError('');
 
@@ -167,12 +165,12 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
     } finally {
       setIsValidatingPermission(false);
     }
-  };
+  }, []);
 
   /**
    * Submit: Create project
    */
-  const handleSubmit = () => {
+  const handleSubmit = React.useCallback(() => {
     if (!selectedProject || !hasPermission) {
       setError('Please select a project and ensure you have permission');
       return;
@@ -190,12 +188,12 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
 
     // Reset form
     handleClose();
-  };
+  }, [selectedProject, hasPermission, pageTitle, onCreate]);
 
   /**
    * Close modal and reset state
    */
-  const handleClose = () => {
+  const handleClose = React.useCallback(() => {
     setSearchQuery('');
     setSearchResults([]);
     setShowDropdown(false);
@@ -205,7 +203,10 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
     setPageTitle('New Page');
     setError('');
     onClose();
-  };
+  }, [onClose]);
+
+  // ✅ FIXED: Early return AFTER all hooks
+  if (!isOpen) return null;
 
   return (
     <>
