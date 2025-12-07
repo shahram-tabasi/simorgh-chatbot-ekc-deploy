@@ -9,6 +9,7 @@ Author: Simorgh Industrial Assistant
 
 import os
 import logging
+import json
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from neo4j import GraphDatabase, Driver, Session
@@ -119,12 +120,15 @@ class Neo4jService:
             contract_number: Contract reference
             contract_date: Contract signing date (ISO format)
             description: Project description
-            metadata: Additional project metadata
+            metadata: Additional project metadata (will be stored as JSON string)
 
         Returns:
             Created project node properties
         """
         with self.driver.session() as session:
+            # Convert metadata dict to JSON string (Neo4j doesn't support Map{} as property)
+            metadata_json = json.dumps(metadata) if metadata else "{}"
+
             query = """
             MERGE (p:Project {project_number: $project_number})
             ON CREATE SET
@@ -136,7 +140,7 @@ class Neo4jService:
                 p.description = $description,
                 p.created_at = datetime(),
                 p.updated_at = datetime(),
-                p.metadata = $metadata
+                p.metadata_json = $metadata_json
             ON MATCH SET
                 p.updated_at = datetime()
             RETURN p
@@ -150,12 +154,22 @@ class Neo4jService:
                 "contract_number": contract_number,
                 "contract_date": contract_date,
                 "description": description,
-                "metadata": metadata or {}
+                "metadata_json": metadata_json
             })
 
             project = result.single()["p"]
             logger.info(f"✅ Project created/updated: {project_number} (owner: {owner_id})")
-            return dict(project)
+
+            # Convert result to dict and parse metadata_json back to dict for response
+            project_dict = dict(project)
+            if 'metadata_json' in project_dict and project_dict['metadata_json']:
+                try:
+                    project_dict['metadata'] = json.loads(project_dict['metadata_json'])
+                    del project_dict['metadata_json']
+                except json.JSONDecodeError:
+                    project_dict['metadata'] = {}
+
+            return project_dict
 
     def get_project(self, project_number: str) -> Optional[Dict[str, Any]]:
         """Get project node by project_number"""
