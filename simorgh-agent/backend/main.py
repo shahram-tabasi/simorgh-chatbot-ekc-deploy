@@ -42,6 +42,7 @@ from models.ontology import *
 
 # Import authentication routes and utilities
 from routes.auth import router as auth_router
+from routes.documents_rag import router as documents_rag_router
 from services.auth_utils import get_current_user
 
 # Logging
@@ -55,8 +56,9 @@ app = FastAPI(
     description="Neo4j-based electrical engineering chatbot with hybrid LLM support"
 )
 
-# Include authentication routes
+# Include routers
 app.include_router(auth_router)
+app.include_router(documents_rag_router)
 
 # CORS
 app.add_middleware(
