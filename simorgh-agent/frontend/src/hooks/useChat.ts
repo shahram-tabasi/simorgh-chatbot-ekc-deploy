@@ -110,6 +110,11 @@ export function useChat(
     console.log('🎯 Chat ID:', chatId);
     console.log('🤖 LLM Mode:', options?.llmMode || llmMode || 'default');
 
+    // Check if this is a local project page
+    const isLocalProjectPage = projectNumber !== null &&
+                                projectNumber.startsWith('proj-') &&
+                                (chatId.startsWith('page-') || chatId.startsWith('chat-'));
+
     const userMessage: Message = {
       id: Date.now().toString(),
       content,
@@ -119,6 +124,20 @@ export function useChat(
     };
 
     setMessages(prev => [...prev, userMessage]);
+
+    // For local project pages, show info message and don't call backend
+    if (isLocalProjectPage) {
+      const infoMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: '📝 **Local Project Note**\n\nThis is a local project page. AI chat responses are not available for local projects.\n\nYour message has been saved locally. To use AI chat features, please create the project in TPMS first.',
+        role: 'assistant',
+        timestamp: new Date(),
+        metadata: { info: true, local: true }
+      };
+      setMessages(prev => [...prev, infoMessage]);
+      return;
+    }
+
     setIsTyping(true);
 
     try {

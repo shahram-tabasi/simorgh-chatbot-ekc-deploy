@@ -444,6 +444,50 @@ export function useProjects(userId?: string) {
     // Fetch chat history from backend when selecting a chat
     if (!userId || !chatId) return;
 
+    // Check if this is a local project page
+    const isLocalProjectPage = projectId !== null &&
+                                projectId.startsWith('proj-') &&
+                                (chatId.startsWith('page-') || chatId.startsWith('chat-'));
+
+    if (isLocalProjectPage) {
+      // Load from localStorage for local project pages
+      console.log('📥 Loading local project page:', chatId);
+
+      try {
+        const pageStorageKey = `simorgh_project_${projectId}_page_${chatId}`;
+        const pageDataStr = localStorage.getItem(pageStorageKey);
+
+        if (pageDataStr) {
+          const pageData = JSON.parse(pageDataStr);
+          const messages = pageData.messages || [];
+
+          console.log(`✅ Loaded ${messages.length} messages from local storage for page ${chatId}`);
+
+          // Messages are already in correct format in localStorage
+          setProjects(prev =>
+            prev.map(p =>
+              p.id === projectId
+                ? {
+                    ...p,
+                    chats: p.chats.map(c =>
+                      c.id === chatId
+                        ? { ...c, messages, updatedAt: new Date() }
+                        : c
+                    )
+                  }
+                : p
+            )
+          );
+        } else {
+          console.log('📝 No stored messages for page:', chatId);
+        }
+      } catch (error) {
+        console.error('❌ Failed to load local page data:', error);
+      }
+      return;
+    }
+
+    // For backend chats (general chats and TPMS project chats), fetch from backend
     try {
       const token = localStorage.getItem('simorgh_token');
       if (!token) {
