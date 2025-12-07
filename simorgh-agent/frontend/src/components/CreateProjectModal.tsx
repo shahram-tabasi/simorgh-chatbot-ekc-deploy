@@ -8,7 +8,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (projectId: string, projectName: string, firstPageTitle: string) => void;
+  onCreate: (oenum: string, projectName: string, firstPageTitle: string) => void;
 }
 
 interface ProjectOption {
@@ -196,9 +196,9 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
     // Use default "New Page" if empty
     const finalPageTitle = pageTitle.trim() || 'New Page';
 
-    // Pass IDProjectMain to parent
+    // Pass OENUM (project_number) to parent for creating TPMS project
     onCreate(
-      String(selectedProject.IDProjectMain),
+      selectedProject.OENUM,
       selectedProject.Project_Name,
       finalPageTitle
     );

@@ -169,8 +169,8 @@ function AppContent() {
         <CreateProjectModal
           isOpen={showCreateModal}
           onClose={() => setShowCreateModal(false)}
-          onCreate={(projectId, projectName, firstPageTitle) => {
-            createProject(projectName, firstPageTitle);
+          onCreate={(oenum, projectName, firstPageTitle) => {
+            createProject(oenum, projectName, firstPageTitle);
             setShowCreateModal(false);
           }}
         />
