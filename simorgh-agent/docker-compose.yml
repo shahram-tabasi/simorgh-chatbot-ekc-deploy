@@ -62,6 +62,8 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - LOCAL_LLM_URL=http://nginx/api/llm
       - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
+      # Document Processor
+      - DOC_PROCESSOR_URL=http://doc-processor:8000
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
@@ -78,6 +80,8 @@ services:
         condition: service_started
       cocoindex_db:
         condition: service_healthy
+      doc-processor:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8890/health | grep -q 'healthy' || exit 1"]
       interval: 30s
@@ -85,6 +89,31 @@ services:
       retries: 3
       start_period: 60s
     restart: unless-stopped
+
+  # ===========================================================================
+  # DOC-PROCESSOR - Document to Markdown Conversion Service
+  # ===========================================================================
+  doc-processor:
+    build:
+      context: ./doc-processor
+      dockerfile: Dockerfile
+    container_name: doc-processor
+    expose:
+      - "8000"
+    volumes:
+      - ./uploads/docs:/app/processed_docs
+      - ./uploads/temp:/app/temp
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
 
   # ===========================================================================
   # NEO4J - Knowledge Graph Database
