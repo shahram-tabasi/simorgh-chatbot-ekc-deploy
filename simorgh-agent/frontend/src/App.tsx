@@ -58,8 +58,7 @@ function AppContent() {
 
   const handleCreateProject = () => setShowCreateModal(true);
 
-  const handleCreateChat = (projectId: string, projectName: string, pageName: string) => {
-    // projectName is for display/validation only, not passed to createChat
+  const handleCreateChat = (projectId: string, pageName: string) => {
     createChat(projectId, pageName);
   };
 
@@ -170,8 +169,8 @@ function AppContent() {
         <CreateProjectModal
           isOpen={showCreateModal}
           onClose={() => setShowCreateModal(false)}
-          onCreate={(projectId, projectName, firstPageTitle) => {
-            createProject(projectName, firstPageTitle);
+          onCreate={(oenum, projectName, firstPageTitle) => {
+            createProject(oenum, projectName, firstPageTitle);
             setShowCreateModal(false);
           }}
         />

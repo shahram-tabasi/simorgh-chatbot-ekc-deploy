@@ -160,39 +160,84 @@ export function useProjects(userId?: string) {
     }
   }, [generalChats, userId]);
 
-  const createProject = (name: string, firstPageTitle: string) => {
-    // Check for duplicate project name in local state
-    const duplicateProject = projects.find(p => p.name.toLowerCase() === name.toLowerCase());
-    if (duplicateProject) {
-      alert(`A project named "${duplicateProject.name}" already exists in local memory. Please choose a different name.`);
-      console.warn('⚠️ Duplicate project name:', name);
+  const createProject = async (oenum: string, name: string, firstPageTitle: string) => {
+    if (!userId) {
+      console.error('Cannot create project: userId missing');
       return;
     }
 
-    const projectId = `proj-${Date.now()}`;
-    const chatId = `chat-${Date.now()}`;
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        alert('Authentication required. Please log in again.');
+        return;
+      }
 
-    const newChat: Chat = {
-      id: chatId,
-      title: firstPageTitle,
-      messages: [],
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      projectId: projectId
-    };
+      // Create project in Neo4j via backend
+      console.log('📤 Creating TPMS project:', oenum, name);
+      const projectResponse = await axios.post(`${API_BASE}/projects`, {
+        project_number: oenum,
+        project_name: name,
+        client: '',
+        contract_number: '',
+        contract_date: '',
+        description: ''
+      }, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
 
-    const newProject: Project = {
-      id: projectId,
-      name,
-      chats: [newChat],
-      createdAt: new Date(),
-      isExpanded: true
-    };
+      console.log('✅ Project created in Neo4j:', projectResponse.data);
 
-    setProjects(prev => [newProject, ...prev]);
-    setActiveProjectId(projectId);
-    setActiveChatId(chatId);
-    console.log('✅ Project created in local memory:', name);
+      // Create first page/chat for the project
+      const chatResponse = await axios.post(`${API_BASE}/chats`, {
+        chat_name: firstPageTitle,
+        user_id: userId,
+        chat_type: 'project',
+        project_number: oenum,
+        page_name: firstPageTitle
+      }, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      const chatId = chatResponse.data.chat.chat_id;
+
+      // Add to local state
+      const newChat: Chat = {
+        id: chatId,
+        title: firstPageTitle,
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        projectId: oenum
+      };
+
+      const newProject: Project = {
+        id: oenum,  // Use OENUM as project ID
+        name,
+        chats: [newChat],
+        createdAt: new Date(),
+        isExpanded: true
+      };
+
+      setProjects(prev => [newProject, ...prev]);
+      setActiveProjectId(oenum);
+      setActiveChatId(chatId);
+
+      console.log('✅ Project and first page created successfully');
+      alert(`Project "${name}" created successfully!`);
+    } catch (error: any) {
+      console.error('❌ Failed to create project:', error);
+      if (error.response?.status === 400 && error.response?.data?.detail?.includes('already exists')) {
+        alert(error.response.data.detail);
+      } else {
+        alert(error.response?.data?.detail || 'Failed to create project. Please try again.');
+      }
+    }
   };
 
   const createChat = async (projectId: string, pageName: string) => {
@@ -201,60 +246,6 @@ export function useProjects(userId?: string) {
       return;
     }
 
-    // Check if this is a local project (ID starts with "proj-") or a TPMS project
-    const isLocalProject = projectId.startsWith('proj-');
-
-    if (isLocalProject) {
-      // Handle local project - create page locally without backend call
-      const pageId = `page-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const now = new Date();
-
-      const newPage: Chat = {
-        id: pageId,
-        title: pageName,
-        messages: [],
-        createdAt: now,
-        updatedAt: now,
-        projectId: projectId
-      };
-
-      // Update projects state
-      setProjects(prev =>
-        prev.map(p =>
-          p.id === projectId
-            ? { ...p, chats: [newPage, ...p.chats], updatedAt: now }
-            : p
-        )
-      );
-
-      // Save page to localStorage with file-based structure
-      const pageData = {
-        id: pageId,
-        projectId: projectId,
-        name: pageName,
-        createdAt: now.toISOString(),
-        content: "",
-        messages: []
-      };
-
-      // Store in file-based structure: /projects/{projectId}/pages/{pageId}.json
-      const pageStorageKey = `simorgh_project_${projectId}_page_${pageId}`;
-      localStorage.setItem(pageStorageKey, JSON.stringify(pageData));
-
-      // Update project's page list
-      const projectPagesKey = `simorgh_project_${projectId}_pages`;
-      const existingPages = JSON.parse(localStorage.getItem(projectPagesKey) || '[]');
-      existingPages.push(pageId);
-      localStorage.setItem(projectPagesKey, JSON.stringify(existingPages));
-
-      setActiveProjectId(projectId);
-      setActiveChatId(pageId);
-
-      console.log('✅ Local project page created:', pageId, 'Project:', projectId, 'Page:', pageName);
-      return;
-    }
-
-    // Handle TPMS project - use backend API
     try {
       // Get auth token
       const token = localStorage.getItem('simorgh_token');
@@ -263,13 +254,13 @@ export function useProjects(userId?: string) {
         return;
       }
 
-      // Create project chat in backend with page_name
+      // Create project page/chat in backend
       const response = await axios.post(`${API_BASE}/chats`, {
-        chat_name: pageName,  // Use page_name as chat_name
+        chat_name: pageName,
         user_id: userId,
         chat_type: 'project',
-        project_number: projectId,
-        page_name: pageName  // New required field for project sessions
+        project_number: projectId,  // projectId is OENUM
+        page_name: pageName
       }, {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -281,7 +272,7 @@ export function useProjects(userId?: string) {
 
       const newChat: Chat = {
         id: backendChatId,
-        title: pageName,  // Use page_name as title
+        title: pageName,
         messages: [],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -299,17 +290,17 @@ export function useProjects(userId?: string) {
       setActiveProjectId(projectId);
       setActiveChatId(backendChatId);
 
-      console.log('✅ Project chat created:', backendChatId, 'Project:', projectName, 'Page:', pageName);
+      console.log('✅ Project page created:', backendChatId, 'Project:', projectName, 'Page:', pageName);
     } catch (error: any) {
-      console.error('❌ Failed to create project chat:', error);
+      console.error('❌ Failed to create project page:', error);
 
       // Show error to user
       if (error.response?.status === 404) {
-        alert(`Project ID ${projectId} not found in database`);
+        alert(`Project ${projectId} not found in database`);
       } else if (error.response?.status === 403) {
         alert(`Access denied for project ${projectId}`);
       } else {
-        alert(error.response?.data?.detail || 'Failed to create project chat');
+        alert(error.response?.data?.detail || 'Failed to create project page');
       }
     }
   };
@@ -383,6 +374,7 @@ export function useProjects(userId?: string) {
 
   const updateChatMessages = (chatId: string, messages: Message[]) => {
     if (activeProjectId) {
+      // Project chat - update in projects
       setProjects(prev =>
         prev.map(p =>
           p.id === activeProjectId
@@ -398,23 +390,8 @@ export function useProjects(userId?: string) {
             : p
         )
       );
-
-      // If local project page, also update the individual page file
-      if (activeProjectId.startsWith('proj-') && chatId.startsWith('page-')) {
-        const pageStorageKey = `simorgh_project_${activeProjectId}_page_${chatId}`;
-        const existingPageData = localStorage.getItem(pageStorageKey);
-        if (existingPageData) {
-          try {
-            const pageData = JSON.parse(existingPageData);
-            pageData.messages = messages;
-            pageData.updatedAt = new Date().toISOString();
-            localStorage.setItem(pageStorageKey, JSON.stringify(pageData));
-          } catch (e) {
-            console.error('Failed to update page file:', e);
-          }
-        }
-      }
     } else {
+      // General chat - update in generalChats
       setGeneralChats(prev =>
         prev.map(c =>
           c.id === chatId
@@ -661,7 +638,7 @@ export function useProjects(userId?: string) {
     }
 
     // Confirmation dialog
-    if (!confirm(`Are you sure you want to delete project "${project.name}" from local memory?\n\nThis will remove it from the chatbot but NOT from TPMS database.\n\nThis action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to remove project "${project.name}" from your chatbot?\n\nThis will:\n- Remove the project from your project list\n- Clear all chat history for this project\n\nNote: The project will remain in TPMS database. You can re-add it later if needed.\n\nThis action cannot be undone.`)) {
       return;
     }
 
@@ -678,8 +655,8 @@ export function useProjects(userId?: string) {
       setActiveProjectId(null);
     }
 
-    console.log('✅ Project deleted from local memory:', projectId);
-    alert(`Project "${project.name}" has been removed from local memory.`);
+    console.log('✅ Project removed from chatbot:', projectId);
+    alert(`Project "${project.name}" has been removed from your chatbot.`);
   };
 
   const activeChat =
