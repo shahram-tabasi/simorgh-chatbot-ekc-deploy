@@ -125,6 +125,7 @@ export interface UploadedFile {
   uploadProgress?: number;
   status?: 'uploading' | 'uploaded' | 'processing' | 'completed' | 'failed';
   error?: string;
+  file?: File; // Store original File object for uploading
 }
 
 // ============================================
