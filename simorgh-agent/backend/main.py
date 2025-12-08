@@ -1012,11 +1012,12 @@ Title:"""
 
 @app.post("/api/chat/send")
 async def send_chat_message(
-    chat_id: str = Form(...),
-    user_id: str = Form(...),
-    content: str = Form(...),
+    message: ChatMessage = None,
+    chat_id: str = Form(None),
+    user_id: str = Form(None),
+    content: str = Form(None),
     llm_mode: Optional[str] = Form(None),
-    use_graph_context: bool = Form(True),
+    use_graph_context: bool = Form(None),
     file: Optional[UploadFile] = File(None),
     current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j),
@@ -1026,21 +1027,45 @@ async def send_chat_message(
     """
     Send a chat message and get AI response (requires authentication)
 
-    Supports optional file attachments for document-based conversations.
-    Files are processed and indexed before generating the response.
+    Supports two formats:
+    1. JSON (application/json) for text-only messages - BACKWARD COMPATIBLE
+    2. Form data (multipart/form-data) with optional file attachments
 
     Validates that the requesting user owns the chat and matches the message user_id
     """
     try:
+        # Detect which format was sent and normalize to common variables
+        if message:
+            # JSON format (backward compatible)
+            _chat_id = message.chat_id
+            _user_id = message.user_id
+            _content = message.content
+            _llm_mode = message.llm_mode
+            _use_graph_context = message.use_graph_context
+            _file = None
+        else:
+            # Form data format (with optional file)
+            if not all([chat_id, user_id, content]):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Missing required fields: chat_id, user_id, content"
+                )
+            _chat_id = chat_id
+            _user_id = user_id
+            _content = content
+            _llm_mode = llm_mode
+            _use_graph_context = use_graph_context if use_graph_context is not None else True
+            _file = file
+
         # Security: Verify the user_id in the message matches the authenticated user
-        if user_id != current_user:
+        if _user_id != current_user:
             raise HTTPException(
                 status_code=403,
                 detail="Cannot send messages as another user"
             )
 
         # Get chat metadata
-        chat_metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
+        chat_metadata = redis.get(f"chat:{_chat_id}:metadata", db="chat")
 
         if not chat_metadata:
             raise HTTPException(status_code=404, detail="Chat not found")
@@ -1057,16 +1082,16 @@ async def send_chat_message(
 
         # Handle file upload if present
         file_context = ""
-        if file:
-            logger.info(f"📎 Processing uploaded file: {file.filename}")
+        if _file:
+            logger.info(f"📎 Processing uploaded file: {_file.filename}")
 
             # Save file temporarily
             import tempfile
             temp_dir = Path(tempfile.gettempdir())
-            temp_file = temp_dir / f"{uuid.uuid4()}_{file.filename}"
+            temp_file = temp_dir / f"{uuid.uuid4()}_{_file.filename}"
 
             with open(temp_file, 'wb') as f:
-                f.write(await file.read())
+                f.write(await _file.read())
 
             try:
                 # Import doc processor client
@@ -1076,7 +1101,7 @@ async def send_chat_message(
                 # Process document to markdown
                 doc_result = await doc_processor.process_document(
                     file_path=temp_file,
-                    user_id=user_id
+                    user_id=_user_id
                 )
 
                 if doc_result.get('success'):
@@ -1091,7 +1116,7 @@ async def send_chat_message(
                         # Classify document
                         classifier = DocumentClassifier()
                         category, doc_type, confidence = classifier.classify(
-                            filename=file.filename,
+                            filename=_file.filename,
                             content=markdown_content
                         )
 
@@ -1106,17 +1131,17 @@ async def send_chat_message(
                             doc_type=doc_type,
                             document_id=doc_id,
                             document_metadata={
-                                'filename': file.filename,
+                                'filename': _file.filename,
                                 'doc_type': doc_type,
                                 'category': category,
                                 'confidence': confidence,
-                                'uploaded_by': user_id,
-                                'chat_id': chat_id
+                                'uploaded_by': _user_id,
+                                'chat_id': _chat_id
                             }
                         )
 
                         # Use document content as context
-                        file_context = f"\n\n## Uploaded Document: {file.filename}\n\n{markdown_content[:5000]}"
+                        file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n{markdown_content[:5000]}"
                         logger.info(f"📊 Added document to project graph: {doc_id}")
 
                     # For general chats: Index to Qdrant and get context
@@ -1126,15 +1151,15 @@ async def send_chat_message(
                         vector_rag = VectorRAG()
                         index_result = await vector_rag.index_document(
                             markdown_content=markdown_content,
-                            user_id=user_id,
-                            filename=file.filename
+                            user_id=_user_id,
+                            filename=_file.filename
                         )
 
                         if index_result.get('success'):
                             logger.info(f"📥 Document indexed: {index_result.get('chunks_indexed')} chunks")
 
                         # Use document content as context
-                        file_context = f"\n\n## Uploaded Document: {file.filename}\n\n{markdown_content[:5000]}"
+                        file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n{markdown_content[:5000]}"
                 else:
                     logger.warning(f"⚠️ Document processing failed: {doc_result.get('error')}")
 
@@ -1147,9 +1172,9 @@ async def send_chat_message(
         graph_context = ""
         context_used = False
 
-        if project_number and use_graph_context:
+        if project_number and _use_graph_context:
             # Get recent chat history for context
-            recent_messages = redis.get_chat_history(chat_id, limit=5)
+            recent_messages = redis.get_chat_history(_chat_id, limit=5)
 
             # Simple semantic search in graph (can be enhanced with Qdrant)
             try:
@@ -1183,15 +1208,15 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content}
+            {"role": "user", "content": _content}
         ]
 
         # Generate response
-        logger.info(f"💬 Generating LLM response - Mode: {llm_mode or 'default'}, Chat: {chat_id}")
+        logger.info(f"💬 Generating LLM response - Mode: {_llm_mode or 'default'}, Chat: {_chat_id}")
 
         result = llm.generate(
             messages=llm_messages,
-            mode=llm_mode,
+            mode=_llm_mode,
             temperature=0.7,
             use_cache=True
         )
@@ -1206,25 +1231,25 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
         # Cache messages with complete metadata structure
         user_msg = {
             "message_id": str(uuid.uuid4()),
-            "chat_id": chat_id,
+            "chat_id": _chat_id,
             "project_id": project_number,  # None for general chats
-            "page_id": chat_id,  # Chat ID represents the page
+            "page_id": _chat_id,  # Chat ID represents the page
             "role": "user",
             "sender": "user",
-            "content": content,
-            "text": content,  # Explicit text field as per requirements
+            "content": _content,
+            "text": _content,  # Explicit text field as per requirements
             "timestamp": created_at,
             "created_at": created_at,  # Explicit CreatedAt as per requirements
-            "user_id": user_id,
-            "has_attachment": file is not None,
-            "attachment_filename": file.filename if file else None
+            "user_id": _user_id,
+            "has_attachment": _file is not None,
+            "attachment_filename": _file.filename if _file else None
         }
 
         assistant_msg = {
             "message_id": str(uuid.uuid4()),
-            "chat_id": chat_id,
+            "chat_id": _chat_id,
             "project_id": project_number,  # None for general chats
-            "page_id": chat_id,  # Chat ID represents the page
+            "page_id": _chat_id,  # Chat ID represents the page
             "role": "assistant",
             "sender": "assistant",
             "content": ai_response,
@@ -1236,11 +1261,11 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             "cached": result.get("cached", False)
         }
 
-        redis.cache_chat_message(chat_id, user_msg)
-        redis.cache_chat_message(chat_id, assistant_msg)
+        redis.cache_chat_message(_chat_id, user_msg)
+        redis.cache_chat_message(_chat_id, assistant_msg)
 
         return {
-            "chat_id": chat_id,
+            "chat_id": _chat_id,
             "response": ai_response,
             "llm_mode": result.get("mode"),
             "context_used": context_used,
