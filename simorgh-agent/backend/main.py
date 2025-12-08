@@ -635,10 +635,36 @@ async def create_chat(
             )
 
         try:
+            # Step 0: Detect if project_number is OENUM or IDProjectMain
+            # OENUM contains letters (e.g., "01A11766"), IDProjectMain is purely numeric (e.g., "1430")
+            project_id_for_auth = chat.project_number
+
+            # If project_number contains letters, it's an OENUM - look up the IDProjectMain
+            if not chat.project_number.isdigit():
+                logger.info(f"🔍 Detected OENUM format: {chat.project_number}, looking up IDProjectMain...")
+                # Try to get project by OENUM to find the IDProjectMain
+                oenum_project = tpms.get_project_by_oenum(chat.project_number[-5:])
+                if not oenum_project:
+                    # Try exact OENUM match using search
+                    search_results = tpms.search_oenum_autocomplete(chat.project_number, limit=1)
+                    if search_results:
+                        project_id_for_auth = str(search_results[0]["IDProjectMain"])
+                        logger.info(f"✅ Found IDProjectMain via search: {project_id_for_auth} for OENUM {chat.project_number}")
+                    else:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Project with OENUM {chat.project_number} not found in TPMS database"
+                        )
+                else:
+                    project_id_for_auth = str(oenum_project["IDProjectMain"])
+                    logger.info(f"✅ Found IDProjectMain: {project_id_for_auth} for OENUM {chat.project_number}")
+            else:
+                logger.info(f"🔍 Detected IDProjectMain format: {chat.project_number}")
+
             # Step 1: Validate project access (lookup + permission check)
             has_access, error_code, error_message = tpms.validate_project_access(
                 username=current_user,
-                project_id=chat.project_number
+                project_id=project_id_for_auth
             )
 
             if not has_access:
@@ -650,7 +676,7 @@ async def create_chat(
                     raise HTTPException(status_code=500, detail=error_message)
 
             # Step 2: Get project details from View_Project_Main
-            project = tpms.get_project_by_id(chat.project_number)
+            project = tpms.get_project_by_id(project_id_for_auth)
             if not project:
                 # This should not happen after validate_project_access, but safety check
                 raise HTTPException(
@@ -661,7 +687,8 @@ async def create_chat(
             project_name = project["Project_Name"]
 
             # Step 3: Generate unique session ID with project-specific counter
-            chat_id = session_id_svc.generate_project_session_id(chat.project_number)
+            # Use IDProjectMain for session ID to ensure uniqueness
+            chat_id = session_id_svc.generate_project_session_id(project_id_for_auth)
 
             # Step 4: Create session data
             chat_data = {
@@ -669,7 +696,8 @@ async def create_chat(
                 "chat_name": chat.page_name,  # Use user-provided page name as title
                 "user_id": chat.user_id,
                 "chat_type": "project",
-                "project_number": chat.project_number,
+                "project_number": chat.project_number,  # OENUM or original input
+                "project_id_main": project_id_for_auth,  # IDProjectMain for auth
                 "project_name": project_name,  # Auto-filled from database
                 "page_name": chat.page_name,
                 "created_at": datetime.now().isoformat(),
@@ -685,12 +713,13 @@ async def create_chat(
                 user_id=chat.user_id,
                 chat_id=chat_id,
                 chat_type="project",
-                project_number=chat.project_number
+                project_number=project_id_for_auth  # Use IDProjectMain for indexing
             )
 
             logger.info(
                 f"✅ Project chat created: {chat_id} for user: {chat.user_id}, "
-                f"project: {chat.project_number} ({project_name}), page: {chat.page_name}"
+                f"project: {chat.project_number} (ID: {project_id_for_auth}, Name: {project_name}), "
+                f"page: {chat.page_name}"
             )
 
             return {
