@@ -139,19 +139,45 @@ export function useChat(
       }
 
       // Call the /api/chat/send endpoint
-      const response = await axios.post(`${API_BASE}/chat/send`, {
-        chat_id: chatId,
-        user_id: userId,
-        content: content,
-        // llm_mode: options?.llmMode || llmMode,
-        llm_mode: llmMode || undefined,   // یا فقط: llmMode
-        use_graph_context: options?.useGraphContext !== false
-      }, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+      // Detect if files are attached and use FormData, otherwise use JSON
+      let response;
+
+      if (files && files.length > 0 && files[0].file) {
+        // Use FormData for file uploads
+        console.log('📎 Sending with file attachment:', files[0].name);
+        const formData = new FormData();
+        formData.append('chat_id', chatId);
+        formData.append('user_id', userId);
+        formData.append('content', content);
+        if (llmMode) {
+          formData.append('llm_mode', llmMode);
         }
-      });
+        formData.append('use_graph_context', String(options?.useGraphContext !== false));
+
+        // Attach the first file (currently supporting single file)
+        formData.append('file', files[0].file);
+
+        response = await axios.post(`${API_BASE}/chat/send`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            'Authorization': `Bearer ${token}`
+          }
+        });
+      } else {
+        // Use JSON for text-only messages (backward compatible)
+        response = await axios.post(`${API_BASE}/chat/send`, {
+          chat_id: chatId,
+          user_id: userId,
+          content: content,
+          llm_mode: llmMode || undefined,
+          use_graph_context: options?.useGraphContext !== false
+        }, {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          }
+        });
+      }
 
       const data = response.data;
 

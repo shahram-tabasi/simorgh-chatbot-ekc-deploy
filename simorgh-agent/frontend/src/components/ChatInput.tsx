@@ -69,6 +69,7 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
           size: file.size,
           category: getFileCategory(file.type),
           url: URL.createObjectURL(file), // Temporary URL
+          file: file, // Store original File object for backend upload
         };
 
         newFiles.push(uploadedFile);
