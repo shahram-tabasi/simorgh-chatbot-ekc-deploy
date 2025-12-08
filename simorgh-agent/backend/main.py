@@ -407,6 +407,47 @@ async def create_project(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/projects/{project_number}/initialize-structure")
+async def initialize_project_structure(
+    project_number: str,
+    current_user: str = Depends(get_current_user),
+    neo4j: Neo4jService = Depends(get_neo4j)
+):
+    """
+    Initialize/fix the graph structure for an existing project
+
+    This endpoint creates the full category/type hierarchy for projects
+    that were created before this functionality was added.
+    """
+    try:
+        # Verify project exists
+        project = neo4j.get_project(project_number)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Initialize structure
+        from services.project_graph_init import ProjectGraphInitializer
+        graph_init = ProjectGraphInitializer(neo4j.driver)
+        result = graph_init.initialize_project_structure(
+            project_oenum=project_number,
+            project_name=project.get('project_name', project_number)
+        )
+
+        logger.info(f"✅ Structure initialized for project {project_number} by {current_user}: {result}")
+
+        return {
+            "status": "success",
+            "message": f"Graph structure initialized for project {project_number}",
+            "stats": result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error initializing structure for {project_number}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/projects/{project_number}")
 async def get_project(
     project_number: str,

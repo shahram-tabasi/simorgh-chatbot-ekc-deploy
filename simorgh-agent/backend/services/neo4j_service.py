@@ -160,6 +160,15 @@ class Neo4jService:
             project = result.single()["p"]
             logger.info(f"✅ Project created/updated: {project_number} (owner: {owner_id})")
 
+            # Initialize full project graph structure (categories, document types, etc.)
+            from services.project_graph_init import ProjectGraphInitializer
+            graph_init = ProjectGraphInitializer(self.driver)
+            init_result = graph_init.initialize_project_structure(
+                project_oenum=project_number,
+                project_name=project_name
+            )
+            logger.info(f"📊 Graph structure initialized: {init_result}")
+
             # Convert result to dict and parse metadata_json back to dict for response
             project_dict = dict(project)
             if 'metadata_json' in project_dict and project_dict['metadata_json']:
