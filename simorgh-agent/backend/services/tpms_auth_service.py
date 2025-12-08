@@ -422,11 +422,13 @@ class TPMSAuthService:
                 cursor = conn.cursor()
 
                 # Query View_Project_Main by last 5 digits of OENUM using RIGHT()
+                # MySQL syntax: LIMIT instead of TOP
                 query = """
-                SELECT TOP 1 IDProjectMain, Project_Name, OENUM
+                SELECT IDProjectMain, Project_Name, OENUM
                 FROM View_Project_Main
                 WHERE RIGHT(OENUM, 5) = %s
                 ORDER BY IDProjectMain DESC
+                LIMIT 1
                 """
 
                 cursor.execute(query, (oenum_suffix,))
@@ -482,13 +484,15 @@ class TPMSAuthService:
 
                 # If search_query is empty, fetch ALL OENUMs
                 # Otherwise, search for OENUMs containing the search query
+                # MySQL syntax: LIMIT instead of TOP
                 if not search_query or not search_query.strip():
                     # Fetch all OENUMs
                     if limit > 0:
                         query = """
-                        SELECT TOP %s OENUM, Project_Name, IDProjectMain
+                        SELECT OENUM, Project_Name, IDProjectMain
                         FROM View_Project_Main
                         ORDER BY OENUM DESC
+                        LIMIT %s
                         """
                         cursor.execute(query, (limit,))
                     else:
@@ -504,12 +508,13 @@ class TPMSAuthService:
 
                     if limit > 0:
                         query = """
-                        SELECT TOP %s OENUM, Project_Name, IDProjectMain
+                        SELECT OENUM, Project_Name, IDProjectMain
                         FROM View_Project_Main
                         WHERE OENUM LIKE %s
                         ORDER BY OENUM DESC
+                        LIMIT %s
                         """
-                        cursor.execute(query, (limit, search_pattern))
+                        cursor.execute(query, (search_pattern, limit))
                     else:
                         query = """
                         SELECT OENUM, Project_Name, IDProjectMain
