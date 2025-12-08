@@ -13,7 +13,7 @@ Architecture:
 Author: Simorgh Industrial Assistant
 """
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Query, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Query, BackgroundTasks, Request, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -1012,13 +1012,7 @@ Title:"""
 
 @app.post("/api/chat/send")
 async def send_chat_message(
-    message: ChatMessage = None,
-    chat_id: str = Form(None),
-    user_id: str = Form(None),
-    content: str = Form(None),
-    llm_mode: Optional[str] = Form(None),
-    use_graph_context: bool = Form(None),
-    file: Optional[UploadFile] = File(None),
+    request: Request,
     current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j),
     redis: RedisService = Depends(get_redis),
@@ -1034,28 +1028,40 @@ async def send_chat_message(
     Validates that the requesting user owns the chat and matches the message user_id
     """
     try:
-        # Detect which format was sent and normalize to common variables
-        if message:
-            # JSON format (backward compatible)
-            _chat_id = message.chat_id
-            _user_id = message.user_id
-            _content = message.content
-            _llm_mode = message.llm_mode
-            _use_graph_context = message.use_graph_context
-            _file = None
-        else:
-            # Form data format (with optional file)
-            if not all([chat_id, user_id, content]):
+        # Detect content type and parse accordingly
+        content_type = request.headers.get("content-type", "")
+
+        if "multipart/form-data" in content_type:
+            # Form data with optional file
+            form = await request.form()
+            _chat_id = form.get("chat_id")
+            _user_id = form.get("user_id")
+            _content = form.get("content")
+            _llm_mode = form.get("llm_mode")
+            _use_graph_context_str = form.get("use_graph_context", "true")
+            _use_graph_context = _use_graph_context_str.lower() in ("true", "1", "yes") if isinstance(_use_graph_context_str, str) else True
+            _file = form.get("file")
+
+            if not all([_chat_id, _user_id, _content]):
                 raise HTTPException(
                     status_code=422,
                     detail="Missing required fields: chat_id, user_id, content"
                 )
-            _chat_id = chat_id
-            _user_id = user_id
-            _content = content
-            _llm_mode = llm_mode
-            _use_graph_context = use_graph_context if use_graph_context is not None else True
-            _file = file
+        else:
+            # JSON format (backward compatible)
+            body = await request.json()
+            _chat_id = body.get("chat_id")
+            _user_id = body.get("user_id")
+            _content = body.get("content")
+            _llm_mode = body.get("llm_mode")
+            _use_graph_context = body.get("use_graph_context", True)
+            _file = None
+
+            if not all([_chat_id, _user_id, _content]):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Missing required fields: chat_id, user_id, content"
+                )
 
         # Security: Verify the user_id in the message matches the authenticated user
         if _user_id != current_user:
