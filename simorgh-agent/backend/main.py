@@ -1231,7 +1231,6 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
         ai_response = result["response"]
 
         # Generate unique message IDs
-        import uuid
         created_at = datetime.now().isoformat()
 
         # Cache messages with complete metadata structure
