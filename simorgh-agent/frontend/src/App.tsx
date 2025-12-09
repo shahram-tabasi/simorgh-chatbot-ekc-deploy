@@ -1,4 +1,5 @@
 import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { StarryBackground } from './components/StarryBackground';
 import { Sidebar } from './components/Sidebar';
 import { ProjectTree } from './components/ProjectTree';
@@ -17,18 +18,9 @@ import { useChat } from './hooks/useChat';
 import { LanguageProvider } from './context/LanguageContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
-// Main app content component (uses auth context)
-function AppContent() {
-  const { isAuthenticated, isLoading, user } = useAuth();
-
-  // Check if we're on the spec review page
-  const path = window.location.pathname;
-  const specReviewMatch = path.match(/^\/review-specs\/([^/]+)\/([^/]+)/);
-
-  if (specReviewMatch && isAuthenticated) {
-    // Render spec review page
-    return <SpecReview />;
-  }
+// Main chat interface component
+function MainChat() {
+  const { user } = useAuth();
   const rightSidebar = useSidebar(true);
   const leftSidebar = useSidebar(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
@@ -126,20 +118,6 @@ function AppContent() {
       }]
       : [])
   ];
-
-  // Show loading state while checking authentication
-  if (isLoading) {
-    return (
-      <div className="w-full h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-black">
-        <div className="text-white text-xl">Loading...</div>
-      </div>
-    );
-  }
-
-  // Show login if not authenticated
-  if (!isAuthenticated) {
-    return <Login />;
-  }
 
   return (
     <LanguageProvider>
@@ -244,6 +222,53 @@ function AppContent() {
         ))}
       </div>
     </LanguageProvider>
+  );
+}
+
+// Protected route wrapper
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="w-full h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-black">
+        <div className="text-white text-xl">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+// App content with routing
+function AppContent() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <MainChat />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/review-specs/:projectNumber/:documentId"
+          element={
+            <ProtectedRoute>
+              <SpecReview />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 

@@ -134,7 +134,7 @@ export const SpecReview: React.FC = () => {
         <div className="text-center">
           <p className="text-red-500 text-xl mb-4">❌ {error}</p>
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => navigate('/')}
             className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
           >
             Go Back
@@ -182,7 +182,7 @@ export const SpecReview: React.FC = () => {
               </button>
 
               <button
-                onClick={() => navigate(-1)}
+                onClick={() => navigate('/')}
                 className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
               >
                 Close
