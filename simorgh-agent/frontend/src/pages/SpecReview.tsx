@@ -1,6 +1,5 @@
 // src/pages/SpecReview.tsx
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -21,8 +20,11 @@ interface SpecResponse {
 }
 
 export const SpecReview: React.FC = () => {
-  const { projectNumber, documentId } = useParams<{ projectNumber: string; documentId: string }>();
-  const navigate = useNavigate();
+  // Parse URL parameters from pathname
+  const path = window.location.pathname;
+  const match = path.match(/^\/review-specs\/([^/]+)\/([^/]+)/);
+  const projectNumber = match ? match[1] : null;
+  const documentId = match ? match[2] : null;
 
   const [specs, setSpecs] = useState<SpecData | null>(null);
   const [originalSpecs, setOriginalSpecs] = useState<SpecData | null>(null);
@@ -134,7 +136,7 @@ export const SpecReview: React.FC = () => {
         <div className="text-center">
           <p className="text-red-500 text-xl mb-4">❌ {error}</p>
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => window.close()}
             className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
           >
             Go Back
@@ -182,7 +184,7 @@ export const SpecReview: React.FC = () => {
               </button>
 
               <button
-                onClick={() => navigate(-1)}
+                onClick={() => window.close()}
                 className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
               >
                 Close
