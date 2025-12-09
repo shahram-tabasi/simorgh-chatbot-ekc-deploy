@@ -576,3 +576,295 @@ class ProjectGraphInitializer:
             except Exception as e:
                 logger.error(f"❌ Failed to update spec structure: {e}")
                 return False
+
+    def add_extraction_guide_to_field(
+        self,
+        project_oenum: str,
+        document_id: str,
+        category_name: str,
+        field_name: str,
+        guide_content: Dict[str, str]
+    ) -> bool:
+        """
+        Add an extraction guide node to a specification field
+
+        Args:
+            project_oenum: Project OENUM
+            document_id: Document ID
+            category_name: Spec category name
+            field_name: Spec field name
+            guide_content: Guide content with keys:
+                - definition: Field definition and purpose
+                - extraction_instructions: How to extract this value
+                - examples: Example values
+                - common_values: Common/standard values
+                - relationships: Related fields
+                - notes: Additional notes
+
+        Returns:
+            Success boolean
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (field:SpecField {
+                name: $field_name,
+                category_name: $category_name,
+                document_id: $doc_id,
+                project_number: $oenum
+            })
+
+            MERGE (guide:ExtractionGuide {
+                field_name: $field_name,
+                category_name: $category_name,
+                project_number: $oenum
+            })
+            SET guide.definition = $definition,
+                guide.extraction_instructions = $instructions,
+                guide.examples = $examples,
+                guide.common_values = $common_values,
+                guide.relationships = $relationships,
+                guide.notes = $notes,
+                guide.updated_at = datetime()
+
+            MERGE (field)-[:HAS_EXTRACTION_GUIDE]->(guide)
+
+            RETURN guide
+            """
+
+            try:
+                result = session.run(
+                    query,
+                    doc_id=document_id,
+                    oenum=project_oenum,
+                    category_name=category_name,
+                    field_name=field_name,
+                    definition=guide_content.get("definition", ""),
+                    instructions=guide_content.get("extraction_instructions", ""),
+                    examples=guide_content.get("examples", ""),
+                    common_values=guide_content.get("common_values", ""),
+                    relationships=guide_content.get("relationships", ""),
+                    notes=guide_content.get("notes", "")
+                )
+
+                logger.info(f"✅ Added extraction guide for {category_name}.{field_name}")
+                return result.single() is not None
+
+            except Exception as e:
+                logger.error(f"❌ Failed to add extraction guide: {e}")
+                return False
+
+    def get_extraction_guide(
+        self,
+        project_oenum: str,
+        category_name: str,
+        field_name: str
+    ) -> Optional[Dict[str, str]]:
+        """
+        Get extraction guide for a specific field
+
+        Args:
+            project_oenum: Project OENUM
+            category_name: Spec category name
+            field_name: Spec field name
+
+        Returns:
+            Extraction guide content or None
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (guide:ExtractionGuide {
+                field_name: $field_name,
+                category_name: $category_name,
+                project_number: $oenum
+            })
+
+            RETURN guide.definition as definition,
+                   guide.extraction_instructions as instructions,
+                   guide.examples as examples,
+                   guide.common_values as common_values,
+                   guide.relationships as relationships,
+                   guide.notes as notes
+            """
+
+            try:
+                result = session.run(
+                    query,
+                    oenum=project_oenum,
+                    category_name=category_name,
+                    field_name=field_name
+                )
+
+                record = result.single()
+                if record:
+                    return {
+                        "definition": record["definition"] or "",
+                        "extraction_instructions": record["instructions"] or "",
+                        "examples": record["examples"] or "",
+                        "common_values": record["common_values"] or "",
+                        "relationships": record["relationships"] or "",
+                        "notes": record["notes"] or ""
+                    }
+                return None
+
+            except Exception as e:
+                logger.error(f"❌ Failed to get extraction guide: {e}")
+                return None
+
+    def initialize_all_extraction_guides(
+        self,
+        project_oenum: str,
+        guides_data: Dict[str, Dict[str, Dict[str, str]]]
+    ) -> Dict[str, int]:
+        """
+        Initialize all extraction guides for a project
+
+        Args:
+            project_oenum: Project OENUM
+            guides_data: Nested dictionary structure:
+                {
+                    "category_name": {
+                        "field_name": {
+                            "definition": "...",
+                            "extraction_instructions": "...",
+                            "examples": "...",
+                            "common_values": "...",
+                            "relationships": "...",
+                            "notes": "..."
+                        }
+                    }
+                }
+
+        Returns:
+            Statistics about created guides
+        """
+        logger.info(f"📚 Initializing extraction guides for project {project_oenum}")
+
+        stats = {
+            "guides_created": 0,
+            "guides_failed": 0,
+            "categories_processed": 0
+        }
+
+        for category_name, fields in guides_data.items():
+            for field_name, guide_content in fields.items():
+                # Create guide node (not linked to specific document yet)
+                success = self._create_standalone_extraction_guide(
+                    project_oenum,
+                    category_name,
+                    field_name,
+                    guide_content
+                )
+
+                if success:
+                    stats["guides_created"] += 1
+                else:
+                    stats["guides_failed"] += 1
+
+            stats["categories_processed"] += 1
+
+        logger.info(f"✅ Extraction guides initialized: {stats}")
+        return stats
+
+    def _create_standalone_extraction_guide(
+        self,
+        project_oenum: str,
+        category_name: str,
+        field_name: str,
+        guide_content: Dict[str, str]
+    ) -> bool:
+        """
+        Create standalone extraction guide (not linked to specific document)
+
+        These guides are project-level resources that can be linked to any
+        spec document field of the same type.
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (p:Project {project_number: $oenum})
+
+            MERGE (guide:ExtractionGuide {
+                field_name: $field_name,
+                category_name: $category_name,
+                project_number: $oenum
+            })
+            SET guide.definition = $definition,
+                guide.extraction_instructions = $instructions,
+                guide.examples = $examples,
+                guide.common_values = $common_values,
+                guide.relationships = $relationships,
+                guide.notes = $notes,
+                guide.created_at = datetime(),
+                guide.is_template = true
+
+            MERGE (p)-[:HAS_EXTRACTION_GUIDE]->(guide)
+
+            RETURN guide
+            """
+
+            try:
+                result = session.run(
+                    query,
+                    oenum=project_oenum,
+                    category_name=category_name,
+                    field_name=field_name,
+                    definition=guide_content.get("definition", ""),
+                    instructions=guide_content.get("extraction_instructions", ""),
+                    examples=guide_content.get("examples", ""),
+                    common_values=guide_content.get("common_values", ""),
+                    relationships=guide_content.get("relationships", ""),
+                    notes=guide_content.get("notes", "")
+                )
+
+                return result.single() is not None
+
+            except Exception as e:
+                logger.error(f"❌ Failed to create extraction guide: {e}")
+                return False
+
+    def link_extraction_guides_to_document(
+        self,
+        project_oenum: str,
+        document_id: str
+    ) -> int:
+        """
+        Link all project-level extraction guides to a spec document's fields
+
+        This creates relationships between the document's SpecField nodes
+        and the corresponding ExtractionGuide template nodes.
+
+        Args:
+            project_oenum: Project OENUM
+            document_id: Document ID
+
+        Returns:
+            Number of links created
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (doc:Document {id: $doc_id, project_number: $oenum})
+                -[:HAS_SPEC_CATEGORY]->(cat:SpecCategory)
+                -[:HAS_FIELD]->(field:SpecField)
+
+            MATCH (guide:ExtractionGuide {
+                field_name: field.name,
+                category_name: cat.name,
+                project_number: $oenum,
+                is_template: true
+            })
+
+            MERGE (field)-[:HAS_EXTRACTION_GUIDE]->(guide)
+
+            RETURN count(field) as links_created
+            """
+
+            try:
+                result = session.run(query, doc_id=document_id, oenum=project_oenum)
+                record = result.single()
+                links_count = record["links_created"] if record else 0
+
+                logger.info(f"✅ Linked {links_count} extraction guides to document {document_id}")
+                return links_count
+
+            except Exception as e:
+                logger.error(f"❌ Failed to link extraction guides: {e}")
+                return 0

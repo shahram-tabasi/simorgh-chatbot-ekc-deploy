@@ -38,6 +38,12 @@ from services.llm_service import (
     LLMTimeoutError
 )
 from services.session_id_service import create_session_id_service, SessionIDService
+from services.document_processing_integration import (
+    process_enhanced_spec_extraction,
+    process_document_with_qdrant,
+    semantic_search_in_project,
+    initialize_project_guides
+)
 from models.ontology import *
 
 # Import authentication routes and utilities
@@ -1319,10 +1325,24 @@ async def send_chat_message(
 
                         logger.info(f"📊 Added document to project graph: {doc_id}")
 
-                        # If it's a Spec document, trigger async specification extraction
+                        # Chunk and store ALL documents in Qdrant (universal RAG)
+                        logger.info(f"📦 Chunking document for Qdrant vector storage")
+                        chunk_result = process_document_with_qdrant(
+                            markdown_content=markdown_content,
+                            project_number=project_number,
+                            document_id=doc_id,
+                            filename=_file.filename
+                        )
+
+                        if chunk_result["success"]:
+                            logger.info(f"✅ Document chunked: {chunk_result['chunks_count']} chunks stored")
+                        else:
+                            logger.warning(f"⚠️ Qdrant chunking failed: {chunk_result.get('error')}")
+
+                        # If it's a Spec document, trigger enhanced spec extraction with KG RAG
                         if doc_type == "Spec" and category == "Client":
                             spec_task_id = str(uuid.uuid4())
-                            logger.info(f"🔍 Starting async spec extraction - Task ID: {spec_task_id}")
+                            logger.info(f"🔍 Starting enhanced spec extraction - Task ID: {spec_task_id}")
 
                             # Store initial task status
                             redis.set(
@@ -1330,7 +1350,7 @@ async def send_chat_message(
                                 {
                                     "task_id": spec_task_id,
                                     "status": "processing",
-                                    "message": "Extracting specifications from document...",
+                                    "message": "Extracting specifications using enhanced RAG...",
                                     "document_id": doc_id,
                                     "project_number": project_number,
                                     "filename": _file.filename,
@@ -1341,10 +1361,9 @@ async def send_chat_message(
                                 db="cache"
                             )
 
-                            # Start background task for spec extraction
-                            from services.spec_extractor import SpecExtractor
+                            # Start background task for ENHANCED spec extraction
                             background_tasks.add_task(
-                                process_spec_extraction,
+                                process_enhanced_spec_extraction,
                                 task_id=spec_task_id,
                                 document_id=doc_id,
                                 project_number=project_number,
@@ -1357,10 +1376,26 @@ async def send_chat_message(
                             )
 
                             # Add task ID to file context
-                            file_context = f"\n\n## Uploaded Document: {_file.filename}\n\nSpec extraction started (Task ID: {spec_task_id}). You will be notified when extraction is complete.\n\n{markdown_content[:3000]}"
+                            file_context = f"\n\n## Uploaded Document: {_file.filename}\n\nEnhanced spec extraction started (Task ID: {spec_task_id}). Using semantic search + extraction guides. You will be notified when extraction is complete.\n\n{markdown_content[:3000]}"
                         else:
-                            # Use document content as context
-                            file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n{markdown_content[:5000]}"
+                            # Use semantic search for context from Qdrant
+                            search_result = semantic_search_in_project(
+                                project_number=project_number,
+                                query=_content,  # User's question
+                                limit=3,
+                                document_id=doc_id
+                            )
+
+                            if search_result["success"] and search_result["results"]:
+                                # Use semantic search results as context
+                                context_chunks = "\n\n".join([
+                                    f"[{r['section_title']}]: {r['text'][:500]}..."
+                                    for r in search_result["results"]
+                                ])
+                                file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n### Relevant Sections:\n{context_chunks}"
+                            else:
+                                # Fallback to direct content
+                                file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n{markdown_content[:5000]}"
 
                     # For general chats: Index to Qdrant and get context
                     else:
