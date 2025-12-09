@@ -91,10 +91,10 @@ class DocumentClassifier:
         # Client document patterns
         self.client_patterns = {
             ClientDocType.CABLE_LIST: [
-                r'cable.*list', r'cablelist', r'کابل.*لیست', r'لیست.*کابل'
+                r'cable.*list', r'cablelist', r'-cbl-', r'_cbl_', r'کابل.*لیست', r'لیست.*کابل'
             ],
             ClientDocType.DATASHEET: [
-                r'data.*sheet', r'datasheet', r'دیتا.*شیت', r'برگه.*داده'
+                r'data.*sheet', r'datasheet', r'-ds-', r'_ds_', r'دیتا.*شیت', r'برگه.*داده'
             ],
             ClientDocType.IO_LIST: [
                 r'i/?o.*list', r'io.*list', r'input.*output', r'ورودی.*خروجی'
@@ -103,7 +103,7 @@ class DocumentClassifier:
                 r'load.*list', r'loadlist', r'بار.*لیست', r'لیست.*بار'
             ],
             ClientDocType.SPEC: [
-                r'spec(ification)?', r'technical.*spec', r'مشخصات.*فنی', r'spec'
+                r'spec(ification)?', r'spc', r'technical.*spec', r'-spc-', r'_spc_', r'مشخصات.*فنی'
             ],
             ClientDocType.SLD_OLD: [
                 r'sld', r'single.*line.*diagram', r'دیاگرام.*تک.*خط'
