@@ -15,7 +15,8 @@ export function useChat(
   chatId?: string | null,
   userId?: string,
   projectNumber?: string | null,
-  onTitleGenerated?: (chatId: string, title: string) => void
+  onTitleGenerated?: (chatId: string, title: string) => void,
+  onSpecTaskCreated?: (taskId: string) => void
 ) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [isTyping, setIsTyping] = useState(false);
@@ -197,6 +198,12 @@ export function useChat(
 
       setMessages(prev => [...prev, aiMessage]);
       setIsTyping(false);
+
+      // Handle spec extraction task if present
+      if (data.spec_task_id && onSpecTaskCreated) {
+        console.log('🔍 Spec extraction task created:', data.spec_task_id);
+        onSpecTaskCreated(data.spec_task_id);
+      }
 
       // Auto-generate chat title if this is the first message
       if (messages.length === 0) {

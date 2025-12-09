@@ -9,6 +9,8 @@ import CreateProjectModal from './components/CreateProjectModal';
 import CreateChatModal from './components/CreateChatModal';
 import CreateProjectChatModal from './components/CreateProjectChatModal';
 import Login from './components/Login';
+import SpecTaskNotification from './components/SpecTaskNotification';
+import SpecReview from './pages/SpecReview';
 import { useSidebar } from './hooks/useSidebar';
 import { useProjects } from './hooks/useProjects';
 import { useChat } from './hooks/useChat';
@@ -18,12 +20,22 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 // Main app content component (uses auth context)
 function AppContent() {
   const { isAuthenticated, isLoading, user } = useAuth();
+
+  // Check if we're on the spec review page
+  const path = window.location.pathname;
+  const specReviewMatch = path.match(/^\/review-specs\/([^/]+)\/([^/]+)/);
+
+  if (specReviewMatch && isAuthenticated) {
+    // Render spec review page
+    return <SpecReview />;
+  }
   const rightSidebar = useSidebar(true);
   const leftSidebar = useSidebar(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
   const [showChatModal, setShowChatModal] = React.useState(false);
   const [showProjectChatModal, setShowProjectChatModal] = React.useState(false);
   const [selectedProjectForChat, setSelectedProjectForChat] = React.useState<string | null>(null);
+  const [activeSpecTasks, setActiveSpecTasks] = React.useState<string[]>([]);
 
   const {
     projects,
@@ -48,12 +60,27 @@ function AppContent() {
   const userId = user?.EMPUSERNAME;
   const projectNumber = activeProjectId || null;
 
+  const handleSpecTaskCreated = (taskId: string) => {
+    console.log('📊 New spec task:', taskId);
+    setActiveSpecTasks(prev => [...prev, taskId]);
+  };
+
+  const handleSpecTaskComplete = (documentId: string, projectNumber: string) => {
+    console.log('✅ Spec extraction complete:', documentId, projectNumber);
+    // You can add logic here to refresh project data or show a success message
+  };
+
+  const handleRemoveSpecTask = (taskId: string) => {
+    setActiveSpecTasks(prev => prev.filter(id => id !== taskId));
+  };
+
   const { messages, isTyping, sendMessage } = useChat(
     activeChat?.messages || [],
     activeChatId,
     userId,
     projectNumber,
-    updateChatTitle
+    updateChatTitle,
+    handleSpecTaskCreated
   );
 
   const handleCreateProject = () => setShowCreateModal(true);
@@ -199,6 +226,22 @@ function AppContent() {
           }}
           userId={userId}
         />
+
+        {/* Spec extraction task notifications */}
+        {activeSpecTasks.map(taskId => (
+          <SpecTaskNotification
+            key={taskId}
+            taskId={taskId}
+            onComplete={(documentId, projectNumber) => {
+              handleSpecTaskComplete(documentId, projectNumber);
+              handleRemoveSpecTask(taskId);
+            }}
+            onError={(error) => {
+              console.error('Spec extraction error:', error);
+              handleRemoveSpecTask(taskId);
+            }}
+          />
+        ))}
       </div>
     </LanguageProvider>
   );

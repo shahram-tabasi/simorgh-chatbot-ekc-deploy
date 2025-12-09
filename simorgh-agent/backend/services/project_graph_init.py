@@ -322,3 +322,257 @@ class ProjectGraphInitializer:
             except Exception as e:
                 logger.error(f"❌ Failed to add document: {e}")
                 return False
+
+    def add_spec_structure_to_document(
+        self,
+        project_oenum: str,
+        document_id: str,
+        specifications: Dict[str, Dict[str, str]]
+    ) -> bool:
+        """
+        Add detailed specification structure to a Spec document
+
+        Creates 13 category nodes linked to the document, each with their specific fields.
+
+        Args:
+            project_oenum: Project OENUM
+            document_id: Document node ID
+            specifications: Extracted specifications data
+
+        Returns:
+            Success boolean
+        """
+        logger.info(f"📊 Adding spec structure to document {document_id}")
+
+        with self.driver.session() as session:
+            try:
+                # Create spec structure for each category
+                for category_name, fields in specifications.items():
+                    self._create_spec_category(
+                        session,
+                        project_oenum,
+                        document_id,
+                        category_name,
+                        fields
+                    )
+
+                logger.info(f"✅ Spec structure added: {len(specifications)} categories")
+                return True
+
+            except Exception as e:
+                logger.error(f"❌ Failed to add spec structure: {e}")
+                return False
+
+    def _create_spec_category(
+        self,
+        session,
+        project_oenum: str,
+        document_id: str,
+        category_name: str,
+        fields: Dict[str, str]
+    ):
+        """Create a specification category with its fields"""
+
+        # First create the category node
+        query_category = """
+        MATCH (doc:Document {id: $doc_id, project_number: $oenum})
+
+        MERGE (cat:SpecCategory {
+            name: $category_name,
+            document_id: $doc_id,
+            project_number: $oenum
+        })
+
+        MERGE (doc)-[:HAS_SPEC_CATEGORY]->(cat)
+
+        RETURN cat
+        """
+
+        session.run(
+            query_category,
+            doc_id=document_id,
+            oenum=project_oenum,
+            category_name=category_name
+        )
+
+        # Then create field nodes for each specification item
+        for field_name, field_value in fields.items():
+            query_field = """
+            MATCH (cat:SpecCategory {
+                name: $category_name,
+                document_id: $doc_id,
+                project_number: $oenum
+            })
+
+            MERGE (field:SpecField {
+                name: $field_name,
+                category_name: $category_name,
+                document_id: $doc_id,
+                project_number: $oenum
+            })
+            SET field.value = $field_value,
+                field.updated_at = datetime()
+
+            MERGE (cat)-[:HAS_FIELD]->(field)
+
+            RETURN field
+            """
+
+            session.run(
+                query_field,
+                doc_id=document_id,
+                oenum=project_oenum,
+                category_name=category_name,
+                field_name=field_name,
+                field_value=field_value
+            )
+
+    def get_spec_structure(
+        self,
+        project_oenum: str,
+        document_id: str
+    ) -> Optional[Dict[str, Dict[str, str]]]:
+        """
+        Retrieve specification structure for a document
+
+        Args:
+            project_oenum: Project OENUM
+            document_id: Document ID
+
+        Returns:
+            Specification data or None if not found
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (doc:Document {id: $doc_id, project_number: $oenum})
+                -[:HAS_SPEC_CATEGORY]->(cat:SpecCategory)
+                -[:HAS_FIELD]->(field:SpecField)
+
+            RETURN cat.name as category, field.name as field_name, field.value as field_value
+            ORDER BY cat.name, field.name
+            """
+
+            try:
+                result = session.run(query, doc_id=document_id, oenum=project_oenum)
+
+                # Build nested structure
+                specs = {}
+                for record in result:
+                    category = record["category"]
+                    field_name = record["field_name"]
+                    field_value = record["field_value"] or ""
+
+                    if category not in specs:
+                        specs[category] = {}
+
+                    specs[category][field_name] = field_value
+
+                return specs if specs else None
+
+            except Exception as e:
+                logger.error(f"❌ Failed to retrieve spec structure: {e}")
+                return None
+
+    def update_spec_field(
+        self,
+        project_oenum: str,
+        document_id: str,
+        category_name: str,
+        field_name: str,
+        new_value: str
+    ) -> bool:
+        """
+        Update a single specification field value
+
+        Args:
+            project_oenum: Project OENUM
+            document_id: Document ID
+            category_name: Category name
+            field_name: Field name
+            new_value: New field value
+
+        Returns:
+            Success boolean
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (field:SpecField {
+                name: $field_name,
+                category_name: $category_name,
+                document_id: $doc_id,
+                project_number: $oenum
+            })
+            SET field.value = $new_value,
+                field.updated_at = datetime(),
+                field.manually_edited = true
+
+            RETURN field
+            """
+
+            try:
+                result = session.run(
+                    query,
+                    doc_id=document_id,
+                    oenum=project_oenum,
+                    category_name=category_name,
+                    field_name=field_name,
+                    new_value=new_value
+                )
+                return result.single() is not None
+
+            except Exception as e:
+                logger.error(f"❌ Failed to update spec field: {e}")
+                return False
+
+    def update_spec_structure(
+        self,
+        project_oenum: str,
+        document_id: str,
+        specifications: Dict[str, Dict[str, str]]
+    ) -> bool:
+        """
+        Bulk update specification structure
+
+        Args:
+            project_oenum: Project OENUM
+            document_id: Document ID
+            specifications: Complete specification data
+
+        Returns:
+            Success boolean
+        """
+        logger.info(f"📝 Updating spec structure for document {document_id}")
+
+        with self.driver.session() as session:
+            try:
+                for category_name, fields in specifications.items():
+                    for field_name, field_value in fields.items():
+                        query = """
+                        MATCH (field:SpecField {
+                            name: $field_name,
+                            category_name: $category_name,
+                            document_id: $doc_id,
+                            project_number: $oenum
+                        })
+                        SET field.value = $new_value,
+                            field.updated_at = datetime(),
+                            field.reviewed = true
+
+                        RETURN field
+                        """
+
+                        session.run(
+                            query,
+                            doc_id=document_id,
+                            oenum=project_oenum,
+                            category_name=category_name,
+                            field_name=field_name,
+                            new_value=field_value
+                        )
+
+                logger.info(f"✅ Spec structure updated successfully")
+                return True
+
+            except Exception as e:
+                logger.error(f"❌ Failed to update spec structure: {e}")
+                return False
