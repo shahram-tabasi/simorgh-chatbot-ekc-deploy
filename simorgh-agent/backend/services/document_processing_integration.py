@@ -132,11 +132,13 @@ def process_enhanced_spec_extraction(
     Enhanced background task for spec extraction using two-stage RAG
 
     Steps:
-    1. Chunk document and store in Qdrant
-    2. Initialize extraction guides in Neo4j (if not already done)
-    3. Extract specs using enhanced RAG (Qdrant + guides)
-    4. Store results in Neo4j
-    5. Link extraction guides to document fields
+    1. Chunk document and store in Qdrant (universal RAG)
+    2. Extract specs using enhanced RAG (Qdrant semantic search + guides)
+    3. Store results in Neo4j with ExtractionGuide and ActualValue nodes
+
+    Graph Structure Created:
+    Document → SpecCategory → SpecField → HAS_EXTRACTION_GUIDE → ExtractionGuide
+                                        → HAS_VALUE → ActualValue
 
     Args:
         task_id: Unique task identifier
@@ -181,34 +183,7 @@ def process_enhanced_spec_extraction(
         chunks_count = chunk_result.get("chunks_count", 0)
         logger.info(f"✅ [Task {task_id}] Document chunked: {chunks_count} chunks")
 
-        # STEP 2: Initialize extraction guides (if not done)
-        redis_service.set(
-            f"spec_task:{task_id}:status",
-            {
-                "task_id": task_id,
-                "status": "initializing_guides",
-                "message": "Initializing extraction guides...",
-                "document_id": document_id,
-                "project_number": project_number,
-                "filename": filename,
-                "progress": 20
-            },
-            ttl=3600,
-            db="cache"
-        )
-
-        graph_init = ProjectGraphInitializer(neo4j_driver)
-
-        # Initialize extraction guides for the project
-        all_guides = get_all_extraction_guides()
-        guides_stats = graph_init.initialize_all_extraction_guides(
-            project_oenum=project_number,
-            guides_data=all_guides
-        )
-
-        logger.info(f"✅ [Task {task_id}] Extraction guides initialized: {guides_stats}")
-
-        # STEP 3: Extract specifications using enhanced RAG
+        # STEP 2: Extract specifications using enhanced RAG
         redis_service.set(
             f"spec_task:{task_id}:status",
             {
@@ -218,13 +193,14 @@ def process_enhanced_spec_extraction(
                 "document_id": document_id,
                 "project_number": project_number,
                 "filename": filename,
-                "progress": 40
+                "progress": 30
             },
             ttl=3600,
             db="cache"
         )
 
         # Use enhanced extractor
+        graph_init = ProjectGraphInitializer(neo4j_driver)
         qdrant = get_qdrant_service()
         enhanced_extractor = EnhancedSpecExtractor(
             llm_service=llm_service,
@@ -243,13 +219,13 @@ def process_enhanced_spec_extraction(
 
         logger.info(f"✅ [Task {task_id}] Extraction complete - {len(specifications)} categories")
 
-        # STEP 4: Create spec structure in Neo4j
+        # STEP 3: Create spec structure in Neo4j (with guides and values)
         redis_service.set(
             f"spec_task:{task_id}:status",
             {
                 "task_id": task_id,
                 "status": "building_graph",
-                "message": "Creating specification structure in knowledge graph...",
+                "message": "Creating specification structure with extraction guides and values...",
                 "document_id": document_id,
                 "project_number": project_number,
                 "filename": filename,
@@ -268,32 +244,9 @@ def process_enhanced_spec_extraction(
         if not success:
             raise Exception("Failed to create spec structure in graph")
 
-        logger.info(f"✅ [Task {task_id}] Graph structure created")
+        logger.info(f"✅ [Task {task_id}] Graph structure created with guides and values")
 
-        # STEP 5: Link extraction guides to document fields
-        redis_service.set(
-            f"spec_task:{task_id}:status",
-            {
-                "task_id": task_id,
-                "status": "linking_guides",
-                "message": "Linking extraction guides to specification fields...",
-                "document_id": document_id,
-                "project_number": project_number,
-                "filename": filename,
-                "progress": 90
-            },
-            ttl=3600,
-            db="cache"
-        )
-
-        links_created = graph_init.link_extraction_guides_to_document(
-            project_oenum=project_number,
-            document_id=document_id
-        )
-
-        logger.info(f"✅ [Task {task_id}] Linked {links_created} extraction guides")
-
-        # STEP 6: Complete
+        # STEP 4: Complete
         redis_service.set(
             f"spec_task:{task_id}:status",
             {
@@ -308,7 +261,7 @@ def process_enhanced_spec_extraction(
                 "metadata": {
                     "categories_extracted": len(specifications),
                     "chunks_created": chunks_count,
-                    "extraction_guides_linked": links_created,
+                    "fields_with_guides": sum(len(fields) for fields in specifications.values()),
                     "method": "enhanced_rag"
                 },
                 "review_url": f"/review-specs/{project_number}/{document_id}"
