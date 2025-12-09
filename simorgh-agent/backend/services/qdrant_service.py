@@ -48,17 +48,25 @@ class QdrantService:
 
         # Initialize Qdrant client
         if self.qdrant_api_key:
+            # Cloud mode: use full URL with protocol
             self.client = QdrantClient(
                 url=self.qdrant_url,
                 api_key=self.qdrant_api_key
             )
             logger.info(f"✅ Connected to Qdrant Cloud: {self.qdrant_url}")
         else:
-            self.client = QdrantClient(
-                host=self.qdrant_url,
-                port=self.qdrant_port
-            )
-            logger.info(f"✅ Connected to Qdrant: {self.qdrant_url}:{self.qdrant_port}")
+            # Local mode: check if URL has protocol
+            if self.qdrant_url.startswith("http://") or self.qdrant_url.startswith("https://"):
+                # Use url parameter for full URLs
+                self.client = QdrantClient(url=self.qdrant_url)
+                logger.info(f"✅ Connected to Qdrant: {self.qdrant_url}")
+            else:
+                # Use host/port for hostname only
+                self.client = QdrantClient(
+                    host=self.qdrant_url,
+                    port=self.qdrant_port
+                )
+                logger.info(f"✅ Connected to Qdrant: {self.qdrant_url}:{self.qdrant_port}")
 
         # Initialize embedding model
         self.embedding_model_name = embedding_model

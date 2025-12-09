@@ -371,7 +371,10 @@ class ProjectGraphInitializer:
         category_name: str,
         fields: Dict[str, str]
     ):
-        """Create a specification category with its fields"""
+        """Create a specification category with its fields, extraction guides, and values"""
+
+        # Import extraction guides
+        from services.extraction_guides_data import get_extraction_guide
 
         # First create the category node
         query_category = """
@@ -395,8 +398,11 @@ class ProjectGraphInitializer:
             category_name=category_name
         )
 
-        # Then create field nodes for each specification item
+        # Then create field nodes with extraction guides and actual values
         for field_name, field_value in fields.items():
+            # Get extraction guide for this field
+            guide_data = get_extraction_guide(category_name, field_name)
+
             query_field = """
             MATCH (cat:SpecCategory {
                 name: $category_name,
@@ -404,16 +410,42 @@ class ProjectGraphInitializer:
                 project_number: $oenum
             })
 
+            // Create SpecField node
             MERGE (field:SpecField {
                 name: $field_name,
                 category_name: $category_name,
                 document_id: $doc_id,
                 project_number: $oenum
             })
-            SET field.value = $field_value,
-                field.updated_at = datetime()
+            SET field.updated_at = datetime()
 
             MERGE (cat)-[:HAS_FIELD]->(field)
+
+            // Create ExtractionGuide node for this field
+            MERGE (field)-[:HAS_EXTRACTION_GUIDE]->(guide:ExtractionGuide {
+                field_name: $field_name,
+                category_name: $category_name,
+                document_id: $doc_id,
+                project_number: $oenum
+            })
+            SET guide.definition = $definition,
+                guide.extraction_instructions = $instructions,
+                guide.examples = $examples,
+                guide.common_values = $common_values,
+                guide.relationships = $relationships,
+                guide.notes = $notes,
+                guide.updated_at = datetime()
+
+            // Create ActualValue node for extracted value
+            MERGE (field)-[:HAS_VALUE]->(value:ActualValue {
+                field_name: $field_name,
+                category_name: $category_name,
+                document_id: $doc_id,
+                project_number: $oenum
+            })
+            SET value.extracted_value = $field_value,
+                value.extraction_method = 'enhanced_rag',
+                value.updated_at = datetime()
 
             RETURN field
             """
@@ -424,7 +456,13 @@ class ProjectGraphInitializer:
                 oenum=project_oenum,
                 category_name=category_name,
                 field_name=field_name,
-                field_value=field_value
+                field_value=field_value,
+                definition=guide_data.get("definition", "") if guide_data else "",
+                instructions=guide_data.get("extraction_instructions", "") if guide_data else "",
+                examples=guide_data.get("examples", "") if guide_data else "",
+                common_values=guide_data.get("common_values", "") if guide_data else "",
+                relationships=guide_data.get("relationships", "") if guide_data else "",
+                notes=guide_data.get("notes", "") if guide_data else ""
             )
 
     def get_spec_structure(
@@ -447,8 +485,11 @@ class ProjectGraphInitializer:
             MATCH (doc:Document {id: $doc_id, project_number: $oenum})
                 -[:HAS_SPEC_CATEGORY]->(cat:SpecCategory)
                 -[:HAS_FIELD]->(field:SpecField)
+            OPTIONAL MATCH (field)-[:HAS_VALUE]->(value:ActualValue)
 
-            RETURN cat.name as category, field.name as field_name, field.value as field_value
+            RETURN cat.name as category,
+                   field.name as field_name,
+                   value.extracted_value as field_value
             ORDER BY cat.name, field.name
             """
 
@@ -501,12 +542,14 @@ class ProjectGraphInitializer:
                 category_name: $category_name,
                 document_id: $doc_id,
                 project_number: $oenum
-            })
-            SET field.value = $new_value,
-                field.updated_at = datetime(),
-                field.manually_edited = true
+            })-[:HAS_VALUE]->(value:ActualValue)
 
-            RETURN field
+            SET value.extracted_value = $new_value,
+                value.updated_at = datetime(),
+                value.manually_edited = true,
+                value.extraction_method = 'manual_review'
+
+            RETURN value
             """
 
             try:
@@ -553,12 +596,14 @@ class ProjectGraphInitializer:
                             category_name: $category_name,
                             document_id: $doc_id,
                             project_number: $oenum
-                        })
-                        SET field.value = $new_value,
-                            field.updated_at = datetime(),
-                            field.reviewed = true
+                        })-[:HAS_VALUE]->(value:ActualValue)
 
-                        RETURN field
+                        SET value.extracted_value = $new_value,
+                            value.updated_at = datetime(),
+                            value.reviewed = true,
+                            value.extraction_method = 'manual_review'
+
+                        RETURN value
                         """
 
                         session.run(
