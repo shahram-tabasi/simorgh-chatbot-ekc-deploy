@@ -1426,25 +1426,70 @@ async def send_chat_message(
         context_used = False
 
         if project_number and _use_graph_context:
-            # Get recent chat history for context
-            recent_messages = redis.get_chat_history(_chat_id, limit=5)
+            logger.info(f"🔍 Retrieving knowledge from graph and vector DB for project {project_number}")
 
-            # Simple semantic search in graph (can be enhanced with Qdrant)
+            # DUAL RAG: Combine Graph Traversal + Vector Search
             try:
-                entities = neo4j.semantic_search(
+                from services.graph_rag_service import GraphRAGService
+
+                graph_rag = GraphRAGService(neo4j.driver)
+
+                # 1. GRAPH TRAVERSAL: Query specifications from Neo4j
+                # Special handling for common queries
+                if any(word in _content.lower() for word in ['protection', 'protections', 'protective', 'relay', 'trip']):
+                    # Get all protection-related specs
+                    graph_result = graph_rag.get_protection_specifications(project_number=project_number)
+                else:
+                    # General query
+                    graph_result = graph_rag.search_by_natural_query(
+                        project_number=project_number,
+                        query=_content
+                    )
+
+                # 2. VECTOR SEARCH: Semantic search in Qdrant
+                vector_result = semantic_search_in_project(
                     project_number=project_number,
-                    filters=None,
-                    limit=10
+                    query=_content,
+                    limit=5
                 )
 
-                if entities:
-                    graph_context = "\n\nRelevant project information:\n"
-                    for entity in entities[:5]:
-                        graph_context += f"- {entity.get('entity_type')}: {entity.get('description', 'N/A')}\n"
+                # Build rich context from both sources
+                context_parts = []
+
+                # Add graph specifications if found
+                if graph_result.get("success"):
+                    # Handle protection specs (different key)
+                    specs_list = graph_result.get("protections") or graph_result.get("specs")
+
+                    if specs_list:
+                        specs_context = graph_rag.build_context_from_specs(
+                            specs=specs_list,
+                            query=_content
+                        )
+                        if specs_context:
+                            context_parts.append(specs_context)
+                            logger.info(f"📊 Retrieved {len(specs_list)} specifications from graph")
+
+                # Add vector search results if found
+                if vector_result.get("success") and vector_result.get("results"):
+                    vector_context = "\n\n## Related Document Sections (Vector Search)\n"
+                    for idx, result in enumerate(vector_result["results"][:3], 1):
+                        vector_context += f"\n**[{result['section_title']}]** (Relevance: {result['score']:.2f})\n"
+                        vector_context += f"{result['text'][:300]}...\n"
+                    context_parts.append(vector_context)
+                    logger.info(f"📝 Retrieved {len(vector_result['results'])} chunks from vector DB")
+
+                # Combine all context
+                if context_parts:
+                    graph_context = "\n\n" + "\n\n".join(context_parts)
                     context_used = True
+                    logger.info(f"✅ Combined context from {len(context_parts)} sources")
+                else:
+                    logger.info(f"ℹ️ No specific context found, using general knowledge")
 
             except Exception as e:
-                logger.warning(f"Graph context retrieval failed: {e}")
+                logger.warning(f"⚠️ Graph/Vector context retrieval failed: {e}")
+                # Continue without context rather than failing
 
         # Build LLM messages
         system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
