@@ -1048,12 +1048,141 @@ Title:"""
 
 
 # =============================================================================
+# BACKGROUND TASKS
+# =============================================================================
+
+def process_spec_extraction(
+    task_id: str,
+    document_id: str,
+    project_number: str,
+    markdown_content: str,
+    filename: str,
+    llm_mode: str,
+    llm_service: LLMService,
+    neo4j_driver,
+    redis_service: RedisService
+):
+    """
+    Background task for extracting specifications from documents
+
+    Updates task status in Redis and creates spec structure in Neo4j
+    """
+    try:
+        logger.info(f"📊 [Task {task_id}] Starting spec extraction for {filename}")
+
+        # Update status: extraction in progress
+        redis_service.set(
+            f"spec_task:{task_id}:status",
+            {
+                "task_id": task_id,
+                "status": "extracting",
+                "message": "Analyzing document and extracting specifications...",
+                "document_id": document_id,
+                "project_number": project_number,
+                "filename": filename,
+                "progress": 25
+            },
+            ttl=3600,
+            db="cache"
+        )
+
+        # Extract specifications using LLM
+        from services.spec_extractor import SpecExtractor
+        extractor = SpecExtractor(llm_service)
+
+        extraction_result = extractor.extract_specifications(
+            markdown_content=markdown_content,
+            filename=filename,
+            llm_mode=llm_mode
+        )
+
+        if extraction_result["status"] != "success":
+            raise Exception(extraction_result.get("error", "Extraction failed"))
+
+        specifications = extraction_result["specifications"]
+        logger.info(f"✅ [Task {task_id}] Extraction complete - {len(specifications)} categories")
+
+        # Update status: creating graph structure
+        redis_service.set(
+            f"spec_task:{task_id}:status",
+            {
+                "task_id": task_id,
+                "status": "building_graph",
+                "message": "Creating specification structure in knowledge graph...",
+                "document_id": document_id,
+                "project_number": project_number,
+                "filename": filename,
+                "progress": 75
+            },
+            ttl=3600,
+            db="cache"
+        )
+
+        # Add spec structure to Neo4j
+        from services.project_graph_init import ProjectGraphInitializer
+        graph_init = ProjectGraphInitializer(neo4j_driver)
+
+        success = graph_init.add_spec_structure_to_document(
+            project_oenum=project_number,
+            document_id=document_id,
+            specifications=specifications
+        )
+
+        if not success:
+            raise Exception("Failed to create spec structure in graph")
+
+        logger.info(f"✅ [Task {task_id}] Graph structure created successfully")
+
+        # Update status: complete
+        redis_service.set(
+            f"spec_task:{task_id}:status",
+            {
+                "task_id": task_id,
+                "status": "completed",
+                "message": "Specifications extracted successfully! Ready for review.",
+                "document_id": document_id,
+                "project_number": project_number,
+                "filename": filename,
+                "progress": 100,
+                "completed_at": datetime.now().isoformat(),
+                "metadata": extraction_result.get("metadata", {}),
+                "review_url": f"/api/projects/{project_number}/documents/{document_id}/specs"
+            },
+            ttl=3600,
+            db="cache"
+        )
+
+        logger.info(f"🎉 [Task {task_id}] Spec extraction completed successfully")
+
+    except Exception as e:
+        logger.error(f"❌ [Task {task_id}] Spec extraction failed: {e}")
+
+        # Update status: error
+        redis_service.set(
+            f"spec_task:{task_id}:status",
+            {
+                "task_id": task_id,
+                "status": "error",
+                "message": f"Failed to extract specifications: {str(e)}",
+                "document_id": document_id,
+                "project_number": project_number,
+                "filename": filename,
+                "error": str(e),
+                "failed_at": datetime.now().isoformat()
+            },
+            ttl=3600,
+            db="cache"
+        )
+
+
+# =============================================================================
 # CHAT/RAG ENDPOINT
 # =============================================================================
 
 @app.post("/api/chat/send")
 async def send_chat_message(
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j),
     redis: RedisService = Depends(get_redis),
@@ -1129,6 +1258,7 @@ async def send_chat_message(
 
         # Handle file upload if present
         file_context = ""
+        spec_task_id = None  # Track spec extraction task ID
         if _file:
             logger.info(f"📎 Processing uploaded file: {_file.filename}")
 
@@ -1187,9 +1317,50 @@ async def send_chat_message(
                             }
                         )
 
-                        # Use document content as context
-                        file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n{markdown_content[:5000]}"
                         logger.info(f"📊 Added document to project graph: {doc_id}")
+
+                        # If it's a Spec document, trigger async specification extraction
+                        if doc_type == "Spec" and category == "Client":
+                            spec_task_id = str(uuid.uuid4())
+                            logger.info(f"🔍 Starting async spec extraction - Task ID: {spec_task_id}")
+
+                            # Store initial task status
+                            redis.set(
+                                f"spec_task:{spec_task_id}:status",
+                                {
+                                    "task_id": spec_task_id,
+                                    "status": "processing",
+                                    "message": "Extracting specifications from document...",
+                                    "document_id": doc_id,
+                                    "project_number": project_number,
+                                    "filename": _file.filename,
+                                    "started_at": datetime.now().isoformat(),
+                                    "progress": 0
+                                },
+                                ttl=3600,
+                                db="cache"
+                            )
+
+                            # Start background task for spec extraction
+                            from services.spec_extractor import SpecExtractor
+                            background_tasks.add_task(
+                                process_spec_extraction,
+                                task_id=spec_task_id,
+                                document_id=doc_id,
+                                project_number=project_number,
+                                markdown_content=markdown_content,
+                                filename=_file.filename,
+                                llm_mode=_llm_mode or "online",
+                                llm_service=llm,
+                                neo4j_driver=neo4j.driver,
+                                redis_service=redis
+                            )
+
+                            # Add task ID to file context
+                            file_context = f"\n\n## Uploaded Document: {_file.filename}\n\nSpec extraction started (Task ID: {spec_task_id}). You will be notified when extraction is complete.\n\n{markdown_content[:3000]}"
+                        else:
+                            # Use document content as context
+                            file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n{markdown_content[:5000]}"
 
                     # For general chats: Index to Qdrant and get context
                     else:
@@ -1310,7 +1481,7 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
         redis.cache_chat_message(_chat_id, user_msg)
         redis.cache_chat_message(_chat_id, assistant_msg)
 
-        return {
+        response_data = {
             "chat_id": _chat_id,
             "response": ai_response,
             "llm_mode": result.get("mode"),
@@ -1318,6 +1489,13 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             "cached_response": result.get("cached", False),
             "tokens": result.get("tokens")
         }
+
+        # Include spec task ID if spec extraction was triggered
+        if spec_task_id:
+            response_data["spec_task_id"] = spec_task_id
+            response_data["spec_task_status_url"] = f"/api/spec-tasks/{spec_task_id}/status"
+
+        return response_data
 
     except HTTPException:
         raise
@@ -1662,6 +1840,121 @@ async def get_document_processing_result(
         }
 
     return result
+
+
+# =============================================================================
+# SPEC EXTRACTION ENDPOINTS
+# =============================================================================
+
+@app.get("/api/projects/{project_number}/documents/{document_id}/specs")
+async def get_spec_structure(
+    project_number: str,
+    document_id: str,
+    current_user: str = Depends(get_current_user),
+    neo4j: Neo4jService = Depends(get_neo4j)
+):
+    """
+    Get extracted specification structure for a document (requires authentication)
+
+    Returns the complete spec structure with all categories and fields
+    """
+    try:
+        from services.project_graph_init import ProjectGraphInitializer
+
+        graph_init = ProjectGraphInitializer(neo4j.driver)
+        specs = graph_init.get_spec_structure(project_number, document_id)
+
+        if not specs:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No specifications found for document {document_id}"
+            )
+
+        return {
+            "status": "success",
+            "project_number": project_number,
+            "document_id": document_id,
+            "specifications": specs
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to retrieve specs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SpecUpdateRequest(BaseModel):
+    """Spec update request"""
+    specifications: Dict[str, Dict[str, str]]
+
+
+@app.put("/api/projects/{project_number}/documents/{document_id}/specs")
+async def update_spec_structure(
+    project_number: str,
+    document_id: str,
+    update_request: SpecUpdateRequest,
+    current_user: str = Depends(get_current_user),
+    neo4j: Neo4jService = Depends(get_neo4j)
+):
+    """
+    Update reviewed specification structure (requires authentication)
+
+    Allows users to review and correct extracted specifications
+    """
+    try:
+        from services.project_graph_init import ProjectGraphInitializer
+
+        graph_init = ProjectGraphInitializer(neo4j.driver)
+        success = graph_init.update_spec_structure(
+            project_number,
+            document_id,
+            update_request.specifications
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to update specifications"
+            )
+
+        logger.info(f"✅ User {current_user} updated specs for document {document_id}")
+
+        return {
+            "status": "success",
+            "message": "Specifications updated successfully",
+            "project_number": project_number,
+            "document_id": document_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to update specs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/spec-tasks/{task_id}/status")
+async def get_spec_task_status(
+    task_id: str,
+    current_user: str = Depends(get_current_user),
+    redis: RedisService = Depends(get_redis)
+):
+    """
+    Get spec extraction task status (requires authentication)
+
+    Returns real-time status of async spec extraction tasks
+    """
+    task_status = redis.get(f"spec_task:{task_id}:status", db="cache")
+
+    if not task_status:
+        return {
+            "task_id": task_id,
+            "status": "not_found",
+            "message": "Task not found"
+        }
+
+    return task_status
 
 
 # =============================================================================
