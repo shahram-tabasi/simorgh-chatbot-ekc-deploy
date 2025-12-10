@@ -1821,7 +1821,11 @@ Answer the user's question using the exact values shown. Be specific and cite th
         # Add user memory context if available
         if user_memory_context:
             system_prompt += f"\n\n{user_memory_context}"
-            system_prompt += "\n\n💡 TIP: You can reference these past conversations to provide more contextual and personalized responses."
+            system_prompt += """\n\n🎯 IMPORTANT INSTRUCTION: The conversation history above contains your past interactions with this user.
+You MUST reference and use information from these conversations when relevant to the current question.
+If the user asks about something they mentioned before (like their name, preferences, or previous discussions),
+use the conversation history to provide accurate, personalized responses. Do NOT say you don't have access to
+information that is clearly present in the conversation history above."""
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
