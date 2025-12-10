@@ -42,7 +42,8 @@ from services.document_processing_integration import (
     process_enhanced_spec_extraction,
     process_document_with_qdrant,
     semantic_search_in_project,
-    initialize_project_guides
+    initialize_project_guides,
+    get_qdrant_service
 )
 from models.ontology import *
 
@@ -1756,6 +1757,36 @@ async def send_chat_message(
                 logger.warning(f"⚠️ Graph/Vector context retrieval failed: {e}")
                 # Continue without context rather than failing
 
+        # 🧠 USER MEMORY: Retrieve similar past conversations from Qdrant
+        user_memory_context = ""
+        try:
+            qdrant = get_qdrant_service()
+            similar_conversations = qdrant.retrieve_similar_conversations(
+                user_id=_user_id,
+                current_query=_content,
+                limit=3,  # Get top 3 similar past conversations
+                score_threshold=0.65,  # Only include relevant conversations
+                project_filter=project_number if project_number else None
+            )
+
+            if similar_conversations:
+                user_memory_context = "\n\n## 💭 Your Past Relevant Conversations\n"
+                user_memory_context += "Here are some of your previous related discussions:\n\n"
+
+                for idx, conv in enumerate(similar_conversations, 1):
+                    user_memory_context += f"**{idx}. Previous Q&A** (Relevance: {conv['score']:.0%})\n"
+                    user_memory_context += f"  - You asked: \"{conv['user_message'][:150]}{'...' if len(conv['user_message']) > 150 else ''}\"\n"
+                    user_memory_context += f"  - I responded: \"{conv['assistant_response'][:200]}{'...' if len(conv['assistant_response']) > 200 else ''}\"\n\n"
+
+                logger.info(f"🧠 Retrieved {len(similar_conversations)} similar past conversations for user memory context")
+                context_used = True
+            else:
+                logger.info(f"🧠 No similar past conversations found for user {_user_id}")
+
+        except Exception as e:
+            logger.warning(f"⚠️ User memory retrieval failed: {e}")
+            # Continue without user memory context rather than failing
+
         # Build LLM messages
         system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
 You help users with electrical panel specifications, power distribution, protection devices, and system design.
@@ -1772,6 +1803,11 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             system_prompt += """\n\n🎯 CRITICAL INSTRUCTION: The specifications above are ACTUAL data from this project's documents.
 You MUST use these specific values in your response. Do NOT say "information not provided" when specifications are listed above.
 Answer the user's question using the exact values shown. Be specific and cite the actual specifications."""
+
+        # Add user memory context if available
+        if user_memory_context:
+            system_prompt += f"\n\n{user_memory_context}"
+            system_prompt += "\n\n💡 TIP: You can reference these past conversations to provide more contextual and personalized responses."
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
@@ -1790,6 +1826,30 @@ Answer the user's question using the exact values shown. Be specific and cite th
 
         logger.info(f"✅ LLM response generated - Actual mode used: {result.get('mode')}, Tokens: {result.get('tokens', {}).get('total', 0)}")
         ai_response = result["response"]
+
+        # 🧠 USER MEMORY: Store this conversation in Qdrant for future reference
+        try:
+            qdrant = get_qdrant_service()
+            storage_metadata = {
+                "llm_mode": result.get("mode"),
+                "context_used": context_used,
+                "cached": result.get("cached", False),
+                "tokens": result.get("tokens", {}).get("total", 0)
+            }
+
+            qdrant.store_user_conversation(
+                user_id=_user_id,
+                user_message=_content,
+                assistant_response=ai_response,
+                chat_id=_chat_id,
+                project_number=project_number,
+                metadata=storage_metadata
+            )
+            logger.info(f"🧠 Stored conversation in user memory for future context")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to store conversation in user memory: {e}")
+            # Continue even if storage fails
 
         # Generate unique message IDs
         created_at = datetime.now().isoformat()

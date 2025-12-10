@@ -3,6 +3,7 @@ Qdrant Vector Database Service
 ================================
 Manages document chunk storage and semantic search using Qdrant.
 Each project has isolated vector space for document chunks.
+Also manages user conversation memory for long-term context.
 
 Author: Simorgh Industrial Assistant
 """
@@ -10,6 +11,7 @@ Author: Simorgh Industrial Assistant
 import os
 import logging
 from typing import List, Dict, Optional, Any
+from datetime import datetime
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
@@ -88,6 +90,20 @@ class QdrantService:
         # Sanitize project number for collection name
         sanitized = project_number.replace("-", "_").replace(" ", "_").lower()
         return f"project_{sanitized}"
+
+    def _get_user_memory_collection_name(self, user_id: str) -> str:
+        """
+        Get collection name for user's conversation memory
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Collection name for the user's memory
+        """
+        # Sanitize user ID for collection name
+        sanitized = user_id.replace("-", "_").replace(" ", "_").replace(".", "_").lower()
+        return f"user_memory_{sanitized}"
 
     def ensure_collection_exists(self, project_number: str) -> bool:
         """
@@ -426,3 +442,214 @@ class QdrantService:
         except Exception as e:
             logger.error(f"❌ Failed to get collection stats: {e}")
             return {}
+
+    # =========================================================================
+    # USER MEMORY METHODS (Long-term conversation context)
+    # =========================================================================
+
+    def ensure_user_memory_collection_exists(self, user_id: str) -> bool:
+        """
+        Ensure user memory collection exists, create if not
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            True if collection exists or was created
+        """
+        collection_name = self._get_user_memory_collection_name(user_id)
+
+        try:
+            # Check if collection exists
+            collections = self.client.get_collections().collections
+            exists = any(c.name == collection_name for c in collections)
+
+            if not exists:
+                # Create collection with vector configuration
+                self.client.create_collection(
+                    collection_name=collection_name,
+                    vectors_config=VectorParams(
+                        size=self.embedding_dim,
+                        distance=Distance.COSINE
+                    )
+                )
+                logger.info(f"✅ Created user memory collection: {collection_name}")
+            else:
+                logger.debug(f"✓ User memory collection exists: {collection_name}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to ensure user memory collection exists: {e}")
+            return False
+
+    def store_user_conversation(
+        self,
+        user_id: str,
+        user_message: str,
+        assistant_response: str,
+        chat_id: Optional[str] = None,
+        project_number: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """
+        Store user conversation (both user message and assistant response) in Qdrant
+
+        Args:
+            user_id: User identifier
+            user_message: User's message
+            assistant_response: Assistant's response
+            chat_id: Optional chat ID
+            project_number: Optional project number
+            metadata: Optional additional metadata
+
+        Returns:
+            True if successful
+        """
+        collection_name = self._get_user_memory_collection_name(user_id)
+
+        # Ensure collection exists
+        if not self.ensure_user_memory_collection_exists(user_id):
+            return False
+
+        try:
+            # Generate unique ID for this conversation pair
+            conversation_id = str(uuid.uuid4())
+            timestamp = datetime.utcnow().isoformat()
+
+            # Combine user message and assistant response for semantic search
+            # We'll mainly search based on assistant responses but include context
+            combined_text = f"User: {user_message}\nAssistant: {assistant_response}"
+
+            # Generate embedding (primarily from assistant response for relevance)
+            embedding = self.generate_embedding(assistant_response)
+
+            # Prepare payload
+            payload = {
+                "user_id": user_id,
+                "user_message": user_message,
+                "assistant_response": assistant_response,
+                "combined_text": combined_text,
+                "chat_id": chat_id or "",
+                "project_number": project_number or "",
+                "timestamp": timestamp,
+                "metadata": metadata or {}
+            }
+
+            # Create point
+            point = PointStruct(
+                id=conversation_id,
+                vector=embedding,
+                payload=payload
+            )
+
+            # Upload point
+            self.client.upsert(
+                collection_name=collection_name,
+                points=[point]
+            )
+
+            logger.info(f"✅ Stored conversation in user memory for {user_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to store user conversation: {e}")
+            return False
+
+    def retrieve_similar_conversations(
+        self,
+        user_id: str,
+        current_query: str,
+        limit: int = 5,
+        score_threshold: float = 0.6,
+        project_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve semantically similar past conversations for a user
+
+        Args:
+            user_id: User identifier
+            current_query: Current user query
+            limit: Maximum number of similar conversations to retrieve
+            score_threshold: Minimum similarity score (0.0 to 1.0)
+            project_filter: Optional filter by project number
+
+        Returns:
+            List of similar past conversations with scores
+        """
+        collection_name = self._get_user_memory_collection_name(user_id)
+
+        try:
+            # Check if collection exists
+            collections = self.client.get_collections().collections
+            exists = any(c.name == collection_name for c in collections)
+
+            if not exists:
+                logger.info(f"ℹ️ No memory collection exists yet for user {user_id}")
+                return []
+
+            # Generate query embedding
+            query_embedding = self.generate_embedding(current_query)
+
+            # Prepare filter if project specified
+            search_filter = None
+            if project_filter:
+                search_filter = Filter(
+                    must=[
+                        FieldCondition(
+                            key="project_number",
+                            match=MatchValue(value=project_filter)
+                        )
+                    ]
+                )
+
+            # Perform search
+            results = self.client.search(
+                collection_name=collection_name,
+                query_vector=query_embedding,
+                limit=limit,
+                query_filter=search_filter,
+                score_threshold=score_threshold
+            )
+
+            # Format results
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    "conversation_id": result.id,
+                    "score": result.score,
+                    "user_message": result.payload.get("user_message", ""),
+                    "assistant_response": result.payload.get("assistant_response", ""),
+                    "chat_id": result.payload.get("chat_id", ""),
+                    "project_number": result.payload.get("project_number", ""),
+                    "timestamp": result.payload.get("timestamp", ""),
+                    "metadata": result.payload.get("metadata", {})
+                })
+
+            logger.info(f"🔍 Found {len(formatted_results)} similar past conversations for user {user_id}")
+            return formatted_results
+
+        except Exception as e:
+            logger.error(f"❌ Failed to retrieve similar conversations: {e}")
+            return []
+
+    def delete_user_memory(self, user_id: str) -> bool:
+        """
+        Delete all conversation memory for a user
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            True if successful
+        """
+        collection_name = self._get_user_memory_collection_name(user_id)
+
+        try:
+            self.client.delete_collection(collection_name=collection_name)
+            logger.info(f"🗑️ Deleted user memory collection: {collection_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to delete user memory: {e}")
+            return False
