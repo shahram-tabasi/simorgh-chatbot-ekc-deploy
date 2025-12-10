@@ -183,11 +183,12 @@ class EnhancedSpecExtractor:
                 temperature=0.1,  # Low temperature for factual extraction
                 max_tokens=400  # Increased to allow flexible, descriptive extractions
 
-                
+
 
             )
 
-            extracted_value = response.strip()
+            # Extract the actual response text from the dictionary
+            extracted_value = response["response"].strip()
 
             # Clean up common patterns - only filter explicit "not found" responses
             if extracted_value.lower() in ['not specified', 'not found', 'n/a', 'none', 'not mentioned']:
@@ -441,7 +442,7 @@ Extract ANY relevant information about "{field_readable}" from the document cont
 
                 # Try to parse JSON response
                 try:
-                    category_values = json.loads(response)
+                    category_values = json.loads(response["response"])
                 except:
                     # If not valid JSON, create empty dict
                     logger.warning(f"⚠️ Could not parse LLM response as JSON for {category_name}")
