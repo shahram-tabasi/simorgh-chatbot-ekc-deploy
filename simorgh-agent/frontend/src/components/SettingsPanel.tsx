@@ -18,6 +18,7 @@ import {
   BellOff
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { showWarning } from '../utils/alerts';
 import { useAuth } from '../context/AuthContext';
 
 const languages = [
@@ -77,7 +78,7 @@ export default function SettingsPanel() {
   // فعال‌سازی نوتیفیکیشن
   const handleEnableNotifications = async () => {
     if (!('Notification' in window)) {
-      alert('مرورگر شما از نوتیفیکیشن پشتیبانی نمی‌کند');
+      showWarning('Not Supported', 'Your browser does not support notifications');
       return;
     }
 

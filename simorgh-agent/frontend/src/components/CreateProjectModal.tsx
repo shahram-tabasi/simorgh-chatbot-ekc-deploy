@@ -272,11 +272,8 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
                     setHasPermission(false);
                     setPermissionError('');
                   }}
-                  onFocus={() => {
-                    if (filteredResults.length > 0) {
-                      setShowDropdown(true);
-                    }
-                  }}
+                  onFocus={() => setShowDropdown(true)}
+                  onClick={() => setShowDropdown(true)}
                   placeholder="Click to browse or type to search..."
                   className="w-full px-4 py-3 pr-10 bg-white/10 border border-white/20 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition"
                   autoFocus
