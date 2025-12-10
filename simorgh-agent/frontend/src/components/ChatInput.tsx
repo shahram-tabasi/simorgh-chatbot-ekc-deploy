@@ -4,6 +4,7 @@ import {
   FileTextIcon, XIcon, LoaderIcon
 } from 'lucide-react';
 import { UploadedFile } from '../types';
+import { showError } from '../utils/alerts';
 
 interface ChatInputProps {
   onSend: (message: string, files?: UploadedFile[]) => void;
@@ -131,7 +132,7 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
       setIsRecording(true);
     } catch (error) {
       console.error('Failed to start recording:', error);
-      alert('Could not access microphone');
+      showError('Microphone Access Denied', 'Could not access microphone. Please check your browser permissions.');
     }
   };
 
@@ -143,11 +144,11 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
   };
 
   const inputClasses = centered
-    ? 'w-full max-w-3xl mx-auto px-4'
-    : 'border-t border-white/10 bg-black/20 backdrop-blur-xl p-4';
+    ? 'w-full max-w-3xl mx-auto px-2 sm:px-4'
+    : 'border-t border-white/10 bg-black/20 backdrop-blur-xl p-2 sm:p-4';
 
   return (
-    <div className={inputClasses}>
+    <div className={`${inputClasses} relative z-10`}>
       {/* File attachments */}
       {files.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
@@ -190,15 +191,15 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
         </div>
       )}
 
-      <div className="flex gap-2 items-end bg-black/40 backdrop-blur-xl rounded-2xl border border-white/10 p-2">
+      <div className="flex gap-1 sm:gap-2 items-end bg-black/40 backdrop-blur-xl rounded-2xl border border-white/10 p-1 sm:p-2">
         {/* File upload */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || isUploading}
-          className="p-3 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+          className="p-2 sm:p-3 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
           title="Attach files"
         >
-          <PaperclipIcon className="w-5 h-5 text-gray-300" />
+          <PaperclipIcon className="w-4 h-4 sm:w-5 sm:h-5 text-gray-300" />
         </button>
         <input
           ref={fileInputRef}
@@ -209,20 +210,20 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
           onChange={handleFileSelect}
         />
 
-        {/* Voice recording */}
+        {/* Voice recording - hidden on very small screens */}
         <button
           onClick={isRecording ? stopRecording : startRecording}
           disabled={disabled}
-          className={`p-3 rounded-lg transition-colors ${isRecording
+          className={`hidden sm:block p-2 sm:p-3 rounded-lg transition-colors ${isRecording
               ? 'bg-red-500/20 hover:bg-red-500/30'
               : 'hover:bg-white/10'
             }`}
           title={isRecording ? 'Stop recording' : 'Start voice recording'}
         >
           {isRecording ? (
-            <StopCircleIcon className="w-5 h-5 text-red-400 animate-pulse" />
+            <StopCircleIcon className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 animate-pulse" />
           ) : (
-            <MicIcon className="w-5 h-5 text-gray-300" />
+            <MicIcon className="w-4 h-4 sm:w-5 sm:h-5 text-gray-300" />
           )}
         </button>
 
@@ -252,8 +253,8 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
             placeholder={disabled ? "Please create or select a project and chat to start messaging..." : "Ask Simorgh anything..."}
             disabled={disabled}
             rows={1}
-            className="w-full px-4 py-3 rounded-lg bg-transparent text-white placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed"
-            style={{ minHeight: '48px', maxHeight: '200px' }}
+            className="w-full px-2 sm:px-4 py-2 sm:py-3 rounded-lg bg-transparent text-white text-sm sm:text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed"
+            style={{ minHeight: '40px', maxHeight: '200px' }}
           />
         </div>
 
@@ -261,9 +262,9 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
         <button
           onClick={handleSend}
           disabled={disabled || (!message.trim() && files.length === 0)}
-          className="p-3 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+          className="p-2 sm:p-3 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
         >
-          <SendIcon className="w-5 h-5 text-white" />
+          <SendIcon className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
         </button>
       </div>
     </div>

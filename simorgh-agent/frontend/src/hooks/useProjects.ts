@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Project, Chat, Message } from '../types';
 import axios from 'axios';
+import { showSuccess, showError, showInfo } from '../utils/alerts';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const initialProjects: Project[] = [];
@@ -240,7 +241,7 @@ export function useProjects(userId?: string) {
       const token = localStorage.getItem('simorgh_token');
       if (!token) {
         console.error('❌ No auth token found');
-        alert('Authentication required. Please log in again.');
+        showError('Authentication Required', 'Please log in again.');
         return;
       }
 
@@ -299,13 +300,13 @@ export function useProjects(userId?: string) {
       setActiveChatId(chatId);
 
       console.log('✅ Project and first page created successfully');
-      alert(`Project "${name}" created successfully!`);
+      showSuccess('Success!', `Project "${name}" created successfully!`);
     } catch (error: any) {
       console.error('❌ Failed to create project:', error);
       if (error.response?.status === 400 && error.response?.data?.detail?.includes('already exists')) {
-        alert(error.response.data.detail);
+        showError('Project Exists', error.response.data.detail);
       } else {
-        alert(error.response?.data?.detail || 'Failed to create project. Please try again.');
+        showError('Create Failed', error.response?.data?.detail || 'Failed to create project. Please try again.');
       }
     }
   };
@@ -366,11 +367,11 @@ export function useProjects(userId?: string) {
 
       // Show error to user
       if (error.response?.status === 404) {
-        alert(`Project ${projectId} not found in database`);
+        showError('Project Not Found', `Project ${projectId} not found in database`);
       } else if (error.response?.status === 403) {
-        alert(`Access denied for project ${projectId}`);
+        showError('Access Denied', `You don't have permission for project ${projectId}`);
       } else {
-        alert(error.response?.data?.detail || 'Failed to create project page');
+        showError('Create Failed', error.response?.data?.detail || 'Failed to create project page');
       }
     }
   };
@@ -638,7 +639,7 @@ export function useProjects(userId?: string) {
       console.log('✅ Chat renamed:', chatId, '->', newName);
     } catch (error: any) {
       console.error('❌ Failed to rename chat:', error);
-      alert(error.response?.data?.detail || 'Failed to rename chat');
+      showError('Rename Failed', error.response?.data?.detail || 'Failed to rename chat');
     }
   };
 
@@ -690,7 +691,7 @@ export function useProjects(userId?: string) {
       console.log('✅ Chat deleted:', chatId);
     } catch (error: any) {
       console.error('❌ Failed to delete chat:', error);
-      alert(error.response?.data?.detail || 'Failed to delete chat');
+      showError('Delete Failed', error.response?.data?.detail || 'Failed to delete chat');
     }
   };
 
@@ -716,7 +717,7 @@ export function useProjects(userId?: string) {
       const token = localStorage.getItem('simorgh_token');
       if (!token) {
         console.error('❌ No auth token found');
-        alert('Authentication required. Please log in again.');
+        showError('Authentication Required', 'Please log in again.');
         return;
       }
 
@@ -759,14 +760,14 @@ export function useProjects(userId?: string) {
         summaryMessage += `\n⚠️ Note: Project was not found in Neo4j database.`;
       }
 
-      alert(summaryMessage);
+      showInfo('Project Deleted', summaryMessage);
 
     } catch (error: any) {
       console.error('❌ Failed to delete project from backend:', error);
 
       // Show error to user
       const errorMessage = error.response?.data?.detail || 'Failed to delete project from backend';
-      alert(`Error: ${errorMessage}\n\nThe project was not deleted.`);
+      showError('Delete Failed', `${errorMessage}\n\nThe project was not deleted.`);
     }
   };
 

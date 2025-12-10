@@ -166,10 +166,17 @@ export function useChat(
         });
       } else {
         // Use JSON for text-only messages (backward compatible)
+        // Prepare conversation history (last 10 messages to avoid token limits)
+        const conversationHistory = messages.slice(-10).map(msg => ({
+          role: msg.role,
+          content: msg.content
+        }));
+
         response = await axios.post(`${API_BASE}/chat/send`, {
           chat_id: chatId,
           user_id: userId,
           content: content,
+          conversation_history: conversationHistory,  // Include conversation context
           llm_mode: llmMode || undefined,
           use_graph_context: options?.useGraphContext !== false
         }, {

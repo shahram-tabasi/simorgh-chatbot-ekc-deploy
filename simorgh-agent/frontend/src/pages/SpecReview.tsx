@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { showSuccess, showError } from '../utils/alerts';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
@@ -101,10 +102,10 @@ export const SpecReview: React.FC = () => {
 
       setOriginalSpecs(JSON.parse(JSON.stringify(specs)));
       setHasChanges(false);
-      alert('✅ Specifications saved successfully!');
+      showSuccess('Success!', 'Specifications saved successfully!');
     } catch (err: any) {
       console.error('Failed to save specs:', err);
-      alert(`❌ Failed to save: ${err.response?.data?.detail || err.message}`);
+      showError('Save Failed', err.response?.data?.detail || err.message);
     } finally {
       setSaving(false);
     }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Edit2 } from 'lucide-react';
+import { showWarning } from '../utils/alerts';
 
 interface RenameModalProps {
   isOpen: boolean;
@@ -29,7 +30,7 @@ export default function RenameModal({
     e.preventDefault();
 
     if (!newName.trim()) {
-      alert(`${type === 'project' ? 'Project' : 'Page'} name cannot be empty`);
+      showWarning('Empty Name', `${type === 'project' ? 'Project' : 'Page'} name cannot be empty`);
       return;
     }
 
