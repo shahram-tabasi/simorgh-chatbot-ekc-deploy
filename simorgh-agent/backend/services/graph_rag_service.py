@@ -291,11 +291,23 @@ class GraphRAGService:
         if not specs:
             return ""
 
-        context_parts = ["## Project Specifications (from Knowledge Graph)\n"]
+        # Filter out specs with empty/null values
+        specs_with_values = [
+            spec for spec in specs
+            if spec.get("value") and spec["value"].strip() and spec["value"] != "Not specified"
+        ]
+
+        if not specs_with_values:
+            return ""
+
+        context_parts = [
+            f"## 📊 Project Specifications Found: {len(specs_with_values)} items\n",
+            "**IMPORTANT: Use the following ACTUAL specifications from this project's documents.**\n"
+        ]
 
         # Group by category
         by_category = {}
-        for spec in specs:
+        for spec in specs_with_values:
             category = spec["category"]
             if category not in by_category:
                 by_category[category] = []
@@ -304,20 +316,23 @@ class GraphRAGService:
         # Format each category
         for category, items in by_category.items():
             category_readable = category.replace("_", " ")
-            context_parts.append(f"\n### {category_readable}:")
+            context_parts.append(f"\n### {category_readable} ({len(items)} specifications):")
 
             for item in items:
                 field_readable = item["field"].replace("_", " ")
                 value = item["value"]
+                document = item.get("document", "")
+
+                # Format with document reference
+                spec_line = f"- **{field_readable}**: `{value}`"
+                if document:
+                    spec_line += f" _(from {document})_"
+
+                context_parts.append(spec_line)
 
                 # Add definition if available
-                if item.get("definition"):
-                    context_parts.append(
-                        f"- **{field_readable}**: {value}\n  "
-                        f"  _{item['definition'][:200]}..._"
-                    )
-                else:
-                    context_parts.append(f"- **{field_readable}**: {value}")
+                if item.get("definition") and len(item["definition"]) > 20:
+                    context_parts.append(f"  > {item['definition'][:150]}...")
 
         return "\n".join(context_parts)
 

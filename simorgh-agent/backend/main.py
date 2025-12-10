@@ -1462,13 +1462,18 @@ async def send_chat_message(
                     specs_list = graph_result.get("protections") or graph_result.get("specs")
 
                     if specs_list:
+                        # Count specs with actual values
+                        specs_with_values = [s for s in specs_list if s.get("value") and s["value"].strip() and s["value"] != "Not specified"]
+
                         specs_context = graph_rag.build_context_from_specs(
                             specs=specs_list,
                             query=_content
                         )
                         if specs_context:
                             context_parts.append(specs_context)
-                            logger.info(f"📊 Retrieved {len(specs_list)} specifications from graph")
+                            logger.info(f"📊 Retrieved {len(specs_list)} specifications from graph ({len(specs_with_values)} with values)")
+                        else:
+                            logger.warning(f"⚠️ Retrieved {len(specs_list)} specs but all values are empty/not specified")
 
                 # Add vector search results if found
                 if vector_result.get("success") and vector_result.get("results"):
@@ -1503,6 +1508,10 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 
         if graph_context:
             system_prompt += f"\n\n{graph_context}"
+            # Add directive to use the provided specs
+            system_prompt += """\n\n🎯 CRITICAL INSTRUCTION: The specifications above are ACTUAL data from this project's documents.
+You MUST use these specific values in your response. Do NOT say "information not provided" when specifications are listed above.
+Answer the user's question using the exact values shown. Be specific and cite the actual specifications."""
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
