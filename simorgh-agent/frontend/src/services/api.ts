@@ -108,9 +108,12 @@ class ApiService {
   async deleteAllProjectChats(projectId: string): Promise<ApiResponse<{
     status: string;
     project_number: string;
-    deleted_count: number;
-    total_count: number;
-    failed_count: number;
+    project_name: string;
+    deleted_chat_count: number;
+    total_chat_count: number;
+    failed_chat_count: number;
+    deleted_neo4j_nodes: number;
+    neo4j_deleted: boolean;
     message: string;
   }>> {
     return this.request(`/api/projects/${projectId}/chats`, {

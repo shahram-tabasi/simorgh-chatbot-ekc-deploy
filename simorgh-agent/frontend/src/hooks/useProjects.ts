@@ -708,7 +708,7 @@ export function useProjects(userId?: string) {
     }
 
     // Confirmation dialog
-    if (!confirm(`Are you sure you want to delete project "${project.name}" from your chatbot?\n\nThis will:\n- Delete the project from your project list\n- Delete all chat history for this project\n- Remove all project data from backend\n\nNote: The project structure will remain in Neo4j database. You can re-add it later if needed.\n\nThis action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to PERMANENTLY DELETE project "${project.name}"?\n\nThis will COMPLETELY REMOVE:\n✗ All chat history from Redis\n✗ All project data from Neo4j database\n✗ All documents and specifications\n✗ All extraction guides and values\n\n⚠️ THIS ACTION CANNOT BE UNDONE!\n\nThe project will be completely deleted from the system.`)) {
       return;
     }
 
@@ -743,9 +743,23 @@ export function useProjects(userId?: string) {
         setActiveProjectId(null);
       }
 
-      const deletedCount = response.data.deleted_count || 0;
-      console.log(`✅ Project deleted: ${projectId} (${deletedCount} chats removed)`);
-      alert(`Project "${project.name}" has been deleted.\n${deletedCount} chat(s) removed from backend.`);
+      const deletedChatCount = response.data.deleted_chat_count || 0;
+      const deletedNeo4jNodes = response.data.deleted_neo4j_nodes || 0;
+      const neo4jDeleted = response.data.neo4j_deleted || false;
+
+      console.log(`✅ Project deleted: ${projectId} (${deletedChatCount} chats, ${deletedNeo4jNodes} Neo4j nodes removed)`);
+
+      // Show detailed deletion summary
+      let summaryMessage = `Project "${project.name}" has been completely deleted!\n\n`;
+      summaryMessage += `📊 Deletion Summary:\n`;
+      summaryMessage += `• Redis: ${deletedChatCount} chat(s) removed\n`;
+      summaryMessage += `• Neo4j: ${deletedNeo4jNodes} node(s) removed\n`;
+
+      if (!neo4jDeleted) {
+        summaryMessage += `\n⚠️ Note: Project was not found in Neo4j database.`;
+      }
+
+      alert(summaryMessage);
 
     } catch (error: any) {
       console.error('❌ Failed to delete project from backend:', error);
