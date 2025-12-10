@@ -2046,6 +2046,117 @@ async def get_spec_task_status(
     return task_status
 
 
+@app.get("/api/projects/{project_number}/specifications/summary")
+async def get_project_specs_summary(
+    project_number: str,
+    current_user: str = Depends(get_current_user),
+    neo4j: Neo4jService = Depends(get_neo4j)
+):
+    """
+    Get summary of extracted specifications in project
+
+    Shows statistics about spec extraction and sample values.
+    Useful for debugging extraction issues.
+    """
+    try:
+        from services.graph_rag_service import GraphRAGService
+
+        graph_rag = GraphRAGService(neo4j.driver)
+
+        with neo4j.driver.session() as session:
+            # Get overall stats
+            stats_query = """
+            MATCH (doc:Document {project_number: $project_number})
+                -[:HAS_SPEC_CATEGORY]->(cat:SpecCategory)
+                -[:HAS_FIELD]->(field:SpecField)
+            OPTIONAL MATCH (field)-[:HAS_VALUE]->(value:ActualValue)
+
+            WITH count(DISTINCT doc) as total_docs,
+                 count(DISTINCT cat) as total_categories,
+                 count(DISTINCT field) as total_fields,
+                 count(CASE WHEN value.extracted_value IS NOT NULL
+                            AND value.extracted_value <> ''
+                            AND value.extracted_value <> 'Not specified'
+                       THEN 1 END) as fields_with_values
+
+            RETURN total_docs, total_categories, total_fields, fields_with_values
+            """
+
+            result = session.run(stats_query, project_number=project_number)
+            stats_record = result.single()
+
+            # Get category breakdown
+            category_query = """
+            MATCH (doc:Document {project_number: $project_number})
+                -[:HAS_SPEC_CATEGORY]->(cat:SpecCategory)
+                -[:HAS_FIELD]->(field:SpecField)
+            OPTIONAL MATCH (field)-[:HAS_VALUE]->(value:ActualValue)
+
+            WITH cat.name as category,
+                 count(field) as total_fields,
+                 count(CASE WHEN value.extracted_value IS NOT NULL
+                            AND value.extracted_value <> ''
+                            AND value.extracted_value <> 'Not specified'
+                       THEN 1 END) as fields_with_values
+
+            RETURN category, total_fields, fields_with_values
+            ORDER BY category
+            """
+
+            result = session.run(category_query, project_number=project_number)
+            categories = []
+            for record in result:
+                categories.append({
+                    "category": record["category"],
+                    "total_fields": record["total_fields"],
+                    "fields_with_values": record["fields_with_values"],
+                    "percentage_populated": round(record["fields_with_values"] / record["total_fields"] * 100, 1) if record["total_fields"] > 0 else 0
+                })
+
+            # Get sample specs with values
+            sample_query = """
+            MATCH (doc:Document {project_number: $project_number})
+                -[:HAS_SPEC_CATEGORY]->(cat:SpecCategory)
+                -[:HAS_FIELD]->(field:SpecField)
+                -[:HAS_VALUE]->(value:ActualValue)
+
+            WHERE value.extracted_value IS NOT NULL
+              AND value.extracted_value <> ''
+              AND value.extracted_value <> 'Not specified'
+
+            RETURN doc.filename as document,
+                   cat.name as category,
+                   field.name as field_name,
+                   value.extracted_value as field_value
+            LIMIT 10
+            """
+
+            result = session.run(sample_query, project_number=project_number)
+            samples = []
+            for record in result:
+                samples.append({
+                    "document": record["document"],
+                    "category": record["category"],
+                    "field": record["field_name"],
+                    "value": record["field_value"]
+                })
+
+            return {
+                "project_number": project_number,
+                "total_documents": stats_record["total_docs"] if stats_record else 0,
+                "total_categories": stats_record["total_categories"] if stats_record else 0,
+                "total_fields": stats_record["total_fields"] if stats_record else 0,
+                "fields_with_values": stats_record["fields_with_values"] if stats_record else 0,
+                "percentage_populated": round(stats_record["fields_with_values"] / stats_record["total_fields"] * 100, 1) if stats_record and stats_record["total_fields"] > 0 else 0,
+                "categories": categories,
+                "sample_specifications": samples
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to get project specs summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =============================================================================
 # GRAPH QUERY ENDPOINTS
 # =============================================================================
