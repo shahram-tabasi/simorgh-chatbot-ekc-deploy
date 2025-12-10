@@ -1764,24 +1764,38 @@ async def send_chat_message(
             similar_conversations = qdrant.retrieve_similar_conversations(
                 user_id=_user_id,
                 current_query=_content,
-                limit=3,  # Get top 3 similar past conversations
+                limit=5,  # Get top 5 semantically similar conversations
                 score_threshold=0.65,  # Only include relevant conversations
-                project_filter=project_number if project_number else None
+                project_filter=project_number if project_number else None,
+                fallback_to_recent=True,  # Fallback to recent if no semantic matches
+                fallback_limit=10  # Return last 10 conversations as fallback
             )
 
             if similar_conversations:
-                user_memory_context = "\n\n## 💭 Your Past Relevant Conversations\n"
-                user_memory_context += "Here are some of your previous related discussions:\n\n"
+                # Check if these are fallback results (recent conversations)
+                is_fallback = similar_conversations[0].get("is_fallback", False)
+
+                if is_fallback:
+                    user_memory_context = "\n\n## 📚 Your Recent Conversation History\n"
+                    user_memory_context += "Here are your most recent conversations (no specific semantic match found):\n\n"
+                else:
+                    user_memory_context = "\n\n## 💭 Your Past Relevant Conversations\n"
+                    user_memory_context += "Here are some of your previous related discussions:\n\n"
 
                 for idx, conv in enumerate(similar_conversations, 1):
-                    user_memory_context += f"**{idx}. Previous Q&A** (Relevance: {conv['score']:.0%})\n"
+                    if is_fallback:
+                        # For fallback, show timestamp instead of relevance score
+                        user_memory_context += f"**{idx}. Previous Q&A**\n"
+                    else:
+                        user_memory_context += f"**{idx}. Previous Q&A** (Relevance: {conv['score']:.0%})\n"
+
                     user_memory_context += f"  - You asked: \"{conv['user_message'][:150]}{'...' if len(conv['user_message']) > 150 else ''}\"\n"
                     user_memory_context += f"  - I responded: \"{conv['assistant_response'][:200]}{'...' if len(conv['assistant_response']) > 200 else ''}\"\n\n"
 
-                logger.info(f"🧠 Retrieved {len(similar_conversations)} similar past conversations for user memory context")
+                logger.info(f"🧠 Retrieved {len(similar_conversations)} {'recent' if is_fallback else 'semantically similar'} past conversations for user memory context")
                 context_used = True
             else:
-                logger.info(f"🧠 No similar past conversations found for user {_user_id}")
+                logger.info(f"🧠 No past conversations found for user {_user_id}")
 
         except Exception as e:
             logger.warning(f"⚠️ User memory retrieval failed: {e}")
