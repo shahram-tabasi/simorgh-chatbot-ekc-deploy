@@ -182,6 +182,9 @@ class EnhancedSpecExtractor:
                 mode=llm_mode,
                 temperature=0.1,  # Low temperature for factual extraction
                 max_tokens=400  # Increased to allow flexible, descriptive extractions
+
+                
+
             )
 
             extracted_value = response.strip()
@@ -189,6 +192,10 @@ class EnhancedSpecExtractor:
             # Clean up common patterns - only filter explicit "not found" responses
             if extracted_value.lower() in ['not specified', 'not found', 'n/a', 'none', 'not mentioned']:
                 return ""
+            
+            extracted_value = extracted_value.replace("Extracted Information:", "").strip()
+
+            extracted_value = extracted_value.replace("**Extracted Information:**", "").strip()
 
             # Remove common LLM wrapper phrases
             extracted_value = extracted_value.replace("Extracted Information:", "").strip()
@@ -249,7 +256,9 @@ class EnhancedSpecExtractor:
         prompt = f"""
 Extract information for: **{field_readable}**
 
+
 **Definition:**
+
 {guide.get('definition', 'N/A')}
 
 **How to identify this information:**
@@ -262,18 +271,32 @@ Extract information for: **{field_readable}**
 {guide.get('common_values', 'N/A')}
 
 **Related information:**
+
 {guide.get('relationships', 'N/A')}
 
+ 
+
 **Important notes:**
+
 {guide.get('notes', 'N/A')}
 
+ 
+
 ---
+
+ 
 
 **Document Context (most relevant sections):**
 
+ 
+
 {context}
 
+ 
+
 ---
+
+ 
 
 **Task:**
 Extract ANY relevant information about "{field_readable}" from the document context above.
@@ -304,6 +327,7 @@ Extract ANY relevant information about "{field_readable}" from the document cont
 - Respond ONLY with: "Not specified"
 
 **Extracted Information:**
+
 """
 
         return prompt.strip()
