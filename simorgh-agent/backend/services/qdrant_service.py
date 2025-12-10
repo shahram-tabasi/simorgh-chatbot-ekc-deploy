@@ -563,10 +563,13 @@ class QdrantService:
         current_query: str,
         limit: int = 5,
         score_threshold: float = 0.6,
-        project_filter: Optional[str] = None
+        project_filter: Optional[str] = None,
+        fallback_to_recent: bool = True,
+        fallback_limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
         Retrieve semantically similar past conversations for a user
+        If no semantic matches found and fallback_to_recent=True, return most recent conversations
 
         Args:
             user_id: User identifier
@@ -574,6 +577,8 @@ class QdrantService:
             limit: Maximum number of similar conversations to retrieve
             score_threshold: Minimum similarity score (0.0 to 1.0)
             project_filter: Optional filter by project number
+            fallback_to_recent: If True and no semantic matches, return recent conversations
+            fallback_limit: Number of recent conversations to return as fallback
 
         Returns:
             List of similar past conversations with scores
@@ -604,7 +609,7 @@ class QdrantService:
                     ]
                 )
 
-            # Perform search
+            # Perform semantic search with score threshold
             results = self.client.search(
                 collection_name=collection_name,
                 query_vector=query_embedding,
@@ -627,7 +632,44 @@ class QdrantService:
                     "metadata": result.payload.get("metadata", {})
                 })
 
-            logger.info(f"🔍 Found {len(formatted_results)} similar past conversations for user {user_id}")
+            # If no semantic matches found and fallback is enabled, get recent conversations
+            if len(formatted_results) == 0 and fallback_to_recent:
+                logger.info(f"💡 No semantic matches found, falling back to {fallback_limit} most recent conversations")
+
+                # Search without score threshold to get recent conversations
+                recent_results = self.client.search(
+                    collection_name=collection_name,
+                    query_vector=query_embedding,
+                    limit=fallback_limit,
+                    query_filter=search_filter,
+                    score_threshold=None  # No threshold for fallback
+                )
+
+                # Sort by timestamp (most recent first)
+                recent_results_sorted = sorted(
+                    recent_results,
+                    key=lambda x: x.payload.get("timestamp", ""),
+                    reverse=True
+                )
+
+                # Format fallback results
+                for result in recent_results_sorted:
+                    formatted_results.append({
+                        "conversation_id": result.id,
+                        "score": result.score,
+                        "user_message": result.payload.get("user_message", ""),
+                        "assistant_response": result.payload.get("assistant_response", ""),
+                        "chat_id": result.payload.get("chat_id", ""),
+                        "project_number": result.payload.get("project_number", ""),
+                        "timestamp": result.payload.get("timestamp", ""),
+                        "metadata": result.payload.get("metadata", {}),
+                        "is_fallback": True  # Mark as fallback result
+                    })
+
+                logger.info(f"📚 Returned {len(formatted_results)} recent conversations as fallback")
+            else:
+                logger.info(f"🔍 Found {len(formatted_results)} semantically similar past conversations for user {user_id}")
+
             return formatted_results
 
         except Exception as e:
