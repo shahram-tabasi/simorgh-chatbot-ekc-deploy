@@ -1,20 +1,30 @@
 // src/components/Login.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { LogIn, User, Lock, AlertCircle, Loader } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const { login, isLoading, error } = useAuth();
+  const { login, isLoading, error, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+
+  // Redirect to main page if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     try {
       await login(username, password);
-      // Login successful - auth context will update
+      // Login successful - navigate to main page
+      navigate('/', { replace: true });
     } catch (error) {
       // Error is handled by auth context
       console.error('Login error:', error);
