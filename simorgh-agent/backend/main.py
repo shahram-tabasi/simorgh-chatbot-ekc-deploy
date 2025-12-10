@@ -936,6 +936,75 @@ async def get_project_chats(
     }
 
 
+@app.delete("/api/projects/{project_number}/chats")
+async def delete_all_project_chats(
+    project_number: str,
+    current_user: str = Depends(get_current_user),
+    redis: RedisService = Depends(get_redis)
+):
+    """
+    Delete all chats for a specific project (requires authentication)
+
+    This removes all project chats from Redis for the current user.
+    The project structure in Neo4j is preserved.
+
+    Returns count of deleted chats.
+    """
+    try:
+        # Get all project chats for this user and project
+        chat_ids = redis.get_user_project_chats(current_user, project_number)
+
+        if not chat_ids:
+            return {
+                "status": "success",
+                "project_number": project_number,
+                "deleted_count": 0,
+                "message": "No chats found for this project"
+            }
+
+        # Delete each chat
+        deleted_count = 0
+        failed_chats = []
+
+        for chat_id in chat_ids:
+            # Verify ownership before deletion
+            metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
+            if metadata and metadata.get("user_id") == current_user:
+                success = redis.delete_chat(chat_id, current_user)
+                if success:
+                    deleted_count += 1
+                else:
+                    failed_chats.append(chat_id)
+            else:
+                logger.warning(f"⚠️ Chat {chat_id} not owned by user {current_user}, skipping")
+
+        if failed_chats:
+            logger.error(f"❌ Failed to delete {len(failed_chats)} chats: {failed_chats}")
+
+        logger.info(
+            f"✅ Deleted {deleted_count}/{len(chat_ids)} project chats for "
+            f"project {project_number}, user: {current_user}"
+        )
+
+        return {
+            "status": "success",
+            "project_number": project_number,
+            "deleted_count": deleted_count,
+            "total_count": len(chat_ids),
+            "failed_count": len(failed_chats),
+            "message": f"Deleted {deleted_count} chat(s) for project {project_number}"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Failed to delete project chats: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete project chats: {str(e)}"
+        )
+
+
 @app.get("/api/users/{user_id}/general-chats")
 async def get_user_general_chats(
     user_id: str,
