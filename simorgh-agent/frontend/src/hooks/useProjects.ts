@@ -122,26 +122,96 @@ export function useProjects(userId?: string) {
 
     fetchGeneralChats();
 
-    // Load projects from localStorage (for now - can be enhanced to fetch from backend)
-    const savedProjects = localStorage.getItem(`simorgh_projects_${userId}`);
-    if (savedProjects) {
+    // Fetch projects from backend (with project chats)
+    const fetchProjects = async () => {
       try {
-        const parsed = JSON.parse(savedProjects);
-        setProjects(parsed.map((p: any) => ({
-          ...p,
-          createdAt: new Date(p.createdAt),
-          updatedAt: p.updatedAt ? new Date(p.updatedAt) : undefined,
-          chats: p.chats.map((c: any) => ({
-            ...c,
-            createdAt: new Date(c.createdAt),
-            updatedAt: new Date(c.updatedAt),
-            messages: []
-          }))
-        })));
-      } catch (e) {
-        console.error('Failed to load projects:', e);
+        const token = localStorage.getItem('simorgh_token');
+        if (!token) {
+          console.warn('⚠️ No auth token, skipping projects fetch');
+          return;
+        }
+
+        // Fetch all user's project chats from backend
+        const projectChatsResponse = await axios.get(`${API_BASE}/users/${userId}/project-chats`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        const backendProjectChats = projectChatsResponse.data.chats || [];
+        console.log(`✅ Loaded ${backendProjectChats.length} project chats from backend`);
+
+        // Group chats by project
+        const projectsMap = new Map<string, any>();
+
+        for (const chat of backendProjectChats) {
+          const projectId = chat.project_number || chat.project_id_main;
+          const projectName = chat.project_name || `Project ${projectId}`;
+
+          if (!projectsMap.has(projectId)) {
+            projectsMap.set(projectId, {
+              id: projectId,
+              name: projectName,
+              chats: [],
+              createdAt: new Date(chat.created_at),
+              isExpanded: false
+            });
+          }
+
+          const project = projectsMap.get(projectId);
+          project.chats.push({
+            id: chat.chat_id,
+            title: chat.chat_name,
+            messages: [],
+            createdAt: new Date(chat.created_at),
+            updatedAt: new Date(chat.created_at),
+            projectId: projectId
+          });
+
+          // Update project createdAt to earliest chat
+          if (new Date(chat.created_at) < project.createdAt) {
+            project.createdAt = new Date(chat.created_at);
+          }
+        }
+
+        // Convert map to array and sort by creation date (newest first)
+        const backendProjects = Array.from(projectsMap.values())
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+        setProjects(backendProjects);
+        console.log(`✅ Loaded ${backendProjects.length} projects from backend`);
+
+        // Save to localStorage as backup
+        localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(backendProjects));
+
+      } catch (error) {
+        console.error('❌ Failed to fetch projects from backend:', error);
+
+        // Fallback to localStorage
+        const savedProjects = localStorage.getItem(`simorgh_projects_${userId}`);
+        if (savedProjects) {
+          try {
+            const parsed = JSON.parse(savedProjects);
+            setProjects(parsed.map((p: any) => ({
+              ...p,
+              createdAt: new Date(p.createdAt),
+              updatedAt: p.updatedAt ? new Date(p.updatedAt) : undefined,
+              chats: p.chats.map((c: any) => ({
+                ...c,
+                createdAt: new Date(c.createdAt),
+                updatedAt: new Date(c.updatedAt),
+                messages: []
+              }))
+            })));
+            console.log('✅ Loaded projects from localStorage (fallback)');
+          } catch (e) {
+            console.error('Failed to load projects from localStorage:', e);
+          }
+        }
       }
-    }
+    };
+
+    fetchProjects();
   }, [userId]);
 
   // Save projects to localStorage (per user)

@@ -86,8 +86,9 @@ class ApiService {
     });
   }
 
-  async getProjects(userId: string): Promise<ApiResponse<Project[]>> {
-    return this.request(`/api/projects?userId=${userId}`);
+  async getProjects(): Promise<ApiResponse<Project[]>> {
+    // Projects are filtered by authenticated user via JWT token
+    return this.request(`/api/projects`);
   }
 
   async createProjectChat(data: {
@@ -123,7 +124,25 @@ class ApiService {
   }
 
   async getGeneralChats(userId: string): Promise<ApiResponse<Chat[]>> {
-    return this.request(`/api/general-chats?userId=${userId}`);
+    // Use correct endpoint with userId in path
+    return this.request(`/api/users/${userId}/general-chats`);
+  }
+
+  async getProjectChatsForUser(userId: string): Promise<ApiResponse<Chat[]>> {
+    // Get all project chats for a user across all projects
+    return this.request(`/api/users/${userId}/project-chats`);
+  }
+
+  async getAllChatsForUser(userId: string): Promise<ApiResponse<{
+    chats: Chat[];
+    general_chats: Chat[];
+    project_chats: Chat[];
+    count: number;
+    general_count: number;
+    project_count: number;
+  }>> {
+    // Get ALL chats (general + project) for a user
+    return this.request(`/api/users/${userId}/chats`);
   }
 
   async saveGeneralChatMessage(data: {

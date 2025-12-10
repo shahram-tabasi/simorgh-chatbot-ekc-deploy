@@ -912,17 +912,27 @@ async def delete_chat(
 @app.get("/api/projects/{project_number}/chats")
 async def get_project_chats(
     project_number: str,
+    current_user: str = Depends(get_current_user),
     redis: RedisService = Depends(get_redis)
 ):
     """
-    Get all chats for a project
+    Get all chats for a specific project (requires authentication)
+
+    Returns all project chats for the current user for this project
     """
-    # This is a simplified implementation
-    # In production, you'd maintain a project->chats index
+    # Get all project chats for this user and project
+    chat_ids = redis.get_user_project_chats(current_user, project_number)
+
+    # Get metadata for all project chats
+    chats = redis.get_chat_metadata_list(chat_ids)
+
+    # Sort by creation date (newest first)
+    chats.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
     return {
         "project_number": project_number,
-        "chats": [],
-        "message": "Project chat listing not yet implemented"
+        "chats": chats,
+        "count": len(chats)
     }
 
 
@@ -957,6 +967,88 @@ async def get_user_general_chats(
         "user_id": user_id,
         "chats": chats,
         "count": len(chats)
+    }
+
+
+@app.get("/api/users/{user_id}/project-chats")
+async def get_user_project_chats(
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+    redis: RedisService = Depends(get_redis)
+):
+    """
+    Get all project chats for a user across ALL projects (requires authentication)
+
+    Validates that the requesting user matches the user_id
+    """
+    # Security: Ensure users can only access their own chats
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Cannot view other users' chats"
+        )
+
+    # Get all chat IDs for this user
+    all_chat_ids = redis.get_user_all_chats(user_id)
+
+    # Get metadata for all chats
+    all_chats = redis.get_chat_metadata_list(all_chat_ids)
+
+    # Filter to only project chats
+    project_chats = [
+        chat for chat in all_chats
+        if chat.get("chat_type") == "project"
+    ]
+
+    # Sort by creation date (newest first)
+    project_chats.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+    return {
+        "user_id": user_id,
+        "chats": project_chats,
+        "count": len(project_chats)
+    }
+
+
+@app.get("/api/users/{user_id}/chats")
+async def get_user_all_chats(
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+    redis: RedisService = Depends(get_redis)
+):
+    """
+    Get ALL chats for a user (both general and project) (requires authentication)
+
+    Validates that the requesting user matches the user_id
+    """
+    # Security: Ensure users can only access their own chats
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Cannot view other users' chats"
+        )
+
+    # Get all chat IDs for this user
+    chat_ids = redis.get_user_all_chats(user_id)
+
+    # Get metadata for all chats
+    chats = redis.get_chat_metadata_list(chat_ids)
+
+    # Sort by creation date (newest first)
+    chats.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+    # Group by type for easier frontend consumption
+    general_chats = [chat for chat in chats if chat.get("chat_type") == "general"]
+    project_chats = [chat for chat in chats if chat.get("chat_type") == "project"]
+
+    return {
+        "user_id": user_id,
+        "chats": chats,
+        "general_chats": general_chats,
+        "project_chats": project_chats,
+        "count": len(chats),
+        "general_count": len(general_chats),
+        "project_count": len(project_chats)
     }
 
 
