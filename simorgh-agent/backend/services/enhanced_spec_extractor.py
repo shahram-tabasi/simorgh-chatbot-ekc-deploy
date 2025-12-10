@@ -168,7 +168,7 @@ class EnhancedSpecExtractor:
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert electrical engineer extracting specification values from technical documents. Extract only the exact value requested, nothing more. If the value is not found, respond with 'Not specified'."
+                "content": "You are an expert electrical engineer extracting information from technical specification documents. Be FLEXIBLE - extract ANY relevant information about the requested field, including product names, technical specifications, requirements, descriptions, or features. Accept multiple formats: exact values, ratings with units, requirement statements, or descriptive text. Combine related information concisely. Only respond 'Not specified' if truly no relevant information exists."
             },
             {
                 "role": "user",
@@ -181,7 +181,7 @@ class EnhancedSpecExtractor:
                 messages=messages,
                 mode=llm_mode,
                 temperature=0.1,  # Low temperature for factual extraction
-                max_tokens=200
+                max_tokens=400
             )
 
             extracted_value = response.strip()
@@ -189,6 +189,10 @@ class EnhancedSpecExtractor:
             # Clean up common patterns
             if extracted_value.lower() in ['not specified', 'not found', 'n/a', 'none', 'not mentioned']:
                 return ""
+            
+            extracted_value = extracted_value.replace("Extracted Information:", "").strip()
+
+            extracted_value = extracted_value.replace("**Extracted Information:**", "").strip()
 
             return extracted_value
 
@@ -243,45 +247,120 @@ class EnhancedSpecExtractor:
         field_readable = field_name.replace("_", " ")
 
         prompt = f"""
-Extract the value for: **{field_readable}**
+Extract information for: **{field_readable}**
+
+ 
 
 **Definition:**
+
 {guide.get('definition', 'N/A')}
 
-**How to extract this value:**
+ 
+
+**How to identify this information:**
+
 {guide.get('extraction_instructions', 'N/A')}
 
-**Examples of valid values:**
+ 
+
+**Examples of possible formats:**
+
 {guide.get('examples', 'N/A')}
 
-**Common/standard values:**
+ 
+
+**Typical values (for reference):**
+
 {guide.get('common_values', 'N/A')}
 
-**Related fields to consider:**
+ 
+
+**Related information:**
+
 {guide.get('relationships', 'N/A')}
 
+ 
+
 **Important notes:**
+
 {guide.get('notes', 'N/A')}
 
+ 
+
 ---
+
+ 
 
 **Document Context (most relevant sections):**
 
+ 
+
 {context}
+
+ 
 
 ---
 
+ 
+
 **Task:**
-Based on the above document context and extraction guide, extract the exact value for "{field_readable}".
 
-**Instructions:**
-- Provide ONLY the extracted value, nothing else
-- If multiple values are mentioned, provide the one that matches the definition best
-- If the value is not found in the context, respond with "Not specified"
-- Use the exact format shown in the examples when possible
-- Include units if applicable (e.g., "400V", "25 kA")
+Extract ANY relevant information about "{field_readable}" from the document context above.
 
-**Extracted Value:**
+ 
+
+**IMPORTANT - Be FLEXIBLE:**
+
+✓ Accept product names, model numbers, or type descriptions
+
+✓ Accept technical specifications (ratings, capacities, values with units)
+
+✓ Accept requirements or mandatory conditions ("shall be provided...", "must have...")
+
+✓ Accept descriptions of features or characteristics
+
+✓ Accept presence/absence indicators ("included", "not required", "provided")
+
+✓ Accept interlocking or operational requirements
+
+✓ Combine multiple related pieces of information if found
+
+ 
+
+**What to extract:**
+
+- If you find a product name or type → extract it
+
+- If you find technical specs or ratings → extract them
+
+- If you find requirements or conditions → extract them
+
+- If you find descriptions or features → extract them
+
+- If you find multiple relevant pieces → combine them concisely
+
+ 
+
+**Format:**
+
+- Keep it concise but complete
+
+- Include units when applicable (kA, kV, mm, etc.)
+
+- Separate multiple items with semicolons if needed
+
+- Example: "Provided at line side; 80 kA peak capacity; Interlocked with circuit breaker"
+
+ 
+
+**If no relevant information is found:**
+
+- Respond ONLY with: "Not specified"
+
+ 
+
+**Extracted Information:**
+
 """
 
         return prompt.strip()
