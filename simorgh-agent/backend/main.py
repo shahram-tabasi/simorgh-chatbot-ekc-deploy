@@ -956,28 +956,50 @@ async def delete_all_project_chats(
         # STEP 1: Delete from Redis (chat history)
         logger.info(f"🗑️ Step 1: Deleting Redis chat data for project {project_number}, user: {current_user}")
 
-        chat_ids = redis.get_user_project_chats(current_user, project_number)
+        # Get ALL user's chats and filter by project_number OR project_id_main
+        # This handles the case where project_number (OENUM) != project_id_main (IDProjectMain)
+        all_chat_ids = redis.get_user_all_chats(current_user)
+
+        # Filter chats that belong to this project (by either identifier)
+        project_chat_ids = []
+        for chat_id in all_chat_ids:
+            metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
+            if metadata and metadata.get("chat_type") == "project":
+                # Check if this chat belongs to the project (match by OENUM or IDProjectMain)
+                chat_project_number = metadata.get("project_number")
+                chat_project_id_main = metadata.get("project_id_main")
+
+                if chat_project_number == project_number or chat_project_id_main == project_number:
+                    project_chat_ids.append(chat_id)
+                    logger.debug(
+                        f"Found project chat: {chat_id} "
+                        f"(project_number: {chat_project_number}, project_id_main: {chat_project_id_main})"
+                    )
+
+        logger.info(f"Found {len(project_chat_ids)} chat(s) for project {project_number}")
 
         deleted_chat_count = 0
         failed_chats = []
 
-        if chat_ids:
-            for chat_id in chat_ids:
-                # Verify ownership before deletion
+        if project_chat_ids:
+            for chat_id in project_chat_ids:
+                # Verify ownership before deletion (double-check)
                 metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
                 if metadata and metadata.get("user_id") == current_user:
                     success = redis.delete_chat(chat_id, current_user)
                     if success:
                         deleted_chat_count += 1
+                        logger.debug(f"✅ Deleted chat: {chat_id}")
                     else:
                         failed_chats.append(chat_id)
+                        logger.warning(f"⚠️ Failed to delete chat: {chat_id}")
                 else:
                     logger.warning(f"⚠️ Chat {chat_id} not owned by user {current_user}, skipping")
 
             if failed_chats:
                 logger.error(f"❌ Failed to delete {len(failed_chats)} chats: {failed_chats}")
 
-            logger.info(f"✅ Deleted {deleted_chat_count}/{len(chat_ids)} chats from Redis")
+            logger.info(f"✅ Deleted {deleted_chat_count}/{len(project_chat_ids)} chats from Redis")
         else:
             logger.info(f"ℹ️ No chats found in Redis for project {project_number}")
 
@@ -1009,7 +1031,7 @@ async def delete_all_project_chats(
                     "status": "success",
                     "project_number": project_number,
                     "deleted_chat_count": deleted_chat_count,
-                    "total_chat_count": len(chat_ids) if chat_ids else 0,
+                    "total_chat_count": len(project_chat_ids),
                     "failed_chat_count": len(failed_chats),
                     "deleted_neo4j_nodes": 0,
                     "neo4j_deleted": False,
@@ -1061,7 +1083,7 @@ async def delete_all_project_chats(
             "project_number": project_number,
             "project_name": project_name,
             "deleted_chat_count": deleted_chat_count,
-            "total_chat_count": len(chat_ids) if chat_ids else 0,
+            "total_chat_count": len(project_chat_ids),
             "failed_chat_count": len(failed_chats),
             "deleted_neo4j_nodes": deleted_neo4j_nodes,
             "neo4j_deleted": True,
