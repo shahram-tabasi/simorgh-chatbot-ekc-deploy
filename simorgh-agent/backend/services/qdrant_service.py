@@ -518,11 +518,12 @@ class QdrantService:
             timestamp = datetime.utcnow().isoformat()
 
             # Combine user message and assistant response for semantic search
-            # We'll mainly search based on assistant responses but include context
+            # Generate embedding from BOTH user question and assistant answer
+            # This allows finding conversations based on what the user asked OR what was discussed
             combined_text = f"User: {user_message}\nAssistant: {assistant_response}"
 
-            # Generate embedding (primarily from assistant response for relevance)
-            embedding = self.generate_embedding(assistant_response)
+            # Generate embedding from combined text for better semantic matching
+            embedding = self.generate_embedding(combined_text)
 
             # Prepare payload
             payload = {
