@@ -936,6 +936,152 @@ async def get_project_chats(
     }
 
 
+@app.delete("/api/projects/{project_number}/chats")
+async def delete_all_project_chats(
+    project_number: str,
+    current_user: str = Depends(get_current_user),
+    redis: RedisService = Depends(get_redis),
+    neo4j: Neo4jService = Depends(get_neo4j)
+):
+    """
+    Delete all chats for a specific project (requires authentication)
+
+    This removes:
+    - All project chats from Redis (chat history, metadata, user indices)
+    - Entire project subgraph from Neo4j (Project, Documents, Specs, Extraction Guides, etc.)
+
+    Returns count of deleted chats and Neo4j nodes.
+    """
+    try:
+        # STEP 1: Delete from Redis (chat history)
+        logger.info(f"🗑️ Step 1: Deleting Redis chat data for project {project_number}, user: {current_user}")
+
+        chat_ids = redis.get_user_project_chats(current_user, project_number)
+
+        deleted_chat_count = 0
+        failed_chats = []
+
+        if chat_ids:
+            for chat_id in chat_ids:
+                # Verify ownership before deletion
+                metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
+                if metadata and metadata.get("user_id") == current_user:
+                    success = redis.delete_chat(chat_id, current_user)
+                    if success:
+                        deleted_chat_count += 1
+                    else:
+                        failed_chats.append(chat_id)
+                else:
+                    logger.warning(f"⚠️ Chat {chat_id} not owned by user {current_user}, skipping")
+
+            if failed_chats:
+                logger.error(f"❌ Failed to delete {len(failed_chats)} chats: {failed_chats}")
+
+            logger.info(f"✅ Deleted {deleted_chat_count}/{len(chat_ids)} chats from Redis")
+        else:
+            logger.info(f"ℹ️ No chats found in Redis for project {project_number}")
+
+        # STEP 2: Delete from Neo4j (entire project subgraph)
+        logger.info(f"🗑️ Step 2: Deleting Neo4j project subgraph for project {project_number}, owner: {current_user}")
+
+        with neo4j.driver.session() as session:
+            # Verify project ownership before deletion (SECURITY CHECK)
+            verify_query = """
+            MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
+            RETURN p.project_number as project_number, p.project_name as project_name
+            """
+
+            verify_result = session.run(verify_query,
+                project_number=project_number,
+                owner_id=current_user
+            )
+
+            project_record = verify_result.single()
+
+            if not project_record:
+                # Project doesn't exist or user doesn't own it
+                logger.warning(
+                    f"⚠️ Project {project_number} not found in Neo4j or not owned by user {current_user}. "
+                    f"Only Redis chats were deleted."
+                )
+
+                return {
+                    "status": "success",
+                    "project_number": project_number,
+                    "deleted_chat_count": deleted_chat_count,
+                    "total_chat_count": len(chat_ids) if chat_ids else 0,
+                    "failed_chat_count": len(failed_chats),
+                    "deleted_neo4j_nodes": 0,
+                    "neo4j_deleted": False,
+                    "message": f"Deleted {deleted_chat_count} chat(s). Project not found in Neo4j or not owned by user."
+                }
+
+            project_name = project_record["project_name"]
+            logger.info(f"✅ Verified ownership of project: {project_name}")
+
+            # Delete entire project subgraph (all nodes and relationships)
+            delete_query = """
+            MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
+
+            // Match all connected nodes recursively
+            OPTIONAL MATCH (p)-[*0..10]-(connected)
+
+            // Count nodes before deletion
+            WITH p, collect(DISTINCT connected) as nodes
+
+            // Delete everything (DETACH DELETE removes relationships automatically)
+            WITH p, nodes, size(nodes) as node_count
+            FOREACH (n in nodes | DETACH DELETE n)
+            DETACH DELETE p
+
+            RETURN node_count
+            """
+
+            delete_result = session.run(delete_query,
+                project_number=project_number,
+                owner_id=current_user
+            )
+
+            delete_record = delete_result.single()
+            deleted_neo4j_nodes = delete_record["node_count"] if delete_record else 0
+
+            logger.info(
+                f"✅ Deleted project '{project_name}' from Neo4j: "
+                f"{deleted_neo4j_nodes} nodes removed"
+            )
+
+        # STEP 3: Return summary
+        logger.info(
+            f"✅ Complete deletion for project {project_number}: "
+            f"{deleted_chat_count} chats from Redis, {deleted_neo4j_nodes} nodes from Neo4j"
+        )
+
+        return {
+            "status": "success",
+            "project_number": project_number,
+            "project_name": project_name,
+            "deleted_chat_count": deleted_chat_count,
+            "total_chat_count": len(chat_ids) if chat_ids else 0,
+            "failed_chat_count": len(failed_chats),
+            "deleted_neo4j_nodes": deleted_neo4j_nodes,
+            "neo4j_deleted": True,
+            "message": (
+                f"Project '{project_name}' completely deleted: "
+                f"{deleted_chat_count} chat(s) from Redis, "
+                f"{deleted_neo4j_nodes} node(s) from Neo4j"
+            )
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Failed to delete project: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete project: {str(e)}"
+        )
+
+
 @app.get("/api/users/{user_id}/general-chats")
 async def get_user_general_chats(
     user_id: str,

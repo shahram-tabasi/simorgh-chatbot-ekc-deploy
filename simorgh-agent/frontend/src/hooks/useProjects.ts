@@ -694,7 +694,7 @@ export function useProjects(userId?: string) {
     }
   };
 
-  const deleteProject = (projectId: string) => {
+  const deleteProject = async (projectId: string) => {
     if (!userId) {
       console.error('Cannot delete project: userId missing');
       return;
@@ -708,25 +708,66 @@ export function useProjects(userId?: string) {
     }
 
     // Confirmation dialog
-    if (!confirm(`Are you sure you want to remove project "${project.name}" from your chatbot?\n\nThis will:\n- Remove the project from your project list\n- Clear all chat history for this project\n\nNote: The project will remain in TPMS database. You can re-add it later if needed.\n\nThis action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to PERMANENTLY DELETE project "${project.name}"?\n\nThis will COMPLETELY REMOVE:\n✗ All chat history from Redis\n✗ All project data from Neo4j database\n✗ All documents and specifications\n✗ All extraction guides and values\n\n⚠️ THIS ACTION CANNOT BE UNDONE!\n\nThe project will be completely deleted from the system.`)) {
       return;
     }
 
-    // Remove from local state
-    const updatedProjects = projects.filter(p => p.id !== projectId);
-    setProjects(updatedProjects);
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) {
+        console.error('❌ No auth token found');
+        alert('Authentication required. Please log in again.');
+        return;
+      }
 
-    // Update localStorage to persist deletion
-    localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(updatedProjects));
+      // Delete all project chats from backend
+      console.log('🗑️ Deleting all chats for project:', projectId);
+      const response = await axios.delete(`${API_BASE}/projects/${projectId}/chats`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
 
-    // Clear active project if it was deleted
-    if (activeProjectId === projectId) {
-      setActiveChatId(null);
-      setActiveProjectId(null);
+      console.log(`✅ Backend deletion result:`, response.data);
+
+      // Remove from local state
+      const updatedProjects = projects.filter(p => p.id !== projectId);
+      setProjects(updatedProjects);
+
+      // Update localStorage to persist deletion
+      localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(updatedProjects));
+
+      // Clear active project if it was deleted
+      if (activeProjectId === projectId) {
+        setActiveChatId(null);
+        setActiveProjectId(null);
+      }
+
+      const deletedChatCount = response.data.deleted_chat_count || 0;
+      const deletedNeo4jNodes = response.data.deleted_neo4j_nodes || 0;
+      const neo4jDeleted = response.data.neo4j_deleted || false;
+
+      console.log(`✅ Project deleted: ${projectId} (${deletedChatCount} chats, ${deletedNeo4jNodes} Neo4j nodes removed)`);
+
+      // Show detailed deletion summary
+      let summaryMessage = `Project "${project.name}" has been completely deleted!\n\n`;
+      summaryMessage += `📊 Deletion Summary:\n`;
+      summaryMessage += `• Redis: ${deletedChatCount} chat(s) removed\n`;
+      summaryMessage += `• Neo4j: ${deletedNeo4jNodes} node(s) removed\n`;
+
+      if (!neo4jDeleted) {
+        summaryMessage += `\n⚠️ Note: Project was not found in Neo4j database.`;
+      }
+
+      alert(summaryMessage);
+
+    } catch (error: any) {
+      console.error('❌ Failed to delete project from backend:', error);
+
+      // Show error to user
+      const errorMessage = error.response?.data?.detail || 'Failed to delete project from backend';
+      alert(`Error: ${errorMessage}\n\nThe project was not deleted.`);
     }
-
-    console.log('✅ Project removed from chatbot:', projectId);
-    alert(`Project "${project.name}" has been removed from your chatbot.`);
   };
 
   const activeChat =
