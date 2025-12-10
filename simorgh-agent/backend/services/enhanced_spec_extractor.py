@@ -181,17 +181,24 @@ class EnhancedSpecExtractor:
                 messages=messages,
                 mode=llm_mode,
                 temperature=0.1,  # Low temperature for factual extraction
-                max_tokens=400
+                max_tokens=400  # Increased to allow flexible, descriptive extractions
+
+                
+
             )
 
             extracted_value = response.strip()
 
-            # Clean up common patterns
+            # Clean up common patterns - only filter explicit "not found" responses
             if extracted_value.lower() in ['not specified', 'not found', 'n/a', 'none', 'not mentioned']:
                 return ""
             
             extracted_value = extracted_value.replace("Extracted Information:", "").strip()
 
+            extracted_value = extracted_value.replace("**Extracted Information:**", "").strip()
+
+            # Remove common LLM wrapper phrases
+            extracted_value = extracted_value.replace("Extracted Information:", "").strip()
             extracted_value = extracted_value.replace("**Extracted Information:**", "").strip()
 
             return extracted_value
@@ -249,31 +256,19 @@ class EnhancedSpecExtractor:
         prompt = f"""
 Extract information for: **{field_readable}**
 
- 
 
 **Definition:**
 
 {guide.get('definition', 'N/A')}
 
- 
-
 **How to identify this information:**
-
 {guide.get('extraction_instructions', 'N/A')}
 
- 
-
 **Examples of possible formats:**
-
 {guide.get('examples', 'N/A')}
 
- 
-
 **Typical values (for reference):**
-
 {guide.get('common_values', 'N/A')}
-
- 
 
 **Related information:**
 
@@ -304,60 +299,32 @@ Extract information for: **{field_readable}**
  
 
 **Task:**
-
 Extract ANY relevant information about "{field_readable}" from the document context above.
 
- 
-
 **IMPORTANT - Be FLEXIBLE:**
-
 ✓ Accept product names, model numbers, or type descriptions
-
 ✓ Accept technical specifications (ratings, capacities, values with units)
-
 ✓ Accept requirements or mandatory conditions ("shall be provided...", "must have...")
-
 ✓ Accept descriptions of features or characteristics
-
 ✓ Accept presence/absence indicators ("included", "not required", "provided")
-
 ✓ Accept interlocking or operational requirements
-
 ✓ Combine multiple related pieces of information if found
 
- 
-
 **What to extract:**
-
 - If you find a product name or type → extract it
-
 - If you find technical specs or ratings → extract them
-
 - If you find requirements or conditions → extract them
-
 - If you find descriptions or features → extract them
-
 - If you find multiple relevant pieces → combine them concisely
 
- 
-
 **Format:**
-
 - Keep it concise but complete
-
 - Include units when applicable (kA, kV, mm, etc.)
-
 - Separate multiple items with semicolons if needed
-
 - Example: "Provided at line side; 80 kA peak capacity; Interlocked with circuit breaker"
 
- 
-
 **If no relevant information is found:**
-
 - Respond ONLY with: "Not specified"
-
- 
 
 **Extracted Information:**
 
