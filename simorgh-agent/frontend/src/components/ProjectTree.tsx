@@ -244,6 +244,7 @@ export function ProjectTree({
                   <button
                     onClick={() => onToggleProject(project.id)}
                     className="flex items-center gap-3 flex-1 text-left"
+                    title={project.name}
                   >
                     {project.isExpanded ? (
                       <ChevronDown className="w-5 h-5 text-gray-400" />
