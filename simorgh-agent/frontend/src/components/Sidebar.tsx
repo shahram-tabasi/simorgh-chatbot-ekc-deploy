@@ -22,31 +22,63 @@ export function Sidebar({
   onNewProject,
   onNewGeneralChat,
 }: SidebarProps) {
+  const [isMobile, setIsMobile] = React.useState(false);
+
+  // Detect mobile screen size
+  React.useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768); // md breakpoint
+    };
+
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   return (
     <>
+      {/* Mobile backdrop - only show on mobile when sidebar is open */}
+      {isMobile && isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onToggle}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30"
+        />
+      )}
+
       {/* Sidebar content */}
       <motion.div
         initial={false}
         animate={{
-          width: isOpen ? 320 : 0,
+          width: isOpen ? (isMobile ? '100%' : 320) : 0,
           opacity: isOpen ? 1 : 0
         }}
         transition={{
           duration: 0.3,
           ease: 'easeInOut'
         }}
-        className={`relative bg-black/40 backdrop-blur-xl border-white/10 overflow-hidden ${
+        className={`${
+          isMobile
+            ? 'fixed inset-y-0 z-40 w-full max-w-sm'
+            : 'relative'
+        } ${
+          side === 'right' && isMobile ? 'left-0' : ''
+        } ${
+          side === 'left' && isMobile ? 'right-0' : ''
+        } bg-black/40 backdrop-blur-xl border-white/10 overflow-hidden ${
           side === 'right' ? 'border-l' : 'border-r'
         } ${className}`}
       >
         <AnimatePresence>
           {isOpen && (
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0, x: side === 'right' ? -20 : 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: side === 'right' ? -20 : 20 }}
               transition={{ duration: 0.2 }}
-              className="w-80 h-full"
+              className={`${isMobile ? 'w-full' : 'w-80'} h-full overflow-y-auto`}
             >
               {/* دکمه toggle داخل sidebar - بالای صفحه */}
               <div

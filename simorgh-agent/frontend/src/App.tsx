@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { StarryBackground } from './components/StarryBackground';
+import { ThemeBackground } from './components/ThemeBackground';
 import { Sidebar } from './components/Sidebar';
 import { ProjectTree } from './components/ProjectTree';
 import { HistoryList } from './components/HistoryList';
@@ -11,16 +11,19 @@ import CreateChatModal from './components/CreateChatModal';
 import CreateProjectChatModal from './components/CreateProjectChatModal';
 import Login from './components/Login';
 import SpecTaskNotification from './components/SpecTaskNotification';
+import NotificationToast, { ToastNotification } from './components/NotificationToast';
 import SpecReview from './pages/SpecReview';
 import { useSidebar } from './hooks/useSidebar';
 import { useProjects } from './hooks/useProjects';
 import { useChat } from './hooks/useChat';
 import { LanguageProvider } from './context/LanguageContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider, useTheme } from './context/ThemeContext';
 
 // Main chat interface component
 function MainChat() {
   const { user } = useAuth();
+  const { notificationsEnabled } = useTheme();
   const rightSidebar = useSidebar(true);
   const leftSidebar = useSidebar(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
@@ -28,6 +31,7 @@ function MainChat() {
   const [showProjectChatModal, setShowProjectChatModal] = React.useState(false);
   const [selectedProjectForChat, setSelectedProjectForChat] = React.useState<string | null>(null);
   const [activeSpecTasks, setActiveSpecTasks] = React.useState<string[]>([]);
+  const [notifications, setNotifications] = React.useState<ToastNotification[]>([]);
 
   const {
     projects,
@@ -92,6 +96,56 @@ function MainChat() {
     createGeneralChat("New conversation");
   };
 
+  // Add notification when AI responds
+  const addNotification = React.useCallback((message: string) => {
+    if (!notificationsEnabled) return;
+
+    const notification: ToastNotification = {
+      id: Date.now().toString(),
+      message,
+      timestamp: Date.now(),
+    };
+
+    setNotifications(prev => [...prev, notification]);
+  }, [notificationsEnabled]);
+
+  // Watch for new AI messages
+  React.useEffect(() => {
+    if (messages.length === 0) return;
+
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage.role === 'assistant') {
+      // Get first 100 characters of message for notification
+      const preview = lastMessage.content.substring(0, 100);
+      addNotification(preview);
+    }
+  }, [messages.length, addNotification]); // Only trigger on new messages
+
+  // Remove notification
+  const removeNotification = React.useCallback((id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  }, []);
+
+  // Handle chat selection - close right sidebar on mobile
+  const handleSelectChat = React.useCallback((projectId: string | null, chatId: string) => {
+    selectChat(projectId, chatId);
+
+    // Close sidebar on mobile after selection
+    if (window.innerWidth < 768) {
+      rightSidebar.toggle();
+    }
+  }, [selectChat, rightSidebar]);
+
+  // Handle chat selection from history - close left sidebar on mobile
+  const handleSelectChatFromHistory = React.useCallback((projectId: string | null, chatId: string) => {
+    selectChat(projectId, chatId);
+
+    // Close sidebar on mobile after selection
+    if (window.innerWidth < 768) {
+      leftSidebar.toggle();
+    }
+  }, [selectChat, leftSidebar]);
+
   // هدر ثابت + پروژه‌ها
   const displayProjects = [
     {
@@ -122,7 +176,7 @@ function MainChat() {
   return (
     <LanguageProvider>
       <div className="w-full h-screen overflow-hidden relative bg-[#0a0e27]">
-        <StarryBackground />
+        <ThemeBackground />
 
         <div className="relative z-10 flex h-full">
           {/* سایدبار راست */}
@@ -141,7 +195,7 @@ function MainChat() {
               showGeneralChats={showGeneralChats}
               onToggleProject={toggleProject}
               onToggleGeneralChats={toggleGeneralChats}
-              onSelectChat={selectChat}
+              onSelectChat={handleSelectChat}
               onCreateProject={handleCreateProject}
               onCreateChat={handleCreateChat}
               onCreateGeneralChat={handleCreateGeneralChat}
@@ -163,7 +217,7 @@ function MainChat() {
 
           {/* سایدبار چپ */}
           <Sidebar isOpen={leftSidebar.isOpen} onToggle={leftSidebar.toggle} side="left">
-            <HistoryList projects={allProjectsForHistory} onSelectChat={selectChat} />
+            <HistoryList projects={allProjectsForHistory} onSelectChat={handleSelectChatFromHistory} />
           </Sidebar>
         </div>
 
@@ -220,6 +274,12 @@ function MainChat() {
             }}
           />
         ))}
+
+        {/* Toast notifications for AI messages */}
+        <NotificationToast
+          notifications={notifications}
+          onDismiss={removeNotification}
+        />
       </div>
     </LanguageProvider>
   );
@@ -277,7 +337,9 @@ export function App() {
   return (
     <AuthProvider>
       <LanguageProvider>
-        <AppContent />
+        <ThemeProvider>
+          <AppContent />
+        </ThemeProvider>
       </LanguageProvider>
     </AuthProvider>
   );
