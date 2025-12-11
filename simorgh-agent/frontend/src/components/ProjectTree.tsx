@@ -177,7 +177,7 @@ export function ProjectTree({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-6">
         {/* General Chats */}
         <div>
           <button
@@ -214,8 +214,9 @@ export function ProjectTree({
                       ? 'bg-emerald-500/20 text-emerald-400'
                       : 'text-gray-300 hover:bg-white/10'
                   }`}
+                  title={chat.title}
                 >
-                  {chat.title}
+                  <span className="block truncate">{chat.title}</span>
                 </button>
               ))}
             </motion.div>
@@ -281,8 +282,9 @@ export function ProjectTree({
                             ? 'bg-emerald-500/20 text-emerald-400'
                             : 'text-gray-300 hover:bg-white/10'
                         }`}
+                        title={chat.title}
                       >
-                        {chat.title}
+                        <span className="block truncate">{chat.title}</span>
                       </button>
                     ))}
                   </motion.div>
