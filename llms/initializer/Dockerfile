@@ -29,7 +29,8 @@ RUN apt-get update -y && \
 RUN pip install --no-cache-dir \
     huggingface-hub \
     requests \
-    tqdm
+    tqdm \
+    pyyaml
 
 # --------------------------------------------------------------
 #  Copy initializer script
