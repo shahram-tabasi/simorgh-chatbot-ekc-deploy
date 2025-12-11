@@ -1,4 +1,4 @@
-// src/components/SettingsPanel.tsx
+// src/components/SettingsPanel.tsx - UPDATED VERSION
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -9,17 +9,18 @@ import {
   Palette,
   LogOut,
   Sparkles,
-  Zap,
   Moon,
-  Sun,
-  Code2,
   ChevronDown,
   Bell,
-  BellOff
+  BellOff,
+  Star,
+  Code2,
+  Feather
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { showWarning } from '../utils/alerts';
 import { useAuth } from '../context/AuthContext';
+import { useTheme, ThemeType } from '../context/ThemeContext';
 
 const languages = [
   { code: 'en', name: 'English', flag: '🇺🇸' },
@@ -27,26 +28,25 @@ const languages = [
   { code: 'de', name: 'Deutsch', flag: '🇩🇪' }
 ] as const;
 
-const themes = [
-  { id: 'midnight', name: 'Midnight Pro', icon: Moon, gradient: 'from-purple-900 to-blue-900' },
-  { id: 'emerald', name: 'Emerald Glow', icon: Sparkles, gradient: 'from-emerald-700 to-teal-900' },
-  { id: 'sunset', name: 'Sunset Blaze', icon: Sun, gradient: 'from-orange-600 to-pink-700' },
-  { id: 'matrix', name: 'Matrix Code', icon: Code2, gradient: 'from-green-900 to-black' },
-  { id: 'cyberpunk', name: 'Cyberpunk', icon: Zap, gradient: 'from-pink-600 to-purple-800' },
+const themes: Array<{ id: ThemeType; name: string; icon: any; gradient: string }> = [
+  { id: 'default', name: 'Default (Starry)', icon: Star, gradient: 'from-indigo-900 to-purple-900' },
+  { id: 'pink-ekc', name: 'Soft Pink EKC', icon: Sparkles, gradient: 'from-pink-300 to-pink-500' },
+  { id: 'navy-simorgh', name: 'Navy Simorgh', icon: Feather, gradient: 'from-blue-900 to-indigo-900' },
+  { id: 'dark-matrix', name: 'Dark Matrix', icon: Code2, gradient: 'from-black to-green-900' },
+  { id: 'modern-dark', name: 'Modern Dark', icon: Moon, gradient: 'from-gray-800 to-gray-900' },
+  { id: 'clean-white', name: 'Clean White', icon: Palette, gradient: 'from-gray-100 to-white' },
 ];
 
 export default function SettingsPanel() {
   const [isOpen, setIsOpen] = React.useState(false);
   const [langOpen, setLangOpen] = React.useState(false);
-  const [selectedTheme, setSelectedTheme] = React.useState('midnight');
   const [aiMode, setAiMode] = React.useState<'online' | 'offline'>('online');
-  const [notifEnabled, setNotifEnabled] = React.useState(false);
 
   const { language, setLanguage } = useLanguage();
   const { user, logout } = useAuth();
-  const currentLang = languages.find(l => l.code === language) || languages[0];
+  const { theme, setTheme, notificationsEnabled, setNotificationsEnabled } = useTheme();
 
-  // Get display name from user
+  const currentLang = languages.find(l => l.code === language) || languages[0];
   const displayName = user?.EMPUSERNAME || 'Guest User';
   const userStatus = user ? 'Pro Member • Online' : 'Guest';
 
@@ -55,57 +55,19 @@ export default function SettingsPanel() {
     const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
     if (savedMode) {
       setAiMode(savedMode);
-      console.log('🔄 Loaded AI mode from storage:', savedMode);
     }
-  }, []);
-
-  // چک کردن وضعیت نوتیفیکیشن از localStorage
-  React.useEffect(() => {
-    const saved = localStorage.getItem('notifications_enabled') === 'true';
-    setNotifEnabled(saved && Notification.permission === 'granted');
   }, []);
 
   // Handle AI mode change
   const handleAiModeChange = (mode: 'online' | 'offline') => {
     setAiMode(mode);
     localStorage.setItem('llm_mode', mode);
-    console.log('✅ AI mode changed to:', mode);
-
-    // Dispatch custom event for same-window communication
     window.dispatchEvent(new CustomEvent('llm-mode-changed', { detail: mode }));
   };
 
-  // فعال‌سازی نوتیفیکیشن
-  const handleEnableNotifications = async () => {
-    if (!('Notification' in window)) {
-      showWarning('Not Supported', 'Your browser does not support notifications');
-      return;
-    }
-
-    if (Notification.permission === 'granted') {
-      const newState = !notifEnabled;
-      setNotifEnabled(newState);
-      localStorage.setItem('notifications_enabled', String(newState));
-
-      if (newState) {
-        new Notification('✅ اعلان‌ها فعال شد!', {
-          body: 'از این به بعد پیام‌های جدید را اعلام می‌کنیم',
-          icon: '/favicon.ico'
-        });
-      }
-      return;
-    }
-
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') {
-      setNotifEnabled(true);
-      localStorage.setItem('notifications_enabled', 'true');
-
-      new Notification('🎉 اعلان‌ها فعال شد!', {
-        body: 'از این به بعد پیام‌های جدید را اعلام می‌کنیم',
-        icon: '/favicon.ico'
-      });
-    }
+  // Handle notification toggle
+  const handleNotificationToggle = () => {
+    setNotificationsEnabled(!notificationsEnabled);
   };
 
   return (
@@ -136,7 +98,7 @@ export default function SettingsPanel() {
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-              className="fixed right-0 top-0 h-full w-96 bg-black/95 backdrop-blur-3xl border-l border-white/10 z-50 overflow-y-auto"
+              className="fixed right-0 top-0 h-full w-full sm:w-96 bg-black/95 backdrop-blur-3xl border-l border-white/10 z-50 overflow-y-auto"
             >
               <div className="p-6 space-y-8">
                 {/* هدر + دکمه بستن */}
@@ -145,7 +107,7 @@ export default function SettingsPanel() {
                     <Palette className="w-8 h-8 text-purple-400" />
                     Settings
                   </h2>
-                  <button 
+                  <button
                     onClick={() => setIsOpen(false)}
                     className="p-3 hover:bg-white/10 rounded-xl transition"
                   >
@@ -253,54 +215,54 @@ export default function SettingsPanel() {
                   </div>
                 </div>
 
-                {/* Notifications */}
+                {/* Notifications - NOW ENABLED */}
                 <div>
                   <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Notifications</h3>
                   <button
-                    onClick={handleEnableNotifications}
+                    onClick={handleNotificationToggle}
                     className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                      notifEnabled 
-                        ? 'border-emerald-500 bg-emerald-500/10' 
+                      notificationsEnabled
+                        ? 'border-emerald-500 bg-emerald-500/10'
                         : 'border-white/10 hover:border-emerald-500 hover:bg-emerald-500/5'
                     }`}
                   >
-                    {notifEnabled ? (
+                    {notificationsEnabled ? (
                       <Bell className="w-6 h-6 text-emerald-400" />
                     ) : (
                       <BellOff className="w-6 h-6 text-gray-400" />
                     )}
                     <div className="text-left">
                       <div className="text-white font-medium">
-                        {notifEnabled ? 'Notifications Active ✓' : 'Enable Notifications'}
+                        {notificationsEnabled ? 'Notifications Active ✓' : 'Enable Notifications'}
                       </div>
                       <div className="text-xs text-gray-400">
-                        {notifEnabled 
-                          ? 'You will be notified of new messages' 
-                          : 'Get notified when AI responds'
+                        {notificationsEnabled
+                          ? 'Toast notifications for AI messages'
+                          : 'Get toast alerts when AI responds'
                         }
                       </div>
                     </div>
                   </button>
                 </div>
 
-                {/* تم‌ها */}
+                {/* Themes - NOW WORKING */}
                 <div>
                   <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Themes</h3>
                   <div className="grid grid-cols-2 gap-3">
-                    {themes.map((theme) => (
+                    {themes.map((themeOption) => (
                       <button
-                        key={theme.id}
-                        onClick={() => setSelectedTheme(theme.id)}
+                        key={themeOption.id}
+                        onClick={() => setTheme(themeOption.id)}
                         className={`relative overflow-hidden rounded-xl p-4 border-2 transition-all ${
-                          selectedTheme === theme.id 
-                            ? 'border-emerald-500 shadow-lg shadow-emerald-500/30' 
+                          theme === themeOption.id
+                            ? 'border-emerald-500 shadow-lg shadow-emerald-500/30'
                             : 'border-white/10 hover:border-white/30'
                         }`}
                       >
-                        <div className={`absolute inset-0 bg-gradient-to-br ${theme.gradient} opacity-80`} />
-                        <div className="relative flex items-center gap-3">
-                          <theme.icon className="w-6 h-6 text-white" />
-                          <span className="text-white font-medium text-sm">{theme.name}</span>
+                        <div className={`absolute inset-0 bg-gradient-to-br ${themeOption.gradient} opacity-80`} />
+                        <div className="relative flex flex-col items-center gap-2">
+                          <themeOption.icon className="w-6 h-6 text-white" />
+                          <span className="text-white font-medium text-xs text-center">{themeOption.name}</span>
                         </div>
                       </button>
                     ))}
