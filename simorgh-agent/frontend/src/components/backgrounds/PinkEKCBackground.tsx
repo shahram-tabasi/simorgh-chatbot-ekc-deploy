@@ -59,14 +59,22 @@ export function PinkEKCBackground() {
   }, []);
 
   return (
-    <div className="fixed inset-0 pointer-events-none" style={{ background: '#f9dfe8' }}>
+    <div className="fixed inset-0 pointer-events-none" style={{ background: '#fef5f8' }}>
       <canvas ref={canvasRef} className="absolute inset-0" />
+
+      {/* Soft gradient overlay for better UI contrast */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background: 'radial-gradient(ellipse at center, rgba(249, 223, 232, 0.3) 0%, transparent 70%)'
+        }}
+      />
 
       {/* EKC Text */}
       <div className="absolute inset-0 flex items-center justify-center">
         <div
           className="text-9xl font-bold opacity-10 select-none"
-          style={{ color: '#d4a5b8' }}
+          style={{ color: '#c28ba0' }}
         >
           EKC
         </div>
