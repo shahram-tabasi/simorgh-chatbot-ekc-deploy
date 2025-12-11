@@ -86,7 +86,19 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     tiktoken==0.11.0
 
 # --------------------------------------------------------------
-#  Remaining requirements (only extras)
+#  vLLM - Install carefully to preserve existing packages
+# --------------------------------------------------------------
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir \
+    vllm==0.6.3 \
+    --extra-index-url https://download.pytorch.org/whl/cu128 && \
+    # Reinstall torch to ensure correct CUDA version after vLLM
+    pip install --no-cache-dir --force-reinstall --no-deps \
+    "torch==2.9.1+cu128" \
+    --extra-index-url https://download.pytorch.org/whl/cu128
+
+# --------------------------------------------------------------
+#  Remaining requirements (only extras, vLLM now installed above)
 # --------------------------------------------------------------
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
