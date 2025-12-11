@@ -5,9 +5,12 @@ services:
     container_name: model_initializer
     volumes:
       # Mount host directory where models will be stored
-      - ${MODEL_CACHE_PATH:-/home/ubuntu/models/huggingface}:/models/huggingface
+      # This needs to persist both HF cache and the 16-bit model
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
     environment:
       - PYTHONUNBUFFERED=1
+      # Optional: HF token for gated models
+      - HF_TOKEN=${HF_TOKEN:-}
     networks:
       - ai_net
     restart: "no" # Run once and exit
@@ -24,11 +27,32 @@ services:
       - CUDA_VISIBLE_DEVICES=0
       # NOTE: Do NOT use HF_HUB_OFFLINE - Unsloth requires network access for metadata
 
+      # vLLM and model configuration
+      - MODEL_PATH=/models/unsloth-gpt-oss-20b-16bit
+      - HF_TOKEN=${HF_TOKEN:-}
+
+      # LangChain tool configuration
+      - ENABLE_SEARCH_TOOL=true
+      - ENABLE_PYTHON_REPL=false  # Disabled by default for security
+      - AGENT_VERBOSE=false
+
+      # Optional: Self-hosted search API
+      - SEARCH_API_URL=${SEARCH_API_URL:-}
+      - SEARCH_API_KEY=${SEARCH_API_KEY:-}
+
+      # Python REPL configuration (if enabled)
+      - PYTHON_REPL_TIMEOUT=10
+      - PYTHON_REPL_SANDBOX=true
+
     expose:
       - "9000"
     volumes:
-      # Mount the same model cache (read-only for safety)
-      - ${MODEL_CACHE_PATH:-/home/ubuntu/models/huggingface}:/root/.cache/huggingface/hub:ro
+      # Mount the models directory (contains both HF cache and 16-bit model)
+      # Read-only for safety - models are already downloaded by initializer
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models:ro
+
+      # Also mount to HF cache location for compatibility with unsloth 4-bit fallback
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface/hub:ro
     networks:
       - ai_net
     deploy:
