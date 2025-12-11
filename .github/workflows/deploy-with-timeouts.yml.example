@@ -1,0 +1,27 @@
+# Deployment step with improved SSH handling
+- name: Deploy to Target Server
+  env:
+    SSH_OPTIONS: "-o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no"
+  run: |
+    # Create tarball of llms directory
+    tar -czf /tmp/llms-deploy.tar.gz -C ./llms .
+
+    # Copy tarball to central server with timeout
+    scp -P 2324 $SSH_OPTIONS -i ~/.ssh/deploy_key /tmp/llms-deploy.tar.gz ***@217.219.39.212:/tmp/
+
+    # Extract on target server via central server with timeouts
+    ssh -p 2324 $SSH_OPTIONS -i ~/.ssh/deploy_key ***@217.219.39.212 << 'ENDSSH'
+    set -e
+
+    # Copy tarball to target server with timeout
+    timeout 300 scp -o ConnectTimeout=30 -o ServerAliveInterval=60 /tmp/llms-deploy.tar.gz ***@192.168.1.61:/tmp/
+
+    # Extract on target server with timeout
+    timeout 300 ssh -o ConnectTimeout=30 -o ServerAliveInterval=60 ***@192.168.1.61 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'
+
+    # Clean up central server
+    rm /tmp/llms-deploy.tar.gz
+    ENDSSH
+
+    # Clean up local
+    rm /tmp/llms-deploy.tar.gz

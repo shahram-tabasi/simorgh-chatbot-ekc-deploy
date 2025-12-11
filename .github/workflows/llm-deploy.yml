@@ -136,29 +136,44 @@ jobs:
       - name: Create directories on target server
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models/huggingface'"
+            "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models ~/models/huggingface'"
 
       - name: Copy deployment files via central server
+        env:
+          SSH_OPTS: "-o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no"
         run: |
-          # Create tarball of llms directory
-          tar -czf /tmp/llms-deploy.tar.gz -C ./llms .
-          
-          # Copy tarball to central server
-          scp -P 2324 -i ~/.ssh/deploy_key /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/
-          
-          # Extract on target server via central server
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          # Create tarball of llms directory (excluding unnecessary files)
+          tar -czf /tmp/llms-deploy.tar.gz -C ./llms \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.git' \
+            --exclude='tests' \
+            --exclude='*.md' \
+            .
+
+          echo "Tarball size: $(du -h /tmp/llms-deploy.tar.gz | cut -f1)"
+
+          # Copy tarball to central server with timeout
+          timeout 180 scp -P 2324 $SSH_OPTS -i ~/.ssh/deploy_key \
+            /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/
+
+          # Extract on target server via central server with timeouts
+          timeout 300 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
           set -e
-          # Copy tarball to target server
-          scp /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/
-          
-          # Extract on target server
-          ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'
-          
+
+          # Copy tarball to target server with timeout
+          timeout 240 scp -o ConnectTimeout=30 -o ServerAliveInterval=60 \
+            /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/
+
+          # Extract on target server with timeout
+          timeout 60 ssh -o ConnectTimeout=30 -o ServerAliveInterval=60 \
+            ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'
+
           # Clean up central server
           rm /tmp/llms-deploy.tar.gz
+          echo "Deployment files transferred successfully"
           ENDSSH
-          
+
           # Clean up local
           rm /tmp/llms-deploy.tar.gz
 
@@ -173,7 +188,7 @@ jobs:
             echo GITHUB_REGISTRY=${{ env.REGISTRY }} > .env && \
             echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} >> .env && \
             echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
-            echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env\"'"
+            echo MODEL_CACHE_PATH=/home/ubuntu/models >> .env\"'"
 
       - name: Verify .env file
         run: |
@@ -200,42 +215,68 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
             "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && docker compose pull\"'"
 
-      - name: Start services
+      - name: Start services (smart deployment)
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && docker compose up -d\"'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
+            if [ -f /home/ubuntu/models/.init_complete ]; then \
+              echo Models already present, starting all services...; \
+              docker compose up -d; \
+            else \
+              echo Models not found, starting initializer in background...; \
+              docker compose up -d model_initializer; \
+              echo Initializer started - will take 30-60 minutes for first download; \
+              echo Once complete, re-run deployment to start AI service; \
+            fi\"'"
 
-      - name: Wait for model initializer
+      - name: Check model initializer status
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"timeout 1800 bash -c \\\"
-              while docker ps -a --format {{.Names}} | grep -q model_initializer; do
-                STATUS=\\\\\\\$(docker inspect model_initializer --format={{.State.Status}} 2>/dev/null || echo not_found)
-                if [ \\\\\\\$STATUS = exited ]; then
-                  EXIT_CODE=\\\\\\\$(docker inspect model_initializer --format={{.State.ExitCode}})
-                  if [ \\\\\\\$EXIT_CODE = 0 ]; then
-                    echo Model initializer completed successfully
-                    break
-                  else
-                    echo Model initializer failed with exit code \\\\\\\$EXIT_CODE
-                    docker logs model_initializer --tail=50
-                    exit 1
-                  fi
-                fi
-                echo Initializer status: \\\\\\\$STATUS
-                sleep 10
-              done
-            \\\" || echo Warning: Initializer monitoring timed out\"'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
+            if docker ps --format {{.Names}} | grep -q model_initializer; then \
+              echo ⏳ Model initializer is running...; \
+              echo Monitor with: docker logs -f model_initializer; \
+            elif docker ps -a --format {{.Names}} | grep -q model_initializer; then \
+              EXIT_CODE=\\\$(docker inspect model_initializer --format={{.State.ExitCode}} 2>/dev/null || echo 999); \
+              if [ \\\$EXIT_CODE -eq 0 ]; then \
+                echo ✓ Model initializer completed successfully; \
+              else \
+                echo ✗ Model initializer failed with exit code \\\$EXIT_CODE; \
+                docker logs model_initializer --tail=50; \
+              fi; \
+            else \
+              echo ℹ Model initializer has not run yet; \
+            fi\"'"
 
-      - name: Wait for AI service to be healthy
+      - name: Wait for AI service to be healthy (if started)
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && timeout 300 bash -c \\\"until docker compose ps | grep -q healthy; do sleep 10; echo Waiting for services...; done\\\" || echo Warning: Some services may not be healthy yet\"'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
+            if docker ps --format {{.Names}} | grep -q ai_service; then \
+              echo Waiting for AI service to be healthy...; \
+              timeout 300 bash -c \\\"until docker compose ps | grep -q healthy; do sleep 10; echo Still waiting...; done\\\" && echo ✓ Services are healthy || echo ⚠ Health check timed out; \
+            else \
+              echo ℹ AI service not started yet - waiting for model download to complete; \
+            fi\"'"
 
       - name: Show service status
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && echo === Docker Compose Status === && docker compose ps\"'"
+            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
+            echo === Docker Compose Status === && \
+            docker compose ps && \
+            echo && \
+            echo === Deployment Summary === && \
+            if [ -f /home/ubuntu/models/.init_complete ]; then \
+              echo ✓ Models: Downloaded; \
+            else \
+              echo ⏳ Models: Downloading in background; \
+            fi && \
+            if docker ps --format {{.Names}} | grep -q ai_service; then \
+              echo ✓ AI Service: Running; \
+            else \
+              echo ⏳ AI Service: Waiting for models; \
+            fi\"'"
 
       - name: Check GPU availability
         run: |
