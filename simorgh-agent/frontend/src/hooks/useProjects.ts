@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Project, Chat, Message } from '../types';
 import axios from 'axios';
-import { showSuccess, showError, showInfo } from '../utils/alerts';
+import { showSuccess, showError, showInfo, showConfirm } from '../utils/alerts';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const initialProjects: Project[] = [];
@@ -649,7 +649,15 @@ export function useProjects(userId?: string) {
       return;
     }
 
-    if (!confirm('Are you sure you want to delete this chat? This action cannot be undone.')) {
+    // Beautiful confirmation dialog
+    const confirmed = await showConfirm(
+      'Delete Chat?',
+      'Are you sure you want to delete this chat? This action cannot be undone.',
+      'Delete',
+      'Cancel'
+    );
+
+    if (!confirmed) {
       return;
     }
 
@@ -689,6 +697,7 @@ export function useProjects(userId?: string) {
       }
 
       console.log('✅ Chat deleted:', chatId);
+      showSuccess('Chat Deleted', 'Chat has been successfully deleted');
     } catch (error: any) {
       console.error('❌ Failed to delete chat:', error);
       showError('Delete Failed', error.response?.data?.detail || 'Failed to delete chat');
@@ -708,8 +717,20 @@ export function useProjects(userId?: string) {
       return;
     }
 
-    // Confirmation dialog
-    if (!confirm(`Are you sure you want to PERMANENTLY DELETE project "${project.name}"?\n\nThis will COMPLETELY REMOVE:\n✗ All chat history from Redis\n✗ All project data from Neo4j database\n✗ All documents and specifications\n✗ All extraction guides and values\n\n⚠️ THIS ACTION CANNOT BE UNDONE!\n\nThe project will be completely deleted from the system.`)) {
+    // Beautiful confirmation dialog with detailed warning
+    const confirmed = await showConfirm(
+      `Delete Project "${project.name}"?`,
+      `⚠️ This will PERMANENTLY DELETE:\n\n` +
+      `✗ All chat history from Redis\n` +
+      `✗ All project data from Neo4j database\n` +
+      `✗ All documents and specifications\n` +
+      `✗ All extraction guides and values\n\n` +
+      `THIS ACTION CANNOT BE UNDONE!`,
+      'Delete Forever',
+      'Cancel'
+    );
+
+    if (!confirmed) {
       return;
     }
 

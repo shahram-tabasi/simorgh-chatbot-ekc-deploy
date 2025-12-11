@@ -11,6 +11,7 @@ import {
 import { Project, Chat } from '../types';
 import ContextMenu from './ContextMenu';
 import RenameModal from './RenameModal';
+import { Tooltip } from './Tooltip';
 
 interface ProjectTreeProps {
   projects: Project[];
@@ -205,19 +206,19 @@ export function ProjectTree({
           {showGeneralChats && generalChats.length > 0 && (
             <motion.div className="ml-8 mt-2 space-y-1">
               {generalChats.map((chat) => (
-                <button
-                  key={chat.id}
-                  onClick={() => onSelectChat(null, chat.id)}
-                  onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, null)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition ${
-                    activeChatId === chat.id && !activeProjectId
-                      ? 'bg-emerald-500/20 text-emerald-400'
-                      : 'text-gray-300 hover:bg-white/10'
-                  }`}
-                  title={chat.title}
-                >
-                  <span className="block truncate">{chat.title}</span>
-                </button>
+                <Tooltip key={chat.id} content={chat.title} position="right">
+                  <button
+                    onClick={() => onSelectChat(null, chat.id)}
+                    onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, null)}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition ${
+                      activeChatId === chat.id && !activeProjectId
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'text-gray-300 hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="block truncate">{chat.title}</span>
+                  </button>
+                </Tooltip>
               ))}
             </motion.div>
           )}
@@ -241,21 +242,22 @@ export function ProjectTree({
                   className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition"
                   onContextMenu={(e) => handleProjectContextMenu(e, project.id, project.name)}
                 >
-                  <button
-                    onClick={() => onToggleProject(project.id)}
-                    className="flex items-center gap-3 flex-1 text-left"
-                    title={project.name}
-                  >
-                    {project.isExpanded ? (
-                      <ChevronDown className="w-5 h-5 text-gray-400" />
-                    ) : (
-                      <ChevronRight className="w-5 h-5 text-gray-400" />
-                    )}
-                    <Folder className="w-5 h-5 text-indigo-400" />
-                    <span className="font-bold text-white">
-                      {(project as any).oeNumber || project.id}
-                    </span>
-                  </button>
+                  <Tooltip content={project.name} position="right">
+                    <button
+                      onClick={() => onToggleProject(project.id)}
+                      className="flex items-center gap-3 flex-1 text-left"
+                    >
+                      {project.isExpanded ? (
+                        <ChevronDown className="w-5 h-5 text-gray-400" />
+                      ) : (
+                        <ChevronRight className="w-5 h-5 text-gray-400" />
+                      )}
+                      <Folder className="w-5 h-5 text-indigo-400" />
+                      <span className="font-bold text-white">
+                        {(project as any).oeNumber || project.id}
+                      </span>
+                    </button>
+                  </Tooltip>
 
                   {/* Add Page + */}
                   <button
@@ -274,19 +276,19 @@ export function ProjectTree({
                 {project.isExpanded && project.chats.length > 0 && (
                   <motion.div className="ml-10 mt-2 space-y-1">
                     {project.chats.map((chat) => (
-                      <button
-                        key={chat.id}
-                        onClick={() => onSelectChat(project.id, chat.id)}
-                        onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, project.id)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition ${
-                          activeChatId === chat.id
-                            ? 'bg-emerald-500/20 text-emerald-400'
-                            : 'text-gray-300 hover:bg-white/10'
-                        }`}
-                        title={chat.title}
-                      >
-                        <span className="block truncate">{chat.title}</span>
-                      </button>
+                      <Tooltip key={chat.id} content={chat.title} position="right">
+                        <button
+                          onClick={() => onSelectChat(project.id, chat.id)}
+                          onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, project.id)}
+                          className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition ${
+                            activeChatId === chat.id
+                              ? 'bg-emerald-500/20 text-emerald-400'
+                              : 'text-gray-300 hover:bg-white/10'
+                          }`}
+                        >
+                          <span className="block truncate">{chat.title}</span>
+                        </button>
+                      </Tooltip>
                     ))}
                   </motion.div>
                 )}
