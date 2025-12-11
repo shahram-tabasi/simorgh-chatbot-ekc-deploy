@@ -95,20 +95,38 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # --------------------------------------------------------------
 #  Application code
 # --------------------------------------------------------------
+COPY app.py .
 COPY ai_server.py .
 COPY saved_lora_adapters ./saved_lora_adapters
+COPY services ./services
+COPY api ./api
+COPY tools ./tools
+COPY utils ./utils
+
+# --------------------------------------------------------------
+#  Create model cache directory
+# --------------------------------------------------------------
+RUN mkdir -p /models
 
 # --------------------------------------------------------------
 #  Expose + Healthcheck
 # --------------------------------------------------------------
 EXPOSE 9000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD wget -qO- http://localhost:9000/health || exit 1
 
 # --------------------------------------------------------------
-#  Run server
+#  Environment variables (can be overridden at runtime)
 # --------------------------------------------------------------
-CMD ["python", "-m", "uvicorn", "ai_server:app", \
+ENV ENABLE_SEARCH_TOOL=true \
+    ENABLE_PYTHON_REPL=false \
+    AGENT_VERBOSE=false \
+    MODEL_PATH=/models/unsloth-gpt-oss-20b-16bit
+
+# --------------------------------------------------------------
+#  Run server - Use new app.py with OpenAI-compatible endpoints
+# --------------------------------------------------------------
+CMD ["python", "-m", "uvicorn", "app:app", \
     "--host", "0.0.0.0", "--port", "9000", \
     "--workers", "1", "--timeout-keep-alive", "120"]

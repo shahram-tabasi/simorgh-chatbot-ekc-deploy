@@ -5,5 +5,40 @@ einops
 # Monitoring
 psutil
 
-# Note: numpy, scipy, scikit-learn, pandas are already included
-# in the PyTorch base image with compatible versions (NumPy 2.x)
+# vLLM for high-performance inference
+vllm>=0.6.0
+
+# Hugging Face utilities
+huggingface_hub>=0.20.0
+
+# LangChain for agent orchestration
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-experimental>=0.3.0
+
+# Search tools
+duckduckgo-search>=6.0.0
+
+# Prometheus metrics
+prometheus-client>=0.20.0
+
+# Additional utilities
+aiofiles>=24.0.0
+
+# Note: The following are already in the base image or installed in Dockerfile:
+# - torch, torchvision, torchaudio (2.9.1+cu128)
+# - transformers (4.56.2)
+# - accelerate (1.10.1)
+# - peft (0.17.1)
+# - safetensors (0.6.2)
+# - tokenizers (0.22.1)
+# - bitsandbytes
+# - xformers (0.0.33)
+# - unsloth
+# - fastapi (0.116.1)
+# - uvicorn (0.35.0)
+# - pydantic (2.11.9)
+# - datasets (3.6.0)
+# - sentencepiece (0.2.1)
+# - sentence-transformers (5.1.0)
+# - tiktoken (0.11.0)
