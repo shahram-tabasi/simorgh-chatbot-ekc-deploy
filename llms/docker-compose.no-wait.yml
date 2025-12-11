@@ -1,0 +1,120 @@
+services:
+  # Model Initializer - Runs once to download models (non-blocking)
+  model_initializer:
+    image: ${GITHUB_REGISTRY}/${GITHUB_REPOSITORY_OWNER}/llm-model-initializer:${IMAGE_TAG:-latest}
+    container_name: model_initializer
+    volumes:
+      # Mount host directory where models will be stored
+      # This needs to persist both HF cache and the 16-bit model
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Optional: HF token for gated models
+      - HF_TOKEN=${HF_TOKEN:-}
+    networks:
+      - ai_net
+    restart: "no" # Run once and exit
+
+  # AI Service (Local LLM) - Starts immediately, waits internally for models
+  ai_service:
+    image: ${GITHUB_REGISTRY}/${GITHUB_REPOSITORY_OWNER}/llm-ai-service:${IMAGE_TAG:-latest}
+    container_name: ai_service
+    # Removed depends_on to allow non-blocking deployment
+    # Service will wait internally for models to be available
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0
+      # NOTE: Do NOT use HF_HUB_OFFLINE - Unsloth requires network access for metadata
+
+      # vLLM and model configuration
+      - MODEL_PATH=/models/unsloth-gpt-oss-20b-16bit
+      - HF_TOKEN=${HF_TOKEN:-}
+
+      # LangChain tool configuration
+      - ENABLE_SEARCH_TOOL=true
+      - ENABLE_PYTHON_REPL=false  # Disabled by default for security
+      - AGENT_VERBOSE=false
+
+      # Optional: Self-hosted search API
+      - SEARCH_API_URL=${SEARCH_API_URL:-}
+      - SEARCH_API_KEY=${SEARCH_API_KEY:-}
+
+      # Python REPL configuration (if enabled)
+      - PYTHON_REPL_TIMEOUT=10
+      - PYTHON_REPL_SANDBOX=true
+
+    expose:
+      - "9000"
+    volumes:
+      # Mount the models directory (contains both HF cache and 16-bit model)
+      # Read-only for safety - models are already downloaded by initializer
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models:ro
+
+      # Also mount to HF cache location for compatibility with unsloth 4-bit fallback
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface/hub:ro
+    networks:
+      - ai_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:9000/health | grep -q 'healthy' || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s # 5 minutes - allows time for models to download if needed
+    restart: unless-stopped
+
+  # Nginx for secure routing
+  nginx:
+    image: nginx:alpine
+    container_name: nginx_ai
+    depends_on:
+      ai_service:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    environment:
+      - TZ=Asia/Tehran
+    volumes:
+      - ./nginx_configs/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - ai_net
+    restart: unless-stopped
+
+  # GPU Monitor (Optional but recommended)
+  gpu_monitor:
+    image: ${GITHUB_REGISTRY}/${GITHUB_REPOSITORY_OWNER}/llm-gpu-monitor:${IMAGE_TAG:-latest}
+    container_name: gpu_monitor
+    environment:
+      - GPU_MEMORY_THRESHOLD=90
+      - GPU_IDLE_THRESHOLD=5
+      - IDLE_DURATION=60
+      - CHECK_INTERVAL=10
+      - TARGET_CONTAINER=ai_service
+      - BACKEND_URL=http://ai_service:9000
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ utility ]
+    networks:
+      - ai_net
+    depends_on:
+      ai_service:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  ai_net:
+    driver: bridge
