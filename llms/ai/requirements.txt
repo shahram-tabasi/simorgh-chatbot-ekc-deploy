@@ -5,8 +5,8 @@ einops
 # Monitoring
 psutil
 
-# vLLM for high-performance inference
-vllm>=0.6.0
+# NOTE: vLLM is now installed in Dockerfile (separate layer) to avoid dependency conflicts
+# This prevents unnecessary reinstallation of torch, numpy, pydantic, etc.
 
 # Hugging Face utilities
 huggingface_hub>=0.20.0
@@ -42,3 +42,4 @@ aiofiles>=24.0.0
 # - sentencepiece (0.2.1)
 # - sentence-transformers (5.1.0)
 # - tiktoken (0.11.0)
+# - vllm (0.6.3) - installed in separate Dockerfile layer
