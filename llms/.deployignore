@@ -1,0 +1,46 @@
+# Files to exclude from deployment tarball
+# Add patterns for files that don't need to be deployed
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Tests
+tests/
+**/test_*.py
+pytest.ini
+
+# Documentation
+README.md
+*.md
+docs/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large binary files that are pulled from registry
+# (These are in Docker images, not needed in tarball)
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+.cache/
