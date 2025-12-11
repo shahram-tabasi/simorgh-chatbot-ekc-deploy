@@ -81,3 +81,5 @@ function NotificationItem({
     </motion.div>
   );
 }
+
+export default NotificationToast;
