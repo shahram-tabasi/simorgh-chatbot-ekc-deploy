@@ -2,10 +2,19 @@
 # Add models that need to be downloaded before services start
 
 models:
+  # 4-bit quantized model (for fallback/legacy support)
   - name: "unsloth/gpt-oss-20b-unsloth-bnb-4bit"
     type: "huggingface"
     cache_dir: "/models/huggingface"
-    
+    description: "4-bit quantized model for fallback"
+
+  # 16-bit full precision model (for vLLM)
+  - name: "unsloth/gpt-oss-20b"
+    type: "huggingface"
+    cache_dir: "/models/huggingface"
+    local_dir: "/models/unsloth-gpt-oss-20b-16bit"
+    description: "16-bit model for vLLM inference"
+
   # Add more models as needed
   # - name: "another/model"
   #   type: "huggingface"

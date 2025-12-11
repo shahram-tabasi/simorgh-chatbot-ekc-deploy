@@ -50,12 +50,31 @@ def load_config() -> Dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def check_model_exists(model_name: str, cache_dir: str) -> bool:
+def check_model_exists(model_name: str, cache_dir: str, local_dir: str = None) -> bool:
     """Check if model is already downloaded"""
+    # If local_dir is specified, check that directory instead
+    if local_dir:
+        model_path = Path(local_dir)
+        if model_path.exists():
+            # Check if directory has model files (config.json or pytorch_model.bin)
+            has_config = (model_path / "config.json").exists()
+            has_model = any(model_path.glob("*.bin")) or any(model_path.glob("*.safetensors"))
+
+            if has_config and has_model:
+                model_size = sum(f.stat().st_size for f in model_path.rglob('*') if f.is_file())
+                size_gb = model_size / (1024**3)
+                log(f"Model already exists: {model_name} in {local_dir} ({size_gb:.2f} GB)", "SUCCESS")
+                return True
+            else:
+                log(f"Local dir exists but incomplete: {local_dir}", "WARNING")
+                return False
+        return False
+
+    # Otherwise check cache directory
     # Convert model name to cache directory format
     cache_model_name = model_name.replace("/", "--")
     model_path = Path(cache_dir) / f"models--{cache_model_name}"
-    
+
     if model_path.exists():
         # Check if download is complete (no .incomplete files)
         incomplete_files = list(model_path.rglob("*.incomplete"))
@@ -67,29 +86,52 @@ def check_model_exists(model_name: str, cache_dir: str) -> bool:
         else:
             log(f"Found incomplete download, will retry: {model_name}", "WARNING")
             return False
-    
+
     return False
 
-def download_huggingface_model(model_name: str, cache_dir: str) -> bool:
+def download_huggingface_model(model_name: str, cache_dir: str, local_dir: str = None) -> bool:
     """Download model from Hugging Face"""
     try:
         log(f"Starting download: {model_name}", "INFO")
-        log(f"Cache directory: {cache_dir}", "INFO")
-        
-        # Ensure cache directory exists
-        Path(cache_dir).mkdir(parents=True, exist_ok=True)
-        
-        # Download the model
-        snapshot_download(
-            repo_id=model_name,
-            cache_dir=cache_dir,
-            resume_download=True,
-            local_files_only=False
-        )
-        
-        log(f"Successfully downloaded: {model_name}", "SUCCESS")
+
+        # If local_dir is specified, download directly to that directory
+        if local_dir:
+            log(f"Target directory: {local_dir}", "INFO")
+            log(f"Cache directory: {cache_dir}", "INFO")
+
+            # Ensure both directories exist
+            Path(local_dir).mkdir(parents=True, exist_ok=True)
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+            # Download to local_dir with cache fallback
+            snapshot_download(
+                repo_id=model_name,
+                local_dir=local_dir,
+                local_dir_use_symlinks=False,
+                cache_dir=cache_dir,
+                resume_download=True,
+                local_files_only=False
+            )
+
+            log(f"Successfully downloaded to: {local_dir}", "SUCCESS")
+        else:
+            log(f"Cache directory: {cache_dir}", "INFO")
+
+            # Ensure cache directory exists
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+            # Download the model to cache only
+            snapshot_download(
+                repo_id=model_name,
+                cache_dir=cache_dir,
+                resume_download=True,
+                local_files_only=False
+            )
+
+            log(f"Successfully downloaded: {model_name}", "SUCCESS")
+
         return True
-        
+
     except Exception as e:
         log(f"Failed to download {model_name}: {str(e)}", "ERROR")
         return False
@@ -125,17 +167,21 @@ def main():
         model_name = model_config.get("name")
         model_type = model_config.get("type", "huggingface")
         cache_dir = model_config.get("cache_dir", "/models/huggingface")
-        
+        local_dir = model_config.get("local_dir")  # Optional: direct download path
+        description = model_config.get("description", "")
+
         log(f"[{idx}/{len(models)}] Processing: {model_name}", "INFO")
-        
+        if description:
+            log(f"  Description: {description}", "INFO")
+
         # Check if already exists
-        if check_model_exists(model_name, cache_dir):
+        if check_model_exists(model_name, cache_dir, local_dir):
             skip_count += 1
             continue
-        
+
         # Download based on type
         if model_type == "huggingface":
-            if download_huggingface_model(model_name, cache_dir):
+            if download_huggingface_model(model_name, cache_dir, local_dir):
                 success_count += 1
             else:
                 fail_count += 1
