@@ -86,16 +86,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     tiktoken==0.11.0
 
 # --------------------------------------------------------------
-#  vLLM - Install carefully to preserve existing packages
+#  vLLM - Install with --no-deps to avoid CUDA library conflicts
+#  Note: This is a best-effort installation. If vLLM fails at runtime,
+#  the service will automatically fall back to 4-bit mode.
 # --------------------------------------------------------------
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir \
-    vllm==0.6.3 \
-    --extra-index-url https://download.pytorch.org/whl/cu128 && \
-    # Reinstall torch to ensure correct CUDA version after vLLM
-    pip install --no-cache-dir --force-reinstall --no-deps \
-    "torch==2.9.1+cu128" \
-    --extra-index-url https://download.pytorch.org/whl/cu128
+    pip install --no-cache-dir --no-deps \
+    vllm==0.6.3 || \
+    echo "vLLM installation failed - service will use 4-bit fallback"
 
 # --------------------------------------------------------------
 #  Remaining requirements (only extras, vLLM now installed above)
