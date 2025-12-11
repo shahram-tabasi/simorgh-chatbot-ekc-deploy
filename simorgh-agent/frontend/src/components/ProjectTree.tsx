@@ -252,8 +252,8 @@ export function ProjectTree({
                       <ChevronRight className="w-5 h-5 text-gray-400" />
                     )}
                     <Folder className="w-5 h-5 text-indigo-400" />
-                    <span className="font-bold text-white truncate">
-                      {project.name}
+                    <span className="font-bold text-white">
+                      {(project as any).oeNumber || project.id}
                     </span>
                   </button>
 
