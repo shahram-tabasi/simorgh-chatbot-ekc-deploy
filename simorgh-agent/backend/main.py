@@ -1813,19 +1813,19 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 
         if graph_context:
             system_prompt += f"\n\n{graph_context}"
-            # Add directive to use the provided specs
-            system_prompt += """\n\n🎯 CRITICAL INSTRUCTION: The specifications above are ACTUAL data from this project's documents.
+            # Add directive to use the provided specs - HIGHEST PRIORITY
+            system_prompt += """\n\n🎯 CRITICAL INSTRUCTION - HIGHEST PRIORITY: The specifications above are ACTUAL data from this project's documents.
 You MUST use these specific values in your response. Do NOT say "information not provided" when specifications are listed above.
-Answer the user's question using the exact values shown. Be specific and cite the actual specifications."""
+Answer the user's question using the exact values shown. Be specific and cite the actual specifications.
+The project specifications and technical data above are THE PRIMARY SOURCE OF TRUTH - they take precedence over everything else."""
 
         # Add user memory context if available
         if user_memory_context:
             system_prompt += f"\n\n{user_memory_context}"
-            system_prompt += """\n\n🎯 IMPORTANT INSTRUCTION: The conversation history above contains your past interactions with this user.
-You MUST reference and use information from these conversations when relevant to the current question.
-If the user asks about something they mentioned before (like their name, preferences, or previous discussions),
-use the conversation history to provide accurate, personalized responses. Do NOT say you don't have access to
-information that is clearly present in the conversation history above."""
+            system_prompt += """\n\n💡 CONTEXT NOTE: The conversation history above is provided for reference to help you give more personalized responses.
+You may reference past conversations when relevant (e.g., if user asks about something they mentioned before),
+but ALWAYS prioritize technical specifications and project data over conversation history.
+If there's any conflict between conversation history and project specifications, the specifications are correct."""
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
