@@ -23,23 +23,23 @@ export function Tooltip({
   const handleMouseEnter = (e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect();
 
-    // Calculate position based on prop
+    // Calculate position based on prop (closer to element)
     let x = rect.left + rect.width / 2;
     let y = rect.top;
 
     switch (position) {
       case 'top':
-        y = rect.top - 8;
+        y = rect.top - 4;
         break;
       case 'bottom':
-        y = rect.bottom + 8;
+        y = rect.bottom + 4;
         break;
       case 'left':
-        x = rect.left - 8;
+        x = rect.left - 4;
         y = rect.top + rect.height / 2;
         break;
       case 'right':
-        x = rect.right + 8;
+        x = rect.right + 4;
         y = rect.top + rect.height / 2;
         break;
     }
@@ -107,7 +107,7 @@ export function Tooltip({
           style={getPositionStyles()}
         >
           <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-gray-900 to-black border border-white/20 shadow-2xl backdrop-blur-xl">
-            <p className="text-sm font-medium text-white whitespace-nowrap max-w-xs">
+            <p className="text-sm font-medium text-white break-words max-w-md">
               {content}
             </p>
 
