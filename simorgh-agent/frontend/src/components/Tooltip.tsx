@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { createPortal } from 'react-dom';
 
 interface TooltipProps {
   content: string;
@@ -94,6 +95,37 @@ export function Tooltip({
     }
   };
 
+  const tooltipContent = (
+    <AnimatePresence>
+      {isVisible && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.9 }}
+          transition={{ duration: 0.15 }}
+          className="fixed z-[99999] pointer-events-none"
+          style={getPositionStyles()}
+        >
+          <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-gray-900 to-black border border-white/20 shadow-2xl backdrop-blur-xl">
+            <p className="text-sm font-medium text-white whitespace-nowrap max-w-xs">
+              {content}
+            </p>
+
+            {/* Arrow */}
+            <div
+              className={`absolute w-2 h-2 bg-gradient-to-r from-gray-900 to-black border-white/20 transform rotate-45 ${
+                position === 'top' ? 'bottom-[-4px] left-1/2 -translate-x-1/2 border-b border-r' :
+                position === 'bottom' ? 'top-[-4px] left-1/2 -translate-x-1/2 border-t border-l' :
+                position === 'left' ? 'right-[-4px] top-1/2 -translate-y-1/2 border-r border-t' :
+                'left-[-4px] top-1/2 -translate-y-1/2 border-l border-b'
+              }`}
+            />
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
   return (
     <>
       {React.cloneElement(children, {
@@ -102,34 +134,7 @@ export function Tooltip({
         onMouseLeave: handleMouseLeave,
       })}
 
-      <AnimatePresence>
-        {isVisible && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
-            transition={{ duration: 0.15 }}
-            className="fixed z-[9999] pointer-events-none"
-            style={getPositionStyles()}
-          >
-            <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-gray-900 to-black border border-white/20 shadow-2xl backdrop-blur-xl">
-              <p className="text-sm font-medium text-white whitespace-nowrap max-w-xs">
-                {content}
-              </p>
-
-              {/* Arrow */}
-              <div
-                className={`absolute w-2 h-2 bg-gradient-to-r from-gray-900 to-black border-white/20 transform rotate-45 ${
-                  position === 'top' ? 'bottom-[-4px] left-1/2 -translate-x-1/2 border-b border-r' :
-                  position === 'bottom' ? 'top-[-4px] left-1/2 -translate-x-1/2 border-t border-l' :
-                  position === 'left' ? 'right-[-4px] top-1/2 -translate-y-1/2 border-r border-t' :
-                  'left-[-4px] top-1/2 -translate-y-1/2 border-l border-b'
-                }`}
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {createPortal(tooltipContent, document.body)}
     </>
   );
 }
