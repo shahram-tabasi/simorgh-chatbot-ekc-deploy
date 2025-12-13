@@ -143,6 +143,7 @@ jobs:
           SSH_OPTS: "-o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no"
         run: |
           # Create tarball of llms directory (excluding unnecessary files)
+          echo "Creating deployment tarball..."
           tar -czf /tmp/llms-deploy.tar.gz -C ./llms \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
@@ -151,31 +152,73 @@ jobs:
             --exclude='*.md' \
             .
 
-          echo "Tarball size: $(du -h /tmp/llms-deploy.tar.gz | cut -f1)"
+          TARBALL_SIZE=$(du -h /tmp/llms-deploy.tar.gz | cut -f1)
+          echo "✓ Tarball created: $TARBALL_SIZE"
 
-          # Copy tarball to central server with timeout
-          timeout 180 scp -P 2324 $SSH_OPTS -i ~/.ssh/deploy_key \
-            /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/
+          # Copy tarball to central server with retry logic
+          echo "Copying tarball to central server..."
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          SCP_SUCCESS=false
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SCP_SUCCESS" = "false" ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              WAIT_TIME=$((2 ** RETRY_COUNT))
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting ${WAIT_TIME}s..."
+              sleep $WAIT_TIME
+            fi
+
+            if timeout 300 scp -v -P 2324 $SSH_OPTS -i ~/.ssh/deploy_key \
+              /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/; then
+              echo "✓ Copied to central server"
+              SCP_SUCCESS=true
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "✗ SCP to central failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+            fi
+          done
+
+          if [ "$SCP_SUCCESS" = "false" ]; then
+            echo "ERROR: Failed to copy tarball to central server after $MAX_RETRIES attempts"
+            rm /tmp/llms-deploy.tar.gz
+            exit 1
+          fi
 
           # Extract on target server via central server with timeouts
-          timeout 300 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          echo "Deploying to target server ${{ matrix.server.host }}..."
+          timeout 400 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
           set -e
 
           # Copy tarball to target server with timeout
-          timeout 240 scp -o ConnectTimeout=30 -o ServerAliveInterval=60 \
-            /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/
+          echo "  → Copying to target server..."
+          if timeout 300 scp -v -o ConnectTimeout=30 -o ServerAliveInterval=60 \
+            /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/; then
+            echo "  ✓ Copied to target"
+          else
+            echo "  ✗ Failed to copy to target"
+            rm /tmp/llms-deploy.tar.gz
+            exit 1
+          fi
 
           # Extract on target server with timeout
-          timeout 60 ssh -o ConnectTimeout=30 -o ServerAliveInterval=60 \
-            ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'
+          echo "  → Extracting on target server..."
+          if timeout 90 ssh -o ConnectTimeout=30 -o ServerAliveInterval=60 \
+            ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'; then
+            echo "  ✓ Extracted on target"
+          else
+            echo "  ✗ Failed to extract on target"
+            exit 1
+          fi
 
           # Clean up central server
           rm /tmp/llms-deploy.tar.gz
-          echo "Deployment files transferred successfully"
+          echo "  ✓ Cleaned up central server"
+          echo "✓ Deployment files transferred successfully"
           ENDSSH
 
           # Clean up local
           rm /tmp/llms-deploy.tar.gz
+          echo "✓ Local cleanup complete"
 
       - name: Create .env file on target server
         env:
