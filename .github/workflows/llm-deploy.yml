@@ -252,27 +252,11 @@ jobs:
             echo "→ Transferring to target and extracting..."
             SERVER_NAME="${{ matrix.server.name }}"
             SERVER_HOST="${{ matrix.server.host }}"
-            if timeout 600 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 bash -s "$SERVER_NAME" "$SERVER_HOST" << 'ENDSSH'
-            set -e
-            SERVER_NAME="$1"
-            SERVER_HOST="$2"
-
-            # Transfer to target
-            cat ~/deploy-${SERVER_NAME}.tar.gz | \
-              ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 \
-                  -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr \
-                  ubuntu@${SERVER_HOST} 'cat > /tmp/llms-deploy.tar.gz'
-
-            # Extract on target
-            ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 \
-              ubuntu@${SERVER_HOST} \
-              'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz'
-
-            # Cleanup central server
-            rm -f ~/deploy-${SERVER_NAME}.tar.gz
-            echo "Complete"
-ENDSSH
-            then
+            if timeout 600 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
+              "cat ~/deploy-${SERVER_NAME}.tar.gz | ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr ubuntu@${SERVER_HOST} 'cat > /tmp/llms-deploy.tar.gz' && \
+               ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 ubuntu@${SERVER_HOST} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz' && \
+               rm -f ~/deploy-${SERVER_NAME}.tar.gz && \
+               echo Complete"; then
               echo "✓ Deployed successfully"
               TRANSFER_SUCCESS=true
             else
