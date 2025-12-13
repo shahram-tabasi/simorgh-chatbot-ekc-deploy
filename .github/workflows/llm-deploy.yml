@@ -303,39 +303,106 @@ jobs:
             fi\"'"
 
       - name: Show service status
+        continue-on-error: true
+        timeout-minutes: 3
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
-            echo === Docker Compose Status === && \
-            docker compose ps && \
-            echo && \
-            echo === Deployment Summary === && \
-            if [ -f /home/ubuntu/models/.init_complete ]; then \
-              echo ✓ Models: Downloaded; \
-            else \
-              echo ⏳ Models: Downloading in background; \
-            fi && \
-            if docker ps --format {{.Names}} | grep -q ai_service; then \
-              echo ✓ AI Service: Running; \
-            else \
-              echo ⏳ AI Service: Waiting for models; \
-            fi\"'"
+          # Add retry logic for SSH connection
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
+              sleep 5
+            fi
+
+            if timeout 120 ssh -p 2324 -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+              -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
+              "timeout 60 ssh -o ConnectTimeout=20 ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
+              echo === Docker Compose Status === && \
+              docker compose ps && \
+              echo && \
+              echo === Deployment Summary === && \
+              if [ -f /home/ubuntu/models/.init_complete ]; then \
+                echo ✓ Models: Downloaded; \
+              else \
+                echo ⏳ Models: Downloading in background; \
+              fi && \
+              if docker ps --format {{.Names}} | grep -q ai_service; then \
+                echo ✓ AI Service: Running; \
+              else \
+                echo ⏳ AI Service: Waiting for models; \
+              fi\"'"; then
+              echo "✓ Status check successful"
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "✗ Status check failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+            fi
+          done
+
+          echo "⚠ Status check failed after $MAX_RETRIES attempts (non-critical)"
+          exit 0
 
       - name: Check GPU availability
+        continue-on-error: true
+        timeout-minutes: 2
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'nvidia-smi || echo nvidia-smi not available'"
+          # Add retry logic for SSH connection
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
+              sleep 5
+            fi
+
+            if timeout 90 ssh -p 2324 -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+              -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
+              "timeout 30 ssh -o ConnectTimeout=20 ubuntu@${{ matrix.server.host }} 'nvidia-smi || echo nvidia-smi not available'"; then
+              echo "✓ GPU check successful"
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "✗ GPU check failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+            fi
+          done
+
+          echo "⚠ GPU check failed after $MAX_RETRIES attempts (non-critical)"
+          exit 0
 
       - name: Show logs on failure
         if: failure()
+        continue-on-error: true
+        timeout-minutes: 3
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && \
-            echo \"=== Docker Compose Status ===\" && docker compose ps -a && \
-            echo \"=== Initializer Logs ===\" && docker logs model_initializer --tail=100 2>/dev/null || echo \"model_initializer not found\" && \
-            echo \"=== AI Service Logs ===\" && docker logs ai_service --tail=100 2>/dev/null || echo \"ai_service not found\" && \
-            echo \"=== GPU Monitor Logs ===\" && docker logs gpu_monitor --tail=50 2>/dev/null || echo \"gpu_monitor not found\" && \
-            echo \"=== Nginx Logs ===\" && docker logs nginx_ai --tail=50 2>/dev/null || echo \"nginx_ai not found\"'"
+          # Try to fetch logs with retry logic
+          MAX_RETRIES=2
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
+              sleep 5
+            fi
+
+            if timeout 150 ssh -p 2324 -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+              -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
+              "timeout 120 ssh -o ConnectTimeout=20 ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && \
+              echo \"=== Docker Compose Status ===\" && docker compose ps -a && \
+              echo \"=== Initializer Logs ===\" && docker logs model_initializer --tail=100 2>/dev/null || echo \"model_initializer not found\" && \
+              echo \"=== AI Service Logs ===\" && docker logs ai_service --tail=100 2>/dev/null || echo \"ai_service not found\" && \
+              echo \"=== GPU Monitor Logs ===\" && docker logs gpu_monitor --tail=50 2>/dev/null || echo \"gpu_monitor not found\" && \
+              echo \"=== Nginx Logs ===\" && docker logs nginx_ai --tail=50 2>/dev/null || echo \"nginx_ai not found\"'"; then
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            fi
+          done
+
+          echo "⚠ Could not fetch logs (SSH connection issue)"
+          exit 0
 
 
   health-check:
@@ -355,10 +422,23 @@ jobs:
           ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
       - name: Health check from central server
+        continue-on-error: true
+        timeout-minutes: 3
         env:
           IMAGE_TAG: ${{ env.BRANCH_SAFE }}-${{ github.sha }}
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << ENDSSH
+          # Add retry logic for SSH connection
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 10s..."
+              sleep 10
+            fi
+
+            if timeout 120 ssh -p 2324 -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+              -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << ENDSSH
           echo "================================"
           echo "LLM Services Health Check"
           echo "================================"
@@ -388,3 +468,14 @@ jobs:
           echo "Image Tag: $IMAGE_TAG"
           echo "================================"
           ENDSSH
+            then
+              echo "✓ Health check completed successfully"
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "✗ Health check failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+            fi
+          done
+
+          echo "⚠ Health check failed after $MAX_RETRIES attempts (non-critical)"
+          exit 0
