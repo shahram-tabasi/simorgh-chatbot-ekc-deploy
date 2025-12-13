@@ -6,13 +6,22 @@ Integrates model with tools (search, Python REPL) for agentic workflows.
 
 import logging
 from typing import List, Dict, Any, Optional
+
+# Fixed imports for LangChain compatibility
 try:
-    # Try new import path first (LangChain >= 0.1.0)
-    from langchain_core.agents import AgentExecutor
-    from langchain.agents import create_react_agent
-except ImportError:
-    # Fall back to old import path
+    # Modern LangChain (>= 0.1.0)
     from langchain.agents import AgentExecutor, create_react_agent
+except ImportError:
+    try:
+        # Older versions
+        from langchain.agents.agent import AgentExecutor
+        from langchain.agents import create_react_agent
+    except ImportError:
+        # Very old versions - may need different approach
+        from langchain.agents import initialize_agent, AgentType
+        AgentExecutor = None
+        create_react_agent = None
+
 from langchain.prompts import PromptTemplate
 from langchain.tools import Tool
 from langchain.schema import BaseLanguageModel
@@ -155,21 +164,33 @@ class LangChainAgent:
                 }
             )
 
-            # Note: create_react_agent expects sync LLM
-            # For production, use async agent execution
-            agent = create_react_agent(
-                llm=self.llm,
-                tools=self.tools,
-                prompt=prompt
-            )
+            # Check if we have the modern API
+            if create_react_agent is not None and AgentExecutor is not None:
+                # Modern LangChain
+                agent = create_react_agent(
+                    llm=self.llm,
+                    tools=self.tools,
+                    prompt=prompt
+                )
 
-            executor = AgentExecutor(
-                agent=agent,
-                tools=self.tools,
-                verbose=self.verbose,
-                max_iterations=5,
-                handle_parsing_errors=True,
-            )
+                executor = AgentExecutor(
+                    agent=agent,
+                    tools=self.tools,
+                    verbose=self.verbose,
+                    max_iterations=5,
+                    handle_parsing_errors=True,
+                )
+            else:
+                # Fallback for older versions
+                from langchain.agents import initialize_agent, AgentType
+                executor = initialize_agent(
+                    tools=self.tools,
+                    llm=self.llm,
+                    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+                    verbose=self.verbose,
+                    max_iterations=5,
+                    handle_parsing_errors=True,
+                )
 
             logger.info(f"✅ LangChain agent created with {len(self.tools)} tools")
             return executor
