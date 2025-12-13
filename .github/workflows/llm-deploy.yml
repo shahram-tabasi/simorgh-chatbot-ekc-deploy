@@ -121,22 +121,97 @@ jobs:
 
       - name: Test SSH to central server
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 "echo 'Connected to central server'"
+          # Add retry logic for SSH connection test (network may be unstable after long deployment)
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              WAIT_TIME=$((5 * (2 ** (RETRY_COUNT - 1))))
+              echo "Connection failed, retry $RETRY_COUNT/$MAX_RETRIES - waiting ${WAIT_TIME}s..."
+              sleep $WAIT_TIME
+            fi
+
+            if timeout 60 ssh -p 2324 -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+              -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
+              "echo 'Connected to central server'"; then
+              echo "✓ Connected to central server"
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            fi
+          done
+
+          echo "ERROR: Failed to connect to central server after $MAX_RETRIES attempts"
+          exit 1
 
       - name: Setup SSH from central to target server
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh-keyscan -H ${{ matrix.server.host }} >> ~/.ssh/known_hosts 2>/dev/null || true"
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
+              sleep 5
+            fi
+
+            if timeout 60 ssh -p 2324 -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
+              ${{ secrets.SSH_USER }}@217.219.39.212 \
+              "ssh-keyscan -H ${{ matrix.server.host }} >> ~/.ssh/known_hosts 2>/dev/null || true"; then
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            fi
+          done
 
       - name: Test SSH to target server via central
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'echo Connected to ${{ matrix.server.name }}'"
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
+              sleep 5
+            fi
+
+            if timeout 60 ssh -p 2324 -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
+              ${{ secrets.SSH_USER }}@217.219.39.212 \
+              "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'echo Connected to ${{ matrix.server.name }}'"; then
+              echo "✓ Connected to ${{ matrix.server.name }}"
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            fi
+          done
+
+          echo "ERROR: Failed to connect to target server"
+          exit 1
 
       - name: Create directories on target server
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models ~/models/huggingface'"
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if [ $RETRY_COUNT -gt 0 ]; then
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
+              sleep 5
+            fi
+
+            if timeout 90 ssh -p 2324 -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
+              ${{ secrets.SSH_USER }}@217.219.39.212 \
+              "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models ~/models/huggingface'"; then
+              echo "✓ Directories created"
+              exit 0
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            fi
+          done
+
+          echo "ERROR: Failed to create directories"
+          exit 1
 
       - name: Copy deployment files via central server
         env:
