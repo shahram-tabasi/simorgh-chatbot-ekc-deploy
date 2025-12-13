@@ -57,25 +57,12 @@
         xformers==0.0.33
     
     # --------------------------------------------------------------
-    #  Install vLLM runtime dependencies FIRST (before vLLM itself)
+    #  vLLM - Install with all dependencies
+    #  Let pip handle dependency resolution - torch is already locked
     # --------------------------------------------------------------
     RUN --mount=type=cache,target=/root/.cache/pip \
         pip install --no-cache-dir \
-        mistral_common>=1.0.0 \
-        ray>=2.9.0 \
-        nvidia-ml-py \
-        psutil \
-        msgpack \
-        cloudpickle
-    
-    # --------------------------------------------------------------
-    #  vLLM - Install latest compatible version with --no-deps
-    #  Dependencies already installed above, so no conflicts
-    # --------------------------------------------------------------
-    RUN --mount=type=cache,target=/root/.cache/pip \
-        pip install --no-cache-dir --no-deps \
-        vllm==0.7.3.post1 || \
-        echo "vLLM installation failed - service will use 4-bit fallback"
+        vllm==0.7.3.post1
     
     # --------------------------------------------------------------
     #  Unsloth (Install latest from GitHub for newest model support)
