@@ -138,29 +138,27 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
             "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models/huggingface'"
 
-            - name: Copy deployment files via central server
-            run: |
-              echo "Streaming deployment to ${{ matrix.server.host }}..."
-              
-              # Stream tarball directly through central server to target
-              tar -czf - -C ./llms \
-                --exclude='__pycache__' \
-                --exclude='*.pyc' \
-                --exclude='.git' \
-                --exclude='tests' \
-                --exclude='*.md' \
-                . | ssh -p 2324 \
-                -o ConnectTimeout=60 \
-                -o ServerAliveInterval=30 \
-                -o ServerAliveCountMax=5 \
-                -o StrictHostKeyChecking=no \
-                -o Compression=yes \
-                -i ~/.ssh/deploy_key \
-                ${{ secrets.SSH_USER }}@217.219.39.212 \
-                "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf -'"
-              
-              echo "✓ Deployment complete"
+      - name: Copy deployment files via central server
+        run: |
+          echo "Streaming deployment to ${{ matrix.server.host }}..."
           
+          tar -czf - -C ./llms \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.git' \
+            --exclude='tests' \
+            --exclude='*.md' \
+            . | ssh -p 2324 \
+            -o ConnectTimeout=60 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=5 \
+            -o StrictHostKeyChecking=no \
+            -o Compression=yes \
+            -i ~/.ssh/deploy_key \
+            ${{ secrets.SSH_USER }}@217.219.39.212 \
+            "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf -'"
+          
+          echo "✓ Deployment complete"
 
       - name: Create .env file on target server
         env:
