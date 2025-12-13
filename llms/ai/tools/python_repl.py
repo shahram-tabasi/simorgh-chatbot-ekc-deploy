@@ -10,7 +10,13 @@ import subprocess
 import tempfile
 import os
 from typing import Optional
-from langchain.tools import Tool
+
+# Import Tool with fallback for different LangChain versions
+try:
+    from langchain.tools import Tool
+except ImportError:
+    from langchain_core.tools import Tool
+
 from langchain_experimental.utilities import PythonREPL
 
 logger = logging.getLogger(__name__)

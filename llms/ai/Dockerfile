@@ -57,25 +57,32 @@
         xformers==0.0.33
     
     # --------------------------------------------------------------
-    #  Install vLLM runtime dependencies FIRST (before vLLM itself)
+    #  vLLM dependencies (install only what's missing from base image)
+    #  This avoids reinstalling torch/numpy and prevents space overflow
     # --------------------------------------------------------------
     RUN --mount=type=cache,target=/root/.cache/pip \
         pip install --no-cache-dir \
         mistral_common>=1.0.0 \
         ray>=2.9.0 \
         nvidia-ml-py \
-        psutil \
         msgpack \
-        cloudpickle
-    
+        cloudpickle \
+        typing-extensions \
+        filelock \
+        outlines>=0.0.43 \
+        interegular \
+        lark \
+        nest-asyncio \
+        pillow \
+        aioprometheus
+
     # --------------------------------------------------------------
-    #  vLLM - Install latest compatible version with --no-deps
-    #  Dependencies already installed above, so no conflicts
+    #  vLLM - Install with --no-deps to avoid reinstalling torch/CUDA
     # --------------------------------------------------------------
     RUN --mount=type=cache,target=/root/.cache/pip \
         pip install --no-cache-dir --no-deps \
-        vllm==0.7.3.post1 || \
-        echo "vLLM installation failed - service will use 4-bit fallback"
+        vllm==0.7.3.post1 && \
+        python -c "import vllm; print('✅ vLLM successfully installed:', vllm.__version__)"
     
     # --------------------------------------------------------------
     #  Unsloth (Install latest from GitHub for newest model support)
