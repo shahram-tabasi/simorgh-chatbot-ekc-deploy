@@ -2,25 +2,28 @@
 LangChain Agent Orchestration
 
 Integrates model with tools (search, Python REPL) for agentic workflows.
+Compatible with LangChain 1.0+
 """
 
 import logging
 from typing import List, Dict, Any, Optional
 
-# Fixed imports for LangChain compatibility
+# For LangChain 1.0+, AgentExecutor is in langchain-classic
+# Option 1: Use langchain-classic (legacy support)
 try:
-    # Modern LangChain (>= 0.1.0)
-    from langchain.agents import AgentExecutor, create_react_agent
+    from langchain_classic.agents import AgentExecutor, create_react_agent
+    USING_CLASSIC = True
 except ImportError:
+    # Option 2: Use the new simplified agent API
     try:
-        # Older versions
-        from langchain.agents.agent import AgentExecutor
-        from langchain.agents import create_react_agent
-    except ImportError:
-        # Very old versions - may need different approach
-        from langchain.agents import initialize_agent, AgentType
+        from langchain.agents import create_agent
+        USING_CLASSIC = False
         AgentExecutor = None
         create_react_agent = None
+    except ImportError:
+        # Fallback: Try old imports for pre-1.0 versions
+        from langchain.agents import AgentExecutor, create_react_agent
+        USING_CLASSIC = True
 
 from langchain.prompts import PromptTemplate
 from langchain.tools import Tool
@@ -121,6 +124,7 @@ class LangChainAgent:
     LangChain agent with tools orchestration.
 
     Provides tool-enhanced generation using ReAct pattern.
+    Compatible with both legacy (langchain-classic) and modern (langchain 1.0+) APIs.
     """
 
     def __init__(
@@ -147,26 +151,28 @@ class LangChainAgent:
         # Create agent
         self.agent = self._create_agent()
 
-    def _create_agent(self) -> Optional[AgentExecutor]:
-        """Create ReAct agent with tools"""
+    def _create_agent(self) -> Optional[Any]:
+        """Create agent with tools"""
         if not self.tools:
             logger.warning("No tools provided - agent will not be created")
             return None
 
         try:
-            # Create prompt
-            prompt = PromptTemplate(
-                template=REACT_PROMPT_TEMPLATE,
-                input_variables=["input", "agent_scratchpad"],
-                partial_variables={
-                    "tools": self._format_tools(),
-                    "tool_names": ", ".join([t.name for t in self.tools]),
-                }
-            )
+            if USING_CLASSIC:
+                # Legacy approach using langchain-classic
+                logger.info("Using langchain-classic AgentExecutor")
+                
+                # Create prompt
+                prompt = PromptTemplate(
+                    template=REACT_PROMPT_TEMPLATE,
+                    input_variables=["input", "agent_scratchpad"],
+                    partial_variables={
+                        "tools": self._format_tools(),
+                        "tool_names": ", ".join([t.name for t in self.tools]),
+                    }
+                )
 
-            # Check if we have the modern API
-            if create_react_agent is not None and AgentExecutor is not None:
-                # Modern LangChain
+                # Create ReAct agent
                 agent = create_react_agent(
                     llm=self.llm,
                     tools=self.tools,
@@ -181,15 +187,15 @@ class LangChainAgent:
                     handle_parsing_errors=True,
                 )
             else:
-                # Fallback for older versions
-                from langchain.agents import initialize_agent, AgentType
-                executor = initialize_agent(
+                # Modern LangChain 1.0+ approach
+                logger.info("Using modern LangChain create_agent")
+                from langchain.agents import create_agent
+                
+                # Convert tools to the format expected by create_agent
+                executor = create_agent(
+                    model=self.llm,
                     tools=self.tools,
-                    llm=self.llm,
-                    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-                    verbose=self.verbose,
-                    max_iterations=5,
-                    handle_parsing_errors=True,
+                    system_prompt="You are a helpful AI assistant. Use the available tools to answer questions.",
                 )
 
             logger.info(f"✅ LangChain agent created with {len(self.tools)} tools")
@@ -197,6 +203,7 @@ class LangChainAgent:
 
         except Exception as e:
             logger.error(f"Failed to create agent: {e}")
+            logger.exception(e)
             return None
 
     def _format_tools(self) -> str:
@@ -235,28 +242,39 @@ class LangChainAgent:
 
         # Run agent with tools
         try:
-            # Note: AgentExecutor is synchronous by default
-            # For async, we run in executor
+            # Run in executor to avoid blocking
             import asyncio
             loop = asyncio.get_event_loop()
 
             def _run_agent():
-                return self.agent.invoke({"input": input_text})
+                if USING_CLASSIC:
+                    # Legacy API
+                    return self.agent.invoke({"input": input_text})
+                else:
+                    # Modern API expects messages format
+                    return self.agent.invoke({
+                        "messages": [{"role": "user", "content": input_text}]
+                    })
 
             result = await loop.run_in_executor(None, _run_agent)
 
             # Extract tool usage from intermediate steps if available
             tool_calls = []
-            if "intermediate_steps" in result:
+            
+            if USING_CLASSIC and "intermediate_steps" in result:
                 for action, observation in result["intermediate_steps"]:
                     tool_calls.append({
                         "tool": action.tool,
                         "input": action.tool_input,
                         "output": observation
                     })
+                output = result.get("output", "")
+            else:
+                # Modern API - extract from messages
+                output = result.get("messages", [])[-1].get("content", "") if result.get("messages") else str(result)
 
             return {
-                "output": result.get("output", ""),
+                "output": output,
                 "tokens_used": None,  # Not tracked in agent mode
                 "tool_calls": tool_calls,
                 "used_tools": len(tool_calls) > 0
@@ -264,6 +282,7 @@ class LangChainAgent:
 
         except Exception as e:
             logger.error(f"Agent execution failed: {e}")
+            logger.exception(e)
             # Fallback to direct generation
             messages = [{"role": "user", "content": input_text}]
             output, tokens = await self.model_manager.generate(messages)
