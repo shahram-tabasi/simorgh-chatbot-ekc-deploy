@@ -51,8 +51,9 @@ services:
       # Read-only for safety - models are already downloaded by initializer
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models:ro
 
-      # Also mount to HF cache location for compatibility with unsloth 4-bit fallback
-      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface/hub:ro
+      # Also mount to HF cache location for vLLM and unsloth
+      # Writable to allow vLLM to cache tokenizer and model metadata
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface/hub
     networks:
       - ai_net
     deploy:

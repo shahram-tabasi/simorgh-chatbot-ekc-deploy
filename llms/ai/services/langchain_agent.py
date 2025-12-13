@@ -111,8 +111,21 @@ class CustomLLMWrapper:
                 self.__class__.__bases__ = (BaseLanguageModel,)
             except:
                 pass  # If we can't set bases, just continue
-        
+
         self.model_manager = model_manager
+        self._stop = None  # Store stop sequences for bind()
+
+    def bind(self, **kwargs):
+        """
+        Bind parameters to this LLM (required by langchain-classic).
+
+        Returns a new instance with bound parameters.
+        """
+        # Create a new instance with the same model manager
+        new_wrapper = CustomLLMWrapper(self.model_manager)
+        # Store any stop sequences
+        new_wrapper._stop = kwargs.get('stop', self._stop)
+        return new_wrapper
 
     @property
     def _llm_type(self) -> str:
