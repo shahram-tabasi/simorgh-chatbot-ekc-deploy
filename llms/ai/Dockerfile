@@ -57,12 +57,58 @@
         xformers==0.0.33
     
     # --------------------------------------------------------------
-    #  vLLM - Install normally with all dependencies
-    #  Use --upgrade-strategy only-if-needed to avoid reinstalling torch
+    #  vLLM dependencies (everything except torch/CUDA packages)
+    #  Base image has torch 2.9.1 but vLLM wants 2.9.0 - skip torch
     # --------------------------------------------------------------
     RUN --mount=type=cache,target=/root/.cache/pip \
         pip install --no-cache-dir \
-        --upgrade-strategy only-if-needed \
+        aiohttp \
+        anthropic \
+        blake3 \
+        cachetools \
+        cbor2 \
+        cloudpickle \
+        compressed-tensors \
+        depyf \
+        diskcache \
+        einops \
+        "fastapi[standard]>=0.115.0" \
+        filelock \
+        gguf>=0.17.0 \
+        llguidance>=1.3.0 \
+        lm-format-enforcer \
+        "mistral_common[image]>=1.8.5" \
+        msgspec \
+        numba \
+        nvidia-ml-py \
+        openai>=1.99.1 \
+        openai-harmony \
+        opencv-python-headless>=4.11.0 \
+        outlines_core \
+        partial-json-parser \
+        pillow \
+        prometheus-fastapi-instrumentator>=7.0.0 \
+        prometheus_client>=0.18.0 \
+        protobuf \
+        psutil \
+        py-cpuinfo \
+        pybase64 \
+        pydantic>=2.12.0 \
+        python-json-logger \
+        pyzmq>=25.0.0 \
+        ray>=2.48.0 \
+        scipy \
+        sentencepiece \
+        setproctitle \
+        tiktoken>=0.6.0 \
+        watchfiles \
+        xgrammar
+
+    # --------------------------------------------------------------
+    #  vLLM - Install with --no-deps (torch already in base image)
+    # --------------------------------------------------------------
+    RUN --mount=type=cache,target=/root/.cache/pip \
+        pip install --no-cache-dir --no-deps \
         vllm==0.12.0 && \
         python -c "import vllm; print('✅ vLLM successfully installed:', vllm.__version__)"
     
