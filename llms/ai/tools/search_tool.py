@@ -7,7 +7,13 @@ as a free alternative to SerpAPI.
 
 import logging
 from typing import Optional, Dict, Any
-from langchain.tools import Tool
+
+# Import Tool with fallback for different LangChain versions
+try:
+    from langchain.tools import Tool
+except ImportError:
+    from langchain_core.tools import Tool
+
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 
 logger = logging.getLogger(__name__)
