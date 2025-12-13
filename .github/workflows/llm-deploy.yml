@@ -188,8 +188,8 @@ jobs:
                   -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr \
                   ubuntu@${{ matrix.server.host }} 'cat > /tmp/llms-deploy.tar.gz' && \
             timeout 90 ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 \
-              ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz' && \
-            rm /tmp/llms-deploy.tar.gz && \
+              ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz' && \
+            rm -f /tmp/llms-deploy.tar.gz && \
             echo '✓ Deployment files transferred successfully'"
 
           echo "✓ Deployment complete"
