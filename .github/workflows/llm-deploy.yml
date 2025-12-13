@@ -170,7 +170,7 @@ jobs:
 
             # Use optimized transfer: fast cipher (aes128-ctr), SSH compression, aggressive keep-alive, 10min timeout
             if timeout 600 scp -v -P 2324 $SSH_OPTS -i ~/.ssh/deploy_key \
-              /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/llms-deploy-${{ matrix.server.name }}.tar.gz; then
+              /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/llms-deploy.tar.gz; then
               echo "✓ Copied to central server"
               SCP_SUCCESS=true
             else
@@ -187,41 +187,15 @@ jobs:
 
           # Extract on target server via central server with timeouts
           echo "Deploying to target server ${{ matrix.server.host }}..."
-          SERVER_NAME="${{ matrix.server.name }}"
-          SERVER_HOST="${{ matrix.server.host }}"
-          timeout 500 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 bash -s << ENDSSH
-          set -e
-          SERVER_NAME="$SERVER_NAME"
-          SERVER_HOST="$SERVER_HOST"
-
-          # Copy tarball to target server with timeout (using same optimizations)
-          echo "  → Copying to target server \$SERVER_HOST..."
-          if timeout 400 scp -v \
-            -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 \
-            -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr \
-            /tmp/llms-deploy-\$SERVER_NAME.tar.gz ubuntu@\$SERVER_HOST:/tmp/llms-deploy.tar.gz; then
-            echo "  ✓ Copied to target"
-          else
-            echo "  ✗ Failed to copy to target"
-            rm /tmp/llms-deploy-\$SERVER_NAME.tar.gz
-            exit 1
-          fi
-
-          # Extract on target server with timeout
-          echo "  → Extracting on target server..."
-          if timeout 90 ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 \
-            ubuntu@\$SERVER_HOST 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'; then
-            echo "  ✓ Extracted on target"
-          else
-            echo "  ✗ Failed to extract on target"
-            exit 1
-          fi
-
-          # Clean up central server
-          rm /tmp/llms-deploy-\$SERVER_NAME.tar.gz
-          echo "  ✓ Cleaned up central server"
-          echo "✓ Deployment files transferred successfully"
-          ENDSSH
+          timeout 500 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
+            "timeout 400 scp -v \
+              -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 \
+              -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr \
+              /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/llms-deploy.tar.gz && \
+            timeout 90 ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+              ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz' && \
+            rm /tmp/llms-deploy.tar.gz && \
+            echo '✓ Deployment files transferred successfully'"
 
           # Clean up local
           rm /tmp/llms-deploy.tar.gz
