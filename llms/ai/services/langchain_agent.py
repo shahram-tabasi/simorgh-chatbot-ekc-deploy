@@ -90,89 +90,153 @@ Thought: {agent_scratchpad}
 """
 
 
-class CustomLLMWrapper:
-    """
-    Wrapper to make our model manager compatible with LangChain.
-
-    LangChain expects a BaseLanguageModel interface, but we have
-    a custom ModelManager. This adapter bridges the gap.
-    """
-
-    def __init__(self, model_manager):
+# Conditional class definition based on what's available
+if BaseLanguageModel is not None:
+    class CustomLLMWrapper(BaseLanguageModel):
         """
-        Initialize wrapper.
+        Wrapper to make our model manager compatible with LangChain.
 
-        Args:
-            model_manager: ModelManager instance
+        Properly inherits from BaseLanguageModel to work with langchain-classic.
         """
-        # Dynamically inherit from BaseLanguageModel if available
-        if BaseLanguageModel is not None:
+
+        def __init__(self, model_manager):
+            """Initialize wrapper with model manager"""
+            super().__init__()
+            self.model_manager = model_manager
+            self._stop = None  # Store stop sequences for bind()
+
+        def bind(self, **kwargs):
+            """
+            Bind parameters to this LLM (required by langchain-classic).
+
+            Returns a new instance with bound parameters.
+            """
+            # Create a new instance with the same model manager
+            new_wrapper = CustomLLMWrapper(self.model_manager)
+            # Store any stop sequences
+            new_wrapper._stop = kwargs.get('stop', self._stop)
+            return new_wrapper
+
+        @property
+        def _llm_type(self) -> str:
+            """Return LLM type identifier"""
+            return "custom_vllm_or_unsloth"
+
+        def invoke(self, input: str, **kwargs) -> str:
+            """
+            Invoke the LLM (required by Runnable interface).
+
+            This is the modern LangChain way to call the model.
+            """
+            return self.predict(input, **kwargs)
+
+        async def _agenerate(self, prompts: List[str], **kwargs) -> Any:
+            """Generate responses asynchronously"""
+            if not prompts:
+                raise ValueError("No prompts provided")
+
+            prompt = prompts[0]
+            messages = [{"role": "user", "content": prompt}]
+
+            text, _ = await self.model_manager.generate(
+                messages=messages,
+                max_tokens=kwargs.get("max_tokens", 1024),
+                temperature=kwargs.get("temperature", 0.7),
+                top_p=kwargs.get("top_p", 0.95),
+            )
+
+            return text
+
+        def _generate(self, prompts: List[str], **kwargs) -> Any:
+            """Synchronous generation"""
+            import asyncio
             try:
-                self.__class__.__bases__ = (BaseLanguageModel,)
-            except:
-                pass  # If we can't set bases, just continue
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop.run_until_complete(self._agenerate(prompts, **kwargs))
 
-        self.model_manager = model_manager
-        self._stop = None  # Store stop sequences for bind()
+        async def apredict(self, text: str, **kwargs) -> str:
+            """Async predict - single text input/output"""
+            result = await self._agenerate([text], **kwargs)
+            return result
 
-    def bind(self, **kwargs):
+        def predict(self, text: str, **kwargs) -> str:
+            """Sync predict"""
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop.run_until_complete(self.apredict(text, **kwargs))
+
+else:
+    # Fallback if BaseLanguageModel is not available
+    class CustomLLMWrapper:
         """
-        Bind parameters to this LLM (required by langchain-classic).
-
-        Returns a new instance with bound parameters.
+        Fallback wrapper when LangChain is not available.
         """
-        # Create a new instance with the same model manager
-        new_wrapper = CustomLLMWrapper(self.model_manager)
-        # Store any stop sequences
-        new_wrapper._stop = kwargs.get('stop', self._stop)
-        return new_wrapper
 
-    @property
-    def _llm_type(self) -> str:
-        """Return LLM type identifier"""
-        return "custom_vllm_or_unsloth"
+        def __init__(self, model_manager):
+            """Initialize wrapper with model manager"""
+            self.model_manager = model_manager
+            self._stop = None
 
-    async def _agenerate(self, prompts: List[str], **kwargs) -> Any:
-        """Generate responses asynchronously"""
-        if not prompts:
-            raise ValueError("No prompts provided")
+        def bind(self, **kwargs):
+            """Bind parameters"""
+            new_wrapper = CustomLLMWrapper(self.model_manager)
+            new_wrapper._stop = kwargs.get('stop', self._stop)
+            return new_wrapper
 
-        prompt = prompts[0]
-        messages = [{"role": "user", "content": prompt}]
+        @property
+        def _llm_type(self) -> str:
+            """Return LLM type identifier"""
+            return "custom_vllm_or_unsloth"
 
-        text, _ = await self.model_manager.generate(
-            messages=messages,
-            max_tokens=kwargs.get("max_tokens", 1024),
-            temperature=kwargs.get("temperature", 0.7),
-            top_p=kwargs.get("top_p", 0.95),
-        )
+        def invoke(self, input: str, **kwargs) -> str:
+            """Invoke the LLM"""
+            return self.predict(input, **kwargs)
 
-        return text
+        async def _agenerate(self, prompts: List[str], **kwargs) -> Any:
+            """Generate responses asynchronously"""
+            if not prompts:
+                raise ValueError("No prompts provided")
+            prompt = prompts[0]
+            messages = [{"role": "user", "content": prompt}]
+            text, _ = await self.model_manager.generate(
+                messages=messages,
+                max_tokens=kwargs.get("max_tokens", 1024),
+                temperature=kwargs.get("temperature", 0.7),
+                top_p=kwargs.get("top_p", 0.95),
+            )
+            return text
 
-    def _generate(self, prompts: List[str], **kwargs) -> Any:
-        """Synchronous generation"""
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(self._agenerate(prompts, **kwargs))
+        def _generate(self, prompts: List[str], **kwargs) -> Any:
+            """Synchronous generation"""
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop.run_until_complete(self._agenerate(prompts, **kwargs))
 
-    async def apredict(self, text: str, **kwargs) -> str:
-        """Async predict - single text input/output"""
-        result = await self._agenerate([text], **kwargs)
-        return result
+        async def apredict(self, text: str, **kwargs) -> str:
+            """Async predict"""
+            result = await self._agenerate([text], **kwargs)
+            return result
 
-    def predict(self, text: str, **kwargs) -> str:
-        """Sync predict"""
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(self.apredict(text, **kwargs))
+        def predict(self, text: str, **kwargs) -> str:
+            """Sync predict"""
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop.run_until_complete(self.apredict(text, **kwargs))
 
 
 class LangChainAgent:
