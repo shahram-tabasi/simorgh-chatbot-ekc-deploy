@@ -172,6 +172,36 @@ if BaseLanguageModel is not None:
                 asyncio.set_event_loop(loop)
             return loop.run_until_complete(self.apredict(text, **kwargs))
 
+        def generate_prompt(self, prompts, stop=None, **kwargs):
+            """
+            Generate responses for prompts (required abstract method).
+
+            This is the synchronous version required by BaseLanguageModel.
+            """
+            # Convert prompts to strings if they're not already
+            if hasattr(prompts, '__iter__') and not isinstance(prompts, str):
+                prompt_strings = [str(p) for p in prompts]
+            else:
+                prompt_strings = [str(prompts)]
+
+            # Use _generate which calls our async generate
+            return self._generate(prompt_strings, stop=stop, **kwargs)
+
+        async def agenerate_prompt(self, prompts, stop=None, **kwargs):
+            """
+            Async generate responses for prompts (required abstract method).
+
+            This is the async version required by BaseLanguageModel.
+            """
+            # Convert prompts to strings if they're not already
+            if hasattr(prompts, '__iter__') and not isinstance(prompts, str):
+                prompt_strings = [str(p) for p in prompts]
+            else:
+                prompt_strings = [str(prompts)]
+
+            # Use _agenerate
+            return await self._agenerate(prompt_strings, stop=stop, **kwargs)
+
 else:
     # Fallback if BaseLanguageModel is not available
     class CustomLLMWrapper:
