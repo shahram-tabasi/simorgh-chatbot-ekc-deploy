@@ -57,31 +57,13 @@
         xformers==0.0.33
     
     # --------------------------------------------------------------
-    #  vLLM dependencies (install only what's missing from base image)
-    #  This avoids reinstalling torch/numpy and prevents space overflow
+    #  vLLM - Install normally with all dependencies
+    #  Use --upgrade-strategy only-if-needed to avoid reinstalling torch
     # --------------------------------------------------------------
     RUN --mount=type=cache,target=/root/.cache/pip \
         pip install --no-cache-dir \
-        mistral_common>=1.0.0 \
-        ray>=2.9.0 \
-        nvidia-ml-py \
-        msgpack \
-        cloudpickle \
-        typing-extensions \
-        filelock \
-        outlines>=0.0.43 \
-        interegular \
-        lark \
-        nest-asyncio \
-        pillow \
-        aioprometheus
-
-    # --------------------------------------------------------------
-    #  vLLM - Install with --no-deps to avoid reinstalling torch/CUDA
-    # --------------------------------------------------------------
-    RUN --mount=type=cache,target=/root/.cache/pip \
-        pip install --no-cache-dir --no-deps \
-        vllm==0.7.3.post1 && \
+        --upgrade-strategy only-if-needed \
+        vllm==0.12.0 && \
         python -c "import vllm; print('✅ vLLM successfully installed:', vllm.__version__)"
     
     # --------------------------------------------------------------
