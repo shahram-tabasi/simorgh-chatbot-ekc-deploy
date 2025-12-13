@@ -119,156 +119,30 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
-      - name: Test SSH to central server
+      - name: Deploy files via central server
         run: |
-          # Add retry logic for SSH connection test (network may be unstable after long deployment)
-          MAX_RETRIES=5
-          RETRY_COUNT=0
+          # Simple SSH streaming approach - minimal connections
+          echo "Deploying to ${{ matrix.server.host }}..."
 
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if [ $RETRY_COUNT -gt 0 ]; then
-              WAIT_TIME=$((5 * (2 ** (RETRY_COUNT - 1))))
-              echo "Connection failed, retry $RETRY_COUNT/$MAX_RETRIES - waiting ${WAIT_TIME}s..."
-              sleep $WAIT_TIME
-            fi
-
-            if timeout 60 ssh -p 2324 -o ConnectTimeout=30 -o ServerAliveInterval=15 \
-              -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-              "echo 'Connected to central server'"; then
-              echo "✓ Connected to central server"
-              exit 0
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-            fi
-          done
-
-          echo "ERROR: Failed to connect to central server after $MAX_RETRIES attempts"
-          exit 1
-
-      - name: Setup SSH from central to target server
-        run: |
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if [ $RETRY_COUNT -gt 0 ]; then
-              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
-              sleep 5
-            fi
-
-            if timeout 60 ssh -p 2324 -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
-              ${{ secrets.SSH_USER }}@217.219.39.212 \
-              "ssh-keyscan -H ${{ matrix.server.host }} >> ~/.ssh/known_hosts 2>/dev/null || true"; then
-              exit 0
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-            fi
-          done
-
-      - name: Test SSH to target server via central
-        run: |
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if [ $RETRY_COUNT -gt 0 ]; then
-              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
-              sleep 5
-            fi
-
-            if timeout 60 ssh -p 2324 -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
-              ${{ secrets.SSH_USER }}@217.219.39.212 \
-              "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'echo Connected to ${{ matrix.server.name }}'"; then
-              echo "✓ Connected to ${{ matrix.server.name }}"
-              exit 0
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-            fi
-          done
-
-          echo "ERROR: Failed to connect to target server"
-          exit 1
-
-      - name: Create directories on target server
-        run: |
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if [ $RETRY_COUNT -gt 0 ]; then
-              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting 5s..."
-              sleep 5
-            fi
-
-            if timeout 90 ssh -p 2324 -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
-              ${{ secrets.SSH_USER }}@217.219.39.212 \
-              "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models ~/models/huggingface'"; then
-              echo "✓ Directories created"
-              exit 0
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-            fi
-          done
-
-          echo "ERROR: Failed to create directories"
-          exit 1
-
-      - name: Copy deployment files via central server
-        env:
-          SSH_OPTS: "-o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr"
-        run: |
-          # Use central server's home directory for staging (more reliable than /tmp)
-          echo "Deploying files to ${{ matrix.server.host }} via central server..."
-
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-          TRANSFER_SUCCESS=false
-
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$TRANSFER_SUCCESS" = "false" ]; do
-            if [ $RETRY_COUNT -gt 0 ]; then
-              WAIT_TIME=$((2 ** RETRY_COUNT))
-              echo "Retry $RETRY_COUNT/$MAX_RETRIES - waiting ${WAIT_TIME}s..."
-              sleep $WAIT_TIME
-            fi
-
-            # Step 1: Stream tarball to central server's home directory
-            echo "→ Streaming tarball to central server..."
-            if ! timeout 600 tar -czf - -C ./llms \
-              --exclude='__pycache__' \
-              --exclude='*.pyc' \
-              --exclude='.git' \
-              --exclude='tests' \
-              --exclude='*.md' \
-              . | ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key \
-              ${{ secrets.SSH_USER }}@217.219.39.212 \
-              "cat > ~/deploy-${{ matrix.server.name }}.tar.gz && echo Uploaded: \$(du -h ~/deploy-${{ matrix.server.name }}.tar.gz | cut -f1)"; then
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "✗ Upload to central failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
-              continue
-            fi
-            echo "✓ Uploaded to central server"
-
-            # Step 2: Transfer from central to target and extract (all in one SSH session)
-            echo "→ Transferring to target and extracting..."
-            SERVER_NAME="${{ matrix.server.name }}"
-            SERVER_HOST="${{ matrix.server.host }}"
-            if timeout 600 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-              "cat ~/deploy-${SERVER_NAME}.tar.gz | ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr ubuntu@${SERVER_HOST} 'cat > /tmp/llms-deploy.tar.gz' && \
-               ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 ubuntu@${SERVER_HOST} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz' && \
-               rm -f ~/deploy-${SERVER_NAME}.tar.gz && \
-               echo Complete"; then
-              echo "✓ Deployed successfully"
-              TRANSFER_SUCCESS=true
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "✗ Transfer to target failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
-            fi
-          done
-
-          if [ "$TRANSFER_SUCCESS" = "false" ]; then
-            echo "ERROR: Failed to deploy after $MAX_RETRIES attempts"
-            exit 1
-          fi
+          # Stream tarball directly to central, then to target in one step
+          tar -czf - -C ./llms \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.git' \
+            --exclude='tests' \
+            --exclude='*.md' \
+            . | ssh -p 2324 \
+            -o ConnectTimeout=60 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=5 \
+            -o StrictHostKeyChecking=no \
+            -o Compression=yes \
+            -i ~/.ssh/deploy_key \
+            ${{ secrets.SSH_USER }}@217.219.39.212 \
+            "cat > /tmp/deploy-${{ matrix.server.name }}.tar.gz && \
+             scp -o StrictHostKeyChecking=no /tmp/deploy-${{ matrix.server.name }}.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/llms-deploy.tar.gz && \
+             ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models ~/models/huggingface && cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz' && \
+             rm -f /tmp/deploy-${{ matrix.server.name }}.tar.gz"
 
           echo "✓ Deployment complete"
 
