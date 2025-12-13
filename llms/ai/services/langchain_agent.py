@@ -2,34 +2,67 @@
 LangChain Agent Orchestration
 
 Integrates model with tools (search, Python REPL) for agentic workflows.
-Compatible with LangChain 1.0+
+Compatible with LangChain 1.0+ - with comprehensive import fallbacks
 """
 
 import logging
 from typing import List, Dict, Any, Optional
 
-# For LangChain 1.0+, AgentExecutor is in langchain-classic
-# Option 1: Use langchain-classic (legacy support)
-try:
-    from langchain_classic.agents import AgentExecutor, create_react_agent
-    USING_CLASSIC = True
-except ImportError:
-    # Option 2: Use the new simplified agent API
-    try:
-        from langchain.agents import create_agent
-        USING_CLASSIC = False
-        AgentExecutor = None
-        create_react_agent = None
-    except ImportError:
-        # Fallback: Try old imports for pre-1.0 versions
-        from langchain.agents import AgentExecutor, create_react_agent
-        USING_CLASSIC = True
-
-from langchain.prompts import PromptTemplate
-from langchain.tools import Tool
-from langchain.schema import BaseLanguageModel
-
 logger = logging.getLogger(__name__)
+
+# Check if langchain is available at all
+LANGCHAIN_AVAILABLE = False
+USING_CLASSIC = False
+AgentExecutor = None
+create_react_agent = None
+PromptTemplate = None
+Tool = None
+BaseLanguageModel = None
+
+try:
+    # Step 1: Try to import Tool (should work with any version)
+    try:
+        from langchain.tools import Tool
+    except ImportError:
+        from langchain_core.tools import Tool
+    
+    # Step 2: Try to import BaseLanguageModel
+    try:
+        from langchain.schema import BaseLanguageModel
+    except ImportError:
+        try:
+            from langchain_core.language_models import BaseLanguageModel
+        except ImportError:
+            from langchain_core.language_models.base import BaseLanguageModel
+    
+    LANGCHAIN_AVAILABLE = True
+    
+    # Step 3: Try to import PromptTemplate (location changed in v1.0)
+    try:
+        from langchain.prompts import PromptTemplate
+    except ImportError:
+        try:
+            from langchain_core.prompts import PromptTemplate
+        except ImportError:
+            logger.warning("Could not import PromptTemplate")
+            PromptTemplate = None
+    
+    # Step 4: Try importing agent components
+    try:
+        from langchain_classic.agents import AgentExecutor, create_react_agent
+        USING_CLASSIC = True
+        logger.info("✅ Using langchain-classic for agents")
+    except ImportError:
+        try:
+            from langchain.agents import create_agent
+            USING_CLASSIC = False
+            logger.info("✅ Using modern LangChain agents")
+        except ImportError:
+            logger.warning("⚠️  No agent support found - agents will be disabled")
+            
+except ImportError as e:
+    logger.error(f"❌ LangChain not properly installed: {e}")
+    logger.error("Please install: pip install langchain langchain-core langchain-classic")
 
 
 # ReAct prompt template for tool use
@@ -57,7 +90,7 @@ Thought: {agent_scratchpad}
 """
 
 
-class CustomLLMWrapper(BaseLanguageModel):
+class CustomLLMWrapper:
     """
     Wrapper to make our model manager compatible with LangChain.
 
@@ -72,7 +105,13 @@ class CustomLLMWrapper(BaseLanguageModel):
         Args:
             model_manager: ModelManager instance
         """
-        super().__init__()
+        # Dynamically inherit from BaseLanguageModel if available
+        if BaseLanguageModel is not None:
+            try:
+                self.__class__.__bases__ = (BaseLanguageModel,)
+            except:
+                pass  # If we can't set bases, just continue
+        
         self.model_manager = model_manager
 
     @property
@@ -82,16 +121,12 @@ class CustomLLMWrapper(BaseLanguageModel):
 
     async def _agenerate(self, prompts: List[str], **kwargs) -> Any:
         """Generate responses asynchronously"""
-        # For agent use, we typically get one prompt at a time
         if not prompts:
             raise ValueError("No prompts provided")
 
         prompt = prompts[0]
-
-        # Convert to message format
         messages = [{"role": "user", "content": prompt}]
 
-        # Generate
         text, _ = await self.model_manager.generate(
             messages=messages,
             max_tokens=kwargs.get("max_tokens", 1024),
@@ -102,9 +137,13 @@ class CustomLLMWrapper(BaseLanguageModel):
         return text
 
     def _generate(self, prompts: List[str], **kwargs) -> Any:
-        """Synchronous generation (not used in async context)"""
+        """Synchronous generation"""
         import asyncio
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         return loop.run_until_complete(self._agenerate(prompts, **kwargs))
 
     async def apredict(self, text: str, **kwargs) -> str:
@@ -115,7 +154,11 @@ class CustomLLMWrapper(BaseLanguageModel):
     def predict(self, text: str, **kwargs) -> str:
         """Sync predict"""
         import asyncio
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         return loop.run_until_complete(self.apredict(text, **kwargs))
 
 
@@ -130,7 +173,7 @@ class LangChainAgent:
     def __init__(
         self,
         model_manager,
-        tools: List[Tool],
+        tools: List[Any],
         verbose: bool = False
     ):
         """
@@ -145,24 +188,31 @@ class LangChainAgent:
         self.tools = tools
         self.verbose = verbose
 
-        # Wrap model for LangChain compatibility
-        self.llm = CustomLLMWrapper(model_manager)
+        if not LANGCHAIN_AVAILABLE:
+            logger.error("❌ LangChain not available - agent functionality disabled")
+            logger.error("   Install: pip install langchain langchain-core langchain-classic")
+            self.agent = None
+            self.llm = None
+            return
 
-        # Create agent
+        self.llm = CustomLLMWrapper(model_manager)
         self.agent = self._create_agent()
 
     def _create_agent(self) -> Optional[Any]:
         """Create agent with tools"""
+        if not LANGCHAIN_AVAILABLE:
+            logger.warning("⚠️  LangChain not available")
+            return None
+            
         if not self.tools:
-            logger.warning("No tools provided - agent will not be created")
+            logger.warning("⚠️  No tools provided - agent will not be created")
             return None
 
         try:
-            if USING_CLASSIC:
+            if USING_CLASSIC and create_react_agent is not None and AgentExecutor is not None and PromptTemplate is not None:
                 # Legacy approach using langchain-classic
-                logger.info("Using langchain-classic AgentExecutor")
+                logger.info("Creating agent with langchain-classic AgentExecutor")
                 
-                # Create prompt
                 prompt = PromptTemplate(
                     template=REACT_PROMPT_TEMPLATE,
                     input_variables=["input", "agent_scratchpad"],
@@ -172,7 +222,6 @@ class LangChainAgent:
                     }
                 )
 
-                # Create ReAct agent
                 agent = create_react_agent(
                     llm=self.llm,
                     tools=self.tools,
@@ -188,10 +237,9 @@ class LangChainAgent:
                 )
             else:
                 # Modern LangChain 1.0+ approach
-                logger.info("Using modern LangChain create_agent")
+                logger.info("Creating agent with modern LangChain create_agent")
                 from langchain.agents import create_agent
                 
-                # Convert tools to the format expected by create_agent
                 executor = create_agent(
                     model=self.llm,
                     tools=self.tools,
@@ -202,7 +250,7 @@ class LangChainAgent:
             return executor
 
         except Exception as e:
-            logger.error(f"Failed to create agent: {e}")
+            logger.error(f"❌ Failed to create agent: {e}")
             logger.exception(e)
             return None
 
@@ -228,7 +276,7 @@ class LangChainAgent:
         Returns:
             Dict with output and metadata
         """
-        if not use_tools or self.agent is None:
+        if not LANGCHAIN_AVAILABLE or not use_tools or self.agent is None:
             # Direct generation without tools
             messages = [{"role": "user", "content": input_text}]
             output, tokens = await self.model_manager.generate(messages)
@@ -242,23 +290,23 @@ class LangChainAgent:
 
         # Run agent with tools
         try:
-            # Run in executor to avoid blocking
             import asyncio
-            loop = asyncio.get_event_loop()
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
 
             def _run_agent():
                 if USING_CLASSIC:
-                    # Legacy API
                     return self.agent.invoke({"input": input_text})
                 else:
-                    # Modern API expects messages format
                     return self.agent.invoke({
                         "messages": [{"role": "user", "content": input_text}]
                     })
 
             result = await loop.run_in_executor(None, _run_agent)
 
-            # Extract tool usage from intermediate steps if available
             tool_calls = []
             
             if USING_CLASSIC and "intermediate_steps" in result:
@@ -270,18 +318,17 @@ class LangChainAgent:
                     })
                 output = result.get("output", "")
             else:
-                # Modern API - extract from messages
                 output = result.get("messages", [])[-1].get("content", "") if result.get("messages") else str(result)
 
             return {
                 "output": output,
-                "tokens_used": None,  # Not tracked in agent mode
+                "tokens_used": None,
                 "tool_calls": tool_calls,
                 "used_tools": len(tool_calls) > 0
             }
 
         except Exception as e:
-            logger.error(f"Agent execution failed: {e}")
+            logger.error(f"❌ Agent execution failed: {e}")
             logger.exception(e)
             # Fallback to direct generation
             messages = [{"role": "user", "content": input_text}]
@@ -310,32 +357,25 @@ class LangChainAgent:
         Returns:
             Dict with output and metadata
         """
-        # Convert messages to single input text
-        # For proper agent integration, we'd need to maintain conversation history
-        # For now, we combine into a single prompt
         input_text = self._format_messages_as_prompt(messages)
-
         return await self.run(input_text, use_tools=use_tools)
 
     def _format_messages_as_prompt(self, messages: List[Dict[str, str]]) -> str:
         """Format messages as prompt for agent"""
-        parts = []
+        user_messages = [m for m in messages if m.get("role") == "user"]
+        if user_messages:
+            return user_messages[-1].get("content", "")
 
+        parts = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-
             if role == "system":
                 parts.append(f"System: {content}")
             elif role == "user":
                 parts.append(f"User: {content}")
             elif role == "assistant":
                 parts.append(f"Assistant: {content}")
-
-        # Get the last user message as the main query
-        user_messages = [m for m in messages if m.get("role") == "user"]
-        if user_messages:
-            return user_messages[-1].get("content", "")
 
         return "\n".join(parts)
 
@@ -356,10 +396,26 @@ def create_agent_with_tools(
         verbose: Whether to log agent steps
 
     Returns:
-        Configured LangChain agent
+        Configured LangChain agent (or fallback without tools if LangChain unavailable)
     """
-    from tools.search_tool import create_search_tool_from_env
-    from tools.python_repl import create_python_repl_from_env
+    if not LANGCHAIN_AVAILABLE:
+        logger.warning("⚠️  LangChain not available - creating agent without tool support")
+        return LangChainAgent(
+            model_manager=model_manager,
+            tools=[],
+            verbose=verbose
+        )
+    
+    try:
+        from tools.search_tool import create_search_tool_from_env
+        from tools.python_repl import create_python_repl_from_env
+    except ImportError as e:
+        logger.warning(f"⚠️  Tool modules not found: {e}")
+        return LangChainAgent(
+            model_manager=model_manager,
+            tools=[],
+            verbose=verbose
+        )
 
     tools = []
 
@@ -371,7 +427,7 @@ def create_agent_with_tools(
                 tools.append(search_tool)
                 logger.info("✅ Search tool enabled")
         except Exception as e:
-            logger.warning(f"Failed to initialize search tool: {e}")
+            logger.warning(f"⚠️  Failed to initialize search tool: {e}")
 
     # Add Python REPL tool
     if enable_python_repl:
@@ -381,7 +437,7 @@ def create_agent_with_tools(
                 tools.append(python_tool)
                 logger.info("✅ Python REPL tool enabled")
         except Exception as e:
-            logger.warning(f"Failed to initialize Python REPL tool: {e}")
+            logger.warning(f"⚠️  Failed to initialize Python REPL tool: {e}")
 
     return LangChainAgent(
         model_manager=model_manager,
