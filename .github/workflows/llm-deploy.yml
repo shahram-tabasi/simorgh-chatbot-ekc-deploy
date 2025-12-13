@@ -142,8 +142,8 @@ jobs:
         env:
           SSH_OPTS: "-o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr"
         run: |
-          # Stream tarball directly via SSH instead of using SCP (more reliable on slow connections)
-          echo "Streaming deployment files to central server (tar over SSH, avoiding SCP/SFTP)..."
+          # Stream tarball directly through central server to target (single SSH session, no intermediate file)
+          echo "Streaming deployment files through central server to ${{ matrix.server.host }}..."
 
           MAX_RETRIES=3
           RETRY_COUNT=0
@@ -156,8 +156,8 @@ jobs:
               sleep $WAIT_TIME
             fi
 
-            # Stream tar directly over SSH (avoids SCP/SFTP which is hanging)
-            # This creates compressed tar on-the-fly and pipes to SSH
+            # Stream tar directly through both hops without storing on central server
+            # GitHub → Central → Target (all in one pipeline)
             if timeout 600 tar -czf - -C ./llms \
               --exclude='__pycache__' \
               --exclude='*.pyc' \
@@ -166,31 +166,24 @@ jobs:
               --exclude='*.md' \
               . | ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key \
               ${{ secrets.SSH_USER }}@217.219.39.212 \
-              "cat > /tmp/llms-deploy.tar.gz && echo Transfer complete: \$(du -h /tmp/llms-deploy.tar.gz | cut -f1)"; then
-              echo "✓ Streamed to central server successfully"
+              "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr ubuntu@${{ matrix.server.host }} 'cat > /tmp/llms-deploy.tar.gz' && echo Transfer complete"; then
+              echo "✓ Streamed through central to target successfully"
               TRANSFER_SUCCESS=true
             else
               RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "✗ Transfer to central failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+              echo "✗ Transfer failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
             fi
           done
 
           if [ "$TRANSFER_SUCCESS" = "false" ]; then
-            echo "ERROR: Failed to transfer files to central server after $MAX_RETRIES attempts"
+            echo "ERROR: Failed to transfer files after $MAX_RETRIES attempts"
             exit 1
           fi
 
-          # Deploy to target server via central server with timeouts
-          echo "Deploying to target server ${{ matrix.server.host }}..."
-          timeout 500 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "timeout 400 cat /tmp/llms-deploy.tar.gz | \
-              ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 \
-                  -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr \
-                  ubuntu@${{ matrix.server.host }} 'cat > /tmp/llms-deploy.tar.gz' && \
-            timeout 90 ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 \
-              ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz' && \
-            rm -f /tmp/llms-deploy.tar.gz && \
-            echo '✓ Deployment files transferred successfully'"
+          # Extract on target server
+          echo "Extracting files on target server..."
+          timeout 120 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
+            "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz && echo Extraction complete'"
 
           echo "✓ Deployment complete"
 
