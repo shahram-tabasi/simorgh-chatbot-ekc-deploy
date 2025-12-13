@@ -217,8 +217,8 @@ jobs:
         env:
           SSH_OPTS: "-o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr"
         run: |
-          # Stream tarball directly through central server to target (single SSH session, no intermediate file)
-          echo "Streaming deployment files through central server to ${{ matrix.server.host }}..."
+          # Use central server's home directory for staging (more reliable than /tmp)
+          echo "Deploying files to ${{ matrix.server.host }} via central server..."
 
           MAX_RETRIES=3
           RETRY_COUNT=0
@@ -231,9 +231,9 @@ jobs:
               sleep $WAIT_TIME
             fi
 
-            # Stream tar directly through both hops without storing on central server
-            # GitHub → Central → Target (all in one pipeline)
-            if timeout 600 tar -czf - -C ./llms \
+            # Step 1: Stream tarball to central server's home directory
+            echo "→ Streaming tarball to central server..."
+            if ! timeout 600 tar -czf - -C ./llms \
               --exclude='__pycache__' \
               --exclude='*.pyc' \
               --exclude='.git' \
@@ -241,24 +241,50 @@ jobs:
               --exclude='*.md' \
               . | ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key \
               ${{ secrets.SSH_USER }}@217.219.39.212 \
-              "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr ubuntu@${{ matrix.server.host }} 'cat > /tmp/llms-deploy.tar.gz' && echo Transfer complete"; then
-              echo "✓ Streamed through central to target successfully"
+              "cat > ~/deploy-${{ matrix.server.name }}.tar.gz && echo Uploaded: \$(du -h ~/deploy-${{ matrix.server.name }}.tar.gz | cut -f1)"; then
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "✗ Upload to central failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+              continue
+            fi
+            echo "✓ Uploaded to central server"
+
+            # Step 2: Transfer from central to target and extract (all in one SSH session)
+            echo "→ Transferring to target and extracting..."
+            SERVER_NAME="${{ matrix.server.name }}"
+            SERVER_HOST="${{ matrix.server.host }}"
+            if timeout 600 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 bash -s "$SERVER_NAME" "$SERVER_HOST" << 'ENDSSH'
+            set -e
+            SERVER_NAME="$1"
+            SERVER_HOST="$2"
+
+            # Transfer to target
+            cat ~/deploy-${SERVER_NAME}.tar.gz | \
+              ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=10 \
+                  -o TCPKeepAlive=yes -o Compression=yes -c aes128-ctr \
+                  ubuntu@${SERVER_HOST} 'cat > /tmp/llms-deploy.tar.gz'
+
+            # Extract on target
+            ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+              ubuntu@${SERVER_HOST} \
+              'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz'
+
+            # Cleanup central server
+            rm -f ~/deploy-${SERVER_NAME}.tar.gz
+            echo "Complete"
+ENDSSH
+            then
+              echo "✓ Deployed successfully"
               TRANSFER_SUCCESS=true
             else
               RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "✗ Transfer failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
+              echo "✗ Transfer to target failed (attempt $RETRY_COUNT/$MAX_RETRIES)"
             fi
           done
 
           if [ "$TRANSFER_SUCCESS" = "false" ]; then
-            echo "ERROR: Failed to transfer files after $MAX_RETRIES attempts"
+            echo "ERROR: Failed to deploy after $MAX_RETRIES attempts"
             exit 1
           fi
-
-          # Extract on target server
-          echo "Extracting files on target server..."
-          timeout 120 ssh -p 2324 $SSH_OPTS -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz && echo Extraction complete'"
 
           echo "✓ Deployment complete"
 
