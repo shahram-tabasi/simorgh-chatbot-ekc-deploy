@@ -6,7 +6,13 @@ Integrates model with tools (search, Python REPL) for agentic workflows.
 
 import logging
 from typing import List, Dict, Any, Optional
-from langchain.agents import AgentExecutor, create_react_agent
+try:
+    # Try new import path first (LangChain >= 0.1.0)
+    from langchain_core.agents import AgentExecutor
+    from langchain.agents import create_react_agent
+except ImportError:
+    # Fall back to old import path
+    from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import PromptTemplate
 from langchain.tools import Tool
 from langchain.schema import BaseLanguageModel
