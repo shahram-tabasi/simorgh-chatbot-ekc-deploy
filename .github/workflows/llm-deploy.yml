@@ -138,6 +138,29 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
             "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models/huggingface'"
 
+      # - name: Copy deployment files via central server
+      #   run: |
+      #     # Create tarball of llms directory
+      #     tar -czf /tmp/llms-deploy.tar.gz -C ./llms .
+          
+      #     # Copy tarball to central server
+      #     scp -P 2324 -i ~/.ssh/deploy_key /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/
+          
+      #     # Extract on target server via central server
+      #     ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+      #     set -e
+      #     # Copy tarball to target server
+      #     scp /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/
+          
+      #     # Extract on target server
+      #     ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'
+          
+      #     # Clean up central server
+      #     rm /tmp/llms-deploy.tar.gz
+      #     ENDSSH
+          
+      #     # Clean up local
+      #     rm /tmp/llms-deploy.tar.gz
       - name: Copy deployment files via central server
         run: |
           # Create tarball of llms directory
@@ -146,18 +169,12 @@ jobs:
           # Copy tarball to central server
           scp -P 2324 -i ~/.ssh/deploy_key /tmp/llms-deploy.tar.gz ${{ secrets.SSH_USER }}@217.219.39.212:/tmp/
           
-          # Extract on target server via central server
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
-          set -e
-          # Copy tarball to target server
-          scp /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/
-          
-          # Extract on target server
-          ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'
-          
-          # Clean up central server
-          rm /tmp/llms-deploy.tar.gz
-          ENDSSH
+          # Copy to target and extract via central server
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 "
+            scp /tmp/llms-deploy.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/ && \
+            ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz' && \
+            rm /tmp/llms-deploy.tar.gz
+          "
           
           # Clean up local
           rm /tmp/llms-deploy.tar.gz
