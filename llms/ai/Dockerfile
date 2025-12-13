@@ -81,7 +81,7 @@
     # --------------------------------------------------------------
     RUN --mount=type=cache,target=/root/.cache/pip \
         pip install --no-cache-dir --no-deps \
-        vllm==0.7.3.post1 && \
+        vllm==0.8.0 && \
         python -c "import vllm; print('✅ vLLM successfully installed:', vllm.__version__)"
     
     # --------------------------------------------------------------
