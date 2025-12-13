@@ -119,32 +119,34 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
-      - name: Deploy files via central server
+      - name: Deploy configuration files via central server
         run: |
-          # Simple SSH streaming approach - minimal connections
-          echo "Deploying to ${{ matrix.server.host }}..."
+          echo "Deploying configuration to ${{ matrix.server.host }}..."
 
-          # Stream tarball directly to central, then to target in one step
-          tar -czf - -C ./llms \
-            --exclude='__pycache__' \
-            --exclude='*.pyc' \
-            --exclude='.git' \
-            --exclude='tests' \
-            --exclude='*.md' \
-            . | ssh -p 2324 \
+          # Create small config package (KB not MB - won't hang)
+          tar -czf /tmp/llm-config.tar.gz -C ./llms \
+            docker-compose.yml \
+            docker-compose.no-wait.yml \
+            .env.example \
+            deploy-llm-service.sh \
+            check-models.sh 2>/dev/null || true
+
+          echo "Config package size: $(du -h /tmp/llm-config.tar.gz | cut -f1)"
+
+          # Deploy via SSH (tiny file, very fast)
+          cat /tmp/llm-config.tar.gz | ssh -p 2324 \
             -o ConnectTimeout=60 \
             -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=5 \
             -o StrictHostKeyChecking=no \
-            -o Compression=yes \
             -i ~/.ssh/deploy_key \
             ${{ secrets.SSH_USER }}@217.219.39.212 \
-            "cat > /tmp/deploy-${{ matrix.server.name }}.tar.gz && \
-             scp -o StrictHostKeyChecking=no /tmp/deploy-${{ matrix.server.name }}.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/llms-deploy.tar.gz && \
-             ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models ~/models/huggingface && cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm -f /tmp/llms-deploy.tar.gz' && \
-             rm -f /tmp/deploy-${{ matrix.server.name }}.tar.gz"
+            "cat > /tmp/llm-config-${{ matrix.server.name }}.tar.gz && \
+             scp -o StrictHostKeyChecking=no /tmp/llm-config-${{ matrix.server.name }}.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/llm-config.tar.gz && \
+             ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models ~/models/huggingface && cd ~/llm-deployment && tar -xzf /tmp/llm-config.tar.gz && rm /tmp/llm-config.tar.gz' && \
+             rm /tmp/llm-config-${{ matrix.server.name }}.tar.gz"
 
-          echo "✓ Deployment complete"
+          rm /tmp/llm-config.tar.gz
+          echo "✓ Configuration deployed (Docker images will be pulled next)"
 
       - name: Create .env file on target server
         env:
