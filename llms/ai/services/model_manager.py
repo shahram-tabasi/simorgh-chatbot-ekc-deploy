@@ -352,7 +352,8 @@ class ModelManager:
 
             # Log output info
             logger.info(f"✅ vLLM generated {tokens_used} tokens, text length: {len(output_text)} chars")
-            logger.debug(f"📤 Output (first 200 chars): {output_text[:200]}")
+            logger.info(f"📤 Output (first 300 chars): {output_text[:300]}")
+            logger.info(f"📤 Output (last 200 chars): ...{output_text[-200:]}")
 
             return output_text, tokens_used
 
@@ -447,7 +448,8 @@ class ModelManager:
                     tokenize=False,
                     add_generation_prompt=True
                 )
-                logger.debug(f"📝 Formatted prompt (first 200 chars): {prompt[:200]}")
+                logger.info(f"📝 Formatted prompt (first 300 chars): {prompt[:300]}")
+                logger.info(f"📝 Formatted prompt (last 200 chars): ...{prompt[-200:]}")
                 return prompt
             except Exception as e:
                 logger.warning(f"⚠️ Chat template application failed: {e}, using fallback")
@@ -461,7 +463,8 @@ class ModelManager:
             content = msg.get("content", "")
             prompt += f"{role}: {content}\n"
         prompt += "assistant: "
-        logger.debug(f"📝 Fallback prompt (first 200 chars): {prompt[:200]}")
+        logger.info(f"📝 Fallback prompt (first 300 chars): {prompt[:300]}")
+        logger.info(f"📝 Fallback prompt (last 200 chars): ...{prompt[-200:]}")
         return prompt
 
     def get_status(self) -> Dict[str, Any]:
