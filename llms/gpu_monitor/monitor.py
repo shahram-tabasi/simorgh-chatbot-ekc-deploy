@@ -5,7 +5,7 @@ This monitor:
 1. Tracks GPU memory usage and utilization
 2. Checks backend service for active tasks via /status endpoint
 3. Automatically restarts container when:
-   - GPU memory > threshold (default 90%)
+   - GPU memory > threshold (default 97% for 16-bit vLLM)
    - GPU utilization < threshold (default 5%)
    - Backend has no active tasks (is_idle = True)
    - Conditions persist for specified duration (default 60s)
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Configuration from Environment Variables
 # ============================================================================
-GPU_MEMORY_THRESHOLD = float(os.getenv('GPU_MEMORY_THRESHOLD', '90'))
+GPU_MEMORY_THRESHOLD = float(os.getenv('GPU_MEMORY_THRESHOLD', '97'))  # Increased for 16-bit vLLM model
 GPU_IDLE_THRESHOLD = float(os.getenv('GPU_IDLE_THRESHOLD', '5'))
 IDLE_DURATION = int(os.getenv('IDLE_DURATION', '60'))
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '10'))
