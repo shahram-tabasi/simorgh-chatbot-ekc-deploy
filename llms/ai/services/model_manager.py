@@ -136,12 +136,16 @@ class ModelManager:
                 trust_remote_code=True,
             )
 
-            # Load tokenizer from the same path as the model
-            # This ensures compatibility and proper chat template
+            # Load tokenizer from LoRA adapter path if available (contains chat template)
+            # Otherwise, load from model path
+            tokenizer_path = self.lora_adapter_path if (self.lora_adapter_path and os.path.exists(self.lora_adapter_path)) else model_path_to_use
+            
             tokenizer = AutoTokenizer.from_pretrained(
-                model_path_to_use,
+                tokenizer_path,
                 trust_remote_code=True,
             )
+            
+            logger.info(f"Loaded tokenizer from: {tokenizer_path}")
 
             return model, tokenizer
 
