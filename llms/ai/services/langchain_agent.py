@@ -92,18 +92,25 @@ Thought: {agent_scratchpad}
 
 # Conditional class definition based on what's available
 if BaseLanguageModel is not None:
+    from typing import Any as AnyType
+
     class CustomLLMWrapper(BaseLanguageModel):
         """
         Wrapper to make our model manager compatible with LangChain.
 
         Properly inherits from BaseLanguageModel to work with langchain-classic.
         """
+        # Pydantic v2 configuration - allow arbitrary types
+        model_config = {'arbitrary_types_allowed': True}
+
+        # Declare fields for Pydantic
+        model_manager: AnyType = None
+        _stop: Optional[List[str]] = None
 
         def __init__(self, model_manager):
             """Initialize wrapper with model manager"""
-            super().__init__()
-            self.model_manager = model_manager
-            self._stop = None  # Store stop sequences for bind()
+            # Initialize BaseLanguageModel first (Pydantic model)
+            super().__init__(model_manager=model_manager)
 
         def bind(self, **kwargs):
             """
