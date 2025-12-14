@@ -37,7 +37,7 @@ class ModelManager:
         model_name: str = "unsloth/gpt-oss-20b",
         model_path: str = "/models/unsloth-gpt-oss-20b-16bit",
         max_model_len: int = 4096,
-        gpu_memory_utilization: float = 0.9,
+        gpu_memory_utilization: float = 0.97,  # Increased for 16-bit vLLM model
         lora_adapter_path: Optional[str] = None,
     ):
         self.model_name = model_name

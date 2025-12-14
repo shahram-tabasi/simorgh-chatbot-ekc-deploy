@@ -103,7 +103,7 @@ async def lifespan(app: FastAPI):
             model_name="unsloth/gpt-oss-20b",
             model_path="/models/unsloth-gpt-oss-20b-16bit",
             max_model_len=4096,
-            gpu_memory_utilization=0.9,
+            gpu_memory_utilization=0.97,  # Increased for 16-bit vLLM model
             lora_adapter_path="./saved_lora_adapters",
         )
 
