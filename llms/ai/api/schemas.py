@@ -126,3 +126,23 @@ class ModelsListResponse(BaseModel):
     """Response for /v1/models endpoint"""
     object: Literal["list"] = "list"
     data: List[ModelInfo]
+
+
+# ============================================================================
+# Legacy Endpoints (for backward compatibility with simorgh-agent backend)
+# ============================================================================
+
+class LegacyGenerateRequest(BaseModel):
+    """Legacy generate request format (from ai_server.py)"""
+    system_prompt: str
+    user_prompt: str
+    thinking_level: str = Field(default="medium", pattern="^(low|medium|high)$")
+    max_tokens: Optional[int] = Field(default=None, ge=100, le=8000)
+    stream: bool = Field(default=False)
+
+
+class LegacyGenerateResponse(BaseModel):
+    """Legacy generate response format"""
+    output: str
+    tokens_used: int
+    thinking_level: str

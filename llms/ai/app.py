@@ -38,6 +38,8 @@ from api.schemas import (
     ModelInfo,
     ErrorResponse,
     Role,
+    LegacyGenerateRequest,
+    LegacyGenerateResponse,
 )
 from services.model_manager import ModelManager
 from services.langchain_agent import create_agent_with_tools
@@ -414,38 +416,133 @@ def _estimate_tokens(messages: list) -> int:
 
 
 # ============================================================================
-# Legacy Endpoints (for backward compatibility)
+# Legacy Endpoints (for backward compatibility with simorgh-agent backend)
 # ============================================================================
-@app.post("/generate")
-async def legacy_generate(request: dict):
+
+# Thinking level to temperature mapping
+THINKING_LEVEL_CONFIG = {
+    "low": {"temperature": 0.05, "max_tokens": 1500},
+    "medium": {"temperature": 0.1, "max_tokens": 3000},
+    "high": {"temperature": 0.15, "max_tokens": 5000},
+}
+
+
+@app.post("/generate", response_model=LegacyGenerateResponse)
+async def legacy_generate(request: LegacyGenerateRequest):
     """
     Legacy generate endpoint for backward compatibility.
+    Used by simorgh-agent backend for non-streaming requests.
     """
+    if model_manager is None:
+        raise HTTPException(status_code=503, detail="Model not initialized")
+
     try:
-        # Convert to ChatCompletionRequest format
+        # Get thinking level config
+        config = THINKING_LEVEL_CONFIG.get(request.thinking_level, THINKING_LEVEL_CONFIG["medium"])
+        max_tokens = request.max_tokens or config["max_tokens"]
+        temperature = config["temperature"]
+
+        # Convert to message format
         messages = [
-            ChatMessage(role=Role.SYSTEM, content=request.get("system_prompt", "")),
-            ChatMessage(role=Role.USER, content=request.get("user_prompt", ""))
+            {"role": "system", "content": request.system_prompt},
+            {"role": "user", "content": request.user_prompt}
         ]
 
-        chat_request = ChatCompletionRequest(
-            model="unsloth/gpt-oss-20b",
+        # Generate response
+        output, tokens_used = await model_manager.generate(
             messages=messages,
-            max_tokens=request.get("max_tokens"),
-            stream=False
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=0.95,
         )
 
-        response = await non_streaming_chat_completion(chat_request)
-
-        # Convert to legacy format
-        return {
-            "output": response.choices[0].message.content,
-            "tokens_used": response.usage.completion_tokens,
-            "thinking_level": request.get("thinking_level", "medium")
-        }
+        return LegacyGenerateResponse(
+            output=output,
+            tokens_used=tokens_used,
+            thinking_level=request.thinking_level
+        )
 
     except Exception as e:
+        logger.error(f"Legacy generate failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/generate-stream")
+async def legacy_generate_stream(request: LegacyGenerateRequest):
+    """
+    Legacy streaming endpoint for backward compatibility.
+    Used by simorgh-agent backend for streaming requests.
+
+    Returns SSE (Server-Sent Events) format expected by the backend.
+    """
+    if model_manager is None:
+        raise HTTPException(status_code=503, detail="Model not initialized")
+
+    if not request.stream:
+        raise HTTPException(status_code=400, detail="Stream parameter must be true")
+
+    return StreamingResponse(
+        legacy_stream_generation(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncIterator[str]:
+    """
+    Stream generation in legacy SSE format.
+
+    Backend expects format:
+    data: {"status": "started", "thinking_level": "medium"}
+    data: {"chunk": "partial text"}
+    data: {"status": "completed", "output": "full text", "tokens_used": 123}
+    """
+    try:
+        # Get thinking level config
+        config = THINKING_LEVEL_CONFIG.get(request.thinking_level, THINKING_LEVEL_CONFIG["medium"])
+        max_tokens = request.max_tokens or config["max_tokens"]
+        temperature = config["temperature"]
+
+        # Send started event
+        import json
+        yield f"data: {json.dumps({'status': 'started', 'thinking_level': request.thinking_level})}\n\n"
+
+        # Convert to message format
+        messages = [
+            {"role": "system", "content": request.system_prompt},
+            {"role": "user", "content": request.user_prompt}
+        ]
+
+        # Stream generation
+        full_output = ""
+        async for chunk in model_manager.generate_stream(
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=0.95,
+        ):
+            full_output += chunk
+            # Send chunk
+            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+        # Send completion event
+        tokens_used = len(full_output.split())  # Rough estimate
+        completion_data = {
+            'status': 'completed',
+            'output': full_output,
+            'tokens_used': tokens_used,
+            'thinking_level': request.thinking_level
+        }
+        yield f"data: {json.dumps(completion_data)}\n\n"
+
+    except Exception as e:
+        logger.error(f"Legacy streaming failed: {e}")
+        error_data = {'status': 'error', 'error': str(e)}
+        yield f"data: {json.dumps(error_data)}\n\n"
 
 
 # ============================================================================
