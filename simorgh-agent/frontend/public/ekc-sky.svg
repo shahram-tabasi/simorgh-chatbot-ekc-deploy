@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1400" height="900" viewBox="0 0 1400 900">
+
+  <!-- Background -->
+  <defs>
+    <!-- Night sky gradient -->
+    <linearGradient id="skyGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070b1a" stop-opacity="1"/>
+      <stop offset="30%" stop-color="#0a0e2a" stop-opacity="1"/>
+      <stop offset="70%" stop-color="#11183d" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#070b1a" stop-opacity="1"/>
+    </linearGradient>
+    
+    <!-- Strong glow for EKC stars -->
+    <filter id="ekcStarGlow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    
+    <!-- Glow for bright background stars -->
+    <filter id="brightStarGlow">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    
+    <!-- Dense star patterns -->
+    <pattern id="starPattern1" width="100" height="100" patternUnits="userSpaceOnUse">
+      <g opacity="0.5">
+        <!-- Dense star field -->
+        <circle cx="10" cy="15" r="0.4" fill="#ffffff"/>
+        <circle cx="35" cy="25" r="0.6" fill="#ffffcc"/>
+        <circle cx="65" cy="10" r="0.3" fill="#ffffff"/>
+        <circle cx="20" cy="50" r="0.5" fill="#ccffff"/>
+        <circle cx="45" cy="65" r="0.4" fill="#ffffff"/>
+        <circle cx="75" cy="40" r="0.7" fill="#ffffcc"/>
+        <circle cx="30" cy="80" r="0.3" fill="#ffffff"/>
+        <circle cx="55" cy="30" r="0.5" fill="#ccffff"/>
+        <circle cx="85" cy="85" r="0.4" fill="#ffffff"/>
+        <circle cx="40" cy="95" r="0.6" fill="#ffffcc"/>
+      </g>
+    </pattern>
+    
+    <pattern id="starPattern2" width="100" height="100" patternUnits="userSpaceOnUse">
+      <g opacity="0.5">
+        <!-- Different star positions -->
+        <circle cx="5" cy="20" r="0.5" fill="#ffffff"/>
+        <circle cx="30" cy="30" r="0.4" fill="#ffffcc"/>
+        <circle cx="60" cy="5" r="0.6" fill="#ffffff"/>
+        <circle cx="15" cy="55" r="0.3" fill="#ccffff"/>
+        <circle cx="40" cy="70" r="0.5" fill="#ffffff"/>
+        <circle cx="70" cy="45" r="0.4" fill="#ffffcc"/>
+        <circle cx="25" cy="85" r="0.6" fill="#ffffff"/>
+        <circle cx="50" cy="35" r="0.3" fill="#ccffff"/>
+        <circle cx="80" cy="90" r="0.5" fill="#ffffff"/>
+        <circle cx="35" cy="100" r="0.4" fill="#ffffcc"/>
+      </g>
+    </pattern>
+    
+    <!-- Natural meteor shape - MOVING FROM TOP-RIGHT TO BOTTOM-LEFT -->
+    <g id="meteor">
+      <!-- Meteor head -->
+      <circle cx="0" cy="0" r="1.5" fill="#ffffff">
+        <animate attributeName="r" values="1.5;2;1.5" dur="2s" repeatCount="indefinite"/>
+      </circle>
+      <!-- Meteor tail BEHIND (diagonal direction) -->
+      <line x1="0" y1="0" x2="30" y2="-25" stroke="url(#meteorGradient)" stroke-width="1.2"/>
+    </g>
+    
+    <!-- Meteor tail gradient -->
+    <linearGradient id="meteorGradient" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="60%" stop-color="#aaccff" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#6688cc" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Night sky background -->
+  <rect width="100%" height="100%" fill="url(#skyGradient)"/>
+  
+  <!-- Dense star field -->
+  <rect width="100%" height="100%" fill="url(#starPattern1)" opacity="0.7"/>
+  
+  <!-- Animated star twinkle -->
+  <rect width="100%" height="100%" fill="url(#starPattern2)" opacity="0">
+    <animate attributeName="opacity"
+             values="0;0.6;0"
+             keyTimes="0;0.2;1"
+             dur="4s"
+             repeatCount="indefinite"/>
+  </rect>
+
+  <!-- ===== EKC CONSTELLATION IN ONE LINE ===== -->
+  
+  <!-- E Constellation - Centered at (350, 400) -->
+  <g id="constellationE" opacity="1" filter="url(#ekcStarGlow)">
+    <!-- Vertical line stars -->
+    <circle cx="350" cy="310" r="5" fill="#4fc3f7" stroke="#bbdefb" stroke-width="2">
+      <animate attributeName="r" values="5;6;5" dur="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="350" cy="400" r="3" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1">
+      <animate attributeName="r" values="3;4;3" dur="3s" repeatCount="indefinite" begin="0.5s"/>
+    </circle>
+    <circle cx="350" cy="490" r="5" fill="#4fc3f7" stroke="#bbdefb" stroke-width="2">
+      <animate attributeName="r" values="5;6;5" dur="3s" repeatCount="indefinite" begin="1s"/>
+    </circle>
+    
+    <!-- Horizontal line stars -->
+    <circle cx="420" cy="310" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="0.2s"/>
+    </circle>
+    <circle cx="420" cy="400" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="0.7s"/>
+    </circle>
+    <circle cx="420" cy="490" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="1.2s"/>
+    </circle>
+    
+    <!-- Simple constellation lines for E -->
+    <path d="M350,310 L420,310" stroke="#bbdefb" stroke-width="1.5" stroke-opacity="0.8"/>
+    <path d="M350,400 L420,400" stroke="#bbdefb" stroke-width="1.5" stroke-opacity="0.8"/>
+    <path d="M350,490 L420,490" stroke="#bbdefb" stroke-width="1.5" stroke-opacity="0.8"/>
+    <path d="M350,310 L350,490" stroke="#bbdefb" stroke-width="1.5" stroke-opacity="0.8"/>
+  </g>
+
+  <!-- K Constellation - Centered at (600, 400) -->
+  <g id="constellationK" opacity="1" filter="url(#ekcStarGlow)">
+    <!-- Vertical line stars -->
+    <circle cx="600" cy="300" r="5" fill="#4fc3f7" stroke="#bbdefb" stroke-width="2">
+      <animate attributeName="r" values="5;6;5" dur="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="600" cy="400" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="0.6s"/>
+    </circle>
+    <circle cx="600" cy="490" r="5" fill="#4fc3f7" stroke="#bbdefb" stroke-width="2">
+      <animate attributeName="r" values="5;6;5" dur="3s" repeatCount="indefinite" begin="1.2s"/>
+    </circle>
+    
+    <!-- Diagonal stars for K -->
+    <circle cx="670" cy="296" r="3" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1">
+      <animate attributeName="r" values="3;4;3" dur="3s" repeatCount="indefinite" begin="0.3s"/>
+    </circle>
+    <circle cx="670" cy="490" r="3" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1">
+      <animate attributeName="r" values="3;4;3" dur="3s" repeatCount="indefinite" begin="0.9s"/>
+    </circle>
+    
+    <!-- Simple constellation lines for K -->
+    <path d="M600,300 L600,490" stroke="#bbdefb" stroke-width="1.5" stroke-opacity="0.8"/>
+    <path d="M600,400 L670,296" stroke="#bbdefb" stroke-width="1.5" stroke-opacity="0.8"/>
+    <path d="M600,400 L670,490" stroke="#bbdefb" stroke-width="1.5" stroke-opacity="0.8"/>
+  </g>
+
+  <!-- C Constellation - Centered at (850, 400) - ROUNDER -->
+  <g id="constellationC" opacity="1" filter="url(#ekcStarGlow)">
+    <!-- C shape stars - Rounder curve with more stars -->
+    <circle cx="850" cy="310" r="5" fill="#4fc3f7" stroke="#bbdefb" stroke-width="2">
+      <animate attributeName="r" values="5;6;5" dur="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="805" cy="330" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="0.2s"/>
+    </circle>
+    <circle cx="785" cy="370" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="0.4s"/>
+    </circle>
+    <circle cx="780" cy="400" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="0.6s"/>
+    </circle>
+    <circle cx="785" cy="430" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="0.8s"/>
+    </circle>
+    <circle cx="805" cy="470" r="4" fill="#4fc3f7" stroke="#bbdefb" stroke-width="1.5">
+      <animate attributeName="r" values="4;5;4" dur="3s" repeatCount="indefinite" begin="1.0s"/>
+    </circle>
+    <circle cx="850" cy="490" r="5" fill="#4fc3f7" stroke="#bbdefb" stroke-width="2">
+      <animate attributeName="r" values="5;6;5" dur="3s" repeatCount="indefinite" begin="1.2s"/>
+    </circle>
+    
+    <!-- More rounded curved lines for C - Very round curve -->
+    <path d="M850,310 
+             C810,320 780,340 780,400
+             C780,460 810,480 850,490" 
+          stroke="#bbdefb" stroke-width="1.5" stroke-opacity="0.8" fill="none"/>
+  </g>
+
+  <!-- More bright background stars -->
+  <g opacity="0.8" filter="url(#brightStarGlow)">
+    <!-- Bright stars at random positions -->
+    <g>
+      <circle cx="120" cy="85" r="1.8" fill="#ffffff">
+        <animate attributeName="opacity" values="0.5;0.9;0.5" dur="5s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    
+    <g>
+      <circle cx="1150" cy="320" r="1.5" fill="#ffffcc">
+        <animate attributeName="opacity" values="0.5;0.8;0.5" dur="6s" repeatCount="indefinite" begin="1s"/>
+      </circle>
+    </g>
+    
+    <g>
+      <circle cx="280" cy="780" r="2" fill="#ccffff">
+        <animate attributeName="opacity" values="0.5;0.9;0.5" dur="4s" repeatCount="indefinite" begin="2s"/>
+      </circle>
+    </g>
+    
+    <g>
+      <circle cx="980" cy="620" r="1.2" fill="#ffffff">
+        <animate attributeName="opacity" values="0.5;0.7;0.5" dur="7s" repeatCount="indefinite" begin="3s"/>
+      </circle>
+    </g>
+  </g>
+  
+  <!-- ===== 4 SLOW METEORS ===== -->
+  
+  <!-- Meteor 1 - Very slow movement -->
+  <g opacity="0">
+    <use href="#meteor" x="1400" y="100"/>
+    <animate attributeName="opacity" values="0;0.7;0" dur="3s" repeatCount="indefinite" begin="10s"/>
+    <animateTransform attributeName="transform"
+                      type="translate"
+                      additive="sum"
+                      values="0,0; -500,300; -1000,600"
+                      dur="3s"
+                      repeatCount="indefinite"
+                      begin="10s"/>
+  </g>
+  
+  <!-- Meteor 2 - Slow movement -->
+  <g opacity="0">
+    <use href="#meteor" x="1300" y="150"/>
+    <animate attributeName="opacity" values="0;0.6;0" dur="2.5s" repeatCount="indefinite" begin="20s"/>
+    <animateTransform attributeName="transform"
+                      type="translate"
+                      additive="sum"
+                      values="0,0; -450,350; -900,700"
+                      dur="2.5s"
+                      repeatCount="indefinite"
+                      begin="20s"/>
+  </g>
+  
+  <!-- Meteor 3 - Moderate slow movement -->
+  <g opacity="0">
+    <use href="#meteor" x="1200" y="200"/>
+    <animate attributeName="opacity" values="0;0.5;0" dur="2s" repeatCount="indefinite" begin="30s"/>
+    <animateTransform attributeName="transform"
+                      type="translate"
+                      additive="sum"
+                      values="0,0; -400,400; -800,800"
+                      dur="2s"
+                      repeatCount="indefinite"
+                      begin="30s"/>
+  </g>
+  
+  <!-- Meteor 4 - Very slow diagonal -->
+  <g opacity="0">
+    <use href="#meteor" x="1100" y="50"/>
+    <animate attributeName="opacity" values="0;0.8;0" dur="3.5s" repeatCount="indefinite" begin="40s"/>
+    <animateTransform attributeName="transform"
+                      type="translate"
+                      additive="sum"
+                      values="0,0; -600,450; -1200,900"
+                      dur="3.5s"
+                      repeatCount="indefinite"
+                      begin="40s"/>
+  </g>
+  
+  <!-- Very faint distant stars -->
+  <g opacity="0.4">
+    <circle cx="300" cy="200" r="0.5" fill="#ffffff"/>
+    <circle cx="1200" cy="500" r="0.4" fill="#ffffff"/>
+    <circle cx="150" cy="700" r="0.6" fill="#ffffcc"/>
+    <circle cx="1000" cy="300" r="0.5" fill="#ffffff"/>
+    <circle cx="500" cy="600" r="0.4" fill="#ccffff"/>
+    <circle cx="800" cy="100" r="0.5" fill="#ffffff"/>
+  </g>
+</svg>
