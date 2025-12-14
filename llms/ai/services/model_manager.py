@@ -126,15 +126,22 @@ class ModelManager:
             gc.collect()
             torch.cuda.empty_cache()
 
+            model_path_to_use = self.model_path if os.path.exists(self.model_path) else self.model_name
+
             model = LLM(
-                model=self.model_path if os.path.exists(self.model_path) else self.model_name,
+                model=model_path_to_use,
                 max_model_len=self.max_model_len,
                 gpu_memory_utilization=self.gpu_memory_utilization,
                 tensor_parallel_size=1,
                 trust_remote_code=True,
             )
 
-            tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            # Load tokenizer from the same path as the model
+            # This ensures compatibility and proper chat template
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_path_to_use,
+                trust_remote_code=True,
+            )
 
             return model, tokenizer
 
@@ -328,6 +335,7 @@ class ModelManager:
 
         # Format messages into prompt
         prompt = self._format_messages(messages)
+        logger.info(f"🤖 vLLM generation - Prompt length: {len(prompt)} chars, max_tokens: {max_tokens}")
 
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -341,6 +349,11 @@ class ModelManager:
             outputs = self.model.generate([prompt], sampling_params)
             output_text = outputs[0].outputs[0].text
             tokens_used = len(outputs[0].outputs[0].token_ids)
+
+            # Log output info
+            logger.info(f"✅ vLLM generated {tokens_used} tokens, text length: {len(output_text)} chars")
+            logger.debug(f"📤 Output (first 200 chars): {output_text[:200]}")
+
             return output_text, tokens_used
 
         return await loop.run_in_executor(None, _generate)
@@ -428,20 +441,28 @@ class ModelManager:
     def _format_messages(self, messages: List[Dict[str, str]]) -> str:
         """Format messages into a prompt string"""
         if self.tokenizer and hasattr(self.tokenizer, 'apply_chat_template'):
-            return self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-        else:
-            # Fallback formatting
-            prompt = ""
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                prompt += f"{role}: {content}\n"
-            prompt += "assistant: "
-            return prompt
+            try:
+                prompt = self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True
+                )
+                logger.debug(f"📝 Formatted prompt (first 200 chars): {prompt[:200]}")
+                return prompt
+            except Exception as e:
+                logger.warning(f"⚠️ Chat template application failed: {e}, using fallback")
+                # Fall through to fallback
+
+        # Fallback formatting
+        logger.warning("⚠️ Using fallback prompt formatting (no chat template)")
+        prompt = ""
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            prompt += f"{role}: {content}\n"
+        prompt += "assistant: "
+        logger.debug(f"📝 Fallback prompt (first 200 chars): {prompt[:200]}")
+        return prompt
 
     def get_status(self) -> Dict[str, Any]:
         """Get model status information"""
