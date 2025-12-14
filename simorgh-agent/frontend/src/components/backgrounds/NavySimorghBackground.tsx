@@ -127,7 +127,15 @@ export function NavySimorghBackground() {
   }, []);
 
   return (
-    <div className="fixed inset-0 pointer-events-none" style={{ background: '#0b1d33' }}>
+    <div
+      className="fixed inset-0 pointer-events-none"
+      style={{
+        backgroundImage: 'url(/simorgh-sky.svg)',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat'
+      }}
+    >
       <canvas ref={canvasRef} className="absolute inset-0" />
     </div>
   );
