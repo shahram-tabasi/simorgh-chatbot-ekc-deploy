@@ -61,6 +61,46 @@ class TestModelManager:
         assert "system:" in prompt.lower() or "you are helpful" in prompt.lower()
         assert "user:" in prompt.lower() or "hello" in prompt.lower()
 
+    @patch('services.model_manager.LLM')
+    @patch('services.model_manager.AutoTokenizer')
+    @patch('os.path.exists')
+    @patch('torch.cuda.is_available')
+    @patch('torch.cuda.get_device_properties')
+    @pytest.mark.asyncio
+    async def test_vllm_tokenizer_loads_from_model_path(
+        self, mock_props, mock_cuda, mock_exists, mock_tokenizer, mock_llm, model_manager
+    ):
+        """Test that vLLM loads tokenizer from model path, NOT LoRA adapter path"""
+        # Setup mocks
+        mock_cuda.return_value = True
+        mock_props.return_value = Mock(total_memory=25 * 1024**3)  # 25GB
+        mock_exists.return_value = True  # Model path exists
+        
+        mock_tokenizer_instance = Mock()
+        mock_tokenizer_instance.chat_template = "test_template"
+        mock_tokenizer.from_pretrained.return_value = mock_tokenizer_instance
+        
+        mock_llm_instance = Mock()
+        mock_llm.return_value = mock_llm_instance
+        
+        # Set LoRA adapter path to verify it's NOT used
+        model_manager.lora_adapter_path = "/tmp/lora_adapter"
+        
+        # Run vLLM initialization
+        await model_manager._try_vllm_init()
+        
+        # Verify tokenizer was loaded from MODEL PATH, not LoRA adapter path
+        mock_tokenizer.from_pretrained.assert_called_once()
+        call_args = mock_tokenizer.from_pretrained.call_args
+        
+        # The tokenizer path should be model_path_to_use (either model_path or model_name)
+        # It should NOT be the LoRA adapter path
+        tokenizer_path_used = call_args[0][0]
+        assert tokenizer_path_used != "/tmp/lora_adapter", \
+            "vLLM should NOT load tokenizer from LoRA adapter path"
+        assert tokenizer_path_used in [model_manager.model_path, model_manager.model_name], \
+            "vLLM should load tokenizer from model path or model name"
+
     def test_get_status_uninitialized(self, model_manager):
         """Test status when model not initialized"""
         status = model_manager.get_status()

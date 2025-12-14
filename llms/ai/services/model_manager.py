@@ -136,16 +136,19 @@ class ModelManager:
                 trust_remote_code=True,
             )
 
-            # Load tokenizer from LoRA adapter path if available (contains chat template)
-            # Otherwise, load from model path
-            tokenizer_path = self.lora_adapter_path if (self.lora_adapter_path and os.path.exists(self.lora_adapter_path)) else model_path_to_use
-            
+            # CRITICAL FIX: Load tokenizer from the SAME path as the model
+            # Do NOT use LoRA adapter path - that's only for 4-bit Unsloth
             tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_path,
+                model_path_to_use,
                 trust_remote_code=True,
             )
             
-            logger.info(f"Loaded tokenizer from: {tokenizer_path}")
+            # Log tokenizer info for debugging
+            logger.info(f"✅ Loaded tokenizer from: {model_path_to_use}")
+            if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template:
+                logger.info(f"📋 Chat template loaded (first 100 chars): {tokenizer.chat_template[:100]}...")
+            else:
+                logger.warning("⚠️ No chat template found in tokenizer!")
 
             return model, tokenizer
 
@@ -354,9 +357,13 @@ class ModelManager:
             output_text = outputs[0].outputs[0].text
             tokens_used = len(outputs[0].outputs[0].token_ids)
 
-            # Log output info
+            # Log output info - at INFO level for debugging
             logger.info(f"✅ vLLM generated {tokens_used} tokens, text length: {len(output_text)} chars")
-            logger.debug(f"📤 Output (first 200 chars): {output_text[:200]}")
+            logger.info(f"📤 Output (first 200 chars): {output_text[:200]}")
+            
+            # Check for garbage output
+            if len(set(output_text)) <= 3:  # Very low character diversity
+                logger.error(f"🚨 GARBAGE OUTPUT DETECTED! Only {len(set(output_text))} unique chars: {set(output_text)}")
 
             return output_text, tokens_used
 
@@ -444,6 +451,8 @@ class ModelManager:
 
     def _format_messages(self, messages: List[Dict[str, str]]) -> str:
         """Format messages into a prompt string"""
+        logger.info(f"📥 Formatting {len(messages)} messages for {'vLLM' if self.is_vllm else 'Unsloth'}")
+        
         if self.tokenizer and hasattr(self.tokenizer, 'apply_chat_template'):
             try:
                 prompt = self.tokenizer.apply_chat_template(
@@ -451,11 +460,13 @@ class ModelManager:
                     tokenize=False,
                     add_generation_prompt=True
                 )
-                logger.debug(f"📝 Formatted prompt (first 200 chars): {prompt[:200]}")
+                logger.info(f"📝 Formatted prompt (first 200 chars): {prompt[:200]}")
+                logger.info(f"📝 Formatted prompt (last 100 chars): {prompt[-100:]}")
                 return prompt
             except Exception as e:
-                logger.warning(f"⚠️ Chat template application failed: {e}, using fallback")
-                # Fall through to fallback
+                logger.warning(f"⚠️ Chat template application failed: {e}")
+                import traceback
+                logger.warning(f"Traceback: {traceback.format_exc()}")
 
         # Fallback formatting
         logger.warning("⚠️ Using fallback prompt formatting (no chat template)")
@@ -465,7 +476,6 @@ class ModelManager:
             content = msg.get("content", "")
             prompt += f"{role}: {content}\n"
         prompt += "assistant: "
-        logger.debug(f"📝 Fallback prompt (first 200 chars): {prompt[:200]}")
         return prompt
 
     def get_status(self) -> Dict[str, Any]:
