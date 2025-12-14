@@ -12,12 +12,16 @@ Responsibilities:
 import os
 import asyncio
 import logging
+import traceback
 from typing import Optional, Dict, Any, List, AsyncIterator
 from enum import Enum
 import torch
 import gc
 
 logger = logging.getLogger(__name__)
+
+# Garbage output detection threshold
+GARBAGE_OUTPUT_THRESHOLD = 3  # Minimum unique characters before considering output as garbage
 
 
 class ModelPrecision(Enum):
@@ -362,7 +366,7 @@ class ModelManager:
             logger.info(f"📤 Output (first 200 chars): {output_text[:200]}")
             
             # Check for garbage output
-            if len(set(output_text)) <= 3:  # Very low character diversity
+            if len(set(output_text)) <= GARBAGE_OUTPUT_THRESHOLD:  # Very low character diversity
                 logger.error(f"🚨 GARBAGE OUTPUT DETECTED! Only {len(set(output_text))} unique chars: {set(output_text)}")
 
             return output_text, tokens_used
@@ -465,7 +469,6 @@ class ModelManager:
                 return prompt
             except Exception as e:
                 logger.warning(f"⚠️ Chat template application failed: {e}")
-                import traceback
                 logger.warning(f"Traceback: {traceback.format_exc()}")
 
         # Fallback formatting
