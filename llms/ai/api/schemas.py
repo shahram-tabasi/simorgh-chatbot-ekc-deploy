@@ -126,3 +126,27 @@ class ModelsListResponse(BaseModel):
     """Response for /v1/models endpoint"""
     object: Literal["list"] = "list"
     data: List[ModelInfo]
+
+
+# ============================================================================
+# Simorgh Frontend Compatibility Schemas
+# ============================================================================
+
+class SimorghChatRequest(BaseModel):
+    """Request from Simorgh frontend to /api/chat/send"""
+    chat_id: str = Field(..., description="Chat session ID")
+    user_id: str = Field(..., description="User ID")
+    content: str = Field(..., description="User message content")
+    conversation_history: Optional[List[Dict[str, str]]] = Field(default=None, description="Previous messages")
+    llm_mode: Optional[Literal["online", "offline"]] = Field(default="offline", description="LLM mode (always offline for this service)")
+    use_graph_context: Optional[bool] = Field(default=False, description="Use graph context (not supported)")
+
+
+class SimorghChatResponse(BaseModel):
+    """Response to Simorgh frontend from /api/chat/send"""
+    response: str = Field(..., description="AI assistant response")
+    llm_mode: str = Field(default="offline", description="LLM mode used")
+    context_used: Optional[bool] = Field(default=False, description="Whether context was used")
+    cached_response: Optional[bool] = Field(default=False, description="Whether response was cached")
+    tokens: Optional[int] = Field(default=None, description="Tokens used")
+    spec_task_id: Optional[str] = Field(default=None, description="Spec extraction task ID if created")
