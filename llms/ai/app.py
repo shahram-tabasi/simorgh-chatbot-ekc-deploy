@@ -38,6 +38,8 @@ from api.schemas import (
     ModelInfo,
     ErrorResponse,
     Role,
+    SimorghChatRequest,
+    SimorghChatResponse,
 )
 from services.model_manager import ModelManager
 from services.langchain_agent import create_agent_with_tools
@@ -445,6 +447,84 @@ async def legacy_generate(request: dict):
         }
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Simorgh Frontend Compatibility Endpoint
+# ============================================================================
+@app.post("/api/chat/send", response_model=SimorghChatResponse)
+async def simorgh_chat_send(request: SimorghChatRequest):
+    """
+    Simorgh frontend compatibility endpoint.
+
+    Converts Simorgh frontend format to OpenAI format and back.
+    This allows the AI service to work standalone without the full simorgh-agent backend.
+    """
+    if model_manager is None:
+        request_counter.labels(endpoint="simorgh_chat_send", status="error").inc()
+        raise HTTPException(status_code=503, detail="Model not initialized")
+
+    start_time = time.time()
+
+    try:
+        async with request_semaphore:
+            # Build message history from conversation_history + new content
+            messages = []
+
+            # Add conversation history if provided
+            if request.conversation_history:
+                messages.extend([
+                    {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                    for msg in request.conversation_history
+                ])
+
+            # Add current user message
+            messages.append({"role": "user", "content": request.content})
+
+            # Check if we should use tools (based on heuristic)
+            use_tools = _should_use_tools(messages)
+
+            if use_tools and langchain_agent:
+                # Use LangChain agent with tools
+                result = await langchain_agent.run_with_messages(
+                    messages=messages,
+                    use_tools=True
+                )
+                output = result["output"]
+                tokens_used = result.get("tokens_used", 0) or len(output.split())
+            else:
+                # Direct generation without tools
+                output, tokens_used = await model_manager.generate(
+                    messages=messages,
+                    max_tokens=1024,  # Default for chat
+                    temperature=0.7,
+                    top_p=0.95,
+                )
+
+            # Create Simorgh-compatible response
+            response = SimorghChatResponse(
+                response=output,
+                llm_mode="offline",  # This service only supports offline mode
+                context_used=False,  # Graph context not available in standalone mode
+                cached_response=False,  # No caching in standalone mode
+                tokens=tokens_used,
+                spec_task_id=None  # Spec extraction not available in standalone mode
+            )
+
+            # Metrics
+            duration = time.time() - start_time
+            request_counter.labels(endpoint="simorgh_chat_send", status="success").inc()
+            request_duration.labels(endpoint="simorgh_chat_send").observe(duration)
+            tokens_generated.labels(model="unsloth/gpt-oss-20b").inc(tokens_used)
+
+            logger.info(f"Simorgh chat request processed in {duration:.2f}s, {tokens_used} tokens")
+
+            return response
+
+    except Exception as e:
+        logger.error(f"Simorgh chat send failed: {e}")
+        request_counter.labels(endpoint="simorgh_chat_send", status="error").inc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
