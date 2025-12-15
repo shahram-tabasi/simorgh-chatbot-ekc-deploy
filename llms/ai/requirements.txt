@@ -11,6 +11,9 @@ psutil
 # Hugging Face utilities
 huggingface_hub>=0.20.0
 
+# Harmony encoding for GPT-OSS models
+unsloth_zoo>=0.1.0
+
 # LangChain for agent orchestration
 langchain>=0.3.0
 langchain-core>=0.3.0

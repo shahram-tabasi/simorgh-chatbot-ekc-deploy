@@ -20,9 +20,6 @@ import gc
 
 logger = logging.getLogger(__name__)
 
-# Garbage output detection threshold
-GARBAGE_OUTPUT_THRESHOLD = 3  # Minimum unique characters before considering output as garbage
-
 
 class ModelPrecision(Enum):
     """Model precision options"""
@@ -344,7 +341,7 @@ class ModelManager:
         """Generate with vLLM (non-streaming)"""
         from vllm import SamplingParams
 
-        # Format messages into prompt
+        # Format messages into prompt using Harmony encoding
         prompt = self._format_messages(messages)
         logger.info(f"🤖 vLLM generation - Prompt length: {len(prompt)} chars, max_tokens: {max_tokens}")
 
@@ -361,14 +358,20 @@ class ModelManager:
             output_text = outputs[0].outputs[0].text
             tokens_used = len(outputs[0].outputs[0].token_ids)
 
-            # Log output info - at INFO level for debugging
             logger.info(f"✅ vLLM generated {tokens_used} tokens, text length: {len(output_text)} chars")
             logger.info(f"📤 Output (first 200 chars): {output_text[:200]}")
             
-            # Check for garbage output
-            if len(set(output_text)) <= GARBAGE_OUTPUT_THRESHOLD:  # Very low character diversity
-                logger.error(f"🚨 GARBAGE OUTPUT DETECTED! Only {len(set(output_text))} unique chars: {set(output_text)}")
-
+            # Detect garbage output
+            unique_chars = set(output_text.replace(' ', '').replace('\n', ''))
+            if len(unique_chars) <= 5 and len(output_text) > 100:
+                logger.error(f"🚨 GARBAGE OUTPUT DETECTED! Only {len(unique_chars)} unique chars: {unique_chars}")
+                # Return error message instead of garbage
+                error_msg = (
+                    "I apologize, but I encountered a technical issue generating a response. "
+                    "This may be due to a model configuration issue. Please try again or contact support."
+                )
+                return error_msg, tokens_used
+            
             return output_text, tokens_used
 
         return await loop.run_in_executor(None, _generate)
@@ -454,9 +457,36 @@ class ModelManager:
             await asyncio.sleep(0.01)
 
     def _format_messages(self, messages: List[Dict[str, str]]) -> str:
-        """Format messages into a prompt string"""
+        """
+        Format messages into a prompt string.
+        
+        For GPT-OSS models, uses Harmony format encoding.
+        Falls back to standard chat template or simple format if Harmony unavailable.
+        """
         logger.info(f"📥 Formatting {len(messages)} messages for {'vLLM' if self.is_vllm else 'Unsloth'}")
         
+        # Try Harmony encoding first (required for GPT-OSS models)
+        try:
+            from unsloth_zoo import encode_conversations_with_harmony
+            
+            # Convert messages to the format expected by Harmony encoder
+            # Harmony expects a list of dicts with 'role' and 'content'
+            prompt = encode_conversations_with_harmony(
+                messages,
+                add_generation_prompt=True,
+                tokenize=False
+            )
+            logger.info(f"✅ Used Harmony encoding for GPT-OSS model")
+            logger.info(f"📝 Formatted prompt (first 300 chars): {prompt[:300]}")
+            logger.info(f"📝 Formatted prompt (last 150 chars): {prompt[-150:]}")
+            return prompt
+            
+        except ImportError:
+            logger.warning("⚠️ unsloth_zoo not available, trying standard chat template")
+        except Exception as e:
+            logger.warning(f"⚠️ Harmony encoding failed: {e}, trying standard chat template")
+        
+        # Fallback to standard chat template
         if self.tokenizer and hasattr(self.tokenizer, 'apply_chat_template'):
             try:
                 prompt = self.tokenizer.apply_chat_template(
@@ -464,21 +494,27 @@ class ModelManager:
                     tokenize=False,
                     add_generation_prompt=True
                 )
-                logger.info(f"📝 Formatted prompt (first 200 chars): {prompt[:200]}")
-                logger.info(f"📝 Formatted prompt (last 100 chars): {prompt[-100:]}")
+                logger.info(f"📝 Used standard chat template")
+                logger.info(f"📝 Formatted prompt (first 300 chars): {prompt[:300]}")
                 return prompt
             except Exception as e:
-                logger.warning(f"⚠️ Chat template application failed: {e}")
+                logger.warning(f"⚠️ Chat template failed: {e}")
                 logger.warning(f"Traceback: {traceback.format_exc()}")
 
-        # Fallback formatting
-        logger.warning("⚠️ Using fallback prompt formatting (no chat template)")
+        # Final fallback - simple format
+        logger.warning("⚠️ Using simple fallback prompt formatting")
         prompt = ""
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            prompt += f"{role}: {content}\n"
-        prompt += "assistant: "
+            if role == "system":
+                prompt += f"System: {content}\n\n"
+            elif role == "user":
+                prompt += f"User: {content}\n\n"
+            elif role == "assistant":
+                prompt += f"Assistant: {content}\n\n"
+        prompt += "Assistant:"
+        logger.info(f"📝 Fallback prompt (first 200 chars): {prompt[:200]}")
         return prompt
 
     def get_status(self) -> Dict[str, Any]:
