@@ -15,7 +15,7 @@ export function NavySimorghBackground() {
 
     // Load Simorgh SVG image
     const img = new Image();
-    img.src = '/favicon.svg'; // SVG is in public folder
+    img.src = '/simorgh-sky.svg'; // SVG is in public folder
     img.onload = () => {
       simorghImageRef.current = img;
     };
