@@ -203,7 +203,8 @@ jobs:
             echo GITHUB_REGISTRY=${{ env.REGISTRY }} > .env && \
             echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} >> .env && \
             echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
-            echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env\"'"
+            echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env && \
+            echo HF_TOKEN=${{ secrets.HF_TOKEN }} >> .env\"'"
 
       - name: Verify .env file
         run: |
