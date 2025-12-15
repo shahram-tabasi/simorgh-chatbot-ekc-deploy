@@ -66,6 +66,139 @@ export function PinkEKCBackground() {
       });
     });
 
+    // بارش شهاب سنگ
+    interface Meteor {
+      x: number;
+      y: number;
+      length: number;
+      speed: number;
+      opacity: number;
+      angle: number;
+      tailLength: number;
+      active: boolean;
+      size: number;
+      color: string;
+    }
+
+    const meteors: Meteor[] = [];
+    const meteorColors = [
+      'rgba(255, 255, 255, 0.9)',
+      'rgba(255, 200, 255, 0.8)',
+      'rgba(200, 220, 255, 0.8)',
+      'rgba(255, 220, 200, 0.8)'
+    ];
+
+    // ایجاد شهاب سنگ‌های اولیه
+    for (let i = 0; i < 4; i++) {
+      meteors.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height * 0.3,
+        length: Math.random() * 60 + 30,
+        speed: Math.random() * 4 + 2,
+        opacity: Math.random() * 0.6 + 0.4,
+        angle: Math.PI / 4 + (Math.random() * Math.PI / 8 - Math.PI / 16), // زاویه مورب
+        tailLength: Math.random() * 40 + 20,
+        active: true,
+        size: Math.random() * 1.5 + 1,
+        color: meteorColors[Math.floor(Math.random() * meteorColors.length)]
+      });
+    }
+
+    // تابع برای ایجاد شهاب سنگ جدید
+    function createMeteor() {
+      meteors.push({
+        x: Math.random() * canvas.width * 1.5,
+        y: -20,
+        length: Math.random() * 60 + 30,
+        speed: Math.random() * 4 + 2,
+        opacity: Math.random() * 0.6 + 0.4,
+        angle: Math.PI / 3 + (Math.random() * Math.PI / 6 - Math.PI / 12),
+        tailLength: Math.random() * 40 + 20,
+        active: true,
+        size: Math.random() * 1.5 + 1,
+        color: meteorColors[Math.floor(Math.random() * meteorColors.length)]
+      });
+    }
+
+    // تابع رسم شهاب سنگ
+    function drawMeteor(meteor: Meteor) {
+      if (!ctx || !canvas || !meteor.active) return;
+
+      // محاسبه موقعیت دم
+      const tailX = meteor.x - meteor.tailLength * Math.cos(meteor.angle);
+      const tailY = meteor.y - meteor.tailLength * Math.sin(meteor.angle);
+
+      // ایجاد گرادیانت برای دم
+      const gradient = ctx.createLinearGradient(
+        tailX, tailY,
+        meteor.x, meteor.y
+      );
+      
+      // گرادیانت دم (از کمرنگ به پررنگ)
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
+      gradient.addColorStop(0.3, meteor.color.replace('0.8', '0.4'));
+      gradient.addColorStop(0.6, meteor.color.replace('0.8', '0.7'));
+      gradient.addColorStop(1, meteor.color);
+
+      // رسم دم
+      ctx.beginPath();
+      ctx.moveTo(tailX, tailY);
+      ctx.lineTo(meteor.x, meteor.y);
+      ctx.strokeStyle = gradient;
+      ctx.lineWidth = meteor.size;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // رسم سر شهاب سنگ
+      ctx.beginPath();
+      ctx.arc(meteor.x, meteor.y, meteor.size * 1.5, 0, Math.PI * 2);
+      
+      // گرادیانت دایره سر
+      const headGradient = ctx.createRadialGradient(
+        meteor.x, meteor.y, 0,
+        meteor.x, meteor.y, meteor.size * 2
+      );
+      headGradient.addColorStop(0, meteor.color);
+      headGradient.addColorStop(0.7, meteor.color.replace('0.8', '0.3'));
+      headGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      
+      ctx.fillStyle = headGradient;
+      ctx.fill();
+
+      // افکت درخشش اضافی
+      ctx.beginPath();
+      ctx.arc(meteor.x, meteor.y, meteor.size * 4, 0, Math.PI * 2);
+      const glowGradient = ctx.createRadialGradient(
+        meteor.x, meteor.y, meteor.size * 1.5,
+        meteor.x, meteor.y, meteor.size * 4
+      );
+      glowGradient.addColorStop(0, meteor.color.replace('0.8', '0.2'));
+      glowGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.fillStyle = glowGradient;
+      ctx.fill();
+    }
+
+    // تابع به‌روزرسانی موقعیت شهاب سنگ
+    function updateMeteor(meteor: Meteor) {
+      meteor.x += meteor.speed * Math.cos(meteor.angle);
+      meteor.y += meteor.speed * Math.sin(meteor.angle);
+
+      // غیرفعال کردن شهاب سنگ اگر از صفحه خارج شود
+      if (
+        meteor.x < -100 || 
+        meteor.x > canvas.width + 100 || 
+        meteor.y > canvas.height + 100
+      ) {
+        meteor.active = false;
+      }
+
+      // کاهش تدریجی opacity
+      meteor.opacity -= 0.002;
+      if (meteor.opacity <= 0) {
+        meteor.active = false;
+      }
+    }
+
     function animate() {
       if (!ctx || !canvas) return;
 
@@ -94,7 +227,26 @@ export function PinkEKCBackground() {
         ctx.fill();
       });
 
-      // 2. رسم EKC (بعد - با opacity کنترل شده)
+      // 2. رسم بارش شهاب سنگ
+      meteors.forEach((meteor, index) => {
+        if (meteor.active) {
+          drawMeteor(meteor);
+          updateMeteor(meteor);
+        } else {
+          // حذف شهاب سنگ‌های غیرفعال و ایجاد جدید
+          meteors.splice(index, 1);
+          if (Math.random() < 0.02) { // 2% chance هر فریم
+            createMeteor();
+          }
+        }
+      });
+
+      // اطمینان از اینکه همیشه حداقل 2 شهاب سنگ فعال داریم
+      if (meteors.filter(m => m.active).length < 2 && Math.random() < 0.01) {
+        createMeteor();
+      }
+
+      // 3. رسم EKC (بعد - با opacity کنترل شده)
       ekcStars.forEach((star, index) => {
         star.opacity += star.speed;
         if (star.opacity > 0.9 || star.opacity < 0.5) {
@@ -127,7 +279,7 @@ export function PinkEKCBackground() {
         ctx.stroke();
       });
 
-      // 3. رسم خطوط بین ستاره‌های EKC (با opacity کم)
+      // 4. رسم خطوط بین ستاره‌های EKC (با opacity کم)
       ctx.strokeStyle = 'rgba(187, 222, 251, 0.4)';
       ctx.lineWidth = 1;
 
@@ -138,11 +290,10 @@ export function PinkEKCBackground() {
       ctx.stroke();
 
       // خطوط افقی E
-      // Corrected version - lines 143-148
       [centerY - 90, centerY, centerY + 90].forEach(y => {
         ctx.beginPath();
-        ctx.moveTo(centerX - 200, y);  // Now y is a number
-        ctx.lineTo(centerX - 80, y);   // Now y is a number
+        ctx.moveTo(centerX - 200, y);
+        ctx.lineTo(centerX - 80, y);
         ctx.stroke();
       });
 
@@ -185,22 +336,63 @@ export function PinkEKCBackground() {
     const handleResize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
+      
       // Reset stars positions
       bgStars.forEach(star => {
         star.x = Math.random() * canvas.width;
         star.y = Math.random() * canvas.height;
       });
+      
+      // Reset EKC positions
+      ekcStars.length = 0;
+      ekcPositions.forEach(pos => {
+        ekcStars.push({
+          x: pos.x,
+          y: pos.y,
+          size: Math.random() * 3 + 2,
+          opacity: 0.7,
+          speed: Math.random() * 0.02 + 0.01
+        });
+      });
+      
+      // Reset meteors
+      meteors.length = 0;
+      for (let i = 0; i < 4; i++) {
+        meteors.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height * 0.3,
+          length: Math.random() * 60 + 30,
+          speed: Math.random() * 4 + 2,
+          opacity: Math.random() * 0.6 + 0.4,
+          angle: Math.PI / 4 + (Math.random() * Math.PI / 8 - Math.PI / 16),
+          tailLength: Math.random() * 40 + 20,
+          active: true,
+          size: Math.random() * 1.5 + 1,
+          color: meteorColors[Math.floor(Math.random() * meteorColors.length)]
+        });
+      }
     };
 
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    
+    // ایجاد شهاب سنگ‌های جدید به صورت دوره‌ای
+    const meteorInterval = setInterval(() => {
+      if (meteors.filter(m => m.active).length < 3) {
+        createMeteor();
+      }
+    }, 3000); // هر 3 ثانیه یک شهاب سنگ جدید
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearInterval(meteorInterval);
+    };
   }, []);
 
   return (
     <canvas
       ref={canvasRef}
       className="fixed inset-0 pointer-events-none z-0"
-      style={{ opacity: 0.7 }} // کاهش opacity کلی
+      style={{ opacity: 0.7 }}
     />
   );
 }
