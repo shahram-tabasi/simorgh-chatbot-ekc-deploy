@@ -1,6 +1,11 @@
-// vite.config.ts
+// vite.config. ts
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -11,13 +16,13 @@ export default defineConfig({
   resolve: {
     alias: {
       // ioredis رو کاملاً از باندل فرانت‌اند حذف می‌کنیم
-      ioredis: '/src/mock/ioredis.ts'
+      ioredis: path.resolve(__dirname, './src/mock/ioredis.ts')
     }
   },
   build: {
     rollupOptions: {
-      // اختیاری: اگر هنوز لود می‌شد، اینم اضافه کن
-      external: ['ioredis', 'redis']
+      // Only keep redis as external since ioredis is now properly mocked
+      external: ['redis']
     }
   }
 });
