@@ -5,7 +5,7 @@ import { PinkEKCBackground } from './backgrounds/PinkEKCBackground';
 import { NavySimorghBackground } from './backgrounds/NavySimorghBackground';
 import { DarkMatrixBackground } from './backgrounds/DarkMatrixBackground';
 import { ModernDarkBackground } from './backgrounds/ModernDarkBackground';
-import { CleanWhiteBackground } from './backgrounds/CleanWhiteBackground';
+import CleanWhiteBackground from './backgrounds/CleanWhiteBackground';
 
 export function ThemeBackground() {
   const { theme } = useTheme();
