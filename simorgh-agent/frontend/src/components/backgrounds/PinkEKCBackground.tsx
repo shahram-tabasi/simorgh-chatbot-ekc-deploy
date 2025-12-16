@@ -26,36 +26,41 @@ export function PinkEKCBackground() {
 
     // EKC Stars (FOREGROUND - با opacity کمتر)
     const ekcStars: Array<{ x: number; y: number; size: number; opacity: number; speed: number }> = [];
-    const centerX = canvas.width / 2;
-    const centerY = canvas.height / 2;
 
-    // موقعیت‌های EKC (با responsive positioning)
-    const ekcPositions = [
-      // حرف E
-      { x: centerX - 200, y: centerY - 90 },
-      { x: centerX - 200, y: centerY },
-      { x: centerX - 200, y: centerY + 90 },
-      { x: centerX - 80, y: centerY - 90 },
-      { x: centerX - 80, y: centerY },
-      { x: centerX - 80, y: centerY + 90 },
+    // Function to calculate EKC positions relative to center
+    const getEKCPositions = (canvasWidth: number, canvasHeight: number) => {
+      const centerX = canvasWidth / 2;
+      const centerY = canvasHeight / 2;
 
-      // حرف K
-      { x: centerX, y: centerY - 100 },
-      { x: centerX, y: centerY },
-      { x: centerX, y: centerY + 90 },
-      { x: centerX + 70, y: centerY - 104 },
-      { x: centerX + 70, y: centerY + 86 },
+      return [
+        // حرف E
+        { x: centerX - 200, y: centerY - 90 },
+        { x: centerX - 200, y: centerY },
+        { x: centerX - 200, y: centerY + 90 },
+        { x: centerX - 80, y: centerY - 90 },
+        { x: centerX - 80, y: centerY },
+        { x: centerX - 80, y: centerY + 90 },
 
-      // حرف C
-      { x: centerX + 200, y: centerY - 90 },
-      { x: centerX + 155, y: centerY - 70 },
-      { x: centerX + 135, y: centerY - 30 },
-      { x: centerX + 130, y: centerY },
-      { x: centerX + 135, y: centerY + 30 },
-      { x: centerX + 155, y: centerY + 70 },
-      { x: centerX + 200, y: centerY + 90 }
-    ];
+        // حرف K
+        { x: centerX, y: centerY - 100 },
+        { x: centerX, y: centerY },
+        { x: centerX, y: centerY + 90 },
+        { x: centerX + 70, y: centerY - 104 },
+        { x: centerX + 70, y: centerY + 86 },
 
+        // حرف C
+        { x: centerX + 200, y: centerY - 90 },
+        { x: centerX + 155, y: centerY - 70 },
+        { x: centerX + 135, y: centerY - 30 },
+        { x: centerX + 130, y: centerY },
+        { x: centerX + 135, y: centerY + 30 },
+        { x: centerX + 155, y: centerY + 70 },
+        { x: centerX + 200, y: centerY + 90 }
+      ];
+    };
+
+    // Initialize EKC stars with current canvas dimensions
+    const ekcPositions = getEKCPositions(canvas.width, canvas.height);
     ekcPositions.forEach(pos => {
       ekcStars.push({
         x: pos.x,
@@ -215,6 +220,10 @@ export function PinkEKCBackground() {
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+      // Calculate center dynamically for each frame
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
       // 1. رسم ستاره‌های پس‌زمینه (اول)
       bgStars.forEach(star => {
         star.opacity += star.speed;
@@ -336,16 +345,17 @@ export function PinkEKCBackground() {
     const handleResize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-      
+
       // Reset stars positions
       bgStars.forEach(star => {
         star.x = Math.random() * canvas.width;
         star.y = Math.random() * canvas.height;
       });
-      
-      // Reset EKC positions
+
+      // Recalculate EKC positions with new canvas dimensions
+      const newEkcPositions = getEKCPositions(canvas.width, canvas.height);
       ekcStars.length = 0;
-      ekcPositions.forEach(pos => {
+      newEkcPositions.forEach(pos => {
         ekcStars.push({
           x: pos.x,
           y: pos.y,
@@ -354,7 +364,7 @@ export function PinkEKCBackground() {
           speed: Math.random() * 0.02 + 0.01
         });
       });
-      
+
       // Reset meteors
       meteors.length = 0;
       for (let i = 0; i < 4; i++) {

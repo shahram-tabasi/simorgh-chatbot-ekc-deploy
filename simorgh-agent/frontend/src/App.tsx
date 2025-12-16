@@ -19,6 +19,7 @@ import { useChat } from './hooks/useChat';
 import { LanguageProvider } from './context/LanguageContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
+import { Message } from './types';
 
 // Main chat interface component
 function MainChat() {
@@ -70,7 +71,16 @@ function MainChat() {
     setActiveSpecTasks(prev => prev.filter(id => id !== taskId));
   };
 
-  const { messages, isTyping, sendMessage } = useChat(
+  const {
+    messages,
+    isTyping,
+    sendMessage,
+    regenerateResponse,
+    updateMessageReaction,
+    switchVersion,
+    cancelGeneration,
+    editMessage
+  } = useChat(
     activeChat?.messages || [],
     activeChatId,
     userId,
@@ -78,6 +88,8 @@ function MainChat() {
     updateChatTitle,
     handleSpecTaskCreated
   );
+
+  const [editingMessage, setEditingMessage] = React.useState<Message | null>(null);
 
   const handleCreateProject = () => setShowCreateModal(true);
 
@@ -146,6 +158,20 @@ function MainChat() {
     }
   }, [selectChat, leftSidebar]);
 
+  const handleEditMessage = React.useCallback((message: Message) => {
+    setEditingMessage(message);
+  }, []);
+
+  const handleSendMessage = React.useCallback((content: string, files?: any[]) => {
+    if (editingMessage) {
+      // If editing, call editMessage instead of sendMessage
+      editMessage(editingMessage.id, content, files);
+      setEditingMessage(null);
+    } else {
+      sendMessage(content, files);
+    }
+  }, [editingMessage, editMessage, sendMessage]);
+
   // هدر ثابت + پروژه‌ها
   const displayProjects = [
     {
@@ -210,7 +236,13 @@ function MainChat() {
             <ChatArea
               messages={messages}
               isTyping={isTyping}
-              onSendMessage={sendMessage}
+              onSendMessage={handleSendMessage}
+              onRegenerateResponse={regenerateResponse}
+              onUpdateReaction={updateMessageReaction}
+              onSwitchVersion={switchVersion}
+              onEditMessage={handleEditMessage}
+              onCancelGeneration={cancelGeneration}
+              editingMessage={editingMessage}
               disabled={!activeChatId}
             />
           </div>
