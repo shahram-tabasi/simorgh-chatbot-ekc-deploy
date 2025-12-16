@@ -63,6 +63,19 @@ export interface Message {
   files?: UploadedFile[];
   metadata?: MessageMetadata;
   isStreaming?: boolean;
+  // AI message interaction features
+  liked?: boolean;
+  disliked?: boolean;
+  versions?: MessageVersion[];
+  currentVersionIndex?: number;
+  refreshCount?: number;
+}
+
+export interface MessageVersion {
+  id: string;
+  content: string;
+  timestamp: Date;
+  metadata?: MessageMetadata;
 }
 
 export interface MessageMetadata {

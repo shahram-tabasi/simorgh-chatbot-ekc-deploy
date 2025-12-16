@@ -30,11 +30,11 @@ const languages = [
 
 const themes: Array<{ id: ThemeType; name: string; icon: any; gradient: string }> = [
   { id: 'default', name: 'Default (Starry)', icon: Star, gradient: 'from-indigo-900 to-purple-900' },
-  { id: 'pink-ekc', name: 'Soft Pink EKC', icon: Sparkles, gradient: 'from-pink-300 to-pink-500' },
+  { id: 'pink-ekc', name: 'Starry EKC Sky', icon: Sparkles, gradient: 'from-pink-300 to-pink-500' },
   { id: 'navy-simorgh', name: 'Navy Simorgh', icon: Feather, gradient: 'from-blue-900 to-indigo-900' },
   { id: 'dark-matrix', name: 'Dark Matrix', icon: Code2, gradient: 'from-black to-green-900' },
   { id: 'modern-dark', name: 'Modern Dark', icon: Moon, gradient: 'from-gray-800 to-gray-900' },
-  { id: 'clean-white', name: 'Clean White', icon: Palette, gradient: 'from-gray-100 to-white' },
+  { id: 'clean-white', name: 'EKC Digital Realm', icon: Palette, gradient: 'from-gray-100 to-white' },
 ];
 
 export default function SettingsPanel() {

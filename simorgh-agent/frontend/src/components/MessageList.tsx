@@ -1,12 +1,28 @@
 import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { UserIcon, SparklesIcon, FileIcon } from 'lucide-react';
+import {
+  UserIcon,
+  SparklesIcon,
+  FileIcon,
+  ThumbsUpIcon,
+  ThumbsDownIcon,
+  CopyIcon,
+  RefreshCwIcon,
+  Share2Icon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  Edit2Icon
+} from 'lucide-react';
 import { Message } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface MessageListProps {
   messages: Message[];
   isTyping: boolean;
+  onRegenerateResponse?: (messageId: string) => void;
+  onUpdateReaction?: (messageId: string, reaction: 'like' | 'dislike' | 'none') => void;
+  onSwitchVersion?: (messageId: string, versionIndex: number) => void;
+  onEditMessage?: (message: Message) => void;
 }
 
 // Helper function to detect if text contains Persian/Arabic characters
@@ -57,10 +73,60 @@ function formatTimestamp(timestamp: Date | string): string {
   return `${day}/${month}/${year} ${hours}:${minutes}`;
 }
 
-export function MessageList({ messages, isTyping }: MessageListProps) {
+export function MessageList({
+  messages,
+  isTyping,
+  onRegenerateResponse,
+  onUpdateReaction,
+  onSwitchVersion,
+  onEditMessage
+}: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
+
+  // Copy message content to clipboard
+  const handleCopy = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      // TODO: Show a toast notification
+      console.log('✅ Content copied to clipboard');
+    } catch (error) {
+      console.error('❌ Failed to copy:', error);
+    }
+  };
+
+  // Share message using Web Share API
+  const handleShare = async (content: string) => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: 'Simorgh AI Response',
+          text: content
+        });
+        console.log('✅ Content shared successfully');
+      } else {
+        // Fallback to copy if Web Share API not available
+        await handleCopy(content);
+      }
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') {
+        console.error('❌ Failed to share:', error);
+      }
+    }
+  };
+
+  // Handle reaction (like/dislike)
+  const handleReaction = (messageId: string, currentReaction: 'like' | 'dislike' | 'none', newReaction: 'like' | 'dislike') => {
+    if (!onUpdateReaction) return;
+
+    // Toggle off if clicking the same reaction
+    if (currentReaction === newReaction) {
+      onUpdateReaction(messageId, 'none');
+    } else {
+      onUpdateReaction(messageId, newReaction);
+    }
+  };
 
   // Check if user is near bottom of scroll
   const isNearBottom = () => {
@@ -134,6 +200,124 @@ export function MessageList({ messages, isTyping }: MessageListProps) {
                   </p>
                 )}
               </div>
+
+              {/* AI Message Controls */}
+              {message.role === 'assistant' && (
+                <div className="flex items-center gap-1 px-2 mt-1">
+                  {/* Like/Dislike */}
+                  <button
+                    onClick={() => handleReaction(
+                      message.id,
+                      message.liked ? 'like' : message.disliked ? 'dislike' : 'none',
+                      'like'
+                    )}
+                    className={`p-1.5 rounded-lg hover:bg-white/10 transition-colors ${
+                      message.liked ? 'text-blue-400 bg-blue-400/10' : 'text-gray-400'
+                    }`}
+                    title="Like this response"
+                  >
+                    <ThumbsUpIcon className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    onClick={() => handleReaction(
+                      message.id,
+                      message.liked ? 'like' : message.disliked ? 'dislike' : 'none',
+                      'dislike'
+                    )}
+                    className={`p-1.5 rounded-lg hover:bg-white/10 transition-colors ${
+                      message.disliked ? 'text-red-400 bg-red-400/10' : 'text-gray-400'
+                    }`}
+                    title="Dislike this response"
+                  >
+                    <ThumbsDownIcon className="w-3.5 h-3.5" />
+                  </button>
+
+                  <div className="w-px h-4 bg-white/10 mx-0.5" />
+
+                  {/* Copy */}
+                  <button
+                    onClick={() => handleCopy(message.content)}
+                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400"
+                    title="Copy response"
+                  >
+                    <CopyIcon className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Regenerate */}
+                  <button
+                    onClick={() => onRegenerateResponse?.(message.id)}
+                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400 relative"
+                    title="Regenerate response"
+                  >
+                    <RefreshCwIcon className="w-3.5 h-3.5" />
+                    {message.refreshCount && message.refreshCount > 0 && (
+                      <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-blue-500 text-white text-[9px] font-bold flex items-center justify-center">
+                        {message.refreshCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Share */}
+                  <button
+                    onClick={() => handleShare(message.content)}
+                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400"
+                    title="Share response"
+                  >
+                    <Share2Icon className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Version Navigator */}
+                  {message.versions && message.versions.length > 0 && (
+                    <>
+                      <div className="w-px h-4 bg-white/10 mx-0.5" />
+                      <button
+                        onClick={() => {
+                          const currentIdx = message.currentVersionIndex ?? message.versions!.length;
+                          if (currentIdx > 0) {
+                            onSwitchVersion?.(message.id, currentIdx - 1);
+                          }
+                        }}
+                        disabled={!message.currentVersionIndex || message.currentVersionIndex === 0}
+                        className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400 disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Previous version"
+                      >
+                        <ChevronLeftIcon className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="text-xs text-gray-500 px-1">
+                        {(message.currentVersionIndex ?? message.versions.length) + 1}/{message.versions.length + 1}
+                      </span>
+                      <button
+                        onClick={() => {
+                          const currentIdx = message.currentVersionIndex ?? message.versions!.length;
+                          if (currentIdx < message.versions!.length) {
+                            onSwitchVersion?.(message.id, currentIdx + 1);
+                          }
+                        }}
+                        disabled={message.currentVersionIndex === message.versions.length}
+                        className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400 disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Next version"
+                      >
+                        <ChevronRightIcon className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* User Message Edit Button */}
+              {message.role === 'user' && index === messages.length - (isTyping ? 2 : 1) && (
+                <div className="flex items-center gap-1 px-2 mt-1 justify-end">
+                  <button
+                    onClick={() => onEditMessage?.(message)}
+                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400"
+                    title="Edit message"
+                  >
+                    <Edit2Icon className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               {/* Timestamp */}
               {message.timestamp && (
                 <span

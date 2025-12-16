@@ -8,11 +8,21 @@ import { showError } from '../utils/alerts';
 
 interface ChatInputProps {
   onSend: (message: string, files?: UploadedFile[]) => void;
+  onCancel?: () => void;
   disabled?: boolean;
   centered?: boolean;
+  isGenerating?: boolean;
+  editMessage?: { content: string; files?: UploadedFile[] } | null;
 }
 
-export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  onCancel,
+  disabled,
+  centered = false,
+  isGenerating = false,
+  editMessage = null
+}: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -23,6 +33,23 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+
+  // Load edit message when provided
+  useEffect(() => {
+    if (editMessage) {
+      setMessage(editMessage.content);
+      setFiles(editMessage.files || []);
+      // Focus textarea after setting message
+      setTimeout(() => {
+        textareaRef.current?.focus();
+        // Move cursor to end
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = editMessage.content.length;
+          textareaRef.current.selectionEnd = editMessage.content.length;
+        }
+      }, 100);
+    }
+  }, [editMessage]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -258,14 +285,24 @@ export function ChatInput({ onSend, disabled, centered = false }: ChatInputProps
           />
         </div>
 
-        {/* Send button */}
-        <button
-          onClick={handleSend}
-          disabled={disabled || (!message.trim() && files.length === 0)}
-          className="p-2 sm:p-3 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
-        >
-          <SendIcon className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-        </button>
+        {/* Send or Stop button */}
+        {isGenerating ? (
+          <button
+            onClick={onCancel}
+            className="p-2 sm:p-3 rounded-lg bg-red-500 hover:bg-red-600 transition-all flex-shrink-0"
+            title="Stop generating"
+          >
+            <StopCircleIcon className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+          </button>
+        ) : (
+          <button
+            onClick={handleSend}
+            disabled={disabled || (!message.trim() && files.length === 0)}
+            className="p-2 sm:p-3 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
+          >
+            <SendIcon className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+          </button>
+        )}
       </div>
     </div>
   );
