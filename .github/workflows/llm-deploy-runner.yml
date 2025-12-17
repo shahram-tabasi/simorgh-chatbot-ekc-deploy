@@ -1,0 +1,377 @@
+name: Deploy LLM Services (Self-Hosted Runners)
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'llms/**'
+      - '.github/workflows/llm-deploy-runner.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-llm-services:
+    name: Build LLM Service Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        service:
+          - name: ai-service
+            context: ./llms/ai
+            dockerfile: ./llms/ai/Dockerfile
+          - name: gpu-monitor
+            context: ./llms/gpu_monitor
+            dockerfile: ./llms/gpu_monitor/Dockerfile
+          - name: model-initializer
+            context: ./llms/initializer
+            dockerfile: ./llms/initializer/Dockerfile
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Sanitize branch name for Docker tag
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+
+      - name: Free Disk Space
+        if: matrix.service.name == 'ai-service'
+        run: |
+          echo "=== Before cleanup ==="
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          sudo docker system prune -af --volumes
+          echo "=== After cleanup ==="
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}
+          tags: |
+            type=raw,value=${{ env.BRANCH_SAFE }}
+            type=raw,value=${{ env.BRANCH_SAFE }}-${{ github.sha }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  deploy-llm-server-1:
+    name: Deploy to LLM Server 1 (1.61)
+    runs-on: [self-hosted, linux, llm-server-1]
+    needs: [build-llm-services]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Sanitize branch name for Docker tag
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+
+      - name: Create deployment directories
+        run: |
+          mkdir -p ~/llm-deployment
+          mkdir -p ~/models/huggingface
+
+      - name: Copy deployment files
+        run: |
+          rsync -av --delete \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.git' \
+            --exclude='tests' \
+            --exclude='*.md' \
+            ./llms/ ~/llm-deployment/
+
+      - name: Create .env file
+        env:
+          OWNER_LC: ${{ env.OWNER_LC }}
+          BRANCH_SAFE: ${{ env.BRANCH_SAFE }}
+          IMAGE_TAG: ${{ env.BRANCH_SAFE }}-${{ github.sha }}
+        run: |
+          cd ~/llm-deployment
+          cat > .env << EOF
+          GITHUB_REGISTRY=${{ env.REGISTRY }}
+          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
+          IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }}
+          MODEL_CACHE_PATH=/home/ubuntu/models/huggingface
+          HF_TOKEN=${{ secrets.HF_TOKEN }}
+          EOF
+
+      - name: Verify .env file
+        run: |
+          echo "=== Environment File ==="
+          cat ~/llm-deployment/.env
+
+      - name: Login to GHCR
+        run: |
+          echo '${{ secrets.GHCR_TOKEN }}' | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Stop running containers
+        run: |
+          cd ~/llm-deployment
+          docker compose down || true
+
+      - name: Clean up old images
+        run: docker image prune -f || true
+
+      - name: Pull latest images
+        run: |
+          cd ~/llm-deployment
+          docker compose pull
+
+      - name: Start services
+        run: |
+          cd ~/llm-deployment
+          docker compose up -d
+
+      - name: Wait for model initializer
+        run: |
+          cd ~/llm-deployment
+          timeout 1800 bash -c '
+            while docker ps -a --format {{.Names}} | grep -q model_initializer; do
+              STATUS=$(docker inspect model_initializer --format={{.State.Status}} 2>/dev/null || echo not_found)
+              if [ "$STATUS" = "exited" ]; then
+                EXIT_CODE=$(docker inspect model_initializer --format={{.State.ExitCode}})
+                if [ "$EXIT_CODE" = "0" ]; then
+                  echo "Model initializer completed successfully"
+                  break
+                else
+                  echo "Model initializer failed with exit code $EXIT_CODE"
+                  docker logs model_initializer --tail=50
+                  exit 1
+                fi
+              fi
+              echo "Initializer status: $STATUS"
+              sleep 10
+            done
+          ' || echo "Warning: Initializer monitoring timed out"
+
+      - name: Wait for AI service to be healthy
+        run: |
+          cd ~/llm-deployment
+          timeout 300 bash -c 'until docker compose ps | grep -q healthy; do sleep 10; echo "Waiting for services..."; done' || echo "Warning: Some services may not be healthy yet"
+
+      - name: Show service status
+        run: |
+          cd ~/llm-deployment
+          echo "=== Docker Compose Status ==="
+          docker compose ps
+
+      - name: Check GPU availability
+        run: nvidia-smi || echo "nvidia-smi not available"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          cd ~/llm-deployment
+          echo "=== Docker Compose Status ==="
+          docker compose ps -a
+          echo "=== Initializer Logs ==="
+          docker logs model_initializer --tail=100 2>/dev/null || echo "model_initializer not found"
+          echo "=== AI Service Logs ==="
+          docker logs ai_service --tail=100 2>/dev/null || echo "ai_service not found"
+          echo "=== GPU Monitor Logs ==="
+          docker logs gpu_monitor --tail=50 2>/dev/null || echo "gpu_monitor not found"
+          echo "=== Nginx Logs ==="
+          docker logs nginx_ai --tail=50 2>/dev/null || echo "nginx_ai not found"
+
+  deploy-llm-server-2:
+    name: Deploy to LLM Server 2 (1.62)
+    runs-on: [self-hosted, linux, llm-server-2]
+    needs: [build-llm-services]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Sanitize branch name for Docker tag
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+
+      - name: Create deployment directories
+        run: |
+          mkdir -p ~/llm-deployment
+          mkdir -p ~/models/huggingface
+
+      - name: Copy deployment files
+        run: |
+          rsync -av --delete \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.git' \
+            --exclude='tests' \
+            --exclude='*.md' \
+            ./llms/ ~/llm-deployment/
+
+      - name: Create .env file
+        env:
+          OWNER_LC: ${{ env.OWNER_LC }}
+          BRANCH_SAFE: ${{ env.BRANCH_SAFE }}
+          IMAGE_TAG: ${{ env.BRANCH_SAFE }}-${{ github.sha }}
+        run: |
+          cd ~/llm-deployment
+          cat > .env << EOF
+          GITHUB_REGISTRY=${{ env.REGISTRY }}
+          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
+          IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }}
+          MODEL_CACHE_PATH=/home/ubuntu/models/huggingface
+          HF_TOKEN=${{ secrets.HF_TOKEN }}
+          EOF
+
+      - name: Verify .env file
+        run: |
+          echo "=== Environment File ==="
+          cat ~/llm-deployment/.env
+
+      - name: Login to GHCR
+        run: |
+          echo '${{ secrets.GHCR_TOKEN }}' | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Stop running containers
+        run: |
+          cd ~/llm-deployment
+          docker compose down || true
+
+      - name: Clean up old images
+        run: docker image prune -f || true
+
+      - name: Pull latest images
+        run: |
+          cd ~/llm-deployment
+          docker compose pull
+
+      - name: Start services
+        run: |
+          cd ~/llm-deployment
+          docker compose up -d
+
+      - name: Wait for model initializer
+        run: |
+          cd ~/llm-deployment
+          timeout 1800 bash -c '
+            while docker ps -a --format {{.Names}} | grep -q model_initializer; do
+              STATUS=$(docker inspect model_initializer --format={{.State.Status}} 2>/dev/null || echo not_found)
+              if [ "$STATUS" = "exited" ]; then
+                EXIT_CODE=$(docker inspect model_initializer --format={{.State.ExitCode}})
+                if [ "$EXIT_CODE" = "0" ]; then
+                  echo "Model initializer completed successfully"
+                  break
+                else
+                  echo "Model initializer failed with exit code $EXIT_CODE"
+                  docker logs model_initializer --tail=50
+                  exit 1
+                fi
+              fi
+              echo "Initializer status: $STATUS"
+              sleep 10
+            done
+          ' || echo "Warning: Initializer monitoring timed out"
+
+      - name: Wait for AI service to be healthy
+        run: |
+          cd ~/llm-deployment
+          timeout 300 bash -c 'until docker compose ps | grep -q healthy; do sleep 10; echo "Waiting for services..."; done' || echo "Warning: Some services may not be healthy yet"
+
+      - name: Show service status
+        run: |
+          cd ~/llm-deployment
+          echo "=== Docker Compose Status ==="
+          docker compose ps
+
+      - name: Check GPU availability
+        run: nvidia-smi || echo "nvidia-smi not available"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          cd ~/llm-deployment
+          echo "=== Docker Compose Status ==="
+          docker compose ps -a
+          echo "=== Initializer Logs ==="
+          docker logs model_initializer --tail=100 2>/dev/null || echo "model_initializer not found"
+          echo "=== AI Service Logs ==="
+          docker logs ai_service --tail=100 2>/dev/null || echo "ai_service not found"
+          echo "=== GPU Monitor Logs ==="
+          docker logs gpu_monitor --tail=50 2>/dev/null || echo "gpu_monitor not found"
+          echo "=== Nginx Logs ==="
+          docker logs nginx_ai --tail=50 2>/dev/null || echo "nginx_ai not found"
+
+  health-check:
+    name: LLM Services Health Check
+    runs-on: [self-hosted, linux, simorgh-server]
+    needs: [deploy-llm-server-1, deploy-llm-server-2]
+
+    steps:
+      - name: Sanitize branch name for display
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+
+      - name: Health check servers
+        env:
+          IMAGE_TAG: ${{ env.BRANCH_SAFE }}-${{ github.sha }}
+        run: |
+          echo "================================"
+          echo "LLM Services Health Check"
+          echo "================================"
+          sleep 10
+
+          echo "Checking LLM Server 1.61..."
+          if curl -f -s --max-time 15 http://192.168.1.61/health; then
+            echo "✓ Server 1.61 is healthy"
+          else
+            echo "⚠ Warning: Server 1.61 health check failed"
+          fi
+
+          echo ""
+          echo "Checking LLM Server 1.62..."
+          if curl -f -s --max-time 15 http://192.168.1.62/health; then
+            echo "✓ Server 1.62 is healthy"
+          else
+            echo "⚠ Warning: Server 1.62 health check failed"
+          fi
+
+          echo ""
+          echo "================================"
+          echo "Deployment Summary"
+          echo "================================"
+          echo "LLM Server 1: http://192.168.1.61"
+          echo "LLM Server 2: http://192.168.1.62"
+          echo "Image Tag: $IMAGE_TAG"
+          echo "================================"
