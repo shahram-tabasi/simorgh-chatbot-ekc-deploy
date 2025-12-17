@@ -138,6 +138,12 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models/huggingface'"
 
+      - name: Check disk space on target server
+        run: |
+          echo "Checking disk space on ${{ matrix.server.host }}..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@${{ matrix.server.host }} 'df -h /tmp && df -h ~'"
+
       # - name: Copy deployment files via central server
       #   run: |
       #     echo "Streaming deployment to ${{ matrix.server.host }}..."
@@ -162,6 +168,14 @@ jobs:
 
       - name: Copy deployment files via central server
         run: |
+          echo "Cleaning up old files on target server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@${{ matrix.server.host }} 'rm -f /tmp/llms-deploy.tar.gz /tmp/deploy-*.tar.gz'" || true
+
+          echo "Cleaning up old files on central server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "rm -f /tmp/deploy-*.tar.gz" || true
+
           echo "Creating tarball..."
           tar -czf /tmp/llms-deploy.tar.gz -C ./llms \
             --exclude='__pycache__' \
@@ -170,26 +184,37 @@ jobs:
             --exclude='tests' \
             --exclude='*.md' \
             .
-          
+
+          TAR_SIZE=$(du -h /tmp/llms-deploy.tar.gz | cut -f1)
+          echo "Tarball size: $TAR_SIZE"
+
           echo "Copying to central server..."
           scp -P 2324 -i ~/.ssh/deploy_key /tmp/llms-deploy.tar.gz \
             ${{ secrets.SSH_USER }}@95.38.203.173:/tmp/deploy-${{ matrix.server.name }}.tar.gz
-          
+
+          echo "Verifying file on central server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ls -lh /tmp/deploy-${{ matrix.server.name }}.tar.gz"
+
           echo "Copying to target server ${{ matrix.server.host }}..."
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "scp -o StrictHostKeyChecking=no /tmp/deploy-${{ matrix.server.name }}.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/llms-deploy.tar.gz"
-          
+            "scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 /tmp/deploy-${{ matrix.server.name }}.tar.gz ubuntu@${{ matrix.server.host }}:/tmp/llms-deploy.tar.gz"
+
+          echo "Verifying file on target server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@${{ matrix.server.host }} 'ls -lh /tmp/llms-deploy.tar.gz'"
+
           echo "Extracting on target server..."
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf /tmp/llms-deploy.tar.gz && rm /tmp/llms-deploy.tar.gz'"
-          
+
           echo "Cleaning up central server..."
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "rm /tmp/deploy-${{ matrix.server.name }}.tar.gz"
-          
+
           echo "Cleaning up local..."
           rm /tmp/llms-deploy.tar.gz
-          
+
           echo "✓ Deployment complete"
           
       - name: Create .env file on target server

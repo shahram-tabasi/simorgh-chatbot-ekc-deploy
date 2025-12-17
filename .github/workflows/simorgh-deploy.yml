@@ -97,15 +97,23 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
+          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
+
+      - name: Check disk space on server
+        run: |
+          echo "Checking disk space on central server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            'df -h ~ && echo "Disk check complete"'
 
       - name: Copy deployment files to server
         run: |
-          scp -P 2324 -i ~/.ssh/deploy_key -r simorgh-agent/* ${{ secrets.SSH_USER }}@217.219.39.212:~/simorgh-deployment/
+          echo "Copying deployment files..."
+          scp -P 2324 -i ~/.ssh/deploy_key -r simorgh-agent/* ${{ secrets.SSH_USER }}@95.38.203.173:~/simorgh-deployment/
+          echo "✓ Files copied successfully"
 
       - name: Create .env file and deploy
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << 'ENDSSH'
           cd ~/simorgh-deployment
 
           # Login to GitHub Container Registry
@@ -298,11 +306,11 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
+          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
 
       - name: Run health checks
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << 'ENDSSH'
           echo "Waiting 30 seconds for application to fully start..."
           sleep 30
 
