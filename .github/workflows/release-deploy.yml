@@ -167,15 +167,15 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
+          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
 
       - name: Copy deployment files to server
         run: |
-          scp -P 2324 -i ~/.ssh/deploy_key -r simorgh-agent/* ${{ secrets.SSH_USER }}@217.219.39.212:~/simorgh-deployment/
+          scp -P 2324 -i ~/.ssh/deploy_key -r simorgh-agent/* ${{ secrets.SSH_USER }}@95.38.203.173:~/simorgh-deployment/
 
       - name: Create .env file and deploy
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << 'ENDSSH'
           cd ~/simorgh-deployment
 
           # Login to GitHub Container Registry
@@ -321,11 +321,11 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
+          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
 
       - name: Deploy to ${{ matrix.server.name }} via central server
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << 'ENDSSH'
           
           # Ensure SSH key for LLM servers exists on central server
           if [ ! -f ~/.ssh/id_ed25519 ] && [ ! -f ~/.ssh/id_rsa ]; then
@@ -439,7 +439,7 @@ jobs:
       - name: Show logs on failure
         if: failure()
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << 'ENDSSH'
           
           ssh ubuntu@${{ matrix.server.host }} "cd ~/llm-deployment ; \
             echo '=== Docker Compose Status ===' ; docker compose ps -a ; echo ; \
@@ -461,11 +461,11 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
+          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
 
       - name: Run health checks
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 << 'ENDSSH'
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << 'ENDSSH'
           echo "Waiting 30 seconds for application to fully start..."
           sleep 30
 
