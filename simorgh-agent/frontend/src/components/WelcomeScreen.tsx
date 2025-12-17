@@ -43,24 +43,26 @@ export function WelcomeScreen({
     duration: 0.5
   }} className="flex flex-col items-center justify-center h-full px-4 pb-32">
       {/* Logo */}
-      <motion.div initial={{
-      scale: 0.8,
-      opacity: 0
-    }} animate={{
-      scale: 1,
-      opacity: 1
-    }} transition={{
-      duration: 0.8,
-      ease: 'easeOut'
-    }} className="relative mb-8">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-500 blur-3xl opacity-30" />
-        <div className="relative">
-          <SparklesIcon className="w-20 h-20 text-white mb-3 mx-auto drop-shadow-2xl" strokeWidth={1.5} />
-          <h1 className="text-6xl font-bold text-white tracking-tight text-center grok-logo">
-            Simorgh
-          </h1>
-        </div>
-      </motion.div>
+<motion.img
+  src="/simorgh-sky.svg"
+  alt="Simorgh Sky"
+  initial={{ opacity: 0, scale: 0.9 }}
+  animate={{ opacity: 1, scale: 1 }}
+  transition={{ duration: 0.8, ease: 'easeOut' }}
+  className="w-20 h-20 mb-3 mx-auto drop-shadow-2xl select-none"
+/>
+
+    <motion.img
+      src="/text_simorgh.svg"
+      alt="Simorgh"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.15, duration: 0.6 }}
+      className="h-16 md:h-20 drop-shadow-2xl select-none"
+    />
+  </div>
+</motion.div>
+
 
       {/* Welcome text */}
       <motion.p initial={{
