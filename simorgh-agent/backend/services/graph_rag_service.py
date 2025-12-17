@@ -436,3 +436,274 @@ class GraphRAGService:
         except Exception as e:
             logger.error(f"❌ Failed to get project summary: {e}")
             return {"success": False, "error": str(e)}
+
+    # =========================================================================
+    # ENHANCED GRAPH TRAVERSAL (BFS) FOR KNOWLEDGE GRAPH RAG
+    # =========================================================================
+
+    def traverse_graph_bfs(
+        self,
+        project_number: str,
+        start_nodes: List[str],
+        max_depth: int = 3,
+        relationship_types: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Traverse graph using Breadth-First Search starting from given nodes
+
+        Args:
+            project_number: Project OE number
+            start_nodes: List of starting node names
+            max_depth: Maximum traversal depth
+            relationship_types: Optional list of relationship types to follow
+
+        Returns:
+            Subgraph data with nodes and relationships
+        """
+        try:
+            logger.info(f"🔍 BFS traversal from {len(start_nodes)} start nodes (max depth: {max_depth})")
+
+            with self.driver.session() as session:
+                # Build relationship pattern
+                rel_pattern = ""
+                if relationship_types:
+                    rel_types = "|".join(f":{rt}" for rt in relationship_types)
+                    rel_pattern = f"[{rel_types}*1..{max_depth}]"
+                else:
+                    rel_pattern = f"[*1..{max_depth}]"
+
+                # Cypher query for BFS traversal
+                query = f"""
+                MATCH (start {{project_number: $project_number}})
+                WHERE start.name IN $start_nodes
+
+                MATCH path = (start)-{rel_pattern}-(connected)
+                WHERE connected.project_number = $project_number
+
+                WITH nodes(path) as path_nodes, relationships(path) as path_rels
+
+                UNWIND path_nodes as node
+                WITH DISTINCT node, path_rels
+
+                OPTIONAL MATCH (node)-[r]-(related)
+                WHERE related.project_number = $project_number
+
+                RETURN
+                    collect(DISTINCT {{
+                        id: id(node),
+                        labels: labels(node),
+                        properties: properties(node)
+                    }}) as nodes,
+                    collect(DISTINCT {{
+                        type: type(r),
+                        start: id(startNode(r)),
+                        end: id(endNode(r)),
+                        properties: properties(r)
+                    }}) as relationships
+                """
+
+                result = session.run(
+                    query,
+                    project_number=project_number,
+                    start_nodes=start_nodes
+                )
+
+                record = result.single()
+
+                if record:
+                    nodes = record["nodes"]
+                    relationships = record["relationships"]
+
+                    logger.info(f"✅ BFS found {len(nodes)} nodes, {len(relationships)} relationships")
+
+                    return {
+                        "success": True,
+                        "nodes": nodes,
+                        "relationships": relationships,
+                        "node_count": len(nodes),
+                        "relationship_count": len(relationships)
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "nodes": [],
+                        "relationships": [],
+                        "error": "No paths found"
+                    }
+
+        except Exception as e:
+            logger.error(f"❌ BFS traversal failed: {e}")
+            return {
+                "success": False,
+                "nodes": [],
+                "relationships": [],
+                "error": str(e)
+            }
+
+    def find_related_subgraph(
+        self,
+        project_number: str,
+        query: str,
+        max_depth: int = 2
+    ) -> Dict[str, Any]:
+        """
+        Find related subgraph based on natural language query
+
+        Process:
+        1. Extract keywords from query
+        2. Find matching nodes in graph
+        3. Perform BFS from matched nodes
+        4. Return subgraph
+
+        Args:
+            project_number: Project OE number
+            query: Natural language query
+            max_depth: Maximum traversal depth
+
+        Returns:
+            Related subgraph data
+        """
+        try:
+            logger.info(f"🔍 Finding related subgraph for: '{query[:50]}...'")
+
+            # Extract keywords
+            keywords = self._extract_keywords(query)
+            logger.info(f"📝 Extracted keywords: {keywords}")
+
+            # Find matching nodes
+            with self.driver.session() as session:
+                # Search for nodes matching keywords
+                keyword_pattern = '|'.join([f'(?i){kw}' for kw in keywords])
+
+                node_search_query = """
+                MATCH (n {project_number: $project_number})
+                WHERE n.name =~ $keyword_pattern
+                   OR (EXISTS(n.type) AND n.type =~ $keyword_pattern)
+                   OR (EXISTS(n.description) AND n.description =~ $keyword_pattern)
+                RETURN DISTINCT n.name as name
+                LIMIT 10
+                """
+
+                result = session.run(
+                    node_search_query,
+                    project_number=project_number,
+                    keyword_pattern=keyword_pattern
+                )
+
+                start_nodes = [record["name"] for record in result if record["name"]]
+
+            if not start_nodes:
+                logger.warning(f"⚠️ No matching nodes found for keywords: {keywords}")
+                return {
+                    "success": False,
+                    "error": "No matching nodes found",
+                    "nodes": [],
+                    "relationships": []
+                }
+
+            logger.info(f"📍 Found {len(start_nodes)} starting nodes for BFS")
+
+            # Perform BFS traversal
+            subgraph = self.traverse_graph_bfs(
+                project_number=project_number,
+                start_nodes=start_nodes,
+                max_depth=max_depth
+            )
+
+            return subgraph
+
+        except Exception as e:
+            logger.error(f"❌ Subgraph search failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "nodes": [],
+                "relationships": []
+            }
+
+    def format_subgraph_for_context(
+        self,
+        subgraph: Dict[str, Any]
+    ) -> str:
+        """
+        Format subgraph data as context for LLM
+
+        Args:
+            subgraph: Subgraph dictionary from traverse_graph_bfs or find_related_subgraph
+
+        Returns:
+            Formatted context string
+        """
+        if not subgraph.get("success") or not subgraph.get("nodes"):
+            return ""
+
+        nodes = subgraph["nodes"]
+        relationships = subgraph["relationships"]
+
+        context_parts = [
+            f"## 🕸️ Knowledge Graph Context ({len(nodes)} entities, {len(relationships)} relationships)\n"
+        ]
+
+        # Group nodes by type
+        nodes_by_type = {}
+        for node in nodes:
+            labels = node.get("labels", [])
+            node_type = labels[0] if labels else "Unknown"
+
+            if node_type not in nodes_by_type:
+                nodes_by_type[node_type] = []
+
+            nodes_by_type[node_type].append(node)
+
+        # Format each type
+        for node_type, type_nodes in nodes_by_type.items():
+            if node_type in ["Project", "Category", "Unknown"]:
+                continue  # Skip structural nodes
+
+            context_parts.append(f"\n### {node_type} ({len(type_nodes)} items):")
+
+            for node in type_nodes[:10]:  # Limit to 10 per type
+                props = node.get("properties", {})
+                name = props.get("name", "Unnamed")
+
+                # Format based on node type
+                if node_type == "Equipment":
+                    equipment_type = props.get("type", "")
+                    specs = props.get("specifications", [])
+                    context_parts.append(f"- **{name}** ({equipment_type})")
+                    if specs:
+                        context_parts.append(f"  Specs: {', '.join(specs[:3])}")
+
+                elif node_type == "System":
+                    system_type = props.get("type", "")
+                    description = props.get("description", "")
+                    context_parts.append(f"- **{name}** ({system_type})")
+                    if description:
+                        context_parts.append(f"  {description[:100]}...")
+
+                elif node_type == "ActualValue":
+                    value = props.get("extracted_value", "")
+                    field_name = props.get("field_name", "")
+                    context_parts.append(f"- **{field_name}**: `{value}`")
+
+                elif node_type == "SpecField":
+                    description = props.get("description", "")
+                    context_parts.append(f"- **{name}**")
+                    if description:
+                        context_parts.append(f"  {description[:80]}...")
+
+                else:
+                    context_parts.append(f"- **{name}**")
+
+        # Add relationship summary
+        if relationships:
+            rel_types = {}
+            for rel in relationships:
+                rel_type = rel.get("type", "RELATED")
+                rel_types[rel_type] = rel_types.get(rel_type, 0) + 1
+
+            context_parts.append(f"\n### Relationships:")
+            for rel_type, count in rel_types.items():
+                context_parts.append(f"- {rel_type}: {count}")
+
+        return "\n".join(context_parts)

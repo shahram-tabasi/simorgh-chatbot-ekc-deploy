@@ -1586,19 +1586,51 @@ async def send_chat_message(
 
                         logger.info(f"📊 Added document to project graph: {doc_id}")
 
-                        # Chunk and store ALL documents in Qdrant (universal RAG)
-                        logger.info(f"📦 Chunking document for Qdrant vector storage")
-                        chunk_result = process_document_with_qdrant(
+                        # ============================================================
+                        # ENHANCED PIPELINE: Section-based processing with summaries
+                        # ============================================================
+                        from services.section_retriever import SectionRetriever
+                        from services.document_overview_service import DocumentOverviewService
+
+                        # Initialize services
+                        qdrant = get_qdrant_service()
+                        section_retriever = SectionRetriever(
+                            llm_service=llm,
+                            qdrant_service=qdrant
+                        )
+                        doc_overview = DocumentOverviewService(redis_service=redis)
+
+                        # Process document: Extract sections → Summarize → Store
+                        logger.info(f"🚀 Starting enhanced document processing")
+                        processing_result = section_retriever.process_and_store_document(
                             markdown_content=markdown_content,
                             project_number=project_number,
                             document_id=doc_id,
-                            filename=_file.filename
+                            filename=_file.filename,
+                            document_type_hint=f"{doc_type} Document",
+                            llm_mode=_llm_mode
                         )
 
-                        if chunk_result["success"]:
-                            logger.info(f"✅ Document chunked: {chunk_result['chunks_count']} chunks stored")
+                        if processing_result.get("success"):
+                            sections_count = processing_result.get("sections_extracted", 0)
+                            logger.info(f"✅ Enhanced processing complete: {sections_count} sections")
+
+                            # Track document for overview
+                            summary_stats = processing_result.get("summary_stats", {})
+                            doc_overview.add_document(
+                                document_id=doc_id,
+                                filename=_file.filename,
+                                document_type=doc_type,
+                                category=category,
+                                key_topics=summary_stats.get("total_subjects", 0),
+                                sections_count=sections_count,
+                                total_chars=len(markdown_content),
+                                project_number=project_number,
+                                chat_id=_chat_id,
+                                user_id=_user_id
+                            )
                         else:
-                            logger.warning(f"⚠️ Qdrant chunking failed: {chunk_result.get('error')}")
+                            logger.warning(f"⚠️ Enhanced processing failed: {processing_result.get('error')}")
 
                         # If it's a Spec document, trigger enhanced spec extraction with KG RAG
                         if doc_type == "Spec" and category == "Client":
@@ -1636,44 +1668,103 @@ async def send_chat_message(
                                 redis_service=redis
                             )
 
-                            # Add task ID to file context
-                            file_context = f"\n\n## Uploaded Document: {_file.filename}\n\nEnhanced spec extraction started (Task ID: {spec_task_id}). Using semantic search + extraction guides. You will be notified when extraction is complete.\n\n{markdown_content[:3000]}"
-                        else:
-                            # Use semantic search for context from Qdrant
-                            search_result = semantic_search_in_project(
+                            # Get initial context from sections (no string slicing!)
+                            sections_result = section_retriever.retrieve_relevant_sections(
                                 project_number=project_number,
-                                query=_content,  # User's question
-                                limit=3,
+                                query=_content,
+                                limit=2,
                                 document_id=doc_id
                             )
 
-                            if search_result["success"] and search_result["results"]:
-                                # Use semantic search results as context
-                                context_chunks = "\n\n".join([
-                                    f"[{r['section_title']}]: {r['text'][:500]}..."
-                                    for r in search_result["results"]
-                                ])
-                                file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n### Relevant Sections:\n{context_chunks}"
+                            if sections_result.get("success") and sections_result["sections"]:
+                                file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n"
+                                file_context += f"Enhanced spec extraction started (Task ID: {spec_task_id}).\n\n"
+                                file_context += section_retriever.format_sections_for_context(
+                                    sections=sections_result["sections"],
+                                    max_sections=2,
+                                    include_subjects=True
+                                )
                             else:
-                                # Fallback to direct content
-                                file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n{markdown_content[:5000]}"
+                                file_context = f"\n\n## Uploaded Document: {_file.filename}\n\nEnhanced spec extraction started (Task ID: {spec_task_id})."
+                        else:
+                            # Use enhanced section retrieval for context (NO string slicing!)
+                            sections_result = section_retriever.retrieve_relevant_sections(
+                                project_number=project_number,
+                                query=_content,  # User's question
+                                limit=3,
+                                document_id=doc_id,
+                                score_threshold=0.3
+                            )
 
-                    # For general chats: Index to Qdrant and get context
+                            if sections_result.get("success") and sections_result["sections"]:
+                                # Format FULL sections as context
+                                file_context = section_retriever.format_sections_for_context(
+                                    sections=sections_result["sections"],
+                                    include_subjects=True
+                                )
+                            else:
+                                # Fallback: get first few sections
+                                file_context = f"\n\n## Uploaded Document: {_file.filename}\n\nDocument processed with {processing_result.get('sections_extracted', 0)} sections."
+
+                    # For general chats: Use enhanced pipeline too
                     else:
-                        from services.vector_rag import VectorRAG
+                        from services.section_retriever import SectionRetriever
+                        from services.document_overview_service import DocumentOverviewService
 
-                        vector_rag = VectorRAG()
-                        index_result = await vector_rag.index_document(
+                        # Initialize services
+                        qdrant = get_qdrant_service()
+                        section_retriever = SectionRetriever(
+                            llm_service=llm,
+                            qdrant_service=qdrant
+                        )
+                        doc_overview = DocumentOverviewService(redis_service=redis)
+
+                        doc_id = str(uuid.uuid4())
+
+                        # Process with enhanced pipeline
+                        logger.info(f"🚀 Starting enhanced processing for general chat")
+                        processing_result = section_retriever.process_and_store_document(
                             markdown_content=markdown_content,
-                            user_id=_user_id,
-                            filename=_file.filename
+                            project_number="general",  # Use "general" for non-project chats
+                            document_id=doc_id,
+                            filename=_file.filename,
+                            document_type_hint="General Document",
+                            llm_mode=_llm_mode
                         )
 
-                        if index_result.get('success'):
-                            logger.info(f"📥 Document indexed: {index_result.get('chunks_indexed')} chunks")
+                        if processing_result.get("success"):
+                            # Track document
+                            summary_stats = processing_result.get("summary_stats", {})
+                            doc_overview.add_document(
+                                document_id=doc_id,
+                                filename=_file.filename,
+                                document_type="General",
+                                category="User",
+                                key_topics=summary_stats.get("total_subjects", 0),
+                                sections_count=processing_result.get("sections_extracted", 0),
+                                total_chars=len(markdown_content),
+                                chat_id=_chat_id,
+                                user_id=_user_id
+                            )
 
-                        # Use document content as context
-                        file_context = f"\n\n## Uploaded Document: {_file.filename}\n\n{markdown_content[:5000]}"
+                            # Get relevant sections for user's question
+                            sections_result = section_retriever.retrieve_relevant_sections(
+                                project_number="general",
+                                query=_content,
+                                limit=3,
+                                score_threshold=0.3
+                            )
+
+                            if sections_result.get("success") and sections_result["sections"]:
+                                file_context = section_retriever.format_sections_for_context(
+                                    sections=sections_result["sections"],
+                                    include_subjects=True
+                                )
+                            else:
+                                file_context = f"\n\n## Uploaded Document: {_file.filename}\n\nDocument processed successfully."
+                        else:
+                            logger.warning(f"⚠️ Enhanced processing failed: {processing_result.get('error')}")
+                            file_context = f"\n\n## Uploaded Document: {_file.filename}\n\nDocument uploaded."
                 else:
                     logger.warning(f"⚠️ Document processing failed: {doc_result.get('error')}")
 
@@ -1682,20 +1773,34 @@ async def send_chat_message(
                 if temp_file.exists():
                     temp_file.unlink()
 
-        # Build context from knowledge graph if project chat
+        # ============================================================
+        # ENHANCED CONTEXT BUILDING: Document Overview + Graph + Vector
+        # ============================================================
         graph_context = ""
+        document_overview_context = ""
         context_used = False
 
         if project_number and _use_graph_context:
-            logger.info(f"🔍 Retrieving knowledge from graph and vector DB for project {project_number}")
+            logger.info(f"🔍 Retrieving enhanced context for project {project_number}")
 
-            # DUAL RAG: Combine Graph Traversal + Vector Search
             try:
                 from services.graph_rag_service import GraphRAGService
+                from services.document_overview_service import DocumentOverviewService
 
                 graph_rag = GraphRAGService(neo4j.driver)
+                doc_overview = DocumentOverviewService(redis_service=redis)
 
-                # 1. GRAPH TRAVERSAL: Query specifications from Neo4j
+                # 0. DOCUMENT OVERVIEW: Always provide overview of uploaded documents
+                logger.info(f"📚 Generating document overview for project")
+                document_overview_context = doc_overview.generate_overview(
+                    project_number=project_number,
+                    max_documents=10
+                )
+
+                # Build rich context from multiple sources
+                context_parts = []
+
+                # 1. GRAPH SPECIFICATIONS: Query specs from Neo4j
                 # Special handling for common queries
                 if any(word in _content.lower() for word in ['protection', 'protections', 'protective', 'relay', 'trip']):
                     # Get all protection-related specs
@@ -1706,16 +1811,6 @@ async def send_chat_message(
                         project_number=project_number,
                         query=_content
                     )
-
-                # 2. VECTOR SEARCH: Semantic search in Qdrant
-                vector_result = semantic_search_in_project(
-                    project_number=project_number,
-                    query=_content,
-                    limit=5
-                )
-
-                # Build rich context from both sources
-                context_parts = []
 
                 # Add graph specifications if found
                 if graph_result.get("success"):
@@ -1736,14 +1831,46 @@ async def send_chat_message(
                         else:
                             logger.warning(f"⚠️ Retrieved {len(specs_list)} specs but all values are empty/not specified")
 
-                # Add vector search results if found
-                if vector_result.get("success") and vector_result.get("results"):
-                    vector_context = "\n\n## Related Document Sections (Vector Search)\n"
-                    for idx, result in enumerate(vector_result["results"][:3], 1):
-                        vector_context += f"\n**[{result['section_title']}]** (Relevance: {result['score']:.2f})\n"
-                        vector_context += f"{result['text'][:300]}...\n"
+                # 2. KNOWLEDGE GRAPH BFS: Find related subgraph
+                logger.info(f"🕸️ Performing BFS graph traversal")
+                subgraph = graph_rag.find_related_subgraph(
+                    project_number=project_number,
+                    query=_content,
+                    max_depth=2
+                )
+
+                if subgraph.get("success") and subgraph.get("nodes"):
+                    subgraph_context = graph_rag.format_subgraph_for_context(subgraph)
+                    if subgraph_context:
+                        context_parts.append(subgraph_context)
+                        logger.info(f"🕸️ Retrieved subgraph: {subgraph.get('node_count', 0)} nodes, {subgraph.get('relationship_count', 0)} relationships")
+
+                # 3. ENHANCED VECTOR SEARCH: Section-based search with FULL content
+                logger.info(f"🔍 Performing enhanced section-based search")
+                qdrant = get_qdrant_service()
+                vector_results = qdrant.search_section_summaries(
+                    project_number=project_number,
+                    query=_content,
+                    limit=5,
+                    score_threshold=0.3
+                )
+
+                # Add vector search results with FULL sections (NO truncation!)
+                if vector_results:
+                    vector_context = "\n\n## 📄 Related Document Sections (Semantic Search)\n"
+                    for idx, result in enumerate(vector_results[:3], 1):
+                        vector_context += f"\n**{idx}. [{result['section_title']}]** (Relevance: {result['score']:.2%})\n"
+
+                        # Show subjects if available
+                        if result.get('subjects'):
+                            vector_context += f"**Subjects:** {', '.join(result['subjects'][:5])}\n\n"
+
+                        # Include FULL content (not truncated!)
+                        vector_context += f"{result['full_content']}\n\n"
+                        vector_context += "---\n"
+
                     context_parts.append(vector_context)
-                    logger.info(f"📝 Retrieved {len(vector_result['results'])} chunks from vector DB")
+                    logger.info(f"📝 Retrieved {len(vector_results)} full sections from vector DB")
 
                 # Combine all context
                 if context_parts:
@@ -1754,7 +1881,7 @@ async def send_chat_message(
                     logger.info(f"ℹ️ No specific context found, using general knowledge")
 
             except Exception as e:
-                logger.warning(f"⚠️ Graph/Vector context retrieval failed: {e}")
+                logger.warning(f"⚠️ Enhanced context retrieval failed: {e}", exc_info=True)
                 # Continue without context rather than failing
 
         # 🧠 USER MEMORY: Retrieve similar past conversations from Qdrant
@@ -1810,6 +1937,12 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
         if file_context:
             system_prompt += file_context
             context_used = True
+
+        # Add document overview context (always for project chats)
+        if document_overview_context:
+            system_prompt += f"\n\n{document_overview_context}"
+            context_used = True
+            logger.info(f"📚 Added document overview to context")
 
         if graph_context:
             system_prompt += f"\n\n{graph_context}"

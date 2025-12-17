@@ -20,6 +20,9 @@ from services.project_graph_init import ProjectGraphInitializer
 from services.llm_service import LLMService
 from services.redis_service import RedisService
 from services.extraction_guides_data import get_all_extraction_guides
+from services.section_retriever import SectionRetriever
+from services.graph_builder import GraphBuilder
+from services.guide_executor import GuideExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -129,16 +132,19 @@ def process_enhanced_spec_extraction(
     redis_service: RedisService
 ):
     """
-    Enhanced background task for spec extraction using two-stage RAG
+    ENHANCED background task for spec extraction using NEW pipeline:
 
-    Steps:
-    1. Chunk document and store in Qdrant (universal RAG)
-    2. Extract specs using enhanced RAG (Qdrant semantic search + guides)
-    3. Store results in Neo4j with ExtractionGuide and ActualValue nodes
+    NEW Pipeline Steps:
+    1. Extract hierarchical sections from document
+    2. Generate LLM summaries for each section (detect subjects/topics)
+    3. Store in Qdrant (summaries for search, full sections for retrieval)
+    4. Build knowledge graph using GraphBuilder (entity extraction)
+    5. Execute extraction guides using GuideExecutor (semantic search + extraction)
 
     Graph Structure Created:
+    Document → Equipment/System nodes (auto-extracted)
     Document → SpecCategory → SpecField → HAS_EXTRACTION_GUIDE → ExtractionGuide
-                                        → HAS_VALUE → ActualValue
+                                        → HAS_VALUE → ActualValue (from guide execution)
 
     Args:
         task_id: Unique task identifier
@@ -152,15 +158,15 @@ def process_enhanced_spec_extraction(
         redis_service: Redis service
     """
     try:
-        logger.info(f"🚀 [Task {task_id}] Starting enhanced spec extraction for {filename}")
+        logger.info(f"🚀 [Task {task_id}] Starting ENHANCED spec extraction pipeline for {filename}")
 
-        # STEP 1: Chunk and store in Qdrant
+        # STEP 1: Section extraction + summarization + Qdrant storage
         redis_service.set(
             f"spec_task:{task_id}:status",
             {
                 "task_id": task_id,
-                "status": "chunking",
-                "message": "Chunking document and creating vector embeddings...",
+                "status": "processing_sections",
+                "message": "Extracting sections and generating summaries...",
                 "document_id": document_id,
                 "project_number": project_number,
                 "filename": filename,
@@ -170,81 +176,104 @@ def process_enhanced_spec_extraction(
             db="cache"
         )
 
-        chunk_result = process_document_with_qdrant(
-            markdown_content=markdown_content,
-            project_number=project_number,
-            document_id=document_id,
-            filename=filename
-        )
-
-        if not chunk_result["success"]:
-            logger.warning(f"⚠️ [Task {task_id}] Qdrant chunking failed, continuing with fallback")
-
-        chunks_count = chunk_result.get("chunks_count", 0)
-        logger.info(f"✅ [Task {task_id}] Document chunked: {chunks_count} chunks")
-
-        # STEP 2: Extract specifications using enhanced RAG
-        redis_service.set(
-            f"spec_task:{task_id}:status",
-            {
-                "task_id": task_id,
-                "status": "extracting",
-                "message": "Extracting specifications using AI with semantic search...",
-                "document_id": document_id,
-                "project_number": project_number,
-                "filename": filename,
-                "progress": 30
-            },
-            ttl=3600,
-            db="cache"
-        )
-
-        # Use enhanced extractor
-        graph_init = ProjectGraphInitializer(neo4j_driver)
         qdrant = get_qdrant_service()
-        enhanced_extractor = EnhancedSpecExtractor(
+        section_retriever = SectionRetriever(
             llm_service=llm_service,
-            qdrant_service=qdrant,
-            graph_initializer=graph_init
+            qdrant_service=qdrant
         )
 
-        # Try enhanced extraction with fallback
-        specifications = enhanced_extractor.extract_with_fallback(
+        # Process document: Extract sections → Summarize → Store
+        processing_result = section_retriever.process_and_store_document(
+            markdown_content=markdown_content,
             project_number=project_number,
             document_id=document_id,
-            markdown_content=markdown_content,
             filename=filename,
+            document_type_hint="Specification Document",
             llm_mode=llm_mode
         )
 
-        logger.info(f"✅ [Task {task_id}] Extraction complete - {len(specifications)} categories")
+        if not processing_result.get("success"):
+            raise Exception(f"Section processing failed: {processing_result.get('error')}")
 
-        # STEP 3: Create spec structure in Neo4j (with guides and values)
+        sections_count = processing_result.get("sections_extracted", 0)
+        logger.info(f"✅ [Task {task_id}] Processed {sections_count} sections with summaries")
+
+        # STEP 2: Build knowledge graph (entity extraction)
         redis_service.set(
             f"spec_task:{task_id}:status",
             {
                 "task_id": task_id,
                 "status": "building_graph",
-                "message": "Creating specification structure with extraction guides and values...",
+                "message": "Extracting entities and building knowledge graph...",
                 "document_id": document_id,
                 "project_number": project_number,
                 "filename": filename,
-                "progress": 75
+                "progress": 40
             },
             ttl=3600,
             db="cache"
         )
 
-        success = graph_init.add_spec_structure_to_document(
-            project_oenum=project_number,
-            document_id=document_id,
-            specifications=specifications
+        graph_builder = GraphBuilder(
+            llm_service=llm_service,
+            neo4j_driver=neo4j_driver
         )
 
-        if not success:
-            raise Exception("Failed to create spec structure in graph")
+        graph_result = graph_builder.build_graph_for_document(
+            project_number=project_number,
+            document_id=document_id,
+            document_content=markdown_content,
+            filename=filename,
+            llm_mode=llm_mode
+        )
 
-        logger.info(f"✅ [Task {task_id}] Graph structure created with guides and values")
+        if not graph_result.get("success"):
+            logger.warning(f"⚠️ [Task {task_id}] Graph building partially failed, continuing...")
+
+        entities_extracted = graph_result.get("entities_extracted", {})
+        logger.info(f"✅ [Task {task_id}] Knowledge graph built: {entities_extracted}")
+
+        # STEP 3: Execute extraction guides
+        redis_service.set(
+            f"spec_task:{task_id}:status",
+            {
+                "task_id": task_id,
+                "status": "executing_guides",
+                "message": "Executing extraction guides to extract specific parameters...",
+                "document_id": document_id,
+                "project_number": project_number,
+                "filename": filename,
+                "progress": 65
+            },
+            ttl=3600,
+            db="cache"
+        )
+
+        guide_executor = GuideExecutor(
+            llm_service=llm_service,
+            qdrant_service=qdrant,
+            neo4j_driver=neo4j_driver
+        )
+
+        # Execute all guides for this document
+        guide_results = guide_executor.execute_all_guides(
+            project_number=project_number,
+            document_id=document_id,
+            llm_mode=llm_mode
+        )
+
+        if guide_results.get("success"):
+            # Store extracted values in graph
+            guide_executor.store_extracted_values(
+                project_number=project_number,
+                document_id=document_id,
+                extraction_results=guide_results.get("results", [])
+            )
+
+            successful_extractions = guide_results.get("successful_extractions", 0)
+            logger.info(f"✅ [Task {task_id}] Guide execution: {successful_extractions} values extracted")
+        else:
+            logger.warning(f"⚠️ [Task {task_id}] Guide execution failed")
 
         # STEP 4: Complete
         redis_service.set(
@@ -252,17 +281,18 @@ def process_enhanced_spec_extraction(
             {
                 "task_id": task_id,
                 "status": "completed",
-                "message": "Specifications extracted successfully! Ready for review.",
+                "message": "Enhanced spec extraction completed successfully!",
                 "document_id": document_id,
                 "project_number": project_number,
                 "filename": filename,
                 "progress": 100,
                 "completed_at": datetime.now().isoformat(),
                 "metadata": {
-                    "categories_extracted": len(specifications),
-                    "chunks_created": chunks_count,
-                    "fields_with_guides": sum(len(fields) for fields in specifications.values()),
-                    "method": "enhanced_rag"
+                    "sections_processed": sections_count,
+                    "entities_extracted": entities_extracted,
+                    "guide_extractions": guide_results.get("successful_extractions", 0),
+                    "total_guides": guide_results.get("total_guides", 0),
+                    "method": "enhanced_pipeline_v2"
                 },
                 "review_url": f"/review-specs/{project_number}/{document_id}"
             },
@@ -270,7 +300,7 @@ def process_enhanced_spec_extraction(
             db="cache"
         )
 
-        logger.info(f"🎉 [Task {task_id}] Enhanced spec extraction completed successfully")
+        logger.info(f"🎉 [Task {task_id}] ENHANCED spec extraction completed successfully")
 
     except Exception as e:
         logger.error(f"❌ [Task {task_id}] Enhanced spec extraction failed: {e}", exc_info=True)
