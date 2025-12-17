@@ -44,8 +44,8 @@ export function WelcomeScreen({
   }} className="flex flex-col items-center justify-center h-full px-4 pb-32">
       {/* Logo */}
 <motion.img
-  src="/simorgh-sky.svg"
-  alt="Simorgh Sky"
+  src="/simorgh.svg"
+  alt="Simorgh2"
   initial={{ opacity: 0, scale: 0.9 }}
   animate={{ opacity: 1, scale: 1 }}
   transition={{ duration: 0.8, ease: 'easeOut' }}
