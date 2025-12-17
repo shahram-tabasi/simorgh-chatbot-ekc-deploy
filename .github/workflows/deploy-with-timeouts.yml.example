@@ -7,10 +7,10 @@
     tar -czf /tmp/llms-deploy.tar.gz -C ./llms .
 
     # Copy tarball to central server with timeout
-    scp -P 2324 $SSH_OPTIONS -i ~/.ssh/deploy_key /tmp/llms-deploy.tar.gz ***@217.219.39.212:/tmp/
+    scp -P 2324 $SSH_OPTIONS -i ~/.ssh/deploy_key /tmp/llms-deploy.tar.gz ***@95.38.203.173:/tmp/
 
     # Extract on target server via central server with timeouts
-    ssh -p 2324 $SSH_OPTIONS -i ~/.ssh/deploy_key ***@217.219.39.212 << 'ENDSSH'
+    ssh -p 2324 $SSH_OPTIONS -i ~/.ssh/deploy_key ***@95.38.203.173 << 'ENDSSH'
     set -e
 
     # Copy tarball to target server with timeout
