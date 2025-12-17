@@ -696,3 +696,256 @@ class QdrantService:
         except Exception as e:
             logger.error(f"❌ Failed to delete user memory: {e}")
             return False
+
+    # =========================================================================
+    # ENHANCED DUAL STORAGE: Summaries (for search) + Full Sections (for retrieval)
+    # =========================================================================
+
+    def add_section_summaries(
+        self,
+        project_number: str,
+        document_id: str,
+        section_summaries: List[Dict[str, Any]]
+    ) -> bool:
+        """
+        Add section summaries with dual storage model
+
+        Stores:
+        1. Summary vectors (for semantic search)
+        2. Full section content (linked via section_id for retrieval)
+
+        Args:
+            project_number: Project OE number
+            document_id: Document unique identifier
+            section_summaries: List of section summary dictionaries with keys:
+                - section_id: Unique section identifier
+                - section_title: Section heading
+                - heading_level: Heading level (0-6)
+                - parent_section_id: Optional parent section ID
+                - summary: LLM-generated summary (vectorized for search)
+                - full_content: Complete section text (stored for retrieval)
+                - subjects: List of detected subjects
+                - key_topics: List of key topics
+                - metadata: Additional metadata
+
+        Returns:
+            True if successful
+        """
+        collection_name = self._get_collection_name(project_number)
+
+        # Ensure collection exists
+        if not self.ensure_collection_exists(project_number):
+            return False
+
+        try:
+            points = []
+
+            for section_data in section_summaries:
+                section_id = section_data.get("section_id")
+                summary = section_data.get("summary", "")
+                full_content = section_data.get("full_content", "")
+
+                if not summary or not full_content:
+                    logger.warning(f"⚠️ Empty summary or content for section {section_id}, skipping")
+                    continue
+
+                # Generate embedding from SUMMARY (not full content)
+                # This allows semantic search on high-level topics
+                embedding = self.generate_embedding(summary)
+
+                # Prepare payload with both summary and full content
+                payload = {
+                    "document_id": document_id,
+                    "project_number": project_number,
+                    "section_id": section_id,
+                    "section_title": section_data.get("section_title", ""),
+                    "heading_level": section_data.get("heading_level", 0),
+                    "parent_section_id": section_data.get("parent_section_id", ""),
+
+                    # Summary (used for vector search)
+                    "summary": summary,
+
+                    # Full content (retrieved when summary matches)
+                    "full_content": full_content,
+
+                    # Subjects and topics
+                    "subjects": section_data.get("subjects", []),
+                    "key_topics": section_data.get("key_topics", []),
+
+                    # Storage type marker
+                    "storage_type": "section_summary",  # Distinguish from old chunks
+
+                    # Char counts
+                    "summary_char_count": len(summary),
+                    "content_char_count": len(full_content),
+                }
+
+                # Add optional metadata
+                if "metadata" in section_data:
+                    payload["metadata"] = section_data["metadata"]
+
+                # Create point with section_id as the point ID
+                point = PointStruct(
+                    id=section_id,  # Use section_id directly for easy retrieval
+                    vector=embedding,
+                    payload=payload
+                )
+                points.append(point)
+
+            # Upload points in batch
+            if points:
+                self.client.upsert(
+                    collection_name=collection_name,
+                    points=points
+                )
+                logger.info(f"✅ Added {len(points)} section summaries to {collection_name}")
+                return True
+            else:
+                logger.warning(f"⚠️ No valid section summaries to add")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Failed to add section summaries: {e}")
+            return False
+
+    def search_section_summaries(
+        self,
+        project_number: str,
+        query: str,
+        limit: int = 5,
+        document_id: Optional[str] = None,
+        score_threshold: float = 0.5
+    ) -> List[Dict[str, Any]]:
+        """
+        Search section summaries and retrieve full section content
+
+        This method:
+        1. Performs semantic search on summaries
+        2. Returns full section content for matched sections
+
+        Args:
+            project_number: Project OE number
+            query: Search query text
+            limit: Maximum number of results
+            document_id: Optional filter by specific document
+            score_threshold: Minimum similarity score (0.0 to 1.0)
+
+        Returns:
+            List of results with full section content
+        """
+        collection_name = self._get_collection_name(project_number)
+
+        try:
+            # Generate query embedding
+            query_embedding = self.generate_embedding(query)
+
+            # Prepare filter for section summaries
+            filter_conditions = [
+                FieldCondition(
+                    key="storage_type",
+                    match=MatchValue(value="section_summary")
+                )
+            ]
+
+            if document_id:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchValue(value=document_id)
+                    )
+                )
+
+            search_filter = Filter(must=filter_conditions)
+
+            # Perform search
+            results = self.client.search(
+                collection_name=collection_name,
+                query_vector=query_embedding,
+                limit=limit,
+                query_filter=search_filter,
+                score_threshold=score_threshold
+            )
+
+            # Format results with FULL CONTENT (not summary)
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    "section_id": result.payload.get("section_id", ""),
+                    "score": result.score,
+
+                    # Return FULL content for context
+                    "text": result.payload.get("full_content", ""),
+                    "full_content": result.payload.get("full_content", ""),
+
+                    # Also include summary for reference
+                    "summary": result.payload.get("summary", ""),
+
+                    # Section metadata
+                    "section_title": result.payload.get("section_title", ""),
+                    "heading_level": result.payload.get("heading_level", 0),
+                    "parent_section_id": result.payload.get("parent_section_id", ""),
+
+                    # Topics
+                    "subjects": result.payload.get("subjects", []),
+                    "key_topics": result.payload.get("key_topics", []),
+
+                    # Document reference
+                    "document_id": result.payload.get("document_id", ""),
+
+                    # Metadata
+                    "metadata": result.payload.get("metadata", {})
+                })
+
+            logger.info(f"🔍 Found {len(formatted_results)} section matches for query")
+            return formatted_results
+
+        except Exception as e:
+            logger.error(f"❌ Section summary search failed: {e}")
+            return []
+
+    def get_section_by_id(
+        self,
+        project_number: str,
+        section_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a specific section by its ID
+
+        Args:
+            project_number: Project OE number
+            section_id: Section unique identifier
+
+        Returns:
+            Section data with full content, or None if not found
+        """
+        collection_name = self._get_collection_name(project_number)
+
+        try:
+            # Retrieve point by ID
+            points = self.client.retrieve(
+                collection_name=collection_name,
+                ids=[section_id]
+            )
+
+            if not points:
+                logger.warning(f"⚠️ Section {section_id} not found")
+                return None
+
+            point = points[0]
+
+            return {
+                "section_id": point.payload.get("section_id", ""),
+                "section_title": point.payload.get("section_title", ""),
+                "heading_level": point.payload.get("heading_level", 0),
+                "parent_section_id": point.payload.get("parent_section_id", ""),
+                "full_content": point.payload.get("full_content", ""),
+                "summary": point.payload.get("summary", ""),
+                "subjects": point.payload.get("subjects", []),
+                "key_topics": point.payload.get("key_topics", []),
+                "document_id": point.payload.get("document_id", ""),
+                "metadata": point.payload.get("metadata", {})
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Failed to retrieve section {section_id}: {e}")
+            return None

@@ -4,12 +4,16 @@ Document Chunking Service
 Intelligently chunks markdown documents section-by-section
 for optimal vector storage and semantic search.
 
+ENHANCED: Now preserves section hierarchy with parent-child relationships
+and assigns unique section IDs for robust retrieval.
+
 Author: Simorgh Industrial Assistant
 """
 
 import re
 import logging
-from typing import List, Dict, Any, Optional
+import uuid
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -23,6 +27,18 @@ class DocumentChunk:
     chunk_index: int
     heading_level: int
     char_count: int
+    metadata: Dict[str, Any]
+
+
+@dataclass
+class HierarchicalSection:
+    """Represents a section with hierarchy information"""
+    section_id: str
+    heading: str
+    heading_level: int
+    content: str
+    parent_section_id: Optional[str]
+    subsections: List[str]  # List of child section IDs
     metadata: Dict[str, Any]
 
 
@@ -375,4 +391,199 @@ class DocumentChunker:
             "max_chunk_size": max(char_counts),
             "total_chars": sum(char_counts),
             "unique_sections": len(set(chunk["section_title"] for chunk in chunks))
+        }
+
+    # =========================================================================
+    # ENHANCED HIERARCHICAL SECTION EXTRACTION
+    # =========================================================================
+
+    def extract_hierarchical_sections(
+        self,
+        markdown_content: str,
+        document_id: str,
+        filename: str = ""
+    ) -> List[HierarchicalSection]:
+        """
+        Extract sections with full hierarchy preservation
+
+        This method extracts sections while maintaining parent-child relationships
+        and assigns unique IDs to each section for robust retrieval.
+
+        Args:
+            markdown_content: Markdown text content
+            document_id: Unique document identifier
+            filename: Original filename (for metadata)
+
+        Returns:
+            List of HierarchicalSection objects with parent-child relationships
+        """
+        logger.info(f"📄 Extracting hierarchical sections from: {filename}")
+
+        # Regex pattern for markdown headings
+        heading_pattern = r'^(#{1,6})\s+(.+)$'
+
+        lines = markdown_content.split('\n')
+        sections: List[HierarchicalSection] = []
+        section_stack: List[Tuple[int, str]] = []  # (level, section_id)
+
+        current_section = {
+            "heading": "Document Introduction",
+            "heading_level": 0,
+            "content_lines": [],
+            "section_id": str(uuid.uuid4()),
+            "parent_section_id": None
+        }
+
+        for line_idx, line in enumerate(lines):
+            # Check if line is a heading
+            match = re.match(heading_pattern, line, re.MULTILINE)
+
+            if match:
+                # Save previous section if it has content
+                if current_section["content_lines"]:
+                    content = '\n'.join(current_section["content_lines"]).strip()
+                    if content:  # Only save non-empty sections
+                        sections.append(HierarchicalSection(
+                            section_id=current_section["section_id"],
+                            heading=current_section["heading"],
+                            heading_level=current_section["heading_level"],
+                            content=content,
+                            parent_section_id=current_section["parent_section_id"],
+                            subsections=[],  # Will be populated later
+                            metadata={
+                                "document_id": document_id,
+                                "filename": filename,
+                                "char_count": len(content),
+                                "line_start": line_idx - len(current_section["content_lines"]),
+                                "line_end": line_idx
+                            }
+                        ))
+
+                # Parse new heading
+                heading_level = len(match.group(1))  # Number of # symbols
+                heading_text = match.group(2).strip()
+                section_id = str(uuid.uuid4())
+
+                # Determine parent based on heading hierarchy
+                parent_section_id = None
+
+                # Pop sections from stack that are at same or lower level
+                while section_stack and section_stack[-1][0] >= heading_level:
+                    section_stack.pop()
+
+                # Parent is the section at top of stack (if any)
+                if section_stack:
+                    parent_section_id = section_stack[-1][1]
+
+                # Add current section to stack
+                section_stack.append((heading_level, section_id))
+
+                # Start new section
+                current_section = {
+                    "heading": heading_text,
+                    "heading_level": heading_level,
+                    "content_lines": [],
+                    "section_id": section_id,
+                    "parent_section_id": parent_section_id
+                }
+            else:
+                # Add line to current section content
+                current_section["content_lines"].append(line)
+
+        # Add final section
+        if current_section["content_lines"]:
+            content = '\n'.join(current_section["content_lines"]).strip()
+            if content:
+                sections.append(HierarchicalSection(
+                    section_id=current_section["section_id"],
+                    heading=current_section["heading"],
+                    heading_level=current_section["heading_level"],
+                    content=content,
+                    parent_section_id=current_section["parent_section_id"],
+                    subsections=[],
+                    metadata={
+                        "document_id": document_id,
+                        "filename": filename,
+                        "char_count": len(content),
+                        "line_start": len(lines) - len(current_section["content_lines"]),
+                        "line_end": len(lines)
+                    }
+                ))
+
+        # Build subsections list for each parent
+        section_dict = {s.section_id: s for s in sections}
+        for section in sections:
+            if section.parent_section_id and section.parent_section_id in section_dict:
+                parent = section_dict[section.parent_section_id]
+                parent.subsections.append(section.section_id)
+
+        logger.info(f"✅ Extracted {len(sections)} hierarchical sections")
+
+        return sections
+
+    def sections_to_dict_format(
+        self,
+        sections: List[HierarchicalSection]
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert HierarchicalSection objects to dictionary format
+
+        Args:
+            sections: List of HierarchicalSection objects
+
+        Returns:
+            List of section dictionaries for use with other services
+        """
+        return [
+            {
+                "section_id": section.section_id,
+                "heading": section.heading,
+                "heading_level": section.heading_level,
+                "content": section.content,
+                "parent_section_id": section.parent_section_id,
+                "subsections": section.subsections,
+                "metadata": section.metadata
+            }
+            for section in sections
+        ]
+
+    def get_section_hierarchy_statistics(
+        self,
+        sections: List[HierarchicalSection]
+    ) -> Dict[str, Any]:
+        """
+        Get statistics about section hierarchy
+
+        Args:
+            sections: List of HierarchicalSection objects
+
+        Returns:
+            Statistics dictionary
+        """
+        if not sections:
+            return {
+                "total_sections": 0,
+                "max_depth": 0,
+                "sections_by_level": {},
+                "avg_section_size": 0,
+                "sections_with_subsections": 0
+            }
+
+        sections_by_level = {}
+        for section in sections:
+            level = section.heading_level
+            sections_by_level[level] = sections_by_level.get(level, 0) + 1
+
+        char_counts = [len(section.content) for section in sections]
+        sections_with_subsections = sum(1 for s in sections if s.subsections)
+
+        return {
+            "total_sections": len(sections),
+            "max_depth": max((s.heading_level for s in sections), default=0),
+            "sections_by_level": sections_by_level,
+            "avg_section_size": sum(char_counts) / len(char_counts) if char_counts else 0,
+            "min_section_size": min(char_counts) if char_counts else 0,
+            "max_section_size": max(char_counts) if char_counts else 0,
+            "sections_with_subsections": sections_with_subsections,
+            "leaf_sections": len(sections) - sections_with_subsections
         }
