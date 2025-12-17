@@ -9,12 +9,8 @@ models:
     local_dir: "/models/huggingface/unsloth--gpt-oss-20b-unsloth-bnb-4bit"
     description: "4-bit quantized model for fallback (existing download)"
 
-  # 16-bit model from OpenAI - Already downloaded
-  - name: "openai/gpt-oss-20b"
-    type: "huggingface"
-    cache_dir: "/models/huggingface"
-    local_dir: "/models/unsloth-gpt-oss-20b-16bit"
-    description: "16-bit model for vLLM inference (existing download)"
+  # 16-bit model - Already exists, no download needed (app.py loads it directly)
+  # The model at /models/unsloth-gpt-oss-20b-16bit is already complete and ready to use
 
   # Add more models as needed
   # - name: "another/model"
