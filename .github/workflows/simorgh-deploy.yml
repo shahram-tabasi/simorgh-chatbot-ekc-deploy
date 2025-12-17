@@ -99,9 +99,17 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p 2324 217.219.39.212 >> ~/.ssh/known_hosts
 
+      - name: Check disk space on server
+        run: |
+          echo "Checking disk space on central server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@217.219.39.212 \
+            'df -h ~ && echo "Disk check complete"'
+
       - name: Copy deployment files to server
         run: |
+          echo "Copying deployment files..."
           scp -P 2324 -i ~/.ssh/deploy_key -r simorgh-agent/* ${{ secrets.SSH_USER }}@217.219.39.212:~/simorgh-deployment/
+          echo "✓ Files copied successfully"
 
       - name: Create .env file and deploy
         run: |
