@@ -111,6 +111,7 @@ export function PinkEKCBackground() {
 
     // تابع برای ایجاد شهاب سنگ جدید
     function createMeteor() {
+      if (!canvas) return;
       meteors.push({
         x: Math.random() * canvas.width * 1.5,
         y: -20,
@@ -138,7 +139,7 @@ export function PinkEKCBackground() {
         tailX, tailY,
         meteor.x, meteor.y
       );
-      
+
       // گرادیانت دم (از کمرنگ به پررنگ)
       gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
       gradient.addColorStop(0.3, meteor.color.replace('0.8', '0.4'));
@@ -157,7 +158,7 @@ export function PinkEKCBackground() {
       // رسم سر شهاب سنگ
       ctx.beginPath();
       ctx.arc(meteor.x, meteor.y, meteor.size * 1.5, 0, Math.PI * 2);
-      
+
       // گرادیانت دایره سر
       const headGradient = ctx.createRadialGradient(
         meteor.x, meteor.y, 0,
@@ -166,7 +167,7 @@ export function PinkEKCBackground() {
       headGradient.addColorStop(0, meteor.color);
       headGradient.addColorStop(0.7, meteor.color.replace('0.8', '0.3'));
       headGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-      
+
       ctx.fillStyle = headGradient;
       ctx.fill();
 
@@ -185,13 +186,15 @@ export function PinkEKCBackground() {
 
     // تابع به‌روزرسانی موقعیت شهاب سنگ
     function updateMeteor(meteor: Meteor) {
+      if (!canvas) return;
+
       meteor.x += meteor.speed * Math.cos(meteor.angle);
       meteor.y += meteor.speed * Math.sin(meteor.angle);
 
       // غیرفعال کردن شهاب سنگ اگر از صفحه خارج شود
       if (
-        meteor.x < -100 || 
-        meteor.x > canvas.width + 100 || 
+        meteor.x < -100 ||
+        meteor.x > canvas.width + 100 ||
         meteor.y > canvas.height + 100
       ) {
         meteor.active = false;
@@ -343,6 +346,8 @@ export function PinkEKCBackground() {
     animate();
 
     const handleResize = () => {
+      if (!canvas) return;
+
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
 
@@ -384,7 +389,7 @@ export function PinkEKCBackground() {
     };
 
     window.addEventListener('resize', handleResize);
-    
+
     // ایجاد شهاب سنگ‌های جدید به صورت دوره‌ای
     const meteorInterval = setInterval(() => {
       if (meteors.filter(m => m.active).length < 3) {
