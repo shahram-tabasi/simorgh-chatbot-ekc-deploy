@@ -73,19 +73,37 @@ def check_model_exists(model_name: str, cache_dir: str, local_dir: str = None) -
     # Otherwise check cache directory
     # Convert model name to cache directory format
     cache_model_name = model_name.replace("/", "--")
-    model_path = Path(cache_dir) / f"models--{cache_model_name}"
 
-    if model_path.exists():
-        # Check if download is complete (no .incomplete files)
-        incomplete_files = list(model_path.rglob("*.incomplete"))
-        if not incomplete_files:
-            model_size = sum(f.stat().st_size for f in model_path.rglob('*') if f.is_file())
-            size_gb = model_size / (1024**3)
-            log(f"Model already exists: {model_name} ({size_gb:.2f} GB)", "SUCCESS")
-            return True
-        else:
-            log(f"Found incomplete download, will retry: {model_name}", "WARNING")
-            return False
+    # Check multiple possible locations for the model
+    possible_paths = [
+        Path(cache_dir) / f"models--{cache_model_name}",  # Standard HF cache format
+        Path(cache_dir) / cache_model_name,                # Alternative format (no "models--" prefix)
+        Path(cache_dir) / "hub" / f"models--{cache_model_name}",  # Sometimes stored in hub subdirectory
+    ]
+
+    for model_path in possible_paths:
+        if model_path.exists():
+            # Check if it's a valid model directory
+            has_config = (model_path / "config.json").exists() or \
+                        any((model_path / "snapshots").glob("*/config.json")) if (model_path / "snapshots").exists() else False
+            has_model = any(model_path.glob("*.bin")) or \
+                       any(model_path.glob("*.safetensors")) or \
+                       any((model_path / "snapshots").glob("*/*.safetensors")) if (model_path / "snapshots").exists() else False
+
+            # For standard cache format, also check for incomplete files
+            incomplete_files = list(model_path.rglob("*.incomplete"))
+
+            if (has_config and has_model) and not incomplete_files:
+                model_size = sum(f.stat().st_size for f in model_path.rglob('*') if f.is_file())
+                size_gb = model_size / (1024**3)
+                log(f"Model already exists: {model_name} at {model_path} ({size_gb:.2f} GB)", "SUCCESS")
+                return True
+            elif incomplete_files:
+                log(f"Found incomplete download at {model_path}, will skip and check other locations", "WARNING")
+                continue  # Check next possible location
+            else:
+                log(f"Found directory but incomplete model at {model_path}", "WARNING")
+                continue
 
     return False
 
