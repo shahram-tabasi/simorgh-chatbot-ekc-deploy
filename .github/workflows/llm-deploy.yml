@@ -216,8 +216,7 @@ jobs:
           echo "Cleaning up local..."
           rm "$TAR_FILE"
 
-          echo "✓ Deployment complete"
-          
+          echo "✓ Deployment complete"          
       - name: Create .env file on target server
         env:
           OWNER_LC: ${{ env.OWNER_LC }}
