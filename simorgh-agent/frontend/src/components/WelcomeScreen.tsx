@@ -92,7 +92,7 @@ Make it easy to understand what each specification means and why it's important 
 
 export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenProps) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen px-4 pb-32">
+    <div className="flex flex-col items-center justify-center px-4 py-8">
       {/* Logo */}
       <img
         src="/simorgh.svg"
