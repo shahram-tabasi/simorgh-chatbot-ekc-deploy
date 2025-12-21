@@ -145,8 +145,8 @@ async def process_and_index_document(
             logger.info(f"🚀 Starting ENHANCED document processing pipeline")
 
             try:
-                # Initialize enhanced services
-                qdrant = QdrantService()
+                # Initialize enhanced services with LLM-based embeddings
+                qdrant = QdrantService(llm_service=llm_service)
                 section_retriever = SectionRetriever(
                     llm_service=llm_service,
                     qdrant_service=qdrant
@@ -256,7 +256,7 @@ async def process_and_index_document(
                     logger.info(f"📋 Executing extraction guides for spec document")
 
                     try:
-                        qdrant = QdrantService()
+                        qdrant = QdrantService(llm_service=llm_service)
                         guide_executor = GuideExecutor(
                             neo4j_driver=neo4j_service.driver,
                             qdrant_service=qdrant,
@@ -342,7 +342,7 @@ async def upload_document(
         # Initialize services
         doc_processor = DocProcessorClient()
         classifier = DocumentClassifier()
-        vector_rag = VectorRAG() if not project_oenum else None
+        vector_rag = VectorRAG(llm_service=llm_service) if not project_oenum else None
         graph_init = ProjectGraphInitializer(neo4j_service.driver) if project_oenum and neo4j_service else None
 
         # ✅ ENHANCED: Process with enhanced pipeline (section extraction, entities, guides)
@@ -397,8 +397,8 @@ async def general_chat(
         )
 
     try:
-        # Initialize vector RAG
-        vector_rag = VectorRAG()
+        # Initialize vector RAG with LLM-based embeddings
+        vector_rag = VectorRAG(llm_service=llm_service)
 
         # Search for relevant chunks
         logger.info(f"🔍 Searching for relevant chunks: {request.message[:50]}...")
@@ -493,8 +493,8 @@ async def project_chat(
         logger.info(f"📊 Querying project graph: {request.project_oenum}")
 
         if request.use_hybrid:
-            # Hybrid: Graph + Vector
-            vector_rag = VectorRAG()
+            # Hybrid: Graph + Vector with LLM-based embeddings
+            vector_rag = VectorRAG(llm_service=llm_service)
             vector_results = await vector_rag.search(
                 query=request.message,
                 user_id=request.user_id,

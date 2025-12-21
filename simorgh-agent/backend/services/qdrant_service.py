@@ -34,7 +34,9 @@ class QdrantService:
         self,
         qdrant_url: str = None,
         qdrant_api_key: str = None,
-        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        llm_service=None,
+        embedding_dim: Optional[int] = None
     ):
         """
         Initialize Qdrant service
@@ -42,7 +44,9 @@ class QdrantService:
         Args:
             qdrant_url: Qdrant server URL (default: localhost:6333)
             qdrant_api_key: Optional API key for Qdrant Cloud
-            embedding_model: Sentence transformer model for embeddings
+            embedding_model: Sentence transformer model for embeddings (fallback if no llm_service)
+            llm_service: Optional LLMService instance for LLM-based embeddings
+            embedding_dim: Optional explicit embedding dimension (auto-detected if not provided)
         """
         self.qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "localhost")
         self.qdrant_port = int(os.getenv("QDRANT_PORT", "6333"))
@@ -70,12 +74,32 @@ class QdrantService:
                 )
                 logger.info(f"✅ Connected to Qdrant: {self.qdrant_url}:{self.qdrant_port}")
 
-        # Initialize embedding model
-        self.embedding_model_name = embedding_model
-        logger.info(f"🔄 Loading embedding model: {embedding_model}")
-        self.embedding_model = SentenceTransformer(embedding_model)
-        self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
-        logger.info(f"✅ Embedding model loaded (dimension: {self.embedding_dim})")
+        # Initialize embedding generation
+        self.llm_service = llm_service
+        self.embedding_model = None
+        self.embedding_model_name = None
+
+        if self.llm_service:
+            # Use LLM-based embeddings (better for domain-specific content)
+            logger.info(f"🔄 Using LLM-based embeddings for superior semantic understanding")
+
+            # Get embedding dimension
+            if embedding_dim:
+                self.embedding_dim = embedding_dim
+                logger.info(f"✅ LLM embeddings configured (dimension: {self.embedding_dim})")
+            else:
+                # Auto-detect dimension by generating a test embedding
+                logger.info(f"🔄 Auto-detecting embedding dimension...")
+                test_embedding = self.llm_service.generate_embedding("test")
+                self.embedding_dim = len(test_embedding)
+                logger.info(f"✅ LLM embeddings configured (auto-detected dimension: {self.embedding_dim})")
+        else:
+            # Fallback to SentenceTransformer (legacy mode)
+            self.embedding_model_name = embedding_model
+            logger.info(f"🔄 Loading SentenceTransformer model: {embedding_model}")
+            self.embedding_model = SentenceTransformer(embedding_model)
+            self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
+            logger.info(f"✅ Embedding model loaded (dimension: {self.embedding_dim})")
 
     def _get_collection_name(self, project_number: str) -> str:
         """
@@ -145,6 +169,9 @@ class QdrantService:
         """
         Generate embedding vector for text
 
+        Uses LLM-based embeddings if llm_service is configured,
+        otherwise falls back to SentenceTransformer.
+
         Args:
             text: Input text
 
@@ -152,8 +179,14 @@ class QdrantService:
             Embedding vector
         """
         try:
-            embedding = self.embedding_model.encode(text, convert_to_numpy=True)
-            return embedding.tolist()
+            if self.llm_service:
+                # Use LLM-based embeddings for better domain-specific understanding
+                embedding = self.llm_service.generate_embedding(text)
+                return embedding
+            else:
+                # Fallback to SentenceTransformer (legacy mode)
+                embedding = self.embedding_model.encode(text, convert_to_numpy=True)
+                return embedding.tolist()
         except Exception as e:
             logger.error(f"❌ Failed to generate embedding: {e}")
             raise

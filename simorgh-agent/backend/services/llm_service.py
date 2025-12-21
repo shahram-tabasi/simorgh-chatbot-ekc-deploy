@@ -727,6 +727,216 @@ Return a JSON array of relationships:
             return []
 
     # =========================================================================
+    # EMBEDDING GENERATION
+    # =========================================================================
+
+    def generate_embedding(
+        self,
+        text: str,
+        mode: Optional[str] = None,
+        model: Optional[str] = None
+    ) -> List[float]:
+        """
+        Generate embedding vector for text using LLM
+
+        This provides better semantic understanding than generic embedding models,
+        especially for domain-specific technical content.
+
+        Args:
+            text: Input text to embed
+            mode: "online", "offline", or None (uses default)
+            model: Optional specific embedding model (online mode only)
+
+        Returns:
+            Embedding vector as list of floats
+
+        Raises:
+            LLMError: If embedding generation fails
+        """
+        # Determine mode
+        effective_mode = LLMMode(mode) if mode else self.default_mode
+
+        try:
+            if effective_mode == LLMMode.ONLINE or effective_mode == LLMMode.AUTO:
+                # Use OpenAI embeddings API
+                return self._generate_embedding_online(text, model)
+
+            elif effective_mode == LLMMode.OFFLINE:
+                # Use local LLM embeddings endpoint
+                return self._generate_embedding_offline(text)
+
+            else:
+                raise ValueError(f"Invalid LLM mode for embeddings: {effective_mode}")
+
+        except Exception as e:
+            # If AUTO mode and online fails, try offline
+            if effective_mode == LLMMode.AUTO:
+                try:
+                    logger.warning(f"Online embedding failed, falling back to offline: {e}")
+                    return self._generate_embedding_offline(text)
+                except Exception as offline_error:
+                    logger.error(f"Both online and offline embedding failed: {offline_error}")
+                    raise LLMError(f"Embedding generation failed: {offline_error}")
+            raise LLMError(f"Embedding generation failed: {e}")
+
+    def _generate_embedding_online(
+        self,
+        text: str,
+        model: Optional[str] = None
+    ) -> List[float]:
+        """
+        Generate embedding using OpenAI API
+
+        Args:
+            text: Input text
+            model: Optional specific model (default: text-embedding-3-large)
+
+        Returns:
+            Embedding vector
+        """
+        if not self.openai_api_key:
+            raise LLMOnlineError("OpenAI API key not configured")
+
+        # Use text-embedding-3-large for best quality (3072 dimensions)
+        # Alternative: text-embedding-3-small (1536 dimensions, faster)
+        embedding_model = model or "text-embedding-3-large"
+
+        try:
+            response = openai.embeddings.create(
+                model=embedding_model,
+                input=text
+            )
+
+            embedding = response.data[0].embedding
+            logger.debug(f"✅ Generated online embedding ({len(embedding)} dimensions)")
+            return embedding
+
+        except Exception as e:
+            logger.error(f"❌ OpenAI embedding failed: {e}")
+            raise LLMOnlineError(f"OpenAI embedding failed: {e}")
+
+    def _generate_embedding_offline(
+        self,
+        text: str,
+        timeout: int = 30
+    ) -> List[float]:
+        """
+        Generate embedding using local LLM server
+
+        Calls the local LLM's embedding endpoint to generate embeddings.
+        This uses the same model understanding as generation, providing
+        better domain-specific semantic matching.
+
+        Args:
+            text: Input text
+            timeout: Request timeout in seconds
+
+        Returns:
+            Embedding vector
+        """
+        try:
+            # Call local LLM embedding endpoint
+            # The endpoint should accept: {"input": "text"}
+            # And return: {"embedding": [float, ...]}
+
+            response = requests.post(
+                f"{self.local_llm_url}/embeddings",
+                json={"input": text},
+                timeout=timeout,
+                headers={"Content-Type": "application/json"}
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+
+                # Handle different response formats
+                if "embedding" in data:
+                    embedding = data["embedding"]
+                elif "data" in data and len(data["data"]) > 0:
+                    # OpenAI-compatible format
+                    embedding = data["data"][0]["embedding"]
+                else:
+                    raise LLMOfflineError(f"Unexpected response format: {data}")
+
+                logger.debug(f"✅ Generated offline embedding ({len(embedding)} dimensions)")
+                return embedding
+
+            else:
+                error_msg = f"Local LLM embedding failed: HTTP {response.status_code}"
+                logger.error(f"❌ {error_msg}")
+
+                # If embedding endpoint doesn't exist, try fallback with generation
+                logger.warning("⚠️ Trying fallback: using LLM generation for embedding")
+                return self._generate_embedding_offline_fallback(text, timeout)
+
+        except requests.exceptions.Timeout:
+            raise LLMTimeoutError(f"Local LLM embedding timeout after {timeout}s")
+
+        except RequestException as e:
+            logger.warning(f"Local LLM embedding request failed: {e}")
+            # Try fallback method
+            return self._generate_embedding_offline_fallback(text, timeout)
+
+    def _generate_embedding_offline_fallback(
+        self,
+        text: str,
+        timeout: int = 30
+    ) -> List[float]:
+        """
+        Fallback method: Generate embedding by asking LLM to create a semantic representation
+
+        This is a creative fallback that asks the LLM to generate a normalized embedding
+        from the text by extracting semantic features.
+
+        Args:
+            text: Input text
+            timeout: Request timeout in seconds
+
+        Returns:
+            Embedding vector
+        """
+        # Ask LLM to generate a semantic embedding
+        # This uses the LLM's understanding to create a meaningful vector
+        embedding_prompt = f"""Extract semantic features from this text and return ONLY a JSON array of exactly 768 floating point numbers between -1.0 and 1.0 representing the semantic embedding.
+
+Text: {text[:500]}
+
+Return only the JSON array, nothing else."""
+
+        try:
+            messages = [
+                {"role": "system", "content": "You are a semantic embedding generator. Return ONLY a JSON array of 768 floats."},
+                {"role": "user", "content": embedding_prompt}
+            ]
+
+            result = self._generate_offline(messages, temperature=0.1, max_tokens=4096)
+
+            # Parse the embedding from response
+            response_text = result["response"].strip()
+
+            # Try to extract JSON array from response
+            import re
+            json_match = re.search(r'\[([\d\s,.\-eE]+)\]', response_text)
+            if json_match:
+                embedding = json.loads(json_match.group(0))
+
+                # Ensure it's the right dimension
+                if len(embedding) >= 768:
+                    embedding = embedding[:768]  # Truncate if too long
+                else:
+                    # Pad with zeros if too short
+                    embedding.extend([0.0] * (768 - len(embedding)))
+
+                logger.debug(f"✅ Generated fallback embedding ({len(embedding)} dimensions)")
+                return embedding
+            else:
+                raise LLMOfflineError("Failed to parse embedding from LLM response")
+
+        except Exception as e:
+            logger.error(f"❌ Fallback embedding generation failed: {e}")
+            raise LLMOfflineError(f"Fallback embedding failed: {e}")
+
+    # =========================================================================
     # UTILITIES
     # =========================================================================
 
