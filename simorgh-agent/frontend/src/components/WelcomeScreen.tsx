@@ -1,6 +1,5 @@
 import React from 'react';
-import { motion } from 'framer-motion';
-import { SparklesIcon, SearchIcon, ImageIcon, CodeIcon, LightbulbIcon, TrendingUpIcon, BookOpenIcon } from 'lucide-react';
+import { Sparkles, Search, Image, Code, Lightbulb, TrendingUp, BookOpen } from 'lucide-react';
 
 interface WelcomeScreenProps {
   onHide: () => void;
@@ -9,109 +8,178 @@ interface WelcomeScreenProps {
 
 const suggestedPrompts = [
   {
-    icon: SearchIcon,
-    title: 'Deep Research',
-    prompt: 'Research the latest developments in quantum computing'
+    icon: BookOpen,
+    title: 'Specification',
+    subtitle: 'Technical specifications and requirements',
+    prompt: `Please analyze the attached "General Specification Items.pdf" document and extract all the technical specifications and requirements. 
+
+For each item in the document, provide:
+1. The item number and subject name
+2. A clear description of what this specification is for
+3. The current value or setting (if mentioned)
+4. Any important notes about this specification
+
+Organize the information in a clear, structured format with categories like:
+- Switchgear Specifications
+- Busbar Specifications  
+- Wire and Cable Specifications
+- Control and Protection Components
+- Network and Communication Settings
+- Measuring Instruments
+- Accessories
+
+Make it easy to understand what each specification means and why it's important for the electrical system.`,
+    enabled: true,
+    emoji: '📋'
   },
   {
-    icon: CodeIcon,
-    title: 'Code Assistant',
-    prompt: 'Help me build a React component with TypeScript'
+    icon: TrendingUp,
+    title: 'Data Sheet',
+    subtitle: 'Equipment data sheets and catalogs',
+    prompt: '',
+    enabled: false,
+    emoji: '📊'
   },
   {
-    icon: ImageIcon,
-    title: 'Create Image',
-    prompt: 'Generate an image of a futuristic city at sunset'
+    icon: Code,
+    title: 'Cable Size',
+    subtitle: 'Cable sizing calculations and tables',
+    prompt: '',
+    enabled: false,
+    emoji: '🔌'
   },
   {
-    icon: LightbulbIcon,
-    title: 'Brainstorm Ideas',
-    prompt: 'Give me creative startup ideas for sustainable technology'
+    icon: Search,
+    title: 'I/O List',
+    subtitle: 'Input/Output signal lists and assignments',
+    prompt: '',
+    enabled: false,
+    emoji: '📝'
   },
   {
-    icon: TrendingUpIcon,
-    title: 'Analyze Data',
-    prompt: 'Analyze market trends in artificial intelligence'
+    icon: Sparkles,
+    title: 'Load List',
+    subtitle: 'Electrical load calculations and distributions',
+    prompt: '',
+    enabled: false,
+    emoji: '⚡'
   },
   {
-    icon: BookOpenIcon,
-    title: 'Explain Concept',
-    prompt: 'Explain how neural networks work in simple terms'
+    icon: Lightbulb,
+    title: 'Logic',
+    subtitle: 'Control logic diagrams and sequences',
+    prompt: '',
+    enabled: false,
+    emoji: '🧠'
+  },
+  {
+    icon: Image,
+    title: 'Site Layout',
+    subtitle: 'Site plans and equipment layouts',
+    prompt: '',
+    enabled: false,
+    emoji: '🗺️'
+  },
+  {
+    icon: Sparkles,
+    title: 'SLD-SLD',
+    subtitle: 'Single line diagrams and electrical schematics',
+    prompt: '',
+    enabled: false,
+    emoji: '⚡'
   }
 ];
 
-export function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenProps) {
+export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenProps) {
   return (
-    <motion.div
-      initial={{ opacity: 1 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ duration: 0.5 }}
-      className="flex flex-col items-center justify-center h-full px-4 pb-32"
-    >
+    <div className="flex flex-col items-center justify-center min-h-screen px-4 pb-32 bg-gradient-to-b from-gray-900 to-black">
       {/* Logo */}
-      <motion.img
+      <img
         src="/simorgh.svg"
-        alt="Simorgh2"
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.8, ease: 'easeOut' }}
-        className="w-20 h-20 mb-3 mx-auto drop-shadow-2xl select-none"
-      />
-
-      <motion.img
-        src="/text_simorgh.svg"
         alt="Simorgh"
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15, duration: 0.6 }}
-        className="h-16 md:h-20 drop-shadow-2xl select-none"
+        className="w-32 h-32 mb-3 mx-auto drop-shadow-2xl select-none animate-fade-in"
       />
-
+      <img
+        src="/text_simorgh.svg"
+        alt="Simorgh Text"
+        className="h-20 md:h-24 drop-shadow-2xl select-none animate-fade-in-delay"
+      />
+      
       {/* Welcome text */}
-      <motion.p
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3, duration: 0.6 }}
-        className="text-lg text-gray-400 text-center max-w-md mb-12 font-light"
-      >
+      <p className="text-lg text-gray-400 text-center max-w-md mb-12 font-light mt-4">
         What do you want to know?
-      </motion.p>
-
+      </p>
+      
       {/* Suggested prompts */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5, duration: 0.6 }}
-        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-4xl w-full"
-      >
+      <div className="grid grid-cols-4 gap-3 max-w-3xl w-full">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
-            <motion.button
+            <button
               key={i}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6 + i * 0.1, duration: 0.4 }}
-              onClick={() => onPromptClick(item.prompt)}
-              className="group p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all text-left"
+              onClick={() => item.enabled && onPromptClick(item.prompt)}
+              disabled={!item.enabled}
+              className={`group p-3 rounded-xl border transition-all text-center relative overflow-hidden aspect-square flex flex-col items-center justify-center ${
+                item.enabled
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
+                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-60'
+              }`}
+              style={{
+                animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
+              }}
             >
-              <div className="flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500/20 to-purple-500/20 group-hover:from-blue-500/30 group-hover:to-purple-500/30 transition-all">
-                  <Icon className="w-5 h-5 text-blue-400" />
+              <div className="flex flex-col items-center gap-1.5">
+                <div className={`text-2xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+                  {item.emoji}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-white mb-1">
-                    {item.title}
-                  </div>
-                  <div className="text-xs text-gray-400 line-clamp-2">
-                    {item.prompt}
-                  </div>
+                <div className="text-xs font-semibold text-white">
+                  {item.title}
                 </div>
+                <div className="text-[9px] text-gray-400 leading-tight px-1">
+                  {item.subtitle}
+                </div>
+                {!item.enabled && (
+                  <div className="mt-0.5 px-1.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/30">
+                    <span className="text-[8px] font-medium text-red-400">Coming Soon</span>
+                  </div>
+                )}
               </div>
-            </motion.button>
+            </button>
           );
         })}
-      </motion.div>
-    </motion.div>
+      </div>
+
+      <style>{`
+        @keyframes fadeInUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        
+        .animate-fade-in {
+          animation: fadeIn 0.8s ease-out;
+        }
+        
+        .animate-fade-in-delay {
+          animation: fadeIn 0.6s ease-out 0.15s backwards;
+        }
+        
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: scale(0.9);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1);
+          }
+        }
+      `}</style>
+    </div>
   );
 }
