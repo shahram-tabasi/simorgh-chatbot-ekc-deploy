@@ -61,19 +61,19 @@ export function ChatArea({
   }, [messages.length]);
 
   return (
-    <div className="flex-1 flex flex-col h-full relative">
-      {/* Container with layout driven by isIdle state */}
-      <div className={`flex-1 flex flex-col h-full ${isIdle ? '' : 'overflow-hidden'}`}>
-        {/* Welcome content - visible only in idle state */}
+    <div className="flex-1 flex flex-col h-full relative overflow-hidden">
+      {/* Main content area - scrollable only in chatting mode */}
+      <div className={`flex-1 flex flex-col ${isIdle ? 'justify-center items-center' : 'overflow-y-auto'} px-2 sm:px-4 md:px-8 lg:px-20`}>
+        {/* Welcome content - shown in idle mode */}
         {isIdle && (
-          <div className="flex-1 flex items-center justify-center w-full">
+          <div className="w-full max-w-5xl mx-auto">
             <WelcomeScreen onHide={() => {}} onPromptClick={handlePromptClick} />
           </div>
         )}
 
-        {/* Message list - visible only in chatting state */}
+        {/* Message list - shown in chatting mode */}
         {!isIdle && (
-          <div className="flex-1 overflow-y-auto px-2 sm:px-4 md:px-8 lg:px-20 pt-4 pb-2">
+          <div className="w-full pt-4 pb-2">
             <MessageList
               messages={messages}
               isTyping={isTyping}
@@ -84,24 +84,24 @@ export function ChatArea({
             />
           </div>
         )}
+      </div>
 
-        {/* Single ChatInput instance - position changes based on state */}
-        <div className={`w-full flex-shrink-0 ${
-          isIdle
-            ? 'flex justify-center mb-6 sm:mb-8 md:mb-12 lg:mb-16 pb-safe'
-            : 'flex justify-center pb-4 sm:pb-6 md:pb-8 mb-safe'
-        }`}>
-          <div className={`w-full px-2 sm:px-4 ${isIdle ? 'max-w-3xl' : 'max-w-4xl'}`}>
-            <ChatInput
-              onSend={handleSend}
-              onCancel={onCancelGeneration}
-              disabled={disabled || isTyping}
-              isGenerating={isTyping}
-              editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
-              promptToInsert={promptToInsert}
-              centered={isIdle}
-            />
-          </div>
+      {/* ChatInput - ALWAYS visible, position changes based on state */}
+      <div className={`w-full flex-shrink-0 flex justify-center ${
+        isIdle
+          ? 'pb-8 sm:pb-12 md:pb-16'
+          : 'pb-4 sm:pb-6 md:pb-8 border-t border-white/10 bg-black/20 backdrop-blur-xl'
+      }`}>
+        <div className={`w-full px-2 sm:px-4 ${isIdle ? 'max-w-3xl' : 'max-w-4xl'}`}>
+          <ChatInput
+            onSend={handleSend}
+            onCancel={onCancelGeneration}
+            disabled={disabled || isTyping}
+            isGenerating={isTyping}
+            editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
+            promptToInsert={promptToInsert}
+            centered={isIdle}
+          />
         </div>
       </div>
     </div>
