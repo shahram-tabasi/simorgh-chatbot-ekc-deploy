@@ -208,11 +208,14 @@ services:
     working_dir: /app
     command: >
       sh -c "
+        echo 'Starting CocoIndex setup...' &&
         apt-get update && apt-get install -y git build-essential curl &&
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y &&
-        . /root/.cargo/env &&
         rm -rf /tmp/coco || true &&
-        git clone --depth 1 https://github.com/cocoindex-io/cocoindex.git /tmp/coco &&
+        echo 'Downloading Rust installer...' &&
+        (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || (echo 'WARNING: Rust install failed - network issue. CocoIndex disabled.' && tail -f /dev/null)) &&
+        . /root/.cargo/env &&
+        echo 'Cloning CocoIndex...' &&
+        (git clone --depth 1 https://github.com/cocoindex-io/cocoindex.git /tmp/coco || (echo 'WARNING: CocoIndex clone failed - network issue. Service disabled.' && tail -f /dev/null)) &&
         cd /tmp/coco &&
         pip install --no-cache-dir . openai &&
         cd /app &&
