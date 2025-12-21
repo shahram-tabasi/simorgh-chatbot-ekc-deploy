@@ -141,7 +141,8 @@ class DocumentChunker:
         # Pattern to ignore auto-generated page number headings from doc-processor
         page_heading_pattern = r'^#{1,6}\s+Page\s+\d+\s*$'
         # Pattern to detect numbered sections (e.g., "1. SCOPE", "2.1 Design", "3.4.2. Implementation")
-        numbered_section_pattern = r'^(\d+(?:\.\d+)*)\.\s+([A-Z][A-Z\s]+[A-Z])$'
+        # Matches both all-caps and mixed-case: "1. SCOPE", "1.2.1. Structure", "2.1. Design criteria"
+        numbered_section_pattern = r'^(\d+(?:\.\d+)*)\.\s+([A-Z][A-Za-z\s/\-()]+)$'
 
         lines = markdown_content.split('\n')
         current_section = {
@@ -454,7 +455,8 @@ class DocumentChunker:
         # Pattern to ignore auto-generated page number headings from doc-processor
         page_heading_pattern = r'^#{1,6}\s+Page\s+\d+\s*$'
         # Pattern to detect numbered sections (e.g., "1. SCOPE", "2.1 Design", "3.4.2. Implementation")
-        numbered_section_pattern = r'^(\d+(?:\.\d+)*)\.\s+([A-Z][A-Z\s]+[A-Z])$'
+        # Matches both all-caps and mixed-case: "1. SCOPE", "1.2.1. Structure", "2.1. Design criteria"
+        numbered_section_pattern = r'^(\d+(?:\.\d+)*)\.\s+([A-Z][A-Za-z\s/\-()]+)$'
 
         lines = markdown_content.split('\n')
         sections: List[HierarchicalSection] = []
