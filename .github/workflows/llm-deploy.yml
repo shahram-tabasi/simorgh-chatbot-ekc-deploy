@@ -211,7 +211,7 @@ jobs:
 
           echo "Cleaning up central server..."
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "rm /tmp/deploy-${{ matrix.server.name }}.tar.gz"
+            "rm -f /tmp/deploy-${{ matrix.server.name }}.tar.gz" || true
 
           echo "Cleaning up local..."
           rm "$TAR_FILE"
