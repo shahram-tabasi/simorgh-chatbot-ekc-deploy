@@ -18,6 +18,11 @@ from services.neo4j_service import Neo4jService, get_neo4j_service
 from services.redis_service import RedisService, get_redis_service
 from services.llm_service import LLMService, get_llm_service
 from services.doc_processor_client import DocProcessorClient
+from services.section_retriever import SectionRetriever
+from services.document_overview_service import DocumentOverviewService
+from services.graph_builder import GraphBuilder
+from services.guide_executor import GuideExecutor
+from services.qdrant_service import QdrantService
 from services.document_classifier import DocumentClassifier
 from services.vector_rag import VectorRAG
 from services.graph_rag import GraphRAG
@@ -88,10 +93,29 @@ async def process_and_index_document(
     classifier: DocumentClassifier,
     vector_rag: Optional[VectorRAG],
     graph_init: Optional[ProjectGraphInitializer],
-    neo4j_service: Neo4jService
+    neo4j_service: Neo4jService,
+    redis_service: Optional[RedisService] = None,
+    llm_service: Optional[LLMService] = None,
+    use_enhanced_pipeline: bool = True
 ) -> Dict[str, Any]:
     """
-    Process document and index based on type (general or project)
+    ENHANCED: Process document with section extraction, summarization, and entity extraction
+
+    Args:
+        file_path: Path to document file
+        user_id: User ID who uploaded the document
+        project_oenum: Optional project number
+        doc_processor: Document processor client
+        classifier: Document classifier
+        vector_rag: Optional vector RAG service (for fallback)
+        graph_init: Optional graph initializer
+        neo4j_service: Neo4j service
+        redis_service: Optional Redis service (for enhanced pipeline)
+        llm_service: Optional LLM service (for enhanced pipeline)
+        use_enhanced_pipeline: If True, use section-based processing (default: True)
+
+    Returns:
+        Result dictionary with processing statistics
     """
     try:
         # 1. Process to markdown
@@ -112,39 +136,64 @@ async def process_and_index_document(
         )
 
         doc_id = str(uuid.uuid4())
+        chunks_indexed = 0
 
-        # 3. Index based on type
-        if project_oenum:
-            # Project document - add to graph structure
-            logger.info(f"📊 Adding to project graph: {project_oenum}")
+        # ============================================================
+        # ✅ ENHANCED: Use Section-based Processing
+        # ============================================================
+        if use_enhanced_pipeline and llm_service and redis_service:
+            logger.info(f"🚀 Starting ENHANCED document processing pipeline")
 
-            # Add document node to graph
-            if graph_init:
-                success = graph_init.add_document_to_structure(
-                    project_oenum=project_oenum,
-                    category=category,
-                    doc_type=doc_type,
+            try:
+                # Initialize enhanced services with LLM-based embeddings
+                qdrant = QdrantService(llm_service=llm_service)
+                section_retriever = SectionRetriever(
+                    llm_service=llm_service,
+                    qdrant_service=qdrant
+                )
+                doc_overview = DocumentOverviewService(redis_service=redis_service)
+
+                # Extract sections + generate summaries + store in Qdrant
+                processing_result = section_retriever.process_and_store_document(
+                    markdown_content=markdown_content,
+                    project_number=project_oenum or "general",
                     document_id=doc_id,
-                    document_metadata={
-                        'filename': file_path.name,
-                        'doc_type': doc_type,
-                        'category': category,
-                        'confidence': confidence,
-                        'markdown_path': output_path,
-                        'uploaded_by': user_id
-                    }
+                    filename=file_path.name,
+                    document_type_hint=f"{doc_type} Document",
+                    llm_mode="offline"  # Use local LLM by default
                 )
 
-                if not success:
-                    logger.warning(f"⚠️ Failed to add document to graph structure")
+                if processing_result.get("success"):
+                    chunks_indexed = processing_result.get("sections_extracted", 0)
+                    logger.info(f"✅ Enhanced processing complete: {chunks_indexed} sections")
 
-            chunks_indexed = None
+                    # Track document in overview
+                    summary_stats = processing_result.get("summary_stats", {})
+                    doc_overview.add_document(
+                        document_id=doc_id,
+                        filename=file_path.name,
+                        document_type=doc_type,
+                        category=category,
+                        key_topics=summary_stats.get("total_subjects", 0),
+                        sections_count=chunks_indexed,
+                        total_chars=len(markdown_content),
+                        project_number=project_oenum,
+                        user_id=user_id
+                    )
+                else:
+                    logger.warning(f"⚠️ Enhanced processing failed: {processing_result.get('error')}")
+                    raise Exception("Enhanced processing failed, falling back to basic indexing")
 
-        else:
-            # General document - index to Qdrant
-            logger.info(f"📥 Indexing to Qdrant for user: {user_id}")
+            except Exception as enhanced_error:
+                logger.warning(f"⚠️ Enhanced pipeline error: {enhanced_error}, falling back to basic indexing")
+                use_enhanced_pipeline = False
 
-            if vector_rag:
+        # ============================================================
+        # Fallback to Basic Indexing (if enhanced disabled or failed)
+        # ============================================================
+        if not use_enhanced_pipeline:
+            if vector_rag and not project_oenum:
+                logger.info(f"📥 Using BASIC indexing to Qdrant")
                 index_result = await vector_rag.index_document(
                     markdown_content=markdown_content,
                     user_id=user_id,
@@ -152,12 +201,79 @@ async def process_and_index_document(
                     doc_id=doc_id
                 )
 
-                if not index_result.get('success'):
-                    raise Exception(f"Vector indexing failed: {index_result.get('error')}")
+                if index_result.get('success'):
+                    chunks_indexed = index_result.get('chunks_indexed', 0)
+                else:
+                    logger.warning(f"⚠️ Vector indexing failed: {index_result.get('error')}")
 
-                chunks_indexed = index_result.get('chunks_indexed')
-            else:
-                chunks_indexed = None
+        # 3. Add to graph structure if project document
+        if project_oenum and graph_init:
+            logger.info(f"📊 Adding to project graph: {project_oenum}")
+
+            success = graph_init.add_document_to_structure(
+                project_oenum=project_oenum,
+                category=category,
+                doc_type=doc_type,
+                document_id=doc_id,
+                document_metadata={
+                    'filename': file_path.name,
+                    'doc_type': doc_type,
+                    'category': category,
+                    'confidence': confidence,
+                    'markdown_path': output_path,
+                    'uploaded_by': user_id,
+                    'sections_extracted': chunks_indexed
+                }
+            )
+
+            if not success:
+                logger.warning(f"⚠️ Failed to add document to graph structure")
+
+            # ============================================================
+            # ✅ ENHANCED: Extract entities for technical documents
+            # ============================================================
+            if use_enhanced_pipeline and doc_type in ["Spec", "Drawing", "Technical"]:
+                logger.info(f"🔍 Extracting entities from {doc_type} document")
+
+                try:
+                    graph_builder = GraphBuilder(neo4j_service.driver)
+                    entity_result = graph_builder.extract_entities_from_spec(
+                        project_oenum=project_oenum,
+                        document_id=doc_id,
+                        spec_content=markdown_content,
+                        filename=file_path.name,
+                        llm_mode="offline"
+                    )
+
+                    if entity_result.get("success"):
+                        entities_count = len(entity_result.get('entities', []))
+                        logger.info(f"✅ Extracted {entities_count} entities")
+                except Exception as e:
+                    logger.warning(f"⚠️ Entity extraction failed: {e}")
+
+                # ✅ ENHANCED: Execute extraction guides for Spec documents
+                if use_enhanced_pipeline and doc_type == "Spec" and category == "Client" and llm_service:
+                    logger.info(f"📋 Executing extraction guides for spec document")
+
+                    try:
+                        qdrant = QdrantService(llm_service=llm_service)
+                        guide_executor = GuideExecutor(
+                            neo4j_driver=neo4j_service.driver,
+                            qdrant_service=qdrant,
+                            llm_service=llm_service
+                        )
+
+                        guide_result = guide_executor.execute_all_guides(
+                            project_number=project_oenum,
+                            document_id=doc_id,
+                            llm_mode="offline"
+                        )
+
+                        if guide_result.get("success"):
+                            extracted_count = guide_result.get('extracted_count', 0)
+                            logger.info(f"✅ Extracted {extracted_count} spec values using guides")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Guide execution failed: {e}")
 
         return {
             "success": True,
@@ -167,11 +283,12 @@ async def process_and_index_document(
             "category": category,
             "confidence": confidence,
             "chunks_indexed": chunks_indexed,
-            "message": f"Document processed and indexed successfully"
+            "processing_method": "enhanced" if use_enhanced_pipeline else "basic",
+            "message": f"Document processed with {'enhanced' if use_enhanced_pipeline else 'basic'} pipeline"
         }
 
     except Exception as e:
-        logger.error(f"❌ Document processing failed: {e}")
+        logger.error(f"❌ Document processing failed: {e}", exc_info=True)
         return {
             "success": False,
             "error": str(e)
@@ -190,13 +307,14 @@ async def upload_document(
     project_oenum: Optional[str] = Form(None),
     current_user: str = Depends(get_current_user),
     neo4j_service: Neo4jService = Depends(get_neo4j_service),
-    redis_service: RedisService = Depends(get_redis_service)
+    redis_service: RedisService = Depends(get_redis_service),
+    llm_service: LLMService = Depends(get_llm_service)
 ):
     """
-    Upload and process document
+    ENHANCED: Upload and process document with section-based extraction
 
-    - For general chats: Indexes to Qdrant vector store
-    - For project chats: Adds to Neo4j project graph structure
+    - For general chats: Indexes to Qdrant with section summaries
+    - For project chats: Adds to Neo4j + extracts entities + runs extraction guides
 
     Args:
         file: Document file (PDF, image, Word, Excel, text)
@@ -224,10 +342,10 @@ async def upload_document(
         # Initialize services
         doc_processor = DocProcessorClient()
         classifier = DocumentClassifier()
-        vector_rag = VectorRAG() if not project_oenum else None
+        vector_rag = VectorRAG(llm_service=llm_service) if not project_oenum else None
         graph_init = ProjectGraphInitializer(neo4j_service.driver) if project_oenum and neo4j_service else None
 
-        # Process and index
+        # ✅ ENHANCED: Process with enhanced pipeline (section extraction, entities, guides)
         result = await process_and_index_document(
             file_path=temp_path,
             user_id=user_id,
@@ -236,7 +354,10 @@ async def upload_document(
             classifier=classifier,
             vector_rag=vector_rag,
             graph_init=graph_init,
-            neo4j_service=neo4j_service
+            neo4j_service=neo4j_service,
+            redis_service=redis_service,  # ✅ ADD
+            llm_service=llm_service,      # ✅ ADD
+            use_enhanced_pipeline=True    # ✅ ADD
         )
 
         # Clean up temp file in background
@@ -276,8 +397,8 @@ async def general_chat(
         )
 
     try:
-        # Initialize vector RAG
-        vector_rag = VectorRAG()
+        # Initialize vector RAG with LLM-based embeddings
+        vector_rag = VectorRAG(llm_service=llm_service)
 
         # Search for relevant chunks
         logger.info(f"🔍 Searching for relevant chunks: {request.message[:50]}...")
@@ -372,8 +493,8 @@ async def project_chat(
         logger.info(f"📊 Querying project graph: {request.project_oenum}")
 
         if request.use_hybrid:
-            # Hybrid: Graph + Vector
-            vector_rag = VectorRAG()
+            # Hybrid: Graph + Vector with LLM-based embeddings
+            vector_rag = VectorRAG(llm_service=llm_service)
             vector_results = await vector_rag.search(
                 query=request.message,
                 user_id=request.user_id,

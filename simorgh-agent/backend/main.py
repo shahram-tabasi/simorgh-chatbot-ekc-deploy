@@ -402,9 +402,33 @@ async def create_project(
 
         logger.info(f"✅ User {current_user} created project: {project.project_name}")
 
+        # ============================================================
+        # ✅ ENHANCED: Initialize extraction guides for the project
+        # ============================================================
+        try:
+            logger.info(f"📋 Initializing extraction guides for project {project.project_number}")
+
+            from services.document_processing_integration import initialize_project_guides
+
+            guides_initialized = initialize_project_guides(
+                neo4j_driver=neo4j.driver,
+                project_number=project.project_number
+            )
+
+            if guides_initialized:
+                logger.info(f"✅ Initialized {guides_initialized} extraction guides for project")
+            else:
+                logger.warning(f"⚠️ No extraction guides initialized (function returned 0)")
+
+        except Exception as guides_error:
+            # Don't fail project creation if guides initialization fails
+            logger.error(f"❌ Failed to initialize extraction guides: {guides_error}")
+            # Continue - guides can be initialized later if needed
+
         return {
             "status": "success",
-            "project": project_node
+            "project": project_node,
+            "guides_initialized": guides_initialized if 'guides_initialized' in locals() else 0
         }
 
     except HTTPException:

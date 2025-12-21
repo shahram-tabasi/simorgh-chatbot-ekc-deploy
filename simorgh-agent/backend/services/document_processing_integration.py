@@ -31,9 +31,12 @@ logger = logging.getLogger(__name__)
 _qdrant_service = None
 
 
-def get_qdrant_service() -> QdrantService:
+def get_qdrant_service(llm_service: Optional[LLMService] = None) -> QdrantService:
     """
     Get or initialize global Qdrant service instance
+
+    Args:
+        llm_service: Optional LLMService for LLM-based embeddings (recommended)
 
     Returns:
         QdrantService instance
@@ -45,7 +48,8 @@ def get_qdrant_service() -> QdrantService:
         _qdrant_service = QdrantService(
             qdrant_url=os.getenv("QDRANT_URL", "localhost"),
             qdrant_api_key=os.getenv("QDRANT_API_KEY"),
-            embedding_model=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+            embedding_model=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+            llm_service=llm_service  # ✅ Use LLM-based embeddings if provided
         )
         logger.info("✅ Qdrant service initialized")
 
@@ -176,7 +180,7 @@ def process_enhanced_spec_extraction(
             db="cache"
         )
 
-        qdrant = get_qdrant_service()
+        qdrant = get_qdrant_service(llm_service=llm_service)
         section_retriever = SectionRetriever(
             llm_service=llm_service,
             qdrant_service=qdrant

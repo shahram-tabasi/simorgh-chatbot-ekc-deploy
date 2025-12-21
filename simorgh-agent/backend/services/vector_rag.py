@@ -33,27 +33,52 @@ class VectorRAG:
         self,
         qdrant_url: str = None,
         openai_api_key: str = None,
-        collection_name: str = "general_docs"
+        collection_name: str = "general_docs",
+        llm_service=None,
+        embedding_dim: Optional[int] = None
     ):
         """
         Initialize Vector RAG
 
         Args:
             qdrant_url: Qdrant service URL
-            openai_api_key: OpenAI API key for embeddings
+            openai_api_key: OpenAI API key for embeddings (fallback if no llm_service)
             collection_name: Qdrant collection name
+            llm_service: Optional LLMService instance for LLM-based embeddings
+            embedding_dim: Optional explicit embedding dimension (auto-detected if not provided)
         """
         self.qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://qdrant:6333")
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.collection_name = collection_name
 
-        # Initialize clients
+        # Initialize Qdrant client
         self.qdrant = QdrantClient(url=self.qdrant_url)
-        openai.api_key = self.openai_api_key
 
-        # Embedding configuration
-        self.embedding_model = "text-embedding-3-small"  # 1536 dimensions, fast
-        self.embedding_dim = 1536
+        # Initialize embedding generation
+        self.llm_service = llm_service
+
+        if self.llm_service:
+            # Use LLM-based embeddings (better for domain-specific content)
+            logger.info(f"🔄 Using LLM-based embeddings for VectorRAG")
+
+            # Get embedding dimension
+            if embedding_dim:
+                self.embedding_dim = embedding_dim
+                logger.info(f"✅ LLM embeddings configured (dimension: {self.embedding_dim})")
+            else:
+                # Auto-detect dimension by generating a test embedding
+                logger.info(f"🔄 Auto-detecting embedding dimension...")
+                test_embedding = self.llm_service.generate_embedding("test")
+                self.embedding_dim = len(test_embedding)
+                logger.info(f"✅ LLM embeddings configured (auto-detected dimension: {self.embedding_dim})")
+
+            self.embedding_model = None  # Not using direct OpenAI API
+        else:
+            # Fallback to direct OpenAI embeddings (legacy mode)
+            openai.api_key = self.openai_api_key
+            self.embedding_model = "text-embedding-3-small"  # 1536 dimensions, fast
+            self.embedding_dim = 1536
+            logger.info(f"✅ Using OpenAI embeddings: {self.embedding_model}")
 
         # Chunking configuration
         self.chunk_size = 1000  # characters
@@ -194,7 +219,10 @@ class VectorRAG:
 
     async def embed_text(self, text: str) -> List[float]:
         """
-        Generate embedding for text using OpenAI
+        Generate embedding for text
+
+        Uses LLM-based embeddings if llm_service is configured,
+        otherwise falls back to direct OpenAI API.
 
         Args:
             text: Text to embed
@@ -203,11 +231,17 @@ class VectorRAG:
             Embedding vector
         """
         try:
-            response = openai.Embedding.create(
-                model=self.embedding_model,
-                input=text
-            )
-            return response['data'][0]['embedding']
+            if self.llm_service:
+                # Use LLM-based embeddings for better domain-specific understanding
+                embedding = self.llm_service.generate_embedding(text)
+                return embedding
+            else:
+                # Fallback to direct OpenAI API (legacy mode)
+                response = openai.Embedding.create(
+                    model=self.embedding_model,
+                    input=text
+                )
+                return response['data'][0]['embedding']
         except Exception as e:
             logger.error(f"❌ Embedding failed: {e}")
             raise
