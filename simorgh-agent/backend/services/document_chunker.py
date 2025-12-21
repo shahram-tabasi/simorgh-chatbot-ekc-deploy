@@ -138,6 +138,10 @@ class DocumentChunker:
 
         # Regex pattern for markdown headings (# to ######)
         heading_pattern = r'^(#{1,6})\s+(.+)$'
+        # Pattern to ignore auto-generated page number headings from doc-processor
+        page_heading_pattern = r'^#{1,6}\s+Page\s+\d+\s*$'
+        # Pattern to detect numbered sections (e.g., "1. SCOPE", "2.1 Design", "3.4.2. Implementation")
+        numbered_section_pattern = r'^(\d+(?:\.\d+)*)\.\s+([A-Z][A-Z\s]+[A-Z])$'
 
         lines = markdown_content.split('\n')
         current_section = {
@@ -147,8 +151,15 @@ class DocumentChunker:
         }
 
         for line in lines:
-            # Check if line is a heading
+            # Skip page number headings added by doc-processor
+            if re.match(page_heading_pattern, line, re.IGNORECASE):
+                logger.debug(f"Skipping auto-generated page heading: {line}")
+                continue
+
+            # Check if line is a markdown heading
             match = re.match(heading_pattern, line, re.MULTILINE)
+            # Check if line is a numbered section (e.g., "1. SCOPE")
+            numbered_match = re.match(numbered_section_pattern, line.strip())
 
             if match:
                 # Save previous section if it has content
@@ -165,6 +176,25 @@ class DocumentChunker:
                     "heading_level": heading_level,
                     "content": []
                 }
+            elif numbered_match:
+                # Handle numbered sections
+                # Save previous section if it has content
+                if current_section["content"]:
+                    current_section["content"] = '\n'.join(current_section["content"])
+                    sections.append(current_section)
+
+                # Parse numbered section
+                section_number = numbered_match.group(1)
+                heading_text = f"{section_number}. {numbered_match.group(2).strip()}"
+                heading_level = len(section_number.split('.')) + 1
+
+                current_section = {
+                    "heading": heading_text,
+                    "heading_level": heading_level,
+                    "content": []
+                }
+
+                logger.debug(f"Detected numbered section: {heading_text}")
             else:
                 # Add line to current section
                 current_section["content"].append(line)
@@ -421,6 +451,10 @@ class DocumentChunker:
 
         # Regex pattern for markdown headings
         heading_pattern = r'^(#{1,6})\s+(.+)$'
+        # Pattern to ignore auto-generated page number headings from doc-processor
+        page_heading_pattern = r'^#{1,6}\s+Page\s+\d+\s*$'
+        # Pattern to detect numbered sections (e.g., "1. SCOPE", "2.1 Design", "3.4.2. Implementation")
+        numbered_section_pattern = r'^(\d+(?:\.\d+)*)\.\s+([A-Z][A-Z\s]+[A-Z])$'
 
         lines = markdown_content.split('\n')
         sections: List[HierarchicalSection] = []
@@ -435,10 +469,18 @@ class DocumentChunker:
         }
 
         for line_idx, line in enumerate(lines):
-            # Check if line is a heading
+            # Skip page number headings added by doc-processor
+            if re.match(page_heading_pattern, line, re.IGNORECASE):
+                logger.debug(f"Skipping auto-generated page heading: {line}")
+                continue
+
+            # Check if line is a markdown heading
             match = re.match(heading_pattern, line, re.MULTILINE)
+            # Check if line is a numbered section (e.g., "1. SCOPE")
+            numbered_match = re.match(numbered_section_pattern, line.strip())
 
             if match:
+                # Handle markdown headings
                 # Save previous section if it has content
                 if current_section["content_lines"]:
                     content = '\n'.join(current_section["content_lines"]).strip()
@@ -486,6 +528,60 @@ class DocumentChunker:
                     "section_id": section_id,
                     "parent_section_id": parent_section_id
                 }
+            elif numbered_match:
+                # Handle numbered sections (e.g., "1. SCOPE", "2.1. DESIGN")
+                # Save previous section if it has content
+                if current_section["content_lines"]:
+                    content = '\n'.join(current_section["content_lines"]).strip()
+                    if content:  # Only save non-empty sections
+                        sections.append(HierarchicalSection(
+                            section_id=current_section["section_id"],
+                            heading=current_section["heading"],
+                            heading_level=current_section["heading_level"],
+                            content=content,
+                            parent_section_id=current_section["parent_section_id"],
+                            subsections=[],  # Will be populated later
+                            metadata={
+                                "document_id": document_id,
+                                "filename": filename,
+                                "char_count": len(content),
+                                "line_start": line_idx - len(current_section["content_lines"]),
+                                "line_end": line_idx
+                            }
+                        ))
+
+                # Parse numbered section
+                section_number = numbered_match.group(1)  # e.g., "1" or "2.1"
+                heading_text = f"{section_number}. {numbered_match.group(2).strip()}"
+
+                # Determine heading level based on section number depth (1 = level 2, 1.1 = level 3, etc.)
+                heading_level = len(section_number.split('.')) + 1
+                section_id = str(uuid.uuid4())
+
+                # Determine parent based on heading hierarchy
+                parent_section_id = None
+
+                # Pop sections from stack that are at same or lower level
+                while section_stack and section_stack[-1][0] >= heading_level:
+                    section_stack.pop()
+
+                # Parent is the section at top of stack (if any)
+                if section_stack:
+                    parent_section_id = section_stack[-1][1]
+
+                # Add current section to stack
+                section_stack.append((heading_level, section_id))
+
+                # Start new section
+                current_section = {
+                    "heading": heading_text,
+                    "heading_level": heading_level,
+                    "content_lines": [],
+                    "section_id": section_id,
+                    "parent_section_id": parent_section_id
+                }
+
+                logger.debug(f"Detected numbered section: {heading_text} (level {heading_level})")
             else:
                 # Add line to current section content
                 current_section["content_lines"].append(line)
