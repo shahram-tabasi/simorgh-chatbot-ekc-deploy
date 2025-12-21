@@ -31,7 +31,10 @@ export function ChatArea({
   editingMessage = null
 }: ChatAreaProps) {
   const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
-  const showWelcome = messages.length === 0;
+  // Track chatting state: starts as false (idle), becomes true after first message send
+  const [isChatting, setIsChatting] = React.useState(false);
+
+  const isIdle = messages.length === 0 && !isChatting;
 
   const handlePromptClick = (prompt: string) => {
     if (!disabled) {
@@ -41,50 +44,35 @@ export function ChatArea({
     }
   };
 
+  // Wrap onSendMessage to detect first send
+  const handleSend = React.useCallback((content: string, files?: UploadedFile[]) => {
+    // If this is the first message (idle state), transition to chatting
+    if (isIdle) {
+      setIsChatting(true);
+    }
+    onSendMessage(content, files);
+  }, [isIdle, onSendMessage]);
+
+  // Reset to idle when messages are cleared
+  React.useEffect(() => {
+    if (messages.length === 0) {
+      setIsChatting(false);
+    }
+  }, [messages.length]);
+
   return (
     <div className="flex-1 flex flex-col h-full relative">
-      {showWelcome ? (
-        <AnimatePresence mode="wait">
-          <motion.div
-            key="welcome"
-            initial={{ opacity: 1 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.3 }}
-            className="flex-1 flex flex-col h-full"
-          >
-            <div className="flex-1 flex items-center justify-center w-full">
-              <WelcomeScreen onHide={() => {}} onPromptClick={handlePromptClick} />
-            </div>
+      {/* Container with layout driven by isIdle state */}
+      <div className={`flex-1 flex flex-col h-full ${isIdle ? '' : 'overflow-hidden'}`}>
+        {/* Welcome content - visible only in idle state */}
+        {isIdle && (
+          <div className="flex-1 flex items-center justify-center w-full">
+            <WelcomeScreen onHide={() => {}} onPromptClick={handlePromptClick} />
+          </div>
+        )}
 
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              transition={{ delay: 0.2, duration: 0.4 }}
-              className="w-full flex justify-center mb-6 sm:mb-8 md:mb-12 lg:mb-16 pb-safe flex-shrink-0"
-            >
-              <div className="w-full max-w-3xl px-2 sm:px-4">
-                <ChatInput
-                  onSend={onSendMessage}
-                  onCancel={onCancelGeneration}
-                  disabled={disabled || isTyping}
-                  isGenerating={isTyping}
-                  editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
-                  promptToInsert={promptToInsert}
-                  centered
-                />
-              </div>
-            </motion.div>
-          </motion.div>
-        </AnimatePresence>
-      ) : (
-        <motion.div
-          key="chat"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.3 }}
-          className="flex-1 flex flex-col h-full overflow-hidden"
-        >
+        {/* Message list - visible only in chatting state */}
+        {!isIdle && (
           <div className="flex-1 overflow-y-auto px-2 sm:px-4 md:px-8 lg:px-20 pt-4 pb-2">
             <MessageList
               messages={messages}
@@ -95,21 +83,27 @@ export function ChatArea({
               onEditMessage={onEditMessage}
             />
           </div>
+        )}
 
-          <div className="w-full flex justify-center pb-4 sm:pb-6 md:pb-8 mb-safe flex-shrink-0">
-            <div className="w-full max-w-4xl px-2 sm:px-4">
-              <ChatInput
-                onSend={onSendMessage}
-                onCancel={onCancelGeneration}
-                disabled={disabled || isTyping}
-                isGenerating={isTyping}
-                editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
-                promptToInsert={promptToInsert}
-              />
-            </div>
+        {/* Single ChatInput instance - position changes based on state */}
+        <div className={`w-full flex-shrink-0 ${
+          isIdle
+            ? 'flex justify-center mb-6 sm:mb-8 md:mb-12 lg:mb-16 pb-safe'
+            : 'flex justify-center pb-4 sm:pb-6 md:pb-8 mb-safe'
+        }`}>
+          <div className={`w-full px-2 sm:px-4 ${isIdle ? 'max-w-3xl' : 'max-w-4xl'}`}>
+            <ChatInput
+              onSend={handleSend}
+              onCancel={onCancelGeneration}
+              disabled={disabled || isTyping}
+              isGenerating={isTyping}
+              editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
+              promptToInsert={promptToInsert}
+              centered={isIdle}
+            />
           </div>
-        </motion.div>
-      )}
+        </div>
+      </div>
     </div>
   );
 }
