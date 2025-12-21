@@ -13,6 +13,7 @@ interface ChatInputProps {
   centered?: boolean;
   isGenerating?: boolean;
   editMessage?: { content: string; files?: UploadedFile[] } | null;
+  promptToInsert?: string | null;
 }
 
 export function ChatInput({
@@ -21,7 +22,8 @@ export function ChatInput({
   disabled,
   centered = false,
   isGenerating = false,
-  editMessage = null
+  editMessage = null,
+  promptToInsert = null
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -50,6 +52,22 @@ export function ChatInput({
       }, 100);
     }
   }, [editMessage]);
+
+  // Insert prompt when provided (for suggested prompts like SPEC)
+  useEffect(() => {
+    if (promptToInsert) {
+      setMessage(promptToInsert);
+      // Focus textarea after setting message
+      setTimeout(() => {
+        textareaRef.current?.focus();
+        // Move cursor to end
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = promptToInsert.length;
+          textareaRef.current.selectionEnd = promptToInsert.length;
+        }
+      }, 100);
+    }
+  }, [promptToInsert]);
 
   // Auto-resize textarea
   useEffect(() => {

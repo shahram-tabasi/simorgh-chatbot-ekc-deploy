@@ -30,11 +30,14 @@ export function ChatArea({
   disabled = false,
   editingMessage = null
 }: ChatAreaProps) {
+  const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
   const showWelcome = messages.length === 0;
 
   const handlePromptClick = (prompt: string) => {
     if (!disabled) {
-      onSendMessage(prompt);
+      setPromptToInsert(prompt);
+      // Reset after a brief moment to allow the effect to trigger
+      setTimeout(() => setPromptToInsert(null), 100);
     }
   };
 
@@ -49,7 +52,7 @@ export function ChatArea({
             transition={{ duration: 0.3 }}
             className="flex-1 flex flex-col h-full"
           >
-            <div className="flex-1 flex items-center justify-center w-full overflow-y-auto">
+            <div className="flex-1 flex items-center justify-center w-full">
               <WelcomeScreen onHide={() => {}} onPromptClick={handlePromptClick} />
             </div>
 
@@ -67,6 +70,7 @@ export function ChatArea({
                   disabled={disabled || isTyping}
                   isGenerating={isTyping}
                   editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
+                  promptToInsert={promptToInsert}
                   centered
                 />
               </div>
@@ -100,6 +104,7 @@ export function ChatArea({
                 disabled={disabled || isTyping}
                 isGenerating={isTyping}
                 editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
+                promptToInsert={promptToInsert}
               />
             </div>
           </div>
