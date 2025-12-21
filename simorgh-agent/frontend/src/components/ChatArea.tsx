@@ -1,6 +1,6 @@
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { WelcomeScreen } from './WelcomeScreen';
+import WelcomeScreen from './WelcomeScreen';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
 import { Message, UploadedFile } from '../types';
