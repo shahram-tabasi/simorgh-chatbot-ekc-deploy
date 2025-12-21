@@ -192,7 +192,8 @@ class LLMService:
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         use_cache: bool = True,
-        cache_ttl: int = 3600
+        cache_ttl: int = 3600,
+        inject_knowledge: bool = False
     ) -> Dict[str, Any]:
         """
         Generate LLM response
@@ -204,6 +205,7 @@ class LLMService:
             max_tokens: Maximum tokens to generate
             use_cache: Whether to use Redis cache
             cache_ttl: Cache lifetime in seconds
+            inject_knowledge: If True, inject electrical knowledge base into system prompt
 
         Returns:
             {
@@ -219,6 +221,34 @@ class LLMService:
             }
         """
         self.stats["total_requests"] += 1
+
+        # Inject electrical knowledge base if requested
+        if inject_knowledge:
+            try:
+                from knowledge.electrical_anthology import get_knowledge_context
+                knowledge = get_knowledge_context()
+
+                # Find system message and append knowledge
+                system_message_found = False
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        # Append knowledge to existing system message
+                        msg["content"] += f"\n\n## Reference Knowledge Base\n{knowledge}"
+                        system_message_found = True
+                        logger.info("✅ Injected electrical knowledge into existing system message")
+                        break
+
+                if not system_message_found:
+                    # No system message exists, add one with knowledge
+                    messages.insert(0, {
+                        "role": "system",
+                        "content": f"You are Simorgh, an expert electrical engineering assistant.\n\n## Reference Knowledge Base\n{knowledge}"
+                    })
+                    logger.info("✅ Injected electrical knowledge in new system message")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to inject knowledge base: {e}")
+                # Continue without knowledge injection
 
         # Determine mode
         effective_mode = LLMMode(mode) if mode else self.default_mode
