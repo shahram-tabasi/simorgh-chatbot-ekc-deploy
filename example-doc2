@@ -1,0 +1,2371 @@
+# e5c31bd6-b0fc-43aa-b388-cb81a2e1523a_Technical Specification for 6.6KV Switchgears.pdf
+
+**Source:** e5c31bd6-b0fc-43aa-b388-cb81a2e1523a_Technical Specification for 6.6KV Switchgears.pdf
+**User:** m.soltani
+**Processed:** 2025-12-21 08:08:42
+
+---
+
+## Page 1
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 1 27 |
+
+|  |  |  |  |  |  |  |
+| --- | --- | --- | --- | --- | --- | --- |
+|  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |
+| REV. | DATE | DESCRIPTION | PREP. | CHECK | APPR. | PROJ. |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 1 27
+
+347180ETS802
+
+A
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+Technical Specification for 6.6kV Switchgears
+
+REV. DATE DESCRIPTION PREP. CHECK APPR. PROJ.
+
+[Type here]
+
+---
+
+## Page 2
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 2 27 |
+
+| SHEET | Rev. A | Rev. B |  |  |  |  |  | SHEET |  |  |  |  |  |  |  |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 2 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 3 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 4 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 5 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 6 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 7 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 8 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 9 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 10 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 11 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 12 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 13 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 14 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 15 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 16 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 17 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 18 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 19 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 20 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 21 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 22 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 23 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 24 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 25 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 26 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 27 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 28 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 29 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 30 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 31 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 32 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 33 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 34 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 35 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 36 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 37 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 38 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 39 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 40 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 41 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 42 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 43 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 44 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 45 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 2 27
+
+347180ETS802
+
+A
+
+TABULATION OF REVISED PAGES
+
+SHEET Rev. Rev. SHEET
+
+A B
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+25
+
+26
+
+27
+
+28
+
+29
+
+30
+
+31
+
+32
+
+33
+
+34
+
+35
+
+36
+
+37
+
+38
+
+39
+
+40
+
+41
+
+42
+
+43
+
+44
+
+45
+
+[Type here]
+
+---
+
+## Page 3
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 3 27 |
+
+| 46 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 47 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 48 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| 49 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 3 27
+
+347180ETS802
+
+A
+
+46
+
+47
+
+48
+
+49
+
+1. Scope
+
+The scope of work covers the design and fabrication for 6.6kV switchgears.
+
+1.1. General
+
+The purpose of this document is to identify technical specification for 6.6kV switchgears
+
+shall be assuring a safe and reliable supply of electric power to the users.
+
+• The 6.6kV switch gear distribution boards shall generally comprise adequately rated
+
+circuit-breakers for incoming, outgoing and bus sectionalizing circuits as required.
+
+• The distribution boards shall be complete with draw out type circuit-
+
+breakers/contactors.
+
+• The distribution boards shall be so constructed that requisite electrical clearances
+
+are kept between any two live parts and between any live part and earth as
+
+specified in the applicable standards.
+
+• The units shall be constructed to provide for interchangeability of corresponding
+
+parts. However, in draw-out type switchgear distribution boards containing circuit-
+
+breakers/contactors, it shall not be possible to insert circuit-breaker/contactor
+
+trucks with circuit- breakers/contactors of lower current rating into cubicles rated
+
+for high currents.
+
+• The current transformers (CTs) shall be mounted on the side of the breaker/ isolator
+
+away from the main bus bars so as to allow safe and easy access of personnel. CT
+
+secondary leads shall be brought to a short-circuiting type terminal board provided
+
+for testing purpose, before connecting to their respective circuits.
+
+• The cable termination shall be contained within the concerned cubicle forming an
+
+integral part thereof mounted in the rear and shall be freely accessible for cable
+
+[Type here]
+
+---
+
+## Page 4
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 4 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 4 27
+
+347180ETS802
+
+A
+
+connection. The cable termination chamber shall have adequate space for
+
+termination of the required number, type and size of cables and shall be provided
+
+with suitable bracing so that the weight of the cables does not unduly stress the
+
+terminals. Provision shall be made for earthing of cables of outgoing feeder circuits
+
+over earthing switch duly interlocked with the circuit- breakers/ isolators at both
+
+ends of the cable feeder to ensure that none of the breaker/isolators can be
+
+switched on when the Earthing switch is on and vice versa.
+
+• All low voltage internal wiring of the distribution board shall be of stranded copper
+
+conductor PVC insulated and PVC sheathed wires of core size not less than 2.mm 52
+
+for CT connections, 1.mm 5for 2 other connections. The terminal blocks shall be
+
+conveniently located and not more than two wires shall be connected to one
+
+terminal. Separate blocks shall be provided for distribution of control power. Each
+
+terminal block shall be provided with at least percent 20 spare terminals. All
+
+terminals and links shall be arranged to facilitate easy checking and testing of relays,
+
+instruments etc.
+
+• Control cables within the distribution board shall be carried in flexible conduits or
+
+troughs which shall be accessible for cable replacement and shall be fitted away
+
+from electrical flash-over zones in the board.
+
+• A copper earthing bus of adequate section and of electrically continuous and
+
+mechanically robust construction shall be provided, extended through and solidly
+
+connected to all the units of the distribution board with terminals for connection to
+
+the station earthing system.
+
+• Interlocks shall be provided according to IEC to ensure proper sequence of
+
+operation. (For outgoing earthing, first the circuit breaker shall be in draw out
+
+position. In this position a key switch will be released for earth switch closing)
+
+• Each cubicle of switchboard shall be provided with MCB/MCCB for protection/
+
+isolation of individual auxiliary AC and DC circuits.
+
+[Type here]
+
+---
+
+## Page 5
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 5 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 5 27
+
+347180ETS802
+
+A
+
+• The switch board shall also be provided with main MCB/MCCB for
+
+protection/isolation of incoming AC and DC supply. The presence the AC and DC
+
+shall be controlled by means of flag relay for giving the visual and acoustic alarm in
+
+case of missing.
+
+• All devices, wires and terminal blocks within the board shall be clearly identified by
+
+durable and legible tag corresponding to those used in applicable drawings.
+
+• Each section of the switchboard and devices mounted on it shall be identified by
+
+name plates in the front as well as rear. The name plates shall be made of durable
+
+material with legible lettering. Units shall be numbered consecutively form left to
+
+right when facing the front of the board. Label for all components both on
+
+component and under back board shall be considered.
+
+• MV panels shall be located in separate sub-station room.
+
+• 6.6kV switchgear shall be installed in indoor spaces under the roof. It shall be
+
+modular apparatus made of aligned standards with arc proof units that have been
+
+tested in compliance with IEC 62271-2.
+
+• The panels shall be assembled in one length switchboard. The type shall be metal
+
+clad and air insulated.
+
+• The boards shall be of air insulated, metal-clad and shall be of prefabricated self-
+
+supporting type for indoor installation in industrial plants and shall be designed for
+
+mounting on structural steel base embedded in concrete construction. The boards
+
+shall consist of independent, standardized easily assemble cubicles provided with
+
+front door.
+
+• Moreover, it shall be such as to allow the addition of other cubicles without major
+
+mechanical modification to the existing cubicles.
+
+• The switchgear shall have circuit breakers and earthing switches and also vacuum
+
+contactor for 6.6kV transformers. The circuit breaker shall be of the horizontal draw-
+
+[Type here]
+
+---
+
+## Page 6
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 6 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 6 27
+
+347180ETS802
+
+A
+
+out indoor type and units with equal rated currents shall be readily interchangeable
+
+with another. Circuit breakers shall be of vacuum and draw-out type.
+
+• The switchgear shall be of flush fronted design having a neat and clean appearance
+
+and readily extensible. The front doors shall be swinging type and provided with
+
+locking device.
+
+• All components shall be accessibly mounted in the switchgear and shall not impede
+
+access to wiring or terminals.
+
+• On the back side, the cubicle shall be closed with removable steel sheet to ensure
+
+accessibility for inspection or maintenance.
+
+• Moreover, every casual contact between HV gears and LV gears shall be absolutely
+
+prevented by suitable means such as screening.
+
+• No readily inflammable material shall be used in the construction of the frame
+
+supports or enclosure.
+
+• The boards shall have the following protection degree:
+
+• IP with 42 closed door
+
+• IP with 20 open door
+
+• Each cubicle shall have sufficient strength to withstand all accidental damages due
+
+to transportation, storage, erection, operating conditions, short circuit etc. Without
+
+suffering deformation or other damages of any kind. The cubicles shall be provided
+
+with lifting lug.
+
+• The front doors shall have mimic diagram.
+
+• -Unless otherwise specified, the cable inlets and outlets shall be from the bottom
+
+(6.6kV, control, auxiliary cables). The auxiliary connection between the panels shall
+
+be located on the top of the board. All necessary cable glands, lug & terminals shall
+
+be provided.
+
+• -Each board section shall consist of one bus system and shall withstand the same
+
+[Type here]
+
+---
+
+## Page 7
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 7 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 7 27
+
+347180ETS802
+
+A
+
+value and duration of short-time withstand current as specified for the bus-bar in
+
+this section.
+
+• -The switchgear shall be constructed from sheet steel of the thickness not less than
+
+2.5mm and the finish shall consist of two coats of anticorrosion prime and two coats
+
+of final.
+
+• -All cubicles shall be fitted with metal rustproof nameplate in English to be fixed by
+
+screws.
+
+• Moreover, for each cubicle a circuit identification label shall be provided rating
+
+plate, marking and labeling for all components of the switchgear shall be according
+
+to IEC.
+
+• All metal parts for the switchgear not belonging to the current carrying components
+
+and equipment but which might come in contact with energized part due to failure
+
+or to striking of an electric arc will be interconnected by means of an earthed
+
+conductor.
+
+• Access to energized part when the equipment is will not be possible unless suitable
+
+equipment is used.
+
+• Removal of draw-out equipment will be possible only through a sequence of specific
+
+mechanically inter-locked operations, by which the equipment is de-energized.
+
+• Equipment under possible electro static induction (such as capacitors etc.) shall be
+
+duly earthed before access is provided.
+
+• The draw-out unit normally earthed shall remain so during the draw- out operations
+
+until the distance from the live components is less than the isolation distance.
+
+• All necessary and special tools, hardware, etc, required for the satisfactory
+
+installation, commissioning, shall be provided.
+
+• All faults occurring with any individual unit shall be contained with the unit, an
+
+except for bus-bars fault shall not cause shut-down of any section board other than
+
+[Type here]
+
+---
+
+## Page 8
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 8 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 8 27
+
+347180ETS802
+
+A
+
+the unit itself.
+
+• All equipment shall be constructed of non-hygroscope and non-flammable material.
+
+• The supply shall include all the material necessary for anchoring at the floor (i.e.
+
+base frame etc.)
+
+• Each C.B. and M.V. cable compartment shall be fitted with proper heating resistors
+
+M.C.B. controlled by adjustable thermostat (for each panel: No. heating 2 resistors
+
+and No. thermostat 1).
+
+• Special precautions shall be taken to prevent corrosion between different metals
+
+• Internal lighting in aux cell shall be considered. The lamp shall be controlled by end-
+
+switch.
+
+• One V 230 a.c. socket in each aux. Cell must be provided.
+
+• the metal clad switchboard shall be designed for mounting on a structural steel base
+
+embedded in concrete
+
+• Each compartment shall be provided with a door. Each door shall be provided with a
+
+dedicated lock (n. keys 2)
+
+During the design of this kind of panels, the following parameters shall be considered:
+
+ Ensuring service continuity
+
+ Guarantee operating staff a high degree of safety
+
+ Ensuring easy installation and reduced construction costs
+
+1.2. Special features of circuit breaker distribution boards
+
+The MV Switchboard comprises totally enclosed Metal Clad cubicles of fully interlocked and
+
+compartment design for indoor installation and made up of modular. Prefabricated elements,
+
+equipped with vacuum circuit breakers of with draw able type.
+
+Separate self-contained duly partitioned housing is provided for individual switchgear units and
+
+associated auxiliary equipment.
+
+[Type here]
+
+---
+
+## Page 9
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 9 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 9 27
+
+347180ETS802
+
+A
+
+The design criteria used for the construction of this type of switchboard enables to achieve the
+
+following important features:
+
+• Division of cells as mentioned hereinafter
+
+• Use of automatic shutters on the fixed poles of the circuit breaker, which
+
+• Prevent accidental contacts with the live parts totally
+
+• Visual check from the outside, through a mechanical shock resistant glass
+
+• Window, of the position of the earthing switches
+
+• Grounding of all metallic parts of the switchboard
+
+• Insulation material of high fire-proof degree
+
+1.2.1. Structure
+
+The structural frame of switchboard is made of modular metallic elements bolted together
+
+consisting of steel sheet having thickness not less than mm 2 as well as the front and rear
+
+door, panels. All other enclosures of partitions shall be mechanical strength sufficient to
+
+withstand all the stresses to which they may be subjected during the functioning of the
+
+switchboard.
+
+Each switchboard is always made to be easily extendible on its ends.
+
+All items of small size (screws, squares, hinges crosses, etc.) shall be galvanized.
+
+1.2.2. Grounding
+
+All the metallic structural parts of the switchboard, the no-live metallic parts of the circuit
+
+breakers and the equipment in general, as well as the CTs/VTs secondary, are connected to
+
+the copper ground bar of adequate section which the grounding system on both ends.
+
+The grounding of the doors of the cells is made by means of flexible copper plates.
+
+In general, the continuity of the earthing circuits shall be ensured taking into account the
+
+[Type here]
+
+---
+
+## Page 10
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 10 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 10 27
+
+347180ETS802
+
+A
+
+thermal and electrical stresses caused by the current they may have to carry.
+
+All metal pans other than those forming part of an electrical circuits shall be connect to a
+
+hard drawn high conductivity copper earth bus- bar which shall run the full length, and be
+
+bolted to the main frame of the switchgear the grounding bus shall have a minimum cross
+
+section of sq 250.mm.
+
+At each end of the grounding bus, terminals shall be fitted for connection to the plant
+
+earthing system.
+
+All the frameworks, doors, devices, non-active metal parts, CT and VT secondary neutral
+
+points and HV cable shielding shall be connected to the aforesaid grounding bus by
+
+adequate means.
+
+The design and construction of all withdraw able equipment shall be such that all metal
+
+parts, other than current carrying parts are earthed before the primary connections are
+
+made, and shall remain earth connected until the conditions for the isolating distance
+
+according to IEC recommendations are met.
+
+Earthing switch shall be provided in the following cases:
+
+1. at the line side of incoming lines
+
+2. at the load side of outgoing feeders
+
+For the above cases, the earthing switches shall have the following interlocks:
+
+Electrical and mechanical interlocking between the incoming lines earthing switches and
+
+related upstream switchgears C.B
+
+Mechanical interlocking may be key-locking or other approved locking.
+
+Electrical and mechanical interlocking with the relevant circuit breaker which are in the
+
+same cubicle.
+
+The earthing switch shall have aux. Contact. (Not micro switch)
+
+1.2.3. Structure of compartments
+
+The compartments of the switchboard are divided into cells which are metallically segregated
+
+[Type here]
+
+---
+
+## Page 11
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 11 27 |
+
+| Rated system voltage: | 6.kV 6 |
+| --- | --- |
+| Highest system voltage: | kV 12 |
+| Number of phases: | 3 |
+| Rated frequency: | 50Hz |
+| Short circuit withstand | kA 40 (Second 3) |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 11 27
+
+347180ETS802
+
+A
+
+and consist of:
+
+• Circuit breaker/Contractor/voltage transformer (VT) cell
+
+• Bus bar cell
+
+• Auxiliary cell
+
+The M.V metal clad switchboard characteristics:
+
+Rated system voltage: 6.kV 6
+
+Highest system voltage: kV 12
+
+Number of phases: 3
+
+Rated frequency: 50Hz
+
+Short circuit withstand kA 40 (Second 3)
+
+For CTs installed in MV motor starters with fuse protection, short time current rating is not
+
+applicable.
+
+-Short time current rating is applicable for earthing switches. Earthing switches have adequate
+
+peak withstand current carrying capacity of kA 80 in closed position. However, for the incoming
+
+feeders, the earthing switches also have the rated peak making capacity of kA 100.
+
+• System earthing Isolated or resistance earthed
+
+• Power frequency withstand voltage (60s) 28kV
+
+• Impulse withstand voltage – peak 75kV
+
+• Control voltage Fed by Emergency Power supply
+
+• Protection degree. IPIndoor 42 IPOutdoor 54
+
+1.3. Description of cells
+
+1.3.1. Circuit breaker/contactor cell
+
+It contains the Withdraw-able circuit breaker/contactor and its relevant fixed part.
+
+A vacuum type circuit breaker/contactor is installed on the Withdraw-able truck.
+
+[Type here]
+
+---
+
+## Page 12
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 12 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 12 27
+
+347180ETS802
+
+A
+
+The Withdraw-able circuit breaker/contactor can reach different 3 positions:
+
+• Service: Main circuit and aux. Circuit connected
+
+• Isolated: Main circuit disconnected – aux. Circuit connected (test position) or aux.
+
+Circuits disconnected (fully isolated)
+
+• Withdrawn: Main circuit and aux. Circuit disconnected.
+
+• Circuit breaker completely withdrawn from the compartment.
+
+In the connected and isolated positions, the circuit breaker/contactor remains inside the
+
+compartment with door closed.
+
+A series of mechanical interlocks are provided to prevent wrong operations.
+
+• Movement of the with draw able module form isolated to service position is isolated
+
+position.
+
+• The earthing switch can be closed only when the with draw able module is in isolated
+
+position
+
+• The circuit breaker/contactor cannot be inserted or drawn-out in closed position
+
+• The circuit breaker/ contactor cannot be closed with the Withdraw-able module being in
+
+between isolated service positions.
+
+• Automatic shutters are closed when the circuit breaker/contactor is moved from the
+
+service position, to totally avoid and accidental contact with the live tarts.
+
+• Movement of the Withdraw-able module from isolated to service position or vice versa
+
+cannot be done with front door open.
+
+• It is possible to lock circuit- breaker/contactor truck in service and isolated positions.
+
+• Bus bar cell
+
+It contains the air insulated copper bus bars, able to withstand the thermal and mechanical
+
+stresses due to short circuit of specified magnitude and duration without any damage and
+
+distortion.
+
+[Type here]
+
+---
+
+## Page 13
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 13 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 13 27
+
+347180ETS802
+
+A
+
+1.3.2. Cable cell
+
+It contains the current transformers (CTs), the earthing switch and the cable terminal. As
+
+mentioned above, interlocks between the Withdraw-able circuit breaker and the earthing
+
+switch are provided. The cover panel of the cable cell is removable and fixed to the main
+
+structure with bolts. The cable terminations are fully contained within the cable cell.
+
+1.3.3. Auxiliary cell
+
+It contains all the auxiliary equipment. Such as:
+
+• Protection relays
+
+• Instruments
+
+• Controls (lamps, selector switches, breaker control switches etc.)
+
+• Terminal strip
+
+All current transformers (CT) are of cast resin insulated type. The volt-ampere outputs of CT
+
+cores are so selected as to have provision for connection of some additional burden in future.
+
+The accuracy class of all CT cores for protective relaying is 5P. The CT cores for general
+
+protective relaying have accuracy limit factor and 20 those for differential relaying have
+
+accuracy limit factor 20.
+
+The CT cores for measuring and indication will have accuracy class of 0.and 5 saturate at an
+
+over current which is safe for the measuring and indicating instruments (instrument security
+
+factor Fs = 5).
+
+Same CT cores are not used for dual purpose of protection and measuring.
+
+All voltage transformers (VT) are of cast resin insulated type, single phase units which are
+
+connected to form a three-phase system. The VTs will have 25% additional VA capacity over
+
+and above that required for meters, relays and instruments connected initially.
+
+The VTs are protected by suitable HRC fuses on the primary side and MBCs on the secondary
+
+side.
+
+The line VT/bus VT are mounted on an independent draw-out type carriage and arranged so
+
+[Type here]
+
+---
+
+## Page 14
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 14 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 14 27
+
+347180ETS802
+
+A
+
+that in the “drawn-out” position, the VT together with its protective HRC fuses get
+
+disconnected from the high voltage circuit.
+
+All transducers shall have 4-mA 20, DC analog signal output for continuous parameters and
+
+pulse signals output for energy monitoring.
+
+Each circuit breaker is provided with a breaker control switch, local remote selector switch, and
+
+the following indicating lamps:
+
+• CB ON
+
+• CB OFF
+
+• CB tripped
+
+• CB drawn out
+
+• Earth switch on
+
+• Earth switches off
+
+The voltage transformer (VT) cubicle is provided with one voltmeter and one selector switch.
+
+Three indicating lamps for the three phases are also provided.
+
+The breaker control switch is so designed that when released by the operator, the switch
+
+handle returns automatically to a neutral position. They are fitted with sequence interlock to
+
+prevent inadvertent operation and are so arranged that after passing the “ON” position, they
+
+cannot be moved into that position again without passing the “OFF” position.
+
+All indicating instruments have a dial size of mm 96 × mm 96.
+
+The following panel mounted measuring instruments have accuracy class of 1.5:
+
+• Ammeter
+
+• Voltmeter
+
+• Wattmeter
+
+• Reactive volt amp – (VAR) meter
+
+• Power factor meter
+
+• Frequency meter
+
+[Type here]
+
+---
+
+## Page 15
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 15 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 15 27
+
+347180ETS802
+
+A
+
+Various types of auxiliary relays, flag relays, time delay relays, high speed tripping and inter-
+
+tripping relays, trip coil supervision (monitoring) relay, etc. Are provided as required for the
+
+purpose of indication, control, alarm annunciation, tripping, interlocking, signal transmission,
+
+multiplication of circuit breaker, isolator and earth witch contacts etc. These relays are
+
+provided irrespective of whether they are specifically mentioned in the technical specification
+
+or not.
+
+The tripping and inter – tripping relays are operated by the respective group of protective
+
+relays as required for associated tripping and control duties. Overcurrent relays have two
+
+stages of protection. Low set stage I> has IDMT characteristic and high set stage I>> has DMT
+
+characteristic. Both stages of protection are provided with current and time adjustment
+
+facilities.
+
+Earth fault relays, over voltage relays and under voltage relays have IDMT/DMT characteristics
+
+depending on requirement. Both current/voltage and time are adjustable for these relays.
+
+Motor protection relays are incorporated with thermal overload protection, thermal start-up
+
+supervision, locked rotor/time overcurrent protection, high set overcurrent protection, low set
+
+earth fault protection, phase reversal, phase unbalance and single phasing protection.
+
+All relays for protection and alarming are provided with either flag indicators or LED lamp
+
+indications. All relays are of solid-state type preferably numeric type. All relays are of multi-
+
+contact hand reset.
+
+The ratios, accuracy class and accuracy limit factors of current transformers (CTs), VA burden of
+
+current and voltage transformers indicated in the technical specifications and single line
+
+diagrams are tentative. However, during the detail engineering stage, such adjustment may be
+
+introduced (not affecting the basic design) as may be required in order to suit the final
+
+data/information obtained for the various production and auxiliary facilities, if any, with a view
+
+to install a system satisfactory in every respect for the purpose for which it is intended.
+
+The incoming and bus-section circuit breakers of each switchboard are suitably interlocked to
+
+prevent parallel operation of the two incoming feeders. However, in case of planned shut-down
+
+[Type here]
+
+---
+
+## Page 16
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 16 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 16 27
+
+347180ETS802
+
+A
+
+of any incoming feeder and also brining the feeder back into service after shut-down, suitable
+
+Provision has been made for momentary paralleling of the two incoming feeders followed by
+
+tripping of concerned incoming/bus-section breaker. The switching over from momentary
+
+paralleling state to independent operating mode of in comers is automatic.
+
+1.4. M.V. Circuit breakers
+
+• Nominal voltage: kV 12
+
+• Service voltage: 6.kV 6
+
+• Short time current rating: kA 40 for sec 3
+
+• Operating mechanism: motor operated – spring charged mechanism
+
+The circuit breaker is provided with closing coil, trip coil and antidumping device. The circuit
+
+breaker is also provided with mechanical ON/OFF position indicator and operation counter.
+
+All circuit breakers have natural ventilation.
+
+At least one circuit breaker opening and closing operation is possible after failure of DC supply
+
+to the spring charging motor.
+
+The circuit breaker is provided with a conveniently located manual tripping lever or button for
+
+emergency tripping and testing purposes. A manually operated mechanical device to enable
+
+closing of the circuit breaker without power supply is also provided.
+
+Operating mechanism of circuit breaker is trip free.
+
+Circuit breakers are provided with necessary auxiliary switches for indication, control,
+
+interlocking. Two spare sets of auxiliary contacts, two normally closed and two normally open
+
+shall be left free in each unit wired up to the control cable terminal block. The auxiliary contacts
+
+can be easily converted from normally open to normally closed type and vice versa, if feasible.
+
+The circuit breaker is suitable for making and breaking capacity currents of shunt capacitor
+
+banks controlled by the breakers without any restrict.
+
+Circuit breakers of only proven, well tried out and robust design are used. Only the circuit
+
+[Type here]
+
+---
+
+## Page 17
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 17 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 17 27
+
+347180ETS802
+
+A
+
+breaker is housed in one cubicle.
+
+The following characteristics shall be considered:
+
+Power circuit
+
+Working voltage 6.kV 6 ± 8%
+
+Rated voltage: 7.kV 2
+
+Rated insulating level: kV 12
+
+sec 60. Test voltage at Hz 50: kV 31
+
+impulse test voltage 1.2/micro 50 s: kV 81
+
+frequency: Hz 50 + 5% - 2%
+
+symmetrical short-time current: kArms 40 for s 3 (at 6.kV 6)
+
+maximum value of the instantaneous short circuit current: KA 90
+
+rated main bus bar current in continuous duty: A 630
+
+current rating for branches bus bars in continuous duty: A 630
+
+These values shall be in compliance with the maximum capacity of the switchgear of the panel
+
+in question.
+
+Auxiliary circuits and services
+
+auxiliary voltage for closing and warning circuits: 110DC + 10% - 15%
+
+auxiliary voltage for breaking circuits: 110DC + 10% - 30%
+
+protecting relay supply circuits: 110DC + 10% - 20%
+
+internal lighting, sockets
+
+and heating resistor circuits: V 230 AC Hz 50
+
+test voltage for auxiliary V 2000 – 50Hz
+
+For electronic/digital apparatus (i.e., Protection relays) the testing voltage will be according to
+
+the relevant standards
+
+[Type here]
+
+---
+
+## Page 18
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 18 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 18 27
+
+347180ETS802
+
+A
+
+1.5. Current transformers (CT)
+
+• Rated secondary current: 5A or 1A
+
+• Standard volt-ampere output: 10VA-15VA-20VA-30VA
+
+All current transformers shall have the following characteristics
+
+Type: solid resins insulation
+
+Insulation reference voltage kV 12
+
+min 1 test voltage kV 31 at Hz 50 (rms)
+
+impulse test voltage 1.2/micro 50 s kV 81 pk
+
+maximum permanent thermal current 1.times 2 the primary rated current
+
+rated short-circuit current kA 40 – s 3
+
+No. of cores as indicated in the enclosed drawings
+
+Rated secondary current A 5 (unless otherwise specified in the enclosed
+
+drawings)
+
+Where specified on the diagrams 5/correctors 1 shall be provided
+
+Rated output (VA) must be suitable for connected instruments and relays
+
+The measuring core shall have a 0.5 % class of accuracy
+
+Accuracy class of protection core as single line diagram
+
+Accuracy limit factor:
+
+For protection as single line diagram
+
+Rated primary current values as single line diagram
+
+Secondary windings shall be earthed
+
+[Type here]
+
+---
+
+## Page 19
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 19 27 |
+
+| Number of windings: | Three |
+| --- | --- |
+| Connection of primary winding for each unit: | Phase-earth |
+| Accuracy class: | 0.5 (3P for open delta) |
+| Standard volt-ampere rating: | 50VA-100VA-200VA |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 19 27
+
+347180ETS802
+
+A
+
+1.6. Voltage transformers (VT)
+
+Voltage transformers should be drawing able type.
+
+Number of windings: Three
+
+Connection of primary winding for each unit: Phase-earth
+
+Accuracy class: 0.5 (3P for open delta)
+
+Standard volt-ampere rating: 50VA-100VA-200VA
+
+• All potential transformers shall have the following charact eristics:
+
+• Type Insulation in solid resins
+
+• Insulation reference voltage kV 12
+
+• min 1 test voltage kV 31 at Hz 50 (rms)
+
+• Impulse test voltage 1.2/micros 50kV 81 pk
+
+• Primary connection normally between phase and earth
+
+• Primary voltage 6.6/ sq.kV 3
+
+• Secondary voltage 100/ sq.V 3
+
+• Rated voltage factor 1.for 2 unlimited time
+
+• Accuracy class 0.5%
+
+• Rated output (VA) must be suitable for connected instruments and relays.
+
+• All potential transformers shall be mounted in a normal PT compartment and mounted
+
+in a draw-out type carriage, protected by:
+
+• M.V. side: fuses
+
+• L.V. side: M.C.B. complete with signal contact.
+
+• The cubicles housing potential transformers shall be completely diaphragmed with
+
+respect to all other switchboard components.
+
+• Sectionalizing shall be controlled from outside with the cell door closed.
+
+[Type here]
+
+---
+
+## Page 20
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 20 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 20 27
+
+347180ETS802
+
+A
+
+• Suitable metal shutter must segregate the PT’s and fuses zone such as one open the
+
+door only with sectioned PT’s and fuses.
+
+1.7. BUS-BAR AND CONNECTIONS
+
+Bus-bars and connection between the several pieces of apparatus forming the equipment of a
+
+cubicle shall be of high conductivity 99.9% electrolytic copper.
+
+Buses in the cubicles shall be sized to carry their maximum load continuously without exceeding
+
+the allowed temperature limits stated in IEC recommendations at voltage 5% lower than the
+
+rated value. The bus-bar system shall be according to electrical characteristics which mentioned
+
+in this specification. The buses shall withstand the electrodynamics stresses caused by short-
+
+circuits without undergoing permanent deformation.
+
+Main and branching-off buses shall be covered with an insulation material of non-hygroscopic
+
+type.
+
+The bus shall be segregated and arranged in a separate special metal duct into the back
+
+compartments.
+
+- Bus Supporting shall be insulating diaphragm type and shall be made of non-hygroscopic
+
+insulating materials. Bus supporting installed between the compartments shall also of non-
+
+flame propagating type.
+
+- Bus - bars connections and their supports shall be of an approved type designed to withstand
+
+all normal and abnormal conditions arising in the system. They shall be capable of carrying the
+
+short circuit rating, for period of not less than s 1.
+
+- The bus-bars connections in individual units shall have a continuous current rating of not less
+
+than that of the equipment the unit.
+
+- All the points where connections or joint occur the bus-bars and connecting pieces shall be
+
+silver plated, clamps where used, shall be phosphor bronze and bolts for joints shall be of
+
+stainless steel.
+
+[Type here]
+
+---
+
+## Page 21
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 21 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 21 27
+
+347180ETS802
+
+A
+
+- Main bus-bars shall have rounded edges to protect against "point effect"
+
+1.8. WIRING METHOD
+
+A distinct and separate wire number shall be assigned to all control wires on the elementary
+
+diagram.
+
+The wire number shall appear on all wiring diagrams and wife tables.
+
+All terminations shall be marked with the wire number by wrapping the wire, with adequate
+
+means.
+
+All terminals and terminal blocks shall be marked with the wire number.
+
+All wiring for devices remotes from a piece of equipment shall be brought to terminal blocks.
+
+Terminal blocks for wires which do not leave tile equipment shall be avoided.
+
+All terminals at LV compartment for CTs shall be current test terminal.
+
+1.9. PAINTING AND RUST PREVENTION
+
+The type of painting and procedure of painting shall be submitted for approval.
+
+The final color code shall be according to the following.
+
+Power switchboard
+
+Externally and internally RAL7032
+
+1.10. RELAYS & INSTRUMENTS
+
+Control and protection relays shall be of withdraw able, flush type, with dust and moisture -
+
+proof suitable for tropical climatic, and shall be provided with at test device, they shall also be
+
+provided with minimum two contacts, the first one for tripping, and the second for the alarm.
+
+All protection relay must be fully digital and programmable and must have suitable port for
+
+programming via a PC.
+
+They shall be suitable for the purpose they are used for (protecting main feeder, transformer,
+
+[Type here]
+
+---
+
+## Page 22
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 22 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 22 27
+
+347180ETS802
+
+A
+
+motor, etc) and shall perfectly function be considering the purpose according to the single line
+
+diagrams, accuracy and selectivity.
+
+- Contact or panel for motor conveyor feeding must have multi-function motor protection relay
+
+- The relays shall be installed on the cubicle front side.
+
+- The relays characteristics shall be as follow or better.
+
+Coil voltage 110VDC+10%-20%
+
+Signal voltage on contact circuit 110VDC
+
+Rated contact current 10A making
+
+Rated thermal current 16A
+
+Contact bounce Less than 8ms
+
+Contact life 100,operation 000
+
+Transient protection IEC 255-class 4 3
+
+- The contact of relays in circuit of closing coil & Tripping coil shall be capable of breaking tile
+
+maximum current which may occur in the circuit which they have to control.
+
+- The over current relays shall have rated current of 5A, with loading capacity of times 5 the
+
+rated current for continuous overload, and, times 100 the rated current for second 1, transient
+
+overload.
+
+- The contacts of all relays shall be capable of, making and breaking the maximum current
+
+which may occur in the circuit which they have to control.
+
+- Relays shall not be affected by mechanical shock or vibration, or by external magnetic fields
+
+consistent with the place or method of mounting.
+
+- Each indicator where of electrically or mechanically operated type, shall be reset able by hand
+
+without opening the relay case.
+
+- All relays shall be suitably marked to clarify their function, phase color of the current and/or
+
+voltage supply, characteristics curve (where appropriate) , rated current and/or voltage of relay
+
+coils, etc.
+
+- Means shall be provided to enable relays and associated current transformers to be tested
+
+[Type here]
+
+---
+
+## Page 23
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 23 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 23 27
+
+347180ETS802
+
+A
+
+without having to remove wires.
+
+Types and specification of the relay recommended for different circuits shall be approved by
+
+the client.
+
+Test blocks for protective relaying circuits. (Voltage transformer and current transformer lead)
+
+The test blocks shall be installed on the cubicle front side.
+
+1.11. WIRING
+
+-The sequence of phases shall be R-S-T from left to right when operator see the panel from the
+
+front.
+
+The auxiliary wiring shall have the following cross section:
+
+Ammeter circuit: ≥ sqmm 4
+
+Internal board feeders (between panels): ≥ sqmm 4
+
+Other circuits: ≥ 2.sqmm 5
+
+1.11.1. Terminal strip
+
+Requirements on terminal strips:
+
+For the ammeter circuit shall be short circuit able type;
+
+For the voltmeter circuit shall be sectionalizing type;
+
+At least the 10% spare terminals for each type shall be provided.
+
+Each section of the D.C and A.C distribution system shall be provided with an individual supply
+
+which shall be protected by a 2-pole automatic circuit breaker provided with thermos magnetic
+
+trips. Circuit breakers or fuse of auxiliary circuit terminals and other auxiliary apparatus
+
+requiring attention while the equipment is in service shall be accessible without exposing high-
+
+voltage.
+
+1.11.2. SIGNALS & SWITCHES
+
+[Type here]
+
+---
+
+## Page 24
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 24 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 24 27
+
+347180ETS802
+
+A
+
+Each cubicle shall have following signal & switches:
+
+1. transformer and feeder outgoing cubicles:
+
+• Signal lamp for indication of:
+
+• circuit breaker test position
+
+• circuit breaker service position
+
+• circuit breaker open
+
+• circuit breaker close
+
+• circuit breaker tripped
+
+• earthing switch close
+
+• permission to close
+
+2. for transformer and feeder outgoing Alarm unit(annunciator) for indication of:
+
+• Buchholz relay alarm (only for transformer outgoings)
+
+• Bochholtz relay trip (only for transformer outgoings)
+
+• transformer temperature alarm (only for transformer outgoings)
+
+• transformer temperature trip (only for transformer outgoings)
+
+• transformer oil level trip (only for transformer outgoings)
+
+• transformer oil pressure alarm (only for transformer outgoings)
+
+• VAC 230 failures
+
+• protection relay trip
+
+3. Transformer outgoing cubicles shall have following switches:
+
+• open push button
+
+• close push button
+
+• reset push button
+
+• lamp test push button
+
+• Local-o-remote selector switch
+
+• ampere meter selector switch
+
+[Type here]
+
+---
+
+## Page 25
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 25 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 25 27
+
+347180ETS802
+
+A
+
+4. Incoming cubicles:
+
+Signal lamp for indication of:
+
+• circuit breaker test position
+
+• circuit breaker service position
+
+• circuit breaker open
+
+• circuit breaker close
+
+• circuit breaker tripped
+
+• earthing switch close
+
+• Permission to close
+
+5. Incoming feeder must have Alarm unit (annunciator) for indication of:
+
+• upstream circuit breaker failure
+
+• VAC 230 failures
+
+• protection relay trip
+
+• under/over voltage trip
+
+6. Incoming cubicles shall have following switches:
+
+• open push button
+
+• close push button
+
+• reset push button
+
+• Earthing switch close (with ready to close signal) – illumination pushbutton
+
+• lamp test push button
+
+• Local-o-remote selector switch
+
+• voltmeter selector switch
+
+General notes
+
+-capacitive dividers with indicators of presence of the voltage in the cable must be considered
+
+[Type here]
+
+---
+
+## Page 26
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 26 27 |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 26 27
+
+347180ETS802
+
+A
+
+according to single line diagram
+
+Spare windows in alarm units must be considered
+
+- With the circuit breaker in the "inserted" position remote control conditioned by local
+
+permissive device.
+
+- Exclusion of both local and remote control if the control switch is in, the locked-out position.
+
+- Indicating lamps and lamp holders shall be arranged so that replacement of lamps and
+
+cleaning of reflectors and glasses can be readily affected.
+
+- The control of all breakers shall be possible from two position. (Local, supervisory) and they
+
+shall be wired to the terminal strip.
+
+Following signals must be provided in each cubicle (for connecting to supervisory system)
+
+• AC failure
+
+• Protection trip
+
+• Protection relays healthy
+
+• Circuit breaker on
+
+• Circuit breaker off
+
+• earthing switch on
+
+• insert position
+
+• test position
+
+• Permission to remote closing
+
+• Panel ready
+
+Note: Before construction manufacturer should issue complete switchgear drawing included
+
+the single line diagram and power & control circuit diagram & switchgear layout according to
+
+this specification and MSCo/MSE. After client approval manufacture can start fabrication stage.
+
+[Type here]
+
+---
+
+## Page 27
+
+| MOBARAKEH STEEL COMPANY (MSC) |  | Mobarakeh Steel Company HOT STRIP MILL #2 | Mobarakeh Steel Engineering (MSE) |
+| --- | --- | --- | --- |
+|  |  | DOCUMENT TITLE: Technical Specification for 6.6kV Switchgears |  |
+| DOCUMENT No. 347180ETS802 | Rev. A |  | Page of 27 27 |
+
+| IEC 62271-200-2 | MV Metal-Clad Switchgear |
+| --- | --- |
+| IEC 60694 | General Application |
+| IEC 62271-100 | Circuit Breakers |
+| IEC 62271-102 | Earthing Switches |
+| IEC 60071-2 | Coordination of The Insulation |
+| IEC 60282 | Protection fuses |
+| IEC 61869-2 | Current Transformers |
+| IEC 61869-3 | Voltage Transformers |
+| IEC 60255 | Protection Relay |
+| IEC 60529 | Classification of Degree Protection |
+| IEC 60099-4 | Surge Arrester |
+
+Mobarakeh Steel Company
+
+HOT STRIP MILL #2
+
+DOCUMENT TITLE:
+
+MOBARAKEH STEEL
+
+Mobarakeh Steel
+
+COMPANY (MSC)
+
+Technical Specification for 6.6kV
+
+Engineering (MSE)
+
+Switchgears
+
+DOCUMENT No. Rev. Page of 27 27
+
+347180ETS802
+
+A
+
+1.11.3. Standards
+
+6.6kV switchgears shall be designed, manufactured, and tested under the following
+
+applicable standards:
+
+IEC 62271-200-MV 2 Metal-Clad Switchgear
+
+IEC General 60694 Application
+
+IEC 62271-Circuit 100 Breakers
+
+IEC 62271-Earthing 102 Switches
+
+IEC 60071-Coordination 2 of The Insulation
+
+IEC Protection 60282 fuses
+
+IEC 61869-Current 2 Transformers
+
+IEC 61869-Voltage 3 Transformers
+
+IEC Protection 60255 Relay
+
+IEC Classification 60529 of Degree Protection
+
+IEC 60099-Surge 4 Arrester
+
+[Type here]
+
+---
+
