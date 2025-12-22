@@ -1,6 +1,7 @@
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import WelcomeScreen from './WelcomeScreen';
+import GeneralWelcome from './GeneralWelcome';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
 import { Message, UploadedFile } from '../types';
@@ -16,6 +17,7 @@ interface ChatAreaProps {
   onCancelGeneration?: () => void;
   disabled?: boolean;
   editingMessage?: Message | null;
+  isProjectChat?: boolean; // NEW: Indicates if this is a project-specific chat
 }
 
 export function ChatArea({
@@ -28,7 +30,8 @@ export function ChatArea({
   onEditMessage,
   onCancelGeneration,
   disabled = false,
-  editingMessage = null
+  editingMessage = null,
+  isProjectChat = false
 }: ChatAreaProps) {
   const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
   // Track chatting state: starts as false (idle), becomes true after first message send
@@ -67,7 +70,11 @@ export function ChatArea({
         {/* Welcome content - shown in idle mode */}
         {isIdle && (
           <div className="w-full max-w-5xl mx-auto">
-            <WelcomeScreen onHide={() => {}} onPromptClick={handlePromptClick} />
+            {isProjectChat ? (
+              <WelcomeScreen onHide={() => {}} onPromptClick={handlePromptClick} />
+            ) : (
+              <GeneralWelcome onHide={() => {}} onPromptClick={handlePromptClick} />
+            )}
           </div>
         )}
 

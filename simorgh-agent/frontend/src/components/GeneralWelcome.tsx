@@ -1,79 +1,79 @@
 import React from 'react';
-import { Sparkles, Search, Image, Code, Lightbulb, TrendingUp, BookOpen } from 'lucide-react';
+import { Brain, Zap, CircuitBoard, Cpu, Lightbulb, Shield, Settings, TrendingUp } from 'lucide-react';
 
-interface WelcomeScreenProps {
+interface GeneralWelcomeProps {
   onHide: () => void;
   onPromptClick: (prompt: string) => void;
 }
 
 const suggestedPrompts = [
   {
-    icon: BookOpen,
-    title: 'Specification',
-    subtitle: 'Extract technical specifications using AI agent',
-    prompt: `__AGENT__:SPECIFICATION_EXTRACTION`,
+    icon: Brain,
+    title: 'AI in Electrical Design',
+    subtitle: 'AI applications in engineering',
+    prompt: `Explain how artificial intelligence and machine learning can be applied to electrical panel design and optimization. What are the key benefits and current limitations?`,
     enabled: true,
-    emoji: '📋'
+    emoji: '🤖'
   },
   {
-    icon: TrendingUp,
-    title: 'Data Sheet',
-    subtitle: 'Equipment data sheets and catalogs',
-    prompt: '',
-    enabled: false,
-    emoji: '📊'
-  },
-  {
-    icon: Code,
-    title: 'Cable Size',
-    subtitle: 'Cable sizing calculations and tables',
-    prompt: '',
-    enabled: false,
-    emoji: '🔌'
-  },
-  {
-    icon: Search,
-    title: 'I/O List',
-    subtitle: 'Input/Output signal lists and assignments',
-    prompt: '',
-    enabled: false,
-    emoji: '📝'
-  },
-  {
-    icon: Sparkles,
-    title: 'Load List',
-    subtitle: 'Electrical load calculations and distributions',
-    prompt: '',
-    enabled: false,
+    icon: Zap,
+    title: 'Transformer Ratings',
+    subtitle: 'Understanding transformer specifications',
+    prompt: `Explain the key parameters for transformer selection including rated voltage, power rating (kVA), impedance, and insulation class. What are the standard ratings for industrial applications?`,
+    enabled: true,
     emoji: '⚡'
+  },
+  {
+    icon: CircuitBoard,
+    title: 'LV Switchgear Best Practices',
+    subtitle: 'Low voltage panel design',
+    prompt: `What are the best practices for designing low voltage (LV) switchgear panels? Include considerations for busbar sizing, circuit breaker selection, IP rating, and thermal management.`,
+    enabled: true,
+    emoji: '📟'
+  },
+  {
+    icon: Shield,
+    title: 'Protection Coordination',
+    subtitle: 'Protective device coordination',
+    prompt: `Explain the principles of protection coordination in electrical distribution systems. How do you ensure proper coordination between upstream and downstream protective devices?`,
+    enabled: true,
+    emoji: '🛡️'
+  },
+  {
+    icon: Settings,
+    title: 'IEC vs ANSI Standards',
+    subtitle: 'International electrical standards',
+    prompt: `Compare IEC (International Electrotechnical Commission) and ANSI (American National Standards Institute) standards for electrical equipment. What are the key differences in voltage levels, protection schemes, and equipment ratings?`,
+    enabled: true,
+    emoji: '📐'
+  },
+  {
+    icon: Cpu,
+    title: 'Smart Grid Technology',
+    subtitle: 'Modern distribution systems',
+    prompt: `Describe the key components and benefits of smart grid technology in electrical distribution systems. How do IoT sensors, automation, and AI enhance grid reliability and efficiency?`,
+    enabled: true,
+    emoji: '🌐'
   },
   {
     icon: Lightbulb,
-    title: 'Logic',
-    subtitle: 'Control logic diagrams and sequences',
-    prompt: '',
-    enabled: false,
-    emoji: '🧠'
+    title: 'Short Circuit Analysis',
+    subtitle: 'Fault current calculations',
+    prompt: `Explain the methodology for calculating short circuit currents in electrical networks. What are the key factors that affect fault levels, and how do you ensure equipment ratings are adequate?`,
+    enabled: true,
+    emoji: '💡'
   },
   {
-    icon: Image,
-    title: 'Site Layout',
-    subtitle: 'Site plans and equipment layouts',
-    prompt: '',
-    enabled: false,
-    emoji: '🗺️'
-  },
-  {
-    icon: Sparkles,
-    title: 'SLD-SLD',
-    subtitle: 'Single line diagrams and electrical schematics',
-    prompt: '',
-    enabled: false,
-    emoji: '⚡'
+    icon: TrendingUp,
+    title: 'Energy Efficiency',
+    subtitle: 'Power quality and optimization',
+    prompt: `What are the best practices for improving energy efficiency in industrial electrical systems? Discuss power factor correction, harmonic mitigation, and load optimization strategies.`,
+    enabled: true,
+    emoji: '📊'
   }
 ];
 
-export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenProps) {
+export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcomeProps) {
   return (
     <div className="flex flex-col items-center justify-center px-4 py-8">
       {/* Logo */}
@@ -87,12 +87,12 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
         alt="Simorgh Text"
         className="h-20 md:h-24 drop-shadow-2xl select-none animate-fade-in-delay"
       />
-      
+
       {/* Welcome text */}
       <p className="text-lg text-gray-400 text-center max-w-md mb-12 font-light mt-4">
-        What do you want to know?
+        Ask me anything about electrical engineering, AI, or technology
       </p>
-      
+
       {/* Suggested prompts */}
       <div className="grid grid-cols-4 gap-3 max-w-3xl w-full">
         {suggestedPrompts.map((item, i) => {
@@ -143,15 +143,15 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
             transform: translateY(0);
           }
         }
-        
+
         .animate-fade-in {
           animation: fadeIn 0.8s ease-out;
         }
-        
+
         .animate-fade-in-delay {
           animation: fadeIn 0.6s ease-out 0.15s backwards;
         }
-        
+
         @keyframes fadeIn {
           from {
             opacity: 0;
