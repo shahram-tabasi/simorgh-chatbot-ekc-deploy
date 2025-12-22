@@ -578,8 +578,8 @@ class GraphRAGService:
                 node_search_query = """
                 MATCH (n {project_number: $project_number})
                 WHERE n.name =~ $keyword_pattern
-                   OR (EXISTS(n.type) AND n.type =~ $keyword_pattern)
-                   OR (EXISTS(n.description) AND n.description =~ $keyword_pattern)
+                   OR (n.type IS NOT NULL AND n.type =~ $keyword_pattern)
+                   OR (n.description IS NOT NULL AND n.description =~ $keyword_pattern)
                 RETURN DISTINCT n.name as name
                 LIMIT 10
                 """

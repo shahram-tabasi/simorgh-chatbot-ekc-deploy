@@ -126,10 +126,12 @@ class SectionRetriever:
                 })
 
             # Store in Qdrant
+            # Note: For project documents, we use a placeholder user_id since projects are user-agnostic
             storage_success = self.qdrant_service.add_section_summaries(
-                project_number=project_number,
+                user_id="system",  # System-level storage for project documents
                 document_id=document_id,
-                section_summaries=section_data
+                section_summaries=section_data,
+                project_oenum=project_number  # Project OE number for session isolation
             )
 
             if not storage_success:
@@ -186,11 +188,12 @@ class SectionRetriever:
 
             # Search section summaries (returns full content)
             results = self.qdrant_service.search_section_summaries(
-                project_number=project_number,
+                user_id="system",  # System-level for project documents
                 query=query,
                 limit=limit,
                 document_id=document_id,
-                score_threshold=score_threshold
+                score_threshold=score_threshold,
+                project_oenum=project_number  # Project OE number for session isolation
             )
 
             logger.info(f"✅ Retrieved {len(results)} relevant sections")

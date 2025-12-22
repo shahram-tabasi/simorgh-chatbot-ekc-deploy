@@ -494,7 +494,7 @@ Be conversational and maintain context from past discussions."""
 
         # ✅ STEP 4: Generate response with cancellation support
         logger.info(f"🤖 Generating response with {len(results)} docs + {len(relevant_conversations)} past convs")
-        result = await llm_service.generate(
+        result = llm_service.generate(
             messages=llm_messages,
             mode=chat_request.llm_mode,
             temperature=0.7,
@@ -692,7 +692,7 @@ Be conversational and maintain context from past project discussions."""
 
         # ✅ STEP 4: Generate response with cancellation support
         logger.info(f"🤖 Generating project response with graph context + {len(relevant_conversations)} past convs")
-        llm_result = await llm_service.generate(
+        llm_result = llm_service.generate(
             messages=llm_messages,
             mode=chat_request.llm_mode,
             temperature=0.7,

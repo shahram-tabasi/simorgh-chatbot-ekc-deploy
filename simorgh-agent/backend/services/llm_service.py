@@ -186,7 +186,7 @@ class LLMService:
     # MAIN GENERATION METHODS
     # =========================================================================
 
-    async def generate(
+    def generate(
         self,
         messages: List[Dict[str, str]],
         mode: Optional[str] = None,
@@ -198,7 +198,10 @@ class LLMService:
         cancellation_token: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
-        Generate LLM response with cancellation support
+        Generate LLM response (synchronous)
+
+        Note: cancellation_token parameter exists for future async support
+        Currently, the method must complete once the HTTP request starts
 
         Args:
             messages: Chat messages in OpenAI format
@@ -208,7 +211,7 @@ class LLMService:
             use_cache: Whether to use Redis cache
             cache_ttl: Cache lifetime in seconds
             inject_knowledge: If True, inject electrical knowledge base into system prompt
-            cancellation_token: Optional CancellationToken for request cancellation
+            cancellation_token: Optional (not currently used - for future async support)
 
         Returns:
             {
@@ -222,15 +225,7 @@ class LLMService:
                 },
                 "cached": bool
             }
-
-        Raises:
-            asyncio.CancelledError: If operation was cancelled
         """
-        # Check cancellation before starting
-        if cancellation_token and await cancellation_token.is_cancelled():
-            logger.warning("🚫 LLM generation cancelled before starting")
-            raise asyncio.CancelledError("LLM generation cancelled by user")
-
         self.stats["total_requests"] += 1
 
         # Inject electrical knowledge base if requested
@@ -280,11 +275,6 @@ class LLMService:
 
         # Generate response based on mode
         try:
-            # Check cancellation before API call
-            if cancellation_token and await cancellation_token.is_cancelled():
-                logger.warning("🚫 LLM generation cancelled before API call")
-                raise asyncio.CancelledError("LLM generation cancelled by user")
-
             if effective_mode == LLMMode.ONLINE:
                 logger.info(f"🌐 Calling ONLINE LLM (OpenAI {self.openai_model})")
                 result = self._generate_online(messages, temperature, max_tokens, cancellation_token)
@@ -300,14 +290,8 @@ class LLMService:
                 try:
                     result = self._generate_online(messages, temperature, max_tokens, cancellation_token)
                     self.stats["online_requests"] += 1
-                except asyncio.CancelledError:
-                    # Don't fallback on cancellation
-                    raise
                 except Exception as e:
                     logger.warning(f"Online LLM failed, falling back to offline: {e}")
-                    # Check cancellation before fallback
-                    if cancellation_token and await cancellation_token.is_cancelled():
-                        raise asyncio.CancelledError("LLM generation cancelled during fallback")
                     result = self._generate_offline(messages, temperature, max_tokens, cancellation_token)
                     self.stats["offline_requests"] += 1
 
