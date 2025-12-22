@@ -56,23 +56,25 @@ class DocumentUploadResponse(BaseModel):
 
 
 class GeneralChatRequest(BaseModel):
-    """General chat request with vector RAG"""
+    """General chat request with vector RAG and session isolation"""
     user_id: str
     message: str
-    session_id: Optional[str] = None
+    session_id: str  # REQUIRED for session isolation
     top_k: int = 5
     llm_mode: Optional[str] = None
+    use_conversation_memory: bool = True  # Enable past context retrieval
 
 
 class ProjectChatRequest(BaseModel):
-    """Project chat request with graph RAG"""
+    """Project chat request with graph RAG and session isolation"""
     user_id: str
-    project_oenum: str
+    project_oenum: str  # Acts as natural session boundary for projects
     message: str
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None  # Optional: project_oenum is the session
     max_hops: int = 2
     use_hybrid: bool = False
     llm_mode: Optional[str] = None
+    use_conversation_memory: bool = True  # Enable past context retrieval
 
 
 class GraphInitRequest(BaseModel):
@@ -382,12 +384,16 @@ async def general_chat(
     request: GeneralChatRequest,
     current_user: str = Depends(get_current_user),
     redis_service: RedisService = Depends(get_redis_service),
-    llm_service: LLMService = Depends(get_llm_service)
+    llm_service: LLMService = Depends(get_llm_service),
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
 ):
     """
-    General chat with vector RAG (Qdrant)
+    General chat with vector RAG (Qdrant) + Session Isolation + Conversation Memory
 
-    Uses semantic search to find relevant document chunks and generates response.
+    NEW FEATURES:
+    - Session-specific document isolation (no cross-session leakage)
+    - LLM-powered conversation memory with semantic retrieval
+    - Past context included in responses for continuity
     """
     # Security: Verify user_id matches authenticated user
     if request.user_id != current_user:
@@ -397,67 +403,124 @@ async def general_chat(
         )
 
     try:
-        # Initialize vector RAG with LLM-based embeddings
-        vector_rag = VectorRAG(llm_service=llm_service)
+        # ✅ Initialize session-isolated services
+        from services.qdrant_service import QdrantService
+        from services.conversation_memory import ConversationMemoryService
 
-        # Search for relevant chunks
-        logger.info(f"🔍 Searching for relevant chunks: {request.message[:50]}...")
-        chunks = await vector_rag.search(
-            query=request.message,
-            user_id=request.user_id,
-            top_k=request.top_k,
-            score_threshold=0.7
+        # Initialize Qdrant with session isolation
+        qdrant_service = QdrantService(llm_service=llm_service)
+
+        # Initialize conversation memory service
+        conv_memory = ConversationMemoryService(
+            qdrant_service=qdrant_service,
+            llm_service=llm_service
         )
 
-        # Build context from chunks
-        context = ""
-        if chunks:
-            context = "\n\n## Relevant Information:\n\n"
-            for idx, chunk in enumerate(chunks, 1):
-                context += f"### Source {idx}: {chunk['filename']}"
-                if chunk.get('header'):
-                    context += f" - {chunk['header']}"
-                context += f"\n{chunk['text']}\n\n"
+        logger.info(f"💬 General chat - User: {request.user_id}, Session: {request.session_id}")
 
-        # Build LLM prompt
-        system_prompt = """You are an expert industrial electrical engineer assistant specializing in electrical panels and power systems.
-Provide accurate, technical responses based on the provided context and your knowledge of electrical engineering standards."""
+        # ✅ STEP 1: Retrieve past conversation context (if enabled)
+        past_context = ""
+        if request.use_conversation_memory:
+            logger.info(f"📚 Retrieving past conversation context...")
+            relevant_conversations = conv_memory.retrieve_relevant_context(
+                user_id=request.user_id,
+                current_query=request.message,
+                session_id=request.session_id,
+                top_k=5,
+                score_threshold=0.6
+            )
 
-        if context:
-            system_prompt += f"\n\n{context}"
+            if relevant_conversations:
+                past_context = conv_memory.format_context_for_llm(relevant_conversations)
+                logger.info(f"✅ Retrieved {len(relevant_conversations)} past conversations")
+
+        # ✅ STEP 2: Search for relevant document chunks (session-isolated)
+        logger.info(f"🔍 Searching session-specific documents...")
+        results = qdrant_service.semantic_search(
+            user_id=request.user_id,
+            query=request.message,
+            limit=request.top_k,
+            score_threshold=0.7,
+            session_id=request.session_id
+        )
+
+        # Build document context
+        doc_context = ""
+        if results:
+            doc_context = "\n\n## Relevant Documents from This Session:\n\n"
+            for idx, result in enumerate(results, 1):
+                doc_context += f"### Source {idx} (Score: {result['score']:.2f})\n"
+                doc_context += f"{result['text']}\n\n"
+
+        # ✅ STEP 3: Build comprehensive LLM prompt
+        system_prompt = """You are Simorgh, an expert industrial electrical engineer assistant specializing in electrical panels and power systems.
+
+Provide accurate, technical responses based on:
+1. Past conversation context (if provided)
+2. Relevant documents from this session
+3. Your expertise in electrical engineering standards
+
+Be conversational and maintain context from past discussions."""
+
+        # Add past conversation context
+        if past_context:
+            system_prompt += f"\n\n{past_context}"
+
+        # Add document context
+        if doc_context:
+            system_prompt += f"\n\n{doc_context}"
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": request.message}
         ]
 
-        # Generate response
-        logger.info(f"💬 Generating response with {len(chunks)} context chunks")
+        # ✅ STEP 4: Generate response
+        logger.info(f"🤖 Generating response with {len(results)} docs + {len(relevant_conversations) if request.use_conversation_memory else 0} past convs")
         result = llm_service.generate(
             messages=llm_messages,
             mode=request.llm_mode,
             temperature=0.7,
-            use_cache=True
+            use_cache=False  # Don't cache - each session is unique
         )
+
+        ai_response = result["response"]
+
+        # ✅ STEP 5: Store conversation in memory (background)
+        if request.use_conversation_memory:
+            logger.info(f"💾 Storing conversation in session memory...")
+            conv_memory.store_conversation(
+                user_id=request.user_id,
+                user_message=request.message,
+                ai_response=ai_response,
+                session_id=request.session_id,
+                metadata={
+                    "chunks_used": len(results),
+                    "mode": result.get("mode"),
+                    "tokens": result.get("tokens")
+                }
+            )
 
         return {
             "success": True,
-            "response": result["response"],
-            "chunks_used": len(chunks),
+            "response": ai_response,
+            "session_id": request.session_id,
+            "chunks_used": len(results),
+            "past_conversations_used": len(relevant_conversations) if request.use_conversation_memory else 0,
             "sources": [
                 {
-                    "filename": chunk['filename'],
-                    "score": chunk['score'],
-                    "header": chunk.get('header')
+                    "text_preview": result['text'][:100],
+                    "score": result['score'],
+                    "section_title": result.get('section_title', '')
                 }
-                for chunk in chunks
+                for result in results
             ],
             "mode": result.get('mode'),
             "tokens": result.get('tokens')
         }
 
     except Exception as e:
-        logger.error(f"❌ General chat failed: {e}")
+        logger.error(f"❌ General chat failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -466,13 +529,17 @@ async def project_chat(
     request: ProjectChatRequest,
     current_user: str = Depends(get_current_user),
     neo4j_service: Neo4jService = Depends(get_neo4j_service),
-    llm_service: LLMService = Depends(get_llm_service)
+    llm_service: LLMService = Depends(get_llm_service),
+    redis_service: RedisService = Depends(get_redis_service)
 ):
     """
-    Project chat with graph RAG (Neo4j)
+    Project chat with graph RAG (Neo4j) + Session Isolation + Conversation Memory
 
-    Uses knowledge graph traversal to find relevant project information.
-    Optional hybrid mode combines graph + vector search.
+    NEW FEATURES:
+    - Project-specific session isolation (project_oenum as session boundary)
+    - LLM-powered conversation memory with semantic retrieval
+    - Past context included for project continuity
+    - Hybrid graph + vector search with session isolation
     """
     # Security: Verify user_id matches authenticated user
     if request.user_id != current_user:
@@ -482,23 +549,58 @@ async def project_chat(
         )
 
     try:
-        # Initialize graph RAG
+        # ✅ Initialize session-isolated services
+        from services.qdrant_service import QdrantService
+        from services.conversation_memory import ConversationMemoryService
+
+        # Initialize Qdrant with session isolation
+        qdrant_service = QdrantService(llm_service=llm_service)
+
+        # Initialize conversation memory service
+        conv_memory = ConversationMemoryService(
+            qdrant_service=qdrant_service,
+            llm_service=llm_service
+        )
+
+        logger.info(f"📊 Project chat - User: {request.user_id}, Project: {request.project_oenum}")
+
+        # ✅ STEP 1: Retrieve past conversation context (if enabled)
+        past_context = ""
+        relevant_conversations = []
+        if request.use_conversation_memory:
+            logger.info(f"📚 Retrieving past project conversation context...")
+            relevant_conversations = conv_memory.retrieve_relevant_context(
+                user_id=request.user_id,
+                current_query=request.message,
+                project_oenum=request.project_oenum,
+                top_k=5,
+                score_threshold=0.6
+            )
+
+            if relevant_conversations:
+                past_context = conv_memory.format_context_for_llm(relevant_conversations)
+                logger.info(f"✅ Retrieved {len(relevant_conversations)} past project conversations")
+
+        # ✅ STEP 2: Query project graph
         graph_rag = GraphRAG(driver=neo4j_service.driver)
 
         # Get project context
         project = neo4j_service.get_project(request.project_oenum)
         project_context = f"{project.get('project_name', '')} - {project.get('client', '')}"
 
-        # Perform graph RAG query
         logger.info(f"📊 Querying project graph: {request.project_oenum}")
 
         if request.use_hybrid:
-            # Hybrid: Graph + Vector with LLM-based embeddings
-            vector_rag = VectorRAG(llm_service=llm_service)
-            vector_results = await vector_rag.search(
-                query=request.message,
+            # Hybrid: Graph + Vector with SESSION ISOLATION
+            logger.info(f"🔀 Using hybrid mode with session-isolated vector search")
+
+            # Search only in project-specific collection
+            vector_results = qdrant_service.semantic_search(
                 user_id=request.user_id,
-                top_k=5
+                query=request.message,
+                limit=5,
+                score_threshold=0.7,
+                project_oenum=request.project_oenum  # ✅ Project session isolation
             )
 
             result = await graph_rag.hybrid_search(
@@ -521,39 +623,229 @@ async def project_chat(
         if not result.get('success'):
             raise Exception(result.get('error', 'Graph query failed'))
 
-        context = result['context']
+        graph_context = result['context']
 
-        # Build LLM prompt
-        system_prompt = f"""You are an expert industrial electrical engineer assistant working on Project {request.project_oenum}.
-Provide accurate, technical responses based on the project's knowledge graph and documents.
+        # ✅ STEP 3: Build comprehensive LLM prompt
+        system_prompt = f"""You are Simorgh, an expert industrial electrical engineer assistant working on Project {request.project_oenum}.
 
-{context}
-"""
+Project: {project_context}
+
+Provide accurate, technical responses based on:
+1. Past conversation context from this project (if provided)
+2. The project's knowledge graph and documents
+3. Your expertise in electrical engineering standards
+
+Be conversational and maintain context from past project discussions."""
+
+        # Add past conversation context
+        if past_context:
+            system_prompt += f"\n\n{past_context}"
+
+        # Add graph context
+        if graph_context:
+            system_prompt += f"\n\n{graph_context}"
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": request.message}
         ]
 
-        # Generate response
-        logger.info(f"💬 Generating project response")
+        # ✅ STEP 4: Generate response
+        logger.info(f"🤖 Generating project response with graph context + {len(relevant_conversations)} past convs")
         llm_result = llm_service.generate(
             messages=llm_messages,
             mode=request.llm_mode,
             temperature=0.7,
-            use_cache=True
+            use_cache=False  # Don't cache - each project session is unique
         )
+
+        ai_response = llm_result["response"]
+
+        # ✅ STEP 5: Store conversation in project memory (background)
+        if request.use_conversation_memory:
+            logger.info(f"💾 Storing conversation in project memory...")
+            conv_memory.store_conversation(
+                user_id=request.user_id,
+                user_message=request.message,
+                ai_response=ai_response,
+                project_oenum=request.project_oenum,
+                metadata={
+                    "graph_stats": result.get('stats', {}),
+                    "mode": llm_result.get("mode"),
+                    "tokens": llm_result.get("tokens")
+                }
+            )
 
         return {
             "success": True,
-            "response": llm_result["response"],
+            "response": ai_response,
+            "project_oenum": request.project_oenum,
+            "past_conversations_used": len(relevant_conversations),
             "graph_stats": result.get('stats', {}),
             "mode": llm_result.get('mode'),
             "tokens": llm_result.get('tokens')
         }
 
     except Exception as e:
-        logger.error(f"❌ Project chat failed: {e}")
+        logger.error(f"❌ Project chat failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# SESSION MANAGEMENT
+# =============================================================================
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+    neo4j_service: Neo4jService = Depends(get_neo4j_service),
+    redis_service: RedisService = Depends(get_redis_service),
+    llm_service: LLMService = Depends(get_llm_service)
+):
+    """
+    Delete a general chat session completely (cascade deletion)
+
+    Removes ALL data:
+    - Qdrant collection (documents + conversation memory)
+    - File storage
+    - Redis cache
+    """
+    # Security: Verify user_id matches authenticated user
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot delete another user's session"
+        )
+
+    try:
+        from services.session_manager import SessionManager
+        from services.qdrant_service import QdrantService
+
+        # Initialize services
+        qdrant_service = QdrantService(llm_service=llm_service)
+
+        session_manager = SessionManager(
+            qdrant_service=qdrant_service,
+            neo4j_driver=neo4j_service.driver,
+            redis_service=redis_service
+        )
+
+        # Delete session completely
+        logger.info(f"🗑️ Deleting session {session_id} for user {user_id}")
+        result = session_manager.delete_session_completely(
+            user_id=user_id,
+            session_id=session_id
+        )
+
+        return {
+            "success": result["success"],
+            "session_id": session_id,
+            "user_id": user_id,
+            "deletion_stats": result
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Session deletion failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/projects/{project_oenum}/session")
+async def delete_project_session(
+    project_oenum: str,
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+    neo4j_service: Neo4jService = Depends(get_neo4j_service),
+    redis_service: RedisService = Depends(get_redis_service),
+    llm_service: LLMService = Depends(get_llm_service)
+):
+    """
+    Delete a project session completely (cascade deletion)
+
+    Removes ALL data:
+    - Qdrant collection (documents + conversation memory)
+    - Neo4j graph (project nodes, documents, guides, values)
+    - File storage
+    - Redis cache
+    """
+    # Security: Verify user_id matches authenticated user
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot delete another user's project session"
+        )
+
+    try:
+        from services.session_manager import SessionManager
+        from services.qdrant_service import QdrantService
+
+        # Initialize services
+        qdrant_service = QdrantService(llm_service=llm_service)
+
+        session_manager = SessionManager(
+            qdrant_service=qdrant_service,
+            neo4j_driver=neo4j_service.driver,
+            redis_service=redis_service
+        )
+
+        # Delete project session completely
+        logger.info(f"🗑️ Deleting project session {project_oenum} for user {user_id}")
+        result = session_manager.delete_session_completely(
+            user_id=user_id,
+            project_oenum=project_oenum
+        )
+
+        return {
+            "success": result["success"],
+            "project_oenum": project_oenum,
+            "user_id": user_id,
+            "deletion_stats": result
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Project session deletion failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/users/{user_id}/sessions")
+async def list_user_sessions(
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+    llm_service: LLMService = Depends(get_llm_service)
+):
+    """
+    List all sessions for a user (general + project sessions)
+    """
+    # Security: Verify user_id matches authenticated user
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot list another user's sessions"
+        )
+
+    try:
+        from services.session_manager import SessionManager
+        from services.qdrant_service import QdrantService
+
+        # Initialize services
+        qdrant_service = QdrantService(llm_service=llm_service)
+
+        session_manager = SessionManager(
+            qdrant_service=qdrant_service
+        )
+
+        # List sessions
+        result = session_manager.list_user_sessions(user_id=user_id)
+
+        return {
+            "success": True,
+            "user_id": user_id,
+            "sessions": result
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Failed to list user sessions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
