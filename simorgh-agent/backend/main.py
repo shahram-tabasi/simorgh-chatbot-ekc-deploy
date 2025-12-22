@@ -1547,6 +1547,210 @@ async def send_chat_message(
         project_number = chat_metadata.get("project_number")
         chat_type = chat_metadata.get("chat_type", "general")
 
+        # ============================================================
+        # SPECIFICATION AGENT: Handle agent workflow
+        # ============================================================
+        if _content.startswith("__AGENT__:SPECIFICATION_EXTRACTION"):
+            logger.info(f"🤖 Specification Agent triggered for chat {_chat_id}")
+
+            # Ensure this is a project chat
+            if chat_type != "project" or not project_number:
+                error_msg = "❌ **Agent Error**\n\nSpecification extraction is only available for project chats. Please create or select a project chat first."
+
+                # Store in chat history
+                redis.lpush(f"chat:{_chat_id}:history", {
+                    "role": "user",
+                    "content": _content,
+                    "timestamp": datetime.now().isoformat()
+                }, db="chat")
+
+                redis.lpush(f"chat:{_chat_id}:history", {
+                    "role": "assistant",
+                    "content": error_msg,
+                    "timestamp": datetime.now().isoformat()
+                }, db="chat")
+
+                return {
+                    "response": error_msg,
+                    "metadata": {
+                        "agent_error": True
+                    }
+                }
+
+            # Initialize agent
+            from services.specification_agent import SpecificationAgent
+
+            agent = SpecificationAgent(
+                redis_service=redis,
+                llm_service=llm,
+                neo4j_service=neo4j,
+                qdrant_service=get_qdrant_service()
+            )
+
+            # Check if this is first invocation (initialize) or continuation
+            agent_state = agent._get_agent_state(_chat_id)
+
+            if agent_state.get("state") == "INITIALIZED":
+                # First invocation - initialize session
+                agent_response = agent.initialize_session(
+                    chat_id=_chat_id,
+                    user_id=_user_id,
+                    project_number=project_number
+                )
+            else:
+                # Continuation - handle message
+                agent_response = await agent.handle_message(
+                    chat_id=_chat_id,
+                    user_message=_content,
+                    uploaded_file_context=None
+                )
+
+            # Store in chat history
+            redis.lpush(f"chat:{_chat_id}:history", {
+                "role": "user",
+                "content": _content,
+                "timestamp": datetime.now().isoformat()
+            }, db="chat")
+
+            redis.lpush(f"chat:{_chat_id}:history", {
+                "role": "assistant",
+                "content": agent_response,
+                "timestamp": datetime.now().isoformat(),
+                "metadata": {
+                    "agent_active": True,
+                    "agent_type": "specification_extraction"
+                }
+            }, db="chat")
+
+            logger.info(f"✅ Agent response generated")
+
+            return {
+                "response": agent_response,
+                "metadata": {
+                    "agent_active": True,
+                    "agent_type": "specification_extraction",
+                    "llm_mode": "online"
+                }
+            }
+
+        # ============================================================
+        # AGENT CONTINUATION: Check if agent is active for this chat
+        # ============================================================
+        from services.specification_agent import SpecificationAgent
+
+        agent = SpecificationAgent(
+            redis_service=redis,
+            llm_service=llm,
+            neo4j_service=neo4j,
+            qdrant_service=get_qdrant_service()
+        )
+
+        agent_state = agent._get_agent_state(_chat_id)
+
+        # If agent is active and not in terminal states, continue with agent
+        if agent_state.get("state") not in ["INITIALIZED", "COMPLETED", "ERROR", None]:
+            logger.info(f"🤖 Continuing agent workflow in state: {agent_state.get('state')}")
+
+            # Prepare file context if file was uploaded
+            uploaded_file_context = None
+
+            if _file:
+                logger.info(f"📎 Processing uploaded file for agent: {_file.filename}")
+
+                # Process document
+                import tempfile
+                from services.doc_processor_client import DocProcessorClient
+
+                temp_dir = Path(tempfile.gettempdir())
+                temp_file = temp_dir / f"{uuid.uuid4()}_{_file.filename}"
+
+                with open(temp_file, 'wb') as f:
+                    f.write(await _file.read())
+
+                try:
+                    doc_processor = DocProcessorClient()
+                    doc_result = await doc_processor.process_document(
+                        file_path=temp_file,
+                        user_id=_user_id
+                    )
+
+                    if doc_result.get('success'):
+                        markdown_content = doc_result['content']
+                        doc_id = str(uuid.uuid4())
+
+                        # Add to project graph
+                        from services.document_classifier import DocumentClassifier
+                        from services.project_graph_init import ProjectGraphInitializer
+
+                        classifier = DocumentClassifier()
+                        category, doc_type, confidence = classifier.classify(
+                            filename=_file.filename,
+                            content=markdown_content
+                        )
+
+                        graph_init = ProjectGraphInitializer(neo4j.driver)
+                        graph_init.add_document_to_structure(
+                            project_oenum=project_number,
+                            category=category,
+                            doc_type=doc_type,
+                            document_id=doc_id,
+                            document_metadata={
+                                'filename': _file.filename,
+                                'doc_type': doc_type,
+                                'category': category,
+                                'confidence': confidence,
+                                'uploaded_by': _user_id,
+                                'chat_id': _chat_id
+                            }
+                        )
+
+                        uploaded_file_context = {
+                            'filename': _file.filename,
+                            'markdown_content': markdown_content,
+                            'document_id': doc_id,
+                            'category': category,
+                            'doc_type': doc_type
+                        }
+
+                        logger.info(f"✅ Document processed for agent: {doc_id}")
+
+                finally:
+                    if temp_file.exists():
+                        temp_file.unlink()
+
+            # Handle message with agent
+            agent_response = await agent.handle_message(
+                chat_id=_chat_id,
+                user_message=_content,
+                uploaded_file_context=uploaded_file_context
+            )
+
+            # Store in chat history
+            redis.lpush(f"chat:{_chat_id}:history", {
+                "role": "user",
+                "content": _content,
+                "timestamp": datetime.now().isoformat()
+            }, db="chat")
+
+            redis.lpush(f"chat:{_chat_id}:history", {
+                "role": "assistant",
+                "content": agent_response,
+                "timestamp": datetime.now().isoformat(),
+                "metadata": {
+                    "agent_active": True,
+                    "agent_type": "specification_extraction"
+                }
+            }, db="chat")
+
+            return {
+                "response": agent_response,
+                "metadata": {
+                    "agent_active": True,
+                    "agent_type": "specification_extraction",
+                    "llm_mode": "online"
+                }
+            }
+
         # Handle file upload if present
         file_context = ""
         spec_task_id = None  # Track spec extraction task ID
@@ -2650,6 +2854,78 @@ async def get_project_specs_summary(
     except Exception as e:
         logger.error(f"Failed to get project specs summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# AGENT FILE DOWNLOAD ENDPOINTS
+# =============================================================================
+
+@app.get("/api/agent/download/{filename}")
+async def download_agent_export_file(
+    filename: str,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Download agent-generated export files (Excel/CSV)
+
+    Security:
+    - Requires authentication
+    - Only allows files from exports directory
+    - Prevents path traversal attacks
+    """
+    from fastapi.responses import FileResponse
+    import os
+
+    logger.info(f"📥 Download request for: {filename} by user: {current_user}")
+
+    # Security: Prevent path traversal attacks
+    if '..' in filename or '/' in filename or '\\' in filename:
+        logger.warning(f"⚠️ Path traversal attempt blocked: {filename}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename"
+        )
+
+    # Construct safe file path
+    exports_dir = Path("/home/user/simorgh-chatbot-ekc-deploy/simorgh-agent/backend/exports")
+    file_path = exports_dir / filename
+
+    # Check if file exists
+    if not file_path.exists():
+        logger.warning(f"⚠️ File not found: {file_path}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {filename}"
+        )
+
+    # Verify file is within exports directory (additional security check)
+    try:
+        file_path.resolve().relative_to(exports_dir.resolve())
+    except ValueError:
+        logger.error(f"🚨 Security violation: File outside exports directory: {file_path}")
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied"
+        )
+
+    logger.info(f"✅ Serving file: {file_path}")
+
+    # Determine media type based on extension
+    if filename.endswith('.xlsx'):
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif filename.endswith('.csv'):
+        media_type = "text/csv"
+    else:
+        media_type = "application/octet-stream"
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        filename=filename,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
 
 
 # =============================================================================

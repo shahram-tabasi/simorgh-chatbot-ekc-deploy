@@ -244,6 +244,7 @@ function MainChat() {
               onCancelGeneration={cancelGeneration}
               editingMessage={editingMessage}
               disabled={!activeChatId}
+              isProjectChat={activeProjectId !== null}
             />
           </div>
 
