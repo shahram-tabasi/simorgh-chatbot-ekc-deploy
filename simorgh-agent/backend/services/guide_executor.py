@@ -50,7 +50,11 @@ class GuideExecutor:
         category: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve extraction guides from Neo4j graph
+        Retrieve project-level extraction guides from Neo4j graph
+
+        NEW BEHAVIOR:
+        - Queries project-level ExtractionGuide nodes (no document_id)
+        - Uses REFERENCES_GUIDE relationship for field linkage
 
         Args:
             project_number: Project OE number
@@ -63,28 +67,31 @@ class GuideExecutor:
             with self.neo4j_driver.session() as session:
                 if category:
                     query = """
-                    MATCH (cat:SpecCategory {name: $category, project_number: $project_number})
-                        -[:HAS_FIELD]->(field:SpecField)
-                        -[:HAS_EXTRACTION_GUIDE]->(guide:ExtractionGuide)
-                    RETURN cat.name as category,
-                           field.name as field_name,
+                    MATCH (guide:ExtractionGuide {
+                        project_number: $project_number,
+                        category_name: $category
+                    })
+                    WHERE NOT EXISTS(guide.document_id)  // Ensure project-level
+                    RETURN guide.category_name as category,
+                           guide.field_name as field_name,
                            guide.definition as definition,
-                           guide.extraction_instruction as instruction,
+                           guide.extraction_instructions as instruction,
                            guide.common_values as common_values,
-                           guide.validation_pattern as validation_pattern
+                           guide.examples as examples,
+                           guide.notes as notes
                     """
                     params = {"category": category, "project_number": project_number}
                 else:
                     query = """
-                    MATCH (cat:SpecCategory {project_number: $project_number})
-                        -[:HAS_FIELD]->(field:SpecField)
-                        -[:HAS_EXTRACTION_GUIDE]->(guide:ExtractionGuide)
-                    RETURN cat.name as category,
-                           field.name as field_name,
+                    MATCH (guide:ExtractionGuide {project_number: $project_number})
+                    WHERE NOT EXISTS(guide.document_id)  // Ensure project-level
+                    RETURN guide.category_name as category,
+                           guide.field_name as field_name,
                            guide.definition as definition,
-                           guide.extraction_instruction as instruction,
+                           guide.extraction_instructions as instruction,
                            guide.common_values as common_values,
-                           guide.validation_pattern as validation_pattern
+                           guide.examples as examples,
+                           guide.notes as notes
                     """
                     params = {"project_number": project_number}
 
@@ -95,13 +102,14 @@ class GuideExecutor:
                     guides.append({
                         "category": record["category"],
                         "field_name": record["field_name"],
-                        "definition": record["definition"],
-                        "instruction": record["instruction"],
-                        "common_values": record["common_values"],
-                        "validation_pattern": record["validation_pattern"]
+                        "definition": record["definition"] or "",
+                        "instruction": record["instruction"] or "",
+                        "common_values": record["common_values"] or "",
+                        "examples": record["examples"] or "",
+                        "notes": record["notes"] or ""
                     })
 
-                logger.info(f"📚 Retrieved {len(guides)} extraction guides")
+                logger.info(f"📚 Retrieved {len(guides)} project-level extraction guides")
                 return guides
 
         except Exception as e:
@@ -361,7 +369,12 @@ Extract the value for: **{field_name}**
         extraction_results: List[Dict[str, Any]]
     ) -> bool:
         """
-        Store extracted values in Neo4j graph
+        Store extracted values in Neo4j graph with new structure
+
+        NEW BEHAVIOR:
+        - ActualValues include document_id and category_name in unique key
+        - Links ActualValue to ExtractionGuide (EXTRACTED_BY_GUIDE)
+        - Creates Document ↔ ExtractionGuide many-to-many relationships
 
         Args:
             project_number: Project OE number
@@ -380,22 +393,54 @@ Extract the value for: **{field_name}**
                         continue
 
                     field_name = result.get("field_name")
+                    category_name = result.get("category", "")
                     value = result.get("extracted_value")
                     confidence = result.get("confidence", "medium")
                     source_section = result.get("source_section", "")
 
-                    # Store value in graph
+                    # Store value in graph with new relationships
                     session.run("""
-                        MATCH (field:SpecField {name: $field_name, project_number: $project_number})
-                        MERGE (value:ActualValue {field_name: $field_name, project_number: $project_number})
+                        MATCH (doc:Document {id: $doc_id, project_number: $project_number})
+                        MATCH (field:SpecField {
+                            name: $field_name,
+                            category_name: $category_name,
+                            document_id: $doc_id,
+                            project_number: $project_number
+                        })
+
+                        // Match project-level guide
+                        MATCH (guide:ExtractionGuide {
+                            field_name: $field_name,
+                            category_name: $category_name,
+                            project_number: $project_number
+                        })
+                        WHERE NOT EXISTS(guide.document_id)
+
+                        // Create ActualValue with proper unique key (includes document_id)
+                        MERGE (value:ActualValue {
+                            field_name: $field_name,
+                            category_name: $category_name,
+                            document_id: $doc_id,
+                            project_number: $project_number
+                        })
                         SET value.extracted_value = $extracted_value,
                             value.confidence = $confidence,
-                            value.source_document = $doc_id,
                             value.source_section = $source_section,
-                            value.extraction_method = 'guide_executor'
+                            value.extraction_method = 'guide_executor',
+                            value.updated_at = datetime()
+
+                        // Link value to field
                         MERGE (field)-[:HAS_VALUE]->(value)
+
+                        // Link value to guide (for traceability)
+                        MERGE (value)-[:EXTRACTED_BY_GUIDE]->(guide)
+
+                        // Create many-to-many Document ↔ Guide relationships
+                        MERGE (doc)-[:USES_GUIDE]->(guide)
+                        MERGE (guide)-[:USED_IN_DOCUMENT]->(doc)
                     """, {
                         "field_name": field_name,
+                        "category_name": category_name,
                         "extracted_value": value,
                         "confidence": confidence,
                         "doc_id": document_id,
@@ -403,7 +448,7 @@ Extract the value for: **{field_name}**
                         "project_number": project_number
                     })
 
-            logger.info(f"✅ Stored extracted values in graph")
+            logger.info(f"✅ Stored extracted values in graph with guide linkage")
             return True
 
         except Exception as e:
