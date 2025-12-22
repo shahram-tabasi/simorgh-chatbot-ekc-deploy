@@ -643,6 +643,7 @@ class QdrantService:
         limit: int = 5,
         score_threshold: float = 0.6,
         project_filter: Optional[str] = None,
+        chat_id: Optional[str] = None,
         fallback_to_recent: bool = True,
         fallback_limit: int = 10
     ) -> List[Dict[str, Any]]:
@@ -656,6 +657,7 @@ class QdrantService:
             limit: Maximum number of similar conversations to retrieve
             score_threshold: Minimum similarity score (0.0 to 1.0)
             project_filter: Optional filter by project number
+            chat_id: Optional filter by chat ID (for session isolation)
             fallback_to_recent: If True and no semantic matches, return recent conversations
             fallback_limit: Number of recent conversations to return as fallback
 
@@ -676,17 +678,28 @@ class QdrantService:
             # Generate query embedding
             query_embedding = self.generate_embedding(current_query)
 
-            # Prepare filter if project specified
+            # Prepare filter for project and chat isolation
             search_filter = None
+            filter_conditions = []
+
             if project_filter:
-                search_filter = Filter(
-                    must=[
-                        FieldCondition(
-                            key="project_number",
-                            match=MatchValue(value=project_filter)
-                        )
-                    ]
+                filter_conditions.append(
+                    FieldCondition(
+                        key="project_number",
+                        match=MatchValue(value=project_filter)
+                    )
                 )
+
+            if chat_id:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="chat_id",
+                        match=MatchValue(value=chat_id)
+                    )
+                )
+
+            if filter_conditions:
+                search_filter = Filter(must=filter_conditions)
 
             # Perform semantic search with score threshold
             results = self.client.search(
