@@ -85,6 +85,7 @@ python-Levenshtein>=0.25.0
 
 # Data processing
 pandas>=2.0.0
+openpyxl>=3.1.0
 numpy<2.0.0
 scipy>=1.11.0
 
