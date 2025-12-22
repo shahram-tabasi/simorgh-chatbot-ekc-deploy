@@ -399,18 +399,35 @@ Be thorough and extract ALL parameters. Mark "NOT FOUND" for missing values."""
                 {"role": "user", "content": user_message}
             ]
 
-            # Call LLM for extraction
+            # Call LLM for extraction with automatic fallback
             logger.info("🤖 Calling LLM for specification extraction...")
-            result = self.llm.generate(
-                messages=messages,
-                mode="online",  # Use online mode for better accuracy
-                temperature=0.3,  # Lower temperature for more consistent extraction
-                use_cache=False  # Don't cache extraction results
-            )
+
+            try:
+                # Try online first for better accuracy
+                result = self.llm.generate(
+                    messages=messages,
+                    mode="online",
+                    temperature=0.3,  # Lower temperature for more consistent extraction
+                    use_cache=False  # Don't cache extraction results
+                )
+                logger.info(f"✅ Extraction complete using online LLM ({len(result.get('response', ''))} chars)")
+            except Exception as online_error:
+                # Fallback to offline/local LLM if online fails
+                logger.warning(f"⚠️ Online LLM failed, falling back to local LLM: {online_error}")
+                try:
+                    result = self.llm.generate(
+                        messages=messages,
+                        mode="offline",
+                        temperature=0.3,
+                        use_cache=False
+                    )
+                    logger.info(f"✅ Extraction complete using local LLM ({len(result.get('response', ''))} chars)")
+                except Exception as offline_error:
+                    # If both fail, raise the error
+                    logger.error(f"❌ Both online and offline LLM failed")
+                    raise Exception(f"LLM extraction failed. Online: {str(online_error)[:100]}. Offline: {str(offline_error)[:100]}")
 
             extraction_table = result.get("response", "")
-
-            logger.info(f"✅ Extraction complete ({len(extraction_table)} chars)")
 
             # Parse extraction results
             extraction_results = self._parse_extraction_table(extraction_table)
