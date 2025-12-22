@@ -6,13 +6,14 @@ API endpoints for document upload, classification, and RAG chat sessions.
 Author: Simorgh Industrial Assistant
 """
 
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, BackgroundTasks, Request
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 import logging
 import os
 import uuid
+import asyncio
 
 from services.neo4j_service import Neo4jService, get_neo4j_service
 from services.redis_service import RedisService, get_redis_service
@@ -28,6 +29,7 @@ from services.vector_rag import VectorRAG
 from services.graph_rag import GraphRAG
 from services.project_graph_init import ProjectGraphInitializer
 from services.auth_utils import get_current_user
+from services.cancellation_service import CancellationService
 
 logger = logging.getLogger(__name__)
 
@@ -381,7 +383,8 @@ async def upload_document(
 
 @router.post("/chat/general")
 async def general_chat(
-    request: GeneralChatRequest,
+    chat_request: GeneralChatRequest,
+    http_request: Request,
     current_user: str = Depends(get_current_user),
     redis_service: RedisService = Depends(get_redis_service),
     llm_service: LLMService = Depends(get_llm_service),
@@ -394,13 +397,17 @@ async def general_chat(
     - Session-specific document isolation (no cross-session leakage)
     - LLM-powered conversation memory with semantic retrieval
     - Past context included in responses for continuity
+    - Request cancellation support - stops all operations when user cancels
     """
     # Security: Verify user_id matches authenticated user
-    if request.user_id != current_user:
+    if chat_request.user_id != current_user:
         raise HTTPException(
             status_code=403,
             detail="Cannot chat as another user"
         )
+
+    # Create cancellation token for this request
+    cancellation_token = CancellationService.create_token(http_request)
 
     try:
         # ✅ Initialize session-isolated services
@@ -416,16 +423,20 @@ async def general_chat(
             llm_service=llm_service
         )
 
-        logger.info(f"💬 General chat - User: {request.user_id}, Session: {request.session_id}")
+        logger.info(f"💬 General chat - User: {chat_request.user_id}, Session: {chat_request.session_id}")
+
+        # Check cancellation before starting
+        await CancellationService.check_cancelled(cancellation_token)
 
         # ✅ STEP 1: Retrieve past conversation context (if enabled)
         past_context = ""
-        if request.use_conversation_memory:
+        relevant_conversations = []
+        if chat_request.use_conversation_memory:
             logger.info(f"📚 Retrieving past conversation context...")
             relevant_conversations = conv_memory.retrieve_relevant_context(
-                user_id=request.user_id,
-                current_query=request.message,
-                session_id=request.session_id,
+                user_id=chat_request.user_id,
+                current_query=chat_request.message,
+                session_id=chat_request.session_id,
                 top_k=5,
                 score_threshold=0.6
             )
@@ -434,15 +445,21 @@ async def general_chat(
                 past_context = conv_memory.format_context_for_llm(relevant_conversations)
                 logger.info(f"✅ Retrieved {len(relevant_conversations)} past conversations")
 
+        # Check cancellation after context retrieval
+        await CancellationService.check_cancelled(cancellation_token)
+
         # ✅ STEP 2: Search for relevant document chunks (session-isolated)
         logger.info(f"🔍 Searching session-specific documents...")
         results = qdrant_service.semantic_search(
-            user_id=request.user_id,
-            query=request.message,
-            limit=request.top_k,
+            user_id=chat_request.user_id,
+            query=chat_request.message,
+            limit=chat_request.top_k,
             score_threshold=0.7,
-            session_id=request.session_id
+            session_id=chat_request.session_id
         )
+
+        # Check cancellation after search
+        await CancellationService.check_cancelled(cancellation_token)
 
         # Build document context
         doc_context = ""
@@ -472,28 +489,29 @@ Be conversational and maintain context from past discussions."""
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": request.message}
+            {"role": "user", "content": chat_request.message}
         ]
 
-        # ✅ STEP 4: Generate response
-        logger.info(f"🤖 Generating response with {len(results)} docs + {len(relevant_conversations) if request.use_conversation_memory else 0} past convs")
-        result = llm_service.generate(
+        # ✅ STEP 4: Generate response with cancellation support
+        logger.info(f"🤖 Generating response with {len(results)} docs + {len(relevant_conversations)} past convs")
+        result = await llm_service.generate(
             messages=llm_messages,
-            mode=request.llm_mode,
+            mode=chat_request.llm_mode,
             temperature=0.7,
-            use_cache=False  # Don't cache - each session is unique
+            use_cache=False,  # Don't cache - each session is unique
+            cancellation_token=cancellation_token
         )
 
         ai_response = result["response"]
 
         # ✅ STEP 5: Store conversation in memory (background)
-        if request.use_conversation_memory:
+        if chat_request.use_conversation_memory:
             logger.info(f"💾 Storing conversation in session memory...")
             conv_memory.store_conversation(
-                user_id=request.user_id,
-                user_message=request.message,
+                user_id=chat_request.user_id,
+                user_message=chat_request.message,
                 ai_response=ai_response,
-                session_id=request.session_id,
+                session_id=chat_request.session_id,
                 metadata={
                     "chunks_used": len(results),
                     "mode": result.get("mode"),
@@ -504,21 +522,27 @@ Be conversational and maintain context from past discussions."""
         return {
             "success": True,
             "response": ai_response,
-            "session_id": request.session_id,
+            "session_id": chat_request.session_id,
             "chunks_used": len(results),
-            "past_conversations_used": len(relevant_conversations) if request.use_conversation_memory else 0,
+            "past_conversations_used": len(relevant_conversations),
             "sources": [
                 {
-                    "text_preview": result['text'][:100],
-                    "score": result['score'],
-                    "section_title": result.get('section_title', '')
+                    "text_preview": r['text'][:100],
+                    "score": r['score'],
+                    "section_title": r.get('section_title', '')
                 }
-                for result in results
+                for r in results
             ],
             "mode": result.get('mode'),
             "tokens": result.get('tokens')
         }
 
+    except asyncio.CancelledError:
+        logger.warning(f"🚫 General chat cancelled by user - User: {chat_request.user_id}, Session: {chat_request.session_id}")
+        raise HTTPException(
+            status_code=499,  # Client Closed Request
+            detail="Request cancelled by user"
+        )
     except Exception as e:
         logger.error(f"❌ General chat failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -526,7 +550,8 @@ Be conversational and maintain context from past discussions."""
 
 @router.post("/chat/project")
 async def project_chat(
-    request: ProjectChatRequest,
+    chat_request: ProjectChatRequest,
+    http_request: Request,
     current_user: str = Depends(get_current_user),
     neo4j_service: Neo4jService = Depends(get_neo4j_service),
     llm_service: LLMService = Depends(get_llm_service),
@@ -540,15 +565,21 @@ async def project_chat(
     - LLM-powered conversation memory with semantic retrieval
     - Past context included for project continuity
     - Hybrid graph + vector search with session isolation
+    - Request cancellation support - stops all operations when user cancels
     """
     # Security: Verify user_id matches authenticated user
-    if request.user_id != current_user:
+    if chat_request.user_id != current_user:
         raise HTTPException(
             status_code=403,
             detail="Cannot chat as another user"
         )
 
+    # Create cancellation token for this request
+    cancellation_token = CancellationService.create_token(http_request)
+
     try:
+        # Check cancellation before starting
+        await CancellationService.check_cancelled(cancellation_token)
         # ✅ Initialize session-isolated services
         from services.qdrant_service import QdrantService
         from services.conversation_memory import ConversationMemoryService
@@ -562,17 +593,17 @@ async def project_chat(
             llm_service=llm_service
         )
 
-        logger.info(f"📊 Project chat - User: {request.user_id}, Project: {request.project_oenum}")
+        logger.info(f"📊 Project chat - User: {chat_request.user_id}, Project: {chat_request.project_oenum}")
 
         # ✅ STEP 1: Retrieve past conversation context (if enabled)
         past_context = ""
         relevant_conversations = []
-        if request.use_conversation_memory:
+        if chat_request.use_conversation_memory:
             logger.info(f"📚 Retrieving past project conversation context...")
             relevant_conversations = conv_memory.retrieve_relevant_context(
-                user_id=request.user_id,
-                current_query=request.message,
-                project_oenum=request.project_oenum,
+                user_id=chat_request.user_id,
+                current_query=chat_request.message,
+                project_oenum=chat_request.project_oenum,
                 top_k=5,
                 score_threshold=0.6
             )
@@ -581,42 +612,51 @@ async def project_chat(
                 past_context = conv_memory.format_context_for_llm(relevant_conversations)
                 logger.info(f"✅ Retrieved {len(relevant_conversations)} past project conversations")
 
+        # Check cancellation after context retrieval
+        await CancellationService.check_cancelled(cancellation_token)
+
         # ✅ STEP 2: Query project graph
         graph_rag = GraphRAG(driver=neo4j_service.driver)
 
         # Get project context
-        project = neo4j_service.get_project(request.project_oenum)
+        project = neo4j_service.get_project(chat_request.project_oenum)
         project_context = f"{project.get('project_name', '')} - {project.get('client', '')}"
 
-        logger.info(f"📊 Querying project graph: {request.project_oenum}")
+        logger.info(f"📊 Querying project graph: {chat_request.project_oenum}")
 
-        if request.use_hybrid:
+        if chat_request.use_hybrid:
             # Hybrid: Graph + Vector with SESSION ISOLATION
             logger.info(f"🔀 Using hybrid mode with session-isolated vector search")
 
             # Search only in project-specific collection
             vector_results = qdrant_service.semantic_search(
-                user_id=request.user_id,
-                query=request.message,
+                user_id=chat_request.user_id,
+                query=chat_request.message,
                 limit=5,
                 score_threshold=0.7,
-                project_oenum=request.project_oenum  # ✅ Project session isolation
+                project_oenum=chat_request.project_oenum  # ✅ Project session isolation
             )
 
+            # Check cancellation before graph query
+            await CancellationService.check_cancelled(cancellation_token)
+
             result = await graph_rag.hybrid_search(
-                project_oenum=request.project_oenum,
-                user_query=request.message,
+                project_oenum=chat_request.project_oenum,
+                user_query=chat_request.message,
                 vector_results=vector_results,
                 project_context=project_context,
-                max_hops=request.max_hops
+                max_hops=chat_request.max_hops
             )
         else:
             # Graph only
+            # Check cancellation before graph query
+            await CancellationService.check_cancelled(cancellation_token)
+
             result = await graph_rag.query(
-                project_oenum=request.project_oenum,
-                user_query=request.message,
+                project_oenum=chat_request.project_oenum,
+                user_query=chat_request.message,
                 project_context=project_context,
-                max_hops=request.max_hops,
+                max_hops=chat_request.max_hops,
                 use_llm_formatting=True
             )
 
@@ -647,28 +687,29 @@ Be conversational and maintain context from past project discussions."""
 
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": request.message}
+            {"role": "user", "content": chat_request.message}
         ]
 
-        # ✅ STEP 4: Generate response
+        # ✅ STEP 4: Generate response with cancellation support
         logger.info(f"🤖 Generating project response with graph context + {len(relevant_conversations)} past convs")
-        llm_result = llm_service.generate(
+        llm_result = await llm_service.generate(
             messages=llm_messages,
-            mode=request.llm_mode,
+            mode=chat_request.llm_mode,
             temperature=0.7,
-            use_cache=False  # Don't cache - each project session is unique
+            use_cache=False,  # Don't cache - each project session is unique
+            cancellation_token=cancellation_token
         )
 
         ai_response = llm_result["response"]
 
         # ✅ STEP 5: Store conversation in project memory (background)
-        if request.use_conversation_memory:
+        if chat_request.use_conversation_memory:
             logger.info(f"💾 Storing conversation in project memory...")
             conv_memory.store_conversation(
-                user_id=request.user_id,
-                user_message=request.message,
+                user_id=chat_request.user_id,
+                user_message=chat_request.message,
                 ai_response=ai_response,
-                project_oenum=request.project_oenum,
+                project_oenum=chat_request.project_oenum,
                 metadata={
                     "graph_stats": result.get('stats', {}),
                     "mode": llm_result.get("mode"),
@@ -679,13 +720,19 @@ Be conversational and maintain context from past project discussions."""
         return {
             "success": True,
             "response": ai_response,
-            "project_oenum": request.project_oenum,
+            "project_oenum": chat_request.project_oenum,
             "past_conversations_used": len(relevant_conversations),
             "graph_stats": result.get('stats', {}),
             "mode": llm_result.get('mode'),
             "tokens": llm_result.get('tokens')
         }
 
+    except asyncio.CancelledError:
+        logger.warning(f"🚫 Project chat cancelled by user - User: {chat_request.user_id}, Project: {chat_request.project_oenum}")
+        raise HTTPException(
+            status_code=499,  # Client Closed Request
+            detail="Request cancelled by user"
+        )
     except Exception as e:
         logger.error(f"❌ Project chat failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

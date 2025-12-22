@@ -18,6 +18,7 @@ import os
 import logging
 import hashlib
 import json
+import asyncio
 from typing import List, Dict, Any, Optional, Iterator, Union
 from enum import Enum
 import openai
@@ -185,7 +186,7 @@ class LLMService:
     # MAIN GENERATION METHODS
     # =========================================================================
 
-    def generate(
+    async def generate(
         self,
         messages: List[Dict[str, str]],
         mode: Optional[str] = None,
@@ -193,10 +194,11 @@ class LLMService:
         max_tokens: Optional[int] = None,
         use_cache: bool = True,
         cache_ttl: int = 3600,
-        inject_knowledge: bool = False
+        inject_knowledge: bool = False,
+        cancellation_token: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
-        Generate LLM response
+        Generate LLM response with cancellation support
 
         Args:
             messages: Chat messages in OpenAI format
@@ -206,6 +208,7 @@ class LLMService:
             use_cache: Whether to use Redis cache
             cache_ttl: Cache lifetime in seconds
             inject_knowledge: If True, inject electrical knowledge base into system prompt
+            cancellation_token: Optional CancellationToken for request cancellation
 
         Returns:
             {
@@ -219,7 +222,15 @@ class LLMService:
                 },
                 "cached": bool
             }
+
+        Raises:
+            asyncio.CancelledError: If operation was cancelled
         """
+        # Check cancellation before starting
+        if cancellation_token and await cancellation_token.is_cancelled():
+            logger.warning("🚫 LLM generation cancelled before starting")
+            raise asyncio.CancelledError("LLM generation cancelled by user")
+
         self.stats["total_requests"] += 1
 
         # Inject electrical knowledge base if requested
@@ -269,24 +280,35 @@ class LLMService:
 
         # Generate response based on mode
         try:
+            # Check cancellation before API call
+            if cancellation_token and await cancellation_token.is_cancelled():
+                logger.warning("🚫 LLM generation cancelled before API call")
+                raise asyncio.CancelledError("LLM generation cancelled by user")
+
             if effective_mode == LLMMode.ONLINE:
                 logger.info(f"🌐 Calling ONLINE LLM (OpenAI {self.openai_model})")
-                result = self._generate_online(messages, temperature, max_tokens)
+                result = self._generate_online(messages, temperature, max_tokens, cancellation_token)
                 self.stats["online_requests"] += 1
 
             elif effective_mode == LLMMode.OFFLINE:
                 logger.info(f"💻 Calling OFFLINE LLM (Local server: {self.local_llm_url})")
-                result = self._generate_offline(messages, temperature, max_tokens)
+                result = self._generate_offline(messages, temperature, max_tokens, cancellation_token)
                 self.stats["offline_requests"] += 1
 
             elif effective_mode == LLMMode.AUTO:
                 # Try online first, fallback to offline
                 try:
-                    result = self._generate_online(messages, temperature, max_tokens)
+                    result = self._generate_online(messages, temperature, max_tokens, cancellation_token)
                     self.stats["online_requests"] += 1
+                except asyncio.CancelledError:
+                    # Don't fallback on cancellation
+                    raise
                 except Exception as e:
                     logger.warning(f"Online LLM failed, falling back to offline: {e}")
-                    result = self._generate_offline(messages, temperature, max_tokens)
+                    # Check cancellation before fallback
+                    if cancellation_token and await cancellation_token.is_cancelled():
+                        raise asyncio.CancelledError("LLM generation cancelled during fallback")
+                    result = self._generate_offline(messages, temperature, max_tokens, cancellation_token)
                     self.stats["offline_requests"] += 1
 
             else:
@@ -318,9 +340,15 @@ class LLMService:
         self,
         messages: List[Dict[str, str]],
         temperature: float,
-        max_tokens: Optional[int]
+        max_tokens: Optional[int],
+        cancellation_token: Optional[Any] = None
     ) -> Dict[str, Any]:
-        """Generate response using OpenAI API"""
+        """
+        Generate response using OpenAI API
+
+        Note: cancellation_token is accepted for future streaming support
+        Currently, once the API call starts, it runs to completion
+        """
         logger.info(f"🌐 _generate_online called - Model: {self.openai_model}")
 
         if not self.openai_api_key:
@@ -370,10 +398,15 @@ class LLMService:
         self,
         messages: List[Dict[str, str]],
         temperature: float,
-        max_tokens: Optional[int]
+        max_tokens: Optional[int],
+        cancellation_token: Optional[Any] = None
     ) -> Dict[str, Any]:
-        """Generate response using local LLM via nginx load balancer"""
+        """
+        Generate response using local LLM via nginx load balancer
 
+        Note: cancellation_token is accepted for future streaming support
+        Currently, once the API call starts, it runs to completion
+        """
         logger.info(f"📡 _generate_offline called - URL: {self.local_llm_url}")
 
         # Call load-balanced endpoint (nginx handles failover between .61/.62)
