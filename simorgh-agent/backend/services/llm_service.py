@@ -335,10 +335,20 @@ class LLMService:
                 timeout=60
             )
 
-            logger.info(f"✅ OpenAI response received - Tokens: {response.usage.total_tokens}, Finish reason: {response.choices[0].finish_reason}")
+            finish_reason = response.choices[0].finish_reason
+            logger.info(f"✅ OpenAI response received - Tokens: {response.usage.total_tokens}, Finish reason: {finish_reason}")
+
+            response_text = response.choices[0].message.content
+
+            # Handle truncation (finish_reason = "length" means hit token limit)
+            if finish_reason == "length" and max_tokens is None:
+                logger.warning(f"⚠️ Response truncated due to token limit, attempting continuation...")
+                response_text = self._continue_truncated_response(
+                    messages, response_text, temperature, "online"
+                )
 
             return {
-                "response": response.choices[0].message.content,
+                "response": response_text,
                 "mode": "online",
                 "model": self.openai_model,
                 "tokens": {
@@ -346,7 +356,7 @@ class LLMService:
                     "completion": response.usage.completion_tokens,
                     "total": response.usage.total_tokens
                 },
-                "finish_reason": response.choices[0].finish_reason
+                "finish_reason": finish_reason
             }
 
         except openai.APITimeoutError as e:
@@ -505,6 +515,80 @@ class LLMService:
         # Fallback: if no marker found, return original response
         logger.warning(f"⚠️ No '{final_marker}' marker found, returning full response")
         return raw_response
+
+    def _continue_truncated_response(
+        self,
+        original_messages: List[Dict[str, str]],
+        partial_response: str,
+        temperature: float,
+        mode: str,
+        max_continuations: int = 3
+    ) -> str:
+        """
+        Continue a truncated response by asking LLM to continue from where it left off
+
+        Args:
+            original_messages: Original conversation messages
+            partial_response: Truncated response received
+            temperature: Sampling temperature
+            mode: "online" or "offline"
+            max_continuations: Maximum number of continuation attempts
+
+        Returns:
+            Complete response (concatenated)
+        """
+        full_response = partial_response
+        continuation_count = 0
+
+        while continuation_count < max_continuations:
+            continuation_count += 1
+
+            # Create continuation prompt
+            continuation_messages = original_messages.copy()
+            continuation_messages.append({
+                "role": "assistant",
+                "content": full_response
+            })
+            continuation_messages.append({
+                "role": "user",
+                "content": "Please continue from where you left off. Complete your previous response."
+            })
+
+            logger.info(f"🔄 Continuation attempt {continuation_count}/{max_continuations}")
+
+            try:
+                if mode == "online":
+                    continuation_result = self._generate_online(
+                        continuation_messages, temperature, max_tokens=None
+                    )
+                else:
+                    continuation_result = self._generate_offline(
+                        continuation_messages, temperature, max_tokens=None
+                    )
+
+                continuation_text = continuation_result["response"]
+                finish_reason = continuation_result.get("finish_reason", "stop")
+
+                # Append continuation
+                full_response += continuation_text
+
+                # If finished naturally, break
+                if finish_reason == "stop":
+                    logger.info(f"✅ Response completed after {continuation_count} continuation(s)")
+                    break
+
+                # If still truncated, continue loop
+                logger.warning(f"⚠️ Continuation {continuation_count} also truncated, trying again...")
+
+            except Exception as e:
+                logger.error(f"❌ Continuation failed: {e}")
+                # Return what we have so far
+                break
+
+        if continuation_count >= max_continuations:
+            logger.warning(f"⚠️ Reached max continuations ({max_continuations}), returning partial response")
+
+        return full_response
 
     # =========================================================================
     # STREAMING SUPPORT
