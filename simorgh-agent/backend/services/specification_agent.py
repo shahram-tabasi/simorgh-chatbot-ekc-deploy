@@ -376,61 +376,33 @@ Please upload at least one specification document to proceed."""
         logger.info(f"🔍 Starting specification extraction from {source_description}")
 
         try:
-            # Generate extraction prompt
-            extraction_prompt = get_extraction_prompt()
+            # Determine which extraction method to use based on LLM availability
+            use_simplified = False
 
-            # Build LLM messages
-            system_message = f"""{extraction_prompt}
-
-## DOCUMENT CONTENT TO ANALYZE:
-
-{markdown_content[:50000]}
-"""  # Limit to ~50K chars to avoid token limits
-
-            user_message = """Please extract all specifications from the document according to the ITEM 1-11 scope defined above.
-
-Output the results as a Markdown table with the following columns:
-| Item No | Sub-Parameter | Classification | Extracted Value | Unit | Page/Section | Source Text |
-
-Be thorough and extract ALL parameters. Mark "NOT FOUND" for missing values."""
-
-            messages = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_message}
-            ]
-
-            # Call LLM for extraction with automatic fallback
-            logger.info("🤖 Calling LLM for specification extraction...")
-
+            # Try online LLM first with full extraction
             try:
-                # Try online first for better accuracy
-                result = self.llm.generate(
-                    messages=messages,
-                    mode="online",
-                    temperature=0.3,  # Lower temperature for more consistent extraction
-                    use_cache=False  # Don't cache extraction results
-                )
-                logger.info(f"✅ Extraction complete using online LLM ({len(result.get('response', ''))} chars)")
+                logger.info("🤖 Attempting extraction with online LLM (full ITEM 1-11 scope)...")
+                extraction_table = await self._extract_with_online_llm(markdown_content)
+                logger.info(f"✅ Extraction complete using online LLM ({len(extraction_table)} chars)")
             except Exception as online_error:
-                # Fallback to offline/local LLM if online fails
-                logger.warning(f"⚠️ Online LLM failed, falling back to local LLM: {online_error}")
-                try:
-                    result = self.llm.generate(
-                        messages=messages,
-                        mode="offline",
-                        temperature=0.3,
-                        use_cache=False
-                    )
-                    logger.info(f"✅ Extraction complete using local LLM ({len(result.get('response', ''))} chars)")
-                except Exception as offline_error:
-                    # If both fail, raise the error
-                    logger.error(f"❌ Both online and offline LLM failed")
-                    raise Exception(f"LLM extraction failed. Online: {str(online_error)[:100]}. Offline: {str(offline_error)[:100]}")
+                # Fallback to simplified extraction for local LLM
+                logger.warning(f"⚠️ Online LLM failed: {str(online_error)[:200]}")
+                logger.info("🔄 Falling back to simplified extraction for local LLM...")
+                use_simplified = True
+                extraction_table = await self._extract_with_local_llm_simplified(markdown_content)
+                logger.info(f"✅ Extraction complete using local LLM ({len(extraction_table)} chars)")
 
-            extraction_table = result.get("response", "")
+            # Check if we got any results
+            if not extraction_table or len(extraction_table) < 50:
+                logger.warning(f"⚠️ Extraction produced minimal output ({len(extraction_table)} chars)")
+                return self._format_error_response("Extraction failed to produce results. The LLM returned an empty or incomplete response.")
 
             # Parse extraction results
             extraction_results = self._parse_extraction_table(extraction_table)
+
+            if not extraction_results:
+                logger.warning("⚠️ No parameters could be parsed from extraction table")
+                return self._format_error_response("Extraction completed but no parameters could be parsed from the output.")
 
             # Update state
             state["extraction_results"] = extraction_results
@@ -450,6 +422,107 @@ Be thorough and extract ALL parameters. Mark "NOT FOUND" for missing values."""
             self._set_agent_state(chat_id, state)
 
             return f"❌ **Extraction Error**\n\n{str(e)}\n\nPlease try again or contact support."
+
+    async def _extract_with_online_llm(self, markdown_content: str) -> str:
+        """Extract using online LLM with full ITEM 1-11 scope"""
+        from services.specification_extraction_scope import get_extraction_prompt
+
+        extraction_prompt = get_extraction_prompt()
+
+        # Build LLM messages
+        system_message = f"""{extraction_prompt}
+
+## DOCUMENT CONTENT TO ANALYZE:
+
+{markdown_content[:50000]}
+"""  # Limit to ~50K chars
+
+        user_message = """Please extract all specifications from the document according to the ITEM 1-11 scope defined above.
+
+Output the results as a Markdown table with the following columns:
+| Item No | Sub-Parameter | Classification | Extracted Value | Unit | Page/Section | Source Text |
+
+Be thorough and extract ALL parameters. Mark "NOT FOUND" for missing values."""
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
+
+        result = self.llm.generate(
+            messages=messages,
+            mode="online",
+            temperature=0.3,
+            use_cache=False
+        )
+
+        return result.get("response", "")
+
+    async def _extract_with_local_llm_simplified(self, markdown_content: str) -> str:
+        """Simplified extraction for local LLM with reduced prompt size"""
+
+        logger.info("📝 Using simplified extraction for local LLM compatibility...")
+
+        # Simplified prompt focused on key parameters only
+        simplified_prompt = """Extract electrical switchgear specifications from the document below.
+
+Focus on these key categories:
+1. General: Voltage, Current, Frequency, IP Rating
+2. Busbar: Material, Rating, Configuration
+3. Circuit Breakers: Type, Rating, Breaking Capacity
+4. Protection: Overcurrent, Earth Fault, Metering
+5. Enclosure: Material, IP Rating, Color
+6. Testing: FAT, IR Test, HV Test
+7. Documentation: Drawings, Manuals, Certificates
+
+Output format (one line per parameter found):
+| Item No | Parameter | Value | Unit | Source |
+
+Example:
+| 1.2 | Rated Voltage | 400V | V | Page 3 |
+| 3.1 | Circuit Breaker Type | MCCB | - | Section 2.1 |
+
+Only extract parameters that are clearly stated. Mark "NOT FOUND" if not present."""
+
+        # Truncate document to fit local LLM context
+        doc_chunk = markdown_content[:15000]  # Much smaller for local LLM
+
+        system_message = f"""{simplified_prompt}
+
+DOCUMENT:
+{doc_chunk}
+"""
+
+        user_message = "Extract all electrical specifications you can find in the document above. Output as a markdown table."
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
+
+        result = self.llm.generate(
+            messages=messages,
+            mode="offline",
+            temperature=0.3,
+            use_cache=False,
+            max_tokens=2000  # Limit output for local LLM
+        )
+
+        return result.get("response", "")
+
+    def _format_error_response(self, error_message: str) -> str:
+        """Format error response for user"""
+        return f"""❌ **Extraction Failed**
+
+{error_message}
+
+**Possible solutions:**
+1. Try uploading the document again
+2. Check if your OpenAI API quota has credits
+3. Ensure the document contains electrical specifications
+4. Contact support if the issue persists
+
+The agent has saved the current state. You can try uploading a different document."""
 
     def _parse_extraction_table(self, markdown_table: str) -> List[Dict[str, Any]]:
         """Parse extraction results from markdown table"""
