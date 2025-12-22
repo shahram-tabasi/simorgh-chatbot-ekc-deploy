@@ -1558,17 +1558,33 @@ async def send_chat_message(
                 error_msg = "❌ **Agent Error**\n\nSpecification extraction is only available for project chats. Please create or select a project chat first."
 
                 # Store in chat history
-                redis.lpush(f"chat:{_chat_id}:history", {
-                    "role": "user",
-                    "content": _content,
-                    "timestamp": datetime.now().isoformat()
-                }, db="chat")
+                created_at = datetime.now().isoformat()
 
-                redis.lpush(f"chat:{_chat_id}:history", {
+                user_msg = {
+                    "message_id": str(uuid.uuid4()),
+                    "chat_id": _chat_id,
+                    "role": "user",
+                    "sender": "user",
+                    "content": _content,
+                    "text": _content,
+                    "timestamp": created_at,
+                    "created_at": created_at,
+                    "user_id": _user_id
+                }
+
+                assistant_msg = {
+                    "message_id": str(uuid.uuid4()),
+                    "chat_id": _chat_id,
                     "role": "assistant",
+                    "sender": "assistant",
                     "content": error_msg,
-                    "timestamp": datetime.now().isoformat()
-                }, db="chat")
+                    "text": error_msg,
+                    "timestamp": created_at,
+                    "created_at": created_at
+                }
+
+                redis.cache_chat_message(_chat_id, user_msg)
+                redis.cache_chat_message(_chat_id, assistant_msg)
 
                 return {
                     "response": error_msg,
@@ -1606,21 +1622,37 @@ async def send_chat_message(
                 )
 
             # Store in chat history
-            redis.lpush(f"chat:{_chat_id}:history", {
-                "role": "user",
-                "content": _content,
-                "timestamp": datetime.now().isoformat()
-            }, db="chat")
+            created_at = datetime.now().isoformat()
 
-            redis.lpush(f"chat:{_chat_id}:history", {
+            user_msg = {
+                "message_id": str(uuid.uuid4()),
+                "chat_id": _chat_id,
+                "project_id": project_number,
+                "role": "user",
+                "sender": "user",
+                "content": _content,
+                "text": _content,
+                "timestamp": created_at,
+                "created_at": created_at,
+                "user_id": _user_id
+            }
+
+            assistant_msg = {
+                "message_id": str(uuid.uuid4()),
+                "chat_id": _chat_id,
+                "project_id": project_number,
                 "role": "assistant",
+                "sender": "assistant",
                 "content": agent_response,
-                "timestamp": datetime.now().isoformat(),
-                "metadata": {
-                    "agent_active": True,
-                    "agent_type": "specification_extraction"
-                }
-            }, db="chat")
+                "text": agent_response,
+                "timestamp": created_at,
+                "created_at": created_at,
+                "agent_active": True,
+                "agent_type": "specification_extraction"
+            }
+
+            redis.cache_chat_message(_chat_id, user_msg)
+            redis.cache_chat_message(_chat_id, assistant_msg)
 
             logger.info(f"✅ Agent response generated")
 
@@ -1726,21 +1758,37 @@ async def send_chat_message(
             )
 
             # Store in chat history
-            redis.lpush(f"chat:{_chat_id}:history", {
-                "role": "user",
-                "content": _content,
-                "timestamp": datetime.now().isoformat()
-            }, db="chat")
+            created_at = datetime.now().isoformat()
 
-            redis.lpush(f"chat:{_chat_id}:history", {
+            user_msg = {
+                "message_id": str(uuid.uuid4()),
+                "chat_id": _chat_id,
+                "project_id": project_number,
+                "role": "user",
+                "sender": "user",
+                "content": _content,
+                "text": _content,
+                "timestamp": created_at,
+                "created_at": created_at,
+                "user_id": _user_id
+            }
+
+            assistant_msg = {
+                "message_id": str(uuid.uuid4()),
+                "chat_id": _chat_id,
+                "project_id": project_number,
                 "role": "assistant",
+                "sender": "assistant",
                 "content": agent_response,
-                "timestamp": datetime.now().isoformat(),
-                "metadata": {
-                    "agent_active": True,
-                    "agent_type": "specification_extraction"
-                }
-            }, db="chat")
+                "text": agent_response,
+                "timestamp": created_at,
+                "created_at": created_at,
+                "agent_active": True,
+                "agent_type": "specification_extraction"
+            }
+
+            redis.cache_chat_message(_chat_id, user_msg)
+            redis.cache_chat_message(_chat_id, assistant_msg)
 
             return {
                 "response": agent_response,
