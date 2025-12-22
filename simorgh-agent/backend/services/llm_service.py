@@ -383,24 +383,48 @@ class LLMService:
         messages: List[Dict[str, str]],
         temperature: float,
         max_tokens: Optional[int],
-        cancellation_token: Optional[Any] = None
+        cancellation_token: Optional[Any] = None,
+        _disable_continuation: bool = False
     ) -> Dict[str, Any]:
         """
         Generate response using local LLM via nginx load balancer
 
         Note: cancellation_token is accepted for future streaming support
         Currently, once the API call starts, it runs to completion
+
+        Args:
+            _disable_continuation: Internal flag to prevent recursive continuation
         """
         logger.info(f"📡 _generate_offline called - URL: {self.local_llm_url}")
 
         # Call load-balanced endpoint (nginx handles failover between .61/.62)
         try:
-            return self._call_local_llm(
+            result = self._call_local_llm(
                 self.local_llm_url,
                 messages,
                 temperature,
                 max_tokens
             )
+
+            finish_reason = result.get("finish_reason", "stop")
+            logger.info(f"✅ Local LLM response received - Finish reason: {finish_reason}")
+
+            response_text = result["response"]
+
+            # Handle truncation (finish_reason = "length" means stream didn't complete)
+            # Only if continuation is not disabled (prevents infinite recursion)
+            if finish_reason == "length" and max_tokens is None and not _disable_continuation:
+                logger.warning(f"⚠️ Response truncated (stream incomplete), attempting continuation...")
+                response_text = self._continue_truncated_response(
+                    messages, response_text, temperature, "offline"
+                )
+
+                # Update result with continued response
+                result["response"] = response_text
+                result["finish_reason"] = "stop"  # Mark as completed after continuation
+
+            return result
+
         except Exception as e:
             logger.error(f"❌ Local LLM endpoint failed: {e}")
             raise LLMOfflineError(f"Local LLM unavailable (load-balanced endpoint: {self.local_llm_url})")
@@ -448,6 +472,7 @@ class LLMService:
             full_response = ""
             line_count = 0
             chunk_count = 0
+            is_completed = False  # Track if stream completed normally
 
             for line in response.iter_lines():
                 if line:
@@ -472,27 +497,36 @@ class LLMService:
                         elif "output" in data:
                             # Complete output format (status: completed)
                             full_response = data["output"]
+                            is_completed = True
                             logger.info(f"✅ Received complete output (length: {len(full_response)})")
                         elif "text" in data:
                             # Alternative chunk format
                             chunk_count += 1
                             full_response += data["text"]
                         else:
+                            # Check for completion status
+                            if data.get('status') == 'completed':
+                                is_completed = True
+                                logger.info(f"✅ Stream completed successfully")
                             logger.debug(f"ℹ️ Status update: {data.get('status', 'unknown')}")
                     except json.JSONDecodeError as e:
                         logger.warning(f"⚠️ JSON decode error on line {line_count}: {e}, Raw: {line[:100]}")
                         continue
 
-            logger.info(f"✅ Local LLM response received - Lines: {line_count}, Chunks: {chunk_count}, Response length: {len(full_response)}")
+            logger.info(f"✅ Local LLM response received - Lines: {line_count}, Chunks: {chunk_count}, Response length: {len(full_response)}, Completed: {is_completed}")
 
             # Extract only the final answer (strip reasoning/analysis)
             clean_response = self._extract_final_answer(full_response)
             logger.info(f"🎯 Extracted final answer - Original: {len(full_response)} chars, Clean: {len(clean_response)} chars")
 
+            # Determine finish reason based on completion status
+            finish_reason = "stop" if is_completed else "length"
+
             return {
                 "response": clean_response,
                 "mode": "offline",
                 "model": "local-llm",
+                "finish_reason": finish_reason,
                 "tokens": {
                     "prompt": 0,
                     "completion": 0,
@@ -579,8 +613,10 @@ class LLMService:
                         continuation_messages, temperature, max_tokens=None
                     )
                 else:
+                    # Disable further continuation to prevent infinite recursion
                     continuation_result = self._generate_offline(
-                        continuation_messages, temperature, max_tokens=None
+                        continuation_messages, temperature, max_tokens=None,
+                        _disable_continuation=True
                     )
 
                 continuation_text = continuation_result["response"]

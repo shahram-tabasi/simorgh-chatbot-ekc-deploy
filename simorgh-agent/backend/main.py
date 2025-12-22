@@ -2160,7 +2160,7 @@ async def send_chat_message(
                 logger.warning(f"⚠️ Enhanced context retrieval failed: {e}", exc_info=True)
                 # Continue without context rather than failing
 
-        # 🧠 USER MEMORY: Retrieve similar past conversations from Qdrant
+        # 🧠 USER MEMORY: Retrieve similar past conversations from Qdrant (session-isolated)
         user_memory_context = ""
         try:
             qdrant = get_qdrant_service()
@@ -2170,6 +2170,7 @@ async def send_chat_message(
                 limit=5,  # Get top 5 semantically similar conversations
                 score_threshold=0.65,  # Only include relevant conversations
                 project_filter=project_number if project_number else None,
+                chat_id=_chat_id,  # Filter by current chat for session isolation
                 fallback_to_recent=True,  # Fallback to recent if no semantic matches
                 fallback_limit=10  # Return last 10 conversations as fallback
             )
