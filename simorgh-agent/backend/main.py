@@ -1497,16 +1497,24 @@ async def send_chat_message(
             form = await request.form()
             _chat_id = form.get("chat_id")
             _user_id = form.get("user_id")
-            _content = form.get("content")
+            _content = form.get("content") or ""  # Allow empty content if file is uploaded
             _llm_mode = form.get("llm_mode")
             _use_graph_context_str = form.get("use_graph_context", "true")
             _use_graph_context = _use_graph_context_str.lower() in ("true", "1", "yes") if isinstance(_use_graph_context_str, str) else True
             _file = form.get("file")
 
-            if not all([_chat_id, _user_id, _content]):
+            # Validate required fields (content can be empty if file is present)
+            if not _chat_id or not _user_id:
                 raise HTTPException(
                     status_code=422,
-                    detail="Missing required fields: chat_id, user_id, content"
+                    detail="Missing required fields: chat_id, user_id"
+                )
+
+            # If no file and no content, that's an error
+            if not _file and not _content:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Either content or file must be provided"
                 )
         else:
             # JSON format (backward compatible)
@@ -1760,17 +1768,22 @@ async def send_chat_message(
             # Store in chat history
             created_at = datetime.now().isoformat()
 
+            # If content is empty but file was uploaded, show file upload message
+            display_content = _content if _content else f"📎 Uploaded: {uploaded_file_context['filename']}" if uploaded_file_context else _content
+
             user_msg = {
                 "message_id": str(uuid.uuid4()),
                 "chat_id": _chat_id,
                 "project_id": project_number,
                 "role": "user",
                 "sender": "user",
-                "content": _content,
-                "text": _content,
+                "content": display_content,
+                "text": display_content,
                 "timestamp": created_at,
                 "created_at": created_at,
-                "user_id": _user_id
+                "user_id": _user_id,
+                "has_attachment": uploaded_file_context is not None,
+                "attachment_filename": uploaded_file_context['filename'] if uploaded_file_context else None
             }
 
             assistant_msg = {
