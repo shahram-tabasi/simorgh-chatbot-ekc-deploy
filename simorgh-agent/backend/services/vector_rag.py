@@ -26,30 +26,55 @@ logger = logging.getLogger(__name__)
 
 class VectorRAG:
     """
-    Vector RAG using Qdrant for general chat documents
+    DEPRECATED: Use QdrantService with session-specific collections instead
+    Vector RAG using Qdrant for general chat documents (kept for backward compatibility)
+
+    NOTE: This class is being phased out in favor of using QdrantService directly
+    with session-specific collection isolation.
     """
 
     def __init__(
         self,
         qdrant_url: str = None,
         openai_api_key: str = None,
-        collection_name: str = "general_docs",
+        collection_name: str = None,
         llm_service=None,
-        embedding_dim: Optional[int] = None
+        embedding_dim: Optional[int] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
     ):
         """
-        Initialize Vector RAG
+        Initialize Vector RAG with session isolation support
 
         Args:
             qdrant_url: Qdrant service URL
             openai_api_key: OpenAI API key for embeddings (fallback if no llm_service)
-            collection_name: Qdrant collection name
+            collection_name: DEPRECATED - use user_id + session_id instead
             llm_service: Optional LLMService instance for LLM-based embeddings
             embedding_dim: Optional explicit embedding dimension (auto-detected if not provided)
+            user_id: User identifier (required for session isolation)
+            session_id: Session ID (required for session isolation)
         """
         self.qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://qdrant:6333")
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
-        self.collection_name = collection_name
+
+        # Session isolation support
+        self.user_id = user_id
+        self.session_id = session_id
+
+        # Generate session-specific collection name
+        if user_id and session_id:
+            user_id_clean = user_id.replace("-", "_").replace(" ", "_").replace(".", "_").lower()
+            session_clean = session_id.replace("-", "_").replace(" ", "_").lower()
+            self.collection_name = f"user_{user_id_clean}_session_{session_clean}"
+            logger.info(f"✅ Session-isolated collection: {self.collection_name}")
+        elif collection_name:
+            self.collection_name = collection_name
+            logger.warning(f"⚠️ Using legacy non-isolated collection: {collection_name}")
+        else:
+            # Fallback for backward compatibility
+            self.collection_name = "general_docs"
+            logger.warning(f"⚠️ No session isolation - using default collection: {self.collection_name}")
 
         # Initialize Qdrant client
         self.qdrant = QdrantClient(url=self.qdrant_url)
@@ -287,19 +312,26 @@ class VectorRAG:
             try:
                 embedding = await self.embed_text(chunk['text'])
 
+                # Prepare payload with session context
+                payload = {
+                    'user_id': user_id,
+                    'doc_id': doc_id,
+                    'filename': filename,
+                    'text': chunk['text'],
+                    'header': chunk.get('header', ''),
+                    'position': chunk['position']
+                }
+
+                # Add session context if available
+                if self.session_id:
+                    payload['session_id'] = self.session_id
+
                 point = PointStruct(
                     id=hashlib.md5(
                         f"{doc_id}_{chunk['position']}".encode()
                     ).hexdigest(),
                     vector=embedding,
-                    payload={
-                        'user_id': user_id,
-                        'doc_id': doc_id,
-                        'filename': filename,
-                        'text': chunk['text'],
-                        'header': chunk.get('header', ''),
-                        'position': chunk['position']
-                    }
+                    payload=payload
                 )
                 points.append(point)
 

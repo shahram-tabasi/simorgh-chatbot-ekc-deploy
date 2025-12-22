@@ -101,22 +101,47 @@ class QdrantService:
             self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
             logger.info(f"✅ Embedding model loaded (dimension: {self.embedding_dim})")
 
-    def _get_collection_name(self, project_number: str) -> str:
+    def _get_collection_name(
+        self,
+        user_id: str,
+        session_id: Optional[str] = None,
+        project_oenum: Optional[str] = None
+    ) -> str:
         """
-        Get collection name for a project (ensures isolation)
+        Get session-specific collection name (ensures strict isolation)
+
+        Collection naming strategy:
+        - General chat: user_{user_id}_session_{session_id}
+        - Project chat: user_{user_id}_project_{project_oenum}
 
         Args:
-            project_number: Project OE number
+            user_id: User identifier
+            session_id: Optional session ID for general chats
+            project_oenum: Optional project OE number for project chats
 
         Returns:
-            Collection name for the project
+            Session-specific collection name
+
+        Raises:
+            ValueError: If neither session_id nor project_oenum provided
         """
-        # Sanitize project number for collection name
-        sanitized = project_number.replace("-", "_").replace(" ", "_").lower()
-        return f"project_{sanitized}"
+        # Sanitize user_id
+        user_id_clean = user_id.replace("-", "_").replace(" ", "_").replace(".", "_").lower()
+
+        if project_oenum:
+            # Project chat: user_{user_id}_project_{project_oenum}
+            project_clean = project_oenum.replace("-", "_").replace(" ", "_").lower()
+            return f"user_{user_id_clean}_project_{project_clean}"
+        elif session_id:
+            # General chat: user_{user_id}_session_{session_id}
+            session_clean = session_id.replace("-", "_").replace(" ", "_").lower()
+            return f"user_{user_id_clean}_session_{session_clean}"
+        else:
+            raise ValueError("Either session_id or project_oenum must be provided for collection isolation")
 
     def _get_user_memory_collection_name(self, user_id: str) -> str:
         """
+        DEPRECATED: Use _get_collection_name with session_id instead
         Get collection name for user's conversation memory
 
         Args:
@@ -129,17 +154,24 @@ class QdrantService:
         sanitized = user_id.replace("-", "_").replace(" ", "_").replace(".", "_").lower()
         return f"user_memory_{sanitized}"
 
-    def ensure_collection_exists(self, project_number: str) -> bool:
+    def ensure_collection_exists(
+        self,
+        user_id: str,
+        session_id: Optional[str] = None,
+        project_oenum: Optional[str] = None
+    ) -> bool:
         """
-        Ensure collection exists for project, create if not
+        Ensure session-specific collection exists, create if not
 
         Args:
-            project_number: Project OE number
+            user_id: User identifier
+            session_id: Optional session ID for general chats
+            project_oenum: Optional project OE number for project chats
 
         Returns:
             True if collection exists or was created
         """
-        collection_name = self._get_collection_name(project_number)
+        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
 
         try:
             # Check if collection exists
@@ -193,29 +225,33 @@ class QdrantService:
 
     def add_document_chunks(
         self,
-        project_number: str,
+        user_id: str,
         document_id: str,
-        chunks: List[Dict[str, Any]]
+        chunks: List[Dict[str, Any]],
+        session_id: Optional[str] = None,
+        project_oenum: Optional[str] = None
     ) -> bool:
         """
-        Add document chunks to Qdrant
+        Add document chunks to session-specific Qdrant collection
 
         Args:
-            project_number: Project OE number
+            user_id: User identifier
             document_id: Document unique identifier
             chunks: List of chunk dictionaries with keys:
                 - text: Chunk text content
                 - section_title: Section/heading title
                 - chunk_index: Chunk position in document
                 - metadata: Optional additional metadata
+            session_id: Optional session ID for general chats
+            project_oenum: Optional project OE number for project chats
 
         Returns:
             True if successful
         """
-        collection_name = self._get_collection_name(project_number)
+        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
 
         # Ensure collection exists
-        if not self.ensure_collection_exists(project_number):
+        if not self.ensure_collection_exists(user_id, session_id, project_oenum):
             return False
 
         try:
@@ -233,14 +269,20 @@ class QdrantService:
 
                 embedding = self.generate_embedding(text)
 
-                # Prepare payload
+                # Prepare payload with session context
                 payload = {
                     "document_id": document_id,
-                    "project_number": project_number,
+                    "user_id": user_id,
                     "text": text,
                     "section_title": chunk.get("section_title", ""),
                     "chunk_index": chunk.get("chunk_index", 0),
                 }
+
+                # Add session context
+                if project_oenum:
+                    payload["project_oenum"] = project_oenum
+                if session_id:
+                    payload["session_id"] = session_id
 
                 # Add optional metadata
                 if "metadata" in chunk:
@@ -272,26 +314,30 @@ class QdrantService:
 
     def semantic_search(
         self,
-        project_number: str,
+        user_id: str,
         query: str,
         limit: int = 5,
         document_id: Optional[str] = None,
-        score_threshold: float = 0.5
+        score_threshold: float = 0.5,
+        session_id: Optional[str] = None,
+        project_oenum: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Perform semantic search in project collection
+        Perform semantic search in session-specific collection
 
         Args:
-            project_number: Project OE number
+            user_id: User identifier
             query: Search query text
             limit: Maximum number of results
             document_id: Optional filter by specific document
             score_threshold: Minimum similarity score (0.0 to 1.0)
+            session_id: Optional session ID for general chats
+            project_oenum: Optional project OE number for project chats
 
         Returns:
             List of search results with chunks and scores
         """
-        collection_name = self._get_collection_name(project_number)
+        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
 
         try:
             # Generate query embedding
@@ -709,8 +755,45 @@ class QdrantService:
             logger.error(f"❌ Failed to retrieve similar conversations: {e}")
             return []
 
+    def delete_session_collection(
+        self,
+        user_id: str,
+        session_id: Optional[str] = None,
+        project_oenum: Optional[str] = None
+    ) -> bool:
+        """
+        Delete session-specific collection (complete data removal)
+
+        Args:
+            user_id: User identifier
+            session_id: Optional session ID for general chats
+            project_oenum: Optional project OE number for project chats
+
+        Returns:
+            True if successful
+        """
+        try:
+            collection_name = self._get_collection_name(user_id, session_id, project_oenum)
+
+            # Check if collection exists first
+            collections = self.client.get_collections().collections
+            exists = any(c.name == collection_name for c in collections)
+
+            if not exists:
+                logger.info(f"ℹ️ Collection {collection_name} does not exist, nothing to delete")
+                return True
+
+            self.client.delete_collection(collection_name=collection_name)
+            logger.info(f"🗑️ Deleted session collection: {collection_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to delete session collection: {e}")
+            return False
+
     def delete_user_memory(self, user_id: str) -> bool:
         """
+        DEPRECATED: Use delete_session_collection instead
         Delete all conversation memory for a user
 
         Args:
@@ -736,19 +819,21 @@ class QdrantService:
 
     def add_section_summaries(
         self,
-        project_number: str,
+        user_id: str,
         document_id: str,
-        section_summaries: List[Dict[str, Any]]
+        section_summaries: List[Dict[str, Any]],
+        session_id: Optional[str] = None,
+        project_oenum: Optional[str] = None
     ) -> bool:
         """
-        Add section summaries with dual storage model
+        Add section summaries with dual storage model to session-specific collection
 
         Stores:
         1. Summary vectors (for semantic search)
         2. Full section content (linked via section_id for retrieval)
 
         Args:
-            project_number: Project OE number
+            user_id: User identifier
             document_id: Document unique identifier
             section_summaries: List of section summary dictionaries with keys:
                 - section_id: Unique section identifier
@@ -761,13 +846,16 @@ class QdrantService:
                 - key_topics: List of key topics
                 - metadata: Additional metadata
 
+            session_id: Optional session ID for general chats
+            project_oenum: Optional project OE number for project chats
+
         Returns:
             True if successful
         """
-        collection_name = self._get_collection_name(project_number)
+        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
 
         # Ensure collection exists
-        if not self.ensure_collection_exists(project_number):
+        if not self.ensure_collection_exists(user_id, session_id, project_oenum):
             return False
 
         try:
@@ -789,7 +877,7 @@ class QdrantService:
                 # Prepare payload with both summary and full content
                 payload = {
                     "document_id": document_id,
-                    "project_number": project_number,
+                    "user_id": user_id,
                     "section_id": section_id,
                     "section_title": section_data.get("section_title", ""),
                     "heading_level": section_data.get("heading_level", 0),
@@ -812,6 +900,12 @@ class QdrantService:
                     "summary_char_count": len(summary),
                     "content_char_count": len(full_content),
                 }
+
+                # Add session context
+                if project_oenum:
+                    payload["project_oenum"] = project_oenum
+                if session_id:
+                    payload["session_id"] = session_id
 
                 # Add optional metadata
                 if "metadata" in section_data:
@@ -843,30 +937,34 @@ class QdrantService:
 
     def search_section_summaries(
         self,
-        project_number: str,
+        user_id: str,
         query: str,
         limit: int = 5,
         document_id: Optional[str] = None,
-        score_threshold: float = 0.5
+        score_threshold: float = 0.5,
+        session_id: Optional[str] = None,
+        project_oenum: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Search section summaries and retrieve full section content
+        Search section summaries and retrieve full section content from session-specific collection
 
         This method:
         1. Performs semantic search on summaries
         2. Returns full section content for matched sections
 
         Args:
-            project_number: Project OE number
+            user_id: User identifier
             query: Search query text
             limit: Maximum number of results
             document_id: Optional filter by specific document
             score_threshold: Minimum similarity score (0.0 to 1.0)
+            session_id: Optional session ID for general chats
+            project_oenum: Optional project OE number for project chats
 
         Returns:
             List of results with full section content
         """
-        collection_name = self._get_collection_name(project_number)
+        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
 
         try:
             # Generate query embedding

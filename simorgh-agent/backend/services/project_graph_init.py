@@ -371,7 +371,14 @@ class ProjectGraphInitializer:
         category_name: str,
         fields: Dict[str, str]
     ):
-        """Create a specification category with its fields, extraction guides, and values"""
+        """
+        Create a specification category with its fields, linking to project-level extraction guides
+
+        NEW STRUCTURE:
+        - ExtractionGuides are project-level templates (shared across documents)
+        - Documents have many-to-many relationships with guides
+        - ActualValues are linked to both SpecFields and ExtractionGuides
+        """
 
         # Import extraction guides
         from services.extraction_guides_data import get_extraction_guide
@@ -398,7 +405,7 @@ class ProjectGraphInitializer:
             category_name=category_name
         )
 
-        # Then create field nodes with extraction guides and actual values
+        # Then create field nodes linking to project-level guides and creating values
         for field_name, field_value in fields.items():
             # Get extraction guide for this field
             guide_data = get_extraction_guide(category_name, field_name)
@@ -409,6 +416,15 @@ class ProjectGraphInitializer:
                 document_id: $doc_id,
                 project_number: $oenum
             })
+            MATCH (doc:Document {id: $doc_id, project_number: $oenum})
+
+            // Match existing project-level ExtractionGuide (no document_id - shared template)
+            MATCH (guide:ExtractionGuide {
+                field_name: $field_name,
+                category_name: $category_name,
+                project_number: $oenum
+            })
+            WHERE NOT EXISTS(guide.document_id)  // Ensure it's project-level, not document-specific
 
             // Create SpecField node
             MERGE (field:SpecField {
@@ -421,22 +437,14 @@ class ProjectGraphInitializer:
 
             MERGE (cat)-[:HAS_FIELD]->(field)
 
-            // Create ExtractionGuide node for this field
-            MERGE (field)-[:HAS_EXTRACTION_GUIDE]->(guide:ExtractionGuide {
-                field_name: $field_name,
-                category_name: $category_name,
-                document_id: $doc_id,
-                project_number: $oenum
-            })
-            SET guide.definition = $definition,
-                guide.extraction_instructions = $instructions,
-                guide.examples = $examples,
-                guide.common_values = $common_values,
-                guide.relationships = $relationships,
-                guide.notes = $notes,
-                guide.updated_at = datetime()
+            // Link field to project-level guide (not creating new guide)
+            MERGE (field)-[:REFERENCES_GUIDE]->(guide)
 
-            // Create ActualValue node for extracted value
+            // Create many-to-many Document ↔ ExtractionGuide relationships
+            MERGE (doc)-[:USES_GUIDE]->(guide)
+            MERGE (guide)-[:USED_IN_DOCUMENT]->(doc)
+
+            // Create ActualValue node for extracted value (document-specific)
             MERGE (field)-[:HAS_VALUE]->(value:ActualValue {
                 field_name: $field_name,
                 category_name: $category_name,
@@ -446,6 +454,9 @@ class ProjectGraphInitializer:
             SET value.extracted_value = $field_value,
                 value.extraction_method = 'enhanced_rag',
                 value.updated_at = datetime()
+
+            // Link value back to guide for traceability
+            MERGE (value)-[:EXTRACTED_BY_GUIDE]->(guide)
 
             RETURN field
             """
@@ -631,7 +642,12 @@ class ProjectGraphInitializer:
         guide_content: Dict[str, str]
     ) -> bool:
         """
-        Add an extraction guide node to a specification field
+        Link a project-level extraction guide to a specification field
+
+        NEW BEHAVIOR:
+        - Guides are project-level (no document_id in unique key)
+        - Links existing guide to field via REFERENCES_GUIDE relationship
+        - Creates Document ↔ Guide many-to-many relationships
 
         Args:
             project_oenum: Project OENUM
@@ -657,7 +673,9 @@ class ProjectGraphInitializer:
                 document_id: $doc_id,
                 project_number: $oenum
             })
+            MATCH (doc:Document {id: $doc_id, project_number: $oenum})
 
+            // Match or create project-level guide (NO document_id)
             MERGE (guide:ExtractionGuide {
                 field_name: $field_name,
                 category_name: $category_name,
@@ -671,7 +689,12 @@ class ProjectGraphInitializer:
                 guide.notes = $notes,
                 guide.updated_at = datetime()
 
-            MERGE (field)-[:HAS_EXTRACTION_GUIDE]->(guide)
+            // Link field to guide
+            MERGE (field)-[:REFERENCES_GUIDE]->(guide)
+
+            // Create many-to-many Document ↔ Guide relationships
+            MERGE (doc)-[:USES_GUIDE]->(guide)
+            MERGE (guide)-[:USED_IN_DOCUMENT]->(doc)
 
             RETURN guide
             """
@@ -691,11 +714,11 @@ class ProjectGraphInitializer:
                     notes=guide_content.get("notes", "")
                 )
 
-                logger.info(f"✅ Added extraction guide for {category_name}.{field_name}")
+                logger.info(f"✅ Linked extraction guide for {category_name}.{field_name}")
                 return result.single() is not None
 
             except Exception as e:
-                logger.error(f"❌ Failed to add extraction guide: {e}")
+                logger.error(f"❌ Failed to link extraction guide: {e}")
                 return False
 
     def get_extraction_guide(
@@ -874,8 +897,10 @@ class ProjectGraphInitializer:
         """
         Link all project-level extraction guides to a spec document's fields
 
-        This creates relationships between the document's SpecField nodes
-        and the corresponding ExtractionGuide template nodes.
+        NEW BEHAVIOR:
+        - Uses REFERENCES_GUIDE relationship (SpecField → ExtractionGuide)
+        - Creates many-to-many Document ↔ ExtractionGuide relationships
+        - Guides are shared across documents (no document_id in guide key)
 
         Args:
             project_oenum: Project OENUM
@@ -890,14 +915,20 @@ class ProjectGraphInitializer:
                 -[:HAS_SPEC_CATEGORY]->(cat:SpecCategory)
                 -[:HAS_FIELD]->(field:SpecField)
 
+            // Match project-level guides (no document_id, may have is_template flag)
             MATCH (guide:ExtractionGuide {
                 field_name: field.name,
                 category_name: cat.name,
-                project_number: $oenum,
-                is_template: true
+                project_number: $oenum
             })
+            WHERE NOT EXISTS(guide.document_id)  // Ensure project-level
 
-            MERGE (field)-[:HAS_EXTRACTION_GUIDE]->(guide)
+            // Link field to guide
+            MERGE (field)-[:REFERENCES_GUIDE]->(guide)
+
+            // Create many-to-many Document ↔ Guide relationships
+            MERGE (doc)-[:USES_GUIDE]->(guide)
+            MERGE (guide)-[:USED_IN_DOCUMENT]->(doc)
 
             RETURN count(field) as links_created
             """

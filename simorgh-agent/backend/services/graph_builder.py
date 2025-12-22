@@ -238,19 +238,58 @@ Analyze the document and extract all equipment, systems, specifications, and the
                         description = field.get("description", "")
 
                         session.run("""
+                            MATCH (doc:Document {id: $doc_id, project_number: $project_number})
                             MATCH (cat:SpecCategory {name: $category, project_number: $project_number})
-                            MERGE (field:SpecField {name: $field_name, category: $category, project_number: $project_number})
-                            SET field.description = $description
+
+                            // Create field with document_id for uniqueness
+                            MERGE (field:SpecField {
+                                name: $field_name,
+                                category_name: $category,
+                                document_id: $doc_id,
+                                project_number: $project_number
+                            })
+                            SET field.description = $description,
+                                field.updated_at = datetime()
                             MERGE (cat)-[:HAS_FIELD]->(field)
 
-                            // Create value node if value exists
+                            // Try to link to project-level ExtractionGuide if exists
+                            OPTIONAL MATCH (guide:ExtractionGuide {
+                                field_name: $field_name,
+                                category_name: $category,
+                                project_number: $project_number
+                            })
+                            WHERE NOT EXISTS(guide.document_id)
+                            FOREACH (_ IN CASE WHEN guide IS NOT NULL THEN [1] ELSE [] END |
+                                MERGE (field)-[:REFERENCES_GUIDE]->(guide)
+                                MERGE (doc)-[:USES_GUIDE]->(guide)
+                                MERGE (guide)-[:USED_IN_DOCUMENT]->(doc)
+                            )
+
+                            // Create value node if value exists (with document_id in unique key)
                             FOREACH (v IN CASE WHEN $value <> '' THEN [1] ELSE [] END |
-                                MERGE (value:ActualValue {field_name: $field_name, category: $category, project_number: $project_number})
+                                MERGE (value:ActualValue {
+                                    field_name: $field_name,
+                                    category_name: $category,
+                                    document_id: $doc_id,
+                                    project_number: $project_number
+                                })
                                 SET value.extracted_value = $value,
                                     value.unit = $unit,
-                                    value.source_document = $doc_id
+                                    value.extraction_method = 'llm_entity_extraction',
+                                    value.updated_at = datetime()
                                 MERGE (field)-[:HAS_VALUE]->(value)
                             )
+
+                            // Link value to guide if both exist
+                            WITH field, guide, $value as val
+                            WHERE guide IS NOT NULL AND val <> ''
+                            MATCH (field)-[:HAS_VALUE]->(value:ActualValue {
+                                field_name: $field_name,
+                                category_name: $category,
+                                document_id: $doc_id,
+                                project_number: $project_number
+                            })
+                            MERGE (value)-[:EXTRACTED_BY_GUIDE]->(guide)
                         """, {
                             "category": category_name,
                             "field_name": field_name,
