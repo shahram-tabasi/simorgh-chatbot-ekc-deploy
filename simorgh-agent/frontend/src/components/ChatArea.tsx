@@ -66,7 +66,7 @@ export function ChatArea({
   return (
     <div className="flex-1 flex flex-col h-full relative overflow-hidden">
       {/* Main content area - scrollable only in chatting mode */}
-      <div className={`flex-1 flex flex-col ${isIdle ? 'justify-center items-center' : 'overflow-y-auto'} px-2 sm:px-4 md:px-8 lg:px-20`}>
+      <div className={`flex-1 flex flex-col ${isIdle ? 'justify-center items-center overflow-y-auto' : 'overflow-y-auto'} px-2 sm:px-4 md:px-8 lg:px-20`}>
         {/* Welcome content - shown in idle mode */}
         {isIdle && (
           <div className="w-full max-w-5xl mx-auto">
