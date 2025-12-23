@@ -2138,7 +2138,8 @@ async def send_chat_message(
                 logger.info(f"🔍 Performing enhanced section-based search")
                 qdrant = get_qdrant_service()
                 vector_results = qdrant.search_section_summaries(
-                    project_number=project_number,
+                    user_id=_user_id,
+                    project_oenum=project_number,
                     query=_content,
                     limit=5,
                     score_threshold=0.3

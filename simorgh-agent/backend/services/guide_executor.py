@@ -71,7 +71,7 @@ class GuideExecutor:
                         project_number: $project_number,
                         category_name: $category
                     })
-                    WHERE NOT EXISTS(guide.document_id)  // Ensure project-level
+                    WHERE guide.document_id IS NULL  // Ensure project-level
                     RETURN guide.category_name as category,
                            guide.field_name as field_name,
                            guide.definition as definition,
@@ -84,7 +84,7 @@ class GuideExecutor:
                 else:
                     query = """
                     MATCH (guide:ExtractionGuide {project_number: $project_number})
-                    WHERE NOT EXISTS(guide.document_id)  // Ensure project-level
+                    WHERE guide.document_id IS NULL  // Ensure project-level
                     RETURN guide.category_name as category,
                            guide.field_name as field_name,
                            guide.definition as definition,
@@ -414,7 +414,7 @@ Extract the value for: **{field_name}**
                             category_name: $category_name,
                             project_number: $project_number
                         })
-                        WHERE NOT EXISTS(guide.document_id)
+                        WHERE guide.document_id IS NULL
 
                         // Create ActualValue with proper unique key (includes document_id)
                         MERGE (value:ActualValue {

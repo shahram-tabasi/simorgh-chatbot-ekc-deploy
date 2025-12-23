@@ -258,7 +258,7 @@ Analyze the document and extract all equipment, systems, specifications, and the
                                 category_name: $category,
                                 project_number: $project_number
                             })
-                            WHERE NOT EXISTS(guide.document_id)
+                            WHERE guide.document_id IS NULL
                             FOREACH (_ IN CASE WHEN guide IS NOT NULL THEN [1] ELSE [] END |
                                 MERGE (field)-[:REFERENCES_GUIDE]->(guide)
                                 MERGE (doc)-[:USES_GUIDE]->(guide)
