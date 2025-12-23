@@ -201,7 +201,7 @@ function MainChat() {
 
   return (
     <LanguageProvider>
-      <div className="w-full h-screen overflow-hidden relative bg-[#0a0e27]">
+      <div className="w-full h-[100dvh] overflow-hidden relative bg-[#0a0e27]">
         <ThemeBackground />
 
         <div className="relative z-10 flex h-full">
@@ -324,7 +324,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-black">
+      <div className="w-full h-[100dvh] flex items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-black">
         <div className="text-white text-xl">Loading...</div>
       </div>
     );

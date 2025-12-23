@@ -69,12 +69,13 @@ export function ChatInput({
     }
   }, [promptToInsert]);
 
-  // Auto-resize textarea
+  // Auto-resize textarea - constrained by CSS max-height
   useEffect(() => {
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.style.height = 'auto';
-      textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+      const maxHeight = window.innerWidth < 640 ? 120 : 200; // Match Tailwind sm breakpoint
+      textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
     }
   }, [message]);
 
@@ -190,7 +191,7 @@ export function ChatInput({
 
   const inputClasses = centered
     ? 'w-full max-w-3xl mx-auto px-2 sm:px-4'
-    : 'border-t border-white/10 bg-black/20 backdrop-blur-xl p-2 sm:p-4';
+    : 'border-t border-transparent backdrop-blur-xl p-2 sm:p-4';
 
   return (
     <div className={`${inputClasses} relative z-10`}>
@@ -298,8 +299,8 @@ export function ChatInput({
             placeholder={disabled ? "Please create or select a project and chat to start messaging..." : "Ask Simorgh anything..."}
             disabled={disabled}
             rows={1}
-            className="w-full px-2 sm:px-4 py-2 sm:py-3 rounded-lg bg-transparent text-white text-sm sm:text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed"
-            style={{ minHeight: '40px', maxHeight: '200px' }}
+            className="w-full px-2 sm:px-4 py-2 sm:py-3 rounded-lg bg-transparent text-white text-sm sm:text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed overflow-y-auto max-h-[120px] sm:max-h-[200px]"
+            style={{ minHeight: '40px' }}
           />
         </div>
 

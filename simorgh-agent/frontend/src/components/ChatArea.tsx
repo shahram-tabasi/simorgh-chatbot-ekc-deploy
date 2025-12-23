@@ -97,7 +97,7 @@ export function ChatArea({
       <div className={`w-full flex-shrink-0 flex justify-center ${
         isIdle
           ? 'pb-8 sm:pb-12 md:pb-16'
-          : 'pb-4 sm:pb-6 md:pb-8 border-t border-white/10 bg-black/20 backdrop-blur-xl'
+          : 'pb-4 sm:pb-6 md:pb-8 border-t border-transparent backdrop-blur-xl'
       }`}>
         <div className={`w-full px-2 sm:px-4 ${isIdle ? 'max-w-3xl' : 'max-w-4xl'}`}>
           <ChatInput
