@@ -459,11 +459,17 @@ Be thorough and extract ALL parameters. Mark "NOT FOUND" for missing values."""
         return result.get("response", "")
 
     async def _extract_with_local_llm_simplified(self, markdown_content: str) -> str:
-        """Simplified extraction for local LLM with reduced prompt size"""
+        """Simplified extraction for local LLM with chunked processing for complete coverage"""
 
-        logger.info("📝 Using simplified extraction for local LLM compatibility...")
+        logger.info("📝 Using simplified extraction for local LLM with chunked processing...")
 
-        # Ultra-simplified prompt for local LLM (within 4096 token limit)
+        # GPU: NVIDIA A30 24GB, Max context: 8196 tokens
+        # Calculation: 8196 tokens - 1500 (output) = 6696 tokens input
+        # Safe chunk size: 6696 tokens × 3 chars/token ≈ 20,000 chars (using 18,000 for safety)
+        CHUNK_SIZE = 18000
+        OVERLAP = 1000  # Overlap between chunks to avoid missing specs at boundaries
+
+        # Ultra-simplified prompt for local LLM
         simplified_prompt = """Extract electrical switchgear specs from the document.
 
 Focus on: Voltage, Current, Frequency, IP Rating, Busbar Material, Circuit Breaker Type/Rating, Protection, Enclosure Material.
@@ -478,34 +484,137 @@ Example:
 
 Only extract clear values."""
 
-        # Reduce document chunk to fit within token limits
-        # Target: ~3000 tokens for input = ~9000 chars (leaving 1000+ tokens for response)
-        doc_chunk = markdown_content[:8000]  # Reduced from 15000 to 8000
+        # Split document into overlapping chunks
+        chunks = []
+        doc_length = len(markdown_content)
+        start = 0
 
-        system_message = f"""{simplified_prompt}
+        while start < doc_length:
+            end = min(start + CHUNK_SIZE, doc_length)
+            chunk = markdown_content[start:end]
+            chunks.append({
+                "content": chunk,
+                "start": start,
+                "end": end,
+                "chunk_num": len(chunks) + 1
+            })
 
-DOCUMENT:
-{doc_chunk}
+            # Move to next chunk with overlap
+            start += CHUNK_SIZE - OVERLAP
+
+            # Stop if we've covered the entire document
+            if end >= doc_length:
+                break
+
+        total_chunks = len(chunks)
+        logger.info(f"📚 Processing {total_chunks} chunks ({CHUNK_SIZE} chars each) to cover entire {doc_length} char document")
+
+        # Process each chunk
+        all_results = []
+        for chunk_info in chunks:
+            chunk_num = chunk_info["chunk_num"]
+            chunk_content = chunk_info["content"]
+
+            logger.info(f"📄 Processing chunk {chunk_num}/{total_chunks} (chars {chunk_info['start']}-{chunk_info['end']})")
+
+            system_message = f"""{simplified_prompt}
+
+DOCUMENT (Chunk {chunk_num}/{total_chunks}):
+{chunk_content}
 """
 
-        user_message = "Extract specifications as table."
+            user_message = "Extract specifications as table."
 
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ]
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ]
 
-        logger.info(f"📏 Local LLM prompt size: {len(system_message)} chars, doc chunk: {len(doc_chunk)} chars")
+            logger.info(f"📏 Chunk {chunk_num} - Prompt size: {len(system_message)} chars")
 
-        result = self.llm.generate(
-            messages=messages,
-            mode="offline",
-            temperature=0.3,
-            use_cache=False,
-            max_tokens=2000  # Limit output for local LLM
-        )
+            try:
+                result = self.llm.generate(
+                    messages=messages,
+                    mode="offline",
+                    temperature=0.3,
+                    use_cache=False,
+                    max_tokens=2000
+                )
 
-        return result.get("response", "")
+                chunk_result = result.get("response", "")
+                if chunk_result and len(chunk_result) > 20:
+                    all_results.append({
+                        "chunk_num": chunk_num,
+                        "result": chunk_result
+                    })
+                    logger.info(f"✅ Chunk {chunk_num} extracted {len(chunk_result)} chars")
+                else:
+                    logger.warning(f"⚠️ Chunk {chunk_num} returned minimal output")
+
+            except Exception as e:
+                logger.error(f"❌ Error processing chunk {chunk_num}: {e}")
+                continue
+
+        # Merge results from all chunks
+        if not all_results:
+            logger.error("❌ No results from any chunk")
+            return ""
+
+        logger.info(f"🔄 Merging results from {len(all_results)} successful chunks...")
+        merged_result = self._merge_chunk_results(all_results)
+
+        logger.info(f"✅ Final merged result: {len(merged_result)} chars from {total_chunks} chunks")
+        return merged_result
+
+    def _merge_chunk_results(self, chunk_results: list) -> str:
+        """Merge and deduplicate extraction results from multiple chunks"""
+
+        # Collect all rows from all chunks
+        all_rows = []
+        seen_params = set()  # Track unique parameter-value combinations
+
+        for chunk_data in chunk_results:
+            result_text = chunk_data["result"]
+
+            # Parse table rows (simple parsing - look for lines with |)
+            lines = result_text.split('\n')
+            for line in lines:
+                line = line.strip()
+
+                # Skip empty lines and header separators
+                if not line or line.startswith('|---') or line.startswith('| ---'):
+                    continue
+
+                # Check if it's a table row
+                if line.startswith('|') and line.count('|') >= 3:
+                    # Create a normalized key for deduplication
+                    # Extract parameter name and value (first two columns)
+                    parts = [p.strip() for p in line.split('|')]
+                    if len(parts) >= 4:  # | Param | Value | Unit | Source |
+                        param = parts[1].lower().strip()
+                        value = parts[2].lower().strip()
+
+                        # Skip headers
+                        if param in ['param', 'parameter', 'item']:
+                            continue
+
+                        # Create unique key
+                        key = f"{param}:{value}"
+
+                        # Only add if not seen before (deduplication)
+                        if key not in seen_params and param and value:
+                            seen_params.add(key)
+                            all_rows.append(line)
+
+        # Build merged table
+        if not all_rows:
+            return ""
+
+        merged = "| Parameter | Value | Unit | Source |\n"
+        merged += "|-----------|-------|------|--------|\n"
+        merged += "\n".join(all_rows)
+
+        return merged
 
     def _format_error_response(self, error_message: str) -> str:
         """Format error response for user"""
