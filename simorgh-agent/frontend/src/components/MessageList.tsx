@@ -356,7 +356,7 @@ export function MessageList({
                 </div>
               )}
 
-              {/* User Message Controls */}
+              {/* User Message Controls - Copy and Edit only (NO Share) */}
               {message.role === 'user' && (
                 <div className="flex items-center gap-1 px-2 mt-1 justify-end">
                   {/* Copy button for user messages */}
@@ -366,15 +366,6 @@ export function MessageList({
                     title="Copy message"
                   >
                     <CopyIcon className="w-3.5 h-3.5" />
-                  </button>
-
-                  {/* Share button for user messages - mobile-friendly native share */}
-                  <button
-                    onClick={() => handleShare(message.content)}
-                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400"
-                    title="Share message"
-                  >
-                    <Share2Icon className="w-3.5 h-3.5" />
                   </button>
 
                   {/* Edit button only for last user message */}
