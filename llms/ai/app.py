@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
         model_manager = ModelManager(
             model_name="unsloth/gpt-oss-20b",
             model_path="/models/unsloth-gpt-oss-20b-16bit",
-            max_model_len=4096,
+            max_model_len=8196,  # Updated for NVIDIA A30 GPU capability
             gpu_memory_utilization=0.9,
             lora_adapter_path="./saved_lora_adapters",
         )
