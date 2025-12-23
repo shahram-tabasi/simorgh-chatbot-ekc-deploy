@@ -424,7 +424,7 @@ class ProjectGraphInitializer:
                 category_name: $category_name,
                 project_number: $oenum
             })
-            WHERE NOT EXISTS(guide.document_id)  // Ensure it's project-level, not document-specific
+            WHERE guide.document_id IS NULL  // Ensure it's project-level, not document-specific
 
             // Create SpecField node
             MERGE (field:SpecField {
@@ -921,7 +921,7 @@ class ProjectGraphInitializer:
                 category_name: cat.name,
                 project_number: $oenum
             })
-            WHERE NOT EXISTS(guide.document_id)  // Ensure project-level
+            WHERE guide.document_id IS NULL  // Ensure project-level
 
             // Link field to guide
             MERGE (field)-[:REFERENCES_GUIDE]->(guide)

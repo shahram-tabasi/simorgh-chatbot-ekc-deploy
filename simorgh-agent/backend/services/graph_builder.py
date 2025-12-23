@@ -125,18 +125,37 @@ Analyze the document and extract all equipment, systems, specifications, and the
 
             response_text = result["response"]
 
-            # Parse JSON response
+            # Parse JSON response with multiple fallback strategies
+            json_str = None
+
+            # Strategy 1: Extract from markdown code blocks
             json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
             else:
-                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                # Strategy 2: Find JSON object directly
+                json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response_text, re.DOTALL)
                 if json_match:
                     json_str = json_match.group(0)
                 else:
-                    raise ValueError("No JSON found in LLM response")
+                    # Strategy 3: Try to find any curly braces content
+                    start_idx = response_text.find('{')
+                    end_idx = response_text.rfind('}')
+                    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                        json_str = response_text[start_idx:end_idx+1]
 
-            entities = json.loads(json_str)
+            if not json_str:
+                logger.warning(f"⚠️ No JSON found in LLM response, returning empty entities")
+                logger.debug(f"Response (first 500 chars): {response_text[:500]}")
+                # Return empty structure instead of failing
+                entities = {"equipment": [], "systems": [], "specifications": [], "relationships": []}
+            else:
+                try:
+                    entities = json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"⚠️ Failed to parse JSON: {e}, returning empty entities")
+                    logger.debug(f"Invalid JSON (first 500 chars): {json_str[:500]}")
+                    entities = {"equipment": [], "systems": [], "specifications": [], "relationships": []}
 
             logger.info(f"✅ Extracted {len(entities.get('equipment', []))} equipment, "
                        f"{len(entities.get('systems', []))} systems, "
@@ -258,7 +277,7 @@ Analyze the document and extract all equipment, systems, specifications, and the
                                 category_name: $category,
                                 project_number: $project_number
                             })
-                            WHERE NOT EXISTS(guide.document_id)
+                            WHERE guide.document_id IS NULL
                             FOREACH (_ IN CASE WHEN guide IS NOT NULL THEN [1] ELSE [] END |
                                 MERGE (field)-[:REFERENCES_GUIDE]->(guide)
                                 MERGE (doc)-[:USES_GUIDE]->(guide)
