@@ -464,9 +464,11 @@ Be thorough and extract ALL parameters. Mark "NOT FOUND" for missing values."""
         logger.info("📝 Using simplified extraction for local LLM with chunked processing...")
 
         # GPU: NVIDIA A30 24GB, Max context: 8196 tokens
-        # Calculation: 8196 tokens - 1500 (output) = 6696 tokens input
-        # Safe chunk size: 6696 tokens × 3 chars/token ≈ 20,000 chars (using 18,000 for safety)
-        CHUNK_SIZE = 18000
+        # Analysis from logs: 18,396 chars → 18,784 formatted → 5,799 tokens (0.315 tokens/char)
+        # Safe calculation: 8196 tokens - 2000 (output+overhead) = 6196 tokens input
+        # 6196 tokens ÷ 0.315 tokens/char ≈ 19,670 chars
+        # Using 12,000 chars for safety margin (ensures <4000 tokens after template)
+        CHUNK_SIZE = 12000
         OVERLAP = 1000  # Overlap between chunks to avoid missing specs at boundaries
 
         # Ultra-simplified prompt for local LLM
