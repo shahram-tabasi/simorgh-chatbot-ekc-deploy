@@ -1,0 +1,153 @@
+name: Deploy EPLAN VMs to Server 1.69
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'vagrant/eplan-vms/**'
+      - '.github/workflows/eplan-vms-deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy-eplan-vms:
+    name: Deploy EPLAN VMs to 192.168.1.69
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key for central server
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
+
+      - name: Test SSH to central server
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 "echo 'Connected to central server'"
+
+      - name: Setup SSH from central to target server (1.69)
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh-keyscan -H 192.168.1.69 >> ~/.ssh/known_hosts 2>/dev/null || true"
+
+      - name: Test SSH to target server via central
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh -o StrictHostKeyChecking=no ubuntu@192.168.1.69 'echo Connected to EPLAN VM host server'"
+
+      - name: Create deployment directory on target server
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'mkdir -p ~/eplan-vms-deployment'"
+
+      - name: Check disk space on target server
+        run: |
+          echo "Checking disk space on 192.168.1.69..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'df -h ~'"
+
+      - name: Copy vagrant files via central server
+        run: |
+          echo "Cleaning up old files on target server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'rm -f ~/eplan-vms-deployment/eplan-deploy.tar.gz'" || true
+
+          echo "Creating tarball of vagrant files..."
+          TAR_FILE="$RUNNER_TEMP/eplan-vms.tar.gz"
+          tar -czf "$TAR_FILE" -C ./vagrant/eplan-vms .
+
+          TAR_SIZE=$(du -h "$TAR_FILE" | cut -f1)
+          echo "Tarball size: $TAR_SIZE"
+
+          echo "Copying to central server..."
+          scp -P 2324 -i ~/.ssh/deploy_key "$TAR_FILE" \
+            ${{ secrets.SSH_USER }}@95.38.203.173:/tmp/eplan-deploy.tar.gz
+
+          echo "Verifying file on central server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ls -lh /tmp/eplan-deploy.tar.gz"
+
+          echo "Copying to target server 192.168.1.69..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 /tmp/eplan-deploy.tar.gz ubuntu@192.168.1.69:~/eplan-vms-deployment/eplan-deploy.tar.gz"
+
+          echo "Verifying file on target server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'ls -lh ~/eplan-vms-deployment/eplan-deploy.tar.gz'"
+
+          echo "Extracting on target server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && tar -xzf eplan-deploy.tar.gz && rm eplan-deploy.tar.gz'"
+
+          echo "Cleaning up central server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "rm -f /tmp/eplan-deploy.tar.gz" || true
+
+          echo "Cleaning up local..."
+          rm "$TAR_FILE"
+
+          echo "✓ Deployment files copied"
+
+      - name: Verify Vagrant and VirtualBox installation
+        run: |
+          echo "Checking Vagrant and VirtualBox versions..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'vagrant --version && vboxmanage --version || echo Warning: Vagrant or VirtualBox not found'"
+
+      - name: Check existing VMs
+        run: |
+          echo "Checking for existing EPLAN VMs..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant status || echo No existing vagrant environment'"
+
+      - name: Start EPLAN VMs with Vagrant
+        run: |
+          echo "Starting 3 EPLAN VMs (this may take 30-60 minutes)..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant up --provider=virtualbox'"
+
+      - name: Show VM status
+        run: |
+          echo "=== EPLAN VMs Status ==="
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant status'"
+
+      - name: Show VirtualBox VMs
+        run: |
+          echo "=== VirtualBox VMs Running ==="
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'vboxmanage list runningvms'"
+
+      - name: Deployment Summary
+        run: |
+          echo "================================"
+          echo "EPLAN VMs Deployment Summary"
+          echo "================================"
+          echo "Target Server: 192.168.1.69"
+          echo "VMs Created: eplan1, eplan2, eplan3"
+          echo "Private IPs: 192.168.56.101-103"
+          echo "RDP Ports: 13390, 13391, 13392"
+          echo ""
+          echo "To connect via RDP from 192.168.1.69:"
+          echo "  - eplan1: rdp://localhost:13390"
+          echo "  - eplan2: rdp://localhost:13391"
+          echo "  - eplan3: rdp://localhost:13392"
+          echo ""
+          echo "To manage VMs:"
+          echo "  ssh ubuntu@192.168.1.69"
+          echo "  cd ~/eplan-vms-deployment"
+          echo "  vagrant status|halt|destroy"
+          echo "================================"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Vagrant Logs ==="
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && cat .vagrant/logs/* 2>/dev/null || echo No vagrant logs found'"
