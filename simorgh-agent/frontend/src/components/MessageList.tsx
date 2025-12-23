@@ -142,24 +142,35 @@ export function MessageList({
         return;
       }
 
-      console.log('📤 Sharing content (length:', content.length, ')');
+      console.log('📤 SHARE CLICKED - Content length:', content.length);
+      console.log('📤 navigator.share available?', 'share' in navigator);
 
       if (navigator.share) {
-        // Share full text without title for better compatibility
-        await navigator.share({
-          text: content
-        });
-        console.log('✅ Content shared successfully');
+        console.log('📤 Attempting to call navigator.share()...');
+        try {
+          await navigator.share({
+            text: content
+          });
+          console.log('✅ Share completed successfully (user selected an app)');
+        } catch (shareError: any) {
+          console.log('⚠️ Share error:', shareError.name, shareError.message);
+          // User cancelled share dialog - this is expected
+          if (shareError.name === 'AbortError') {
+            console.log('ℹ️ User cancelled share dialog (this is normal)');
+            return;
+          }
+          // Other errors - fall back to copy
+          console.warn('⚠️ Share failed with non-abort error, falling back to copy');
+          await handleCopy(content);
+        }
       } else {
         // Fallback to copy if Web Share API not available
-        console.log('ℹ️ Web Share API not supported, falling back to copy');
+        console.log('ℹ️ Web Share API not supported on this device/browser, falling back to copy');
         await handleCopy(content);
       }
     } catch (error) {
-      // User cancelled share dialog - this is expected, don't log as error
-      if ((error as Error).name !== 'AbortError') {
-        console.error('❌ Failed to share:', error);
-      }
+      console.error('❌ Unexpected error in handleShare:', error);
+      await handleCopy(content);
     }
   };
 

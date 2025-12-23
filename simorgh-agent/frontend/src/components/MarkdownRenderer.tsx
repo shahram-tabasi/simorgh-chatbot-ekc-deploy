@@ -111,26 +111,33 @@ export function MarkdownRenderer({ content, className = '', dir = 'ltr' }: Markd
             />
           ),
 
-          // Tables
+          // Tables - Mobile responsive with horizontal scroll container
           table: ({ node, ...props }) => (
-            <div className="overflow-x-auto my-4">
-              <table className="min-w-full border border-gray-700 rounded-lg overflow-hidden" {...props} />
+            <div className="overflow-x-auto my-4 -mx-3 sm:mx-0 max-w-full">
+              {/* Mobile: Scrollable table container with visual hint */}
+              <div className="inline-block min-w-full align-middle">
+                <div className="overflow-hidden shadow-sm ring-1 ring-gray-700 sm:rounded-lg">
+                  <table className="min-w-full divide-y divide-gray-700" {...props} />
+                </div>
+              </div>
             </div>
           ),
           thead: ({ node, ...props }) => (
             <thead className="bg-gray-800" {...props} />
           ),
           tbody: ({ node, ...props }) => (
-            <tbody className="bg-gray-900/50" {...props} />
+            <tbody className="bg-gray-900/50 divide-y divide-gray-700" {...props} />
           ),
           tr: ({ node, ...props }) => (
-            <tr className="border-b border-gray-700 last:border-b-0" {...props} />
+            <tr {...props} />
           ),
           th: ({ node, ...props }) => (
-            <th className="px-4 py-2 text-left font-semibold text-white border-r border-gray-700 last:border-r-0" {...props} />
+            // Mobile: smaller padding, responsive text
+            <th className="px-2 py-2 sm:px-4 text-left text-xs sm:text-sm font-semibold text-white border-r border-gray-700 last:border-r-0 whitespace-nowrap" {...props} />
           ),
           td: ({ node, ...props }) => (
-            <td className="px-4 py-2 border-r border-gray-700 last:border-r-0" {...props} />
+            // Mobile: smaller padding, allow text wrap on very small content
+            <td className="px-2 py-2 sm:px-4 text-xs sm:text-sm border-r border-gray-700 last:border-r-0" {...props} />
           ),
 
           // Horizontal rule
