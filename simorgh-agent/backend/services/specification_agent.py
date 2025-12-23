@@ -463,29 +463,24 @@ Be thorough and extract ALL parameters. Mark "NOT FOUND" for missing values."""
 
         logger.info("📝 Using simplified extraction for local LLM compatibility...")
 
-        # Simplified prompt focused on key parameters only
-        simplified_prompt = """Extract electrical switchgear specifications from the document below.
+        # Ultra-simplified prompt for local LLM (within 4096 token limit)
+        simplified_prompt = """Extract electrical switchgear specs from the document.
 
-Focus on these key categories:
-1. General: Voltage, Current, Frequency, IP Rating
-2. Busbar: Material, Rating, Configuration
-3. Circuit Breakers: Type, Rating, Breaking Capacity
-4. Protection: Overcurrent, Earth Fault, Metering
-5. Enclosure: Material, IP Rating, Color
-6. Testing: FAT, IR Test, HV Test
-7. Documentation: Drawings, Manuals, Certificates
+Focus on: Voltage, Current, Frequency, IP Rating, Busbar Material, Circuit Breaker Type/Rating, Protection, Enclosure Material.
 
-Output format (one line per parameter found):
-| Item No | Parameter | Value | Unit | Source |
+Output as table:
+| Param | Value | Unit | Source |
 
 Example:
-| 1.2 | Rated Voltage | 400V | V | Page 3 |
-| 3.1 | Circuit Breaker Type | MCCB | - | Section 2.1 |
+| Voltage | 6.6kV | kV | Page 2 |
+| Current | 1600A | A | Page 2 |
+| CB Type | VCB | - | Page 3 |
 
-Only extract parameters that are clearly stated. Mark "NOT FOUND" if not present."""
+Only extract clear values."""
 
-        # Truncate document to fit local LLM context
-        doc_chunk = markdown_content[:15000]  # Much smaller for local LLM
+        # Reduce document chunk to fit within token limits
+        # Target: ~3000 tokens for input = ~9000 chars (leaving 1000+ tokens for response)
+        doc_chunk = markdown_content[:8000]  # Reduced from 15000 to 8000
 
         system_message = f"""{simplified_prompt}
 
@@ -493,12 +488,14 @@ DOCUMENT:
 {doc_chunk}
 """
 
-        user_message = "Extract all electrical specifications you can find in the document above. Output as a markdown table."
+        user_message = "Extract specifications as table."
 
         messages = [
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message}
         ]
+
+        logger.info(f"📏 Local LLM prompt size: {len(system_message)} chars, doc chunk: {len(doc_chunk)} chars")
 
         result = self.llm.generate(
             messages=messages,
