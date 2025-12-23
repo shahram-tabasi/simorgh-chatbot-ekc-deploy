@@ -633,7 +633,7 @@ DOCUMENT (Chunk {chunk_num}/{total_chunks}):
 The agent has saved the current state. You can try uploading a different document."""
 
     def _parse_extraction_table(self, markdown_table: str) -> List[Dict[str, Any]]:
-        """Parse extraction results from markdown table"""
+        """Parse extraction results from markdown table (supports both 4 and 7 column formats)"""
 
         # Simple parser - extract data rows
         results = []
@@ -644,8 +644,12 @@ The agent has saved the current state. You can try uploading a different documen
                 # Split by pipe and clean
                 parts = [p.strip() for p in line.split('|')[1:-1]]  # Remove first/last empty parts
 
+                # Skip header rows
+                if not parts or parts[0].lower() in ['item no', 'parameter', 'param', 'item', '#']:
+                    continue
+
+                # Handle 7-column format (full ITEM 1-11 from online LLM)
                 if len(parts) >= 7 and parts[0] and parts[0][0].isdigit():
-                    # Valid data row
                     results.append({
                         "item_no": parts[0],
                         "sub_parameter": parts[1],
@@ -654,6 +658,19 @@ The agent has saved the current state. You can try uploading a different documen
                         "unit": parts[4],
                         "page_section": parts[5],
                         "source_text": parts[6]
+                    })
+
+                # Handle 4-column format (simplified from local LLM)
+                elif len(parts) >= 4 and parts[0] and parts[1]:
+                    # Format: | Parameter | Value | Unit | Source |
+                    results.append({
+                        "item_no": "-",  # Not available in simplified format
+                        "sub_parameter": parts[0],  # Parameter name
+                        "classification": "VALUE_PARAMETER",  # Default
+                        "extracted_value": parts[1],  # Value
+                        "unit": parts[2] if len(parts) > 2 else "-",  # Unit
+                        "page_section": parts[3] if len(parts) > 3 else "-",  # Source/Page
+                        "source_text": "-"  # Not available in simplified format
                     })
 
         logger.info(f"📊 Parsed {len(results)} specification parameters")
