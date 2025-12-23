@@ -75,7 +75,8 @@ export default function SettingsPanel() {
       {/* دکمه تنظیمات - positioned under search icon on mobile (right side), bottom-right on desktop */}
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed right-4 top-24 md:bottom-6 md:right-6 md:top-auto z-50 w-12 h-12 rounded-full bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl hover:scale-110 hover:bg-white/20 transition-all flex items-center justify-center"
+        // Mobile-only fix: move settings icon down to avoid overlap with search icon
+        className="fixed right-4 top-32 md:bottom-6 md:right-6 md:top-auto z-50 w-12 h-12 rounded-full bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl hover:scale-110 hover:bg-white/20 transition-all flex items-center justify-center"
       >
         <Settings className="w-6 h-6 text-white" />
       </button>

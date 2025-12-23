@@ -197,7 +197,8 @@ export function MessageList({
   return (
     <div
       ref={containerRef}
-      className="flex-1 overflow-y-auto px-4 py-6 space-y-6"
+      // Mobile: ensure scrollable messages with proper spacing
+      className="flex-1 overflow-y-auto overflow-x-hidden px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6"
       onScroll={handleScroll}
     >
       {messages.map((message, index) => {
@@ -210,7 +211,8 @@ export function MessageList({
             initial={{ opacity: 1, y: 0 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0 }}
-            className={`flex gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            // Mobile: reduce gap and ensure proper layout
+            className={`flex gap-2 sm:gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {message.role === 'assistant' && (
               <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
@@ -218,9 +220,10 @@ export function MessageList({
               </div>
             )}
 
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1 min-w-0">
               <div
-                className={`max-w-2xl rounded-2xl px-4 py-3 ${
+                // Mobile: smaller max-width, ensure text wraps properly
+                className={`max-w-[85vw] sm:max-w-xl md:max-w-2xl rounded-2xl px-3 sm:px-4 py-3 break-words overflow-wrap-anywhere ${
                   message.role === 'user'
                     ? 'bg-gradient-to-br from-blue-500 to-purple-500 text-white'
                     : 'bg-white/5 border border-white/10 text-gray-200'
@@ -242,7 +245,8 @@ export function MessageList({
                 {message.role === 'assistant' ? (
                   <MarkdownRenderer content={message.content} dir={textDir} />
                 ) : (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap" dir={textDir}>
+                  // Mobile: ensure user messages wrap and don't overflow
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap break-words" dir={textDir}>
                     {message.content}
                   </p>
                 )}
@@ -362,6 +366,15 @@ export function MessageList({
                     title="Copy message"
                   >
                     <CopyIcon className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Share button for user messages - mobile-friendly native share */}
+                  <button
+                    onClick={() => handleShare(message.content)}
+                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400"
+                    title="Share message"
+                  >
+                    <Share2Icon className="w-3.5 h-3.5" />
                   </button>
 
                   {/* Edit button only for last user message */}
