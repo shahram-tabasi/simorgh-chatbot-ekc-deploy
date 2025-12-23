@@ -160,9 +160,9 @@ export function MessageList({
         return (
           <motion.div
             key={message.id}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 1, y: 0 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: index * 0.1 }}
+            transition={{ duration: 0 }}
             className={`flex gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {message.role === 'assistant' && (
@@ -305,16 +305,28 @@ export function MessageList({
                 </div>
               )}
 
-              {/* User Message Edit Button */}
-              {message.role === 'user' && index === messages.length - (isTyping ? 2 : 1) && (
+              {/* User Message Controls */}
+              {message.role === 'user' && (
                 <div className="flex items-center gap-1 px-2 mt-1 justify-end">
+                  {/* Copy button for user messages */}
                   <button
-                    onClick={() => onEditMessage?.(message)}
+                    onClick={() => handleCopy(message.content)}
                     className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400"
-                    title="Edit message"
+                    title="Copy message"
                   >
-                    <Edit2Icon className="w-3.5 h-3.5" />
+                    <CopyIcon className="w-3.5 h-3.5" />
                   </button>
+
+                  {/* Edit button only for last user message */}
+                  {index === messages.length - (isTyping ? 2 : 1) && (
+                    <button
+                      onClick={() => onEditMessage?.(message)}
+                      className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400"
+                      title="Edit message"
+                    >
+                      <Edit2Icon className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -341,8 +353,9 @@ export function MessageList({
 
       {isTyping && (
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 1, y: 0 }}
           animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0 }}
           className="flex gap-4"
         >
           <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
