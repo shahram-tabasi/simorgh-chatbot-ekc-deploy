@@ -84,12 +84,14 @@ export function MessageList({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
+  const [showCopyConfirmation, setShowCopyConfirmation] = React.useState(false);
 
   // Copy message content to clipboard
   const handleCopy = async (content: string) => {
     try {
       await navigator.clipboard.writeText(content);
-      // TODO: Show a toast notification
+      setShowCopyConfirmation(true);
+      setTimeout(() => setShowCopyConfirmation(false), 2000);
       console.log('✅ Content copied to clipboard');
     } catch (error) {
       console.error('❌ Failed to copy:', error);
@@ -372,6 +374,13 @@ export function MessageList({
       )}
 
       <div ref={messagesEndRef} />
+
+      {/* Copy confirmation message */}
+      {showCopyConfirmation && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-green-500 text-white text-sm rounded-lg shadow-lg animate-fade-in">
+          Copied to clipboard
+        </div>
+      )}
     </div>
   );
 }
