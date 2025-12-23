@@ -544,27 +544,48 @@ class LLMService:
         """
         Extract only the final user-facing answer from local LLM response.
 
-        Local LLM returns format like:
-        system...developer...user...assistantanalysis...assistantfinal<ACTUAL ANSWER>
+        Local LLM may return formats like:
+        - assistantfinal<ACTUAL ANSWER>  (preferred)
+        - assistantanalysis...assistantfinal<ANSWER>
+        - analysis<CONTENT>final<ANSWER>
+        - Just the content directly
 
-        We want to extract only the content after 'assistantfinal'.
+        We try multiple extraction strategies.
         """
         if not raw_response:
             return raw_response
 
-        # Look for the final answer marker
-        final_marker = "assistantfinal"
-
-        if final_marker in raw_response:
-            # Extract everything after the marker
-            parts = raw_response.split(final_marker, 1)
+        # Strategy 1: Look for assistantfinal marker (most specific)
+        if "assistantfinal" in raw_response:
+            parts = raw_response.split("assistantfinal", 1)
             if len(parts) > 1:
                 final_answer = parts[1].strip()
-                logger.debug(f"📝 Extracted final answer after '{final_marker}' marker")
+                logger.debug(f"📝 Extracted final answer after 'assistantfinal' marker")
                 return final_answer
 
-        # Fallback: if no marker found, return original response
-        logger.warning(f"⚠️ No '{final_marker}' marker found, returning full response")
+        # Strategy 2: Look for final channel marker
+        if "final" in raw_response.lower():
+            import re
+            # Match patterns like "final<content>" or "assistantfinal<content>"
+            match = re.search(r'(?:assistant)?final\s*(.*)', raw_response, re.IGNORECASE | re.DOTALL)
+            if match:
+                final_answer = match.group(1).strip()
+                if final_answer:
+                    logger.debug(f"📝 Extracted answer after 'final' marker")
+                    return final_answer
+
+        # Strategy 3: Look for analysis channel and extract meaningful content
+        if "analysis" in raw_response.lower():
+            # Remove the analysis prefix
+            parts = raw_response.split("analysis", 1)
+            if len(parts) > 1:
+                content = parts[1].strip()
+                # If content starts with description of what to do, return it
+                logger.debug(f"📝 Extracted content after 'analysis' marker")
+                return content
+
+        # Fallback: Return original response (it might already be clean)
+        logger.debug(f"ℹ️ No specific marker found, returning full response")
         return raw_response
 
     def _continue_truncated_response(

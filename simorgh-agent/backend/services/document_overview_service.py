@@ -211,11 +211,15 @@ class DocumentOverviewService:
                 overview_parts.append(f"   - Type: {doc_type} | Category: {category}")
                 overview_parts.append(f"   - Sections: {sections_count}")
 
+                # Safely handle key_topics (could be list, int, or other type)
                 if key_topics:
-                    topics_str = ", ".join(key_topics[:5])  # Limit to 5 topics
-                    if len(key_topics) > 5:
-                        topics_str += f" (+{len(key_topics) - 5} more)"
-                    overview_parts.append(f"   - Key Topics: {topics_str}")
+                    if isinstance(key_topics, list):
+                        topics_str = ", ".join(str(t) for t in key_topics[:5])  # Limit to 5 topics
+                        if len(key_topics) > 5:
+                            topics_str += f" (+{len(key_topics) - 5} more)"
+                        overview_parts.append(f"   - Key Topics: {topics_str}")
+                    elif isinstance(key_topics, (str, int)):
+                        overview_parts.append(f"   - Key Topics: {key_topics}")
 
                 overview_parts.append(f"   - Uploaded: {time_str}")
 
