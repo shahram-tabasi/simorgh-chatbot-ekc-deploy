@@ -72,10 +72,10 @@ export default function SettingsPanel() {
 
   return (
     <>
-      {/* دکمه تنظیمات */}
+      {/* دکمه تنظیمات - moved to left on mobile to avoid overlap with send button */}
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl hover:scale-110 hover:bg-white/20 transition-all flex items-center justify-center"
+        className="fixed bottom-6 left-6 md:bottom-6 md:right-6 md:left-auto z-50 w-12 h-12 rounded-full bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl hover:scale-110 hover:bg-white/20 transition-all flex items-center justify-center"
       >
         <Settings className="w-6 h-6 text-white" />
       </button>

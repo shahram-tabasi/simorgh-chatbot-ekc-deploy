@@ -146,34 +146,34 @@ export const SpecReview: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 overflow-x-hidden">
       {/* Header */}
       <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+        <div className="max-w-7xl mx-auto px-2 sm:px-4 py-3 sm:py-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white truncate">
                 Review Specifications
               </h1>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+              <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mt-1 truncate">
                 Project: {projectNumber} • Document: {documentId}
               </p>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-shrink-0 w-full sm:w-auto">
               {hasChanges && (
                 <button
                   onClick={handleReset}
-                  className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
+                  className="px-3 sm:px-4 py-2 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                 >
-                  Reset Changes
+                  Reset
                 </button>
               )}
 
               <button
                 onClick={handleSave}
                 disabled={!hasChanges || saving}
-                className={`px-4 py-2 rounded font-medium ${
+                className={`px-3 sm:px-4 py-2 text-sm rounded font-medium transition-colors flex-1 sm:flex-initial ${
                   hasChanges && !saving
                     ? 'bg-blue-500 hover:bg-blue-600 text-white'
                     : 'bg-gray-300 dark:bg-gray-700 text-gray-500 cursor-not-allowed'
@@ -184,7 +184,7 @@ export const SpecReview: React.FC = () => {
 
               <button
                 onClick={() => navigate('/')}
-                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
+                className="hidden sm:block px-3 sm:px-4 py-2 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
               >
                 Close
               </button>
@@ -194,22 +194,22 @@ export const SpecReview: React.FC = () => {
       </div>
 
       {/* Content */}
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-2 sm:px-4 py-4 sm:py-6 pb-20 sm:pb-6">
         {specs && Object.entries(specs).map(([category, fields]) => (
           <div
             key={category}
-            className="bg-white dark:bg-gray-800 rounded-lg shadow mb-6 overflow-hidden"
+            className="bg-white dark:bg-gray-800 rounded-lg shadow mb-4 sm:mb-6 overflow-hidden"
           >
-            <div className="bg-blue-500 text-white px-4 py-3">
-              <h2 className="text-lg font-semibold">
+            <div className="bg-blue-500 text-white px-3 sm:px-4 py-2 sm:py-3">
+              <h2 className="text-base sm:text-lg font-semibold truncate">
                 {category.replace(/_/g, ' ')}
               </h2>
             </div>
 
-            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-3 sm:p-4 grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
               {Object.entries(fields).map(([fieldName, fieldValue]) => (
-                <div key={fieldName} className="flex flex-col">
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <div key={fieldName} className="flex flex-col min-w-0">
+                  <label className="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 truncate">
                     {fieldName.replace(/_/g, ' ')}
                   </label>
                   <input
@@ -217,7 +217,7 @@ export const SpecReview: React.FC = () => {
                     value={fieldValue}
                     onChange={(e) => handleFieldChange(category, fieldName, e.target.value)}
                     placeholder="Not specified"
-                    className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full min-w-0 px-2 sm:px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-shadow"
                   />
                 </div>
               ))}
@@ -226,13 +226,13 @@ export const SpecReview: React.FC = () => {
         ))}
       </div>
 
-      {/* Floating save button for mobile */}
+      {/* Floating save button for mobile - moved to avoid settings button */}
       {hasChanges && (
-        <div className="fixed bottom-4 right-4 md:hidden">
+        <div className="fixed bottom-4 left-4 md:hidden z-40">
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg font-medium"
+            className="px-4 sm:px-6 py-2 sm:py-3 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg font-medium transition-colors disabled:opacity-50"
           >
             {saving ? '💾 Saving...' : '💾 Save'}
           </button>
