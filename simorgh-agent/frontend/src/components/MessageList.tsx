@@ -88,40 +88,48 @@ export function MessageList({
 
   // Copy message content to clipboard
   const handleCopy = async (content: string) => {
+    // Verify content is not empty
+    if (!content || content.trim().length === 0) {
+      console.error('❌ Copy failed: content is empty');
+      return;
+    }
+
+    console.log('📋 Copying content (length:', content.length, ')');
+
+    // Try modern Clipboard API first
     try {
-      // Verify content is not empty
-      if (!content || content.trim().length === 0) {
-        console.error('❌ Copy failed: content is empty');
-        return;
-      }
-
-      // Log what we're copying for debugging
-      console.log('📋 Copying content (length:', content.length, '):', content.substring(0, 100) + '...');
-
-      // Write to clipboard - MUST succeed before showing success
       await navigator.clipboard.writeText(content);
-      console.log('✅ Content written to clipboard');
-
-      // Try to verify the write by reading back (if permissions allow)
-      try {
-        const clipboardText = await navigator.clipboard.readText();
-        if (clipboardText === content) {
-          console.log('✅ Clipboard content verified - matches original');
-        } else {
-          console.warn('⚠️ Clipboard verification: content mismatch (may be browser limitation)');
-        }
-      } catch (readError) {
-        // Reading might fail due to permissions, but write succeeded
-        console.log('ℹ️ Clipboard read permission not available (write succeeded)');
-      }
-
-      // Show success message after successful write
+      console.log('✅ Content copied via Clipboard API');
       setShowCopyConfirmation(true);
       setTimeout(() => setShowCopyConfirmation(false), 2000);
+      return;
+    } catch (clipboardError) {
+      console.warn('⚠️ Clipboard API failed, using fallback:', clipboardError);
+    }
 
-    } catch (error) {
-      console.error('❌ Failed to copy to clipboard:', error);
-      // Don't show success message on error
+    // Fallback: textarea + execCommand for older browsers / permission issues
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = content;
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-999999px';
+      textarea.style.top = '-999999px';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textarea);
+
+      if (successful) {
+        console.log('✅ Content copied via execCommand fallback');
+        setShowCopyConfirmation(true);
+        setTimeout(() => setShowCopyConfirmation(false), 2000);
+      } else {
+        console.error('❌ execCommand copy failed');
+      }
+    } catch (fallbackError) {
+      console.error('❌ All copy methods failed:', fallbackError);
     }
   };
 
