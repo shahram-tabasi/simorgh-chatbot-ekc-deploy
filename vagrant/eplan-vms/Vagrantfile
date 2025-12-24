@@ -10,7 +10,8 @@ Vagrant.configure("2") do |config|
   (1..3).each do |i|
     config.vm.define "eplan#{i}" do |node|
 
-      node.vm.box = "gusztavvargadr/windows-10"
+      node.vm.box = "gusztavvargadr/windows-10-22h2-enterprise"
+      node.vm.box_version = "2202.0.2310"
       node.vm.hostname = "eplan#{i}"
 
       # FIXED: Use correct syntax for intnet
