@@ -118,6 +118,32 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh -o StrictHostKeyChecking=no ubuntu@192.168.1.69 'pkill -9 -f vagrant 2>/dev/null || true; pkill -9 ruby 2>/dev/null || true; cd ~/eplan-vms-deployment && find .vagrant/machines -name index_lock -delete 2>/dev/null || true; find .vagrant -name \"*.lock\" -delete 2>/dev/null || true; echo Cleanup complete'" || echo "Warning: Cleanup had issues, continuing anyway"
 
+      - name: Pre-download Vagrant box with retry
+        run: |
+          echo "Pre-downloading Windows 10 box (~12GB, may take 10-30 minutes)..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && \
+            for i in 1 2 3 4 5; do \
+              echo \"Download attempt \$i of 5...\"; \
+              if vagrant box add gusztavvargadr/windows-10-22h2-enterprise --box-version 2509.0.0 --provider virtualbox 2>&1 | tee /tmp/vagrant-download.log; then \
+                echo \"✓ Box downloaded successfully\"; \
+                break; \
+              else \
+                if grep -q \"already installed\" /tmp/vagrant-download.log; then \
+                  echo \"✓ Box already installed\"; \
+                  break; \
+                fi; \
+                echo \"Download failed, retrying in 10 seconds...\"; \
+                sleep 10; \
+              fi; \
+            done'"
+
+      - name: Verify box is available
+        run: |
+          echo "Verifying Vagrant box is installed..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'vagrant box list | grep windows-10-22h2-enterprise'"
+
       - name: Create VMs without provisioning
         run: |
           echo "Creating 3 Windows VMs (without EPLAN installation, ~15-20 minutes)..."
