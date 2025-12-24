@@ -86,6 +86,17 @@ export function MessageList({
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
   const [showCopyConfirmation, setShowCopyConfirmation] = React.useState(false);
 
+  // Log Web Share API capability once on mount (dev-safe detection)
+  React.useEffect(() => {
+    const hasShareAPI = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    console.log('🔍 Web Share API Detection:', {
+      available: hasShareAPI,
+      navigatorExists: typeof navigator !== 'undefined',
+      shareIsFunction: typeof navigator !== 'undefined' ? typeof navigator.share === 'function' : false,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'N/A'
+    });
+  }, []);
+
   // Copy message content to clipboard
   const handleCopy = async (content: string) => {
     // Verify content is not empty
@@ -133,43 +144,48 @@ export function MessageList({
     }
   };
 
-  // Share message using Web Share API
+  // Share message using Web Share API - MUST check properly for function type
   const handleShare = async (content: string) => {
-    try {
-      // Verify content is not empty
-      if (!content || content.trim().length === 0) {
-        console.error('❌ Share failed: content is empty');
+    // Verify content is not empty
+    if (!content || content.trim().length === 0) {
+      console.error('❌ Share failed: content is empty');
+      return;
+    }
+
+    console.log('📤 SHARE CLICKED - Content length:', content.length);
+
+    // CRITICAL: Proper detection - check navigator exists AND share is a function
+    const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    console.log('📤 Can use Web Share API?', canShare);
+
+    if (canShare) {
+      // Web Share API is available - use it
+      console.log('📤 Calling navigator.share() directly...');
+      try {
+        await navigator.share({
+          text: content
+        });
+        console.log('✅ Share completed - user selected an app');
+        // NO fallback to copy - share succeeded
         return;
-      }
+      } catch (shareError: any) {
+        console.log('⚠️ Share error:', shareError.name, '-', shareError.message);
 
-      console.log('📤 SHARE CLICKED - Content length:', content.length);
-      console.log('📤 navigator.share available?', 'share' in navigator);
-
-      if (navigator.share) {
-        console.log('📤 Attempting to call navigator.share()...');
-        try {
-          await navigator.share({
-            text: content
-          });
-          console.log('✅ Share completed successfully (user selected an app)');
-        } catch (shareError: any) {
-          console.log('⚠️ Share error:', shareError.name, shareError.message);
-          // User cancelled share dialog - this is expected
-          if (shareError.name === 'AbortError') {
-            console.log('ℹ️ User cancelled share dialog (this is normal)');
-            return;
-          }
-          // Other errors - fall back to copy
-          console.warn('⚠️ Share failed with non-abort error, falling back to copy');
-          await handleCopy(content);
+        // User cancelled - this is normal, don't fall back
+        if (shareError.name === 'AbortError') {
+          console.log('ℹ️ User cancelled share (normal behavior, no fallback)');
+          return;
         }
-      } else {
-        // Fallback to copy if Web Share API not available
-        console.log('ℹ️ Web Share API not supported on this device/browser, falling back to copy');
+
+        // Real error - log it and fall back
+        console.error('❌ Share failed with error (falling back to copy):', shareError);
         await handleCopy(content);
       }
-    } catch (error) {
-      console.error('❌ Unexpected error in handleShare:', error);
+    } else {
+      // Web Share API not supported - fall back to copy
+      console.log('ℹ️ Web Share API not supported - falling back to copy');
+      console.log('   navigator exists:', typeof navigator !== 'undefined');
+      console.log('   navigator.share is function:', typeof navigator !== 'undefined' && typeof navigator.share === 'function');
       await handleCopy(content);
     }
   };
