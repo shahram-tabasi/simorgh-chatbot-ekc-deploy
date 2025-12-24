@@ -85,6 +85,7 @@ export function MessageList({
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
   const [showCopyConfirmation, setShowCopyConfirmation] = React.useState(false);
+  const [showShareMenu, setShowShareMenu] = React.useState<string | null>(null); // messageId for share menu
 
   // Log API capabilities once on mount (dev-safe detection)
   React.useEffect(() => {
@@ -105,6 +106,15 @@ export function MessageList({
       console.warn('⚠️ Clipboard API unavailable - will use textarea fallback for copy operations');
     }
   }, []);
+
+  // Close share menu when clicking outside
+  React.useEffect(() => {
+    if (!showShareMenu) return;
+
+    const handleClickOutside = () => setShowShareMenu(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [showShareMenu]);
 
   // Copy message content to clipboard - BULLETPROOF with fallback
   const handleCopy = async (content: string) => {
@@ -165,8 +175,19 @@ export function MessageList({
     }
   };
 
-  // Share message using Web Share API - MUST check properly for function type
-  const handleShare = async (content: string) => {
+  // Share URL helper functions
+  const getShareUrls = (text: string) => {
+    const encoded = encodeURIComponent(text);
+    return {
+      whatsapp: `https://wa.me/?text=${encoded}`,
+      telegram: `https://t.me/share/url?text=${encoded}`,
+      twitter: `https://twitter.com/intent/tweet?text=${encoded}`,
+      email: `mailto:?subject=${encodeURIComponent('AI Response')}&body=${encoded}`
+    };
+  };
+
+  // Share message using Web Share API or URL intents
+  const handleShare = async (content: string, messageId: string) => {
     // Verify content is not empty
     if (!content || content.trim().length === 0) {
       console.error('❌ Share failed: content is empty');
@@ -187,7 +208,7 @@ export function MessageList({
           text: content
         });
         console.log('✅ Share completed - user selected an app');
-        // NO fallback to copy - share succeeded
+        // NO fallback - share succeeded
         return;
       } catch (shareError: any) {
         console.log('⚠️ Share error:', shareError.name, '-', shareError.message);
@@ -198,17 +219,22 @@ export function MessageList({
           return;
         }
 
-        // Real error - log it and fall back
-        console.error('❌ Share failed with error (falling back to copy):', shareError);
-        await handleCopy(content);
+        // Real error - show share menu as fallback
+        console.warn('⚠️ Share failed with error, showing share menu');
+        setShowShareMenu(messageId);
       }
     } else {
-      // Web Share API not supported - fall back to copy
-      console.log('ℹ️ Web Share API not supported - falling back to copy');
-      console.log('   navigator exists:', typeof navigator !== 'undefined');
-      console.log('   navigator.share is function:', typeof navigator !== 'undefined' && typeof navigator.share === 'function');
-      await handleCopy(content);
+      // Web Share API not supported - show share menu
+      console.log('ℹ️ Web Share API not supported - showing share options menu');
+      setShowShareMenu(messageId);
     }
+  };
+
+  // Handle share via URL intent
+  const handleShareViaUrl = (url: string, platform: string) => {
+    console.log(`📤 Sharing via ${platform}:`, url);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setShowShareMenu(null);
   };
 
   // Handle reaction (like/dislike)
@@ -359,12 +385,62 @@ export function MessageList({
 
                   {/* Share */}
                   <button
-                    onClick={() => handleShare(message.content)}
-                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleShare(message.content, message.id);
+                    }}
+                    className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-400 relative"
                     title="Share response"
                   >
                     <Share2Icon className="w-3.5 h-3.5" />
                   </button>
+
+                  {/* Share Menu - URL intents fallback when Web Share API unavailable */}
+                  {showShareMenu === message.id && (
+                    <div className="absolute z-50 mt-2 bg-gray-900 border border-gray-700 rounded-lg shadow-xl p-2 min-w-[180px]">
+                      <div className="flex flex-col gap-1">
+                        <button
+                          onClick={() => handleShareViaUrl(getShareUrls(message.content).whatsapp, 'WhatsApp')}
+                          className="flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-white/10 rounded transition-colors text-left"
+                        >
+                          <span className="text-green-400">📱</span>
+                          WhatsApp
+                        </button>
+                        <button
+                          onClick={() => handleShareViaUrl(getShareUrls(message.content).telegram, 'Telegram')}
+                          className="flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-white/10 rounded transition-colors text-left"
+                        >
+                          <span className="text-blue-400">✈️</span>
+                          Telegram
+                        </button>
+                        <button
+                          onClick={() => handleShareViaUrl(getShareUrls(message.content).twitter, 'Twitter')}
+                          className="flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-white/10 rounded transition-colors text-left"
+                        >
+                          <span className="text-sky-400">🐦</span>
+                          Twitter / X
+                        </button>
+                        <button
+                          onClick={() => handleShareViaUrl(getShareUrls(message.content).email, 'Email')}
+                          className="flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-white/10 rounded transition-colors text-left"
+                        >
+                          <span className="text-gray-400">📧</span>
+                          Email
+                        </button>
+                        <div className="border-t border-gray-700 my-1"></div>
+                        <button
+                          onClick={() => {
+                            handleCopy(message.content);
+                            setShowShareMenu(null);
+                          }}
+                          className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:bg-white/10 rounded transition-colors text-left"
+                        >
+                          <span>📋</span>
+                          Copy to Clipboard
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Version Navigator */}
                   {message.versions && message.versions.length > 0 && (
