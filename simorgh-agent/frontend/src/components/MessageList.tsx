@@ -86,18 +86,27 @@ export function MessageList({
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
   const [showCopyConfirmation, setShowCopyConfirmation] = React.useState(false);
 
-  // Log Web Share API capability once on mount (dev-safe detection)
+  // Log API capabilities once on mount (dev-safe detection)
   React.useEffect(() => {
     const hasShareAPI = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
-    console.log('🔍 Web Share API Detection:', {
-      available: hasShareAPI,
+    const hasClipboardAPI = typeof navigator !== 'undefined' &&
+                           navigator.clipboard &&
+                           typeof navigator.clipboard.writeText === 'function';
+
+    console.log('🔍 Browser API Detection:', {
+      shareAPI: hasShareAPI,
+      clipboardAPI: hasClipboardAPI,
       navigatorExists: typeof navigator !== 'undefined',
-      shareIsFunction: typeof navigator !== 'undefined' ? typeof navigator.share === 'function' : false,
+      clipboardExists: typeof navigator !== 'undefined' ? navigator.clipboard !== undefined : false,
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'N/A'
     });
+
+    if (!hasClipboardAPI) {
+      console.warn('⚠️ Clipboard API unavailable - will use textarea fallback for copy operations');
+    }
   }, []);
 
-  // Copy message content to clipboard
+  // Copy message content to clipboard - BULLETPROOF with fallback
   const handleCopy = async (content: string) => {
     // Verify content is not empty
     if (!content || content.trim().length === 0) {
@@ -107,18 +116,30 @@ export function MessageList({
 
     console.log('📋 Copying content (length:', content.length, ')');
 
-    // Try modern Clipboard API first
-    try {
-      await navigator.clipboard.writeText(content);
-      console.log('✅ Content copied via Clipboard API');
-      setShowCopyConfirmation(true);
-      setTimeout(() => setShowCopyConfirmation(false), 2000);
-      return;
-    } catch (clipboardError) {
-      console.warn('⚠️ Clipboard API failed, using fallback:', clipboardError);
+    // CRITICAL: Check if Clipboard API exists before trying to use it
+    const hasClipboardAPI = typeof navigator !== 'undefined' &&
+                           navigator.clipboard &&
+                           typeof navigator.clipboard.writeText === 'function';
+
+    console.log('📋 Clipboard API available?', hasClipboardAPI);
+
+    if (hasClipboardAPI) {
+      // Try modern Clipboard API if available
+      try {
+        await navigator.clipboard.writeText(content);
+        console.log('✅ Content copied via Clipboard API');
+        setShowCopyConfirmation(true);
+        setTimeout(() => setShowCopyConfirmation(false), 2000);
+        return;
+      } catch (clipboardError) {
+        console.warn('⚠️ Clipboard API call failed, using fallback:', clipboardError);
+        // Fall through to textarea fallback
+      }
+    } else {
+      console.log('ℹ️ Clipboard API not available, using textarea fallback');
     }
 
-    // Fallback: textarea + execCommand for older browsers / permission issues
+    // Fallback: textarea + execCommand (works even if Clipboard API undefined)
     try {
       const textarea = document.createElement('textarea');
       textarea.value = content;
