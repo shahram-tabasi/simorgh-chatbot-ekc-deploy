@@ -7,32 +7,54 @@ Vagrant.configure("2") do |config|
   config.winrm.username = "vagrant"
   config.winrm.password = "vagrant"
 
+  # EPLAN TCP Service Configuration
+  # Change these ports to match your EPLAN TCP server
+  EPLAN_SERVICE_BASE_PORT = 8000
+
   (1..3).each do |i|
     config.vm.define "eplan#{i}" do |node|
 
-      node.vm.box = "gusztavvargadr/windows-10-22h2-enterprise"
+      # Lighter Windows Server 2022 for headless service
+      node.vm.box = "gusztavvargadr/windows-server-2022-standard"
       node.vm.box_version = "2509.0.0"
-      node.vm.hostname = "eplan#{i}"
+      node.vm.hostname = "eplan-service-#{i}"
 
-      # FIXED: Use correct syntax for intnet
-      node.vm.network "private_network", 
-        ip: "192.168.56.#{100 + i}", 
+      # Private network for inter-VM communication
+      node.vm.network "private_network",
+        ip: "192.168.56.#{100 + i}",
         virtualbox__intnet: "eplan-lan"
 
-      node.vm.network "forwarded_port", 
-        guest: 3389, 
-        host: 13389 + i, 
-        host_ip: "127.0.0.1", 
+      # RDP port (for maintenance only)
+      node.vm.network "forwarded_port",
+        guest: 3389,
+        host: 13389 + i,
+        host_ip: "127.0.0.1",
+        auto_correct: true
+
+      # EPLAN TCP Service Port
+      node.vm.network "forwarded_port",
+        guest: EPLAN_SERVICE_BASE_PORT,
+        host: EPLAN_SERVICE_BASE_PORT + i - 1,
+        host_ip: "0.0.0.0",
         auto_correct: true
 
       node.vm.provider "virtualbox" do |vb|
-        vb.name = "eplan#{i}"
-        vb.memory = 16384
-        vb.cpus = 8
+        vb.name = "eplan-service-#{i}"
+
+        # Optimized resources for headless service
+        vb.memory = 6144  # 6GB RAM (reduced from 16GB)
+        vb.cpus = 4       # 4 CPUs (reduced from 8)
         vb.gui = false
-        vb.customize ["modifyvm", :id, "--vram", "256"]
-        vb.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
-        vb.customize ["modifyvm", :id, "--accelerate3d", "on"]
+
+        # Minimal graphics for headless
+        vb.customize ["modifyvm", :id, "--vram", "32"]
+        vb.customize ["modifyvm", :id, "--graphicscontroller", "vboxsvga"]
+        vb.customize ["modifyvm", :id, "--accelerate3d", "off"]
+
+        # Disable unnecessary features
+        vb.customize ["modifyvm", :id, "--nested-hw-virt", "off"]
+        vb.customize ["modifyvm", :id, "--audio", "none"]
+        vb.customize ["modifyvm", :id, "--usb", "off"]
       end
 
       node.vm.provision "shell", path: "install-eplan.ps1"

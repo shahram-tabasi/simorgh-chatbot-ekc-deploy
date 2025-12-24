@@ -118,9 +118,35 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh -o StrictHostKeyChecking=no ubuntu@192.168.1.69 'pkill -9 -f vagrant 2>/dev/null || true; pkill -9 ruby 2>/dev/null || true; cd ~/eplan-vms-deployment && find .vagrant/machines -name index_lock -delete 2>/dev/null || true; find .vagrant -name \"*.lock\" -delete 2>/dev/null || true; echo Cleanup complete'" || echo "Warning: Cleanup had issues, continuing anyway"
 
+      - name: Pre-download Vagrant box with retry
+        run: |
+          echo "Pre-downloading Windows Server 2022 box (~8GB, may take 10-20 minutes)..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && \
+            for i in 1 2 3 4 5; do \
+              echo \"Download attempt \$i of 5...\"; \
+              if vagrant box add gusztavvargadr/windows-server-2022-standard --box-version 2509.0.0 --provider virtualbox 2>&1 | tee /tmp/vagrant-download.log; then \
+                echo \"✓ Box downloaded successfully\"; \
+                break; \
+              else \
+                if grep -q \"already installed\" /tmp/vagrant-download.log; then \
+                  echo \"✓ Box already installed\"; \
+                  break; \
+                fi; \
+                echo \"Download failed, retrying in 10 seconds...\"; \
+                sleep 10; \
+              fi; \
+            done'"
+
+      - name: Verify box is available
+        run: |
+          echo "Verifying Vagrant box is installed..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'vagrant box list | grep windows-server-2022-standard'"
+
       - name: Create VMs without provisioning
         run: |
-          echo "Creating 3 Windows VMs (without EPLAN installation, ~15-20 minutes)..."
+          echo "Creating 3 Windows Server 2022 VMs for EPLAN headless services (~10-15 minutes)..."
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant up --no-provision --provider=virtualbox'"
 
@@ -139,15 +165,24 @@ jobs:
       - name: VM Creation Summary
         run: |
           echo "================================"
-          echo "VMs Created Successfully"
+          echo "EPLAN Service VMs Created"
           echo "================================"
           echo "Target Server: 192.168.1.69"
-          echo "VMs Created: eplan1, eplan2, eplan3"
-          echo "Private IPs: 192.168.56.101-103"
-          echo "RDP Ports: 13390, 13391, 13392"
+          echo "OS: Windows Server 2022 Standard"
+          echo "VMs: eplan-service-1, eplan-service-2, eplan-service-3"
           echo ""
-          echo "Status: VMs are running (EPLAN not installed yet)"
-          echo "Next: EPLAN provisioning will start automatically"
+          echo "Resources per VM (optimized for headless):"
+          echo "  - 6GB RAM (reduced from 16GB)"
+          echo "  - 4 CPUs (reduced from 8)"
+          echo "  - Minimal VRAM (32MB)"
+          echo ""
+          echo "Network Configuration:"
+          echo "  - Private IPs: 192.168.56.101-103"
+          echo "  - RDP Ports: 13390-13392 (maintenance only)"
+          echo "  - EPLAN TCP Service Ports: 8000-8002"
+          echo ""
+          echo "Status: VMs ready (EPLAN not installed yet)"
+          echo "Next: EPLAN provisioning will start"
           echo "================================"
 
       - name: Show logs on failure
@@ -212,25 +247,34 @@ jobs:
       - name: Deployment Complete Summary
         run: |
           echo "================================"
-          echo "EPLAN Deployment Complete!"
+          echo "EPLAN Headless Services Deployed!"
           echo "================================"
           echo "Target Server: 192.168.1.69"
-          echo "VMs: eplan1, eplan2, eplan3"
-          echo "Private IPs: 192.168.56.101-103"
-          echo "RDP Ports: 13390, 13391, 13392"
+          echo "OS: Windows Server 2022 Standard"
+          echo "VMs: eplan-service-1, eplan-service-2, eplan-service-3"
           echo ""
-          echo "EPLAN 2024.0.3.21408 is installed and ready!"
+          echo "EPLAN 2024.0.3.21408 installed and ready!"
           echo ""
-          echo "To connect via RDP from 192.168.1.69:"
-          echo "  - eplan1: rdp://localhost:13390"
-          echo "  - eplan2: rdp://localhost:13391"
-          echo "  - eplan3: rdp://localhost:13392"
+          echo "TCP Service Endpoints (from anywhere):"
+          echo "  - Service 1: 192.168.1.69:8000"
+          echo "  - Service 2: 192.168.1.69:8001"
+          echo "  - Service 3: 192.168.1.69:8002"
           echo ""
-          echo "Credentials:"
-          echo "  Username: vagrant"
-          echo "  Password: vagrant"
+          echo "Private Network (internal):"
+          echo "  - VM 1: 192.168.56.101"
+          echo "  - VM 2: 192.168.56.102"
+          echo "  - VM 3: 192.168.56.103"
           echo ""
-          echo "To manage VMs:"
+          echo "Maintenance (RDP from 192.168.1.69 only):"
+          echo "  - VM 1: rdp://localhost:13390"
+          echo "  - VM 2: rdp://localhost:13391"
+          echo "  - VM 3: rdp://localhost:13392"
+          echo "  Credentials: vagrant/vagrant"
+          echo ""
+          echo "Resource Usage per VM:"
+          echo "  - 6GB RAM, 4 CPUs (optimized for headless)"
+          echo ""
+          echo "Management Commands:"
           echo "  ssh ubuntu@192.168.1.69"
           echo "  cd ~/eplan-vms-deployment"
           echo "  vagrant status|halt|reload|destroy"
