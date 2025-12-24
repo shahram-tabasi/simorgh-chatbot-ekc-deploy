@@ -112,6 +112,17 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant status || echo No existing vagrant environment'"
 
+      - name: Cleanup any stuck Vagrant processes and locks
+        run: |
+          echo "Cleaning up any stuck Vagrant processes and lock files..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && \
+            pkill -9 -f vagrant 2>/dev/null || true && \
+            pkill -9 ruby 2>/dev/null || true && \
+            find .vagrant/machines -name \"index_lock\" -delete 2>/dev/null || true && \
+            find .vagrant -name \"*.lock\" -delete 2>/dev/null || true && \
+            echo \"✓ Cleanup complete\"'"
+
       - name: Create VMs without provisioning
         run: |
           echo "Creating 3 Windows VMs (without EPLAN installation, ~15-20 minutes)..."
