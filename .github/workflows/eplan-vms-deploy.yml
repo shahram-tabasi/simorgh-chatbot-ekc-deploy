@@ -9,10 +9,16 @@ on:
       - 'vagrant/eplan-vms/**'
       - '.github/workflows/eplan-vms-deploy.yml'
   workflow_dispatch:
+    inputs:
+      skip_provisioning:
+        description: 'Skip EPLAN provisioning (only create VMs)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  deploy-eplan-vms:
-    name: Deploy EPLAN VMs to 192.168.1.69
+  create-vms:
+    name: Create Windows VMs on 192.168.1.69
     runs-on: ubuntu-latest
 
     steps:
@@ -106,11 +112,11 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant status || echo No existing vagrant environment'"
 
-      - name: Start EPLAN VMs with Vagrant
+      - name: Create VMs without provisioning
         run: |
-          echo "Starting 3 EPLAN VMs (this may take 30-60 minutes)..."
+          echo "Creating 3 Windows VMs (without EPLAN installation, ~15-20 minutes)..."
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant up --provider=virtualbox'"
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant up --no-provision --provider=virtualbox'"
 
       - name: Show VM status
         run: |
@@ -124,25 +130,18 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh ubuntu@192.168.1.69 'vboxmanage list runningvms'"
 
-      - name: Deployment Summary
+      - name: VM Creation Summary
         run: |
           echo "================================"
-          echo "EPLAN VMs Deployment Summary"
+          echo "VMs Created Successfully"
           echo "================================"
           echo "Target Server: 192.168.1.69"
           echo "VMs Created: eplan1, eplan2, eplan3"
           echo "Private IPs: 192.168.56.101-103"
           echo "RDP Ports: 13390, 13391, 13392"
           echo ""
-          echo "To connect via RDP from 192.168.1.69:"
-          echo "  - eplan1: rdp://localhost:13390"
-          echo "  - eplan2: rdp://localhost:13391"
-          echo "  - eplan3: rdp://localhost:13392"
-          echo ""
-          echo "To manage VMs:"
-          echo "  ssh ubuntu@192.168.1.69"
-          echo "  cd ~/eplan-vms-deployment"
-          echo "  vagrant status|halt|destroy"
+          echo "Status: VMs are running (EPLAN not installed yet)"
+          echo "Next: EPLAN provisioning will start automatically"
           echo "================================"
 
       - name: Show logs on failure
@@ -151,3 +150,93 @@ jobs:
           echo "=== Vagrant Logs ==="
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && cat .vagrant/logs/* 2>/dev/null || echo No vagrant logs found'"
+
+  provision-eplan:
+    name: Install EPLAN 2024 on VMs
+    runs-on: ubuntu-latest
+    needs: [create-vms]
+    if: ${{ !inputs.skip_provisioning }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key for central server
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
+
+      - name: Test SSH to central server
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 "echo 'Connected to central server'"
+
+      - name: Setup SSH from central to target server (1.69)
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh-keyscan -H 192.168.1.69 >> ~/.ssh/known_hosts 2>/dev/null || true"
+
+      - name: Verify VMs are running
+        run: |
+          echo "Checking VM status before provisioning..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant status'"
+
+      - name: Provision EPLAN on all VMs
+        run: |
+          echo "Installing EPLAN 2024 on all 3 VMs (this may take 60-90 minutes)..."
+          echo "This will:"
+          echo "  - Mount EPLAN ISO"
+          echo "  - Install EPLAN 2024.0.3.21408"
+          echo "  - Apply crack and patches"
+          echo "  - Generate licenses"
+          echo "  - Enable RDP"
+          echo ""
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant provision'"
+
+      - name: Show VM status after provisioning
+        run: |
+          echo "=== VMs Status After Provisioning ==="
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant status'"
+
+      - name: Deployment Complete Summary
+        run: |
+          echo "================================"
+          echo "EPLAN Deployment Complete!"
+          echo "================================"
+          echo "Target Server: 192.168.1.69"
+          echo "VMs: eplan1, eplan2, eplan3"
+          echo "Private IPs: 192.168.56.101-103"
+          echo "RDP Ports: 13390, 13391, 13392"
+          echo ""
+          echo "EPLAN 2024.0.3.21408 is installed and ready!"
+          echo ""
+          echo "To connect via RDP from 192.168.1.69:"
+          echo "  - eplan1: rdp://localhost:13390"
+          echo "  - eplan2: rdp://localhost:13391"
+          echo "  - eplan3: rdp://localhost:13392"
+          echo ""
+          echo "Credentials:"
+          echo "  Username: vagrant"
+          echo "  Password: vagrant"
+          echo ""
+          echo "To manage VMs:"
+          echo "  ssh ubuntu@192.168.1.69"
+          echo "  cd ~/eplan-vms-deployment"
+          echo "  vagrant status|halt|reload|destroy"
+          echo "================================"
+
+      - name: Show provision logs on failure
+        if: failure()
+        run: |
+          echo "=== Provisioning Failed - Checking Logs ==="
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant ssh eplan1 -c \"Get-Content C:\\vagrant\\eplan_install.log -ErrorAction SilentlyContinue\" 2>/dev/null || echo No logs for eplan1'"
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant ssh eplan2 -c \"Get-Content C:\\vagrant\\eplan_install.log -ErrorAction SilentlyContinue\" 2>/dev/null || echo No logs for eplan2'"
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/eplan-vms-deployment && vagrant ssh eplan3 -c \"Get-Content C:\\vagrant\\eplan_install.log -ErrorAction SilentlyContinue\" 2>/dev/null || echo No logs for eplan3'"
