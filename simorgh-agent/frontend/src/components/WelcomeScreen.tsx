@@ -75,21 +75,37 @@ const suggestedPrompts = [
 
 export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-8">
-      {/* Logo */}
-      <img
-        src="/simorgh.svg"
-        alt="Simorgh"
-        className="w-32 h-32 mb-3 mx-auto drop-shadow-2xl select-none animate-fade-in"
-      />
-      <img
-        src="/text_simorgh.svg"
-        alt="Simorgh Text"
-        className="h-20 md:h-24 drop-shadow-2xl select-none animate-fade-in-delay"
-      />
-      
-      {/* Welcome text */}
-      <p className="text-lg text-gray-400 text-center max-w-md mb-12 font-light mt-4">
+    <div className="flex flex-col items-center justify-center px-4 py-4 md:py-8 w-full min-h-[calc(100vh-14rem)] md:min-h-0">
+      {/* Logo - with proper iOS SVG support */}
+      <div className="flex flex-col items-center mb-6 md:mb-8">
+        <img
+          src="/simorgh.svg"
+          alt="Simorgh Logo"
+          className="w-24 h-24 md:w-32 md:h-32 mb-3 mx-auto drop-shadow-2xl select-none animate-fade-in"
+          onError={(e) => {
+            // Fallback for iOS if SVG fails to load
+            const target = e.target as HTMLImageElement;
+            target.style.display = 'none';
+          }}
+        />
+        <img
+          src="/text_simorgh.svg"
+          alt="Simorgh"
+          className="h-16 md:h-20 lg:h-24 drop-shadow-2xl select-none animate-fade-in-delay"
+          onError={(e) => {
+            // Fallback text for iOS
+            const target = e.target as HTMLImageElement;
+            target.style.display = 'none';
+            const fallback = document.createElement('h1');
+            fallback.className = 'text-4xl md:text-5xl font-bold text-white grok-logo';
+            fallback.textContent = 'SIMORGH';
+            target.parentNode?.appendChild(fallback);
+          }}
+        />
+      </div>
+
+      {/* Welcome text - centered on mobile */}
+      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-8 md:mb-12 font-light px-4">
         What do you want to know?
       </p>
       

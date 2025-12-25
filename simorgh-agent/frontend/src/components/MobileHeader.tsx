@@ -1,15 +1,16 @@
 // src/components/MobileHeader.tsx
 import React from 'react';
-import { Menu, Settings, ChevronDown } from 'lucide-react';
+import { Menu, Settings, ChevronDown, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface MobileHeaderProps {
   onMenuClick: () => void;
+  onHistoryClick: () => void;
   onSettingsClick: () => void;
   currentModel: 'online' | 'offline';
 }
 
-export default function MobileHeader({ onMenuClick, onSettingsClick, currentModel }: MobileHeaderProps) {
+export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsClick, currentModel }: MobileHeaderProps) {
   const [showModelSelector, setShowModelSelector] = React.useState(false);
   const [selectedModel, setSelectedModel] = React.useState<'online' | 'offline'>(currentModel);
 
@@ -30,15 +31,24 @@ export default function MobileHeader({ onMenuClick, onSettingsClick, currentMode
     <>
       {/* Mobile Header - only visible on screens < 768px */}
       <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-black/80 backdrop-blur-xl border-b border-white/10">
-        <div className="flex items-center justify-between px-4 h-14" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-          {/* Left: Hamburger Menu */}
-          <button
-            onClick={onMenuClick}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-            aria-label="Open menu"
-          >
-            <Menu className="w-6 h-6 text-white" />
-          </button>
+        <div className="flex items-center justify-between px-3 h-14" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+          {/* Left: Hamburger Menu + History */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onMenuClick}
+              className="p-2.5 hover:bg-white/10 rounded-lg transition-colors"
+              aria-label="Open menu"
+            >
+              <Menu className="w-6 h-6 text-white" />
+            </button>
+            <button
+              onClick={onHistoryClick}
+              className="p-2.5 hover:bg-white/10 rounded-lg transition-colors"
+              aria-label="Open history"
+            >
+              <History className="w-5 h-5 text-white" />
+            </button>
+          </div>
 
           {/* Center: Model Selector */}
           <button
@@ -52,7 +62,7 @@ export default function MobileHeader({ onMenuClick, onSettingsClick, currentMode
           {/* Right: Settings */}
           <button
             onClick={onSettingsClick}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+            className="p-2.5 hover:bg-white/10 rounded-lg transition-colors"
             aria-label="Settings"
           >
             <Settings className="w-6 h-6 text-white" />
