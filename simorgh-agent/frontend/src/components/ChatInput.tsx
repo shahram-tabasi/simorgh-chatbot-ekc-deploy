@@ -256,11 +256,11 @@ export function ChatInput({
           onChange={handleFileSelect}
         />
 
-        {/* Voice recording - hidden on very small screens */}
+        {/* Voice recording - visible on all screens (matches Claude/ChatGPT mobile) */}
         <button
           onClick={isRecording ? stopRecording : startRecording}
           disabled={disabled}
-          className={`hidden sm:block p-2 sm:p-3 rounded-lg transition-colors ${isRecording
+          className={`p-2 sm:p-3 rounded-lg transition-colors ${isRecording
               ? 'bg-red-500/20 hover:bg-red-500/30'
               : 'hover:bg-white/10'
             }`}

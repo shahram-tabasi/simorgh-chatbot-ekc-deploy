@@ -5,12 +5,22 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Safe area insets for mobile devices with notches */
+    --sat: env(safe-area-inset-top);
+    --sar: env(safe-area-inset-right);
+    --sab: env(safe-area-inset-bottom);
+    --sal: env(safe-area-inset-left);
+  }
+
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     /* Prevent text size adjustment on mobile */
     -webkit-text-size-adjust: 100%;
+    /* Prevent overscroll bounce on iOS */
+    overscroll-behavior-y: none;
   }
 
   /* Prevent double-tap zoom on interactive elements */
@@ -20,6 +30,14 @@
   textarea,
   select {
     touch-action: manipulation;
+  }
+
+  /* Ensure minimum touch target size of 44x44px for mobile (iOS guidelines) */
+  @media (max-width: 768px) {
+    button:not(.no-min-touch) {
+      min-width: 44px;
+      min-height: 44px;
+    }
   }
 }
 
