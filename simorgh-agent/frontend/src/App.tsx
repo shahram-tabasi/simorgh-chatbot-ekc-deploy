@@ -226,6 +226,7 @@ function MainChat() {
         {/* Mobile Header - only visible on mobile */}
         <MobileHeader
           onMenuClick={rightSidebar.toggle}
+          onHistoryClick={leftSidebar.toggle}
           onSettingsClick={() => setSettingsPanelOpen(true)}
           currentModel={currentAiMode}
         />
