@@ -237,15 +237,15 @@ export function ChatInput({
         </div>
       )}
 
-      <div className="flex gap-2 items-center bg-black/40 backdrop-blur-xl rounded-2xl border border-white/10 p-2 sm:p-2">
+      <div className="flex gap-1.5 md:gap-2 items-center bg-black/40 backdrop-blur-xl rounded-2xl border border-white/10 p-1.5 md:p-2">
         {/* File upload */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || isUploading}
-          className="p-2.5 sm:p-3 rounded-xl hover:bg-white/10 transition-colors disabled:opacity-50 flex-shrink-0"
+          className="p-2 md:p-2.5 rounded-xl hover:bg-white/10 transition-colors disabled:opacity-50 flex-shrink-0"
           title="Attach files"
         >
-          <PaperclipIcon className="w-5 h-5 sm:w-5 sm:h-5 text-gray-300" />
+          <PaperclipIcon className="w-5 h-5 text-gray-300" />
         </button>
         <input
           ref={fileInputRef}
@@ -260,21 +260,21 @@ export function ChatInput({
         <button
           onClick={isRecording ? stopRecording : startRecording}
           disabled={disabled}
-          className={`p-2.5 sm:p-3 rounded-xl transition-colors flex-shrink-0 ${isRecording
+          className={`p-2 md:p-2.5 rounded-xl transition-colors flex-shrink-0 ${isRecording
               ? 'bg-red-500/20 hover:bg-red-500/30'
               : 'hover:bg-white/10'
             }`}
           title={isRecording ? 'Stop recording' : 'Start voice recording'}
         >
           {isRecording ? (
-            <StopCircleIcon className="w-5 h-5 sm:w-5 sm:h-5 text-red-400 animate-pulse" />
+            <StopCircleIcon className="w-5 h-5 text-red-400 animate-pulse" />
           ) : (
-            <MicIcon className="w-5 h-5 sm:w-5 sm:h-5 text-gray-300" />
+            <MicIcon className="w-5 h-5 text-gray-300" />
           )}
         </button>
 
         {/* Text input */}
-        <div className="flex-1 relative flex items-center min-h-[44px]">
+        <div className="flex-1 relative flex items-center min-h-[40px] md:min-h-[44px]">
           <textarea
             ref={textareaRef}
             value={message}
@@ -288,8 +288,8 @@ export function ChatInput({
             placeholder={disabled ? "Please create or select a project and chat to start messaging..." : "Ask Simorgh anything..."}
             disabled={disabled}
             rows={1}
-            className="w-full px-3 sm:px-4 py-3 sm:py-3 rounded-xl bg-transparent text-white text-base sm:text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed overflow-y-auto max-h-[120px] sm:max-h-[200px] leading-normal"
-            style={{ minHeight: '44px' }}
+            className="w-full px-3 md:px-4 py-2 md:py-3 rounded-xl bg-transparent text-white text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed overflow-y-auto max-h-[120px] sm:max-h-[200px] leading-normal"
+            style={{ minHeight: '40px' }}
           />
         </div>
 
@@ -297,18 +297,18 @@ export function ChatInput({
         {isGenerating ? (
           <button
             onClick={onCancel}
-            className="p-2.5 sm:p-3 rounded-xl bg-red-500 hover:bg-red-600 transition-all flex-shrink-0"
+            className="p-2 md:p-2.5 rounded-xl bg-red-500 hover:bg-red-600 transition-all flex-shrink-0"
             title="Stop generating"
           >
-            <StopCircleIcon className="w-5 h-5 sm:w-5 sm:h-5 text-white" />
+            <StopCircleIcon className="w-5 h-5 text-white" />
           </button>
         ) : (
           <button
             onClick={handleSend}
             disabled={disabled || (!message.trim() && files.length === 0)}
-            className="p-2.5 sm:p-3 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
+            className="p-2 md:p-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
           >
-            <SendIcon className="w-5 h-5 sm:w-5 sm:h-5 text-white" />
+            <SendIcon className="w-5 h-5 text-white" />
           </button>
         )}
       </div>
