@@ -37,7 +37,12 @@ const themes: Array<{ id: ThemeType; name: string; icon: any; gradient: string }
   { id: 'clean-white', name: 'EKC Digital Realm', icon: Palette, gradient: 'from-gray-100 to-white' },
 ];
 
-export default function SettingsPanel() {
+interface SettingsPanelProps {
+  externalOpen?: boolean;
+  onExternalClose?: () => void;
+}
+
+export default function SettingsPanel({ externalOpen = false, onExternalClose }: SettingsPanelProps = {}) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [langOpen, setLangOpen] = React.useState(false);
   const [aiMode, setAiMode] = React.useState<'online' | 'offline'>('online');
@@ -49,6 +54,13 @@ export default function SettingsPanel() {
   const currentLang = languages.find(l => l.code === language) || languages[0];
   const displayName = user?.EMPUSERNAME || 'Guest User';
   const userStatus = user ? 'Pro Member • Online' : 'Guest';
+
+  // Sync with external control
+  React.useEffect(() => {
+    if (externalOpen) {
+      setIsOpen(true);
+    }
+  }, [externalOpen]);
 
   // Load AI mode from localStorage on mount
   React.useEffect(() => {
@@ -70,13 +82,17 @@ export default function SettingsPanel() {
     setNotificationsEnabled(!notificationsEnabled);
   };
 
+  const handleClose = () => {
+    setIsOpen(false);
+    onExternalClose?.();
+  };
+
   return (
     <>
-      {/* دکمه تنظیمات - positioned under search icon on mobile (right side), bottom-right on desktop */}
+      {/* دکمه تنظیمات - hidden on mobile (< 768px), bottom-right on desktop */}
       <button
         onClick={() => setIsOpen(true)}
-        // Mobile-only fix: move settings icon down to avoid overlap with search icon
-        className="fixed right-4 top-32 md:bottom-6 md:right-6 md:top-auto z-50 w-12 h-12 rounded-full bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl hover:scale-110 hover:bg-white/20 transition-all flex items-center justify-center"
+        className="hidden md:flex fixed right-6 bottom-6 z-50 w-12 h-12 rounded-full bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl hover:scale-110 hover:bg-white/20 transition-all items-center justify-center"
       >
         <Settings className="w-6 h-6 text-white" />
       </button>
@@ -89,7 +105,7 @@ export default function SettingsPanel() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsOpen(false)}
+              onClick={handleClose}
               className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40"
             />
 
@@ -109,7 +125,7 @@ export default function SettingsPanel() {
                     Settings
                   </h2>
                   <button
-                    onClick={() => setIsOpen(false)}
+                    onClick={handleClose}
                     className="p-3 hover:bg-white/10 rounded-xl transition"
                   >
                     <X className="w-6 h-6 text-gray-400" />

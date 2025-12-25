@@ -6,6 +6,7 @@ import { ProjectTree } from './components/ProjectTree';
 import { HistoryList } from './components/HistoryList';
 import { ChatArea } from './components/ChatArea';
 import SettingsPanel from './components/SettingsPanel';
+import MobileHeader from './components/MobileHeader';
 import CreateProjectModal from './components/CreateProjectModal';
 import CreateChatModal from './components/CreateChatModal';
 import CreateProjectChatModal from './components/CreateProjectChatModal';
@@ -33,6 +34,8 @@ function MainChat() {
   const [selectedProjectForChat, setSelectedProjectForChat] = React.useState<string | null>(null);
   const [activeSpecTasks, setActiveSpecTasks] = React.useState<string[]>([]);
   const [notifications, setNotifications] = React.useState<ToastNotification[]>([]);
+  const [settingsPanelOpen, setSettingsPanelOpen] = React.useState(false);
+  const [currentAiMode, setCurrentAiMode] = React.useState<'online' | 'offline'>('online');
 
   const {
     projects,
@@ -90,6 +93,22 @@ function MainChat() {
   );
 
   const [editingMessage, setEditingMessage] = React.useState<Message | null>(null);
+
+  // Load AI mode on mount and listen for changes
+  React.useEffect(() => {
+    const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
+    if (savedMode) {
+      setCurrentAiMode(savedMode);
+    }
+
+    const handleModeChange = (e: Event) => {
+      const customEvent = e as CustomEvent<'online' | 'offline'>;
+      setCurrentAiMode(customEvent.detail);
+    };
+
+    window.addEventListener('llm-mode-changed', handleModeChange);
+    return () => window.removeEventListener('llm-mode-changed', handleModeChange);
+  }, []);
 
   const handleCreateProject = () => setShowCreateModal(true);
 
@@ -204,7 +223,14 @@ function MainChat() {
       <div className="w-full h-[100dvh] overflow-hidden relative bg-[#0a0e27]">
         <ThemeBackground />
 
-        <div className="relative z-10 flex h-full">
+        {/* Mobile Header - only visible on mobile */}
+        <MobileHeader
+          onMenuClick={rightSidebar.toggle}
+          onSettingsClick={() => setSettingsPanelOpen(true)}
+          currentModel={currentAiMode}
+        />
+
+        <div className="relative z-10 flex h-full mt-0 md:mt-0">
           {/* سایدبار راست */}
           <Sidebar
             isOpen={rightSidebar.isOpen}
@@ -255,7 +281,10 @@ function MainChat() {
         </div>
 
         {/* تنظیمات */}
-        <SettingsPanel />
+        <SettingsPanel
+          externalOpen={settingsPanelOpen}
+          onExternalClose={() => setSettingsPanelOpen(false)}
+        />
 
         {/* مودال ساخت پروژه */}
         <CreateProjectModal

@@ -107,12 +107,12 @@ export function Sidebar({
         </AnimatePresence>
       </motion.div>
 
-      {/* دکمه‌ها وقتی sidebar بسته است - در بالای صفحه */}
+      {/* دکمه‌ها وقتی sidebar بسته است - hidden on mobile (< 768px), shown on desktop */}
       {!isOpen && (
         <div
-          className={`fixed ${
+          className={`hidden md:flex fixed ${
             side === 'right' ? 'left-4' : 'right-4'
-          } top-4 z-50 flex flex-col gap-2`}
+          } top-4 z-50 flex-col gap-2`}
         >
           {/* دکمه toggle */}
           <button

@@ -65,8 +65,8 @@ export function ChatArea({
 
   return (
     <div className="flex-1 flex flex-col h-full relative overflow-hidden">
-      {/* Main content area - scrollable only in chatting mode */}
-      <div className={`flex-1 flex flex-col ${isIdle ? 'justify-center items-center overflow-y-auto' : 'overflow-y-auto'} px-2 sm:px-4 md:px-8 lg:px-20`}>
+      {/* Main content area - scrollable only in chatting mode, with padding for mobile header */}
+      <div className={`flex-1 flex flex-col pt-14 md:pt-0 ${isIdle ? 'justify-center items-center overflow-y-auto' : 'overflow-y-auto'} px-2 sm:px-4 md:px-8 lg:px-20`}>
         {/* Welcome content - shown in idle mode */}
         {isIdle && (
           <div className="w-full max-w-5xl mx-auto">
@@ -93,12 +93,15 @@ export function ChatArea({
         )}
       </div>
 
-      {/* ChatInput - ALWAYS visible, position changes based on state */}
-      <div className={`w-full flex-shrink-0 flex justify-center ${
-        isIdle
-          ? 'pb-8 sm:pb-12 md:pb-16'
-          : 'pb-4 sm:pb-6 md:pb-8 border-t border-transparent backdrop-blur-xl'
-      }`}>
+      {/* ChatInput - ALWAYS visible, position changes based on state, with safe area support */}
+      <div
+        className={`w-full flex-shrink-0 flex justify-center ${
+          isIdle
+            ? 'pb-8 sm:pb-12 md:pb-16'
+            : 'pb-4 sm:pb-6 md:pb-8 border-t border-transparent backdrop-blur-xl'
+        }`}
+        style={{ paddingBottom: `max(${isIdle ? '2rem' : '1rem'}, calc(${isIdle ? '2rem' : '1rem'} + env(safe-area-inset-bottom)))` }}
+      >
         <div className={`w-full px-2 sm:px-4 ${isIdle ? 'max-w-3xl' : 'max-w-4xl'}`}>
           <ChatInput
             onSend={handleSend}
