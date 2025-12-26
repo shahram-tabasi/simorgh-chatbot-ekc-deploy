@@ -25,32 +25,31 @@ async function generateIcons() {
     const sharp = (await import('sharp')).default;
 
     const publicDir = path.join(__dirname, 'public');
-    const svgPath = path.join(publicDir, 'simorgh.svg');
+    const svgPath = path.join(publicDir, 'simorgh-sky.svg');
 
     if (!fs.existsSync(svgPath)) {
-      console.error('❌ Error: simorgh.svg not found in public directory');
+      console.error('❌ Error: simorgh-sky.svg not found in public directory');
       process.exit(1);
     }
 
-    console.log('📦 Generating PNG icons with solid background and safe padding...\n');
+    console.log('📦 Generating iOS PNG icons from simorgh-sky.svg (FULL logo)...\n');
 
     // App background color (dark blue-black from theme)
     const backgroundColor = { r: 10, g: 14, b: 39 };
 
+    // ONLY iOS icons (Apple touch icons)
     const sizes = [
       { name: 'apple-touch-icon-180.png', size: 180 },
       { name: 'apple-touch-icon-167.png', size: 167 },
-      { name: 'apple-touch-icon-152.png', size: 152 },
-      { name: 'icon-192.png', size: 192 },
-      { name: 'icon-512.png', size: 512 }
+      { name: 'apple-touch-icon-152.png', size: 152 }
     ];
 
     for (const { name, size } of sizes) {
       const outputPath = path.join(publicDir, name);
 
-      // iOS safe area: logo should be ~72% of icon size to avoid clipping
+      // iOS safe area: logo should be ~70% of icon size to avoid clipping
       // This prevents iOS rounded-square mask from cropping the logo
-      const logoSize = Math.round(size * 0.72);
+      const logoSize = Math.round(size * 0.70);
       const padding = Math.round((size - logoSize) / 2);
 
       // Create a solid background and composite the logo centered with padding
@@ -80,9 +79,9 @@ async function generateIcons() {
       console.log(`✅ Created ${name} (${size}x${size}) - logo: ${logoSize}px with ${padding}px padding`);
     }
 
-    console.log('\n🎉 All icons generated successfully!');
-    console.log('\nℹ️  iOS users can now add the app to their Home Screen and see the full Simorgh logo.');
-    console.log('ℹ️  Icons have solid dark background and safe padding to prevent iOS clipping.');
+    console.log('\n🎉 All iOS icons generated successfully from simorgh-sky.svg!');
+    console.log('\nℹ️  iOS users can now add the app to their Home Screen and see the FULL Simorgh logo.');
+    console.log('ℹ️  Icons include complete artwork (tail, wings, all details) with safe padding.');
 
   } catch (error) {
     if (error.code === 'MODULE_NOT_FOUND') {
@@ -90,12 +89,10 @@ async function generateIcons() {
       console.log('To generate icons, please run:');
       console.log('  npm install sharp --save-dev');
       console.log('  node generate-icons.js\n');
-      console.log('Alternatively, manually export simorgh.svg to PNG in these sizes:');
+      console.log('Alternatively, manually export simorgh-sky.svg to PNG in these sizes:');
       console.log('  - apple-touch-icon-180.png (180x180)');
       console.log('  - apple-touch-icon-167.png (167x167)');
       console.log('  - apple-touch-icon-152.png (152x152)');
-      console.log('  - icon-192.png (192x192)');
-      console.log('  - icon-512.png (512x512)');
       console.log('\nPlace them in the public/ directory.');
       process.exit(1);
     }
