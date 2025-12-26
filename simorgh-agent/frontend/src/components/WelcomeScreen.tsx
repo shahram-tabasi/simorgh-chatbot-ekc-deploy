@@ -110,7 +110,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
       </p>
 
       {/* Suggested prompts */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 sm:gap-3 max-w-3xl w-full">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5 sm:gap-2 max-w-3xl w-full">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
@@ -118,7 +118,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
               key={i}
               onClick={() => item.enabled && onPromptClick(item.prompt)}
               disabled={!item.enabled}
-              className={`group p-1.5 sm:p-3 rounded-xl border transition-all text-center relative overflow-hidden aspect-square flex flex-col items-center justify-center ${
+              className={`group p-1 sm:p-2 rounded-xl border transition-all text-center relative overflow-hidden aspect-square flex flex-col items-center justify-center ${
                 item.enabled
                   ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
                   : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-60'
@@ -127,14 +127,14 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
                 animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
               }}
             >
-              <div className="flex flex-col items-center gap-0.5 sm:gap-1.5">
-                <div className={`text-xl sm:text-2xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+              <div className="flex flex-col items-center gap-0.5 sm:gap-1">
+                <div className={`text-lg sm:text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
                   {item.emoji}
                 </div>
-                <div className="text-[10px] sm:text-xs font-semibold text-white">
+                <div className="text-[9px] sm:text-[10px] font-semibold text-white">
                   {item.title}
                 </div>
-                <div className="text-[8px] sm:text-[9px] text-gray-400 leading-tight px-1">
+                <div className="text-[7px] sm:text-[8px] text-gray-400 leading-tight px-1">
                   {item.subtitle}
                 </div>
                 {!item.enabled && (
