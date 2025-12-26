@@ -32,7 +32,10 @@ async function generateIcons() {
       process.exit(1);
     }
 
-    console.log('📦 Generating PNG icons from simorgh.svg...\n');
+    console.log('📦 Generating PNG icons with solid background from simorgh.svg...\n');
+
+    // App background color (dark blue-black from theme)
+    const backgroundColor = { r: 10, g: 14, b: 39 };
 
     const sizes = [
       { name: 'apple-touch-icon-180.png', size: 180 },
@@ -44,15 +47,36 @@ async function generateIcons() {
 
     for (const { name, size } of sizes) {
       const outputPath = path.join(publicDir, name);
-      await sharp(svgPath)
-        .resize(size, size)
-        .png()
-        .toFile(outputPath);
-      console.log(`✅ Created ${name} (${size}x${size})`);
+
+      // Create a solid background and composite the logo on top
+      // This ensures iOS doesn't show a white icon
+      await sharp({
+        create: {
+          width: size,
+          height: size,
+          channels: 4,
+          background: backgroundColor
+        }
+      })
+      .composite([
+        {
+          input: await sharp(svgPath)
+            .resize(size, size, {
+              fit: 'contain',
+              background: { r: 0, g: 0, b: 0, alpha: 0 }
+            })
+            .toBuffer()
+        }
+      ])
+      .png()
+      .toFile(outputPath);
+
+      console.log(`✅ Created ${name} (${size}x${size}) with solid background`);
     }
 
     console.log('\n🎉 All icons generated successfully!');
     console.log('\nℹ️  iOS users can now add the app to their Home Screen and see the Simorgh logo.');
+    console.log('ℹ️  Icons have a solid dark background to prevent iOS white icon issue.');
 
   } catch (error) {
     if (error.code === 'MODULE_NOT_FOUND') {
