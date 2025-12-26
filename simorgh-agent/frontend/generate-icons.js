@@ -32,7 +32,7 @@ async function generateIcons() {
       process.exit(1);
     }
 
-    console.log('📦 Generating PNG icons with solid background from simorgh.svg...\n');
+    console.log('📦 Generating PNG icons with solid background and safe padding...\n');
 
     // App background color (dark blue-black from theme)
     const backgroundColor = { r: 10, g: 14, b: 39 };
@@ -48,8 +48,12 @@ async function generateIcons() {
     for (const { name, size } of sizes) {
       const outputPath = path.join(publicDir, name);
 
-      // Create a solid background and composite the logo on top
-      // This ensures iOS doesn't show a white icon
+      // iOS safe area: logo should be ~72% of icon size to avoid clipping
+      // This prevents iOS rounded-square mask from cropping the logo
+      const logoSize = Math.round(size * 0.72);
+      const padding = Math.round((size - logoSize) / 2);
+
+      // Create a solid background and composite the logo centered with padding
       await sharp({
         create: {
           width: size,
@@ -61,22 +65,24 @@ async function generateIcons() {
       .composite([
         {
           input: await sharp(svgPath)
-            .resize(size, size, {
+            .resize(logoSize, logoSize, {
               fit: 'contain',
               background: { r: 0, g: 0, b: 0, alpha: 0 }
             })
-            .toBuffer()
+            .toBuffer(),
+          top: padding,
+          left: padding
         }
       ])
       .png()
       .toFile(outputPath);
 
-      console.log(`✅ Created ${name} (${size}x${size}) with solid background`);
+      console.log(`✅ Created ${name} (${size}x${size}) - logo: ${logoSize}px with ${padding}px padding`);
     }
 
     console.log('\n🎉 All icons generated successfully!');
-    console.log('\nℹ️  iOS users can now add the app to their Home Screen and see the Simorgh logo.');
-    console.log('ℹ️  Icons have a solid dark background to prevent iOS white icon issue.');
+    console.log('\nℹ️  iOS users can now add the app to their Home Screen and see the full Simorgh logo.');
+    console.log('ℹ️  Icons have solid dark background and safe padding to prevent iOS clipping.');
 
   } catch (error) {
     if (error.code === 'MODULE_NOT_FOUND') {
