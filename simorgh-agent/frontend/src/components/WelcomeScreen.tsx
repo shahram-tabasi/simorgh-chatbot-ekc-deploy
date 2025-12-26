@@ -79,7 +79,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
       {/* Logo - with proper iOS SVG support */}
       <div className="flex flex-col items-center mb-6 md:mb-8">
         <img
-          src="/simorgh.svg"
+          src="/simorgh-sky.svg"
           alt="Simorgh Logo"
           className="w-24 h-24 md:w-32 md:h-32 mb-3 mx-auto drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
