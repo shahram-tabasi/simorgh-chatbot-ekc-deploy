@@ -220,9 +220,10 @@ function MainChat() {
 
   return (
     <LanguageProvider>
-      <div className="w-full h-[100dvh] relative bg-[#0a0e27]">
-        <ThemeBackground />
+      {/* Render background at root level to avoid stacking context issues */}
+      <ThemeBackground />
 
+      <div className="w-full h-[100dvh] relative bg-[#0a0e27]">
         {/* Mobile Header - only visible on mobile */}
         <MobileHeader
           onMenuClick={rightSidebar.toggle}
