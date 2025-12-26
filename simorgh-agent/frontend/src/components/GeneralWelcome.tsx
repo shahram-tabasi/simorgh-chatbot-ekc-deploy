@@ -75,9 +75,9 @@ const suggestedPrompts = [
 
 export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcomeProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-4 md:py-8 w-full min-h-[calc(100vh-14rem)] md:min-h-0">
+    <div className="flex flex-col items-center justify-center px-4 py-2 md:py-8 w-full min-h-[calc(100vh-14rem)] md:min-h-0">
       {/* Logo - with proper iOS SVG support */}
-      <div className="flex flex-col items-center mb-6 md:mb-8">
+      <div className="flex flex-col items-center mb-4 md:mb-8">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
@@ -105,7 +105,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
       </div>
 
       {/* Welcome text - centered on mobile */}
-      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-8 md:mb-12 font-light px-4">
+      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-6 md:mb-12 font-light px-4">
         Ask me anything about electrical engineering, AI, or technology
       </p>
 
@@ -118,7 +118,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
               key={i}
               onClick={() => item.enabled && onPromptClick(item.prompt)}
               disabled={!item.enabled}
-              className={`group p-2 sm:p-3 rounded-xl border transition-all text-center relative overflow-hidden aspect-square flex flex-col items-center justify-center ${
+              className={`group p-1.5 sm:p-3 rounded-xl border transition-all text-center relative overflow-hidden aspect-square flex flex-col items-center justify-center ${
                 item.enabled
                   ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
                   : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-60'
@@ -127,7 +127,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
                 animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
               }}
             >
-              <div className="flex flex-col items-center gap-1 sm:gap-1.5">
+              <div className="flex flex-col items-center gap-0.5 sm:gap-1.5">
                 <div className={`text-xl sm:text-2xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
                   {item.emoji}
                 </div>
