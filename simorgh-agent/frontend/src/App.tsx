@@ -220,7 +220,7 @@ function MainChat() {
 
   return (
     <LanguageProvider>
-      <div className="w-full h-[100dvh] overflow-hidden relative bg-[#0a0e27]">
+      <div className="w-full h-[100dvh] relative bg-[#0a0e27]">
         <ThemeBackground />
 
         {/* Mobile Header - only visible on mobile */}
