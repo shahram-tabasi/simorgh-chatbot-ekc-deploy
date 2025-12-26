@@ -115,9 +115,11 @@ export function NavySimorghBackground() {
       // Draw Simorgh constellation from SVG
       if (simorghImageRef.current) {
         const img = simorghImageRef.current;
+        // Use explicit dimensions (SVG viewBox is 1000x1000) to avoid platform-specific issues
+        const svgSize = 1000;
         const scale = 0.3; // Adjust scale as needed
-        const width = img.naturalWidth * scale;
-        const height = img.naturalHeight * scale;
+        const width = svgSize * scale;
+        const height = svgSize * scale;
         const x = (canvas.width - width) / 2;
         const y = (canvas.height - height) / 2;
 
