@@ -75,9 +75,9 @@ const suggestedPrompts = [
 
 export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcomeProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-2 md:py-4 w-full">
+    <div className="flex flex-col items-center justify-center px-4 py-1 md:py-2 w-full">
       {/* Logo - with proper iOS SVG support */}
-      <div className="flex flex-col items-center mb-4 md:mb-6">
+      <div className="flex flex-col items-center mb-3 md:mb-4">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
@@ -105,13 +105,13 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
       </div>
 
       {/* Welcome text */}
-      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-4 md:mb-6 font-light px-4">
+      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-3 md:mb-4 font-light px-4">
         Ask me anything about electrical engineering, AI,
         <br />or technology
       </p>
 
       {/* Suggested prompts */}
-      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-2">
+      <div className="flex flex-wrap gap-2 justify-center max-w-2xl w-full mb-2">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
