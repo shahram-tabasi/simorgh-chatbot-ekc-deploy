@@ -7,6 +7,15 @@ interface GeneralWelcomeProps {
 }
 
 const suggestedPrompts = [
+  // Row 1: 5 buttons
+  {
+    icon: Lightbulb,
+    title: 'Short Circuit Analysis',
+    subtitle: 'Fault current calculations',
+    prompt: `Explain the methodology for calculating short circuit currents in electrical networks. What are the key factors that affect fault levels, and how do you ensure equipment ratings are adequate?`,
+    enabled: true,
+    emoji: '💡'
+  },
   {
     icon: Brain,
     title: 'AI in Electrical Design',
@@ -32,6 +41,15 @@ const suggestedPrompts = [
     emoji: '📟'
   },
   {
+    icon: TrendingUp,
+    title: 'Energy Efficiency',
+    subtitle: 'Power quality and optimization',
+    prompt: `What are the best practices for improving energy efficiency in industrial electrical systems? Discuss power factor correction, harmonic mitigation, and load optimization strategies.`,
+    enabled: true,
+    emoji: '📊'
+  },
+  // Row 2: 3 buttons
+  {
     icon: Shield,
     title: 'Protection Coordination',
     subtitle: 'Protective device coordination',
@@ -54,22 +72,6 @@ const suggestedPrompts = [
     prompt: `Describe the key components and benefits of smart grid technology in electrical distribution systems. How do IoT sensors, automation, and AI enhance grid reliability and efficiency?`,
     enabled: true,
     emoji: '🌐'
-  },
-  {
-    icon: Lightbulb,
-    title: 'Short Circuit Analysis',
-    subtitle: 'Fault current calculations',
-    prompt: `Explain the methodology for calculating short circuit currents in electrical networks. What are the key factors that affect fault levels, and how do you ensure equipment ratings are adequate?`,
-    enabled: true,
-    emoji: '💡'
-  },
-  {
-    icon: TrendingUp,
-    title: 'Energy Efficiency',
-    subtitle: 'Power quality and optimization',
-    prompt: `What are the best practices for improving energy efficiency in industrial electrical systems? Discuss power factor correction, harmonic mitigation, and load optimization strategies.`,
-    enabled: true,
-    emoji: '📊'
   }
 ];
 
@@ -110,8 +112,8 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
         <br />or technology
       </p>
 
-      {/* Suggested prompts */}
-      <div className="flex flex-wrap gap-2 justify-center max-w-2xl w-full mb-2">
+      {/* Suggested prompts - Two rows: 5 buttons + 3 buttons */}
+      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-2">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
