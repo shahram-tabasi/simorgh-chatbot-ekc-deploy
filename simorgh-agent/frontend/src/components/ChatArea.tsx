@@ -66,10 +66,10 @@ export function ChatArea({
   return (
     <div className="flex-1 flex flex-col h-full relative">
       {/* Main content area - scrollable only in chatting mode, with padding for mobile header */}
-      <div className={`flex-1 flex flex-col ${isIdle ? 'pt-0 md:pt-0 justify-start md:justify-center items-center overflow-y-auto' : 'pt-14 md:pt-0 overflow-y-auto'} px-2 sm:px-4 md:px-8 lg:px-20`}>
+      <div className={`flex-1 flex flex-col ${isIdle ? 'pt-0 md:pt-0 justify-center items-center overflow-y-auto' : 'pt-14 md:pt-0 overflow-y-auto'} px-2 sm:px-4 md:px-8 lg:px-20`}>
         {/* Welcome content - shown in idle mode */}
         {isIdle && (
-          <div className="w-full max-w-5xl mx-auto pt-14 md:pt-0">
+          <div className="w-full max-w-5xl mx-auto">
             {isProjectChat ? (
               <WelcomeScreen onHide={() => {}} onPromptClick={handlePromptClick} />
             ) : (

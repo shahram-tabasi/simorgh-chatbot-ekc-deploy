@@ -75,13 +75,13 @@ const suggestedPrompts = [
 
 export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcomeProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-4 md:py-6 w-full">
+    <div className="flex flex-col items-center justify-center px-4 py-2 md:py-4 w-full">
       {/* Logo - with proper iOS SVG support */}
-      <div className="flex flex-col items-center mb-6 md:mb-8">
+      <div className="flex flex-col items-center mb-4 md:mb-6">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
-          className="w-32 h-32 md:w-40 md:h-40 mb-4 mx-auto drop-shadow-2xl select-none animate-fade-in"
+          className="w-32 h-32 md:w-40 md:h-40 mb-3 mx-auto drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
             // Fallback for iOS if SVG fails to load
             const target = e.target as HTMLImageElement;
@@ -105,7 +105,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
       </div>
 
       {/* Welcome text */}
-      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-6 md:mb-8 font-light px-4">
+      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-4 md:mb-6 font-light px-4">
         Ask me anything about electrical engineering, AI,
         <br />or technology
       </p>
