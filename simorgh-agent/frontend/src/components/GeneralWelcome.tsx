@@ -111,7 +111,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
       </p>
 
       {/* Suggested prompts */}
-      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-4">
+      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-2">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (

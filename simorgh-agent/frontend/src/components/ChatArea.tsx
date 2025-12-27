@@ -97,10 +97,10 @@ export function ChatArea({
       <div
         className={`w-full flex-shrink-0 flex justify-center ${
           isIdle
-            ? 'pb-8 sm:pb-12 md:pb-16'
+            ? 'pb-2 sm:pb-3 md:pb-4'
             : 'pb-4 sm:pb-6 md:pb-8 border-t border-transparent backdrop-blur-xl'
         }`}
-        style={{ paddingBottom: `max(${isIdle ? '2rem' : '1rem'}, calc(${isIdle ? '2rem' : '1rem'} + env(safe-area-inset-bottom)))` }}
+        style={{ paddingBottom: `max(${isIdle ? '0.5rem' : '1rem'}, calc(${isIdle ? '0.5rem' : '1rem'} + env(safe-area-inset-bottom)))` }}
       >
         <div className={`w-full px-2 sm:px-4 ${isIdle ? 'max-w-3xl' : 'max-w-4xl'}`}>
           <ChatInput
