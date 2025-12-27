@@ -75,13 +75,13 @@ const suggestedPrompts = [
 
 export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-2 md:py-4 w-full min-h-[calc(100vh-14rem)] md:min-h-0">
+    <div className="flex flex-col items-center justify-center px-4 py-2 w-full">
       {/* Logo - with proper iOS SVG support */}
-      <div className="flex flex-col items-center mb-3 md:mb-4">
+      <div className="flex flex-col items-center mb-2">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
-          className="w-24 h-24 md:w-32 md:h-32 mb-3 mx-auto drop-shadow-2xl select-none animate-fade-in"
+          className="w-16 h-16 md:w-20 md:h-20 mb-2 mx-auto drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
             // Fallback for iOS if SVG fails to load
             const target = e.target as HTMLImageElement;
@@ -91,7 +91,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
         <img
           src="/text_simorgh.svg"
           alt="Simorgh"
-          className="h-16 md:h-20 lg:h-24 drop-shadow-2xl select-none animate-fade-in-delay"
+          className="h-12 md:h-14 drop-shadow-2xl select-none animate-fade-in-delay"
           onError={(e) => {
             // Fallback text for iOS
             const target = e.target as HTMLImageElement;
@@ -105,7 +105,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
       </div>
 
       {/* Suggested prompts */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5 sm:gap-2 max-w-3xl w-full">
+      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
@@ -113,19 +113,24 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
               key={i}
               onClick={() => item.enabled && onPromptClick(item.prompt)}
               disabled={!item.enabled}
-              className={`group rounded-xl border transition-all text-center relative overflow-hidden flex items-center justify-center ${
+              className={`group rounded-2xl border transition-all relative overflow-hidden ${
                 item.enabled
-                  ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20 w-28 h-28 sm:w-32 sm:h-32'
-                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40 w-16 h-8 sm:w-20 sm:h-10'
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20 px-6 py-3 flex items-center gap-3'
+                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40 w-12 h-6'
               }`}
               style={{
                 animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
               }}
             >
               {item.enabled && (
-                <div className={`text-2xl sm:text-3xl transition-transform group-hover:scale-110`}>
-                  {item.emoji}
-                </div>
+                <>
+                  <div className="text-2xl transition-transform group-hover:scale-110">
+                    {item.emoji}
+                  </div>
+                  <div className="text-sm font-medium text-white lowercase">
+                    {item.title}
+                  </div>
+                </>
               )}
             </button>
           );
