@@ -75,9 +75,9 @@ const suggestedPrompts = [
 
 export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-2 md:py-8 w-full min-h-[calc(100vh-14rem)] md:min-h-0">
+    <div className="flex flex-col items-center justify-center px-4 py-2 md:py-4 w-full min-h-[calc(100vh-14rem)] md:min-h-0">
       {/* Logo - with proper iOS SVG support */}
-      <div className="flex flex-col items-center mb-4 md:mb-8">
+      <div className="flex flex-col items-center mb-3 md:mb-4">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
@@ -104,11 +104,6 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
         />
       </div>
 
-      {/* Welcome text - centered on mobile */}
-      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-6 md:mb-12 font-light px-4">
-        What do you want to know?
-      </p>
-
       {/* Suggested prompts */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5 sm:gap-2 max-w-3xl w-full">
         {suggestedPrompts.map((item, i) => {
@@ -118,31 +113,20 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
               key={i}
               onClick={() => item.enabled && onPromptClick(item.prompt)}
               disabled={!item.enabled}
-              className={`group p-1 sm:p-2 rounded-xl border transition-all text-center relative overflow-hidden w-28 h-28 sm:w-32 sm:h-32 flex flex-col items-center justify-center ${
+              className={`group rounded-xl border transition-all text-center relative overflow-hidden flex items-center justify-center ${
                 item.enabled
-                  ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
-                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-60'
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20 w-28 h-28 sm:w-32 sm:h-32'
+                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40 w-16 h-8 sm:w-20 sm:h-10'
               }`}
               style={{
                 animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
               }}
             >
-              <div className="flex flex-col items-center gap-0.5 sm:gap-1">
-                <div className={`text-base sm:text-lg transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+              {item.enabled && (
+                <div className={`text-2xl sm:text-3xl transition-transform group-hover:scale-110`}>
                   {item.emoji}
                 </div>
-                <div className="text-[9px] sm:text-[10px] font-semibold text-white">
-                  {item.title}
-                </div>
-                <div className="text-[7px] sm:text-[8px] text-gray-400 leading-tight px-1">
-                  {item.subtitle}
-                </div>
-                {!item.enabled && (
-                  <div className="mt-0.5 px-1 sm:px-1.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/30">
-                    <span className="text-[7px] sm:text-[8px] font-medium text-red-400">Coming Soon</span>
-                  </div>
-                )}
-              </div>
+              )}
             </button>
           );
         })}
