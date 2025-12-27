@@ -111,7 +111,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
       </p>
 
       {/* Suggested prompts */}
-      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-6">
+      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-4">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
@@ -119,7 +119,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
               key={i}
               onClick={() => item.enabled && onPromptClick(item.prompt)}
               disabled={!item.enabled}
-              className={`group rounded-2xl border transition-all relative overflow-hidden px-6 py-3 flex items-center gap-3 ${
+              className={`group rounded-2xl border transition-all relative overflow-hidden px-4 py-2.5 flex items-center gap-2.5 ${
                 item.enabled
                   ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
                   : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40'
@@ -128,10 +128,10 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
                 animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
               }}
             >
-              <div className={`text-2xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+              <div className={`text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
                 {item.emoji}
               </div>
-              <div className="text-sm font-medium text-white lowercase">
+              <div className="text-xs font-medium text-white lowercase whitespace-nowrap">
                 {item.title}
               </div>
             </button>
