@@ -7,6 +7,15 @@ interface WelcomeScreenProps {
 }
 
 const suggestedPrompts = [
+  // Single row: all 8 buttons in order
+  {
+    icon: Image,
+    title: 'Site Layout',
+    subtitle: 'Site plans and equipment layouts',
+    prompt: '',
+    enabled: false,
+    emoji: '🗺️'
+  },
   {
     icon: BookOpen,
     title: 'Specification',
@@ -56,14 +65,6 @@ const suggestedPrompts = [
     emoji: '🧠'
   },
   {
-    icon: Image,
-    title: 'Site Layout',
-    subtitle: 'Site plans and equipment layouts',
-    prompt: '',
-    enabled: false,
-    emoji: '🗺️'
-  },
-  {
     icon: Sparkles,
     title: 'SLD-SLD',
     subtitle: 'Single line diagrams and electrical schematics',
@@ -110,8 +111,9 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
         <br />or technology
       </p>
 
-      {/* Suggested prompts */}
-      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-2">
+      {/* Suggested prompts - Single row for Project Welcome */}
+      <div className="flex flex-nowrap gap-2 justify-center w-full mb-2 overflow-x-auto pb-1 px-2"
+           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
@@ -150,15 +152,15 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
             transform: translateY(0);
           }
         }
-        
+
         .animate-fade-in {
           animation: fadeIn 0.8s ease-out;
         }
-        
+
         .animate-fade-in-delay {
           animation: fadeIn 0.6s ease-out 0.15s backwards;
         }
-        
+
         @keyframes fadeIn {
           from {
             opacity: 0;
@@ -168,6 +170,11 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
             opacity: 1;
             transform: scale(1);
           }
+        }
+
+        /* Hide scrollbar for webkit browsers */
+        .overflow-x-auto::-webkit-scrollbar {
+          display: none;
         }
       `}</style>
     </div>
