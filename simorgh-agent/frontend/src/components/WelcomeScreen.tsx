@@ -104,6 +104,12 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
         />
       </div>
 
+      {/* Welcome text */}
+      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-4 font-light px-4">
+        Ask me anything about electrical engineering, AI,
+        <br />or technology
+      </p>
+
       {/* Suggested prompts */}
       <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full">
         {suggestedPrompts.map((item, i) => {
@@ -113,25 +119,21 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
               key={i}
               onClick={() => item.enabled && onPromptClick(item.prompt)}
               disabled={!item.enabled}
-              className={`group rounded-2xl border transition-all relative overflow-hidden ${
+              className={`group rounded-2xl border transition-all relative overflow-hidden px-6 py-3 flex items-center gap-3 ${
                 item.enabled
-                  ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20 px-6 py-3 flex items-center gap-3'
-                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40 w-12 h-6'
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
+                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40'
               }`}
               style={{
                 animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
               }}
             >
-              {item.enabled && (
-                <>
-                  <div className="text-2xl transition-transform group-hover:scale-110">
-                    {item.emoji}
-                  </div>
-                  <div className="text-sm font-medium text-white lowercase">
-                    {item.title}
-                  </div>
-                </>
-              )}
+              <div className={`text-2xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+                {item.emoji}
+              </div>
+              <div className="text-sm font-medium text-white lowercase">
+                {item.title}
+              </div>
             </button>
           );
         })}
