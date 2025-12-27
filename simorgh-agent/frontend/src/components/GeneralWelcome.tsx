@@ -75,13 +75,13 @@ const suggestedPrompts = [
 
 export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcomeProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-2 md:py-8 w-full min-h-[calc(100vh-14rem)] md:min-h-0">
+    <div className="flex flex-col items-center justify-center px-4 py-4 md:py-6 w-full">
       {/* Logo - with proper iOS SVG support */}
-      <div className="flex flex-col items-center mb-4 md:mb-8">
+      <div className="flex flex-col items-center mb-6 md:mb-8">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
-          className="w-24 h-24 md:w-32 md:h-32 mb-3 mx-auto drop-shadow-2xl select-none animate-fade-in"
+          className="w-32 h-32 md:w-40 md:h-40 mb-4 mx-auto drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
             // Fallback for iOS if SVG fails to load
             const target = e.target as HTMLImageElement;
@@ -91,7 +91,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
         <img
           src="/text_simorgh.svg"
           alt="Simorgh"
-          className="h-16 md:h-20 lg:h-24 drop-shadow-2xl select-none animate-fade-in-delay"
+          className="h-20 md:h-24 lg:h-28 drop-shadow-2xl select-none animate-fade-in-delay"
           onError={(e) => {
             // Fallback text for iOS
             const target = e.target as HTMLImageElement;
@@ -104,13 +104,14 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
         />
       </div>
 
-      {/* Welcome text - centered on mobile */}
-      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-6 md:mb-12 font-light px-4">
-        Ask me anything about electrical engineering, AI, or technology
+      {/* Welcome text */}
+      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-6 md:mb-8 font-light px-4">
+        Ask me anything about electrical engineering, AI,
+        <br />or technology
       </p>
 
       {/* Suggested prompts */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 sm:gap-3 max-w-3xl w-full">
+      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-6">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
@@ -118,30 +119,20 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
               key={i}
               onClick={() => item.enabled && onPromptClick(item.prompt)}
               disabled={!item.enabled}
-              className={`group p-1.5 sm:p-3 rounded-xl border transition-all text-center relative overflow-hidden aspect-square flex flex-col items-center justify-center ${
+              className={`group rounded-2xl border transition-all relative overflow-hidden px-6 py-3 flex items-center gap-3 ${
                 item.enabled
                   ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
-                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-60'
+                  : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40'
               }`}
               style={{
                 animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
               }}
             >
-              <div className="flex flex-col items-center gap-0.5 sm:gap-1.5">
-                <div className={`text-xl sm:text-2xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
-                  {item.emoji}
-                </div>
-                <div className="text-[10px] sm:text-xs font-semibold text-white">
-                  {item.title}
-                </div>
-                <div className="text-[8px] sm:text-[9px] text-gray-400 leading-tight px-1">
-                  {item.subtitle}
-                </div>
-                {!item.enabled && (
-                  <div className="mt-0.5 px-1 sm:px-1.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/30">
-                    <span className="text-[7px] sm:text-[8px] font-medium text-red-400">Coming Soon</span>
-                  </div>
-                )}
+              <div className={`text-2xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+                {item.emoji}
+              </div>
+              <div className="text-sm font-medium text-white lowercase">
+                {item.title}
               </div>
             </button>
           );

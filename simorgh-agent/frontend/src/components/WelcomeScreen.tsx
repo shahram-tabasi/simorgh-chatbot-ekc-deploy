@@ -75,13 +75,13 @@ const suggestedPrompts = [
 
 export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-2 w-full">
+    <div className="flex flex-col items-center justify-center px-4 py-4 md:py-6 w-full">
       {/* Logo - with proper iOS SVG support */}
-      <div className="flex flex-col items-center mb-2">
+      <div className="flex flex-col items-center mb-6 md:mb-8">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
-          className="w-16 h-16 md:w-20 md:h-20 mb-2 mx-auto drop-shadow-2xl select-none animate-fade-in"
+          className="w-32 h-32 md:w-40 md:h-40 mb-4 mx-auto drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
             // Fallback for iOS if SVG fails to load
             const target = e.target as HTMLImageElement;
@@ -91,7 +91,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
         <img
           src="/text_simorgh.svg"
           alt="Simorgh"
-          className="h-12 md:h-14 drop-shadow-2xl select-none animate-fade-in-delay"
+          className="h-20 md:h-24 lg:h-28 drop-shadow-2xl select-none animate-fade-in-delay"
           onError={(e) => {
             // Fallback text for iOS
             const target = e.target as HTMLImageElement;
@@ -105,13 +105,13 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
       </div>
 
       {/* Welcome text */}
-      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-4 font-light px-4">
+      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-6 md:mb-8 font-light px-4">
         Ask me anything about electrical engineering, AI,
         <br />or technology
       </p>
 
       {/* Suggested prompts */}
-      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full">
+      <div className="flex flex-wrap gap-2 justify-center max-w-3xl w-full mb-6">
         {suggestedPrompts.map((item, i) => {
           const Icon = item.icon;
           return (
