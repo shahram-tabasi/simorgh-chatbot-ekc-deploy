@@ -118,7 +118,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
               key={i}
               onClick={() => item.enabled && onPromptClick(item.prompt)}
               disabled={!item.enabled}
-              className={`group p-1 sm:p-2 rounded-xl border transition-all text-center relative overflow-hidden w-32 h-32 sm:w-36 sm:h-36 flex flex-col items-center justify-center ${
+              className={`group p-1 sm:p-2 rounded-xl border transition-all text-center relative overflow-hidden w-28 h-28 sm:w-32 sm:h-32 flex flex-col items-center justify-center ${
                 item.enabled
                   ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
                   : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-60'
@@ -128,7 +128,7 @@ export default function WelcomeScreen({ onHide, onPromptClick }: WelcomeScreenPr
               }}
             >
               <div className="flex flex-col items-center gap-0.5 sm:gap-1">
-                <div className={`text-lg sm:text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+                <div className={`text-base sm:text-lg transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
                   {item.emoji}
                 </div>
                 <div className="text-[9px] sm:text-[10px] font-semibold text-white">
