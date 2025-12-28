@@ -81,6 +81,7 @@ export function Sidebar({
               className={`${isMobile ? 'w-full' : 'w-80'} h-full overflow-y-auto`}
             >
               {/* Header with Logo and toggle button */}
+
               <div
                 className="absolute top-4 z-10 flex items-center gap-3"
                 style={{
@@ -112,12 +113,25 @@ export function Sidebar({
                     <PanelLeftIcon className="w-5 h-5 text-white" />
                   ) : (
                     <PanelRightIcon className="w-5 h-5 text-white" />
+
                   )}
-                </button>
+
+                  <button
+                    onClick={onToggle}
+                    className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg"
+                    title="Hide sidebar"
+                  >
+                    {side === 'right' ? (
+                      <PanelLeftIcon className="w-5 h-5 text-white" />
+                    ) : (
+                      <PanelRightIcon className="w-5 h-5 text-white" />
+                    )}
+                  </button>
+                </div>
               </div>
 
-              {/* محتوای sidebar با padding از بالا */}
-              <div className="h-full pt-16">{children}</div>
+              {/* محتوای sidebar */}
+              <div className="h-full">{children}</div>
             </motion.div>
           )}
         </AnimatePresence>

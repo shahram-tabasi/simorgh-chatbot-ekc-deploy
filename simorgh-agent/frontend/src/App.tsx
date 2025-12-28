@@ -223,7 +223,9 @@ function MainChat() {
       {/* Render background at root level to avoid stacking context issues */}
       <ThemeBackground />
 
+
       <div className="w-full h-[100dvh] relative ">
+
         {/* Mobile Header - only visible on mobile */}
         <MobileHeader
           onMenuClick={rightSidebar.toggle}
