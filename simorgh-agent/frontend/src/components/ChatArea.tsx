@@ -73,6 +73,18 @@ export function ChatArea({
 
   return (
     <div className="flex-1 flex flex-col h-full relative overflow-hidden w-full max-w-full min-w-0">
+      {/* Desktop Header - shows Simorgh logo at top (hidden on mobile) */}
+      <div className="hidden md:flex items-center justify-center py-3 border-b border-white/5">
+        <div className="flex items-center gap-2">
+          <img
+            src="/simorgh.svg"
+            alt="Simorgh"
+            className="w-7 h-7"
+          />
+          <span className="text-white/90 font-medium text-lg">Simorgh</span>
+        </div>
+      </div>
+
       {/* IDLE MODE: Welcome content with ChatInput integrated - centered vertically */}
       {isIdle && (
         <div className="flex-1 flex flex-col justify-center items-center overflow-y-auto overflow-x-hidden px-2 sm:px-4 md:px-8 lg:px-20 w-full min-w-0">
