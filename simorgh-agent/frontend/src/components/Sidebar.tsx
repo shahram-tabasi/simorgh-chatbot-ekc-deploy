@@ -93,12 +93,12 @@ export function Sidebar({
                     <img
                       src="/simorgh.svg"
                       alt="Simorgh"
-                      className="w-24 h-24"
+                      className="w-20 h-20"
                     />
                     <img
                       src="/text_simorgh.svg"
                       alt="Simorgh"
-                      className="h-18"
+                      className="h-16"
                     />
                   </div>
                 )}
