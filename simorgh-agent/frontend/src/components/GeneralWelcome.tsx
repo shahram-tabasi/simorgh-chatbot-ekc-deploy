@@ -78,13 +78,13 @@ const suggestedPrompts = [
 
 export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleClick }: GeneralWelcomeProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-2 py-1 md:py-2 w-full max-w-full">
-      {/* Logo - smaller on mobile */}
-      <div className="flex flex-col items-center mb-2 md:mb-4">
+    <div className="flex flex-col items-center justify-center px-2 py-1 md:py-2 w-full max-w-full box-border">
+      {/* Logo - smaller on mobile, centered */}
+      <div className="flex flex-col items-center justify-center mb-2 md:mb-4 w-full">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
-          className="w-20 h-20 sm:w-28 sm:h-28 md:w-40 md:h-40 mb-2 mx-auto drop-shadow-2xl select-none animate-fade-in"
+          className="w-20 h-20 sm:w-28 sm:h-28 md:w-40 md:h-40 mb-2 drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
             const target = e.target as HTMLImageElement;
             target.style.display = 'none';
@@ -106,14 +106,14 @@ export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleCl
       </div>
 
       {/* Welcome text - smaller on mobile */}
-      <p className="text-sm sm:text-base md:text-lg text-gray-400 text-center max-w-md mb-2 md:mb-4 font-light px-2">
+      <p className="text-sm sm:text-base md:text-lg text-gray-400 text-center max-w-md mb-2 md:mb-4 font-light px-2 w-full">
         Ask me anything about electrical engineering, AI,
         <br />or technology
       </p>
 
       {/* Suggested prompts - Single row slider */}
-      <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider">
-        <div className="inline-flex gap-1.5 sm:gap-2 px-2 pb-2">
+      <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider box-border">
+        <div className="inline-flex gap-1.5 sm:gap-2 px-2 pb-2 pr-8">
           {suggestedPrompts.map((item, i) => {
             const Icon = item.icon;
             return (
@@ -179,6 +179,7 @@ export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleCl
           scrollbar-width: none; /* Firefox */
           -ms-overflow-style: none; /* IE/Edge */
           -webkit-overflow-scrolling: touch; /* iOS momentum scrolling */
+          overscroll-behavior-x: contain; /* Prevent rubber band effect */
         }
         .prompt-slider::-webkit-scrollbar {
           display: none; /* Chrome/Safari/Opera */
