@@ -4,6 +4,7 @@ import { Brain, Zap, CircuitBoard, Cpu, Lightbulb, Shield, Settings, TrendingUp 
 interface GeneralWelcomeProps {
   onHide: () => void;
   onPromptClick: (prompt: string) => void;
+  onPromptDoubleClick?: (prompt: string) => void;
 }
 
 const suggestedPrompts = [
@@ -75,7 +76,7 @@ const suggestedPrompts = [
   }
 ];
 
-export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcomeProps) {
+export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleClick }: GeneralWelcomeProps) {
   return (
     <div className="flex flex-col items-center justify-center px-4 py-1 md:py-2 w-full">
       {/* Logo - with proper iOS SVG support */}
@@ -112,8 +113,8 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
         <br />or technology
       </p>
 
-      {/* Suggested prompts - Two rows with proper overflow isolation */}
-      <div className="w-full max-w-full min-w-0 flex flex-col gap-2 mb-2">
+      {/* Suggested prompts - Two rows with proper overflow isolation, same width as chat input */}
+      <div className="w-full max-w-full min-w-0 flex flex-col gap-2">
         {/* Row 1: First 5 buttons */}
         <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider">
           <div className="inline-flex gap-2 justify-center w-full px-2">
@@ -123,6 +124,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
                 <button
                   key={i}
                   onClick={() => item.enabled && onPromptClick(item.prompt)}
+                  onDoubleClick={() => item.enabled && onPromptDoubleClick?.(item.prompt)}
                   disabled={!item.enabled}
                   className={`group rounded-2xl border transition-all relative overflow-hidden px-4 py-2.5 flex items-center gap-2.5 flex-shrink-0 ${
                     item.enabled
@@ -145,7 +147,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
           </div>
         </div>
         {/* Row 2: Last 3 buttons */}
-        <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider">
+        <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider pb-2">
           <div className="inline-flex gap-2 justify-center w-full px-2">
             {suggestedPrompts.slice(5).map((item, i) => {
               const Icon = item.icon;
@@ -153,6 +155,7 @@ export default function GeneralWelcome({ onHide, onPromptClick }: GeneralWelcome
                 <button
                   key={i + 5}
                   onClick={() => item.enabled && onPromptClick(item.prompt)}
+                  onDoubleClick={() => item.enabled && onPromptDoubleClick?.(item.prompt)}
                   disabled={!item.enabled}
                   className={`group rounded-2xl border transition-all relative overflow-hidden px-4 py-2.5 flex items-center gap-2.5 flex-shrink-0 ${
                     item.enabled
