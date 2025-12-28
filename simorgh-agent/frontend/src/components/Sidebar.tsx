@@ -89,7 +89,7 @@ export function Sidebar({
               >
                 {/* Simorgh Logo - only on right sidebar */}
                 {side === 'right' && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
                     <img
                       src="/simorgh.svg"
                       alt="Simorgh"
