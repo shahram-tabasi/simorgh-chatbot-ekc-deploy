@@ -72,11 +72,11 @@ export function ChatArea({
   }, [messages.length]);
 
   return (
-    <div className="flex-1 flex flex-col h-full relative overflow-x-hidden">
+    <div className="flex-1 flex flex-col h-full relative overflow-hidden w-full max-w-full min-w-0">
       {/* IDLE MODE: Welcome content with ChatInput integrated - centered vertically */}
       {isIdle && (
-        <div className="flex-1 flex flex-col justify-center items-center overflow-y-auto overflow-x-hidden px-2 sm:px-4 md:px-8 lg:px-20">
-          <div className="w-full max-w-3xl mx-auto flex flex-col items-center overflow-x-hidden">
+        <div className="flex-1 flex flex-col justify-center items-center overflow-y-auto overflow-x-hidden px-2 sm:px-4 md:px-8 lg:px-20 w-full min-w-0">
+          <div className="w-full max-w-3xl mx-auto flex flex-col items-center overflow-hidden min-w-0">
             {isProjectChat ? (
               <WelcomeScreen
                 onHide={() => {}}

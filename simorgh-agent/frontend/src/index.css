@@ -18,6 +18,15 @@
     overflow-x: hidden;
     width: 100%;
     max-width: 100vw;
+    position: relative;
+  }
+
+  /* Root container fix for mobile */
+  #root {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+    position: relative;
   }
 
   body {
@@ -27,7 +36,9 @@
     /* Prevent text size adjustment on mobile */
     -webkit-text-size-adjust: 100%;
     /* Prevent overscroll bounce on iOS */
-    overscroll-behavior-y: none;
+    overscroll-behavior: none;
+    /* Only allow vertical pan on body - prevents horizontal page scroll */
+    touch-action: pan-y;
   }
 
   /* Prevent double-tap zoom on interactive elements */

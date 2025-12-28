@@ -232,7 +232,7 @@ function MainChat() {
           currentModel={currentAiMode}
         />
 
-        <div className="relative z-10 flex h-full mt-0 md:mt-0">
+        <div className="relative z-10 flex h-full mt-0 md:mt-0 overflow-hidden">
           {/* سایدبار راست */}
           <Sidebar
             isOpen={rightSidebar.isOpen}
@@ -260,7 +260,7 @@ function MainChat() {
           </Sidebar>
 
           {/* چت اصلی */}
-          <div className="flex-1 flex flex-col">
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
             <ChatArea
               messages={messages}
               isTyping={isTyping}
