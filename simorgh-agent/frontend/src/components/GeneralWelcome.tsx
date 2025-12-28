@@ -113,69 +113,37 @@ export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleCl
         <br />or technology
       </p>
 
-      {/* Suggested prompts - Two rows with proper overflow isolation, same width as chat input */}
-      <div className="w-full max-w-full min-w-0 flex flex-col gap-2">
-        {/* Row 1: First 5 buttons */}
-        <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider">
-          <div className="inline-flex gap-2 justify-center w-full px-2">
-            {suggestedPrompts.slice(0, 5).map((item, i) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={i}
-                  onClick={() => item.enabled && onPromptClick(item.prompt)}
-                  onDoubleClick={() => item.enabled && onPromptDoubleClick?.(item.prompt)}
-                  disabled={!item.enabled}
-                  className={`group rounded-2xl border transition-all relative overflow-hidden px-4 py-2.5 flex items-center gap-2.5 flex-shrink-0 ${
-                    item.enabled
-                      ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
-                      : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40'
-                  }`}
-                  style={{
-                    animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
-                  }}
-                >
-                  <div className={`text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
-                    {item.emoji}
-                  </div>
-                  <div className="text-xs font-medium text-white lowercase whitespace-nowrap">
-                    {item.title}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        {/* Row 2: Last 3 buttons */}
-        <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider pb-2">
-          <div className="inline-flex gap-2 justify-center w-full px-2">
-            {suggestedPrompts.slice(5).map((item, i) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={i + 5}
-                  onClick={() => item.enabled && onPromptClick(item.prompt)}
-                  onDoubleClick={() => item.enabled && onPromptDoubleClick?.(item.prompt)}
-                  disabled={!item.enabled}
-                  className={`group rounded-2xl border transition-all relative overflow-hidden px-4 py-2.5 flex items-center gap-2.5 flex-shrink-0 ${
-                    item.enabled
-                      ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
-                      : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40'
-                  }`}
-                  style={{
-                    animation: `fadeInUp 0.4s ease-out ${0.6 + (i + 5) * 0.1}s backwards`
-                  }}
-                >
-                  <div className={`text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
-                    {item.emoji}
-                  </div>
-                  <div className="text-xs font-medium text-white lowercase whitespace-nowrap">
-                    {item.title}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+      {/* Suggested prompts - Single row slider */}
+      {/* Outer container: width-constrained, isolates overflow */}
+      <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider">
+        {/* Inner container: inline-flex, no w-full to allow natural overflow */}
+        <div className="inline-flex gap-2 px-2 pb-2">
+          {suggestedPrompts.map((item, i) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={i}
+                onClick={() => item.enabled && onPromptClick(item.prompt)}
+                onDoubleClick={() => item.enabled && onPromptDoubleClick?.(item.prompt)}
+                disabled={!item.enabled}
+                className={`group rounded-2xl border transition-all relative overflow-hidden px-4 py-2.5 flex items-center gap-2.5 flex-shrink-0 ${
+                  item.enabled
+                    ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
+                    : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40'
+                }`}
+                style={{
+                  animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
+                }}
+              >
+                <div className={`text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+                  {item.emoji}
+                </div>
+                <div className="text-xs font-medium text-white lowercase whitespace-nowrap">
+                  {item.title}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
 

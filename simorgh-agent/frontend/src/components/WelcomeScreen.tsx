@@ -115,8 +115,8 @@ export default function WelcomeScreen({ onHide, onPromptClick, onPromptDoubleCli
       {/* Suggested prompts - Single row slider for Project Welcome */}
       {/* Outer container: width-constrained, isolates overflow, same width as chat input */}
       <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider">
-        {/* Inner container: inline-flex for horizontal layout */}
-        <div className="inline-flex gap-2 justify-center w-full px-2 pb-2">
+        {/* Inner container: inline-flex, no w-full to allow natural overflow */}
+        <div className="inline-flex gap-2 px-2 pb-2">
           {suggestedPrompts.map((item, i) => {
             const Icon = item.icon;
             return (
