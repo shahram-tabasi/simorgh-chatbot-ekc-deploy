@@ -81,11 +81,11 @@ export function Sidebar({
               className={`${isMobile ? 'w-full' : 'w-80'} h-full overflow-y-auto`}
             >
               {/* Header with Logo and toggle button */}
-              <div className="flex flex-col px-4 pt-3 pb-2">
+              <div className="flex flex-col px-4 pt-2 pb-2">
                 {/* Top row: Logo + Toggle */}
                 <div className="flex items-center justify-between">
-                  {/* Simorgh Logo - only on right sidebar */}
-                  {side === 'right' && (
+                  {/* Simorgh Logo - only on right sidebar, hidden on mobile */}
+                  {side === 'right' && !isMobile && (
                     <div className="flex items-center gap-1.5">
                       <img
                         src="/simorgh.svg"
