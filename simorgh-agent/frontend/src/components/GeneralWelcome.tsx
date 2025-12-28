@@ -78,15 +78,14 @@ const suggestedPrompts = [
 
 export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleClick }: GeneralWelcomeProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-1 md:py-2 w-full">
-      {/* Logo - with proper iOS SVG support */}
-      <div className="flex flex-col items-center mb-3 md:mb-4">
+    <div className="flex flex-col items-center justify-center px-2 py-1 md:py-2 w-full max-w-full">
+      {/* Logo - smaller on mobile */}
+      <div className="flex flex-col items-center mb-2 md:mb-4">
         <img
           src="/simorgh.svg"
           alt="Simorgh Logo"
-          className="w-32 h-32 md:w-40 md:h-40 mb-3 mx-auto drop-shadow-2xl select-none animate-fade-in"
+          className="w-20 h-20 sm:w-28 sm:h-28 md:w-40 md:h-40 mb-2 mx-auto drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
-            // Fallback for iOS if SVG fails to load
             const target = e.target as HTMLImageElement;
             target.style.display = 'none';
           }}
@@ -94,30 +93,27 @@ export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleCl
         <img
           src="/text_simorgh.svg"
           alt="Simorgh"
-          className="h-20 md:h-24 lg:h-28 drop-shadow-2xl select-none animate-fade-in-delay"
+          className="h-12 sm:h-16 md:h-24 lg:h-28 drop-shadow-2xl select-none animate-fade-in-delay"
           onError={(e) => {
-            // Fallback text for iOS
             const target = e.target as HTMLImageElement;
             target.style.display = 'none';
             const fallback = document.createElement('h1');
-            fallback.className = 'text-4xl md:text-5xl font-bold text-white grok-logo';
+            fallback.className = 'text-2xl sm:text-3xl md:text-5xl font-bold text-white grok-logo';
             fallback.textContent = 'SIMORGH';
             target.parentNode?.appendChild(fallback);
           }}
         />
       </div>
 
-      {/* Welcome text */}
-      <p className="text-base md:text-lg text-gray-400 text-center max-w-md mb-3 md:mb-4 font-light px-4">
+      {/* Welcome text - smaller on mobile */}
+      <p className="text-sm sm:text-base md:text-lg text-gray-400 text-center max-w-md mb-2 md:mb-4 font-light px-2">
         Ask me anything about electrical engineering, AI,
         <br />or technology
       </p>
 
       {/* Suggested prompts - Single row slider */}
-      {/* Outer container: width-constrained, isolates overflow */}
       <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider">
-        {/* Inner container: inline-flex, no w-full to allow natural overflow */}
-        <div className="inline-flex gap-2 px-2 pb-2">
+        <div className="inline-flex gap-1.5 sm:gap-2 px-2 pb-2">
           {suggestedPrompts.map((item, i) => {
             const Icon = item.icon;
             return (
@@ -126,7 +122,7 @@ export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleCl
                 onClick={() => item.enabled && onPromptClick(item.prompt)}
                 onDoubleClick={() => item.enabled && onPromptDoubleClick?.(item.prompt)}
                 disabled={!item.enabled}
-                className={`group rounded-2xl border transition-all relative overflow-hidden px-4 py-2.5 flex items-center gap-2.5 flex-shrink-0 ${
+                className={`group rounded-xl sm:rounded-2xl border transition-all relative overflow-hidden px-2.5 py-1.5 sm:px-4 sm:py-2.5 flex items-center gap-1.5 sm:gap-2.5 flex-shrink-0 ${
                   item.enabled
                     ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
                     : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40'
@@ -135,10 +131,10 @@ export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleCl
                   animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
                 }}
               >
-                <div className={`text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
+                <div className={`text-base sm:text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
                   {item.emoji}
                 </div>
-                <div className="text-xs font-medium text-white lowercase whitespace-nowrap">
+                <div className="text-[10px] sm:text-xs font-medium text-white lowercase whitespace-nowrap">
                   {item.title}
                 </div>
               </button>
