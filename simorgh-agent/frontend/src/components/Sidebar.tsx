@@ -80,13 +80,29 @@ export function Sidebar({
               transition={{ duration: 0.2 }}
               className={`${isMobile ? 'w-full' : 'w-80'} h-full overflow-y-auto`}
             >
-              {/* دکمه toggle داخل sidebar - بالای صفحه */}
+              {/* Header with Logo and toggle button */}
               <div
-                className="absolute top-4 z-10"
+                className="absolute top-4 z-10 flex items-center gap-3"
                 style={{
                   [side === 'right' ? 'left' : 'right']: '16px'
                 }}
               >
+                {/* Simorgh Logo - only on right sidebar */}
+                {side === 'right' && (
+                  <div className="flex items-center gap-2">
+                    <img
+                      src="/simorgh.svg"
+                      alt="Simorgh"
+                      className="w-7 h-7"
+                    />
+                    <img
+                      src="/text_simorgh.svg"
+                      alt="Simorgh"
+                      className="h-6"
+                    />
+                  </div>
+                )}
+
                 <button
                   onClick={onToggle}
                   className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg"
@@ -114,6 +130,15 @@ export function Sidebar({
             side === 'right' ? 'left-4' : 'right-4'
           } top-4 z-50 flex-col gap-2`}
         >
+          {/* Simorgh Logo - only on right sidebar when closed */}
+          {side === 'right' && (
+            <img
+              src="/simorgh.svg"
+              alt="Simorgh"
+              className="w-7 h-7 mb-1"
+            />
+          )}
+
           {/* دکمه toggle */}
           <button
             onClick={onToggle}
@@ -154,12 +179,11 @@ export function Sidebar({
           {/* Search Icon */}
           <button
             onClick={onToggle}
-            className="p-3 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg group"
+            className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg group"
             title="Search History"
           >
             <SearchIcon className="w-5 h-5 text-blue-400 group-hover:text-blue-300" />
           </button>
-          )
         </div>
       )}
     </>
