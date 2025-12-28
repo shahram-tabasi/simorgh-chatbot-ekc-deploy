@@ -81,23 +81,39 @@ export function Sidebar({
               className={`${isMobile ? 'w-full' : 'w-80'} h-full overflow-y-auto`}
             >
               {/* Header with Logo and toggle button */}
-              <div className="flex flex-col px-4 pt-2 pb-2">
-                {/* Top row: Logo + Toggle */}
-                <div className="flex items-center justify-between">
-                  {/* Simorgh Logo - only on right sidebar, hidden on mobile */}
-                  {side === 'right' && !isMobile && (
-                    <div className="flex items-center gap-1.5">
-                      <img
-                        src="/simorgh.svg"
-                        alt="Simorgh"
-                        className="w-9 h-9 -mt-0.5"
-                      />
-                      <img
-                        src="/text_simorgh.svg"
-                        alt="Simorgh"
-                        className="h-7"
-                      />
-                    </div>
+
+              <div
+                className="absolute top-4 z-10 flex items-center gap-3"
+                style={{
+                  [side === 'right' ? 'left' : 'right']: '16px'
+                }}
+              >
+                {/* Simorgh Logo - only on right sidebar */}
+                {side === 'right' && (
+                  <div className="flex items-center gap-1">
+                    <img
+                      src="/simorgh.svg"
+                      alt="Simorgh"
+                      className="w-20 h-20"
+                    />
+                    <img
+                      src="/text_simorgh.svg"
+                      alt="Simorgh"
+                      className="h-16"
+                    />
+                  </div>
+                )}
+
+                <button
+                  onClick={onToggle}
+                  className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg"
+                  title="Hide sidebar"
+                >
+                  {side === 'right' ? (
+                    <PanelLeftIcon className="w-5 h-5 text-white" />
+                  ) : (
+                    <PanelRightIcon className="w-5 h-5 text-white" />
+
                   )}
 
                   <button
@@ -133,7 +149,7 @@ export function Sidebar({
             <img
               src="/simorgh.svg"
               alt="Simorgh"
-              className="w-8 h-8 mb-1"
+              className="w-10 h-10 mb-1"
             />
           )}
 
