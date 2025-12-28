@@ -78,7 +78,7 @@ const suggestedPrompts = [
 
 export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleClick }: GeneralWelcomeProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-2 py-1 md:py-2 w-full max-w-full box-border">
+    <div className="flex flex-col items-center justify-center px-2 py-1 md:py-2 w-full max-w-full box-border overflow-hidden">
       {/* Logo - smaller on mobile, centered */}
       <div className="flex flex-col items-center justify-center mb-2 md:mb-4 w-full">
         <img
