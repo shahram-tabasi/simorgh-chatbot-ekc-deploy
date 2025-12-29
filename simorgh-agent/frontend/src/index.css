@@ -19,6 +19,7 @@
     width: 100%;
     max-width: 100vw;
     position: relative;
+    background-color: #0a0e27;
   }
 
   /* Root container fix for mobile */
