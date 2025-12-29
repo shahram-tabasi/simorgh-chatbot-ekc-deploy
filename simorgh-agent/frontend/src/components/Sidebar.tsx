@@ -86,16 +86,16 @@ export function Sidebar({
               >
                 {/* Simorgh Logo - only on right sidebar, hidden on mobile */}
                 {side === 'right' && !isMobile && (
-                  <div className="flex items-center gap-0">
+                  <div className="flex items-left gap-0">
                     <img
                       src="/simorgh.svg"
                       alt="Simorgh"
-                      className="w-10 h-10"
+                      className="w-14 h-14"
                     />
                     <img
                       src="/text_simorgh.svg"
                       alt="Simorgh"
-                      className="h-7"
+                      className="h-14 mt-3"
                     />
                   </div>
                 )}
