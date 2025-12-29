@@ -1,5 +1,5 @@
 // src/hooks/useChat.ts
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Message, UploadedFile } from '../types';
 import axios from 'axios';
 
@@ -8,6 +8,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 export interface ChatOptions {
   llmMode?: 'online' | 'offline' | null; // null = use default
   useGraphContext?: boolean;
+  useStreaming?: boolean; // Enable streaming responses (default: true)
 }
 
 export function useChat(
@@ -103,60 +104,220 @@ export function useChat(
   //   prevChatIdRef.current = chatId || null;
   // }, [chatId]); // ← ONLY chatId here!
 
-  const sendMessage = async (
+  // Streaming message sender using Server-Sent Events
+  const sendMessageStreaming = useCallback(async (
     content: string,
-    files?: UploadedFile[],
     options?: ChatOptions
   ) => {
     if (!chatId || !userId) {
-      console.log(chatId);
-      console.log(userId);
       console.error('❌ Cannot send message: chatId or userId missing');
       return;
     }
 
-    console.log('📤 Sending message:', content);
-    console.log('🎯 Chat ID:', chatId);
-    console.log('🤖 LLM Mode:', options?.llmMode || llmMode || 'default');
+    const token = localStorage.getItem('simorgh_token');
+    if (!token) {
+      console.error('❌ No auth token found');
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: 'Authentication required. Please log in again.',
+        role: 'assistant',
+        timestamp: new Date(),
+        metadata: { error: true }
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      return;
+    }
+
+    console.log('📤 Sending message (streaming):', content);
 
     // Cancel any ongoing request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-
-    // Create new abort controller for this request
     abortControllerRef.current = new AbortController();
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      content,
-      role: 'user',
+    // Create placeholder AI message for streaming
+    const aiMessageId = (Date.now() + 1).toString();
+    const aiMessage: Message = {
+      id: aiMessageId,
+      content: '',
+      role: 'assistant',
       timestamp: new Date(),
-      files
+      metadata: {
+        streaming: true
+      }
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages(prev => [...prev, aiMessage]);
     setIsTyping(true);
 
     try {
-      // Get auth token
-      const token = localStorage.getItem('simorgh_token');
-      if (!token) {
-        console.error('❌ No auth token found');
-        const errorMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          content: 'Authentication required. Please log in again.',
-          role: 'assistant',
-          timestamp: new Date(),
-          metadata: { error: true }
-        };
-        setMessages(prev => [...prev, errorMessage]);
+      const response = await fetch(`${API_BASE}/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'text/event-stream'
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          user_id: userId,
+          content: content,
+          llm_mode: llmMode || undefined,
+          use_graph_context: options?.useGraphContext !== false
+        }),
+        signal: abortControllerRef.current?.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body');
+      }
+
+      const decoder = new TextDecoder();
+      let accumulatedContent = '';
+      let finalLlmMode: string | undefined;
+      let contextUsed = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const text = decoder.decode(value, { stream: true });
+        const lines = text.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              // Handle error
+              if (data.error) {
+                console.error('❌ Streaming error:', data.error);
+                setMessages(prev => prev.map(msg =>
+                  msg.id === aiMessageId
+                    ? { ...msg, content: `Error: ${data.message || data.error}`, metadata: { error: true } }
+                    : msg
+                ));
+                setIsTyping(false);
+                return;
+              }
+
+              // Handle metadata
+              if (data.context_used !== undefined) {
+                contextUsed = data.context_used;
+              }
+
+              // Handle chunk
+              if (data.chunk) {
+                accumulatedContent += data.chunk;
+                // Update message with accumulated content
+                setMessages(prev => prev.map(msg =>
+                  msg.id === aiMessageId
+                    ? { ...msg, content: accumulatedContent }
+                    : msg
+                ));
+              }
+
+              // Handle completion
+              if (data.done) {
+                finalLlmMode = data.llm_mode;
+                // Update final message with metadata
+                setMessages(prev => prev.map(msg =>
+                  msg.id === aiMessageId
+                    ? {
+                        ...msg,
+                        content: accumulatedContent,
+                        metadata: {
+                          llm_mode: finalLlmMode,
+                          context_used: contextUsed,
+                          streaming: false
+                        }
+                      }
+                    : msg
+                ));
+                setIsTyping(false);
+                console.log('✅ Streaming complete');
+
+                // Browser Notification
+                showNotification('Response Ready!', accumulatedContent.slice(0, 100));
+              }
+            } catch (e) {
+              // Skip malformed JSON lines
+              console.warn('⚠️ Failed to parse SSE data:', line);
+            }
+          }
+        }
+      }
+
+      // Handle case where stream ended without done signal
+      if (accumulatedContent) {
+        setMessages(prev => prev.map(msg =>
+          msg.id === aiMessageId
+            ? {
+                ...msg,
+                content: accumulatedContent,
+                metadata: { llm_mode: finalLlmMode, context_used: contextUsed, streaming: false }
+              }
+            : msg
+        ));
+      }
+      setIsTyping(false);
+
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.log('🛑 Streaming request cancelled');
         setIsTyping(false);
         return;
       }
+      console.error('❌ Streaming failed:', error);
+      setMessages(prev => prev.map(msg =>
+        msg.id === aiMessageId
+          ? { ...msg, content: `Error: ${error.message}`, metadata: { error: true } }
+          : msg
+      ));
+      setIsTyping(false);
+    }
+  }, [chatId, userId, llmMode]);
 
-      // Call the /api/chat/send endpoint
-      // Detect if files are attached and use FormData, otherwise use JSON
+  // Non-streaming message sender (fallback for file uploads)
+  const sendMessageBatch = useCallback(async (
+    content: string,
+    files?: UploadedFile[],
+    options?: ChatOptions
+  ) => {
+    if (!chatId || !userId) {
+      console.error('❌ Cannot send message: chatId or userId missing');
+      return;
+    }
+
+    const token = localStorage.getItem('simorgh_token');
+    if (!token) {
+      console.error('❌ No auth token found');
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: 'Authentication required. Please log in again.',
+        role: 'assistant',
+        timestamp: new Date(),
+        metadata: { error: true }
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      return;
+    }
+
+    // Cancel any ongoing request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
+    setIsTyping(true);
+
+    try {
       let response;
 
       if (files && files.length > 0 && files[0].file) {
@@ -170,8 +331,6 @@ export function useChat(
           formData.append('llm_mode', llmMode);
         }
         formData.append('use_graph_context', String(options?.useGraphContext !== false));
-
-        // Attach the first file (currently supporting single file)
         formData.append('file', files[0].file);
 
         response = await axios.post(`${API_BASE}/chat/send`, formData, {
@@ -182,8 +341,6 @@ export function useChat(
           signal: abortControllerRef.current?.signal
         });
       } else {
-        // Use JSON for text-only messages (backward compatible)
-        // Prepare conversation history (last 10 messages to avoid token limits)
         const conversationHistory = messages.slice(-10).map(msg => ({
           role: msg.role,
           content: msg.content
@@ -193,7 +350,7 @@ export function useChat(
           chat_id: chatId,
           user_id: userId,
           content: content,
-          conversation_history: conversationHistory,  // Include conversation context
+          conversation_history: conversationHistory,
           llm_mode: llmMode || undefined,
           use_graph_context: options?.useGraphContext !== false
         }, {
@@ -207,7 +364,6 @@ export function useChat(
 
       const data = response.data;
 
-      // Create AI message with metadata
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         content: data.response,
@@ -224,15 +380,86 @@ export function useChat(
       setMessages(prev => [...prev, aiMessage]);
       setIsTyping(false);
 
-      // Handle spec extraction task if present
       if (data.spec_task_id && onSpecTaskCreated) {
-        console.log('🔍 Spec extraction task created:', data.spec_task_id);
         onSpecTaskCreated(data.spec_task_id);
       }
 
-      // Auto-generate chat title if this is the first message
-      if (messages.length === 0) {
-        try {
+      showNotification('Response Ready!', data.response);
+      console.log('✅ Message sent successfully (batch mode)');
+
+    } catch (error: any) {
+      if (axios.isCancel(error) || error.name === 'CanceledError') {
+        console.log('🛑 Request cancelled by user');
+        setIsTyping(false);
+        return;
+      }
+
+      console.error('❌ Send message failed:', error);
+      setIsTyping(false);
+
+      let errorContent = 'Failed to connect to server. Please try again.';
+      if (error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        if (typeof detail === 'object' && detail.message) {
+          errorContent = `❌ ${detail.error || 'Error'}: ${detail.message}`;
+        } else if (typeof detail === 'string') {
+          errorContent = detail;
+        }
+      }
+
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: errorContent,
+        role: 'assistant',
+        timestamp: new Date(),
+        metadata: { error: true }
+      };
+
+      setMessages(prev => [...prev, errorMessage]);
+    }
+  }, [chatId, userId, llmMode, messages, onSpecTaskCreated]);
+
+  // Main sendMessage function - uses streaming by default
+  const sendMessage = async (
+    content: string,
+    files?: UploadedFile[],
+    options?: ChatOptions
+  ) => {
+    if (!chatId || !userId) {
+      console.log(chatId);
+      console.log(userId);
+      console.error('❌ Cannot send message: chatId or userId missing');
+      return;
+    }
+
+    console.log('📤 Sending message:', content);
+    console.log('🎯 Chat ID:', chatId);
+    console.log('🤖 LLM Mode:', options?.llmMode || llmMode || 'default');
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      content,
+      role: 'user',
+      timestamp: new Date(),
+      files
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+
+    // Use streaming unless disabled or files are attached
+    const useStreaming = options?.useStreaming !== false && (!files || files.length === 0);
+
+    if (useStreaming) {
+      await sendMessageStreaming(content, options);
+    } else {
+      await sendMessageBatch(content, files, options);
+    }
+
+    // Auto-generate chat title if this is the first message
+    if (messages.length === 0) {
+      try {
+        const token = localStorage.getItem('simorgh_token');
+        if (token) {
           console.log('🎯 Generating chat title for first message...');
           const formData = new FormData();
           formData.append('first_message', content);
@@ -246,83 +473,13 @@ export function useChat(
           const generatedTitle = titleResponse.data.title;
           console.log('✅ Chat title generated:', generatedTitle);
 
-          // Notify parent component to update the chat list
           if (onTitleGenerated && generatedTitle) {
             onTitleGenerated(chatId, generatedTitle);
           }
-        } catch (titleError) {
-          console.warn('⚠️ Failed to generate chat title:', titleError);
-          // Non-critical error, continue anyway
         }
+      } catch (titleError) {
+        console.warn('⚠️ Failed to generate chat title:', titleError);
       }
-
-      // Browser Notification
-      showNotification('Response Ready!', data.response);
-
-      console.log('✅ Message sent successfully');
-      console.log('📊 Metadata:', {
-        llm_mode: data.llm_mode,
-        context_used: data.context_used,
-        cached: data.cached_response,
-        tokens: data.tokens
-      });
-
-    } catch (error: any) {
-      // Check if request was aborted
-      if (axios.isCancel(error) || error.name === 'CanceledError') {
-        console.log('🛑 Request cancelled by user');
-        setIsTyping(false);
-        return;
-      }
-
-      console.error('❌ Send message failed:', error);
-      console.error('Error details:', error.response?.data);
-      setIsTyping(false);
-
-      // Extract detailed error message
-      let errorContent = 'Failed to connect to server. Please try again.';
-
-      if (error.response?.data?.detail) {
-        const detail = error.response.data.detail;
-
-        // Check if detail is an object with structured error info
-        if (typeof detail === 'object' && detail.message) {
-          errorContent = `❌ ${detail.error || 'Error'}: ${detail.message}`;
-
-          // Add technical details if available
-          if (detail.technical_error) {
-            errorContent += `\n\n🔧 Technical details: ${detail.technical_error}`;
-          }
-
-          // Add server info for offline errors
-          if (detail.servers_tried) {
-            errorContent += `\n\n🖥️ Servers tried:\n${detail.servers_tried.map((s: string) => `- ${s}`).join('\n')}`;
-          }
-
-          // Add model info for online errors
-          if (detail.api_model) {
-            errorContent += `\n\n🤖 Model: ${detail.api_model}`;
-          }
-        } else if (typeof detail === 'string') {
-          errorContent = detail;
-        }
-      } else if (error.response?.data?.message) {
-        errorContent = error.response.data.message;
-      } else if (error.message) {
-        errorContent = `Network error: ${error.message}`;
-      }
-
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: errorContent,
-        role: 'assistant',
-        timestamp: new Date(),
-        metadata: {
-          error: true
-        }
-      };
-
-      setMessages(prev => [...prev, errorMessage]);
     }
   };
 

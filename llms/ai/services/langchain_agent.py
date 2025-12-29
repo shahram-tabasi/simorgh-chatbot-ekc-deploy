@@ -405,11 +405,15 @@ class LangChainAgent:
         # Run agent with tools
         try:
             import asyncio
+            import time
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+
+            logger.info(f"🤖 Agent starting with {len(self.tools)} tools available: {[t.name for t in self.tools]}")
+            start_time = time.time()
 
             def _run_agent():
                 if USING_CLASSIC:
@@ -422,23 +426,40 @@ class LangChainAgent:
             result = await loop.run_in_executor(None, _run_agent)
 
             tool_calls = []
-            
+
             if USING_CLASSIC and "intermediate_steps" in result:
                 for action, observation in result["intermediate_steps"]:
-                    tool_calls.append({
+                    tool_call = {
                         "tool": action.tool,
                         "input": action.tool_input,
                         "output": observation
-                    })
+                    }
+                    tool_calls.append(tool_call)
+
+                    # Log each tool call with details
+                    logger.info(f"🔧 TOOL CALL: {action.tool}")
+                    logger.info(f"   📥 Input: {str(action.tool_input)[:200]}...")
+                    logger.info(f"   📤 Output: {str(observation)[:200]}...")
+
                 output = result.get("output", "")
             else:
                 output = result.get("messages", [])[-1].get("content", "") if result.get("messages") else str(result)
+
+            elapsed_time = time.time() - start_time
+
+            # Summary log
+            if tool_calls:
+                tools_used = [tc["tool"] for tc in tool_calls]
+                logger.info(f"✅ Agent completed in {elapsed_time:.2f}s - Tools used: {tools_used}")
+            else:
+                logger.info(f"✅ Agent completed in {elapsed_time:.2f}s - No tools used (direct response)")
 
             return {
                 "output": output,
                 "tokens_used": None,
                 "tool_calls": tool_calls,
-                "used_tools": len(tool_calls) > 0
+                "used_tools": len(tool_calls) > 0,
+                "execution_time": elapsed_time
             }
 
         except Exception as e:
@@ -498,6 +519,7 @@ def create_agent_with_tools(
     model_manager,
     enable_search: bool = True,
     enable_python_repl: bool = False,
+    enable_wikipedia: bool = True,
     verbose: bool = False
 ) -> LangChainAgent:
     """
@@ -507,6 +529,7 @@ def create_agent_with_tools(
         model_manager: ModelManager instance
         enable_search: Whether to enable search tool
         enable_python_repl: Whether to enable Python REPL
+        enable_wikipedia: Whether to enable Wikipedia search tool
         verbose: Whether to log agent steps
 
     Returns:
@@ -519,10 +542,11 @@ def create_agent_with_tools(
             tools=[],
             verbose=verbose
         )
-    
+
     try:
         from tools.search_tool import create_search_tool_from_env
         from tools.python_repl import create_python_repl_from_env
+        from tools.wikipedia_tool import create_wikipedia_tool_from_env, create_electrical_wiki_tool
     except ImportError as e:
         logger.warning(f"⚠️  Tool modules not found: {e}")
         return LangChainAgent(
@@ -542,6 +566,23 @@ def create_agent_with_tools(
                 logger.info("✅ Search tool enabled")
         except Exception as e:
             logger.warning(f"⚠️  Failed to initialize search tool: {e}")
+
+    # Add Wikipedia tool (general + electrical standards)
+    if enable_wikipedia:
+        try:
+            # General Wikipedia search
+            wiki_tool = create_wikipedia_tool_from_env()
+            if wiki_tool:
+                tools.append(wiki_tool)
+                logger.info("✅ Wikipedia tool enabled")
+
+            # Specialized electrical standards Wikipedia
+            electrical_wiki = create_electrical_wiki_tool()
+            if electrical_wiki:
+                tools.append(electrical_wiki)
+                logger.info("✅ Electrical Standards Wikipedia tool enabled")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize Wikipedia tool: {e}")
 
     # Add Python REPL tool
     if enable_python_repl:

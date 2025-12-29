@@ -25,6 +25,13 @@ import openai
 import requests
 from requests.exceptions import RequestException, Timeout
 
+# Import output parser for extracting clean responses
+try:
+    from utils.output_parser import OutputParser, parse_llm_output, parse_streaming_chunk
+    OUTPUT_PARSER_AVAILABLE = True
+except ImportError:
+    OUTPUT_PARSER_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -544,49 +551,81 @@ class LLMService:
         """
         Extract only the final user-facing answer from local LLM response.
 
-        Local LLM may return formats like:
-        - assistantfinal<ACTUAL ANSWER>  (preferred)
-        - assistantanalysis...assistantfinal<ANSWER>
-        - analysis<CONTENT>final<ANSWER>
-        - Just the content directly
+        Uses the OutputParser to handle various LLM output formats including:
+        - Thinking tags (<think>...</think>, <thinking>...</thinking>)
+        - Reasoning tags (<reasoning>...</reasoning>)
+        - Analysis markers (assistantanalysis, assistantfinal)
+        - ReAct format (Thought/Action/Observation/Final Answer)
+        - Chain of thought markers
 
-        We try multiple extraction strategies.
+        Returns clean, user-facing content only.
         """
         if not raw_response:
             return raw_response
 
-        # Strategy 1: Look for assistantfinal marker (most specific)
-        if "assistantfinal" in raw_response:
-            parts = raw_response.split("assistantfinal", 1)
+        # Use the advanced OutputParser if available
+        if OUTPUT_PARSER_AVAILABLE:
+            try:
+                clean_response = parse_llm_output(raw_response)
+                if clean_response:
+                    logger.debug(f"📝 OutputParser extracted clean response ({len(raw_response)} -> {len(clean_response)} chars)")
+                    return clean_response
+            except Exception as e:
+                logger.warning(f"OutputParser failed, using fallback: {e}")
+
+        # Fallback extraction logic
+        import re
+
+        # Strategy 1: Remove thinking/reasoning tags
+        thinking_patterns = [
+            r'<think>.*?</think>',
+            r'<thinking>.*?</thinking>',
+            r'<reasoning>.*?</reasoning>',
+            r'<analysis>.*?</analysis>',
+            r'<internal>.*?</internal>',
+            r'<scratchpad>.*?</scratchpad>',
+        ]
+        result = raw_response
+        for pattern in thinking_patterns:
+            result = re.sub(pattern, '', result, flags=re.DOTALL | re.IGNORECASE)
+
+        # Strategy 2: Look for explicit final answer markers
+        final_patterns = [
+            r'<final_answer>(.*?)</final_answer>',
+            r'<answer>(.*?)</answer>',
+            r'Final Answer:\s*(.*?)(?:\n\n|$)',
+        ]
+        for pattern in final_patterns:
+            match = re.search(pattern, result, re.DOTALL | re.IGNORECASE)
+            if match:
+                final_answer = match.group(1).strip()
+                if final_answer:
+                    logger.debug(f"📝 Extracted final answer from marker")
+                    return final_answer
+
+        # Strategy 3: Look for assistantfinal marker (most specific)
+        if "assistantfinal" in result:
+            parts = result.split("assistantfinal", 1)
             if len(parts) > 1:
                 final_answer = parts[1].strip()
                 logger.debug(f"📝 Extracted final answer after 'assistantfinal' marker")
                 return final_answer
 
-        # Strategy 2: Look for final channel marker
-        if "final" in raw_response.lower():
-            import re
-            # Match patterns like "final<content>" or "assistantfinal<content>"
-            match = re.search(r'(?:assistant)?final\s*(.*)', raw_response, re.IGNORECASE | re.DOTALL)
-            if match:
-                final_answer = match.group(1).strip()
-                if final_answer:
-                    logger.debug(f"📝 Extracted answer after 'final' marker")
-                    return final_answer
+        # Strategy 4: Clean up remaining artifacts
+        # Remove orphaned tags
+        result = re.sub(r'</?(?:think|thinking|reasoning|analysis|internal)>', '', result, flags=re.IGNORECASE)
 
-        # Strategy 3: Look for analysis channel and extract meaningful content
-        if "analysis" in raw_response.lower():
-            # Remove the analysis prefix
-            parts = raw_response.split("analysis", 1)
-            if len(parts) > 1:
-                content = parts[1].strip()
-                # If content starts with description of what to do, return it
-                logger.debug(f"📝 Extracted content after 'analysis' marker")
-                return content
+        # Remove common prefixes
+        prefixes = ['assistant', 'Assistant:', 'AI:', 'assistantanalysis']
+        for prefix in prefixes:
+            if result.lower().startswith(prefix.lower()):
+                result = result[len(prefix):].lstrip(':').strip()
 
-        # Fallback: Return original response (it might already be clean)
-        logger.debug(f"ℹ️ No specific marker found, returning full response")
-        return raw_response
+        # Clean up multiple newlines
+        result = re.sub(r'\n{3,}', '\n\n', result).strip()
+
+        logger.debug(f"📝 Cleaned response: {len(raw_response)} -> {len(result)} chars")
+        return result
 
     def _continue_truncated_response(
         self,
@@ -727,7 +766,7 @@ class LLMService:
         temperature: float,
         max_tokens: Optional[int]
     ) -> Iterator[str]:
-        """Stream from local LLM via nginx load balancer"""
+        """Stream from local LLM via nginx load balancer with thinking section filtering"""
 
         payload = {
             "messages": messages,
@@ -742,7 +781,7 @@ class LLMService:
 
             payload = {
                 "system_prompt": "You are Simorgh, an expert industrial electrical engineering assistant.",
-                "user_prompt": messages[-1]["content"],  # فقط آخرین پیام کاربر
+                "user_prompt": messages[-1]["content"],
                 "thinking_level": "medium",
                 "stream": True
             }
@@ -751,9 +790,19 @@ class LLMService:
                 url,
                 json=payload,
                 stream=True,
-                timeout=180  # چون local کندتره
+                timeout=180
             )
             response.raise_for_status()
+
+            # State for tracking thinking sections during streaming
+            accumulated_text = ""
+            in_thinking = False
+            thinking_depth = 0  # Track nested thinking tags
+
+            # Patterns for detecting thinking sections
+            import re
+            think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
+            think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
 
             for line in response.iter_lines():
                 if line:
@@ -765,20 +814,58 @@ class LLMService:
                             decoded_line = decoded_line[6:]
 
                         data = json.loads(decoded_line)
+                        chunk = ""
 
                         # Handle different response formats
                         if "chunk" in data:
-                            # Incremental chunk format
-                            yield data["chunk"]
+                            chunk = data["chunk"]
                         elif "output" in data:
                             # Complete output format - extract final answer and yield
                             raw_output = data["output"]
                             clean_output = self._extract_final_answer(raw_output)
                             yield clean_output
+                            continue
                         elif "text" in data:
-                            # Alternative chunk format
-                            yield data["text"]
-                        # Skip status updates without content
+                            chunk = data["text"]
+                        else:
+                            # Skip status updates without content
+                            continue
+
+                        if not chunk:
+                            continue
+
+                        # Track accumulated text for context
+                        accumulated_text += chunk
+
+                        # Check for thinking tag transitions
+                        open_matches = think_open_pattern.findall(chunk)
+                        close_matches = think_close_pattern.findall(chunk)
+
+                        thinking_depth += len(open_matches)
+                        thinking_depth -= len(close_matches)
+                        thinking_depth = max(0, thinking_depth)  # Prevent negative
+
+                        # If we're inside thinking section, don't yield
+                        if thinking_depth > 0:
+                            in_thinking = True
+                            continue
+
+                        # If we just exited thinking section
+                        if in_thinking and thinking_depth == 0:
+                            in_thinking = False
+                            # Clean any remaining thinking tags from chunk
+                            clean_chunk = think_open_pattern.sub('', chunk)
+                            clean_chunk = think_close_pattern.sub('', clean_chunk)
+                            if clean_chunk.strip():
+                                yield clean_chunk
+                            continue
+
+                        # Normal chunk - yield after cleaning any stray tags
+                        clean_chunk = think_open_pattern.sub('', chunk)
+                        clean_chunk = think_close_pattern.sub('', clean_chunk)
+                        if clean_chunk:
+                            yield clean_chunk
+
                     except json.JSONDecodeError:
                         continue
 

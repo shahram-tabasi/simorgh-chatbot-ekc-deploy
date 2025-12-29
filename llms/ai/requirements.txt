@@ -24,6 +24,9 @@ langchain-classic>=0.1.0  # CRITICAL: Contains AgentExecutor and create_react_ag
 # Search tools
 duckduckgo-search>=6.0.0
 
+# Wikipedia tool for scientific data and standards
+wikipedia-api>=0.6.0
+
 # Prometheus metrics
 prometheus-client>=0.20.0
 

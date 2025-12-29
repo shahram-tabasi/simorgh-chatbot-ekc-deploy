@@ -52,6 +52,13 @@ from routes.auth import router as auth_router
 from routes.documents_rag import router as documents_rag_router
 from services.auth_utils import get_current_user
 
+# Import output parser for cleaning LLM responses
+try:
+    from utils.output_parser import OutputParser, parse_llm_output
+    OUTPUT_PARSER_AVAILABLE = True
+except ImportError:
+    OUTPUT_PARSER_AVAILABLE = False
+
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2466,17 +2473,45 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             # Send metadata first
             yield f"data: {json.dumps({'context_used': context_used, 'streaming': True})}\n\n"
 
-            # Stream response chunks
+            # Stream response chunks with thinking section filtering
             full_response = ""
             llm_mode = message.llm_mode or None
+
+            # State for filtering thinking sections during streaming
+            import re
+            thinking_depth = 0
+            think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
+            think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
 
             for chunk in llm.generate_stream(
                 messages=llm_messages,
                 mode=llm_mode,
                 temperature=0.7
             ):
+                # Track thinking depth
+                open_matches = think_open_pattern.findall(chunk)
+                close_matches = think_close_pattern.findall(chunk)
+                thinking_depth += len(open_matches) - len(close_matches)
+                thinking_depth = max(0, thinking_depth)
+
+                # Always accumulate for caching
                 full_response += chunk
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+                # Only send to client if not inside thinking section
+                if thinking_depth == 0:
+                    # Clean any thinking tags from chunk
+                    clean_chunk = think_open_pattern.sub('', chunk)
+                    clean_chunk = think_close_pattern.sub('', clean_chunk)
+                    if clean_chunk:
+                        yield f"data: {json.dumps({'chunk': clean_chunk})}\n\n"
+
+            # Parse full response to extract clean final answer for caching
+            clean_response = full_response
+            if OUTPUT_PARSER_AVAILABLE:
+                try:
+                    clean_response = parse_llm_output(full_response)
+                except Exception as e:
+                    logger.warning(f"Output parser failed: {e}")
 
             # Cache messages after completion with complete metadata structure
             import uuid
@@ -2503,8 +2538,8 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                 "page_id": message.chat_id,  # Chat ID represents the page
                 "role": "assistant",
                 "sender": "assistant",
-                "content": full_response,
-                "text": full_response,  # Explicit text field as per requirements
+                "content": clean_response,  # Use cleaned response
+                "text": clean_response,  # Explicit text field as per requirements
                 "timestamp": created_at,
                 "created_at": created_at,  # Explicit CreatedAt as per requirements
                 "llm_mode": llm_mode,

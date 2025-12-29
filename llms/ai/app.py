@@ -44,6 +44,15 @@ from api.schemas import (
 from services.model_manager import ModelManager
 from services.langchain_agent import create_agent_with_tools
 
+# Import output parser for cleaning LLM responses
+try:
+    from utils.output_parser import OutputParser, StreamingOutputParser, parse_llm_output, create_streaming_parser
+    OUTPUT_PARSER_AVAILABLE = True
+except ImportError:
+    OUTPUT_PARSER_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ Output parser not available")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -113,11 +122,13 @@ async def lifespan(app: FastAPI):
         import os
         enable_search = os.getenv("ENABLE_SEARCH_TOOL", "true").lower() == "true"
         enable_python = os.getenv("ENABLE_PYTHON_REPL", "false").lower() == "true"
+        enable_wikipedia = os.getenv("ENABLE_WIKIPEDIA_TOOL", "true").lower() == "true"
 
         langchain_agent = create_agent_with_tools(
             model_manager=model_manager,
             enable_search=enable_search,
             enable_python_repl=enable_python,
+            enable_wikipedia=enable_wikipedia,
             verbose=os.getenv("AGENT_VERBOSE", "false").lower() == "true"
         )
 
@@ -257,17 +268,24 @@ async def non_streaming_chat_completion(
                     messages=messages,
                     use_tools=True
                 )
-                output = result["output"]
-                tokens_used = result.get("tokens_used", 0) or len(output.split())
+                raw_output = result["output"]
+                tokens_used = result.get("tokens_used", 0) or len(raw_output.split())
             else:
                 # Direct generation without tools
-                output, tokens_used = await model_manager.generate(
+                raw_output, tokens_used = await model_manager.generate(
                     messages=messages,
                     max_tokens=request.max_tokens,
                     temperature=request.temperature,
                     top_p=request.top_p,
                     reasoning_effort=request.reasoning_effort,
                 )
+
+            # Parse output to remove thinking sections
+            if OUTPUT_PARSER_AVAILABLE:
+                output = parse_llm_output(raw_output)
+                logger.info(f"📝 Output parsed: {len(raw_output)} -> {len(output)} chars")
+            else:
+                output = raw_output
 
             # Create response
             completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -313,10 +331,16 @@ async def stream_chat_completion(
 ) -> AsyncIterator[str]:
     """
     Handle streaming chat completion with Server-Sent Events.
+
+    Filters out thinking sections (<think>...</think>) from the stream
+    so only the final answer is sent to the client.
     """
     start_time = time.time()
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
+
+    # Create streaming parser for filtering thinking sections
+    streaming_parser = create_streaming_parser() if OUTPUT_PARSER_AVAILABLE else None
 
     try:
         async with request_semaphore:
@@ -326,7 +350,7 @@ async def stream_chat_completion(
                 for msg in request.messages
             ]
 
-            # Stream generation
+            # Stream generation with thinking section filtering
             async for chunk in model_manager.generate_stream(
                 messages=messages,
                 max_tokens=request.max_tokens,
@@ -334,6 +358,14 @@ async def stream_chat_completion(
                 top_p=request.top_p,
                 reasoning_effort=request.reasoning_effort,
             ):
+                # Filter thinking sections if parser available
+                if streaming_parser:
+                    clean_chunk, in_thinking = streaming_parser.process_chunk(chunk)
+                    if in_thinking or not clean_chunk:
+                        # Skip chunks inside thinking sections
+                        continue
+                    chunk = clean_chunk
+
                 # Create SSE chunk
                 stream_chunk = ChatCompletionStreamResponse(
                     id=completion_id,
@@ -373,6 +405,7 @@ async def stream_chat_completion(
             duration = time.time() - start_time
             request_counter.labels(endpoint="chat_completions_stream", status="success").inc()
             request_duration.labels(endpoint="chat_completions_stream").observe(duration)
+            logger.info(f"✅ Streaming completed in {duration:.2f}s")
 
     except Exception as e:
         logger.error(f"Streaming failed: {e}")
@@ -449,12 +482,19 @@ async def legacy_generate(request: LegacyGenerateRequest):
         ]
 
         # Generate response
-        output, tokens_used = await model_manager.generate(
+        raw_output, tokens_used = await model_manager.generate(
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=0.95,
         )
+
+        # Parse output to remove thinking sections
+        if OUTPUT_PARSER_AVAILABLE:
+            output = parse_llm_output(raw_output)
+            logger.info(f"📝 Output parsed: {len(raw_output)} -> {len(output)} chars")
+        else:
+            output = raw_output
 
         return LegacyGenerateResponse(
             output=output,
@@ -500,7 +540,15 @@ async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncItera
     data: {"status": "started", "thinking_level": "medium"}
     data: {"chunk": "partial text"}
     data: {"status": "completed", "output": "full text", "tokens_used": 123}
+
+    Filters out thinking sections (<think>...</think>) from the stream
+    so only the final answer is sent to the client.
     """
+    import json
+
+    # Create streaming parser for filtering thinking sections
+    streaming_parser = create_streaming_parser() if OUTPUT_PARSER_AVAILABLE else None
+
     try:
         # Get thinking level config
         config = THINKING_LEVEL_CONFIG.get(request.thinking_level, THINKING_LEVEL_CONFIG["medium"])
@@ -508,7 +556,6 @@ async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncItera
         temperature = config["temperature"]
 
         # Send started event
-        import json
         yield f"data: {json.dumps({'status': 'started', 'thinking_level': request.thinking_level})}\n\n"
 
         # Convert to message format
@@ -517,8 +564,10 @@ async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncItera
             {"role": "user", "content": request.user_prompt}
         ]
 
-        # Stream generation
+        # Stream generation with thinking section filtering
         full_output = ""
+        clean_output = ""
+
         async for chunk in model_manager.generate_stream(
             messages=messages,
             max_tokens=max_tokens,
@@ -526,18 +575,37 @@ async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncItera
             top_p=0.95,
         ):
             full_output += chunk
-            # Send chunk
-            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
 
-        # Send completion event
+            # Filter thinking sections if parser available
+            if streaming_parser:
+                clean_chunk, in_thinking = streaming_parser.process_chunk(chunk)
+                if in_thinking or not clean_chunk:
+                    # Skip chunks inside thinking sections
+                    continue
+                clean_output += clean_chunk
+                # Send clean chunk
+                yield f"data: {json.dumps({'chunk': clean_chunk})}\n\n"
+            else:
+                clean_output += chunk
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+        # Parse full output for final clean version (in case of any missed thinking sections)
+        if OUTPUT_PARSER_AVAILABLE:
+            final_output = parse_llm_output(full_output)
+        else:
+            final_output = clean_output
+
+        # Send completion event with clean output
         tokens_used = len(full_output.split())  # Rough estimate
         completion_data = {
             'status': 'completed',
-            'output': full_output,
+            'output': final_output,
             'tokens_used': tokens_used,
             'thinking_level': request.thinking_level
         }
         yield f"data: {json.dumps(completion_data)}\n\n"
+
+        logger.info(f"✅ Legacy streaming completed - Raw: {len(full_output)} chars, Clean: {len(final_output)} chars")
 
     except Exception as e:
         logger.error(f"Legacy streaming failed: {e}")

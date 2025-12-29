@@ -68,10 +68,30 @@ class SandboxedPythonREPL:
         Returns:
             Execution output or error message
         """
-        if not self.use_sandbox:
-            return self._run_unsandboxed(code)
-        else:
-            return self._run_sandboxed(code)
+        import time
+        start_time = time.time()
+
+        # Log code execution start (truncate for readability)
+        code_preview = code[:100].replace('\n', '\\n') + ('...' if len(code) > 100 else '')
+        logger.info(f"🐍 [PYTHON REPL TOOL] Executing code: {code_preview}")
+        logger.info(f"   Mode: {'Sandboxed' if self.use_sandbox else 'Unsandboxed'}, Timeout: {self.timeout}s")
+
+        try:
+            if not self.use_sandbox:
+                result = self._run_unsandboxed(code)
+            else:
+                result = self._run_sandboxed(code)
+
+            elapsed = time.time() - start_time
+            result_preview = result[:200].replace('\n', '\\n') + ('...' if len(result) > 200 else '')
+            logger.info(f"✅ [PYTHON REPL TOOL] Execution completed in {elapsed:.2f}s")
+            logger.info(f"   Output: {result_preview}")
+            return result
+
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"❌ [PYTHON REPL TOOL] Execution failed after {elapsed:.2f}s: {e}")
+            raise
 
     def _run_unsandboxed(self, code: str) -> str:
         """Run code using LangChain's PythonREPL (less secure)"""
