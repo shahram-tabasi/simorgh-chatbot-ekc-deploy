@@ -55,11 +55,9 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
   const displayName = user?.EMPUSERNAME || 'Guest User';
   const userStatus = user ? 'Pro Member • Online' : 'Guest';
 
-  // Sync with external control
+  // Sync with external control (both open and close)
   React.useEffect(() => {
-    if (externalOpen) {
-      setIsOpen(true);
-    }
+    setIsOpen(externalOpen);
   }, [externalOpen]);
 
   // Load AI mode from localStorage on mount
