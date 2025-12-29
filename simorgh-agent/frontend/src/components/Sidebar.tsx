@@ -84,18 +84,18 @@ export function Sidebar({
               <div
                 className="flex items-center justify-between px-4 pt-3 pb-2"
               >
-                {/* Simorgh Logo - only on right sidebar */}
-                {side === 'right' && (
-                  <div className="flex items-center gap-1">
+                {/* Simorgh Logo - only on right sidebar, hidden on mobile */}
+                {side === 'right' && !isMobile && (
+                  <div className="flex items-center gap-0">
                     <img
                       src="/simorgh.svg"
                       alt="Simorgh"
-                      className="w-8 h-8"
+                      className="w-10 h-10"
                     />
                     <img
                       src="/text_simorgh.svg"
                       alt="Simorgh"
-                      className="h-6"
+                      className="h-7"
                     />
                   </div>
                 )}
