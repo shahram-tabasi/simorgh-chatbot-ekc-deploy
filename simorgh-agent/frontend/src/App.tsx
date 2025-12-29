@@ -110,6 +110,26 @@ function MainChat() {
     return () => window.removeEventListener('llm-mode-changed', handleModeChange);
   }, []);
 
+  // Handle back button for settings panel on mobile
+  React.useEffect(() => {
+    const handlePopState = () => {
+      if (window.innerWidth < 768 && settingsPanelOpen) {
+        setSettingsPanelOpen(false);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [settingsPanelOpen]);
+
+  // Push history state when settings panel opens on mobile
+  const handleOpenSettings = React.useCallback(() => {
+    if (window.innerWidth < 768) {
+      window.history.pushState({ settingsOpen: true }, '');
+    }
+    setSettingsPanelOpen(true);
+  }, []);
+
   const handleCreateProject = () => setShowCreateModal(true);
 
   const handleCreateChat = (projectId: string, pageName: string) => {
@@ -224,13 +244,13 @@ function MainChat() {
       <ThemeBackground />
 
 
-      <div className="w-full h-[100dvh] relative ">
+      <div className="w-full h-[100dvh] relative bg-[#0a0e27]">
 
         {/* Mobile Header - only visible on mobile */}
         <MobileHeader
           onMenuClick={rightSidebar.toggle}
           onHistoryClick={leftSidebar.toggle}
-          onSettingsClick={() => setSettingsPanelOpen(true)}
+          onSettingsClick={handleOpenSettings}
           currentModel={currentAiMode}
         />
 
