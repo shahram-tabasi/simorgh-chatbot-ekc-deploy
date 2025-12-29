@@ -498,6 +498,7 @@ def create_agent_with_tools(
     model_manager,
     enable_search: bool = True,
     enable_python_repl: bool = False,
+    enable_wikipedia: bool = True,
     verbose: bool = False
 ) -> LangChainAgent:
     """
@@ -507,6 +508,7 @@ def create_agent_with_tools(
         model_manager: ModelManager instance
         enable_search: Whether to enable search tool
         enable_python_repl: Whether to enable Python REPL
+        enable_wikipedia: Whether to enable Wikipedia search tool
         verbose: Whether to log agent steps
 
     Returns:
@@ -519,10 +521,11 @@ def create_agent_with_tools(
             tools=[],
             verbose=verbose
         )
-    
+
     try:
         from tools.search_tool import create_search_tool_from_env
         from tools.python_repl import create_python_repl_from_env
+        from tools.wikipedia_tool import create_wikipedia_tool_from_env, create_electrical_wiki_tool
     except ImportError as e:
         logger.warning(f"⚠️  Tool modules not found: {e}")
         return LangChainAgent(
@@ -542,6 +545,23 @@ def create_agent_with_tools(
                 logger.info("✅ Search tool enabled")
         except Exception as e:
             logger.warning(f"⚠️  Failed to initialize search tool: {e}")
+
+    # Add Wikipedia tool (general + electrical standards)
+    if enable_wikipedia:
+        try:
+            # General Wikipedia search
+            wiki_tool = create_wikipedia_tool_from_env()
+            if wiki_tool:
+                tools.append(wiki_tool)
+                logger.info("✅ Wikipedia tool enabled")
+
+            # Specialized electrical standards Wikipedia
+            electrical_wiki = create_electrical_wiki_tool()
+            if electrical_wiki:
+                tools.append(electrical_wiki)
+                logger.info("✅ Electrical Standards Wikipedia tool enabled")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize Wikipedia tool: {e}")
 
     # Add Python REPL tool
     if enable_python_repl:

@@ -113,11 +113,13 @@ async def lifespan(app: FastAPI):
         import os
         enable_search = os.getenv("ENABLE_SEARCH_TOOL", "true").lower() == "true"
         enable_python = os.getenv("ENABLE_PYTHON_REPL", "false").lower() == "true"
+        enable_wikipedia = os.getenv("ENABLE_WIKIPEDIA_TOOL", "true").lower() == "true"
 
         langchain_agent = create_agent_with_tools(
             model_manager=model_manager,
             enable_search=enable_search,
             enable_python_repl=enable_python,
+            enable_wikipedia=enable_wikipedia,
             verbose=os.getenv("AGENT_VERBOSE", "false").lower() == "true"
         )
 
