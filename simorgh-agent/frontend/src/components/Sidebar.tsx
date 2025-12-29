@@ -113,21 +113,8 @@ export function Sidebar({
                     <PanelLeftIcon className="w-5 h-5 text-white" />
                   ) : (
                     <PanelRightIcon className="w-5 h-5 text-white" />
-
                   )}
-
-                  <button
-                    onClick={onToggle}
-                    className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg"
-                    title="Hide sidebar"
-                  >
-                    {side === 'right' ? (
-                      <PanelLeftIcon className="w-5 h-5 text-white" />
-                    ) : (
-                      <PanelRightIcon className="w-5 h-5 text-white" />
-                    )}
-                  </button>
-                </div>
+                </button>
               </div>
 
               {/* محتوای sidebar */}
