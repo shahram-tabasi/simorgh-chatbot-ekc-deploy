@@ -88,21 +88,29 @@ class WikipediaToolWrapper:
         Returns:
             Wikipedia search results as formatted string
         """
+        import time
+        start_time = time.time()
+
         if not self._initialized:
             self._lazy_init()
 
         try:
-            logger.info(f"Executing Wikipedia search: {query}")
+            logger.info(f"🔍 [WIKIPEDIA TOOL] Starting search for: '{query}'")
 
             # Try using wikipedia-api package
             if self._wiki is not None:
-                return self._search_with_wikipediaapi(query)
+                result = self._search_with_wikipediaapi(query)
             else:
                 # Fallback to requests-based search
-                return self._search_with_requests(query)
+                result = self._search_with_requests(query)
+
+            elapsed = time.time() - start_time
+            logger.info(f"✅ [WIKIPEDIA TOOL] Search completed in {elapsed:.2f}s - Result length: {len(result)} chars")
+            return result
 
         except Exception as e:
-            logger.error(f"Wikipedia search failed: {e}")
+            elapsed = time.time() - start_time
+            logger.error(f"❌ [WIKIPEDIA TOOL] Search failed after {elapsed:.2f}s: {e}")
             return f"Wikipedia search error: {str(e)}"
 
     def _search_with_wikipediaapi(self, query: str) -> str:

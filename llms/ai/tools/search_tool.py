@@ -62,16 +62,21 @@ class SearchToolWrapper:
         Returns:
             Search results as formatted string
         """
+        import time
+        start_time = time.time()
+
         if not self._initialized:
             self._lazy_init()
 
         try:
-            logger.info(f"Executing search query: {query}")
+            logger.info(f"🔍 [WEB SEARCH TOOL] Starting search for: '{query}'")
             results = self._search.run(query)
-            logger.info(f"Search completed: {len(results)} characters returned")
+            elapsed = time.time() - start_time
+            logger.info(f"✅ [WEB SEARCH TOOL] Search completed in {elapsed:.2f}s - Result length: {len(results)} chars")
             return results
         except Exception as e:
-            logger.error(f"Search failed: {e}")
+            elapsed = time.time() - start_time
+            logger.error(f"❌ [WEB SEARCH TOOL] Search failed after {elapsed:.2f}s: {e}")
             return f"Search error: {str(e)}"
 
     def get_langchain_tool(self) -> Tool:

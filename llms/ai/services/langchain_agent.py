@@ -405,11 +405,15 @@ class LangChainAgent:
         # Run agent with tools
         try:
             import asyncio
+            import time
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+
+            logger.info(f"🤖 Agent starting with {len(self.tools)} tools available: {[t.name for t in self.tools]}")
+            start_time = time.time()
 
             def _run_agent():
                 if USING_CLASSIC:
@@ -422,23 +426,40 @@ class LangChainAgent:
             result = await loop.run_in_executor(None, _run_agent)
 
             tool_calls = []
-            
+
             if USING_CLASSIC and "intermediate_steps" in result:
                 for action, observation in result["intermediate_steps"]:
-                    tool_calls.append({
+                    tool_call = {
                         "tool": action.tool,
                         "input": action.tool_input,
                         "output": observation
-                    })
+                    }
+                    tool_calls.append(tool_call)
+
+                    # Log each tool call with details
+                    logger.info(f"🔧 TOOL CALL: {action.tool}")
+                    logger.info(f"   📥 Input: {str(action.tool_input)[:200]}...")
+                    logger.info(f"   📤 Output: {str(observation)[:200]}...")
+
                 output = result.get("output", "")
             else:
                 output = result.get("messages", [])[-1].get("content", "") if result.get("messages") else str(result)
+
+            elapsed_time = time.time() - start_time
+
+            # Summary log
+            if tool_calls:
+                tools_used = [tc["tool"] for tc in tool_calls]
+                logger.info(f"✅ Agent completed in {elapsed_time:.2f}s - Tools used: {tools_used}")
+            else:
+                logger.info(f"✅ Agent completed in {elapsed_time:.2f}s - No tools used (direct response)")
 
             return {
                 "output": output,
                 "tokens_used": None,
                 "tool_calls": tool_calls,
-                "used_tools": len(tool_calls) > 0
+                "used_tools": len(tool_calls) > 0,
+                "execution_time": elapsed_time
             }
 
         except Exception as e:
