@@ -136,20 +136,12 @@ export function useChat(
     }
     abortControllerRef.current = new AbortController();
 
-    // Create placeholder AI message for streaming
-    const aiMessageId = (Date.now() + 1).toString();
-    const aiMessage: Message = {
-      id: aiMessageId,
-      content: '',
-      role: 'assistant',
-      timestamp: new Date(),
-      metadata: {
-        streaming: true
-      }
-    };
-
-    setMessages(prev => [...prev, aiMessage]);
+    // Show typing indicator ONLY - no empty message yet
     setIsTyping(true);
+
+    // Message will be added on first chunk
+    const aiMessageId = (Date.now() + 1).toString();
+    let messageAdded = false;
 
     try {
       const response = await fetch(`${API_BASE}/chat/stream`, {
@@ -198,12 +190,15 @@ export function useChat(
               // Handle error
               if (data.error) {
                 console.error('❌ Streaming error:', data.error);
-                setMessages(prev => prev.map(msg =>
-                  msg.id === aiMessageId
-                    ? { ...msg, content: `Error: ${data.message || data.error}`, metadata: { error: true } }
-                    : msg
-                ));
                 setIsTyping(false);
+                const errorMessage: Message = {
+                  id: aiMessageId,
+                  content: `Error: ${data.message || data.error}`,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { error: true }
+                };
+                setMessages(prev => [...prev, errorMessage]);
                 return;
               }
 
@@ -212,21 +207,35 @@ export function useChat(
                 contextUsed = data.context_used;
               }
 
-              // Handle chunk
+              // Handle chunk - add message on FIRST chunk, update on subsequent
               if (data.chunk) {
                 accumulatedContent += data.chunk;
-                // Update message with accumulated content
-                setMessages(prev => prev.map(msg =>
-                  msg.id === aiMessageId
-                    ? { ...msg, content: accumulatedContent }
-                    : msg
-                ));
+
+                if (!messageAdded) {
+                  // First chunk: hide dots, add message with content
+                  messageAdded = true;
+                  setIsTyping(false);
+                  const aiMessage: Message = {
+                    id: aiMessageId,
+                    content: accumulatedContent,
+                    role: 'assistant',
+                    timestamp: new Date(),
+                    metadata: { streaming: true }
+                  };
+                  setMessages(prev => [...prev, aiMessage]);
+                } else {
+                  // Subsequent chunks: update message content
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === aiMessageId
+                      ? { ...msg, content: accumulatedContent }
+                      : msg
+                  ));
+                }
               }
 
               // Handle completion
               if (data.done) {
                 finalLlmMode = data.llm_mode;
-                // Update final message with metadata
                 setMessages(prev => prev.map(msg =>
                   msg.id === aiMessageId
                     ? {
@@ -240,10 +249,7 @@ export function useChat(
                       }
                     : msg
                 ));
-                setIsTyping(false);
                 console.log('✅ Streaming complete');
-
-                // Browser Notification
                 showNotification('Response Ready!', accumulatedContent.slice(0, 100));
               }
             } catch (e) {
@@ -254,33 +260,47 @@ export function useChat(
         }
       }
 
-      // Handle case where stream ended without done signal
-      if (accumulatedContent) {
+      // Handle stream ended without explicit done signal
+      if (!messageAdded && accumulatedContent) {
+        setIsTyping(false);
+        const aiMessage: Message = {
+          id: aiMessageId,
+          content: accumulatedContent,
+          role: 'assistant',
+          timestamp: new Date(),
+          metadata: { llm_mode: finalLlmMode, context_used: contextUsed, streaming: false }
+        };
+        setMessages(prev => [...prev, aiMessage]);
+      } else if (messageAdded) {
         setMessages(prev => prev.map(msg =>
           msg.id === aiMessageId
-            ? {
-                ...msg,
-                content: accumulatedContent,
-                metadata: { llm_mode: finalLlmMode, context_used: contextUsed, streaming: false }
-              }
+            ? { ...msg, metadata: { ...msg.metadata, streaming: false } }
             : msg
         ));
       }
       setIsTyping(false);
 
     } catch (error: any) {
+      setIsTyping(false);
       if (error.name === 'AbortError') {
         console.log('🛑 Streaming request cancelled');
-        setIsTyping(false);
         return;
       }
       console.error('❌ Streaming failed:', error);
-      setMessages(prev => prev.map(msg =>
-        msg.id === aiMessageId
-          ? { ...msg, content: `Error: ${error.message}`, metadata: { error: true } }
-          : msg
-      ));
-      setIsTyping(false);
+      const errorMessage: Message = {
+        id: aiMessageId,
+        content: `Error: ${error.message}`,
+        role: 'assistant',
+        timestamp: new Date(),
+        metadata: { error: true }
+      };
+      if (!messageAdded) {
+        setMessages(prev => [...prev, errorMessage]);
+      } else {
+        setMessages(prev => prev.map(msg =>
+          msg.id === aiMessageId ? errorMessage : msg
+        ));
+      }
     }
   }, [chatId, userId, llmMode]);
 
