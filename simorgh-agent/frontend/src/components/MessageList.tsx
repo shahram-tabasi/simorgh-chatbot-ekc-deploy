@@ -85,6 +85,13 @@ export function MessageList({
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
   const [showCopyConfirmation, setShowCopyConfirmation] = React.useState(false);
+  const scrollAnimationRef = useRef<number | null>(null);
+  const lastMessageCountRef = useRef(messages.length);
+
+  // Check if any message is currently streaming
+  const isStreaming = React.useMemo(() => {
+    return messages.some(msg => msg.metadata?.streaming === true);
+  }, [messages]);
 
   // Log API capabilities once on mount (dev-safe detection)
   React.useEffect(() => {
@@ -224,23 +231,84 @@ export function MessageList({
   };
 
   // Check if user is near bottom of scroll
-  const isNearBottom = () => {
+  const isNearBottom = React.useCallback(() => {
     if (!containerRef.current) return true;
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    return scrollHeight - scrollTop - clientHeight < 100;
-  };
+    return scrollHeight - scrollTop - clientHeight < 150;
+  }, []);
 
   // Handle scroll events to detect manual scrolling
-  const handleScroll = () => {
+  const handleScroll = React.useCallback(() => {
     setShouldAutoScroll(isNearBottom());
-  };
+  }, [isNearBottom]);
 
-  // Auto-scroll to bottom when new messages arrive (only if user is near bottom)
-  useEffect(() => {
-    if (shouldAutoScroll && messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  // Smooth scroll to bottom using requestAnimationFrame
+  const scrollToBottom = React.useCallback((instant: boolean = false) => {
+    if (!containerRef.current) return;
+
+    // Cancel any ongoing scroll animation
+    if (scrollAnimationRef.current) {
+      cancelAnimationFrame(scrollAnimationRef.current);
+      scrollAnimationRef.current = null;
     }
-  }, [messages, isTyping, shouldAutoScroll]);
+
+    const container = containerRef.current;
+    const targetScroll = container.scrollHeight - container.clientHeight;
+
+    if (instant || isStreaming) {
+      // Instant scroll for streaming content (prevents jank)
+      container.scrollTop = targetScroll;
+    } else {
+      // Smooth scroll for new messages
+      const startScroll = container.scrollTop;
+      const distance = targetScroll - startScroll;
+      const duration = 200; // ms
+      const startTime = performance.now();
+
+      const animateScroll = (currentTime: number) => {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        // Ease out function
+        const easeOut = 1 - Math.pow(1 - progress, 3);
+        container.scrollTop = startScroll + distance * easeOut;
+
+        if (progress < 1) {
+          scrollAnimationRef.current = requestAnimationFrame(animateScroll);
+        } else {
+          scrollAnimationRef.current = null;
+        }
+      };
+
+      scrollAnimationRef.current = requestAnimationFrame(animateScroll);
+    }
+  }, [isStreaming]);
+
+  // Auto-scroll when messages change
+  useEffect(() => {
+    const newMessageAdded = messages.length > lastMessageCountRef.current;
+    lastMessageCountRef.current = messages.length;
+
+    if (shouldAutoScroll) {
+      // Use instant scroll during streaming, smooth for new messages
+      scrollToBottom(isStreaming);
+    }
+  }, [messages, shouldAutoScroll, scrollToBottom, isStreaming]);
+
+  // Also scroll when typing indicator appears
+  useEffect(() => {
+    if (isTyping && shouldAutoScroll) {
+      scrollToBottom(false);
+    }
+  }, [isTyping, shouldAutoScroll, scrollToBottom]);
+
+  // Cleanup animation on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollAnimationRef.current) {
+        cancelAnimationFrame(scrollAnimationRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div
