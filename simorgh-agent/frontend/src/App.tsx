@@ -318,7 +318,7 @@ function MainChat() {
             setSelectedProjectForChat(null);
           }}
           onCreate={(projectId, projectName, pageName) => {
-            handleCreateChat(projectId, projectName, pageName);
+            handleCreateChat(projectId, pageName);
             setShowProjectChatModal(false);
             setSelectedProjectForChat(null);
           }}
