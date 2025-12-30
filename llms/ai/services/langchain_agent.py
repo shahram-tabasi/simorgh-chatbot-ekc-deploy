@@ -129,11 +129,14 @@ if BaseLanguageModel is not None:
             """Return LLM type identifier"""
             return "custom_vllm_or_unsloth"
 
-        def invoke(self, input: str, **kwargs) -> str:
+        def invoke(self, input: str, config: Any = None, **kwargs) -> str:
             """
             Invoke the LLM (required by Runnable interface).
 
             This is the modern LangChain way to call the model.
+            Args:
+                input: The input text/prompt
+                config: Optional LangChain RunnableConfig (ignored but required for compatibility)
             """
             return self.predict(input, **kwargs)
 
@@ -232,8 +235,8 @@ else:
             """Return LLM type identifier"""
             return "custom_vllm_or_unsloth"
 
-        def invoke(self, input: str, **kwargs) -> str:
-            """Invoke the LLM"""
+        def invoke(self, input: str, config: Any = None, **kwargs) -> str:
+            """Invoke the LLM (config is optional for LangChain compatibility)"""
             return self.predict(input, **kwargs)
 
         async def _agenerate(self, prompts: List[str], **kwargs) -> Any:

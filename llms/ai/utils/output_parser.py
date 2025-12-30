@@ -126,6 +126,15 @@ class OutputParser:
                     logger.info(f"📝 Extracted after 'final': {original_length} -> {len(final_content)} chars")
                     return cls._clean_response(final_content, preserve_markdown)
 
+        # Step 2b: Handle incomplete responses that start with "analysis" but never reach "assistantfinal"
+        # This happens when LLM runs out of tokens before completing its thinking
+        if response.lower().startswith('analysis') and 'assistantfinal' not in response.lower():
+            # Try to extract the most useful content from the analysis
+            extracted = cls._extract_from_incomplete_analysis(response)
+            if extracted:
+                logger.info(f"📝 Extracted from incomplete analysis: {original_length} -> {len(extracted)} chars")
+                return cls._clean_response(extracted, preserve_markdown)
+
         # Step 3: Try to extract explicit final answer markers
         final_answer = cls._extract_final_answer(response)
         if final_answer:
@@ -156,6 +165,66 @@ class OutputParser:
                 content = match.group(1).strip()
                 if content:
                     return content
+        return None
+
+    @classmethod
+    def _extract_from_incomplete_analysis(cls, response: str) -> Optional[str]:
+        """
+        Extract useful content from an incomplete analysis response.
+
+        This handles cases where the LLM started with 'analysis' but ran out
+        of tokens before reaching 'assistantfinal'.
+        """
+        # Remove the "analysis" prefix
+        content = response
+        if content.lower().startswith('analysis'):
+            content = content[8:].strip()  # len('analysis') = 8
+
+        if not content:
+            return None
+
+        # Look for answer-like patterns in the content
+        answer_patterns = [
+            # Explicit answer markers
+            (r'(?:The\s+)?answer\s+is[:\s]+(.+)', re.DOTALL | re.IGNORECASE),
+            (r'In\s+summary[,:\s]+(.+)', re.DOTALL | re.IGNORECASE),
+            (r'To\s+summarize[,:\s]+(.+)', re.DOTALL | re.IGNORECASE),
+            (r'(?:So|Therefore|Thus)[,:\s]+(.{50,})', re.DOTALL | re.IGNORECASE),
+
+            # ANSI/IEEE device number patterns (specific to electrical standards)
+            (r'(ANSI\s+(?:device\s+)?(?:code|number)?\s*25[^.]*\.)', re.IGNORECASE),
+            (r'(Device\s+(?:number|code)\s+25[^.]*\.)', re.IGNORECASE),
+            (r'((?:ANSI|IEEE)\s+(?:C37\.2|C37\.90)[^.]*\.)', re.IGNORECASE),
+        ]
+
+        for pattern, flags in answer_patterns:
+            match = re.search(pattern, content, flags)
+            if match:
+                extracted = match.group(1).strip()
+                if len(extracted) > 50:  # Must be substantial
+                    return extracted
+
+        # Look for the last substantial paragraph (often contains conclusions)
+        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+        if paragraphs:
+            # Filter out very short paragraphs
+            substantial = [p for p in paragraphs if len(p) > 100]
+            if substantial:
+                # Return the last substantial paragraph (often the conclusion)
+                return substantial[-1]
+
+            # If no substantial paragraphs, return all content after removing first line
+            # (which is often just "The user asks..." context)
+            lines = content.split('\n')
+            if len(lines) > 2:
+                remaining = '\n'.join(lines[1:]).strip()
+                if len(remaining) > 100:
+                    return remaining
+
+        # Fallback: return the content as-is if it's long enough
+        if len(content) > 200:
+            return content
+
         return None
 
     @classmethod
