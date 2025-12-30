@@ -425,11 +425,25 @@ async def stream_chat_completion(
 def _should_use_tools(messages: list) -> bool:
     """
     Heuristic to determine if tools should be used.
+    Detects keywords that suggest the user wants information from external sources.
     """
-    # Check if any message mentions search, calculation, etc.
+    # Keywords that suggest tool usage is needed
     tool_keywords = [
-        "search", "look up", "find information",
-        "calculate", "compute", "math", "analysis"
+        # Search-related
+        "search", "look up", "find information", "find out",
+        "google", "browse", "internet",
+        # Wikipedia-related
+        "wikipedia", "wiki", "encyclopedia",
+        # Standards and technical info
+        "standard", "iec", "ieee", "nema", "ansi", "iso",
+        "protection code", "relay code", "device number",
+        # Calculation
+        "calculate", "compute", "math",
+        # Current information
+        "current", "latest", "recent", "today", "2024", "2025",
+        # Explicit requests
+        "what is", "who is", "when was", "where is", "how does",
+        "define", "explain", "describe",
     ]
 
     for msg in messages:
@@ -438,6 +452,14 @@ def _should_use_tools(messages: list) -> bool:
             return True
 
     return False
+
+
+def _should_use_tools_for_prompt(prompt: str) -> bool:
+    """
+    Heuristic to determine if tools should be used based on user prompt.
+    """
+    messages = [{"role": "user", "content": prompt}]
+    return _should_use_tools(messages)
 
 
 def _estimate_tokens(messages: list) -> int:
@@ -465,6 +487,8 @@ async def legacy_generate(request: LegacyGenerateRequest):
     """
     Legacy generate endpoint for backward compatibility.
     Used by simorgh-agent backend for non-streaming requests.
+
+    Supports tool usage (Wikipedia, search) when use_tools=True or auto-detected.
     """
     if model_manager is None:
         raise HTTPException(status_code=503, detail="Model not initialized")
@@ -475,19 +499,42 @@ async def legacy_generate(request: LegacyGenerateRequest):
         max_tokens = request.max_tokens or config["max_tokens"]
         temperature = config["temperature"]
 
+        # Determine if tools should be used
+        use_tools = request.use_tools
+        if use_tools is None:
+            # Auto-detect based on query content
+            use_tools = _should_use_tools_for_prompt(request.user_prompt)
+
         # Convert to message format
         messages = [
             {"role": "system", "content": request.system_prompt},
             {"role": "user", "content": request.user_prompt}
         ]
 
-        # Generate response
-        raw_output, tokens_used = await model_manager.generate(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=0.95,
-        )
+        # Generate response (with or without tools)
+        if use_tools and langchain_agent:
+            logger.info(f"🔧 Using LangChain agent with tools for query: {request.user_prompt[:100]}...")
+
+            # Run agent with tools
+            result = await langchain_agent.run_with_messages(
+                messages=messages,
+                use_tools=True
+            )
+
+            raw_output = result.get("output", "")
+            tokens_used = result.get("tokens_used") or len(raw_output.split())
+            tool_calls = result.get("tool_calls", [])
+
+            if tool_calls:
+                logger.info(f"🔧 Agent used {len(tool_calls)} tool(s): {[tc['tool'] for tc in tool_calls]}")
+        else:
+            # Direct generation without tools
+            raw_output, tokens_used = await model_manager.generate(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=0.95,
+            )
 
         # Parse output to remove thinking sections
         if OUTPUT_PARSER_AVAILABLE:
@@ -541,13 +588,11 @@ async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncItera
     data: {"chunk": "partial text"}
     data: {"status": "completed", "output": "full text", "tokens_used": 123}
 
-    Filters out thinking sections (<think>...</think>) from the stream
-    so only the final answer is sent to the client.
+    Supports two modes:
+    1. With tools (LangChain agent): First gets full result, then streams it in chunks
+    2. Without tools (direct): Streams directly from model with thinking section filtering
     """
     import json
-
-    # Create streaming parser for filtering thinking sections
-    streaming_parser = create_streaming_parser() if OUTPUT_PARSER_AVAILABLE else None
 
     try:
         # Get thinking level config
@@ -555,60 +600,130 @@ async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncItera
         max_tokens = request.max_tokens or config["max_tokens"]
         temperature = config["temperature"]
 
-        # Send started event
-        yield f"data: {json.dumps({'status': 'started', 'thinking_level': request.thinking_level})}\n\n"
+        # Determine if tools should be used
+        use_tools = request.use_tools
+        if use_tools is None:
+            # Auto-detect based on query content
+            use_tools = _should_use_tools_for_prompt(request.user_prompt)
 
-        # Convert to message format
-        messages = [
-            {"role": "system", "content": request.system_prompt},
-            {"role": "user", "content": request.user_prompt}
-        ]
+        # Send started event with tool usage info
+        yield f"data: {json.dumps({'status': 'started', 'thinking_level': request.thinking_level, 'using_tools': use_tools})}\n\n"
 
-        # Stream generation with thinking section filtering
-        full_output = ""
-        clean_output = ""
+        # =========================================================================
+        # MODE 1: With Tools (LangChain Agent)
+        # =========================================================================
+        if use_tools and langchain_agent:
+            logger.info(f"🔧 Using LangChain agent with tools for query: {request.user_prompt[:100]}...")
 
-        async for chunk in model_manager.generate_stream(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=0.95,
-        ):
-            full_output += chunk
+            # Convert to message format
+            messages = [
+                {"role": "system", "content": request.system_prompt},
+                {"role": "user", "content": request.user_prompt}
+            ]
 
-            # Filter thinking sections if parser available
-            if streaming_parser:
-                clean_chunk, in_thinking = streaming_parser.process_chunk(chunk)
-                if in_thinking or not clean_chunk:
-                    # Skip chunks inside thinking sections
-                    continue
-                clean_output += clean_chunk
-                # Send clean chunk
-                yield f"data: {json.dumps({'chunk': clean_chunk})}\n\n"
+            # Run agent (non-streaming) to get result with tool usage
+            result = await langchain_agent.run_with_messages(
+                messages=messages,
+                use_tools=True
+            )
+
+            raw_output = result.get("output", "")
+            tool_calls = result.get("tool_calls", [])
+
+            # Log tool usage
+            if tool_calls:
+                logger.info(f"🔧 Agent used {len(tool_calls)} tool(s): {[tc['tool'] for tc in tool_calls]}")
+
+            # Parse output to remove thinking sections
+            if OUTPUT_PARSER_AVAILABLE:
+                final_output = parse_llm_output(raw_output)
+                logger.info(f"📝 Output parsed: {len(raw_output)} -> {len(final_output)} chars")
             else:
-                clean_output += chunk
+                final_output = raw_output
+
+            # Stream the result in chunks for smooth UI
+            chunk_size = 50  # Characters per chunk for smooth streaming effect
+            for i in range(0, len(final_output), chunk_size):
+                chunk = final_output[i:i + chunk_size]
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                # Small delay for visual streaming effect
+                await asyncio.sleep(0.02)
 
-        # Parse full output for final clean version (in case of any missed thinking sections)
-        if OUTPUT_PARSER_AVAILABLE:
-            final_output = parse_llm_output(full_output)
+            # Send completion event
+            tokens_used = result.get("tokens_used") or len(raw_output.split())
+            completion_data = {
+                'status': 'completed',
+                'output': final_output,
+                'tokens_used': tokens_used,
+                'thinking_level': request.thinking_level,
+                'tools_used': [tc['tool'] for tc in tool_calls] if tool_calls else []
+            }
+            yield f"data: {json.dumps(completion_data)}\n\n"
+
+            logger.info(f"✅ Agent streaming completed - Raw: {len(raw_output)} chars, Clean: {len(final_output)} chars")
+
+        # =========================================================================
+        # MODE 2: Without Tools (Direct Streaming)
+        # =========================================================================
         else:
-            final_output = clean_output
+            logger.info(f"📝 Direct streaming (no tools) for query: {request.user_prompt[:100]}...")
 
-        # Send completion event with clean output
-        tokens_used = len(full_output.split())  # Rough estimate
-        completion_data = {
-            'status': 'completed',
-            'output': final_output,
-            'tokens_used': tokens_used,
-            'thinking_level': request.thinking_level
-        }
-        yield f"data: {json.dumps(completion_data)}\n\n"
+            # Create streaming parser for filtering thinking sections
+            streaming_parser = create_streaming_parser() if OUTPUT_PARSER_AVAILABLE else None
 
-        logger.info(f"✅ Legacy streaming completed - Raw: {len(full_output)} chars, Clean: {len(final_output)} chars")
+            # Convert to message format
+            messages = [
+                {"role": "system", "content": request.system_prompt},
+                {"role": "user", "content": request.user_prompt}
+            ]
+
+            # Stream generation with thinking section filtering
+            full_output = ""
+            clean_output = ""
+
+            async for chunk in model_manager.generate_stream(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=0.95,
+            ):
+                full_output += chunk
+
+                # Filter thinking sections if parser available
+                if streaming_parser:
+                    clean_chunk, in_thinking = streaming_parser.process_chunk(chunk)
+                    if in_thinking or not clean_chunk:
+                        # Skip chunks inside thinking sections
+                        continue
+                    clean_output += clean_chunk
+                    # Send clean chunk
+                    yield f"data: {json.dumps({'chunk': clean_chunk})}\n\n"
+                else:
+                    clean_output += chunk
+                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+            # Parse full output for final clean version (in case of any missed thinking sections)
+            if OUTPUT_PARSER_AVAILABLE:
+                final_output = parse_llm_output(full_output)
+            else:
+                final_output = clean_output
+
+            # Send completion event with clean output
+            tokens_used = len(full_output.split())  # Rough estimate
+            completion_data = {
+                'status': 'completed',
+                'output': final_output,
+                'tokens_used': tokens_used,
+                'thinking_level': request.thinking_level,
+                'tools_used': []
+            }
+            yield f"data: {json.dumps(completion_data)}\n\n"
+
+            logger.info(f"✅ Direct streaming completed - Raw: {len(full_output)} chars, Clean: {len(final_output)} chars")
 
     except Exception as e:
         logger.error(f"Legacy streaming failed: {e}")
+        logger.exception(e)
         error_data = {'status': 'error', 'error': str(e)}
         yield f"data: {json.dumps(error_data)}\n\n"
 

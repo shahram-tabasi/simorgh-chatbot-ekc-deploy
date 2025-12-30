@@ -139,6 +139,10 @@ class LegacyGenerateRequest(BaseModel):
     thinking_level: str = Field(default="medium", pattern="^(low|medium|high)$")
     max_tokens: Optional[int] = Field(default=None, ge=100, le=8000)
     stream: bool = Field(default=False)
+    use_tools: Optional[bool] = Field(
+        default=None,
+        description="Whether to use tools (search, Wikipedia). If None, auto-detect based on query content."
+    )
 
 
 class LegacyGenerateResponse(BaseModel):
