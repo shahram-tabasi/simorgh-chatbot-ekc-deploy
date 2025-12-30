@@ -183,6 +183,23 @@ class OutputParser:
         if not content:
             return None
 
+        # First, try to remove common "thinking out loud" patterns
+        # These are internal reasoning that shouldn't be shown to users
+        thinking_patterns = [
+            r'^The user asks?:.*?(?=\n\n|\. (?:They|The|I |Let|So |Maybe))',  # "The user asks: X. They want..."
+            r'(?:They|The user) want[s]?.*?(?=\n\n|\. (?:I |Let|Maybe|Could))',  # "They want to..."
+            r'Likely referring to.*?(?=\n\n|\.)',  # "Likely referring to..."
+            r'Not sure\.?',  # "Not sure."
+            r'Wait,.*?(?=\n\n|\.)',  # "Wait, actually..."
+            r'Actually,?.*?(?=\n\n|\.)',  # "Actually, ..."
+            r'But (?:maybe|perhaps|I\'m not).*?(?=\n\n|\.)',  # "But maybe..."
+        ]
+
+        cleaned = content
+        for pattern in thinking_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()  # Normalize whitespace
+
         # Look for answer-like patterns in the content
         answer_patterns = [
             # Explicit answer markers
@@ -192,38 +209,70 @@ class OutputParser:
             (r'(?:So|Therefore|Thus)[,:\s]+(.{50,})', re.DOTALL | re.IGNORECASE),
 
             # ANSI/IEEE device number patterns (specific to electrical standards)
-            (r'(ANSI\s+(?:device\s+)?(?:code|number)?\s*25[^.]*\.)', re.IGNORECASE),
-            (r'(Device\s+(?:number|code)\s+25[^.]*\.)', re.IGNORECASE),
-            (r'((?:ANSI|IEEE)\s+(?:C37\.2|C37\.90)[^.]*\.)', re.IGNORECASE),
+            (r'(ANSI[/-]?(?:device\s+)?(?:code\s+|number\s+)?25\b[^.]*\.)', re.IGNORECASE),
+            (r'(Device\s+(?:number|code)\s+25\b[^.]*\.)', re.IGNORECASE),
+            (r'((?:ANSI|IEEE)[/-]?(?:C37\.2|C37\.90|ISA[/-]?\d+)[^.]*\.)', re.IGNORECASE),
+
+            # Standard information patterns
+            (r'((?:ANSI|IEEE|IEC|NEMA)[/-]\S+\s+(?:is|defines?|covers?|standards?)[^.]+\.)', re.IGNORECASE),
+            (r'(The\s+standard\s+(?:is|defines?|covers?)[^.]+\.)', re.IGNORECASE),
+
+            # Informative statements (not questions or uncertainty)
+            (r'(It (?:is|defines?|covers?|specifies?)[^.?]+\.)', re.IGNORECASE),
+            (r'(This (?:is|defines?|covers?|specifies?)[^.?]+\.)', re.IGNORECASE),
         ]
 
         for pattern, flags in answer_patterns:
-            match = re.search(pattern, content, flags)
+            match = re.search(pattern, cleaned, flags)
             if match:
                 extracted = match.group(1).strip()
                 if len(extracted) > 50:  # Must be substantial
                     return extracted
 
+        # Look for informative sentences (statements, not questions/uncertainty)
+        sentences = re.split(r'(?<=[.!])\s+', cleaned)
+        informative = []
+        for sent in sentences:
+            sent = sent.strip()
+            # Skip sentences that are questions, uncertainty, or meta-commentary
+            skip_patterns = [
+                r'^\?',  # Questions
+                r'^(?:Maybe|Perhaps|Could be|Not sure|I think|I\'m not)',  # Uncertainty
+                r'^(?:The user|They) (?:ask|want|said)',  # Meta-commentary
+                r'^(?:But|Wait|Actually)\b',  # Corrections/hedging
+                r'^(?:Let me|I should|I\'ll)',  # Planning
+            ]
+            if any(re.match(p, sent, re.IGNORECASE) for p in skip_patterns):
+                continue
+            if len(sent) > 30 and not sent.endswith('?'):
+                informative.append(sent)
+
+        if informative:
+            # Return all informative sentences joined
+            result = ' '.join(informative)
+            if len(result) > 100:
+                return result
+
         # Look for the last substantial paragraph (often contains conclusions)
         paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
         if paragraphs:
-            # Filter out very short paragraphs
-            substantial = [p for p in paragraphs if len(p) > 100]
+            # Filter out very short paragraphs and meta-commentary
+            substantial = []
+            for p in paragraphs:
+                if len(p) > 100:
+                    # Skip if it's mostly questions or uncertainty
+                    if not re.match(r'^(?:The user|Maybe|Perhaps|Not sure)', p, re.IGNORECASE):
+                        substantial.append(p)
             if substantial:
-                # Return the last substantial paragraph (often the conclusion)
                 return substantial[-1]
 
-            # If no substantial paragraphs, return all content after removing first line
-            # (which is often just "The user asks..." context)
-            lines = content.split('\n')
-            if len(lines) > 2:
-                remaining = '\n'.join(lines[1:]).strip()
-                if len(remaining) > 100:
-                    return remaining
-
-        # Fallback: return the content as-is if it's long enough
-        if len(content) > 200:
-            return content
+        # Fallback: if there's useful content, return it with a prefix explaining incompleteness
+        if len(cleaned) > 200:
+            # Extract any definitions or explanations
+            definitions = re.findall(r'([A-Z][A-Z/-]+\d*\s+(?:is|means?|refers? to|defines?)[^.]+\.)', cleaned, re.IGNORECASE)
+            if definitions:
+                return ' '.join(definitions)
+            return cleaned
 
         return None
 
