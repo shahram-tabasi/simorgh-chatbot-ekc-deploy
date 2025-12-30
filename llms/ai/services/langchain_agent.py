@@ -135,9 +135,16 @@ if BaseLanguageModel is not None:
 
             This is the modern LangChain way to call the model.
             Args:
-                input: The input text/prompt
+                input: The input text/prompt (may be StringPromptValue or str)
                 config: Optional LangChain RunnableConfig (ignored but required for compatibility)
             """
+            # Handle LangChain's StringPromptValue objects
+            if hasattr(input, 'text'):
+                input = input.text
+            elif hasattr(input, 'to_string'):
+                input = input.to_string()
+            elif not isinstance(input, str):
+                input = str(input)
             return self.predict(input, **kwargs)
 
         async def _agenerate(self, prompts: List[str], **kwargs) -> Any:
@@ -237,6 +244,13 @@ else:
 
         def invoke(self, input: str, config: Any = None, **kwargs) -> str:
             """Invoke the LLM (config is optional for LangChain compatibility)"""
+            # Handle LangChain's StringPromptValue objects
+            if hasattr(input, 'text'):
+                input = input.text
+            elif hasattr(input, 'to_string'):
+                input = input.to_string()
+            elif not isinstance(input, str):
+                input = str(input)
             return self.predict(input, **kwargs)
 
         async def _agenerate(self, prompts: List[str], **kwargs) -> Any:

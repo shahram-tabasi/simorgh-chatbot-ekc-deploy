@@ -78,6 +78,57 @@ class WikipediaToolWrapper:
                 logger.error(f"Failed to initialize Wikipedia tool: {e}")
                 raise
 
+    def _clean_query(self, query: str) -> str:
+        """
+        Clean malformed queries from LLM output.
+
+        LLM sometimes includes thinking/reasoning in the query.
+        This extracts just the actual search terms.
+        """
+        import re
+
+        if not query:
+            return query
+
+        original = query
+
+        # Try to extract query from JSON-like format: {"query": "actual query"}
+        json_match = re.search(r'["\']query["\']\s*:\s*["\']([^"\']+)["\']', query)
+        if json_match:
+            return json_match.group(1).strip()
+
+        # Remove common LLM thinking patterns
+        cutoff_patterns = [
+            r'\n\nThen\s+we',
+            r'\.\s+Then\s+we',
+            r'\n\nWe\s+should',
+            r'\.\s+We\s+should',
+            r'\n\nLet\'?s',
+            r'\.\s+Let\'?s',
+            r'assistant(?:analysis|final)',
+            r'\n\nThe\s+user',
+            r'\.\s+The\s+user',
+        ]
+
+        for pattern in cutoff_patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                query = query[:match.start()].strip()
+
+        # Remove trailing quotes, newlines, special characters
+        query = re.sub(r'["\'\n\r]+$', '', query)
+        query = re.sub(r'^["\'\n\r]+', '', query)
+
+        # If query is too long (>200 chars), likely contains garbage - try first sentence
+        if len(query) > 200:
+            sentences = re.split(r'[.!?\n]', original)
+            if sentences:
+                first_sentence = sentences[0].strip()
+                if 10 < len(first_sentence) < 200:
+                    query = first_sentence
+
+        return query.strip() if query.strip() else original
+
     def search(self, query: str) -> str:
         """
         Search Wikipedia for information.
@@ -93,6 +144,12 @@ class WikipediaToolWrapper:
 
         if not self._initialized:
             self._lazy_init()
+
+        # Clean malformed queries from LLM output
+        original_query = query
+        query = self._clean_query(query)
+        if query != original_query:
+            logger.info(f"🧹 [WIKIPEDIA TOOL] Cleaned query: '{original_query[:100]}...' -> '{query}'")
 
         try:
             logger.info(f"🔍 [WIKIPEDIA TOOL] Starting search for: '{query}'")
