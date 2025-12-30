@@ -89,6 +89,16 @@ class OutputParser:
         (r'Observation:\s*.*?(?=Thought:|Final Answer:|$)', re.DOTALL | re.IGNORECASE),
     ]
 
+    # Patterns for LLM internal markers to remove (tool calls, analysis, etc.)
+    INTERNAL_MARKER_PATTERNS = [
+        # Tool call markers - remove everything from assistantcommentary to end of JSON
+        (r'assistantcommentary\s+to=\w+\s*(?:json|code)?\s*\{[^}]+\}', re.IGNORECASE),
+        # Analysis prefix
+        (r'^analysis', re.IGNORECASE),
+        # Commentary markers without full tool call
+        (r'commentary\s+to=\w+[^\n]*', re.IGNORECASE),
+    ]
+
     @classmethod
     def parse(cls, raw_response: str, preserve_markdown: bool = True) -> str:
         """
@@ -106,6 +116,16 @@ class OutputParser:
 
         original_length = len(raw_response)
         response = raw_response
+
+        # Step 0: Remove tool call markers (assistantcommentary to=X json{...})
+        # This handles cases where the LLM returns partial tool calls
+        for pattern, flags in cls.INTERNAL_MARKER_PATTERNS:
+            response = re.sub(pattern, '', response, flags=flags)
+        response = response.strip()
+
+        # Log if we cleaned internal markers
+        if len(response) != original_length:
+            logger.info(f"📝 Removed internal markers: {original_length} -> {len(response)} chars")
 
         # Step 1: Check for plain text "analysis...assistantfinal" format (most common)
         if 'assistantfinal' in response.lower():
