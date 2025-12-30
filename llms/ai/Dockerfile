@@ -157,6 +157,7 @@
     COPY services ./services
     COPY api ./api
     COPY tools ./tools
+    COPY utils ./utils
     
     # --------------------------------------------------------------
     #  Create model cache directory
