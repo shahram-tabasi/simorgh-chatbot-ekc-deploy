@@ -11,6 +11,7 @@ Supports various LLM output formats including:
 - DeepSeek-style thinking tags (<think>...</think>)
 - Claude-style thinking tags (<thinking>...</thinking>)
 - Custom markers (analysis, reasoning, etc.)
+- Plain text markers (analysisXXX...assistantfinalYYY)
 - ReAct format (Thought/Action/Observation)
 """
 
@@ -60,8 +61,15 @@ class OutputParser:
         (r'<steps>.*?</steps>', re.DOTALL | re.IGNORECASE),
     ]
 
-    # Patterns for extracting final answer
+    # Patterns for extracting final answer (checked FIRST - order matters!)
     FINAL_ANSWER_PATTERNS = [
+        # Plain text "assistantfinal" marker (most common for this model)
+        # Matches: "analysisXXX...assistantfinal## Answer" -> captures "## Answer"
+        (r'assistantfinal(.*)', re.DOTALL | re.IGNORECASE),
+
+        # Plain text "final" marker after "analysis" section
+        (r'analysis.*?final(.*)', re.DOTALL | re.IGNORECASE),
+
         # Explicit final answer tags
         (r'<final[_\s]?answer>(.*?)</final[_\s]?answer>', re.DOTALL | re.IGNORECASE),
         (r'<answer>(.*?)</answer>', re.DOTALL | re.IGNORECASE),
@@ -71,9 +79,6 @@ class OutputParser:
         # Final markers (for ReAct and similar patterns)
         (r'Final Answer:\s*(.*?)(?:\n\n|$)', re.DOTALL | re.IGNORECASE),
         (r'Answer:\s*(.*?)(?:\n\n|$)', re.DOTALL | re.IGNORECASE),
-
-        # Assistant final marker
-        (r'assistantfinal\s*(.*)', re.DOTALL | re.IGNORECASE),
     ]
 
     # ReAct pattern markers to remove
@@ -102,23 +107,44 @@ class OutputParser:
         original_length = len(raw_response)
         response = raw_response
 
-        # Step 1: Try to extract explicit final answer first
+        # Step 1: Check for plain text "analysis...assistantfinal" format (most common)
+        if 'assistantfinal' in response.lower():
+            # Extract everything after "assistantfinal"
+            match = re.search(r'assistantfinal(.*)', response, re.DOTALL | re.IGNORECASE)
+            if match:
+                final_content = match.group(1).strip()
+                if final_content:
+                    logger.info(f"📝 Extracted after 'assistantfinal': {original_length} -> {len(final_content)} chars")
+                    return cls._clean_response(final_content, preserve_markdown)
+
+        # Step 2: Check for "analysis...final" format without "assistant" prefix
+        if response.lower().startswith('analysis') and 'final' in response.lower():
+            match = re.search(r'final(.*)', response, re.DOTALL | re.IGNORECASE)
+            if match:
+                final_content = match.group(1).strip()
+                if final_content:
+                    logger.info(f"📝 Extracted after 'final': {original_length} -> {len(final_content)} chars")
+                    return cls._clean_response(final_content, preserve_markdown)
+
+        # Step 3: Try to extract explicit final answer markers
         final_answer = cls._extract_final_answer(response)
         if final_answer:
-            logger.debug(f"📝 Extracted explicit final answer ({len(final_answer)} chars)")
+            logger.info(f"📝 Extracted explicit final answer: {original_length} -> {len(final_answer)} chars")
             return cls._clean_response(final_answer, preserve_markdown)
 
-        # Step 2: Remove thinking/reasoning sections
+        # Step 4: Remove thinking/reasoning sections (XML tags)
         response = cls._remove_thinking_sections(response)
 
-        # Step 3: Handle ReAct format if detected
+        # Step 5: Handle ReAct format if detected
         if cls._is_react_format(response):
             response = cls._extract_from_react(response)
 
-        # Step 4: Clean up the response
+        # Step 6: Clean up the response
         response = cls._clean_response(response, preserve_markdown)
 
-        logger.info(f"📝 Output parsed: {original_length} -> {len(response)} chars")
+        if len(response) != original_length:
+            logger.info(f"📝 Output parsed: {original_length} -> {len(response)} chars")
+
         return response
 
     @classmethod
@@ -127,7 +153,9 @@ class OutputParser:
         for pattern, flags in cls.FINAL_ANSWER_PATTERNS:
             match = re.search(pattern, response, flags)
             if match:
-                return match.group(1).strip()
+                content = match.group(1).strip()
+                if content:
+                    return content
         return None
 
     @classmethod
@@ -180,7 +208,6 @@ class OutputParser:
         # Remove common prefix artifacts
         prefixes_to_remove = [
             'assistant', 'Assistant:', 'AI:', 'Response:',
-            'assistantanalysis', 'assistantfinal'
         ]
         for prefix in prefixes_to_remove:
             if response.lower().startswith(prefix.lower()):
@@ -193,12 +220,17 @@ class StreamingOutputParser:
     """
     Stateful parser for streaming responses.
 
-    Tracks thinking section state across chunks and filters appropriately.
+    Handles both XML-style tags (<think>...</think>) and
+    plain text markers (analysis...assistantfinal).
     """
 
     def __init__(self):
         self.thinking_depth = 0
         self.accumulated_text = ""
+        self.found_final_marker = False
+        self.in_analysis_section = False
+
+        # XML-style patterns
         self.think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
         self.think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
 
@@ -213,21 +245,51 @@ class StreamingOutputParser:
             Tuple of (clean_chunk_to_display, is_in_thinking_section)
         """
         if not chunk:
-            return "", self.thinking_depth > 0
+            return "", self.thinking_depth > 0 or self.in_analysis_section
 
-        # Track for debugging
+        # Accumulate text
         self.accumulated_text += chunk
 
-        # Count opening and closing tags
+        # Check if we've found "assistantfinal" in the accumulated text
+        if not self.found_final_marker:
+            lower_accumulated = self.accumulated_text.lower()
+
+            # Check for "assistantfinal" marker
+            if 'assistantfinal' in lower_accumulated:
+                self.found_final_marker = True
+                self.in_analysis_section = False
+
+                # Find position of marker and return content after it
+                idx = lower_accumulated.find('assistantfinal')
+                after_marker = self.accumulated_text[idx + len('assistantfinal'):]
+
+                # Only return the new part from this chunk
+                if after_marker:
+                    return after_marker, False
+                return "", False
+
+            # If text starts with "analysis" and no final marker yet, we're in analysis
+            if lower_accumulated.startswith('analysis') or 'analysis' in lower_accumulated[:50]:
+                self.in_analysis_section = True
+                return "", True  # Don't show analysis section
+
+        # If we've found the final marker, pass through content
+        if self.found_final_marker:
+            # Clean any stray XML tags
+            clean_chunk = self.think_open_pattern.sub('', chunk)
+            clean_chunk = self.think_close_pattern.sub('', clean_chunk)
+            return clean_chunk, False
+
+        # Handle XML-style thinking tags
         open_matches = self.think_open_pattern.findall(chunk)
         close_matches = self.think_close_pattern.findall(chunk)
 
         self.thinking_depth += len(open_matches)
         self.thinking_depth -= len(close_matches)
-        self.thinking_depth = max(0, self.thinking_depth)  # Prevent negative
+        self.thinking_depth = max(0, self.thinking_depth)
 
         # If inside thinking section, don't return content
-        if self.thinking_depth > 0:
+        if self.thinking_depth > 0 or self.in_analysis_section:
             return "", True
 
         # Clean any stray tags from chunk
@@ -240,6 +302,8 @@ class StreamingOutputParser:
         """Reset parser state for new response"""
         self.thinking_depth = 0
         self.accumulated_text = ""
+        self.found_final_marker = False
+        self.in_analysis_section = False
 
 
 def parse_llm_output(raw_response: str) -> str:
