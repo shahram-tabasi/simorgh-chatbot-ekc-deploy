@@ -521,8 +521,9 @@ Question: {input_text}"""
                 }
 
             # Check for tool call in LLM's native format
+            # Handles: "assistantcommentary to=web_search json{...}" or "assistantcommentary to=web_searchjson{...}"
             tool_match = re.search(
-                r'(?:assistantcommentary|commentary)\s+to=(\w+)\s+(?:json|code)?\s*(\{[^}]+\})',
+                r'(?:assistantcommentary|commentary)\s+to=(\w+)\s*(?:json|code)?\s*(\{[^}]+\})',
                 output,
                 re.IGNORECASE
             )
@@ -565,20 +566,27 @@ Question: {input_text}"""
                     })
                     continue
 
-            # No tool call found and no final answer - try to extract useful content
-            if 'analysis' in output.lower() and iteration > 0:
-                # LLM is just thinking, might have useful content
-                elapsed = time.time() - start_time
-                # Try to extract any substantive content
-                content = re.sub(r'^analysis', '', output, flags=re.IGNORECASE).strip()
-                if len(content) > 100:
-                    return {
-                        "output": content,
-                        "tokens_used": tokens,
-                        "tool_calls": tool_calls,
-                        "used_tools": len(tool_calls) > 0,
-                        "execution_time": elapsed
-                    }
+            # No tool call matched - check if there's any tool-like pattern we missed
+            # This handles malformed tool calls
+            if 'assistantcommentary' in output.lower() or 'commentary to=' in output.lower():
+                # LLM is trying to call a tool but format is wrong - prompt for correct format
+                logger.warning(f"⚠️ Detected malformed tool call, prompting for correct format")
+                messages.append({"role": "assistant", "content": output})
+                messages.append({
+                    "role": "user",
+                    "content": "I see you're trying to use a tool. Please use this exact format:\nassistantcommentary to=web_search json{\"query\": \"your search query\"}\n\nOr provide your final answer with:\nassistantfinal Your answer here"
+                })
+                continue
+
+            # No tool call and no final answer - if we have tool results, ask for final answer
+            if tool_calls and iteration > 0:
+                logger.info(f"🔄 Have {len(tool_calls)} tool results, prompting for final answer")
+                messages.append({"role": "assistant", "content": output})
+                messages.append({
+                    "role": "user",
+                    "content": f"You have already searched and found information. Please provide your final answer now using:\nassistantfinal Your answer based on the search results"
+                })
+                continue
 
             # Add response and prompt for tool use or final answer
             messages.append({"role": "assistant", "content": output})
