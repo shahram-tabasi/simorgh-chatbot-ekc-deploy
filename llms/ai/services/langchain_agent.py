@@ -68,26 +68,42 @@ except ImportError as e:
 # ReAct prompt template for tool use
 REACT_PROMPT_TEMPLATE = """You are a helpful AI assistant with access to tools.
 
+IMPORTANT: You MUST follow the EXACT format below. Do NOT use analysis/final markers.
+
 You have access to the following tools:
 
 {tools}
 
-Use the following format:
+Use this EXACT format (copy it exactly):
 
 Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I need to think about what to do
+Action: the action to take, must be exactly one of [{tool_names}]
+Action Input: the input to the action (just the query, nothing else)
+Observation: the result of the action (this will be provided to you)
+... (Thought/Action/Action Input/Observation can repeat)
 Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+Final Answer: the final answer to the original question
+
+EXAMPLE:
+Question: What is ANSI code 27?
+Thought: I need to search for information about ANSI code 27
+Action: web_search
+Action Input: ANSI code 27 protection relay
+Observation: [search results will appear here]
+Thought: I now know the final answer based on the search results
+Final Answer: ANSI code 27 is the undervoltage relay...
+
+RULES:
+- ALWAYS start with "Thought:" (not "analysis" or anything else)
+- Action Input must be ONLY the search query (no JSON, no extra text)
+- After getting Observation, provide "Final Answer:" with the actual answer
+- Do NOT output "analysis", "assistantfinal", or JSON format
 
 Begin!
 
 Question: {input}
-Thought: {agent_scratchpad}
-"""
+{agent_scratchpad}"""
 
 
 # Conditional class definition based on what's available
@@ -363,8 +379,9 @@ class LangChainAgent:
                     agent=agent,
                     tools=self.tools,
                     verbose=self.verbose,
-                    max_iterations=5,
-                    handle_parsing_errors=True,
+                    max_iterations=10,  # Increased to give LLM more chances
+                    handle_parsing_errors=self._handle_parsing_error,
+                    max_execution_time=60,  # 60 second timeout
                 )
             else:
                 # Modern LangChain 1.0+ approach
@@ -384,6 +401,32 @@ class LangChainAgent:
             logger.error(f"❌ Failed to create agent: {e}")
             logger.exception(e)
             return None
+
+    def _handle_parsing_error(self, error: Exception) -> str:
+        """
+        Handle parsing errors from the agent.
+
+        When the LLM outputs in wrong format (e.g., analysis/assistantfinal),
+        this provides a helpful message to guide it back to the correct format.
+        """
+        import re
+
+        error_str = str(error)
+        logger.warning(f"⚠️ Agent parsing error: {error_str[:200]}")
+
+        # Check if the error contains what looks like a final answer
+        if 'assistantfinal' in error_str.lower():
+            # Try to extract the answer from the error
+            match = re.search(r'assistantfinal[:\s]*(.+)', error_str, re.IGNORECASE | re.DOTALL)
+            if match:
+                answer = match.group(1).strip()[:500]
+                return f"Final Answer: {answer}"
+
+        # Return guidance to help the LLM correct its format
+        return (
+            "I made a formatting error. Let me try again with the correct format.\n"
+            "Thought: I need to provide my answer in the correct format.\n"
+        )
 
     def _format_tools(self) -> str:
         """Format tools for prompt"""
