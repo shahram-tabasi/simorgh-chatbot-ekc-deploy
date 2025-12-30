@@ -462,28 +462,167 @@ class LangChainAgent:
                 "used_tools": False
             }
 
-        # Run agent with tools
-        try:
-            import asyncio
-            import time
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+        # Try custom tool loop first (handles LLM's native format)
+        custom_result = await self._run_custom_tool_loop(input_text)
+        if custom_result:
+            return custom_result
 
-            logger.info(f"🤖 Agent starting with {len(self.tools)} tools available: {[t.name for t in self.tools]}")
-            start_time = time.time()
+        # Fallback to standard agent
+        return await self._run_standard_agent(input_text)
 
-            def _run_agent():
-                if USING_CLASSIC:
-                    return self.agent.invoke({"input": input_text})
-                else:
-                    return self.agent.invoke({
-                        "messages": [{"role": "user", "content": input_text}]
+    async def _run_custom_tool_loop(self, input_text: str) -> Optional[Dict[str, Any]]:
+        """
+        Custom tool execution loop that handles the LLM's native format.
+
+        The LLM outputs in format:
+        - analysisXXX... (thinking)
+        - assistantcommentary to=tool_name json{"query": "..."} (tool call)
+        - assistantfinal... (final answer)
+
+        This parses that format and executes tools accordingly.
+        """
+        import re
+        import time
+        import json
+
+        start_time = time.time()
+        tool_calls = []
+        max_iterations = 5
+
+        # Build simple prompt for tool use
+        tools_desc = "\n".join([f"- {t.name}: {t.description[:100]}..." for t in self.tools])
+        prompt = f"""You have these tools available:
+{tools_desc}
+
+To use a tool, output: assistantcommentary to=tool_name json{{"query": "your query"}}
+After getting results, provide your answer with: assistantfinal Your answer here
+
+Question: {input_text}"""
+
+        messages = [{"role": "user", "content": prompt}]
+
+        for iteration in range(max_iterations):
+            # Generate response
+            output, tokens = await self.model_manager.generate(messages, max_tokens=1024)
+            logger.info(f"🔄 Custom loop iteration {iteration + 1}: {output[:150]}...")
+
+            # Check for final answer
+            final_match = re.search(r'assistantfinal\s*(.*)', output, re.IGNORECASE | re.DOTALL)
+            if final_match:
+                final_answer = final_match.group(1).strip()
+                elapsed = time.time() - start_time
+                logger.info(f"✅ Custom loop completed in {elapsed:.2f}s with {len(tool_calls)} tool calls")
+                return {
+                    "output": final_answer if final_answer else output,
+                    "tokens_used": tokens,
+                    "tool_calls": tool_calls,
+                    "used_tools": len(tool_calls) > 0,
+                    "execution_time": elapsed
+                }
+
+            # Check for tool call in LLM's native format
+            tool_match = re.search(
+                r'(?:assistantcommentary|commentary)\s+to=(\w+)\s+(?:json|code)?\s*(\{[^}]+\})',
+                output,
+                re.IGNORECASE
+            )
+
+            if tool_match:
+                tool_name = tool_match.group(1).strip()
+                try:
+                    tool_args = json.loads(tool_match.group(2))
+                except json.JSONDecodeError:
+                    # Try to extract query from malformed JSON
+                    query_match = re.search(r'["\']query["\']\s*:\s*["\']([^"\']+)["\']', tool_match.group(2))
+                    tool_args = {"query": query_match.group(1) if query_match else input_text}
+
+                query = tool_args.get("query", input_text)
+
+                # Find and execute tool
+                tool_result = None
+                for tool in self.tools:
+                    if tool.name == tool_name or tool_name in tool.name:
+                        logger.info(f"🔧 Custom loop: Executing {tool.name} with query: '{query[:100]}'")
+                        try:
+                            tool_result = tool.run(query)
+                            tool_calls.append({
+                                "tool": tool.name,
+                                "input": query,
+                                "output": tool_result[:500] if tool_result else ""
+                            })
+                            logger.info(f"✅ Tool {tool.name} returned {len(tool_result) if tool_result else 0} chars")
+                        except Exception as e:
+                            logger.error(f"❌ Tool {tool.name} failed: {e}")
+                            tool_result = f"Error: {str(e)}"
+                        break
+
+                if tool_result:
+                    # Add tool result to messages and continue
+                    messages.append({"role": "assistant", "content": output})
+                    messages.append({
+                        "role": "user",
+                        "content": f"Observation from {tool_name}:\n{tool_result}\n\nNow provide your final answer with: assistantfinal Your answer"
                     })
+                    continue
 
-            result = await loop.run_in_executor(None, _run_agent)
+            # No tool call found and no final answer - try to extract useful content
+            if 'analysis' in output.lower() and iteration > 0:
+                # LLM is just thinking, might have useful content
+                elapsed = time.time() - start_time
+                # Try to extract any substantive content
+                content = re.sub(r'^analysis', '', output, flags=re.IGNORECASE).strip()
+                if len(content) > 100:
+                    return {
+                        "output": content,
+                        "tokens_used": tokens,
+                        "tool_calls": tool_calls,
+                        "used_tools": len(tool_calls) > 0,
+                        "execution_time": elapsed
+                    }
+
+            # Add response and prompt for tool use or final answer
+            messages.append({"role": "assistant", "content": output})
+            messages.append({
+                "role": "user",
+                "content": "Please either use a tool with 'assistantcommentary to=tool_name json{\"query\": \"...\"}' or provide your final answer with 'assistantfinal Your answer here'"
+            })
+
+        # Exhausted iterations - return what we have
+        elapsed = time.time() - start_time
+        logger.warning(f"⚠️ Custom loop exhausted {max_iterations} iterations")
+
+        # If we have tool results, try to summarize them
+        if tool_calls:
+            summary = "Based on the search results:\n"
+            for tc in tool_calls:
+                summary += f"\n{tc['output'][:1000]}"
+            return {
+                "output": summary,
+                "tokens_used": 0,
+                "tool_calls": tool_calls,
+                "used_tools": True,
+                "execution_time": elapsed
+            }
+
+        return None  # Let standard agent try
+
+    async def _run_standard_agent(self, input_text: str) -> Dict[str, Any]:
+        """
+        Run the standard ReAct agent.
+
+        Falls back to this if custom tool loop doesn't work.
+        """
+        import time
+
+        try:
+            start_time = time.time()
+            logger.info(f"🚀 Running standard agent for: {input_text[:100]}...")
+
+            # Invoke the agent
+            if USING_CLASSIC:
+                result = await self.agent.ainvoke({"input": input_text})
+            else:
+                result = await self.agent.ainvoke({"messages": [{"role": "user", "content": input_text}]})
 
             tool_calls = []
 
