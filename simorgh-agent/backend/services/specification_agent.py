@@ -6,9 +6,11 @@ This agent handles the complete specification extraction workflow through chat:
 2. Document upload handling
 3. Specification extraction using ITEM 1-11 scope
 4. Excel/CSV export generation
-5. PostgreSQL storage
+5. Neo4j graph storage via CoCoIndex
 
 The agent maintains state in Redis and runs entirely within the chat interface.
+
+REFACTORED: All Neo4j access now goes through CoCoIndex adapter.
 """
 
 import json
@@ -43,14 +45,32 @@ class AgentState(str, Enum):
 
 class SpecificationAgent:
     """
-    Stateful agent for specification extraction workflow
+    Stateful agent for specification extraction workflow.
+
+    REFACTORED: Uses CoCoIndex adapter for all Neo4j operations.
+    No direct Cypher queries - all graph access via CoCoIndex.
     """
 
-    def __init__(self, redis_service, llm_service, neo4j_service, qdrant_service):
+    def __init__(
+        self,
+        redis_service,
+        llm_service,
+        cocoindex_adapter,  # Changed from neo4j_service
+        qdrant_service,
+        neo4j_service=None  # Deprecated, kept for backward compatibility
+    ):
         self.redis = redis_service
         self.llm = llm_service
-        self.neo4j = neo4j_service
+        self.cocoindex = cocoindex_adapter  # CoCoIndex adapter for graph access
         self.qdrant = qdrant_service
+
+        # Backward compatibility - log deprecation warning
+        if neo4j_service is not None:
+            logger.warning("SpecificationAgent: neo4j_service parameter is deprecated. Use cocoindex_adapter instead.")
+            if cocoindex_adapter is None:
+                # Create adapter from neo4j_service driver if needed
+                from cocoindex_flows import CoCoIndexAdapter
+                self.cocoindex = CoCoIndexAdapter(driver=neo4j_service.driver)
 
     def _get_agent_session_key(self, chat_id: str) -> str:
         """Get Redis key for agent session"""
@@ -278,39 +298,58 @@ Please either:
         return extraction_result
 
     async def _use_existing_documents(self, chat_id: str, state: Dict[str, Any]) -> str:
-        """Use existing project documents for extraction"""
+        """Use existing project documents for extraction via CoCoIndex"""
 
         project_number = state.get("project_number")
         if not project_number:
-            return "❌ No project associated with this chat. Please upload documents manually."
+            return "Please upload documents manually."
 
-        logger.info(f"📚 Retrieving existing documents for project {project_number}")
+        logger.info(f"Retrieving existing documents for project {project_number}")
 
-        # Query Neo4j for project documents
+        # Query CoCoIndex for project specification documents
         try:
-            query = """
-            MATCH (p:Project {project_number: $project_number})-[:HAS_CATEGORY]->(cat)-[:HAS_TYPE]->(type)-[:CONTAINS]->(doc:Document)
-            WHERE type.type_name = 'Spec'
-            RETURN doc.doc_id AS doc_id, doc.filename AS filename
-            LIMIT 10
-            """
+            # Use CoCoIndex adapter to get spec documents
+            spec_docs = self.cocoindex.get_entities_by_type(
+                project_number=project_number,
+                entity_type="SpecificationDocument",
+                limit=10
+            )
 
-            with self.neo4j.driver.session() as session:
-                result = session.run(query, project_number=project_number)
-                documents = [dict(record) for record in result]
+            # Also try Document type with Spec filter
+            if not spec_docs:
+                all_docs = self.cocoindex.get_entities_by_type(
+                    project_number=project_number,
+                    entity_type="Document",
+                    limit=20
+                )
+                # Filter for spec documents
+                spec_docs = [
+                    doc for doc in all_docs
+                    if 'spec' in doc.get('filename', '').lower()
+                    or 'spec' in doc.get('document_type', '').lower()
+                ]
 
-            if not documents:
-                return f"""❌ No specification documents found for project `{project_number}`.
+            if not spec_docs:
+                return f"""No specification documents found for project `{project_number}`.
 
 Please upload at least one specification document to proceed."""
 
-            logger.info(f"✅ Found {len(documents)} existing documents")
+            # Format documents list
+            documents = [
+                {
+                    "doc_id": doc.get("entity_id", doc.get("doc_id")),
+                    "filename": doc.get("filename", "Unknown")
+                }
+                for doc in spec_docs
+            ]
+
+            logger.info(f"Found {len(documents)} existing documents via CoCoIndex")
 
             # Get markdown content from documents (from Qdrant or storage)
             combined_content = await self._retrieve_document_contents(project_number, documents)
 
             if not combined_content:
-                return "❌ Failed to retrieve document contents. Please upload documents manually."
+                return "Failed to retrieve document contents. Please upload documents manually."
 
             # Update state
             state["documents_processed"] = documents
@@ -326,8 +365,8 @@ Please upload at least one specification document to proceed."""
             )
 
         except Exception as e:
-            logger.error(f"❌ Failed to retrieve existing documents: {e}", exc_info=True)
-            return f"❌ Error retrieving existing documents: {str(e)}\n\nPlease upload documents manually."
+            logger.error(f"Failed to retrieve existing documents: {e}", exc_info=True)
+            return f"Error retrieving existing documents: {str(e)}\n\nPlease upload documents manually."
 
     async def _retrieve_document_contents(self, project_number: str, documents: List[Dict]) -> str:
         """Retrieve markdown content for documents from Qdrant"""
@@ -794,57 +833,162 @@ The extraction results have been saved to the project database for future refere
         results: List[Dict[str, Any]],
         state: Dict[str, Any]
     ) -> bool:
-        """Save extraction results to PostgreSQL"""
+        """Save extraction results to Neo4j via CoCoIndex"""
 
-        # This would connect to PostgreSQL and save results
-        # For now, we'll save to Neo4j as we don't have PostgreSQL set up yet
-
-        logger.info(f"💾 Saving {len(results)} extraction results to database...")
+        logger.info(f"Saving {len(results)} extraction results to database via CoCoIndex...")
 
         try:
             project_number = state.get("project_number")
 
             if not project_number:
-                logger.warning("⚠️ No project number, skipping database save")
+                logger.warning("No project number, skipping database save")
                 return False
 
-            # Save to Neo4j as SpecValue nodes
-            with self.neo4j.driver.session() as session:
-                for result in results:
-                    query = """
-                    MATCH (p:Project {project_number: $project_number})
-                    MERGE (p)-[:HAS_EXTRACTION]->(ext:SpecExtraction {
-                        param_id: $param_id,
-                        name: $name,
-                        value: $value,
-                        classification: $classification,
-                        unit: $unit,
-                        page_section: $page_section,
-                        source_text: $source_text,
-                        extracted_at: datetime(),
-                        extraction_session_id: $chat_id
-                    })
-                    """
+            # Ensure project exists
+            self.cocoindex.create_project(
+                project_number=project_number,
+                project_name=f"Project {project_number}"
+            )
 
-                    session.run(
-                        query,
-                        project_number=project_number,
-                        param_id=result.get("item_no"),
-                        name=result.get("sub_parameter"),
-                        value=result.get("extracted_value"),
-                        classification=result.get("classification"),
-                        unit=result.get("unit"),
-                        page_section=result.get("page_section"),
-                        source_text=result.get("source_text")[:500],  # Truncate long text
-                        chat_id=chat_id
-                    )
+            # Create extraction session entity
+            session_id = f"extraction_{chat_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            self.cocoindex.create_entity(
+                project_number=project_number,
+                entity_type="SpecExtraction",
+                entity_id=session_id,
+                properties={
+                    "chat_id": chat_id,
+                    "extracted_at": datetime.now().isoformat(),
+                    "total_parameters": len(results)
+                }
+            )
 
-            logger.info(f"✅ Saved {len(results)} results to Neo4j")
+            # Save each extraction result as an entity
+            entities_to_create = []
+            relationships_to_create = []
+
+            for idx, result in enumerate(results):
+                param_id = f"{session_id}_param_{idx}"
+
+                # Create extraction result entity
+                entities_to_create.append({
+                    "entity_type": "ExtractedParameter",
+                    "entity_id": param_id,
+                    "properties": {
+                        "item_no": result.get("item_no", "-"),
+                        "name": result.get("sub_parameter", ""),
+                        "value": result.get("extracted_value", ""),
+                        "classification": result.get("classification", "VALUE_PARAMETER"),
+                        "unit": result.get("unit", "-"),
+                        "page_section": result.get("page_section", "-"),
+                        "source_text": str(result.get("source_text", ""))[:500],
+                        "extraction_session": session_id
+                    }
+                })
+
+                # Link to extraction session
+                relationships_to_create.append({
+                    "from_id": session_id,
+                    "to_id": param_id,
+                    "type": "HAS_PARAMETER"
+                })
+
+            # Batch create entities and relationships
+            self.cocoindex.batch_create_entities(project_number, entities_to_create)
+            self.cocoindex.batch_create_relationships(project_number, relationships_to_create)
+
+            logger.info(f"Saved {len(results)} results to Neo4j via CoCoIndex")
             return True
 
         except Exception as e:
-            logger.error(f"❌ Database save failed: {e}", exc_info=True)
+            logger.error(f"Database save failed: {e}", exc_info=True)
             return False
+
+    def generate_report_from_graph(
+        self,
+        project_number: str,
+        document_id: str = None
+    ) -> Dict[str, Any]:
+        """
+        Generate specification report from graph data.
+
+        This method queries the CoCoIndex graph to gather all specification
+        data and formats it as a comprehensive report.
+
+        Args:
+            project_number: Project identifier
+            document_id: Optional specific document ID
+
+        Returns:
+            Report data with categories, fields, and values
+        """
+        logger.info(f"Generating report from graph for project {project_number}")
+
+        try:
+            report = {
+                "project_number": project_number,
+                "generated_at": datetime.now().isoformat(),
+                "categories": {},
+                "total_fields": 0,
+                "total_values": 0
+            }
+
+            # Get all spec documents
+            if document_id:
+                spec_data = self.cocoindex.get_full_specification(
+                    project_number=project_number,
+                    document_id=document_id
+                )
+                if spec_data:
+                    report["documents"] = {document_id: spec_data}
+            else:
+                # Get all specification documents
+                spec_docs = self.cocoindex.get_entities_by_type(
+                    project_number=project_number,
+                    entity_type="SpecificationDocument",
+                    limit=50
+                )
+
+                report["documents"] = {}
+                for doc in spec_docs:
+                    doc_id = doc.get("entity_id")
+                    if doc_id:
+                        doc_specs = self.cocoindex.get_full_specification(
+                            project_number=project_number,
+                            document_id=doc_id
+                        )
+                        if doc_specs:
+                            report["documents"][doc_id] = doc_specs
+
+            # Aggregate categories across all documents
+            for doc_id, doc_specs in report.get("documents", {}).items():
+                for category_name, fields in doc_specs.items():
+                    if category_name not in report["categories"]:
+                        report["categories"][category_name] = {}
+
+                    for field_name, field_data in fields.items():
+                        report["total_fields"] += 1
+                        if field_data.get("value"):
+                            report["total_values"] += 1
+
+                        # Store field data, merging from multiple documents
+                        if field_name not in report["categories"][category_name]:
+                            report["categories"][category_name][field_name] = field_data
+                        else:
+                            # Keep the one with higher confidence
+                            existing = report["categories"][category_name][field_name]
+                            if (field_data.get("confidence") == "high" and
+                                existing.get("confidence") != "high"):
+                                report["categories"][category_name][field_name] = field_data
+
+            logger.info(f"Report generated: {len(report['categories'])} categories, "
+                       f"{report['total_values']}/{report['total_fields']} values")
+
+            return report
+
+        except Exception as e:
+            logger.error(f"Report generation failed: {e}")
+            return {"error": str(e)}
 
     async def _handle_completed_state(
         self,
