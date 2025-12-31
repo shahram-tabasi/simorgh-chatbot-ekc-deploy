@@ -1610,11 +1610,15 @@ async def send_chat_message(
 
             # Initialize agent
             from services.specification_agent import SpecificationAgent
+            from cocoindex_flows import CoCoIndexAdapter
+
+            # Create CoCoIndex adapter from Neo4j driver
+            cocoindex_adapter = CoCoIndexAdapter(driver=neo4j.driver)
 
             agent = SpecificationAgent(
                 redis_service=redis,
                 llm_service=llm,
-                neo4j_service=neo4j,
+                cocoindex_adapter=cocoindex_adapter,
                 qdrant_service=get_qdrant_service()
             )
 
@@ -1684,11 +1688,15 @@ async def send_chat_message(
         # AGENT CONTINUATION: Check if agent is active for this chat
         # ============================================================
         from services.specification_agent import SpecificationAgent
+        from cocoindex_flows import CoCoIndexAdapter
+
+        # Create CoCoIndex adapter from Neo4j driver
+        cocoindex_adapter = CoCoIndexAdapter(driver=neo4j.driver)
 
         agent = SpecificationAgent(
             redis_service=redis,
             llm_service=llm,
-            neo4j_service=neo4j,
+            cocoindex_adapter=cocoindex_adapter,
             qdrant_service=get_qdrant_service()
         )
 
