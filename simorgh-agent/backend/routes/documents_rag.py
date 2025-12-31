@@ -631,18 +631,32 @@ async def project_chat(
 
         logger.info(f"📊 Querying project graph: {chat_request.project_oenum}")
 
-        if chat_request.use_hybrid:
-            # Hybrid: Graph + Vector with SESSION ISOLATION
-            logger.info(f"🔀 Using hybrid mode with session-isolated vector search")
+        # ✅ ALWAYS search project documents (stored under user_id="system")
+        # This ensures uploaded documents are always accessible regardless of use_hybrid flag
+        from services.section_retriever import SectionRetriever
+        section_retriever = SectionRetriever(
+            llm_service=llm_service,
+            qdrant_service=qdrant_service
+        )
 
-            # Search only in project-specific collection
-            vector_results = qdrant_service.semantic_search(
-                user_id=chat_request.user_id,
-                query=chat_request.message,
-                limit=5,
-                score_threshold=0.7,
-                project_oenum=chat_request.project_oenum  # ✅ Project session isolation
+        document_sections = section_retriever.retrieve_relevant_sections(
+            project_number=chat_request.project_oenum,
+            query=chat_request.message,
+            limit=5,
+            score_threshold=0.5
+        )
+
+        doc_context = ""
+        if document_sections.get("success") and document_sections.get("sections"):
+            doc_context = section_retriever.format_sections_for_context(
+                sections=document_sections["sections"],
+                max_sections=3
             )
+            logger.info(f"📄 Found {len(document_sections['sections'])} relevant document sections")
+
+        if chat_request.use_hybrid:
+            # Hybrid: Graph + Vector (with document sections already retrieved above)
+            logger.info(f"🔀 Using hybrid mode with graph + document context")
 
             # Check cancellation before graph query
             await CancellationService.check_cancelled(cancellation_token)
@@ -650,12 +664,12 @@ async def project_chat(
             result = await graph_rag.hybrid_search(
                 project_oenum=chat_request.project_oenum,
                 user_query=chat_request.message,
-                vector_results=vector_results,
+                vector_results=[],  # Document sections handled separately above
                 project_context=project_context,
                 max_hops=chat_request.max_hops
             )
         else:
-            # Graph only
+            # Graph only mode (but still includes document context)
             # Check cancellation before graph query
             await CancellationService.check_cancelled(cancellation_token)
 
@@ -672,8 +686,12 @@ async def project_chat(
 
         graph_context = result['context']
 
+        # Combine graph and document context
+        if doc_context:
+            graph_context = f"{graph_context}\n\n{doc_context}"
+
         # ✅ STEP 3: Build comprehensive LLM prompt
-        system_prompt = f"""You are Simorgh, an expert industrial electrical engineer assistant working on Project {request.project_oenum}.
+        system_prompt = f"""You are Simorgh, an expert industrial electrical engineer assistant working on Project {chat_request.project_oenum}.
 
 Project: {project_context}
 
@@ -729,6 +747,7 @@ Be conversational and maintain context from past project discussions."""
             "response": ai_response,
             "project_oenum": chat_request.project_oenum,
             "past_conversations_used": len(relevant_conversations),
+            "document_sections_used": len(document_sections.get("sections", [])),
             "graph_stats": result.get('stats', {}),
             "mode": llm_result.get('mode'),
             "tokens": llm_result.get('tokens')

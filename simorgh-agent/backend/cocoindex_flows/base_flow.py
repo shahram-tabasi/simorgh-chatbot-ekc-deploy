@@ -252,9 +252,12 @@ class BaseDocumentFlow(ABC):
         """
         Store extracted entities and relationships to Neo4j.
 
+        IMPORTANT: Links entities to the Document node (not just Project).
+        The Document node uses 'id' as identifier, while other entities use 'entity_id'.
+
         Args:
             project_number: Project context
-            document_id: Document identifier
+            document_id: Document identifier (matches Document.id)
             extraction_result: Extraction results
             metadata: Additional metadata
 
@@ -262,25 +265,27 @@ class BaseDocumentFlow(ABC):
             Storage statistics
         """
         try:
-            # Create document node
+            # Update existing Document node properties (don't create separate document entity)
+            # Document nodes use 'id' not 'entity_id'
             doc_props = {
-                "filename": metadata.get("filename", "") if metadata else "",
                 "document_type": self.document_type,
                 "entities_count": len(extraction_result.entities),
-                "processed_at": "datetime()",
-                **(metadata or {})
             }
 
-            self.adapter.create_entity(
+            # Update Document node via direct query
+            self._update_document_properties(
                 project_number=project_number,
-                entity_type=f"{self.document_type}Document",
-                entity_id=document_id,
+                document_id=document_id,
                 properties=doc_props
             )
 
-            # Create entities
+            # Create entities (except the SpecificationDocument which is the Document itself)
             entities_created = 0
             for entity in extraction_result.entities:
+                # Skip creating separate document entity - we use the existing Document node
+                if entity.entity_type.endswith("Document"):
+                    continue
+
                 props = {
                     **entity.properties,
                     "source_text": entity.source_text,
@@ -295,16 +300,27 @@ class BaseDocumentFlow(ABC):
                 )
                 entities_created += 1
 
-            # Create relationships
+            # Create relationships with special handling for Document source
             relationships_created = 0
             for rel in extraction_result.relationships:
-                success = self.adapter.create_relationship(
-                    project_number=project_number,
-                    from_entity_id=rel.from_entity_id,
-                    to_entity_id=rel.to_entity_id,
-                    relationship_type=rel.relationship_type,
-                    properties=rel.properties
-                )
+                # Handle relationships FROM Document node (uses 'id' not 'entity_id')
+                if rel.from_entity_id == document_id:
+                    success = self._create_document_relationship(
+                        project_number=project_number,
+                        document_id=document_id,
+                        to_entity_id=rel.to_entity_id,
+                        relationship_type=rel.relationship_type,
+                        properties=rel.properties
+                    )
+                else:
+                    # Normal entity-to-entity relationship
+                    success = self.adapter.create_relationship(
+                        project_number=project_number,
+                        from_entity_id=rel.from_entity_id,
+                        to_entity_id=rel.to_entity_id,
+                        relationship_type=rel.relationship_type,
+                        properties=rel.properties
+                    )
                 if success:
                     relationships_created += 1
 
@@ -320,6 +336,94 @@ class BaseDocumentFlow(ABC):
                 "success": False,
                 "error": str(e)
             }
+
+    def _update_document_properties(
+        self,
+        project_number: str,
+        document_id: str,
+        properties: Dict[str, Any]
+    ) -> bool:
+        """
+        Update properties on existing Document node.
+
+        Document nodes use 'id' as identifier (not 'entity_id').
+        """
+        try:
+            with self.adapter.driver.session() as session:
+                # Build SET clause for properties
+                set_clauses = []
+                params = {
+                    "doc_id": document_id,
+                    "project_number": project_number
+                }
+
+                for key, value in properties.items():
+                    param_name = f"prop_{key}"
+                    set_clauses.append(f"doc.{key} = ${param_name}")
+                    params[param_name] = value
+
+                set_clause = ", ".join(set_clauses) if set_clauses else "doc.updated_at = datetime()"
+
+                query = f"""
+                MATCH (doc:Document {{id: $doc_id, project_number: $project_number}})
+                SET {set_clause}, doc.extraction_completed_at = datetime()
+                RETURN doc.id as id
+                """
+
+                result = session.run(query, params)
+                record = result.single()
+                return record is not None
+
+        except Exception as e:
+            logger.error(f"Failed to update document properties: {e}")
+            return False
+
+    def _create_document_relationship(
+        self,
+        project_number: str,
+        document_id: str,
+        to_entity_id: str,
+        relationship_type: str,
+        properties: Dict[str, Any] = None
+    ) -> bool:
+        """
+        Create relationship from Document node to another entity.
+
+        Document nodes use 'id' as identifier, while other entities use 'entity_id'.
+        This method handles the asymmetric matching.
+        """
+        try:
+            safe_rel_type = relationship_type.replace(" ", "_").replace("-", "_").upper()
+
+            with self.adapter.driver.session() as session:
+                query = f"""
+                MATCH (doc:Document {{id: $doc_id, project_number: $project_number}})
+                MATCH (target {{entity_id: $to_id, project_number: $project_number}})
+                MERGE (doc)-[r:{safe_rel_type}]->(target)
+                SET r += $properties,
+                    r.created_at = coalesce(r.created_at, datetime())
+                RETURN r IS NOT NULL as created
+                """
+
+                result = session.run(query, {
+                    "doc_id": document_id,
+                    "project_number": project_number,
+                    "to_id": to_entity_id,
+                    "properties": properties or {}
+                })
+                record = result.single()
+                success = record["created"] if record else False
+
+                if success:
+                    logger.debug(f"Created Document->{relationship_type}->{to_entity_id}")
+                else:
+                    logger.warning(f"Failed to create Document relationship: {document_id} -> {to_entity_id}")
+
+                return success
+
+        except Exception as e:
+            logger.error(f"Failed to create document relationship: {e}")
+            return False
 
     def get_extraction_prompt(
         self,
