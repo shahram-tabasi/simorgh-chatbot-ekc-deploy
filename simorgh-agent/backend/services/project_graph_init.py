@@ -277,51 +277,102 @@ class ProjectGraphInitializer:
         doc_type: str,  # e.g., 'Spec', 'DataSheet'
         document_id: str,
         document_metadata: Dict[str, Any]
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """
-        Add a document node to the project structure
+        Add a document node to the project structure with duplicate detection.
+
+        Documents are uniquely identified by filename + project_number.
+        If a document with the same filename already exists, it returns the existing document.
 
         Args:
             project_oenum: Project OENUM
             category: Main category (Client/Ekc)
             doc_type: Document type
-            document_id: Unique document identifier
-            document_metadata: Additional document metadata
+            document_id: Unique document identifier (used if creating new)
+            document_metadata: Additional document metadata (must include 'filename')
 
         Returns:
-            Success boolean
+            Dict with keys:
+                - success: bool
+                - is_duplicate: bool (True if document already existed)
+                - document_id: str (ID of existing or new document)
+                - filename: str
         """
+        filename = document_metadata.get('filename', '')
+
+        if not filename:
+            logger.error("❌ Document metadata must include 'filename'")
+            return {"success": False, "is_duplicate": False, "document_id": None, "filename": None}
+
         with self.driver.session() as session:
-            query = """
+            # First check if document with same filename already exists
+            check_query = """
             MATCH (p:Project {project_number: $oenum})
-            MATCH (p)-[:HAS_CATEGORY]->(:Category {name: 'Document'})-[:HAS_SUBCATEGORY*0..1]->(cat:Category)
-            MATCH (cat)-[:HAS_TYPE]->(type:DocumentType {name: $doc_type})
-            WHERE cat.name = $category OR cat.name = 'DocumentIndex' OR cat.name = 'OrderList' OR cat.name = 'TechnicalCalculation'
-
-            MERGE (doc:Document {id: $doc_id, project_number: $oenum})
-            SET doc += $metadata
-            SET doc.indexed_at = datetime()
-
-            MERGE (type)-[:HAS_DOCUMENT]->(doc)
-            MERGE (doc)-[:BELONGS_TO_PROJECT]->(p)
-
-            RETURN doc
+            MATCH (doc:Document {project_number: $oenum})
+            WHERE doc.filename = $filename
+            RETURN doc.id as doc_id, doc.filename as filename
             """
 
             try:
-                result = session.run(query,
+                check_result = session.run(check_query, oenum=project_oenum, filename=filename)
+                existing = check_result.single()
+
+                if existing:
+                    logger.info(f"📄 Document '{filename}' already exists in project {project_oenum}, reusing existing node")
+                    return {
+                        "success": True,
+                        "is_duplicate": True,
+                        "document_id": existing["doc_id"],
+                        "filename": existing["filename"]
+                    }
+
+                # Document doesn't exist, create new one
+                # MERGE by filename + project_number for uniqueness
+                create_query = """
+                MATCH (p:Project {project_number: $oenum})
+                MATCH (p)-[:HAS_CATEGORY]->(:Category {name: 'Document'})-[:HAS_SUBCATEGORY*0..1]->(cat:Category)
+                MATCH (cat)-[:HAS_TYPE]->(type:DocumentType {name: $doc_type})
+                WHERE cat.name = $category OR cat.name = 'DocumentIndex' OR cat.name = 'OrderList' OR cat.name = 'TechnicalCalculation'
+
+                MERGE (doc:Document {filename: $filename, project_number: $oenum})
+                ON CREATE SET
+                    doc.id = $doc_id,
+                    doc.name = $filename,
+                    doc.created_at = datetime()
+                SET doc += $metadata
+                SET doc.indexed_at = datetime()
+
+                MERGE (type)-[:HAS_DOCUMENT]->(doc)
+                MERGE (doc)-[:BELONGS_TO_PROJECT]->(p)
+
+                RETURN doc.id as doc_id, doc.filename as filename
+                """
+
+                result = session.run(create_query,
                     oenum=project_oenum,
                     category=category,
                     doc_type=doc_type,
                     doc_id=document_id,
+                    filename=filename,
                     metadata=document_metadata
                 )
                 record = result.single()
-                return record is not None
+
+                if record:
+                    logger.info(f"✅ Created new document node: {filename} ({record['doc_id']})")
+                    return {
+                        "success": True,
+                        "is_duplicate": False,
+                        "document_id": record["doc_id"],
+                        "filename": record["filename"]
+                    }
+                else:
+                    logger.error(f"❌ Failed to create document node for {filename}")
+                    return {"success": False, "is_duplicate": False, "document_id": None, "filename": filename}
 
             except Exception as e:
                 logger.error(f"❌ Failed to add document: {e}")
-                return False
+                return {"success": False, "is_duplicate": False, "document_id": None, "filename": filename, "error": str(e)}
 
     def add_spec_structure_to_document(
         self,

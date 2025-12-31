@@ -799,6 +799,134 @@ class CoCoIndexAdapter:
 
         return count
 
+    # =========================================================================
+    # DOCUMENT OPERATIONS (Special handling for Document nodes)
+    # =========================================================================
+
+    def get_project_documents(
+        self,
+        project_number: str,
+        doc_type: str = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Get documents for a project with optional type filter.
+
+        Documents are stored differently from other entities - they use
+        'filename' as identifier and 'id' as UUID, not 'entity_id'.
+
+        Args:
+            project_number: Project identifier
+            doc_type: Optional document type filter (e.g., 'Spec', 'DataSheet')
+            limit: Max results
+
+        Returns:
+            List of document dictionaries
+        """
+        with self.driver.session() as session:
+            if doc_type:
+                query = """
+                MATCH (doc:Document {project_number: $project_number})
+                WHERE doc.doc_type = $doc_type OR doc.category = $doc_type
+                RETURN doc {.*, labels: labels(doc)} as document
+                ORDER BY doc.indexed_at DESC
+                LIMIT $limit
+                """
+                params = {
+                    "project_number": project_number,
+                    "doc_type": doc_type,
+                    "limit": limit
+                }
+            else:
+                query = """
+                MATCH (doc:Document {project_number: $project_number})
+                RETURN doc {.*, labels: labels(doc)} as document
+                ORDER BY doc.indexed_at DESC
+                LIMIT $limit
+                """
+                params = {
+                    "project_number": project_number,
+                    "limit": limit
+                }
+
+            try:
+                result = session.run(query, params)
+                return [dict(record["document"]) for record in result]
+            except Exception as e:
+                logger.error(f"Failed to get project documents: {e}")
+                return []
+
+    def get_document_by_filename(
+        self,
+        project_number: str,
+        filename: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific document by filename.
+
+        Args:
+            project_number: Project identifier
+            filename: Document filename
+
+        Returns:
+            Document dictionary or None
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (doc:Document {project_number: $project_number, filename: $filename})
+            RETURN doc {.*, labels: labels(doc)} as document
+            """
+
+            try:
+                result = session.run(query, {
+                    "project_number": project_number,
+                    "filename": filename
+                })
+                record = result.single()
+                return dict(record["document"]) if record else None
+            except Exception as e:
+                logger.error(f"Failed to get document by filename: {e}")
+                return None
+
+    def get_spec_documents(
+        self,
+        project_number: str,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Get specification documents for a project.
+
+        Filters for documents with type 'Spec' or containing 'spec' in filename.
+
+        Args:
+            project_number: Project identifier
+            limit: Max results
+
+        Returns:
+            List of spec document dictionaries
+        """
+        with self.driver.session() as session:
+            query = """
+            MATCH (doc:Document {project_number: $project_number})
+            WHERE doc.doc_type = 'Spec'
+                OR doc.category = 'Spec'
+                OR toLower(doc.filename) CONTAINS 'spec'
+                OR toLower(doc.name) CONTAINS 'spec'
+            RETURN doc {.*, labels: labels(doc)} as document
+            ORDER BY doc.indexed_at DESC
+            LIMIT $limit
+            """
+
+            try:
+                result = session.run(query, {
+                    "project_number": project_number,
+                    "limit": limit
+                })
+                return [dict(record["document"]) for record in result]
+            except Exception as e:
+                logger.error(f"Failed to get spec documents: {e}")
+                return []
+
 
 # =============================================================================
 # SINGLETON INSTANCE

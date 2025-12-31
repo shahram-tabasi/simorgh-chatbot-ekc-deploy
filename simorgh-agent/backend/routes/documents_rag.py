@@ -210,11 +210,11 @@ async def process_and_index_document(
                 else:
                     logger.warning(f"⚠️ Vector indexing failed: {index_result.get('error')}")
 
-        # 3. Add to graph structure if project document
+        # 3. Add to graph structure if project document (with duplicate detection)
         if project_oenum and graph_init:
             logger.info(f"📊 Adding to project graph: {project_oenum}")
 
-            success = graph_init.add_document_to_structure(
+            doc_result = graph_init.add_document_to_structure(
                 project_oenum=project_oenum,
                 category=category,
                 doc_type=doc_type,
@@ -230,7 +230,14 @@ async def process_and_index_document(
                 }
             )
 
-            if not success:
+            if doc_result and doc_result.get('success'):
+                if doc_result.get('is_duplicate'):
+                    # Use the existing document ID
+                    doc_id = doc_result.get('document_id', doc_id)
+                    logger.info(f"📄 Reusing existing document: {file_path.name} ({doc_id})")
+                else:
+                    logger.info(f"✅ Added new document to graph: {doc_id}")
+            else:
                 logger.warning(f"⚠️ Failed to add document to graph structure")
 
             # ============================================================
