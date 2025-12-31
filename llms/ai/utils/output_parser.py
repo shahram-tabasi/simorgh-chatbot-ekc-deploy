@@ -1,18 +1,13 @@
 """
-Output Parser for LLM Responses
+Output Parser for LLM Responses - Robust Version
 
 Extracts the final answer from LLM responses, filtering out:
-- Thinking/reasoning sections
-- Internal analysis
-- Chain of thought markers
-- Tool call traces
+- Thinking/reasoning sections (analysis, thinking, etc.)
+- Tool call markers (assistantcommentary to=X json{...})
+- Chain of thought traces
+- Internal markers and formatting
 
-Supports various LLM output formats including:
-- DeepSeek-style thinking tags (<think>...</think>)
-- Claude-style thinking tags (<thinking>...</thinking>)
-- Custom markers (analysis, reasoning, etc.)
-- Plain text markers (analysisXXX...assistantfinalYYY)
-- ReAct format (Thought/Action/Observation)
+Designed to ALWAYS return clean, user-facing content regardless of LLM output format.
 """
 
 import re
@@ -24,64 +19,90 @@ logger = logging.getLogger(__name__)
 
 class OutputParser:
     """
-    Parser to extract clean final answers from LLM responses.
+    Robust parser to extract clean final answers from LLM responses.
 
-    Removes thinking/reasoning sections and returns only the user-facing content.
+    Guarantees clean output by:
+    1. First trying to extract explicit final answer markers
+    2. Removing all known internal markers
+    3. Extracting meaningful content from what remains
+    4. Final sanitization to catch any edge cases
     """
 
-    # Patterns for thinking/reasoning sections to remove
+    # =========================================================================
+    # INTERNAL MARKERS TO REMOVE (tool calls, analysis, etc.)
+    # =========================================================================
+    INTERNAL_MARKER_PATTERNS = [
+        # Tool call patterns - comprehensive matching
+        (r'assistantcommentary\s+to=\w+\s*(?:json|code)?\s*\{[^}]*\}', re.IGNORECASE),
+        (r'commentary\s+to=\w+\s*(?:json|code)?\s*\{[^}]*\}', re.IGNORECASE),
+        (r'assistantcommentary\s+to=\w+[^\n]*', re.IGNORECASE),
+        (r'commentary\s+to=\w+[^\n]*', re.IGNORECASE),
+
+        # Analysis/thinking markers (plain text, not XML)
+        (r'^analysis\s*', re.IGNORECASE | re.MULTILINE),
+        (r'\banalysis\s*$', re.IGNORECASE | re.MULTILINE),
+
+        # Assistant channel markers from Harmony format
+        (r'assistant(?:analysis|commentary|final|thinking)\s*', re.IGNORECASE),
+
+        # JSON-like tool call remnants
+        (r'\{["\']query["\']\s*:\s*["\'][^"\']*["\']\s*\}', 0),
+
+        # Repeated content markers (LLM sometimes duplicates)
+        (r'(.{50,}?)\1+', 0),  # Remove exact duplicates
+    ]
+
+    # =========================================================================
+    # THINKING PATTERNS TO REMOVE (XML-style tags)
+    # =========================================================================
     THINKING_PATTERNS = [
-        # DeepSeek thinking tags
+        # DeepSeek/Claude thinking tags
         (r'<think>.*?</think>', re.DOTALL | re.IGNORECASE),
         (r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE),
 
-        # Reasoning tags
+        # Reasoning/analysis tags
         (r'<reasoning>.*?</reasoning>', re.DOTALL | re.IGNORECASE),
         (r'<reason>.*?</reason>', re.DOTALL | re.IGNORECASE),
-
-        # Analysis tags
         (r'<analysis>.*?</analysis>', re.DOTALL | re.IGNORECASE),
         (r'<analyze>.*?</analyze>', re.DOTALL | re.IGNORECASE),
 
-        # Internal tags
+        # Internal/scratchpad tags
         (r'<internal>.*?</internal>', re.DOTALL | re.IGNORECASE),
         (r'<scratchpad>.*?</scratchpad>', re.DOTALL | re.IGNORECASE),
         (r'<scratch>.*?</scratch>', re.DOTALL | re.IGNORECASE),
 
-        # Chain of thought tags
+        # Chain of thought
         (r'<cot>.*?</cot>', re.DOTALL | re.IGNORECASE),
         (r'<chain_of_thought>.*?</chain_of_thought>', re.DOTALL | re.IGNORECASE),
 
-        # Planning tags
+        # Planning
         (r'<plan>.*?</plan>', re.DOTALL | re.IGNORECASE),
         (r'<planning>.*?</planning>', re.DOTALL | re.IGNORECASE),
-
-        # Step-by-step thinking
         (r'<step>.*?</step>', re.DOTALL | re.IGNORECASE),
         (r'<steps>.*?</steps>', re.DOTALL | re.IGNORECASE),
     ]
 
-    # Patterns for extracting final answer (checked FIRST - order matters!)
+    # =========================================================================
+    # FINAL ANSWER EXTRACTION PATTERNS (priority order)
+    # =========================================================================
     FINAL_ANSWER_PATTERNS = [
-        # Plain text "assistantfinal" marker (most common for this model)
-        # Matches: "analysisXXX...assistantfinal## Answer" -> captures "## Answer"
-        (r'assistantfinal(.*)', re.DOTALL | re.IGNORECASE),
+        # Harmony format - assistantfinal marker (most common)
+        (r'assistantfinal\s*(.*)', re.DOTALL | re.IGNORECASE),
 
-        # Plain text "final" marker after "analysis" section
-        (r'analysis.*?final(.*)', re.DOTALL | re.IGNORECASE),
-
-        # Explicit final answer tags
+        # Standard final answer markers
         (r'<final[_\s]?answer>(.*?)</final[_\s]?answer>', re.DOTALL | re.IGNORECASE),
         (r'<answer>(.*?)</answer>', re.DOTALL | re.IGNORECASE),
         (r'<response>(.*?)</response>', re.DOTALL | re.IGNORECASE),
         (r'<output>(.*?)</output>', re.DOTALL | re.IGNORECASE),
 
-        # Final markers (for ReAct and similar patterns)
+        # ReAct format
         (r'Final Answer:\s*(.*?)(?:\n\n|$)', re.DOTALL | re.IGNORECASE),
         (r'Answer:\s*(.*?)(?:\n\n|$)', re.DOTALL | re.IGNORECASE),
     ]
 
-    # ReAct pattern markers to remove
+    # =========================================================================
+    # ReAct pattern markers
+    # =========================================================================
     REACT_PATTERNS = [
         (r'Thought:\s*.*?(?=Action:|Observation:|Final Answer:|$)', re.DOTALL | re.IGNORECASE),
         (r'Action:\s*.*?(?=Action Input:|Observation:|$)', re.DOTALL | re.IGNORECASE),
@@ -89,20 +110,12 @@ class OutputParser:
         (r'Observation:\s*.*?(?=Thought:|Final Answer:|$)', re.DOTALL | re.IGNORECASE),
     ]
 
-    # Patterns for LLM internal markers to remove (tool calls, analysis, etc.)
-    INTERNAL_MARKER_PATTERNS = [
-        # Tool call markers - remove everything from assistantcommentary to end of JSON
-        (r'assistantcommentary\s+to=\w+\s*(?:json|code)?\s*\{[^}]+\}', re.IGNORECASE),
-        # Analysis prefix
-        (r'^analysis', re.IGNORECASE),
-        # Commentary markers without full tool call
-        (r'commentary\s+to=\w+[^\n]*', re.IGNORECASE),
-    ]
-
     @classmethod
     def parse(cls, raw_response: str, preserve_markdown: bool = True) -> str:
         """
         Parse LLM response and extract clean final answer.
+
+        This is the MAIN entry point. Guarantees clean output.
 
         Args:
             raw_response: Raw LLM output that may contain thinking/reasoning
@@ -112,64 +125,47 @@ class OutputParser:
             Clean final answer suitable for user display
         """
         if not raw_response:
-            return raw_response
+            return ""
 
         original_length = len(raw_response)
         response = raw_response
 
-        # Step 0: Remove tool call markers (assistantcommentary to=X json{...})
-        # This handles cases where the LLM returns partial tool calls
-        for pattern, flags in cls.INTERNAL_MARKER_PATTERNS:
-            response = re.sub(pattern, '', response, flags=flags)
-        response = response.strip()
-
-        # Log if we cleaned internal markers
-        if len(response) != original_length:
-            logger.info(f"📝 Removed internal markers: {original_length} -> {len(response)} chars")
-
-        # Step 1: Check for plain text "analysis...assistantfinal" format (most common)
-        if 'assistantfinal' in response.lower():
-            # Extract everything after "assistantfinal"
-            match = re.search(r'assistantfinal(.*)', response, re.DOTALL | re.IGNORECASE)
-            if match:
-                final_content = match.group(1).strip()
-                if final_content:
-                    logger.info(f"📝 Extracted after 'assistantfinal': {original_length} -> {len(final_content)} chars")
-                    return cls._clean_response(final_content, preserve_markdown)
-
-        # Step 2: Check for "analysis...final" format without "assistant" prefix
-        if response.lower().startswith('analysis') and 'final' in response.lower():
-            match = re.search(r'final(.*)', response, re.DOTALL | re.IGNORECASE)
-            if match:
-                final_content = match.group(1).strip()
-                if final_content:
-                    logger.info(f"📝 Extracted after 'final': {original_length} -> {len(final_content)} chars")
-                    return cls._clean_response(final_content, preserve_markdown)
-
-        # Step 2b: Handle incomplete responses that start with "analysis" but never reach "assistantfinal"
-        # This happens when LLM runs out of tokens before completing its thinking
-        if response.lower().startswith('analysis') and 'assistantfinal' not in response.lower():
-            # Try to extract the most useful content from the analysis
-            extracted = cls._extract_from_incomplete_analysis(response)
-            if extracted:
-                logger.info(f"📝 Extracted from incomplete analysis: {original_length} -> {len(extracted)} chars")
-                return cls._clean_response(extracted, preserve_markdown)
-
-        # Step 3: Try to extract explicit final answer markers
+        # =====================================================================
+        # STEP 1: Try to extract explicit final answer (most reliable)
+        # =====================================================================
         final_answer = cls._extract_final_answer(response)
-        if final_answer:
-            logger.info(f"📝 Extracted explicit final answer: {original_length} -> {len(final_answer)} chars")
-            return cls._clean_response(final_answer, preserve_markdown)
+        if final_answer and len(final_answer) > 20:
+            logger.info(f"📝 Extracted final answer: {original_length} -> {len(final_answer)} chars")
+            return cls._sanitize_output(final_answer, preserve_markdown)
 
-        # Step 4: Remove thinking/reasoning sections (XML tags)
+        # =====================================================================
+        # STEP 2: Remove all internal markers
+        # =====================================================================
+        response = cls._remove_internal_markers(response)
+
+        # =====================================================================
+        # STEP 3: Remove XML-style thinking sections
+        # =====================================================================
         response = cls._remove_thinking_sections(response)
 
-        # Step 5: Handle ReAct format if detected
+        # =====================================================================
+        # STEP 4: Handle ReAct format if detected
+        # =====================================================================
         if cls._is_react_format(response):
             response = cls._extract_from_react(response)
 
-        # Step 6: Clean up the response
-        response = cls._clean_response(response, preserve_markdown)
+        # =====================================================================
+        # STEP 5: If still looks like incomplete analysis, try to extract content
+        # =====================================================================
+        if cls._looks_like_internal_content(response):
+            extracted = cls._extract_meaningful_content(response)
+            if extracted and len(extracted) > 50:
+                response = extracted
+
+        # =====================================================================
+        # STEP 6: Final sanitization
+        # =====================================================================
+        response = cls._sanitize_output(response, preserve_markdown)
 
         if len(response) != original_length:
             logger.info(f"📝 Output parsed: {original_length} -> {len(response)} chars")
@@ -183,126 +179,28 @@ class OutputParser:
             match = re.search(pattern, response, flags)
             if match:
                 content = match.group(1).strip()
-                if content:
+                if content and len(content) > 10:
                     return content
         return None
 
     @classmethod
-    def _extract_from_incomplete_analysis(cls, response: str) -> Optional[str]:
-        """
-        Extract useful content from an incomplete analysis response.
-
-        This handles cases where the LLM started with 'analysis' but ran out
-        of tokens before reaching 'assistantfinal'.
-        """
-        # Remove the "analysis" prefix
-        content = response
-        if content.lower().startswith('analysis'):
-            content = content[8:].strip()  # len('analysis') = 8
-
-        if not content:
-            return None
-
-        # First, try to remove common "thinking out loud" patterns
-        # These are internal reasoning that shouldn't be shown to users
-        thinking_patterns = [
-            r'^The user asks?:.*?(?=\n\n|\. (?:They|The|I |Let|So |Maybe))',  # "The user asks: X. They want..."
-            r'(?:They|The user) want[s]?.*?(?=\n\n|\. (?:I |Let|Maybe|Could))',  # "They want to..."
-            r'Likely referring to.*?(?=\n\n|\.)',  # "Likely referring to..."
-            r'Not sure\.?',  # "Not sure."
-            r'Wait,.*?(?=\n\n|\.)',  # "Wait, actually..."
-            r'Actually,?.*?(?=\n\n|\.)',  # "Actually, ..."
-            r'But (?:maybe|perhaps|I\'m not).*?(?=\n\n|\.)',  # "But maybe..."
-        ]
-
-        cleaned = content
-        for pattern in thinking_patterns:
-            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()  # Normalize whitespace
-
-        # Look for answer-like patterns in the content
-        answer_patterns = [
-            # Explicit answer markers
-            (r'(?:The\s+)?answer\s+is[:\s]+(.+)', re.DOTALL | re.IGNORECASE),
-            (r'In\s+summary[,:\s]+(.+)', re.DOTALL | re.IGNORECASE),
-            (r'To\s+summarize[,:\s]+(.+)', re.DOTALL | re.IGNORECASE),
-            (r'(?:So|Therefore|Thus)[,:\s]+(.{50,})', re.DOTALL | re.IGNORECASE),
-
-            # ANSI/IEEE device number patterns (specific to electrical standards)
-            (r'(ANSI[/-]?(?:device\s+)?(?:code\s+|number\s+)?25\b[^.]*\.)', re.IGNORECASE),
-            (r'(Device\s+(?:number|code)\s+25\b[^.]*\.)', re.IGNORECASE),
-            (r'((?:ANSI|IEEE)[/-]?(?:C37\.2|C37\.90|ISA[/-]?\d+)[^.]*\.)', re.IGNORECASE),
-
-            # Standard information patterns
-            (r'((?:ANSI|IEEE|IEC|NEMA)[/-]\S+\s+(?:is|defines?|covers?|standards?)[^.]+\.)', re.IGNORECASE),
-            (r'(The\s+standard\s+(?:is|defines?|covers?)[^.]+\.)', re.IGNORECASE),
-
-            # Informative statements (not questions or uncertainty)
-            (r'(It (?:is|defines?|covers?|specifies?)[^.?]+\.)', re.IGNORECASE),
-            (r'(This (?:is|defines?|covers?|specifies?)[^.?]+\.)', re.IGNORECASE),
-        ]
-
-        for pattern, flags in answer_patterns:
-            match = re.search(pattern, cleaned, flags)
-            if match:
-                extracted = match.group(1).strip()
-                if len(extracted) > 50:  # Must be substantial
-                    return extracted
-
-        # Look for informative sentences (statements, not questions/uncertainty)
-        sentences = re.split(r'(?<=[.!])\s+', cleaned)
-        informative = []
-        for sent in sentences:
-            sent = sent.strip()
-            # Skip sentences that are questions, uncertainty, or meta-commentary
-            skip_patterns = [
-                r'^\?',  # Questions
-                r'^(?:Maybe|Perhaps|Could be|Not sure|I think|I\'m not)',  # Uncertainty
-                r'^(?:The user|They) (?:ask|want|said)',  # Meta-commentary
-                r'^(?:But|Wait|Actually)\b',  # Corrections/hedging
-                r'^(?:Let me|I should|I\'ll)',  # Planning
-            ]
-            if any(re.match(p, sent, re.IGNORECASE) for p in skip_patterns):
-                continue
-            if len(sent) > 30 and not sent.endswith('?'):
-                informative.append(sent)
-
-        if informative:
-            # Return all informative sentences joined
-            result = ' '.join(informative)
-            if len(result) > 100:
-                return result
-
-        # Look for the last substantial paragraph (often contains conclusions)
-        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
-        if paragraphs:
-            # Filter out very short paragraphs and meta-commentary
-            substantial = []
-            for p in paragraphs:
-                if len(p) > 100:
-                    # Skip if it's mostly questions or uncertainty
-                    if not re.match(r'^(?:The user|Maybe|Perhaps|Not sure)', p, re.IGNORECASE):
-                        substantial.append(p)
-            if substantial:
-                return substantial[-1]
-
-        # Fallback: if there's useful content, return it with a prefix explaining incompleteness
-        if len(cleaned) > 200:
-            # Extract any definitions or explanations
-            definitions = re.findall(r'([A-Z][A-Z/-]+\d*\s+(?:is|means?|refers? to|defines?)[^.]+\.)', cleaned, re.IGNORECASE)
-            if definitions:
-                return ' '.join(definitions)
-            return cleaned
-
-        return None
+    def _remove_internal_markers(cls, response: str) -> str:
+        """Remove all internal markers (tool calls, analysis, etc.)"""
+        result = response
+        for pattern, flags in cls.INTERNAL_MARKER_PATTERNS:
+            try:
+                result = re.sub(pattern, '', result, flags=flags)
+            except Exception as e:
+                logger.warning(f"Pattern error: {e}")
+        return result.strip()
 
     @classmethod
     def _remove_thinking_sections(cls, response: str) -> str:
-        """Remove all thinking/reasoning sections"""
+        """Remove all XML-style thinking/reasoning sections"""
         result = response
         for pattern, flags in cls.THINKING_PATTERNS:
             result = re.sub(pattern, '', result, flags=flags)
-        return result
+        return result.strip()
 
     @classmethod
     def _is_react_format(cls, response: str) -> bool:
@@ -322,20 +220,130 @@ class OutputParser:
         result = response
         for pattern, flags in cls.REACT_PATTERNS:
             result = re.sub(pattern, '', result, flags=flags)
-
         return result.strip()
 
     @classmethod
-    def _clean_response(cls, response: str, preserve_markdown: bool = True) -> str:
-        """Clean up the final response"""
+    def _looks_like_internal_content(cls, response: str) -> bool:
+        """Check if response still contains internal LLM markers"""
+        internal_indicators = [
+            'analysis',
+            'commentary',
+            'the user asks',
+            'they want',
+            'let me',
+            'i should',
+            'i need to',
+            'first, ',
+            'then, ',
+            'wait,',
+            'actually,',
+            'maybe',
+            'perhaps',
+            'not sure',
+        ]
+        lower_response = response.lower()
+
+        # Check if starts with internal content
+        for indicator in internal_indicators:
+            if lower_response.startswith(indicator):
+                return True
+
+        return False
+
+    @classmethod
+    def _extract_meaningful_content(cls, response: str) -> Optional[str]:
+        """
+        Extract meaningful content from an incomplete/messy response.
+
+        Used when the LLM didn't properly format its output but there's
+        useful information buried in the response.
+        """
         if not response:
-            return response
+            return None
+
+        # Try to find answer-like patterns
+        answer_patterns = [
+            (r'(?:The\s+)?answer\s+is[:\s]+(.+)', re.DOTALL | re.IGNORECASE),
+            (r'In\s+summary[,:\s]+(.+)', re.DOTALL | re.IGNORECASE),
+            (r'To\s+summarize[,:\s]+(.+)', re.DOTALL | re.IGNORECASE),
+            (r'(?:So|Therefore|Thus)[,:\s]+(.{50,})', re.DOTALL | re.IGNORECASE),
+            (r'(?:ANSI|IEEE|IEC|NEMA|ISO)[/-]?\S+\s+(?:is|defines?|covers?|refers? to)[^.]+\.', re.IGNORECASE),
+        ]
+
+        for pattern_tuple in answer_patterns:
+            pattern = pattern_tuple[0] if isinstance(pattern_tuple, tuple) else pattern_tuple
+            flags = pattern_tuple[1] if isinstance(pattern_tuple, tuple) and len(pattern_tuple) > 1 else 0
+            match = re.search(pattern, response, flags)
+            if match:
+                extracted = match.group(1).strip() if match.lastindex else match.group(0).strip()
+                if len(extracted) > 50:
+                    return extracted
+
+        # Find informative sentences (not questions, not meta-commentary)
+        sentences = re.split(r'(?<=[.!])\s+', response)
+        informative = []
+
+        skip_patterns = [
+            r'^(?:Maybe|Perhaps|Could be|Not sure|I think|I\'m not)',
+            r'^(?:The user|They) (?:ask|want|said)',
+            r'^(?:But|Wait|Actually)\b',
+            r'^(?:Let me|I should|I\'ll|I need)',
+            r'^\?',
+            r'^(?:analysis|commentary)',
+        ]
+
+        for sent in sentences:
+            sent = sent.strip()
+            if len(sent) < 30 or sent.endswith('?'):
+                continue
+            if any(re.match(p, sent, re.IGNORECASE) for p in skip_patterns):
+                continue
+            informative.append(sent)
+
+        if informative:
+            result = ' '.join(informative)
+            if len(result) > 100:
+                return result
+
+        # Last resort: return cleaned content if substantial
+        cleaned = re.sub(r'^(?:analysis|thinking|commentary)\s*', '', response, flags=re.IGNORECASE)
+        if len(cleaned) > 200:
+            return cleaned
+
+        return None
+
+    @classmethod
+    def _sanitize_output(cls, response: str, preserve_markdown: bool = True) -> str:
+        """
+        Final sanitization step.
+
+        Ensures the output is clean for user display by removing any
+        remaining internal markers or artifacts.
+        """
+        if not response:
+            return ""
+
+        # Remove any remaining internal markers
+        internal_patterns = [
+            r'analysis\s*$',
+            r'^analysis\s*',
+            r'assistantfinal\s*',
+            r'assistantcommentary[^\n]*',
+            r'commentary\s+to=\w+[^\n]*',
+            r'\{["\']query["\']:[^\}]+\}',
+        ]
+
+        for pattern in internal_patterns:
+            response = re.sub(pattern, '', response, flags=re.IGNORECASE)
 
         # Remove empty XML-like tags
         response = re.sub(r'<[^>]+>\s*</[^>]+>', '', response)
 
         # Remove orphaned opening/closing tags
-        response = re.sub(r'</?(?:think|thinking|reasoning|analysis|internal|cot|plan|step)>', '', response, flags=re.IGNORECASE)
+        response = re.sub(
+            r'</?(?:think|thinking|reasoning|analysis|internal|cot|plan|step|answer|final_answer)>',
+            '', response, flags=re.IGNORECASE
+        )
 
         # Clean up multiple newlines
         response = re.sub(r'\n{3,}', '\n\n', response)
@@ -344,12 +352,24 @@ class OutputParser:
         response = response.strip()
 
         # Remove common prefix artifacts
-        prefixes_to_remove = [
-            'assistant', 'Assistant:', 'AI:', 'Response:',
-        ]
+        prefixes_to_remove = ['assistant', 'Assistant:', 'AI:', 'Response:', 'Output:']
         for prefix in prefixes_to_remove:
             if response.lower().startswith(prefix.lower()):
                 response = response[len(prefix):].lstrip(':').strip()
+
+        # Remove trailing incomplete sentences (often truncation artifacts)
+        if not response.rstrip().endswith(('.', '!', '?', '```', '"', "'")):
+            # Find last complete sentence
+            last_period = max(
+                response.rfind('. '),
+                response.rfind('.\n'),
+                response.rfind('! '),
+                response.rfind('!\n'),
+                response.rfind('? '),
+                response.rfind('?\n'),
+            )
+            if last_period > len(response) * 0.7:  # Only trim if we keep most of it
+                response = response[:last_period + 1].strip()
 
         return response
 
@@ -358,8 +378,8 @@ class StreamingOutputParser:
     """
     Stateful parser for streaming responses.
 
-    Handles both XML-style tags (<think>...</think>) and
-    plain text markers (analysis...assistantfinal).
+    Filters out thinking sections in real-time as chunks arrive.
+    Handles both XML-style tags and plain text markers (analysis...assistantfinal).
     """
 
     def __init__(self):
@@ -367,6 +387,7 @@ class StreamingOutputParser:
         self.accumulated_text = ""
         self.found_final_marker = False
         self.in_analysis_section = False
+        self.buffer = ""  # Buffer for incomplete markers
 
         # XML-style patterns
         self.think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
@@ -387,6 +408,7 @@ class StreamingOutputParser:
 
         # Accumulate text
         self.accumulated_text += chunk
+        self.buffer += chunk
 
         # Check if we've found "assistantfinal" in the accumulated text
         if not self.found_final_marker:
@@ -400,23 +422,25 @@ class StreamingOutputParser:
                 # Find position of marker and return content after it
                 idx = lower_accumulated.find('assistantfinal')
                 after_marker = self.accumulated_text[idx + len('assistantfinal'):]
+                self.buffer = ""  # Clear buffer
 
-                # Only return the new part from this chunk
                 if after_marker:
-                    return after_marker, False
+                    return self._clean_chunk(after_marker), False
                 return "", False
 
-            # If text starts with "analysis" and no final marker yet, we're in analysis
-            if lower_accumulated.startswith('analysis') or 'analysis' in lower_accumulated[:50]:
+            # If text contains analysis markers, we're in thinking section
+            if 'analysis' in lower_accumulated[:100]:
                 self.in_analysis_section = True
-                return "", True  # Don't show analysis section
 
-        # If we've found the final marker, pass through content
+            # Check for tool call markers - don't show these
+            if 'assistantcommentary' in lower_accumulated or 'commentary to=' in lower_accumulated:
+                self.buffer = ""
+                return "", True
+
+        # If we've found the final marker, pass through content (cleaned)
         if self.found_final_marker:
-            # Clean any stray XML tags
-            clean_chunk = self.think_open_pattern.sub('', chunk)
-            clean_chunk = self.think_close_pattern.sub('', clean_chunk)
-            return clean_chunk, False
+            self.buffer = ""
+            return self._clean_chunk(chunk), False
 
         # Handle XML-style thinking tags
         open_matches = self.think_open_pattern.findall(chunk)
@@ -426,15 +450,26 @@ class StreamingOutputParser:
         self.thinking_depth -= len(close_matches)
         self.thinking_depth = max(0, self.thinking_depth)
 
-        # If inside thinking section, don't return content
+        # If inside thinking/analysis section, don't return content
         if self.thinking_depth > 0 or self.in_analysis_section:
             return "", True
 
-        # Clean any stray tags from chunk
-        clean_chunk = self.think_open_pattern.sub('', chunk)
-        clean_chunk = self.think_close_pattern.sub('', clean_chunk)
+        # Clean and return
+        self.buffer = ""
+        return self._clean_chunk(chunk), False
 
-        return clean_chunk, False
+    def _clean_chunk(self, chunk: str) -> str:
+        """Clean a chunk for display"""
+        # Remove XML tags
+        chunk = self.think_open_pattern.sub('', chunk)
+        chunk = self.think_close_pattern.sub('', chunk)
+
+        # Remove internal markers
+        chunk = re.sub(r'assistantfinal\s*', '', chunk, flags=re.IGNORECASE)
+        chunk = re.sub(r'assistantcommentary[^\n]*', '', chunk, flags=re.IGNORECASE)
+        chunk = re.sub(r'analysis\s*', '', chunk, flags=re.IGNORECASE)
+
+        return chunk
 
     def reset(self):
         """Reset parser state for new response"""
@@ -442,11 +477,22 @@ class StreamingOutputParser:
         self.accumulated_text = ""
         self.found_final_marker = False
         self.in_analysis_section = False
+        self.buffer = ""
+
+    def get_final_output(self) -> str:
+        """
+        Get the final parsed output after streaming completes.
+
+        This applies the full OutputParser to ensure clean output.
+        """
+        return OutputParser.parse(self.accumulated_text)
 
 
 def parse_llm_output(raw_response: str) -> str:
     """
     Convenience function to parse LLM output.
+
+    This is the main function to call for non-streaming responses.
 
     Args:
         raw_response: Raw LLM response text
@@ -465,3 +511,12 @@ def create_streaming_parser() -> StreamingOutputParser:
         StreamingOutputParser instance
     """
     return StreamingOutputParser()
+
+
+def sanitize_for_user(text: str) -> str:
+    """
+    Final sanitization before showing to user.
+
+    Use this as a last-resort cleanup for any text going to the user.
+    """
+    return OutputParser._sanitize_output(text)
