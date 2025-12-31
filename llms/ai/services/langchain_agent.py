@@ -480,13 +480,24 @@ class LangChainAgent:
         - assistantfinal... (final answer)
 
         This parses that format and executes tools accordingly.
+        GUARANTEES clean output - no internal markers in returned text.
         """
         import re
         import time
         import json
 
+        # Import output parser for guaranteed clean output
+        try:
+            from utils.output_parser import parse_llm_output, sanitize_for_user
+            HAS_PARSER = True
+        except ImportError:
+            HAS_PARSER = False
+            def parse_llm_output(x): return x
+            def sanitize_for_user(x): return x
+
         start_time = time.time()
         tool_calls = []
+        tool_results = []  # Store full results for summary
         max_iterations = 5
 
         # Build simple prompt for tool use
@@ -512,8 +523,16 @@ Question: {input_text}"""
                 final_answer = final_match.group(1).strip()
                 elapsed = time.time() - start_time
                 logger.info(f"✅ Custom loop completed in {elapsed:.2f}s with {len(tool_calls)} tool calls")
+
+                # Ensure clean output
+                clean_answer = sanitize_for_user(final_answer) if final_answer else ""
+
+                # If answer is empty but we have tool results, summarize them
+                if not clean_answer and tool_results:
+                    clean_answer = self._generate_summary_from_results(input_text, tool_results)
+
                 return {
-                    "output": final_answer if final_answer else output,
+                    "output": clean_answer,
                     "tokens_used": tokens,
                     "tool_calls": tool_calls,
                     "used_tools": len(tool_calls) > 0,
@@ -551,6 +570,11 @@ Question: {input_text}"""
                                 "input": query,
                                 "output": tool_result[:500] if tool_result else ""
                             })
+                            tool_results.append({
+                                "tool": tool.name,
+                                "query": query,
+                                "result": tool_result
+                            })
                             logger.info(f"✅ Tool {tool.name} returned {len(tool_result) if tool_result else 0} chars")
                         except Exception as e:
                             logger.error(f"❌ Tool {tool.name} failed: {e}")
@@ -567,7 +591,6 @@ Question: {input_text}"""
                     continue
 
             # No tool call matched - check if there's any tool-like pattern we missed
-            # This handles malformed tool calls
             if 'assistantcommentary' in output.lower() or 'commentary to=' in output.lower():
                 # LLM is trying to call a tool but format is wrong - prompt for correct format
                 logger.warning(f"⚠️ Detected malformed tool call, prompting for correct format")
@@ -579,8 +602,8 @@ Question: {input_text}"""
                 continue
 
             # No tool call and no final answer - if we have tool results, ask for final answer
-            if tool_calls and iteration > 0:
-                logger.info(f"🔄 Have {len(tool_calls)} tool results, prompting for final answer")
+            if tool_results and iteration > 0:
+                logger.info(f"🔄 Have {len(tool_results)} tool results, prompting for final answer")
                 messages.append({"role": "assistant", "content": output})
                 messages.append({
                     "role": "user",
@@ -595,15 +618,13 @@ Question: {input_text}"""
                 "content": "Please either use a tool with 'assistantcommentary to=tool_name json{\"query\": \"...\"}' or provide your final answer with 'assistantfinal Your answer here'"
             })
 
-        # Exhausted iterations - return what we have
+        # Exhausted iterations - generate clean output from what we have
         elapsed = time.time() - start_time
         logger.warning(f"⚠️ Custom loop exhausted {max_iterations} iterations")
 
-        # If we have tool results, try to summarize them
-        if tool_calls:
-            summary = "Based on the search results:\n"
-            for tc in tool_calls:
-                summary += f"\n{tc['output'][:1000]}"
+        # If we have tool results, generate a summary
+        if tool_results:
+            summary = self._generate_summary_from_results(input_text, tool_results)
             return {
                 "output": summary,
                 "tokens_used": 0,
@@ -612,15 +633,65 @@ Question: {input_text}"""
                 "execution_time": elapsed
             }
 
+        # No tool results - try to extract useful content from last output
+        if HAS_PARSER:
+            clean_output = parse_llm_output(output)
+            if clean_output and len(clean_output) > 50:
+                return {
+                    "output": clean_output,
+                    "tokens_used": 0,
+                    "tool_calls": [],
+                    "used_tools": False,
+                    "execution_time": elapsed
+                }
+
         return None  # Let standard agent try
+
+    def _generate_summary_from_results(self, question: str, tool_results: List[Dict]) -> str:
+        """
+        Generate a clean summary from tool results.
+
+        Used when the LLM doesn't produce a proper final answer but we have
+        useful tool results to present to the user.
+        """
+        if not tool_results:
+            return ""
+
+        # Build a clean summary
+        summary_parts = []
+        summary_parts.append(f"Based on the search results for your question:\n")
+
+        for result in tool_results:
+            tool_name = result.get("tool", "search")
+            tool_result = result.get("result", "")
+
+            if tool_result:
+                # Clean the result - remove any internal markers
+                clean_result = tool_result
+                # Truncate if too long
+                if len(clean_result) > 2000:
+                    clean_result = clean_result[:2000] + "..."
+
+                summary_parts.append(f"\n{clean_result}")
+
+        return "\n".join(summary_parts)
 
     async def _run_standard_agent(self, input_text: str) -> Dict[str, Any]:
         """
         Run the standard ReAct agent.
 
         Falls back to this if custom tool loop doesn't work.
+        GUARANTEES clean output - no internal markers.
         """
         import time
+
+        # Import output parser
+        try:
+            from utils.output_parser import parse_llm_output
+            HAS_PARSER = True
+        except ImportError:
+            HAS_PARSER = False
+            def parse_llm_output(x): return x
 
         try:
             start_time = time.time()
@@ -654,6 +725,12 @@ Question: {input_text}"""
 
             elapsed_time = time.time() - start_time
 
+            # ENSURE CLEAN OUTPUT - parse to remove any internal markers
+            if HAS_PARSER:
+                clean_output = parse_llm_output(output)
+                logger.info(f"📝 Standard agent output parsed: {len(output)} -> {len(clean_output)} chars")
+                output = clean_output
+
             # Summary log
             if tool_calls:
                 tools_used = [tc["tool"] for tc in tool_calls]
@@ -675,6 +752,10 @@ Question: {input_text}"""
             # Fallback to direct generation
             messages = [{"role": "user", "content": input_text}]
             output, tokens = await self.model_manager.generate(messages)
+
+            # Parse fallback output too
+            if HAS_PARSER:
+                output = parse_llm_output(output)
 
             return {
                 "output": output,

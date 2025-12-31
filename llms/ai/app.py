@@ -46,12 +46,23 @@ from services.langchain_agent import create_agent_with_tools
 
 # Import output parser for cleaning LLM responses
 try:
-    from utils.output_parser import OutputParser, StreamingOutputParser, parse_llm_output, create_streaming_parser
+    from utils.output_parser import (
+        OutputParser,
+        StreamingOutputParser,
+        parse_llm_output,
+        create_streaming_parser,
+        sanitize_for_user
+    )
     OUTPUT_PARSER_AVAILABLE = True
 except ImportError:
     OUTPUT_PARSER_AVAILABLE = False
     logger = logging.getLogger(__name__)
     logger.warning("⚠️ Output parser not available")
+
+    # Fallback functions if parser not available
+    def parse_llm_output(x): return x
+    def sanitize_for_user(x): return x
+    def create_streaming_parser(): return None
 
 # Configure logging
 logging.basicConfig(
@@ -637,9 +648,16 @@ async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncItera
             # Parse output to remove thinking sections
             if OUTPUT_PARSER_AVAILABLE:
                 final_output = parse_llm_output(raw_output)
+                # Double-check with sanitize_for_user for any edge cases
+                final_output = sanitize_for_user(final_output)
                 logger.info(f"📝 Output parsed: {len(raw_output)} -> {len(final_output)} chars")
             else:
                 final_output = raw_output
+
+            # Ensure we have content to stream
+            if not final_output or len(final_output.strip()) < 10:
+                final_output = "I was unable to generate a complete response. Please try again."
+                logger.warning("⚠️ Empty or minimal response after parsing, using fallback")
 
             # Stream the result in chunks for smooth UI
             chunk_size = 50  # Characters per chunk for smooth streaming effect
@@ -703,10 +721,17 @@ async def legacy_stream_generation(request: LegacyGenerateRequest) -> AsyncItera
                     yield f"data: {json.dumps({'chunk': chunk})}\n\n"
 
             # Parse full output for final clean version (in case of any missed thinking sections)
-            if OUTPUT_PARSER_AVAILABLE:
+            # Use the streaming parser's final output for guaranteed clean result
+            if streaming_parser:
+                final_output = streaming_parser.get_final_output()
+            elif OUTPUT_PARSER_AVAILABLE:
                 final_output = parse_llm_output(full_output)
             else:
                 final_output = clean_output
+
+            # Final sanitization to catch any edge cases
+            if OUTPUT_PARSER_AVAILABLE:
+                final_output = sanitize_for_user(final_output)
 
             # Send completion event with clean output
             tokens_used = len(full_output.split())  # Rough estimate
