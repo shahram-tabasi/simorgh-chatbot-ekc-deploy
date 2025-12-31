@@ -409,33 +409,15 @@ async def create_project(
 
         logger.info(f"✅ User {current_user} created project: {project.project_name}")
 
-        # ============================================================
-        # ✅ ENHANCED: Initialize extraction guides for the project
-        # ============================================================
-        try:
-            logger.info(f"📋 Initializing extraction guides for project {project.project_number}")
-
-            from services.document_processing_integration import initialize_project_guides
-
-            guides_initialized = initialize_project_guides(
-                neo4j_driver=neo4j.driver,
-                project_number=project.project_number
-            )
-
-            if guides_initialized:
-                logger.info(f"✅ Initialized {guides_initialized} extraction guides for project")
-            else:
-                logger.warning(f"⚠️ No extraction guides initialized (function returned 0)")
-
-        except Exception as guides_error:
-            # Don't fail project creation if guides initialization fails
-            logger.error(f"❌ Failed to initialize extraction guides: {guides_error}")
-            # Continue - guides can be initialized later if needed
+        # NOTE: Extraction guides are NO LONGER created at project initialization.
+        # They will be created dynamically when specification documents are processed
+        # via CoCoIndex flows. This keeps the project graph clean with only the
+        # Document/Drawing/Identity hierarchy.
 
         return {
             "status": "success",
             "project": project_node,
-            "guides_initialized": guides_initialized if 'guides_initialized' in locals() else 0
+            "guides_initialized": 0  # Guides created during document processing, not here
         }
 
     except HTTPException:
@@ -1610,11 +1592,15 @@ async def send_chat_message(
 
             # Initialize agent
             from services.specification_agent import SpecificationAgent
+            from cocoindex_flows import CoCoIndexAdapter
+
+            # Create CoCoIndex adapter from Neo4j driver
+            cocoindex_adapter = CoCoIndexAdapter(driver=neo4j.driver)
 
             agent = SpecificationAgent(
                 redis_service=redis,
                 llm_service=llm,
-                neo4j_service=neo4j,
+                cocoindex_adapter=cocoindex_adapter,
                 qdrant_service=get_qdrant_service()
             )
 
@@ -1684,11 +1670,15 @@ async def send_chat_message(
         # AGENT CONTINUATION: Check if agent is active for this chat
         # ============================================================
         from services.specification_agent import SpecificationAgent
+        from cocoindex_flows import CoCoIndexAdapter
+
+        # Create CoCoIndex adapter from Neo4j driver
+        cocoindex_adapter = CoCoIndexAdapter(driver=neo4j.driver)
 
         agent = SpecificationAgent(
             redis_service=redis,
             llm_service=llm,
-            neo4j_service=neo4j,
+            cocoindex_adapter=cocoindex_adapter,
             qdrant_service=get_qdrant_service()
         )
 
