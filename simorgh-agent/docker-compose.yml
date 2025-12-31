@@ -67,6 +67,8 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
+      - ./backend/cocoindex_flows:/app/cocoindex_flows
+      - ./backend/services:/app/services
     expose:
       - "8890"
     networks:
