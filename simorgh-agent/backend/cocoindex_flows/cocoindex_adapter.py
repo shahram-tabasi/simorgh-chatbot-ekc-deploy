@@ -236,7 +236,10 @@ class CoCoIndexAdapter:
                 safe_props[k] = v
 
         query = f"""
-        MATCH (proj:Project {{project_number: $project_number}})
+        // Use MERGE to ensure Project exists (prevents silent failure if project not created yet)
+        MERGE (proj:Project {{project_number: $project_number}})
+        ON CREATE SET proj.created_at = datetime()
+
         MERGE (e:{entity_type} {{entity_id: $entity_id, project_number: $project_number}})
         ON CREATE SET
             e += $properties,
