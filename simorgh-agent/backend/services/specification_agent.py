@@ -278,16 +278,44 @@ Please either:
         filename = file_context.get('filename', 'Unknown')
         markdown_content = file_context.get('markdown_content', '')
         doc_id = file_context.get('document_id', str(uuid.uuid4()))
+        is_duplicate = file_context.get('is_duplicate', False)
 
         logger.info(f"📄 Processing uploaded document: {filename} ({len(markdown_content)} chars)")
 
-        # Add to processed documents list
-        state["documents_processed"].append({
+        # Check if this document was already processed in this session
+        processed_docs = state.get("documents_processed", [])
+        already_processed = any(d.get("filename") == filename for d in processed_docs)
+
+        if already_processed and not is_duplicate:
+            logger.info(f"📎 Document {filename} already processed in this session, skipping re-extraction")
+            # Return cached results if available
+            if state.get("extraction_results"):
+                return f"""📄 **Document Already Processed**
+
+The document `{filename}` has already been processed in this session.
+
+You can:
+- Ask questions about the extracted specifications
+- Type "show results" to see the extraction table again
+- Upload a different document to extract more specifications"""
+
+        # Add to processed documents list (with content for memory)
+        doc_info = {
             "document_id": doc_id,
             "filename": filename,
             "processed_at": datetime.now().isoformat(),
             "char_count": len(markdown_content)
-        })
+        }
+
+        # Store content summary for memory (not full content to save Redis space)
+        # Store first 50K chars for context
+        doc_info["content_preview"] = markdown_content[:50000]
+
+        state["documents_processed"].append(doc_info)
+
+        # Also store the current document content for answering questions
+        state["current_document_content"] = markdown_content
+        state["current_document_filename"] = filename
 
         state["state"] = AgentState.EXTRACTING_SPECS
         self._set_agent_state(chat_id, state)
@@ -308,25 +336,24 @@ Please either:
 
         # Query CoCoIndex for project specification documents
         try:
-            # Use CoCoIndex adapter to get spec documents
-            spec_docs = self.cocoindex.get_entities_by_type(
+            # Use new CoCoIndex method for spec documents
+            spec_docs = self.cocoindex.get_spec_documents(
                 project_number=project_number,
-                entity_type="SpecificationDocument",
-                limit=10
+                limit=20
             )
 
-            # Also try Document type with Spec filter
+            # If no spec docs found, try getting all documents
             if not spec_docs:
-                all_docs = self.cocoindex.get_entities_by_type(
+                all_docs = self.cocoindex.get_project_documents(
                     project_number=project_number,
-                    entity_type="Document",
                     limit=20
                 )
-                # Filter for spec documents
+                # Filter for spec documents by filename
                 spec_docs = [
                     doc for doc in all_docs
                     if 'spec' in doc.get('filename', '').lower()
-                    or 'spec' in doc.get('document_type', '').lower()
+                    or 'spec' in doc.get('name', '').lower()
+                    or doc.get('doc_type', '').lower() == 'spec'
                 ]
 
             if not spec_docs:
@@ -334,11 +361,11 @@ Please either:
 
 Please upload at least one specification document to proceed."""
 
-            # Format documents list
+            # Format documents list - Document nodes use 'id' property, not 'entity_id'
             documents = [
                 {
-                    "doc_id": doc.get("entity_id", doc.get("doc_id")),
-                    "filename": doc.get("filename", "Unknown")
+                    "doc_id": doc.get("id", doc.get("entity_id", doc.get("doc_id"))),
+                    "filename": doc.get("filename", doc.get("name", "Unknown"))
                 }
                 for doc in spec_docs
             ]
@@ -996,19 +1023,132 @@ The extraction results have been saved to the project database for future refere
         user_message: str,
         state: Dict[str, Any]
     ) -> str:
-        """Handle messages after extraction is completed"""
+        """Handle messages after extraction is completed - answer questions about extracted data"""
 
+        user_msg_lower = user_message.lower().strip()
         export_filename = state.get("export_filename")
-        results_count = len(state.get("extraction_results", []))
+        extraction_results = state.get("extraction_results", [])
+        extraction_table = state.get("extraction_table_markdown", "")
+        document_content = state.get("current_document_content", "")
+        results_count = len(extraction_results)
 
-        return f"""✅ **Extraction already completed!**
+        # Check for common commands
+        if any(cmd in user_msg_lower for cmd in ["show results", "show table", "extraction table", "show extraction"]):
+            if extraction_table:
+                return f"""## 📋 Extracted Specifications
+
+{extraction_table}
+
+---
+**Parameters**: {results_count} | **Export**: `{export_filename or 'Not available'}`
+"""
+            else:
+                return "No extraction table available. Please upload a document to start extraction."
+
+        # Check for download request
+        if any(cmd in user_msg_lower for cmd in ["download", "export", "excel", "file"]):
+            if export_filename:
+                return f"""## 📥 Download Your Results
+
+[⬇️ Download Excel File](/api/agent/download/{export_filename})
+
+**File**: `{export_filename}`
+**Parameters**: {results_count} specifications extracted
+"""
+            else:
+                return "No export file available yet. Please complete the extraction first."
+
+        # Check for new document upload request
+        if any(cmd in user_msg_lower for cmd in ["new extraction", "new document", "extract more", "upload another"]):
+            state["state"] = AgentState.WAITING_FOR_DOCUMENTS
+            self._set_agent_state(chat_id, state)
+            return """## 📤 Ready for New Document
+
+I'm ready to extract specifications from another document.
+
+Please upload your document using the file upload button."""
+
+        # Try to answer questions about extracted data using LLM
+        if extraction_results or document_content:
+            return await self._answer_question_about_extraction(
+                user_message, extraction_results, document_content, state
+            )
+
+        # Default response
+        return f"""## ✅ Extraction Complete
 
 - **Parameters Extracted**: {results_count}
 - **Export File**: `{export_filename or 'Not available'}`
 
-[⬇️ Download Excel File](/api/agent/download/{export_filename})
+### Available Commands:
+- **"show results"** - View extraction table
+- **"download"** - Get Excel file
+- **"new extraction"** - Process another document
 
-**To start a new extraction**, please create a new chat session or use the "Specification" template again.
+Or ask me any question about the extracted specifications!
+
+[⬇️ Download Excel File](/api/agent/download/{export_filename})
+"""
+
+    async def _answer_question_about_extraction(
+        self,
+        question: str,
+        extraction_results: List[Dict[str, Any]],
+        document_content: str,
+        state: Dict[str, Any]
+    ) -> str:
+        """Use LLM to answer questions about extracted specifications"""
+
+        logger.info(f"🤔 Answering question about extraction: {question[:100]}...")
+
+        try:
+            # Build context from extraction results
+            specs_context = "## Extracted Specifications:\n\n"
+            for result in extraction_results[:50]:  # Limit for context size
+                specs_context += f"- **{result.get('sub_parameter', 'Unknown')}**: {result.get('extracted_value', 'N/A')}"
+                if result.get('unit') and result.get('unit') != '-':
+                    specs_context += f" {result.get('unit')}"
+                specs_context += "\n"
+
+            # Build prompt
+            system_prompt = f"""You are a technical assistant helping with electrical switchgear specifications.
+
+The user has previously extracted specifications from their document. Here are the extracted parameters:
+
+{specs_context}
+
+Answer the user's question based on the extracted specifications. Be concise and helpful.
+If the answer is not in the extracted data, say so clearly."""
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": question}
+            ]
+
+            result = self.llm.generate(
+                messages=messages,
+                mode="offline",  # Use local LLM for quick responses
+                temperature=0.3,
+                max_tokens=500
+            )
+
+            answer = result.get("response", "I couldn't find an answer to that question.")
+
+            return f"""## 💡 Answer
+
+{answer}
+
+---
+*Based on {len(extraction_results)} extracted specifications*
+"""
+
+        except Exception as e:
+            logger.error(f"Failed to answer question: {e}")
+            return f"""I encountered an error while processing your question.
+
+**Your question**: {question}
+
+Please try rephrasing, or use "show results" to see the extraction table.
 """
 
     def get_session_status(self, chat_id: str) -> Dict[str, Any]:

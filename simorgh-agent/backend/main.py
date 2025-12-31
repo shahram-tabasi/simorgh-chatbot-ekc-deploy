@@ -1726,7 +1726,7 @@ async def send_chat_message(
                         )
 
                         graph_init = ProjectGraphInitializer(neo4j.driver)
-                        graph_init.add_document_to_structure(
+                        doc_result = graph_init.add_document_to_structure(
                             project_oenum=project_number,
                             category=category,
                             doc_type=doc_type,
@@ -1741,15 +1741,23 @@ async def send_chat_message(
                             }
                         )
 
+                        # Use returned document_id (may be existing if duplicate)
+                        actual_doc_id = doc_result.get('document_id', doc_id) if doc_result else doc_id
+                        is_duplicate = doc_result.get('is_duplicate', False) if doc_result else False
+
+                        if is_duplicate:
+                            logger.info(f"📄 Reusing existing document: {_file.filename} ({actual_doc_id})")
+
                         uploaded_file_context = {
                             'filename': _file.filename,
                             'markdown_content': markdown_content,
-                            'document_id': doc_id,
+                            'document_id': actual_doc_id,
                             'category': category,
-                            'doc_type': doc_type
+                            'doc_type': doc_type,
+                            'is_duplicate': is_duplicate
                         }
 
-                        logger.info(f"✅ Document processed for agent: {doc_id}")
+                        logger.info(f"✅ Document processed for agent: {actual_doc_id}")
 
                 finally:
                     if temp_file.exists():
@@ -1852,14 +1860,14 @@ async def send_chat_message(
 
                         logger.info(f"📋 Document classified: {category}/{doc_type} ({confidence:.2f})")
 
-                        # Add to project graph
+                        # Add to project graph (with duplicate detection)
                         graph_init = ProjectGraphInitializer(neo4j.driver)
-                        doc_id = str(uuid.uuid4())
-                        graph_init.add_document_to_structure(
+                        new_doc_id = str(uuid.uuid4())
+                        doc_result = graph_init.add_document_to_structure(
                             project_oenum=project_number,
                             category=category,
                             doc_type=doc_type,
-                            document_id=doc_id,
+                            document_id=new_doc_id,
                             document_metadata={
                                 'filename': _file.filename,
                                 'doc_type': doc_type,
@@ -1870,7 +1878,14 @@ async def send_chat_message(
                             }
                         )
 
-                        logger.info(f"📊 Added document to project graph: {doc_id}")
+                        # Use returned document_id (may be existing if duplicate)
+                        doc_id = doc_result.get('document_id', new_doc_id) if doc_result else new_doc_id
+                        is_duplicate = doc_result.get('is_duplicate', False) if doc_result else False
+
+                        if is_duplicate:
+                            logger.info(f"📄 Reusing existing document: {_file.filename} ({doc_id})")
+                        else:
+                            logger.info(f"📊 Added new document to project graph: {doc_id}")
 
                         # ============================================================
                         # ENHANCED PIPELINE: Section-based processing with summaries
