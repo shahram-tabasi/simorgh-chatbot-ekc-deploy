@@ -24,6 +24,10 @@ from services.section_retriever import SectionRetriever
 from services.graph_builder import GraphBuilder
 from services.guide_executor import GuideExecutor
 
+# Import CocoIndex flows for proper entity extraction
+from cocoindex_flows.spec_flow import SpecificationFlow, create_specification_flow
+from cocoindex_flows.cocoindex_adapter import CoCoIndexAdapter
+
 logger = logging.getLogger(__name__)
 
 
@@ -247,66 +251,75 @@ def process_enhanced_spec_extraction(
             db="cache"
         )
 
-        graph_builder = GraphBuilder(
-            llm_service=llm_service,
-            neo4j_driver=neo4j_driver
-        )
+        # Use CocoIndex SpecificationFlow for proper ITEM 1-13 extraction
+        try:
+            # Initialize CocoIndex adapter with the existing Neo4j driver
+            cocoindex_adapter = CoCoIndexAdapter(driver=neo4j_driver)
 
-        graph_result = graph_builder.build_graph_for_document(
-            project_number=project_number,
-            document_id=document_id,
-            document_content=markdown_content,
-            filename=filename,
-            llm_mode=llm_mode
-        )
+            # Create SpecificationFlow with LLM service
+            spec_flow = SpecificationFlow(
+                cocoindex_adapter=cocoindex_adapter,
+                llm_service=llm_service,
+                qdrant_service=qdrant
+            )
 
-        if not graph_result.get("success"):
-            logger.warning(f"⚠️ [Task {task_id}] Graph building partially failed, continuing...")
+            # Process document with SpecificationFlow (extracts all 13 ITEM categories)
+            flow_result = spec_flow.process_document(
+                project_number=project_number,
+                document_id=document_id,
+                content=markdown_content,
+                filename=filename,
+                metadata={"filename": filename, "doc_type": "Spec"},
+                llm_mode=llm_mode
+            )
 
-        entities_extracted = graph_result.get("entities_extracted", {})
-        logger.info(f"✅ [Task {task_id}] Knowledge graph built: {entities_extracted}")
+            if flow_result.get("success"):
+                entities_extracted = {
+                    "entities_count": flow_result.get("entities_extracted", 0),
+                    "relationships_count": flow_result.get("relationships_extracted", 0),
+                    "document_type": flow_result.get("document_type", "Specification")
+                }
+                logger.info(f"✅ [Task {task_id}] SpecificationFlow completed: {entities_extracted}")
+            else:
+                logger.warning(f"⚠️ [Task {task_id}] SpecificationFlow failed: {flow_result.get('error', 'Unknown error')}")
+                entities_extracted = {"error": flow_result.get("error", "Flow failed")}
 
-        # STEP 3: Execute extraction guides
+        except Exception as e:
+            logger.error(f"❌ [Task {task_id}] SpecificationFlow error: {e}", exc_info=True)
+            # Fallback to GraphBuilder if SpecificationFlow fails
+            logger.info(f"🔄 [Task {task_id}] Falling back to GraphBuilder...")
+            graph_builder = GraphBuilder(
+                llm_service=llm_service,
+                neo4j_driver=neo4j_driver
+            )
+            graph_result = graph_builder.build_graph_for_document(
+                project_number=project_number,
+                document_id=document_id,
+                document_content=markdown_content,
+                filename=filename,
+                llm_mode=llm_mode
+            )
+            entities_extracted = graph_result.get("entities_extracted", {})
+
+        # Update progress
         redis_service.set(
             f"spec_task:{task_id}:status",
             {
                 "task_id": task_id,
-                "status": "executing_guides",
-                "message": "Executing extraction guides to extract specific parameters...",
+                "status": "extracting_parameters",
+                "message": "Extracting specification parameters...",
                 "document_id": document_id,
                 "project_number": project_number,
                 "filename": filename,
-                "progress": 65
+                "progress": 75
             },
             ttl=3600,
             db="cache"
         )
 
-        guide_executor = GuideExecutor(
-            llm_service=llm_service,
-            qdrant_service=qdrant,
-            neo4j_driver=neo4j_driver
-        )
-
-        # Execute all guides for this document
-        guide_results = guide_executor.execute_all_guides(
-            project_number=project_number,
-            document_id=document_id,
-            llm_mode=llm_mode
-        )
-
-        if guide_results.get("success"):
-            # Store extracted values in graph
-            guide_executor.store_extracted_values(
-                project_number=project_number,
-                document_id=document_id,
-                extraction_results=guide_results.get("results", [])
-            )
-
-            successful_extractions = guide_results.get("successful_extractions", 0)
-            logger.info(f"✅ [Task {task_id}] Guide execution: {successful_extractions} values extracted")
-        else:
-            logger.warning(f"⚠️ [Task {task_id}] Guide execution failed")
+        # Note: GuideExecutor is no longer needed - SpecificationFlow handles all extraction
+        guide_results = {"successful_extractions": 0, "total_guides": 0}
+        logger.info(f"✅ [Task {task_id}] Parameter extraction completed via SpecificationFlow")
 
         # STEP 4: Complete
         redis_service.set(
