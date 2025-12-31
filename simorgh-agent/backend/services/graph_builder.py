@@ -180,7 +180,8 @@ Analyze the document and extract all equipment, systems, specifications, and the
         self,
         project_number: str,
         document_id: str,
-        entities: Dict[str, Any]
+        entities: Dict[str, Any],
+        filename: Optional[str] = None
     ) -> bool:
         """
         Build Neo4j graph structure from extracted entities
@@ -189,6 +190,7 @@ Analyze the document and extract all equipment, systems, specifications, and the
             project_number: Project OE number
             document_id: Document unique identifier
             entities: Extracted entities dictionary
+            filename: Optional filename for fallback matching
 
         Returns:
             True if successful
@@ -196,10 +198,42 @@ Analyze the document and extract all equipment, systems, specifications, and the
         try:
             logger.info(f"🏗️ Building graph structure for document {document_id}")
 
+            # Check if there are any entities to process
+            equipment_list = entities.get("equipment", [])
+            systems_list = entities.get("systems", [])
+            spec_categories = entities.get("specifications", [])
+            relationships = entities.get("relationships", [])
+
+            total_entities = len(equipment_list) + len(systems_list) + len(spec_categories) + len(relationships)
+            if total_entities == 0:
+                logger.warning(f"⚠️ No entities extracted for document {document_id}, skipping graph building")
+                return True  # Not a failure, just nothing to add
+
             with self.neo4j_driver.session() as session:
+                # First verify document exists
+                verify_result = session.run("""
+                    MATCH (doc:Document {project_number: $project_number})
+                    WHERE doc.id = $doc_id OR doc.filename = $filename
+                    RETURN doc.id as id, doc.filename as filename
+                """, {
+                    "doc_id": document_id,
+                    "project_number": project_number,
+                    "filename": filename or ""
+                })
+                doc_record = verify_result.single()
+
+                if not doc_record:
+                    logger.error(f"❌ Document not found in graph: id={document_id}, project={project_number}")
+                    return False
+
+                actual_doc_id = doc_record["id"]
+                logger.info(f"✅ Found document in graph: {doc_record['filename']} (id: {actual_doc_id})")
+
                 # Create equipment nodes
-                equipment_list = entities.get("equipment", [])
                 for equip in equipment_list:
+                    equip_name = equip.get("name", "")
+                    if not equip_name:
+                        continue
                     session.run("""
                         MATCH (doc:Document {id: $doc_id, project_number: $project_number})
                         MERGE (eq:Equipment {name: $name, project_number: $project_number})
@@ -207,16 +241,19 @@ Analyze the document and extract all equipment, systems, specifications, and the
                             eq.specifications = $specs
                         MERGE (doc)-[:HAS_EQUIPMENT]->(eq)
                     """, {
-                        "doc_id": document_id,
+                        "doc_id": actual_doc_id,
                         "project_number": project_number,
-                        "name": equip.get("name", ""),
+                        "name": equip_name,
                         "type": equip.get("type", ""),
                         "specs": equip.get("specifications", [])
                     })
+                    logger.debug(f"  Created equipment: {equip_name}")
 
                 # Create system nodes
-                systems_list = entities.get("systems", [])
                 for system in systems_list:
+                    system_name = system.get("name", "")
+                    if not system_name:
+                        continue
                     session.run("""
                         MATCH (doc:Document {id: $doc_id, project_number: $project_number})
                         MERGE (sys:System {name: $name, project_number: $project_number})
@@ -225,18 +262,20 @@ Analyze the document and extract all equipment, systems, specifications, and the
                             sys.components = $components
                         MERGE (doc)-[:HAS_SYSTEM]->(sys)
                     """, {
-                        "doc_id": document_id,
+                        "doc_id": actual_doc_id,
                         "project_number": project_number,
-                        "name": system.get("name", ""),
+                        "name": system_name,
                         "type": system.get("type", ""),
                         "description": system.get("description", ""),
                         "components": system.get("components", [])
                     })
+                    logger.debug(f"  Created system: {system_name}")
 
                 # Create specification categories and fields
-                spec_categories = entities.get("specifications", [])
                 for spec_cat in spec_categories:
                     category_name = spec_cat.get("category", "")
+                    if not category_name:
+                        continue
 
                     # Create category node
                     session.run("""
@@ -244,14 +283,17 @@ Analyze the document and extract all equipment, systems, specifications, and the
                         MERGE (cat:SpecCategory {name: $category, project_number: $project_number})
                         MERGE (doc)-[:HAS_SPEC_CATEGORY]->(cat)
                     """, {
-                        "doc_id": document_id,
+                        "doc_id": actual_doc_id,
                         "project_number": project_number,
                         "category": category_name
                     })
+                    logger.debug(f"  Created spec category: {category_name}")
 
                     # Create field nodes
                     for field in spec_cat.get("fields", []):
                         field_name = field.get("name", "")
+                        if not field_name:
+                            continue
                         value = field.get("value", "")
                         unit = field.get("unit", "")
                         description = field.get("description", "")
@@ -315,12 +357,12 @@ Analyze the document and extract all equipment, systems, specifications, and the
                             "value": value,
                             "unit": unit,
                             "description": description,
-                            "doc_id": document_id,
+                            "doc_id": actual_doc_id,
                             "project_number": project_number
                         })
+                        logger.debug(f"    Created field: {field_name} = {value}")
 
                 # Create relationships
-                relationships = entities.get("relationships", [])
                 for rel in relationships:
                     from_entity = rel.get("from", "")
                     to_entity = rel.get("to", "")
@@ -337,7 +379,9 @@ Analyze the document and extract all equipment, systems, specifications, and the
                         "project_number": project_number
                     })
 
-            logger.info(f"✅ Graph structure built successfully for document {document_id}")
+            logger.info(f"✅ Graph structure built successfully for document {actual_doc_id}: "
+                        f"{len(equipment_list)} equipment, {len(systems_list)} systems, "
+                        f"{len(spec_categories)} spec categories, {len(relationships)} relationships")
             return True
 
         except Exception as e:
@@ -381,7 +425,8 @@ Analyze the document and extract all equipment, systems, specifications, and the
         graph_success = self.build_graph_from_entities(
             project_number=project_number,
             document_id=document_id,
-            entities=entities
+            entities=entities,
+            filename=filename  # Pass filename for fallback matching
         )
 
         return {

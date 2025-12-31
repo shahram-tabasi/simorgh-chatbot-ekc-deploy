@@ -318,6 +318,12 @@ class ProjectGraphInitializer:
                 existing = check_result.single()
 
                 if existing:
+                    # Ensure the existing document has a name (fix for older documents)
+                    session.run("""
+                        MATCH (doc:Document {id: $doc_id, project_number: $oenum})
+                        SET doc.name = COALESCE(doc.name, $filename)
+                    """, doc_id=existing["doc_id"], oenum=project_oenum, filename=filename)
+
                     logger.info(f"📄 Document '{filename}' already exists in project {project_oenum}, reusing existing node")
                     return {
                         "success": True,
@@ -328,24 +334,34 @@ class ProjectGraphInitializer:
 
                 # Document doesn't exist, create new one
                 # MERGE by filename + project_number for uniqueness
+                # Use OPTIONAL MATCH for DocumentType to handle cases where project structure isn't fully initialized
                 create_query = """
                 MATCH (p:Project {project_number: $oenum})
-                MATCH (p)-[:HAS_CATEGORY]->(:Category {name: 'Document'})-[:HAS_SUBCATEGORY*0..1]->(cat:Category)
-                MATCH (cat)-[:HAS_TYPE]->(type:DocumentType {name: $doc_type})
-                WHERE cat.name = $category OR cat.name = 'DocumentIndex' OR cat.name = 'OrderList' OR cat.name = 'TechnicalCalculation'
 
+                // Try to find the document type in project structure
+                OPTIONAL MATCH (p)-[:HAS_CATEGORY]->(:Category {name: 'Document'})-[:HAS_SUBCATEGORY*0..1]->(cat:Category)
+                OPTIONAL MATCH (cat)-[:HAS_TYPE]->(type:DocumentType {name: $doc_type})
+                WHERE cat.name = $category OR cat.name = 'DocumentIndex' OR cat.name = 'OrderList' OR cat.name = 'TechnicalCalculation' OR cat IS NULL
+
+                // Create document with explicit properties (not just ON CREATE)
                 MERGE (doc:Document {filename: $filename, project_number: $oenum})
                 ON CREATE SET
                     doc.id = $doc_id,
-                    doc.name = $filename,
                     doc.created_at = datetime()
+
+                // Always set name and other properties (ensures name is set even for existing docs)
+                SET doc.name = $filename
+                SET doc.id = COALESCE(doc.id, $doc_id)
                 SET doc += $metadata
                 SET doc.indexed_at = datetime()
 
-                MERGE (type)-[:HAS_DOCUMENT]->(doc)
+                // Link to document type if it exists
+                FOREACH (_ IN CASE WHEN type IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (type)-[:HAS_DOCUMENT]->(doc)
+                )
                 MERGE (doc)-[:BELONGS_TO_PROJECT]->(p)
 
-                RETURN doc.id as doc_id, doc.filename as filename
+                RETURN doc.id as doc_id, doc.filename as filename, doc.name as name
                 """
 
                 result = session.run(create_query,

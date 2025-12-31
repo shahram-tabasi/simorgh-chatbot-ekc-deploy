@@ -611,7 +611,58 @@ class LLMService:
                 logger.debug(f"📝 Extracted final answer after 'assistantfinal' marker")
                 return final_answer
 
-        # Strategy 4: Clean up remaining artifacts
+        # Strategy 4: Detect chain-of-thought reasoning output (no tags)
+        # Pattern: "The user: '...' They want... Provide..."
+        cot_patterns = [
+            # Model reasoning about user's question
+            r'^The user:?\s*["\'].*?["\']\.?\s*They\s+want',
+            r'^The user\s+(?:asks?|wants?|is asking)',
+            r'^User\'?s?\s+(?:question|request|query)',
+            # Internal planning
+            r'^(?:I\s+)?(?:need|should|will|must)\s+(?:to\s+)?(?:provide|give|explain|respond)',
+            r'^(?:Let me|I\'ll|We should|We need to)\s+(?:think|analyze|consider|provide)',
+            r'^Thinking:',
+            r'^Analysis:',
+            r'^Planning:',
+        ]
+
+        for pattern in cot_patterns:
+            if re.search(pattern, result, re.IGNORECASE | re.MULTILINE):
+                logger.warning(f"⚠️ Detected chain-of-thought reasoning in output, attempting to extract answer")
+
+                # Try to find actual answer after reasoning
+                # Look for patterns that indicate the actual response starts
+                answer_markers = [
+                    r'\n\n(?:Here is|Here\'s|The answer is|Answer:)\s*(.*)',
+                    r'\n\n(?:Based on|According to|From the)\s+(?:the\s+)?(?:document|specification|context)',
+                    r'\n\n##\s+',  # Markdown header usually indicates actual content
+                    r'\n\n\*\*',  # Bold text usually indicates actual content
+                    r'\n\n\d+\.\s+',  # Numbered list
+                    r'\n\n-\s+',  # Bullet list
+                ]
+
+                for marker in answer_markers:
+                    match = re.search(marker, result, re.DOTALL | re.IGNORECASE)
+                    if match:
+                        # Extract from this point forward
+                        start_pos = match.start()
+                        extracted = result[start_pos:].strip()
+                        if len(extracted) > 100:  # Reasonable answer length
+                            logger.info(f"📝 Extracted actual answer from reasoning ({len(result)} -> {len(extracted)} chars)")
+                            result = extracted
+                            break
+
+                # If still looks like reasoning, try harder - look for structured content
+                if re.search(cot_patterns[0], result, re.IGNORECASE):
+                    # Last resort: find first table, list, or substantial paragraph
+                    content_match = re.search(r'(\|[^\n]+\|.*?\n(?:\|[^\n]+\|\n)+)', result, re.DOTALL)
+                    if content_match:
+                        result = content_match.group(1).strip()
+                        logger.info(f"📝 Extracted table from reasoning output")
+
+                break
+
+        # Strategy 5: Clean up remaining artifacts
         # Remove orphaned tags
         result = re.sub(r'</?(?:think|thinking|reasoning|analysis|internal)>', '', result, flags=re.IGNORECASE)
 
