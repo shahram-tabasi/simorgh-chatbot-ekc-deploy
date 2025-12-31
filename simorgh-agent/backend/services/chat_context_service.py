@@ -81,12 +81,13 @@ class GeneralChatHandler:
         """
         try:
             # Search Qdrant for relevant sections
+            # IMPORTANT: Documents are stored with user_id="system" so we must search the same way
             vector_results = self.qdrant.search_section_summaries(
-                project_number=None,  # No project scope
+                user_id="system",  # Must match how documents are stored in section_retriever
                 query=query,
                 limit=limit,
-                session_id=session_id,
-                user_id=user_id
+                project_oenum=None,  # No project scope for general chat
+                session_id=session_id
             )
 
             # Format context for LLM
@@ -292,11 +293,12 @@ class ProjectChatHandler:
         """
         try:
             # 1. Vector search in Qdrant (project-scoped)
+            # IMPORTANT: Documents are stored with user_id="system" so we must search the same way
             vector_results = self.qdrant.search_section_summaries(
-                project_number=project_number,
+                user_id="system",  # Must match how documents are stored in section_retriever
                 query=query,
                 limit=limit,
-                user_id=user_id
+                project_oenum=project_number  # Correct parameter name
             )
 
             # 2. Graph context via CoCoIndex

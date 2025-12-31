@@ -2147,10 +2147,12 @@ async def send_chat_message(
                         logger.info(f"🕸️ Retrieved subgraph: {subgraph.get('node_count', 0)} nodes, {subgraph.get('relationship_count', 0)} relationships")
 
                 # 3. ENHANCED VECTOR SEARCH: Section-based search with FULL content
+                # IMPORTANT: Documents are stored with user_id="system" during upload
+                # so we must search with the same user_id to find them
                 logger.info(f"🔍 Performing enhanced section-based search")
                 qdrant = get_qdrant_service()
                 vector_results = qdrant.search_section_summaries(
-                    user_id=_user_id,
+                    user_id="system",  # Must match how documents are stored in section_retriever
                     project_oenum=project_number,
                     query=_content,
                     limit=5,
