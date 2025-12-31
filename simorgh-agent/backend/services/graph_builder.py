@@ -210,11 +210,11 @@ Analyze the document and extract all equipment, systems, specifications, and the
                 return True  # Not a failure, just nothing to add
 
             with self.neo4j_driver.session() as session:
-                # First verify document exists
+                # First verify document exists (Document nodes use filename+project_number as key)
                 verify_result = session.run("""
                     MATCH (doc:Document {project_number: $project_number})
                     WHERE doc.id = $doc_id OR doc.filename = $filename
-                    RETURN doc.id as id, doc.filename as filename
+                    RETURN doc.id as id, doc.filename as filename, doc.name as name
                 """, {
                     "doc_id": document_id,
                     "project_number": project_number,
@@ -223,11 +223,12 @@ Analyze the document and extract all equipment, systems, specifications, and the
                 doc_record = verify_result.single()
 
                 if not doc_record:
-                    logger.error(f"❌ Document not found in graph: id={document_id}, project={project_number}")
+                    logger.error(f"❌ Document not found in graph: id={document_id}, project={project_number}, filename={filename}")
                     return False
 
-                actual_doc_id = doc_record["id"]
-                logger.info(f"✅ Found document in graph: {doc_record['filename']} (id: {actual_doc_id})")
+                # Use filename for matching (the actual unique key for Document nodes)
+                actual_filename = doc_record["filename"]
+                logger.info(f"✅ Found document in graph: {actual_filename} (id: {doc_record['id']})")
 
                 # Create equipment nodes
                 for equip in equipment_list:
@@ -235,13 +236,13 @@ Analyze the document and extract all equipment, systems, specifications, and the
                     if not equip_name:
                         continue
                     session.run("""
-                        MATCH (doc:Document {id: $doc_id, project_number: $project_number})
+                        MATCH (doc:Document {filename: $filename, project_number: $project_number})
                         MERGE (eq:Equipment {name: $name, project_number: $project_number})
                         SET eq.type = $type,
                             eq.specifications = $specs
                         MERGE (doc)-[:HAS_EQUIPMENT]->(eq)
                     """, {
-                        "doc_id": actual_doc_id,
+                        "filename": actual_filename,
                         "project_number": project_number,
                         "name": equip_name,
                         "type": equip.get("type", ""),
@@ -255,14 +256,14 @@ Analyze the document and extract all equipment, systems, specifications, and the
                     if not system_name:
                         continue
                     session.run("""
-                        MATCH (doc:Document {id: $doc_id, project_number: $project_number})
+                        MATCH (doc:Document {filename: $filename, project_number: $project_number})
                         MERGE (sys:System {name: $name, project_number: $project_number})
                         SET sys.type = $type,
                             sys.description = $description,
                             sys.components = $components
                         MERGE (doc)-[:HAS_SYSTEM]->(sys)
                     """, {
-                        "doc_id": actual_doc_id,
+                        "filename": actual_filename,
                         "project_number": project_number,
                         "name": system_name,
                         "type": system.get("type", ""),
@@ -279,11 +280,11 @@ Analyze the document and extract all equipment, systems, specifications, and the
 
                     # Create category node
                     session.run("""
-                        MATCH (doc:Document {id: $doc_id, project_number: $project_number})
+                        MATCH (doc:Document {filename: $filename, project_number: $project_number})
                         MERGE (cat:SpecCategory {name: $category, project_number: $project_number})
                         MERGE (doc)-[:HAS_SPEC_CATEGORY]->(cat)
                     """, {
-                        "doc_id": actual_doc_id,
+                        "filename": actual_filename,
                         "project_number": project_number,
                         "category": category_name
                     })

@@ -1923,7 +1923,7 @@ async def send_chat_message(
                                 filename=_file.filename,
                                 document_type=doc_type,
                                 category=category,
-                                key_topics=summary_stats.get("total_subjects", 0),
+                                key_topics=[],  # summary_stats only has count, not list
                                 sections_count=sections_count,
                                 total_chars=len(markdown_content),
                                 project_number=project_number,
@@ -2022,11 +2022,15 @@ async def send_chat_message(
 
                         doc_id = str(uuid.uuid4())
 
+                        # Per-chat isolation for general chats
+                        # Using chat_id in project_number ensures each chat has its own document collection
+                        general_chat_key = f"general_{_chat_id}"
+
                         # Process with enhanced pipeline
-                        logger.info(f"🚀 Starting enhanced processing for general chat")
+                        logger.info(f"🚀 Starting enhanced processing for general chat (key: {general_chat_key})")
                         processing_result = section_retriever.process_and_store_document(
                             markdown_content=markdown_content,
-                            project_number="general",  # Use "general" for non-project chats
+                            project_number=general_chat_key,  # Per-chat isolation
                             document_id=doc_id,
                             filename=_file.filename,
                             document_type_hint="General Document",
@@ -2041,7 +2045,7 @@ async def send_chat_message(
                                 filename=_file.filename,
                                 document_type="General",
                                 category="User",
-                                key_topics=summary_stats.get("total_subjects", 0),
+                                key_topics=[],  # summary_stats only has count, not list
                                 sections_count=processing_result.get("sections_extracted", 0),
                                 total_chars=len(markdown_content),
                                 chat_id=_chat_id,
@@ -2050,7 +2054,7 @@ async def send_chat_message(
 
                             # Get relevant sections for user's question
                             sections_result = section_retriever.retrieve_relevant_sections(
-                                project_number="general",
+                                project_number=general_chat_key,  # Must match storage
                                 query=_content,
                                 limit=3,
                                 score_threshold=0.3
@@ -2081,7 +2085,49 @@ async def send_chat_message(
         document_overview_context = ""
         context_used = False
 
-        if project_number and _use_graph_context:
+        # Handle general chats (no project) - retrieve document context from per-chat collection
+        if not project_number and chat_type == "general":
+            logger.info(f"🔍 Retrieving document context for general chat {_chat_id}")
+            try:
+                from services.section_retriever import SectionRetriever
+                from services.document_overview_service import DocumentOverviewService
+
+                qdrant = get_qdrant_service()
+                section_retriever = SectionRetriever(
+                    llm_service=llm_service,
+                    qdrant_service=qdrant
+                )
+                doc_overview = DocumentOverviewService(redis_service=redis)
+
+                # Per-chat isolation key (must match storage)
+                general_chat_key = f"general_{_chat_id}"
+
+                # Get document overview for this chat
+                document_overview_context = doc_overview.generate_overview(
+                    chat_id=_chat_id,
+                    max_documents=10
+                )
+
+                # Retrieve relevant sections from uploaded documents
+                sections_result = section_retriever.retrieve_relevant_sections(
+                    project_number=general_chat_key,
+                    query=_content,
+                    limit=5,
+                    score_threshold=0.3
+                )
+
+                if sections_result.get("success") and sections_result.get("sections"):
+                    graph_context = section_retriever.format_sections_for_context(
+                        sections=sections_result["sections"],
+                        max_sections=3
+                    )
+                    context_used = True
+                    logger.info(f"📄 Retrieved {len(sections_result['sections'])} sections for general chat")
+
+            except Exception as e:
+                logger.warning(f"⚠️ General chat context retrieval failed: {e}", exc_info=True)
+
+        elif project_number and _use_graph_context:
             logger.info(f"🔍 Retrieving enhanced context for project {project_number}")
 
             try:
@@ -2147,10 +2193,12 @@ async def send_chat_message(
                         logger.info(f"🕸️ Retrieved subgraph: {subgraph.get('node_count', 0)} nodes, {subgraph.get('relationship_count', 0)} relationships")
 
                 # 3. ENHANCED VECTOR SEARCH: Section-based search with FULL content
+                # IMPORTANT: Documents are stored with user_id="system" during upload
+                # so we must search with the same user_id to find them
                 logger.info(f"🔍 Performing enhanced section-based search")
                 qdrant = get_qdrant_service()
                 vector_results = qdrant.search_section_summaries(
-                    user_id=_user_id,
+                    user_id="system",  # Must match how documents are stored in section_retriever
                     project_oenum=project_number,
                     query=_content,
                     limit=5,
