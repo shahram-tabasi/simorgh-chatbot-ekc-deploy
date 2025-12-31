@@ -165,42 +165,71 @@ def process_enhanced_spec_extraction(
         logger.info(f"🚀 [Task {task_id}] Starting ENHANCED spec extraction pipeline for {filename}")
 
         # STEP 1: Section extraction + summarization + Qdrant storage
-        redis_service.set(
-            f"spec_task:{task_id}:status",
-            {
-                "task_id": task_id,
-                "status": "processing_sections",
-                "message": "Extracting sections and generating summaries...",
-                "document_id": document_id,
-                "project_number": project_number,
-                "filename": filename,
-                "progress": 10
-            },
-            ttl=3600,
-            db="cache"
-        )
-
+        # First check if sections already exist (avoid double processing)
         qdrant = get_qdrant_service(llm_service=llm_service)
         section_retriever = SectionRetriever(
             llm_service=llm_service,
             qdrant_service=qdrant
         )
 
-        # Process document: Extract sections → Summarize → Store
-        processing_result = section_retriever.process_and_store_document(
-            markdown_content=markdown_content,
+        # Check if document sections already exist in Qdrant
+        existing_sections = section_retriever.retrieve_relevant_sections(
             project_number=project_number,
-            document_id=document_id,
-            filename=filename,
-            document_type_hint="Specification Document",
-            llm_mode=llm_mode
+            query="document overview",
+            limit=1,
+            document_id=document_id
         )
 
-        if not processing_result.get("success"):
-            raise Exception(f"Section processing failed: {processing_result.get('error')}")
+        if existing_sections.get("success") and existing_sections.get("sections"):
+            sections_count = len(existing_sections.get("sections", []))
+            logger.info(f"📄 [Task {task_id}] Sections already exist for document {document_id}, skipping re-extraction")
 
-        sections_count = processing_result.get("sections_extracted", 0)
-        logger.info(f"✅ [Task {task_id}] Processed {sections_count} sections with summaries")
+            redis_service.set(
+                f"spec_task:{task_id}:status",
+                {
+                    "task_id": task_id,
+                    "status": "sections_cached",
+                    "message": f"Using {sections_count} existing sections (already processed)",
+                    "document_id": document_id,
+                    "project_number": project_number,
+                    "filename": filename,
+                    "progress": 30
+                },
+                ttl=3600,
+                db="cache"
+            )
+        else:
+            # Sections don't exist, process document
+            redis_service.set(
+                f"spec_task:{task_id}:status",
+                {
+                    "task_id": task_id,
+                    "status": "processing_sections",
+                    "message": "Extracting sections and generating summaries...",
+                    "document_id": document_id,
+                    "project_number": project_number,
+                    "filename": filename,
+                    "progress": 10
+                },
+                ttl=3600,
+                db="cache"
+            )
+
+            # Process document: Extract sections → Summarize → Store
+            processing_result = section_retriever.process_and_store_document(
+                markdown_content=markdown_content,
+                project_number=project_number,
+                document_id=document_id,
+                filename=filename,
+                document_type_hint="Specification Document",
+                llm_mode=llm_mode
+            )
+
+            if not processing_result.get("success"):
+                raise Exception(f"Section processing failed: {processing_result.get('error')}")
+
+            sections_count = processing_result.get("sections_extracted", 0)
+            logger.info(f"✅ [Task {task_id}] Processed {sections_count} sections with summaries")
 
         # STEP 2: Build knowledge graph (entity extraction)
         redis_service.set(
