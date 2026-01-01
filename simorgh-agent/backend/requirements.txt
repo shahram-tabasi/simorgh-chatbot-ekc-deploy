@@ -34,6 +34,10 @@ redis>=5.0.0
 # MySQL (External Authentication) - NEW Architecture
 pymysql>=1.1.0
 
+# PostgreSQL (Message Persistence) - NEW for Unified Memory Service
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+
 # ArangoDB (Graph Database) - Legacy (backward compatibility)
 pyArango==2.1.1
 python-arango==8.2.2
@@ -66,6 +70,9 @@ accelerate>=0.25.0
 
 # Sentence Transformers (for embeddings) - REQUIRED for Graph RAG
 sentence-transformers>=3.0.0
+
+# Token counting (for Context Window Manager)
+tiktoken>=0.5.0
 
 # -------------------------------------------------
 #  AI/LLM Integration
