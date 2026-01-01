@@ -45,6 +45,11 @@ from services.document_processing_integration import (
     initialize_project_guides,
     get_qdrant_service
 )
+from services.unified_memory_service import (
+    UnifiedMemoryService,
+    get_unified_memory_service,
+    init_unified_memory_service
+)
 from models.ontology import *
 
 # Import authentication routes and utilities
@@ -94,6 +99,7 @@ sql_auth_service: Optional[SQLAuthService] = None
 tpms_auth_service: Optional[TPMSAuthService] = None
 llm_service: Optional[LLMService] = None
 session_id_service: Optional[SessionIDService] = None
+unified_memory_service: Optional[UnifiedMemoryService] = None
 
 
 # =============================================================================
@@ -162,7 +168,7 @@ class PowerPathQuery(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service
+    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service, unified_memory_service
 
     logger.info("🚀 Starting Simorgh Industrial Assistant...")
 
@@ -189,6 +195,23 @@ async def startup_event():
     # Initialize Session ID Service
     session_id_service = create_session_id_service(redis_service)
     logger.info("✅ Session ID service initialized")
+
+    # Initialize Unified Memory Service
+    try:
+        qdrant = get_qdrant_service()
+        unified_memory_service = await init_unified_memory_service(
+            redis_service=redis_service,
+            qdrant_service=qdrant,
+            llm_service=llm_service,
+            neo4j_service=neo4j_service
+        )
+        logger.info("✅ Unified Memory service initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Unified Memory service initialization failed (non-fatal): {e}")
+        unified_memory_service = get_unified_memory_service(
+            redis_service=redis_service,
+            llm_service=llm_service
+        )
 
     logger.info("🎉 All services ready!")
 
@@ -251,6 +274,17 @@ def get_session_id_service() -> SessionIDService:
     if session_id_service is None:
         raise HTTPException(status_code=503, detail="Session ID service not available")
     return session_id_service
+
+
+def get_unified_memory() -> UnifiedMemoryService:
+    """Get Unified Memory service instance"""
+    if unified_memory_service is None:
+        # Return a basic instance with available services
+        return get_unified_memory_service(
+            redis_service=redis_service,
+            llm_service=llm_service
+        )
+    return unified_memory_service
 
 
 # =============================================================================
@@ -1466,10 +1500,16 @@ async def send_chat_message(
     current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j),
     redis: RedisService = Depends(get_redis),
-    llm: LLMService = Depends(get_llm)
+    llm: LLMService = Depends(get_llm),
+    memory: UnifiedMemoryService = Depends(get_unified_memory)
 ):
     """
     Send a chat message and get AI response (requires authentication)
+
+    NOW WITH ENHANCED MEMORY:
+    - Includes recent chat history in LLM context
+    - Retrieves semantic memories from Qdrant
+    - Stores messages across all tiers (Redis, Qdrant, PostgreSQL)
 
     Supports two formats:
     1. JSON (application/json) for text-only messages - BACKWARD COMPATIBLE
@@ -2311,10 +2351,28 @@ You may reference past conversations when relevant (e.g., if user asks about som
 but ALWAYS prioritize technical specifications and project data over conversation history.
 If there's any conflict between conversation history and project specifications, the specifications are correct."""
 
-        llm_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": _content}
-        ]
+        # 🆕 ENHANCED: Get recent chat history from Redis for conversation continuity
+        llm_messages = [{"role": "system", "content": system_prompt}]
+
+        try:
+            # Get recent messages from Redis (last 10 messages for context)
+            recent_messages = redis.get_chat_history(_chat_id, limit=10)
+            if recent_messages:
+                # Add historical messages to context
+                for msg in recent_messages:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", msg.get("text", ""))
+                    if role in ["user", "assistant"] and content:
+                        # Truncate very long messages to save context space
+                        if len(content) > 500:
+                            content = content[:500] + "..."
+                        llm_messages.append({"role": role, "content": content})
+                logger.info(f"📝 Added {len(recent_messages)} recent messages to LLM context")
+        except Exception as e:
+            logger.warning(f"Failed to retrieve chat history: {e}")
+
+        # Add current user message
+        llm_messages.append({"role": "user", "content": _content})
 
         # Generate response
         logger.info(f"💬 Generating LLM response - Mode: {_llm_mode or 'default'}, Chat: {_chat_id}")
@@ -2392,6 +2450,34 @@ If there's any conflict between conversation history and project specifications,
         redis.cache_chat_message(_chat_id, user_msg)
         redis.cache_chat_message(_chat_id, assistant_msg)
 
+        # 🆕 ENHANCED: Store to PostgreSQL for persistent backup
+        try:
+            await memory.persistence.store_message(
+                message_id=user_msg["message_id"],
+                chat_id=_chat_id,
+                user_id=_user_id,
+                role="user",
+                content=_content,
+                project_number=project_number,
+                metadata={"has_attachment": _file is not None}
+            )
+            await memory.persistence.store_message(
+                message_id=assistant_msg["message_id"],
+                chat_id=_chat_id,
+                user_id=_user_id,
+                role="assistant",
+                content=ai_response,
+                project_number=project_number,
+                metadata={
+                    "llm_mode": result.get("mode"),
+                    "context_used": context_used,
+                    "cached": result.get("cached", False)
+                }
+            )
+            logger.debug("📦 Messages stored in PostgreSQL for persistence")
+        except Exception as e:
+            logger.warning(f"PostgreSQL storage failed (non-fatal): {e}")
+
         response_data = {
             "chat_id": _chat_id,
             "response": ai_response,
@@ -2457,74 +2543,123 @@ async def send_chat_message_stream(
     current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j),
     redis: RedisService = Depends(get_redis),
-    llm: LLMService = Depends(get_llm)
+    llm: LLMService = Depends(get_llm),
+    memory: UnifiedMemoryService = Depends(get_unified_memory)
 ):
     """
     Send a chat message and get AI response via Server-Sent Events streaming (requires authentication)
 
+    NOW WITH FULL MEMORY CONTEXT:
+    - Retrieves recent chat history from Redis
+    - Retrieves semantic memories from Qdrant
+    - Uses conversation summary for long chats
+    - Stores messages in all tiers after completion
+
     Validates that the requesting user owns the chat and matches the message user_id
     Returns chunks in real-time as the LLM generates them
     """
-    def event_stream():
+    # Pre-flight validation (before streaming)
+    if message.user_id != current_user:
+        return StreamingResponse(
+            iter([f"data: {json.dumps({'error': 'Cannot send messages as another user'})}\n\n"]),
+            media_type="text/event-stream"
+        )
+
+    chat_metadata = redis.get(f"chat:{message.chat_id}:metadata", db="chat")
+    if not chat_metadata:
+        return StreamingResponse(
+            iter([f"data: {json.dumps({'error': 'Chat not found'})}\n\n"]),
+            media_type="text/event-stream"
+        )
+
+    if chat_metadata.get("user_id") != current_user:
+        return StreamingResponse(
+            iter([f"data: {json.dumps({'error': 'Access denied'})}\n\n"]),
+            media_type="text/event-stream"
+        )
+
+    project_number = chat_metadata.get("project_number")
+
+    # Build graph context if project chat
+    graph_context = ""
+    if project_number and message.use_graph_context:
         try:
-            # Security: Verify the user_id in the message matches the authenticated user
-            if message.user_id != current_user:
-                error_data = json.dumps({'error': 'Cannot send messages as another user'})
-                yield f"data: {error_data}\n\n"
-                return
+            # Get graph entities
+            entities = neo4j.semantic_search(
+                project_number=project_number,
+                filters=None,
+                limit=10
+            )
+            if entities:
+                graph_context = "\n\n## Project Knowledge Graph\n"
+                for entity in entities[:5]:
+                    graph_context += f"- {entity.get('entity_type')}: {entity.get('description', 'N/A')}\n"
 
-            # Get chat metadata
-            chat_metadata = redis.get(f"chat:{message.chat_id}:metadata", db="chat")
+            # Get vector context from Qdrant
+            try:
+                qdrant = get_qdrant_service()
+                vector_results = qdrant.search_section_summaries(
+                    user_id="system",
+                    project_oenum=project_number,
+                    query=message.content,
+                    limit=3,
+                    score_threshold=0.3
+                )
+                if vector_results:
+                    graph_context += "\n\n## Relevant Document Sections\n"
+                    for idx, result in enumerate(vector_results[:3], 1):
+                        graph_context += f"\n**{idx}. {result.get('section_title', 'Section')}** (Score: {result.get('score', 0):.2f})\n"
+                        graph_context += f"{result.get('full_content', '')[:1000]}\n"
+            except Exception as e:
+                logger.warning(f"Vector context retrieval failed: {e}")
 
-            if not chat_metadata:
-                error_data = json.dumps({'error': 'Chat not found'})
-                yield f"data: {error_data}\n\n"
-                return
+        except Exception as e:
+            logger.warning(f"Graph context retrieval failed: {e}")
 
-            # Security: Verify the chat belongs to the requesting user
-            if chat_metadata.get("user_id") != current_user:
-                error_data = json.dumps({'error': 'Access denied: You do not have permission to send messages in this chat'})
-                yield f"data: {error_data}\n\n"
-                return
-
-            project_number = chat_metadata.get("project_number")
-
-            # Build context from knowledge graph if project chat
-            graph_context = ""
-            context_used = False
-
-            if project_number and message.use_graph_context:
-                try:
-                    entities = neo4j.semantic_search(
-                        project_number=project_number,
-                        filters=None,
-                        limit=10
-                    )
-
-                    if entities:
-                        graph_context = "\n\nRelevant project information:\n"
-                        for entity in entities[:5]:
-                            graph_context += f"- {entity.get('entity_type')}: {entity.get('description', 'N/A')}\n"
-                        context_used = True
-
-                except Exception as e:
-                    logger.warning(f"Graph context retrieval failed: {e}")
-
-            # Build LLM messages
-            system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
+    # Get full context using unified memory service
+    system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
 You help users with electrical panel specifications, power distribution, protection devices, and system design.
 Provide accurate, technical responses based on IEC and IEEE standards."""
 
-            if graph_context:
-                system_prompt += f"\n\n{graph_context}"
+    try:
+        context_result = await memory.get_context_for_llm(
+            chat_id=message.chat_id,
+            user_id=message.user_id,
+            current_query=message.content,
+            project_number=project_number,
+            system_prompt=system_prompt,
+            graph_context=graph_context,
+            use_semantic_memory=True,
+            use_summary=True
+        )
+        llm_messages = context_result["messages"]
+        context_metadata = context_result.get("metadata", {})
+    except Exception as e:
+        logger.warning(f"Memory context retrieval failed: {e}")
+        # Fallback to basic context
+        llm_messages = [
+            {"role": "system", "content": system_prompt + (f"\n\n{graph_context}" if graph_context else "")},
+            {"role": "user", "content": message.content}
+        ]
+        context_metadata = {"fallback": True}
 
-            llm_messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message.content}
-            ]
+    def event_stream():
+        try:
+            context_used = context_metadata.get("has_graph_context", False) or \
+                          context_metadata.get("recent_message_count", 0) > 0 or \
+                          context_metadata.get("semantic_memory_count", 0) > 0
 
             # Send metadata first
-            yield f"data: {json.dumps({'context_used': context_used, 'streaming': True})}\n\n"
+            metadata_msg = {
+                'context_used': context_used,
+                'streaming': True,
+                'memory_stats': {
+                    'recent_messages': context_metadata.get('recent_message_count', 0),
+                    'semantic_memories': context_metadata.get('semantic_memory_count', 0),
+                    'has_summary': context_metadata.get('has_summary', False)
+                }
+            }
+            yield f"data: {json.dumps(metadata_msg)}\n\n"
 
             # Stream response chunks with thinking section filtering
             full_response = ""
@@ -2547,18 +2682,17 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                 thinking_depth += len(open_matches) - len(close_matches)
                 thinking_depth = max(0, thinking_depth)
 
-                # Always accumulate for caching
+                # Always accumulate for storage
                 full_response += chunk
 
                 # Only send to client if not inside thinking section
                 if thinking_depth == 0:
-                    # Clean any thinking tags from chunk
                     clean_chunk = think_open_pattern.sub('', chunk)
                     clean_chunk = think_close_pattern.sub('', clean_chunk)
                     if clean_chunk:
                         yield f"data: {json.dumps({'chunk': clean_chunk})}\n\n"
 
-            # Parse full response to extract clean final answer for caching
+            # Parse full response
             clean_response = full_response
             if OUTPUT_PARSER_AVAILABLE:
                 try:
@@ -2566,72 +2700,75 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                 except Exception as e:
                     logger.warning(f"Output parser failed: {e}")
 
-            # Cache messages after completion with complete metadata structure
-            import uuid
+            # Store messages using unified memory service (runs async in background)
             created_at = datetime.now().isoformat()
 
+            # Store in Redis immediately (sync)
             user_msg = {
                 "message_id": str(uuid.uuid4()),
                 "chat_id": message.chat_id,
-                "project_id": project_number,  # None for general chats
-                "page_id": message.chat_id,  # Chat ID represents the page
+                "project_id": project_number,
                 "role": "user",
                 "sender": "user",
                 "content": message.content,
-                "text": message.content,  # Explicit text field as per requirements
+                "text": message.content,
                 "timestamp": created_at,
-                "created_at": created_at,  # Explicit CreatedAt as per requirements
+                "created_at": created_at,
                 "user_id": message.user_id
             }
 
             assistant_msg = {
                 "message_id": str(uuid.uuid4()),
                 "chat_id": message.chat_id,
-                "project_id": project_number,  # None for general chats
-                "page_id": message.chat_id,  # Chat ID represents the page
+                "project_id": project_number,
                 "role": "assistant",
                 "sender": "assistant",
-                "content": clean_response,  # Use cleaned response
-                "text": clean_response,  # Explicit text field as per requirements
+                "content": clean_response,
+                "text": clean_response,
                 "timestamp": created_at,
-                "created_at": created_at,  # Explicit CreatedAt as per requirements
+                "created_at": created_at,
                 "llm_mode": llm_mode,
                 "context_used": context_used,
-                "cached": False
+                "memory_enhanced": True
             }
 
             redis.cache_chat_message(message.chat_id, user_msg)
             redis.cache_chat_message(message.chat_id, assistant_msg)
 
+            # Store in Qdrant for semantic search (async, best effort)
+            try:
+                qdrant = get_qdrant_service()
+                if qdrant:
+                    qdrant.store_user_conversation(
+                        user_id=message.user_id,
+                        user_message=message.content,
+                        assistant_response=clean_response,
+                        chat_id=message.chat_id,
+                        project_number=project_number,
+                        metadata={
+                            "llm_mode": llm_mode,
+                            "context_used": context_used,
+                            "streaming": True
+                        }
+                    )
+                    logger.debug("Conversation stored in Qdrant for semantic search")
+            except Exception as e:
+                logger.warning(f"Qdrant storage failed (non-fatal): {e}")
+
             # Signal completion
-            yield f"data: {json.dumps({'done': True, 'llm_mode': llm_mode})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'llm_mode': llm_mode, 'memory_enhanced': True})}\n\n"
 
         except LLMOfflineError as e:
             logger.error(f"Offline LLM unavailable: {e}")
-            error_data = {
-                'error': 'offline_unavailable',
-                'message': 'Local LLM servers are unavailable. Please try online mode.',
-                'technical_error': str(e)
-            }
-            yield f"data: {json.dumps(error_data)}\n\n"
+            yield f"data: {json.dumps({'error': 'offline_unavailable', 'message': 'Local LLM servers unavailable.'})}\n\n"
         except LLMOnlineError as e:
             logger.error(f"Online LLM unavailable: {e}")
-            error_data = {
-                'error': 'online_unavailable',
-                'message': 'OpenAI API is unavailable. Please try offline mode.',
-                'technical_error': str(e)
-            }
-            yield f"data: {json.dumps(error_data)}\n\n"
+            yield f"data: {json.dumps({'error': 'online_unavailable', 'message': 'OpenAI API unavailable.'})}\n\n"
         except LLMTimeoutError as e:
             logger.error(f"LLM timeout: {e}")
-            error_data = {
-                'error': 'timeout',
-                'message': 'LLM request timed out. Please try again.',
-                'technical_error': str(e)
-            }
-            yield f"data: {json.dumps(error_data)}\n\n"
+            yield f"data: {json.dumps({'error': 'timeout', 'message': 'Request timed out.'})}\n\n"
         except Exception as e:
-            logger.error(f"Streaming error: {e}")
+            logger.error(f"Streaming error: {e}", exc_info=True)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(

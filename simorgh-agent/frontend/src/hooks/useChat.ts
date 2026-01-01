@@ -202,9 +202,14 @@ export function useChat(
                 return;
               }
 
-              // Handle metadata
+              // Handle metadata (including new memory stats)
               if (data.context_used !== undefined) {
                 contextUsed = data.context_used;
+              }
+
+              // Log memory stats if available (for debugging)
+              if (data.memory_stats) {
+                console.log('🧠 Memory context:', data.memory_stats);
               }
 
               // Handle chunk - add message on FIRST chunk, update on subsequent
@@ -244,12 +249,13 @@ export function useChat(
                         metadata: {
                           llm_mode: finalLlmMode,
                           context_used: contextUsed,
+                          memory_enhanced: data.memory_enhanced || false,
                           streaming: false
                         }
                       }
                     : msg
                 ));
-                console.log('✅ Streaming complete');
+                console.log('✅ Streaming complete', data.memory_enhanced ? '(with memory context)' : '');
                 showNotification('Response Ready!', accumulatedContent.slice(0, 100));
               }
             } catch (e) {
