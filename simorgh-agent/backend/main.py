@@ -1601,6 +1601,8 @@ async def send_chat_message(
             )
 
         project_number = chat_metadata.get("project_number")
+        # For memory lookups, use project_id_main (IDProjectMain) since that's what the index uses
+        project_id_for_memory = chat_metadata.get("project_id_main") or project_number
         chat_type = chat_metadata.get("chat_type", "general")
 
         # ============================================================
@@ -2371,22 +2373,46 @@ but ALWAYS prioritize technical specifications and project data over conversatio
 If there's any conflict between conversation history and project specifications, the specifications are correct."""
 
         # 🆕 ENHANCED: Get recent chat history from Redis for conversation continuity
+        # For PROJECT chats: Use cross-chat memory (all chats in the project)
+        # For GENERAL chats: Use single-chat memory (current chat only)
         llm_messages = [{"role": "system", "content": system_prompt}]
 
         try:
-            # Get recent messages from Redis (last 10 messages for context)
-            recent_messages = redis.get_chat_history(_chat_id, limit=10)
+            if chat_type == "project" and project_id_for_memory:
+                # PROJECT CHAT: Get cross-chat memory from all project chats
+                logger.info(f"🔗 Using project-wide memory for project {project_id_for_memory}")
+                recent_messages = redis.get_project_chat_history(
+                    user_id=_user_id,
+                    project_number=project_id_for_memory,
+                    current_chat_id=_chat_id,
+                    limit=30,  # More messages since we're aggregating from multiple chats
+                    include_current_chat=True
+                )
+
+                # Count source chats for logging
+                source_chats = set(m.get('source_chat_id', _chat_id) for m in recent_messages)
+                logger.info(f"📚 Retrieved {len(recent_messages)} messages from {len(source_chats)} project chat(s)")
+            else:
+                # GENERAL CHAT: Use current chat history only (isolated)
+                recent_messages = redis.get_chat_history(_chat_id, limit=10)
+
             if recent_messages:
                 # Add historical messages to context
                 for msg in recent_messages:
                     role = msg.get("role", "user")
                     content = msg.get("content", msg.get("text", ""))
+
+                    # For project-wide memory, prefix messages from other chats
+                    if chat_type == "project" and msg.get('source_chat_id') and msg.get('source_chat_id') != _chat_id:
+                        content = f"[From earlier project discussion] {content}"
+
                     if role in ["user", "assistant"] and content:
                         # Truncate very long messages to save context space
                         if len(content) > 500:
                             content = content[:500] + "..."
                         llm_messages.append({"role": role, "content": content})
-                logger.info(f"📝 Added {len(recent_messages)} recent messages to LLM context")
+
+                logger.info(f"📝 Added {len(recent_messages)} messages to LLM context")
         except Exception as e:
             logger.warning(f"Failed to retrieve chat history: {e}")
 
@@ -2598,6 +2624,8 @@ async def send_chat_message_stream(
         )
 
     project_number = chat_metadata.get("project_number")
+    # For memory lookups, use project_id_main (IDProjectMain) since that's what the index uses
+    project_id_for_memory = chat_metadata.get("project_id_main") or project_number
 
     # Build graph context if project chat
     graph_context = ""
@@ -2645,7 +2673,7 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             chat_id=message.chat_id,
             user_id=message.user_id,
             current_query=message.content,
-            project_number=project_number,
+            project_number=project_id_for_memory,  # Use IDProjectMain for memory lookup
             system_prompt=system_prompt,
             graph_context=graph_context,
             use_semantic_memory=True,

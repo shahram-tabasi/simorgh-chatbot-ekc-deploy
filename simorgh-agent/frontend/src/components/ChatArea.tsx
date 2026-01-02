@@ -109,17 +109,16 @@ export function ChatArea({
       {/* CHATTING MODE: Messages with fixed bottom ChatInput */}
       {!isIdle && (
         <>
-          <div className="flex-1 flex flex-col pt-14 md:pt-0 overflow-y-auto px-2 sm:px-4 md:px-8 lg:px-20">
-            <div className="w-full pt-4 pb-2">
-              <MessageList
-                messages={messages}
-                isTyping={isTyping}
-                onRegenerateResponse={onRegenerateResponse}
-                onUpdateReaction={onUpdateReaction}
-                onSwitchVersion={onSwitchVersion}
-                onEditMessage={onEditMessage}
-              />
-            </div>
+          {/* Remove overflow-y-auto from here - let MessageList handle scrolling */}
+          <div className="flex-1 flex flex-col pt-14 md:pt-0 overflow-hidden px-2 sm:px-4 md:px-8 lg:px-20">
+            <MessageList
+              messages={messages}
+              isTyping={isTyping}
+              onRegenerateResponse={onRegenerateResponse}
+              onUpdateReaction={onUpdateReaction}
+              onSwitchVersion={onSwitchVersion}
+              onEditMessage={onEditMessage}
+            />
           </div>
 
           {/* ChatInput - fixed at bottom in chatting mode */}

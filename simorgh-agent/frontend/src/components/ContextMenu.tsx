@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Edit2, Trash2, Plus } from 'lucide-react';
 
 interface ContextMenuProps {
@@ -67,7 +68,8 @@ export default function ContextMenu({
     }
   }, [x, y]);
 
-  return (
+  // Use Portal to render at document.body level to escape stacking context
+  return createPortal(
     <div
       ref={menuRef}
       style={{ left: x, top: y }}
@@ -113,6 +115,7 @@ export default function ContextMenu({
           </button>
         </>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }
