@@ -864,8 +864,27 @@ async def get_chat(
             detail="Access denied: You don't have permission to view this chat"
         )
 
-    # Get messages
-    messages = redis.get_chat_history(chat_id, limit=limit, offset=offset)
+    # Get messages and normalize field names for frontend compatibility
+    raw_messages = redis.get_chat_history(chat_id, limit=limit, offset=offset)
+
+    # Ensure each message has consistent fields that frontend expects
+    messages = []
+    for msg in raw_messages:
+        normalized = {
+            "message_id": msg.get("message_id", str(hash(msg.get("content", "")))),
+            "content": msg.get("content") or msg.get("text", ""),
+            "role": msg.get("role") or msg.get("sender", "user"),
+            "timestamp": msg.get("timestamp") or msg.get("created_at", ""),
+            "metadata": {
+                "llm_mode": msg.get("llm_mode"),
+                "context_used": msg.get("context_used"),
+                "cached": msg.get("cached"),
+                "memory_enhanced": msg.get("memory_enhanced"),
+            }
+        }
+        messages.append(normalized)
+
+    logger.debug(f"Returning {len(messages)} normalized messages for chat {chat_id}")
 
     return {
         "chat": metadata,

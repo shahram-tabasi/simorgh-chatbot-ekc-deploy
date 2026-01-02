@@ -76,18 +76,27 @@ export function useChat(
     };
   }, []);
 
+  // Track previous messages length to detect actual changes
+  const prevMessagesLengthRef = useRef<number>(0);
+
   // Reset messages when chatId changes OR when initialMessages updates (after async load)
   useEffect(() => {
     const chatIdChanged = chatId !== prevChatIdRef.current;
+    const messagesChanged = initialMessages.length !== prevMessagesLengthRef.current;
 
     if (chatIdChanged) {
       console.log('🔄 Chat switched - ID changed from', prevChatIdRef.current, 'to', chatId);
       prevChatIdRef.current = chatId || null;
+      prevMessagesLengthRef.current = 0; // Reset message tracking for new chat
     }
 
     // Update messages whenever initialMessages changes (including async loads)
-    console.log('📝 Loading messages:', initialMessages.length);
-    setMessages(initialMessages);
+    // This handles: 1) Chat switch, 2) Async message load, 3) New messages from other sources
+    if (chatIdChanged || messagesChanged || initialMessages.length > 0) {
+      console.log(`📝 Loading ${initialMessages.length} messages (chatId: ${chatId}, changed: ${chatIdChanged || messagesChanged})`);
+      setMessages(initialMessages);
+      prevMessagesLengthRef.current = initialMessages.length;
+    }
 
     // Reset typing state only on chat switch
     if (chatIdChanged) {
