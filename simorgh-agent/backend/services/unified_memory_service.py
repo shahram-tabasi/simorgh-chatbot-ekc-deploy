@@ -265,6 +265,8 @@ class UnifiedMemoryService:
 
         Retrieves and combines:
         1. Recent chat history from Redis
+           - For general chats: current chat only
+           - For project chats: ALL chats in the project (cross-chat memory)
         2. Conversation summary (if available)
         3. Semantic memories from Qdrant
         4. Graph context (if provided)
@@ -273,7 +275,7 @@ class UnifiedMemoryService:
             chat_id: Chat identifier
             user_id: User identifier
             current_query: Current user message
-            project_number: Optional project number
+            project_number: Optional project number (enables project-wide memory)
             system_prompt: Base system prompt
             graph_context: Optional knowledge graph context
             use_semantic_memory: Whether to include semantic memories
@@ -286,10 +288,25 @@ class UnifiedMemoryService:
         tasks = []
 
         # Task 1: Get recent messages from Redis
+        # For PROJECT chats: get history from ALL chats in the project
+        # For GENERAL chats: get history from current chat only
         async def get_redis_history():
-            if self.redis:
+            if not self.redis:
+                return []
+
+            if project_number:
+                # PROJECT CHAT: Get cross-chat memory from all project chats
+                logger.info(f"🔗 Using project-wide memory for project {project_number}")
+                return self.redis.get_project_chat_history(
+                    user_id=user_id,
+                    project_number=project_number,
+                    current_chat_id=chat_id,
+                    limit=30,  # More messages since we're aggregating
+                    include_current_chat=True
+                )
+            else:
+                # GENERAL CHAT: Use current chat history only (isolated)
                 return self.redis.get_chat_history(chat_id, limit=20)
-            return []
 
         tasks.append(get_redis_history())
 
@@ -335,9 +352,14 @@ class UnifiedMemoryService:
         session_summary = results[1] if not isinstance(results[1], Exception) else None
         semantic_memories = results[2] if not isinstance(results[2], Exception) else []
 
+        # Count unique source chats for project memory
+        source_chats = set(m.get('source_chat_id', chat_id) for m in recent_messages)
+        memory_type = "project-wide" if project_number and len(source_chats) > 1 else "chat-local"
+
         # Log what we retrieved
         logger.info(
-            f"Context retrieved: {len(recent_messages)} recent messages, "
+            f"Context retrieved ({memory_type}): {len(recent_messages)} messages "
+            f"from {len(source_chats)} chat(s), "
             f"summary={'yes' if session_summary else 'no'}, "
             f"{len(semantic_memories)} semantic memories"
         )
@@ -368,7 +390,10 @@ class UnifiedMemoryService:
                 "recent_message_count": len(recent_messages),
                 "semantic_memory_count": len(semantic_memories),
                 "has_summary": session_summary is not None,
-                "has_graph_context": graph_context is not None
+                "has_graph_context": graph_context is not None,
+                "memory_type": memory_type,
+                "source_chat_count": len(source_chats),
+                "is_project_chat": project_number is not None
             }
         }
 

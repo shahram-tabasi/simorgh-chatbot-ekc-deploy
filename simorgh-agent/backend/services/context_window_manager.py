@@ -313,10 +313,20 @@ class ContextWindowManager:
 
         # Add chat history
         if chat_history:
-            history_messages = [
-                {"role": msg.get("role", "user"), "content": msg.get("content", msg.get("text", ""))}
-                for msg in chat_history
-            ]
+            # Check if this is project-wide memory (messages from multiple chats)
+            has_multi_chat = any(m.get('source_chat_id') for m in chat_history)
+
+            history_messages = []
+            for msg in chat_history:
+                role = msg.get("role", "user")
+                content = msg.get("content", msg.get("text", ""))
+
+                # For project-wide memory, prefix messages from other chats
+                if has_multi_chat and msg.get('source_chat_id') and not msg.get('is_current_chat', True):
+                    # Add context marker for messages from other project chats
+                    content = f"[From earlier project discussion] {content}"
+
+                history_messages.append({"role": role, "content": content})
 
             truncated_history, history_truncated = self._truncate_messages(
                 history_messages,

@@ -311,6 +311,88 @@ class RedisService:
             logger.error(f"Failed to clear chat history: {e}")
             return False
 
+    def get_project_chat_history(
+        self,
+        user_id: str,
+        project_number: str,
+        current_chat_id: str,
+        limit: int = 30,
+        include_current_chat: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Get chat history from ALL chats in a project.
+
+        This enables cross-chat memory within the same project.
+        Messages are sorted by timestamp (oldest first) and limited.
+
+        Args:
+            user_id: User identifier
+            project_number: Project number to get chats for
+            current_chat_id: Current chat ID (for prioritization)
+            limit: Maximum total messages to return
+            include_current_chat: Whether to include current chat's messages
+
+        Returns:
+            List of messages from all project chats, sorted by timestamp
+        """
+        try:
+            # Get all chat IDs for this project
+            chat_ids = self.get_user_project_chats(user_id, project_number)
+
+            if not chat_ids:
+                logger.debug(f"No chats found for project {project_number}")
+                return []
+
+            logger.info(f"📚 Project {project_number} has {len(chat_ids)} chats: {chat_ids}")
+
+            all_messages = []
+
+            for chat_id in chat_ids:
+                # Skip current chat if not included
+                if not include_current_chat and chat_id == current_chat_id:
+                    continue
+
+                # Get messages from this chat (last 20 per chat to avoid overload)
+                chat_messages = self.get_chat_history(chat_id, limit=20)
+
+                # Add chat_id to each message for context
+                for msg in chat_messages:
+                    msg['source_chat_id'] = chat_id
+                    msg['is_current_chat'] = (chat_id == current_chat_id)
+
+                all_messages.extend(chat_messages)
+
+            if not all_messages:
+                return []
+
+            # Sort by timestamp (oldest first for conversation flow)
+            all_messages.sort(key=lambda m: m.get('timestamp', ''))
+
+            # Prioritize: keep most recent messages, but ensure current chat is represented
+            if len(all_messages) > limit:
+                # Split into current chat and other chats
+                current_chat_msgs = [m for m in all_messages if m.get('is_current_chat')]
+                other_chat_msgs = [m for m in all_messages if not m.get('is_current_chat')]
+
+                # Allocate: 60% for current chat, 40% for other project chats
+                current_limit = int(limit * 0.6)
+                other_limit = limit - current_limit
+
+                # Take most recent from each
+                current_chat_msgs = current_chat_msgs[-current_limit:] if len(current_chat_msgs) > current_limit else current_chat_msgs
+                other_chat_msgs = other_chat_msgs[-other_limit:] if len(other_chat_msgs) > other_limit else other_chat_msgs
+
+                # Combine and re-sort
+                all_messages = current_chat_msgs + other_chat_msgs
+                all_messages.sort(key=lambda m: m.get('timestamp', ''))
+
+            logger.info(f"📚 Retrieved {len(all_messages)} messages from {len(chat_ids)} project chats")
+            return all_messages
+
+        except Exception as e:
+            logger.error(f"Failed to get project chat history: {e}")
+            return []
+
     def get_chat_count(self, chat_id: str) -> int:
         """Get total message count for a chat"""
         try:
