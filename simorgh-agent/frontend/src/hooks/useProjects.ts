@@ -78,23 +78,24 @@ export function useProjects(userId?: string) {
             const messages = chatResponse.data.messages || [];
             console.log(`✅ Auto-loaded ${messages.length} messages for chat ${mostRecentChat.id}`);
 
-            // Update chat with messages
+            // Update chat with messages - use message_id for unique IDs
             setGeneralChats(prev =>
               prev.map(c =>
                 c.id === mostRecentChat.id
                   ? {
                       ...c,
-                      messages: messages.map((m: any) => ({
-                        id: m.timestamp || Date.now().toString(),
-                        content: m.content,
-                        role: m.role,
-                        timestamp: new Date(m.timestamp),
-                        metadata: m.metadata
+                      messages: messages.map((m: any, idx: number) => ({
+                        id: m.message_id || `${m.timestamp}-${idx}` || `${Date.now()}-${idx}`,
+                        content: m.content || m.text || '',
+                        role: m.role || 'user',
+                        timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+                        metadata: m.metadata || {}
                       }))
                     }
                   : c
               )
             );
+            console.log(`✅ Messages populated in generalChats state: ${messages.length}`);
           } catch (error) {
             console.error('❌ Failed to auto-load chat history:', error);
           }
@@ -512,7 +513,15 @@ export function useProjects(userId?: string) {
 
       console.log(`✅ Loaded ${messages.length} messages for chat ${chatId}`);
 
-      // Update chat with loaded messages and latest metadata
+      // Update chat with loaded messages and latest metadata - use message_id for unique IDs
+      const mapMessages = (messages: any[]) => messages.map((m: any, idx: number) => ({
+        id: m.message_id || `${m.timestamp}-${idx}` || `${Date.now()}-${idx}`,
+        content: m.content || m.text || '',
+        role: m.role || 'user',
+        timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+        metadata: m.metadata || {}
+      }));
+
       if (projectId !== null) {
         // Project chat
         setProjects(prev =>
@@ -525,13 +534,7 @@ export function useProjects(userId?: string) {
                       ? {
                           ...c,
                           title: chatMetadata.chat_name || c.title,
-                          messages: messages.map((m: any) => ({
-                            id: m.timestamp || Date.now().toString(),
-                            content: m.content,
-                            role: m.role,
-                            timestamp: new Date(m.timestamp),
-                            metadata: m.metadata
-                          })),
+                          messages: mapMessages(messages),
                           updatedAt: new Date()
                         }
                       : c
@@ -540,6 +543,7 @@ export function useProjects(userId?: string) {
               : p
           )
         );
+        console.log(`✅ Project chat messages loaded: ${messages.length}`);
       } else {
         // General chat
         setGeneralChats(prev =>
@@ -548,18 +552,13 @@ export function useProjects(userId?: string) {
               ? {
                   ...c,
                   title: chatMetadata.chat_name || c.title,
-                  messages: messages.map((m: any) => ({
-                    id: m.timestamp || Date.now().toString(),
-                    content: m.content,
-                    role: m.role,
-                    timestamp: new Date(m.timestamp),
-                    metadata: m.metadata
-                  })),
+                  messages: mapMessages(messages),
                   updatedAt: new Date()
                 }
               : c
           )
         );
+        console.log(`✅ General chat messages loaded: ${messages.length}`);
       }
     } catch (error) {
       console.error('❌ Failed to load chat history:', error);

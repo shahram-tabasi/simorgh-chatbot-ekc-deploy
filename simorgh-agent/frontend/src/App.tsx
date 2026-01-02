@@ -74,6 +74,13 @@ function MainChat() {
     setActiveSpecTasks(prev => prev.filter(id => id !== taskId));
   };
 
+  // Memoize initial messages to prevent unnecessary re-renders with new empty array references
+  const initialMessages = React.useMemo(() => {
+    const msgs = activeChat?.messages || [];
+    console.log(`📚 Active chat messages: ${msgs.length} (chat: ${activeChatId})`);
+    return msgs;
+  }, [activeChat?.messages, activeChatId]);
+
   const {
     messages,
     isTyping,
@@ -84,7 +91,7 @@ function MainChat() {
     cancelGeneration,
     editMessage
   } = useChat(
-    activeChat?.messages || [],
+    initialMessages,
     activeChatId,
     userId,
     projectNumber,

@@ -146,6 +146,56 @@ class LLMService:
         health["status"] = overall_status
         return health
 
+    def _format_messages_for_local_llm(
+        self,
+        messages: List[Dict[str, str]]
+    ) -> tuple[str, str]:
+        """
+        Format OpenAI-style messages for local LLM API.
+
+        Local LLM only accepts system_prompt and user_prompt, so we need to
+        include the conversation history in the user prompt.
+
+        Args:
+            messages: List of messages with 'role' and 'content'
+
+        Returns:
+            Tuple of (system_prompt, user_prompt_with_history)
+        """
+        system_prompt = "You are Simorgh, an expert industrial electrical engineering assistant."
+        conversation_history = []
+        current_message = ""
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_prompt = content
+            elif role == "user":
+                # Keep track of conversation for history
+                conversation_history.append(f"User: {content}")
+                current_message = content  # Keep last user message
+            elif role == "assistant":
+                conversation_history.append(f"Assistant: {content}")
+
+        # If we have conversation history (more than just the current message)
+        if len(conversation_history) > 1:
+            # Format history (excluding the last user message which becomes the current question)
+            history_text = "\n\n".join(conversation_history[:-1])
+            user_prompt = f"""## Previous Conversation:
+{history_text}
+
+## Current Question:
+{current_message}
+
+Please answer the current question, keeping in mind the context from our previous conversation."""
+        else:
+            # No history, just use the current message
+            user_prompt = current_message
+
+        return system_prompt, user_prompt
+
     def _check_openai_health(self) -> Dict[str, Any]:
         """Check OpenAI API availability"""
         if not self.openai_api_key:
@@ -445,13 +495,8 @@ class LLMService:
     ) -> Dict[str, Any]:
         """Call a local LLM server endpoint (non-streaming - consumes stream internally)"""
 
-        # Extract system and user prompts from messages
-        system_prompt = "You are Simorgh, an expert industrial electrical engineering assistant."
-        for msg in messages:
-            if msg.get("role") == "system":
-                system_prompt = msg.get("content", system_prompt)
-
-        user_prompt = messages[-1].get("content", "") if messages else ""
+        # Format messages for local LLM API (includes conversation history)
+        system_prompt, user_prompt = self._format_messages_for_local_llm(messages)
 
         payload = {
             "system_prompt": system_prompt,
@@ -462,7 +507,7 @@ class LLMService:
 
         full_url = f"{url.rstrip('/')}/generate-stream"
         logger.info(f"🔧 _call_local_llm - Full URL: {full_url}")
-        logger.info(f"🔧 Payload: system_prompt length={len(system_prompt)}, user_prompt={user_prompt[:50]}...")
+        logger.info(f"🔧 Payload: system_prompt length={len(system_prompt)}, user_prompt length={len(user_prompt)}, history_included={'Previous Conversation' in user_prompt}")
 
         try:
             response = requests.post(
@@ -819,23 +864,21 @@ class LLMService:
     ) -> Iterator[str]:
         """Stream from local LLM via nginx load balancer with thinking section filtering"""
 
-        payload = {
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens or 2000,
-            "stream": True
-        }
+        # Format messages for local LLM API (includes conversation history)
+        system_prompt, user_prompt = self._format_messages_for_local_llm(messages)
 
         # Call load-balanced endpoint (nginx handles failover between .61/.62)
         try:
             url = f"{self.local_llm_url.rstrip('/')}/generate-stream"
 
             payload = {
-                "system_prompt": "You are Simorgh, an expert industrial electrical engineering assistant.",
-                "user_prompt": messages[-1]["content"],
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
                 "thinking_level": "medium",
                 "stream": True
             }
+
+            logger.info(f"🔧 _stream_offline - history_included={'Previous Conversation' in user_prompt}, user_prompt_length={len(user_prompt)}")
 
             response = requests.post(
                 url,
