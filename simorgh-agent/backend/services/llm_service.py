@@ -892,6 +892,7 @@ Please answer the current question, keeping in mind the context from our previou
             accumulated_text = ""
             in_thinking = False
             thinking_depth = 0  # Track nested thinking tags
+            chunks_yielded = False  # Track if any chunks have been yielded
 
             # Patterns for detecting thinking sections
             import re
@@ -914,10 +915,12 @@ Please answer the current question, keeping in mind the context from our previou
                         if "chunk" in data:
                             chunk = data["chunk"]
                         elif "output" in data:
-                            # Complete output format - extract final answer and yield
-                            raw_output = data["output"]
-                            clean_output = self._extract_final_answer(raw_output)
-                            yield clean_output
+                            # Complete output format - only yield if no chunks were sent
+                            # This prevents duplication when both chunks AND output are sent
+                            if not chunks_yielded:
+                                raw_output = data["output"]
+                                clean_output = self._extract_final_answer(raw_output)
+                                yield clean_output
                             continue
                         elif "text" in data:
                             chunk = data["text"]
@@ -951,6 +954,7 @@ Please answer the current question, keeping in mind the context from our previou
                             clean_chunk = think_open_pattern.sub('', chunk)
                             clean_chunk = think_close_pattern.sub('', clean_chunk)
                             if clean_chunk.strip():
+                                chunks_yielded = True
                                 yield clean_chunk
                             continue
 
@@ -958,6 +962,7 @@ Please answer the current question, keeping in mind the context from our previou
                         clean_chunk = think_open_pattern.sub('', chunk)
                         clean_chunk = think_close_pattern.sub('', clean_chunk)
                         if clean_chunk:
+                            chunks_yielded = True
                             yield clean_chunk
 
                     except json.JSONDecodeError:
