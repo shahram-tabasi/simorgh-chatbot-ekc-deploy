@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   SendIcon, PaperclipIcon, MicIcon, StopCircleIcon,
-  FileTextIcon, XIcon, LoaderIcon
+  FileTextIcon, XIcon, LoaderIcon, Loader2Icon
 } from 'lucide-react';
 import { UploadedFile } from '../types';
-import { showError } from '../utils/alerts';
+import { showError, showInfo } from '../utils/alerts';
 
 interface ChatInputProps {
   onSend: (message: string, files?: UploadedFile[]) => void;
@@ -28,6 +28,7 @@ export function ChatInput({
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -35,6 +36,7 @@ export function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
 
   // Load edit message when provided
   useEffect(() => {
@@ -146,11 +148,15 @@ export function ChatInput({
     return 'document';
   };
 
-  // Voice recording
+  // Voice recording with STT transcription
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      streamRef.current = stream;
+
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -160,21 +166,60 @@ export function ChatInput({
         }
       };
 
-      mediaRecorder.onstop = () => {
+      mediaRecorder.onstop = async () => {
+        // Create audio blob
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const audioFile: UploadedFile = {
-          id: Date.now().toString(),
-          name: `voice-recording-${Date.now()}.webm`,
-          type: 'audio/webm',
-          size: audioBlob.size,
-          category: 'audio',
-          url: URL.createObjectURL(audioBlob),
-        };
-        setFiles((prev) => [...prev, audioFile]);
+
+        // Stop all tracks
         stream.getTracks().forEach((track) => track.stop());
+
+        // If audio is too short, skip transcription
+        if (audioBlob.size < 1000) {
+          console.log('Audio too short, skipping transcription');
+          return;
+        }
+
+        // Transcribe audio
+        setIsTranscribing(true);
+        try {
+          const formData = new FormData();
+          formData.append('audio', audioBlob, 'recording.webm');
+
+          const response = await fetch('/api/stt/transcribe', {
+            method: 'POST',
+            body: formData
+          });
+
+          if (!response.ok) {
+            throw new Error(`STT failed: ${response.statusText}`);
+          }
+
+          const result = await response.json();
+
+          if (result.text && result.text.trim()) {
+            // Append transcribed text to message
+            setMessage(prev => {
+              const separator = prev.trim() ? ' ' : '';
+              return prev + separator + result.text.trim();
+            });
+
+            // Focus textarea
+            setTimeout(() => textareaRef.current?.focus(), 100);
+
+            console.log(`STT: "${result.text}" (${result.language}, ${result.processing_time.toFixed(2)}s)`);
+          } else {
+            showInfo('No Speech Detected', 'Could not detect any speech in the recording. Please try again.');
+          }
+        } catch (error) {
+          console.error('Transcription failed:', error);
+          showError('Transcription Failed', 'Could not transcribe audio. Please try again or type your message.');
+        } finally {
+          setIsTranscribing(false);
+        }
       };
 
-      mediaRecorder.start();
+      // Request data every 1 second for potential future streaming
+      mediaRecorder.start(1000);
       setIsRecording(true);
     } catch (error) {
       console.error('Failed to start recording:', error);
@@ -188,6 +233,15 @@ export function ChatInput({
       setIsRecording(false);
     }
   };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
 
   const inputClasses = centered
     ? 'w-full max-w-3xl mx-auto px-2 sm:px-4'
@@ -256,17 +310,28 @@ export function ChatInput({
           onChange={handleFileSelect}
         />
 
-        {/* Voice recording - visible on all screens (matches Claude/ChatGPT mobile) */}
+        {/* Voice recording with STT - visible on all screens (matches Claude/ChatGPT mobile) */}
         <button
           onClick={isRecording ? stopRecording : startRecording}
-          disabled={disabled}
-          className={`p-2 md:p-2.5 rounded-xl transition-colors flex-shrink-0 ${isRecording
+          disabled={disabled || isTranscribing}
+          className={`p-2 md:p-2.5 rounded-xl transition-colors flex-shrink-0 ${
+            isTranscribing
+              ? 'bg-blue-500/20 cursor-wait'
+              : isRecording
               ? 'bg-red-500/20 hover:bg-red-500/30'
               : 'hover:bg-white/10'
-            }`}
-          title={isRecording ? 'Stop recording' : 'Start voice recording'}
+            } disabled:opacity-50`}
+          title={
+            isTranscribing
+              ? 'Transcribing...'
+              : isRecording
+              ? 'Stop recording'
+              : 'Start voice recording (Speech-to-Text)'
+          }
         >
-          {isRecording ? (
+          {isTranscribing ? (
+            <Loader2Icon className="w-5 h-5 text-blue-400 animate-spin" />
+          ) : isRecording ? (
             <StopCircleIcon className="w-5 h-5 text-red-400 animate-pulse" />
           ) : (
             <MicIcon className="w-5 h-5 text-gray-300" />

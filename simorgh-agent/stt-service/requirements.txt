@@ -1,0 +1,19 @@
+# STT Service - Faster-Whisper based Speech-to-Text
+# Runs on CPU to avoid GPU memory conflicts with vLLM
+
+# Web framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Audio processing
+pydub==0.25.1
+soundfile==0.12.1
+numpy>=1.24.0
+
+# Speech-to-Text
+faster-whisper==1.0.1
+ctranslate2>=4.0.0
+
+# Utilities
+python-dotenv==1.0.0

@@ -118,6 +118,33 @@ services:
       - PYTHONUNBUFFERED=1
 
   # ===========================================================================
+  # STT-SERVICE - Speech-to-Text using Faster-Whisper (CPU)
+  # ===========================================================================
+  stt-service:
+    build:
+      context: ./stt-service
+      dockerfile: Dockerfile
+    container_name: stt-service
+    expose:
+      - "8001"
+    volumes:
+      - stt_models:/app/models  # Cache Whisper models
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # Model loading takes time
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-base}  # tiny, base, small, medium
+      - WHISPER_DEVICE=cpu  # Use CPU to avoid GPU memory conflicts
+      - WHISPER_COMPUTE_TYPE=int8  # Optimized for CPU
+
+  # ===========================================================================
   # NEO4J - Knowledge Graph Database
   # ===========================================================================
   neo4j:
@@ -302,4 +329,6 @@ volumes:
   qdrant_storage:
     driver: local
   cocoindex_db_data:
+    driver: local
+  stt_models:
     driver: local
