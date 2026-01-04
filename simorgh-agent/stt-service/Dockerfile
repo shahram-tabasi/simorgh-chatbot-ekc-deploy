@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libswscale-dev \
     libswresample-dev \
     libavfilter-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
