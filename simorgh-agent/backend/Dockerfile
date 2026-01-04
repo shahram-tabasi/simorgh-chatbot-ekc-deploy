@@ -117,6 +117,16 @@ RUN echo "=== Downloading NLTK data ===" && \
     echo "=== NLTK data downloaded ==="
 
 # -------------------------------------------------
+#  Pre-download SentenceTransformer model
+#  This avoids HuggingFace timeout issues at runtime
+# -------------------------------------------------
+RUN echo "=== Pre-downloading SentenceTransformer model ===" && \
+    python3.11 -c "from sentence_transformers import SentenceTransformer; \
+    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
+    print(f'Model cached: {model.get_sentence_embedding_dimension()} dimensions')" && \
+    echo "=== SentenceTransformer model cached ==="
+
+# -------------------------------------------------
 #  Verify critical packages are installed
 # -------------------------------------------------
 RUN echo "=== Verifying installations ===" && \
