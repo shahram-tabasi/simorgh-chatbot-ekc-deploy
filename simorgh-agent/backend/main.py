@@ -54,8 +54,16 @@ from models.ontology import *
 
 # Import authentication routes and utilities
 from routes.auth import router as auth_router
+from routes.auth_v2 import router as auth_v2_router
 from routes.documents_rag import router as documents_rag_router
 from services.auth_utils import get_current_user
+
+# Import security middleware
+from middleware.security import (
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    RequestValidationMiddleware
+)
 
 # Import output parser for cleaning LLM responses
 try:
@@ -77,6 +85,7 @@ app = FastAPI(
 
 # Include routers
 app.include_router(auth_router)
+app.include_router(auth_v2_router)  # Modern auth endpoints (v2)
 app.include_router(documents_rag_router)
 
 # CORS
@@ -86,6 +95,17 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Security Middleware
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestValidationMiddleware)
+app.add_middleware(
+    RateLimitMiddleware,
+    auth_limit=10,      # 10 auth requests per minute
+    api_limit=100,      # 100 API requests per minute
+    upload_limit=20,    # 20 upload requests per minute
+    window_seconds=60
 )
 
 # Configuration
