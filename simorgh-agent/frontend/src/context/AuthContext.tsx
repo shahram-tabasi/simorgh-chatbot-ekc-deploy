@@ -1,16 +1,41 @@
 // src/context/AuthContext.tsx
-import React, { createContext, useState, useEffect, useContext, ReactNode } from 'react';
+import React, { createContext, useState, useEffect, useContext, ReactNode, useCallback } from 'react';
 import axios from 'axios';
 
-const API_BASE_react = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
+// Modern user interface
+export interface ModernUser {
+  id: string;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  display_name?: string;
+  avatar_url?: string;
+  email_verified: boolean;
+  is_active: boolean;
+  created_at: string;
+  last_login_at?: string;
+}
 
-
-// User interface matching backend response
-export interface User {
+// Legacy user interface (for TPMS compatibility)
+export interface LegacyUser {
   ID: number;
   EMPUSERNAME: string;
   USER_UID: string;
+}
+
+// Union type for user
+export type User = ModernUser | LegacyUser;
+
+// Check if user is modern type
+export function isModernUser(user: User): user is ModernUser {
+  return 'email' in user && 'id' in user;
+}
+
+// Check if user is legacy type
+export function isLegacyUser(user: User): user is LegacyUser {
+  return 'EMPUSERNAME' in user && 'ID' in user;
 }
 
 // Auth context interface
@@ -19,10 +44,27 @@ interface AuthContextType {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
-  checkPermission: (projectId: string) => Promise<boolean>;
   error: string | null;
+
+  // Core auth methods
+  login: (emailOrUsername: string, password: string) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
+  logout: () => void;
+
+  // Registration & verification
+  register: (email: string, password: string, firstName?: string, lastName?: string) => Promise<void>;
+  verifyEmail: (token: string) => Promise<void>;
+  resendVerification: (email: string) => Promise<void>;
+
+  // Password reset
+  forgotPassword: (email: string) => Promise<void>;
+  resetPassword: (token: string, newPassword: string) => Promise<void>;
+
+  // Legacy support
+  checkPermission: (projectId: string) => Promise<boolean>;
+
+  // Utilities
+  clearError: () => void;
 }
 
 // Create context
@@ -40,102 +82,228 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Clear error
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
+  // Store tokens and user
+  const storeAuth = useCallback((accessToken: string, userData: User) => {
+    setToken(accessToken);
+    setUser(userData);
+    localStorage.setItem('simorgh_token', accessToken);
+    localStorage.setItem('simorgh_user', JSON.stringify(userData));
+  }, []);
+
+  // Clear auth
+  const clearAuth = useCallback(() => {
+    setUser(null);
+    setToken(null);
+    setError(null);
+    localStorage.removeItem('simorgh_token');
+    localStorage.removeItem('simorgh_user');
+    localStorage.removeItem('simorgh_refresh_token');
+  }, []);
+
   // Initialize auth from localStorage
   useEffect(() => {
     const storedToken = localStorage.getItem('simorgh_token');
     const storedUser = localStorage.getItem('simorgh_user');
 
     if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
-
-      // Validate token by fetching current user
-      validateToken(storedToken);
+      try {
+        const userData = JSON.parse(storedUser);
+        setToken(storedToken);
+        setUser(userData);
+        validateToken(storedToken, userData);
+      } catch (e) {
+        clearAuth();
+        setIsLoading(false);
+      }
     } else {
       setIsLoading(false);
     }
-  }, []);
+  }, [clearAuth]);
 
   // Validate token
-  const validateToken = async (authToken: string) => {
+  const validateToken = async (authToken: string, userData: User) => {
     try {
-      const response = await axios.get(`${API_BASE_react}/auth/me`, {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+      // Try modern API first if user has email, otherwise use legacy
+      const endpoint = isModernUser(userData) ? '/auth/v2/me' : '/auth/me';
+
+      const response = await axios.get(`${API_BASE}${endpoint}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
       });
 
       setUser(response.data);
       setIsLoading(false);
     } catch (error) {
-      // Token invalid - clear auth
       console.error('Token validation failed:', error);
-      logout();
+      clearAuth();
+      setIsLoading(false);
     }
   };
 
-  // Login function
-  const login = async (username: string, password: string) => {
+  // Modern login (email/password)
+  const login = async (emailOrUsername: string, password: string) => {
     try {
       setError(null);
       setIsLoading(true);
 
-      const response = await axios.post(`${API_BASE_react}/auth/login`, {
-        username,
-        password
-      });
+      // Detect if it's an email or username
+      const isEmail = emailOrUsername.includes('@');
 
-      const { access_token, user: userData } = response.data;
+      if (isEmail) {
+        // Modern login
+        const response = await axios.post(`${API_BASE}/auth/v2/login`, {
+          email: emailOrUsername,
+          password
+        });
 
-      // CRITICAL: Only clear data if switching to a DIFFERENT user
-      // Check if there's a previous user stored
-      const previousUser = localStorage.getItem('simorgh_user');
-      if (previousUser) {
-        const previousUserData = JSON.parse(previousUser);
-        // Only clear if logging in as a different user
-        if (previousUserData.EMPUSERNAME !== userData.EMPUSERNAME) {
-          console.log('🔄 Switching users, clearing previous user data...');
-          clearUserData(previousUserData.EMPUSERNAME);
-        } else {
-          console.log('👤 Same user logging in, keeping existing data');
+        const { access_token, refresh_token, user: userData } = response.data;
+
+        storeAuth(access_token, userData);
+        if (refresh_token) {
+          localStorage.setItem('simorgh_refresh_token', refresh_token);
         }
+      } else {
+        // Legacy login (TPMS username)
+        const response = await axios.post(`${API_BASE}/auth/login`, {
+          username: emailOrUsername,
+          password
+        });
+
+        const { access_token, user: userData } = response.data;
+
+        // Handle user switching
+        const previousUser = localStorage.getItem('simorgh_user');
+        if (previousUser) {
+          const previousUserData = JSON.parse(previousUser);
+          if (previousUserData.EMPUSERNAME && previousUserData.EMPUSERNAME !== userData.EMPUSERNAME) {
+            clearUserData(previousUserData.EMPUSERNAME);
+          }
+        }
+
+        storeAuth(access_token, userData);
       }
-
-      // Store in state
-      setToken(access_token);
-      setUser(userData);
-
-      // Store in localStorage
-      localStorage.setItem('simorgh_token', access_token);
-      localStorage.setItem('simorgh_user', JSON.stringify(userData));
 
       setIsLoading(false);
     } catch (error: any) {
       setIsLoading(false);
+      handleAuthError(error);
+      throw error;
+    }
+  };
 
-      if (error.response?.status === 401) {
-        setError('Invalid username or password');
-      } else {
-        setError('Login failed. Please try again.');
-      }
+  // Google OAuth login
+  const loginWithGoogle = async () => {
+    try {
+      setError(null);
+      const response = await axios.get(`${API_BASE}/auth/v2/google/url`);
+      window.location.href = response.data.auth_url;
+    } catch (error: any) {
+      handleAuthError(error);
+      throw error;
+    }
+  };
 
+  // Register
+  const register = async (email: string, password: string, firstName?: string, lastName?: string) => {
+    try {
+      setError(null);
+      setIsLoading(true);
+
+      await axios.post(`${API_BASE}/auth/v2/register`, {
+        email,
+        password,
+        first_name: firstName,
+        last_name: lastName
+      });
+
+      setIsLoading(false);
+    } catch (error: any) {
+      setIsLoading(false);
+      handleAuthError(error);
+      throw error;
+    }
+  };
+
+  // Verify email
+  const verifyEmail = async (verificationToken: string) => {
+    try {
+      setError(null);
+      setIsLoading(true);
+
+      await axios.post(`${API_BASE}/auth/v2/verify-email`, {
+        token: verificationToken
+      });
+
+      setIsLoading(false);
+    } catch (error: any) {
+      setIsLoading(false);
+      handleAuthError(error);
+      throw error;
+    }
+  };
+
+  // Resend verification email
+  const resendVerification = async (email: string) => {
+    try {
+      setError(null);
+      setIsLoading(true);
+
+      await axios.post(`${API_BASE}/auth/v2/resend-verification`, { email });
+
+      setIsLoading(false);
+    } catch (error: any) {
+      setIsLoading(false);
+      handleAuthError(error);
+      throw error;
+    }
+  };
+
+  // Forgot password
+  const forgotPassword = async (email: string) => {
+    try {
+      setError(null);
+      setIsLoading(true);
+
+      await axios.post(`${API_BASE}/auth/v2/forgot-password`, { email });
+
+      setIsLoading(false);
+    } catch (error: any) {
+      setIsLoading(false);
+      handleAuthError(error);
+      throw error;
+    }
+  };
+
+  // Reset password
+  const resetPassword = async (resetToken: string, newPassword: string) => {
+    try {
+      setError(null);
+      setIsLoading(true);
+
+      await axios.post(`${API_BASE}/auth/v2/reset-password`, {
+        token: resetToken,
+        new_password: newPassword
+      });
+
+      setIsLoading(false);
+    } catch (error: any) {
+      setIsLoading(false);
+      handleAuthError(error);
       throw error;
     }
   };
 
   // Logout function
   const logout = () => {
-    console.log('🚪 Logging out user:', user?.EMPUSERNAME);
-
-    // IMPORTANT: Do NOT clear user data on logout
-    // Only clear authentication tokens
-    // User data persists so they can log back in and see their chats
-    setUser(null);
-    setToken(null);
-    setError(null);
-
-    localStorage.removeItem('simorgh_token');
-    localStorage.removeItem('simorgh_user');
+    const currentUser = user;
+    if (currentUser && isLegacyUser(currentUser)) {
+      console.log('🚪 Logging out user:', currentUser.EMPUSERNAME);
+    }
+    clearAuth();
   };
 
   // Helper function to clear specific user's localStorage data
@@ -145,7 +313,24 @@ export function AuthProvider({ children }: AuthProviderProps) {
     localStorage.removeItem(`simorgh_general_chats_${username}`);
   };
 
-  // Check project permission
+  // Handle auth errors
+  const handleAuthError = (error: any) => {
+    if (axios.isAxiosError(error)) {
+      if (error.response?.status === 401) {
+        setError('Invalid credentials');
+      } else if (error.response?.status === 429) {
+        setError('Too many attempts. Please try again later.');
+      } else if (error.response?.data?.detail) {
+        setError(error.response.data.detail);
+      } else {
+        setError('An error occurred. Please try again.');
+      }
+    } else {
+      setError('An unexpected error occurred.');
+    }
+  };
+
+  // Check project permission (legacy)
   const checkPermission = async (projectId: string): Promise<boolean> => {
     if (!token) {
       throw new Error('Not authenticated');
@@ -153,13 +338,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     try {
       const response = await axios.post(
-        `${API_BASE_react}/auth/check-permission`,
+        `${API_BASE}/auth/check-permission`,
         { project_id: projectId },
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        }
+        { headers: { 'Authorization': `Bearer ${token}` } }
       );
 
       return response.data.has_access;
@@ -174,10 +355,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
     token,
     isAuthenticated: !!user && !!token,
     isLoading,
+    error,
     login,
+    loginWithGoogle,
     logout,
+    register,
+    verifyEmail,
+    resendVerification,
+    forgotPassword,
+    resetPassword,
     checkPermission,
-    error
+    clearError
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
