@@ -123,7 +123,7 @@ loguru>=0.7.2
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 cryptography>=41.0.7
-bcrypt>=4.1.2
+bcrypt==4.0.1  # Pinned for passlib compatibility (4.1+ breaks passlib)
 PyJWT>=2.8.0
 email-validator>=2.1.0  # Required for Pydantic EmailStr validation
 
