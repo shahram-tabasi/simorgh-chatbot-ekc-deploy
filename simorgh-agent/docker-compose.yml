@@ -121,9 +121,7 @@ services:
   # STT-SERVICE - Speech-to-Text using Faster-Whisper (CPU)
   # ===========================================================================
   stt-service:
-    build:
-      context: ./stt-service
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-stt-service:${IMAGE_TAG:-latest}
     container_name: stt-service
     expose:
       - "8001"
