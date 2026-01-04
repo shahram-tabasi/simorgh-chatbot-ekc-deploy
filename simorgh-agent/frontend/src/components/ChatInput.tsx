@@ -151,6 +151,15 @@ export function ChatInput({
   // Voice recording with STT transcription
   const startRecording = async () => {
     try {
+      // Check if mediaDevices API is available (requires HTTPS or localhost)
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showError(
+          'Microphone Not Available',
+          'Microphone access requires HTTPS. Please access the site via HTTPS or localhost.'
+        );
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
