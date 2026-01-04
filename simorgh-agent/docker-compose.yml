@@ -43,6 +43,7 @@ services:
       - QDRANT_URL=http://qdrant:6333
       # CocoIndex (builds from source)
       - COCOINDEX_PIPELINE_DIR=/app/cocoindex_flows
+      - COCOINDEX_DATABASE_URL=postgresql://cocoindex:${COCOINDEX_DB_PASSWORD:-cocoindex_2024}@cocoindex_db:5432/cocoindex
       # SQL Server (Auth) - Read Only
       - SQL_SERVER_HOST=${SQL_SERVER_HOST}
       - SQL_SERVER_PORT=${SQL_SERVER_PORT:-1433}
