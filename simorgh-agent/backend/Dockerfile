@@ -147,6 +147,8 @@ COPY main.py .
 COPY services/ ./services/
 COPY models/ ./models/
 COPY routes/ ./routes/
+COPY database/ ./database/
+COPY middleware/ ./middleware/
 
 # -------------------------------------------------
 #  Create necessary directories
