@@ -334,6 +334,7 @@ services:
     volumes:
       - ./nginx_configs/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx_configs/ssl:/etc/nginx/ssl:ro
       - ./static:/usr/share/nginx/html/old:ro
     networks:
       - app_net
