@@ -15,14 +15,15 @@ import SpecTaskNotification from './components/SpecTaskNotification';
 import NotificationToast, { ToastNotification } from './components/NotificationToast';
 import SpecReview from './pages/SpecReview';
 
-// New modern auth components
+// Auth components (modern + auto-routing)
 import {
   ModernLogin,
   Signup,
   ForgotPassword,
   ResetPassword,
   VerifyEmail,
-  VerifyEmailSent
+  VerifyEmailSent,
+  LoginRouter
 } from './components/auth';
 
 import { useSidebar } from './hooks/useSidebar';
@@ -413,16 +414,19 @@ function AppContent() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Smart Login Router - auto-detects local vs external access */}
+        <Route path="/login" element={<LoginRouter />} />
+
+        {/* Direct access to specific login types */}
+        <Route path="/login/modern" element={<ModernLogin />} />
+        <Route path="/login/legacy" element={<Login />} />
+
         {/* Modern Auth Routes */}
-        <Route path="/login" element={<ModernLogin />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/verify-email-sent" element={<VerifyEmailSent />} />
-
-        {/* Legacy login for TPMS users */}
-        <Route path="/login/legacy" element={<Login />} />
 
         {/* Protected Routes */}
         <Route
