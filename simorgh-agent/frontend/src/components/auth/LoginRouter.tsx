@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ModernLogin } from './ModernLogin';
+import ModernLogin from './ModernLogin';
 import Login from '../Login';
 
 /**
