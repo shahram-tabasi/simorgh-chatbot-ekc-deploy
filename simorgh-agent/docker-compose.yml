@@ -317,8 +317,6 @@ services:
     image: nginx:alpine
     container_name: nginx
     depends_on:
-      certbot_init:
-        condition: service_completed_successfully
       backend:
         condition: service_healthy
       frontend:
@@ -326,12 +324,14 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "8085:8085"  # External access port (forwarded from public server)
     environment:
       - TZ=Asia/Tehran
     volumes:
       - ./nginx_configs/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx_configs/includes/locations.inc:/etc/nginx/includes/locations.inc:ro
+      - ./nginx_configs/ssl:/etc/nginx/ssl:ro  # Self-signed certs for local/fallback
       - ./static:/usr/share/nginx/html/old:ro
       - certbot_webroot:/var/www/certbot:ro
       - letsencrypt:/etc/letsencrypt
@@ -345,17 +345,26 @@ services:
   # ===========================================================================
   # CERTBOT - Let's Encrypt SSL Certificate Manager
   # ===========================================================================
+  # NOTE: For initial certificate, run manually:
+  #   docker run --rm -p 80:80 -v letsencrypt:/etc/letsencrypt certbot/certbot certonly --standalone -d simorghai.electrokavir.com -m simorgh.ekc.ai@gmail.com --agree-tos --non-interactive
+  # Or use DNS challenge if port 80 is not directly accessible from internet.
+  # ===========================================================================
   certbot_init:
     image: certbot/certbot:latest
+    container_name: certbot_init
     environment:
-      DOMAIN: ${DOMAIN:simorghai.electrokavir.com}
-      CERTBOT_EMAIL: ${CERTBOT_EMAIL:simorgh.ekc.ai@gmail.com}
+      DOMAIN: ${DOMAIN:-simorghai.electrokavir.com}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
     volumes:
       - letsencrypt:/etc/letsencrypt
-    ports:
-      - "80:80"
+      - certbot_webroot:/var/www/certbot
+    # Use webroot mode - requires nginx to be running with /.well-known/acme-challenge/ configured
+    # For initial cert when nginx isn't running yet, use standalone mode manually (see NOTE above)
     command: >-
-      certonly --standalone --preferred-challenges http -d ${DOMAIN:simorghai.electrokavir.com} -m ${CERTBOT_EMAIL:simorgh.ekc.ai@gmail.com} --agree-tos --non-interactive -vvv
+      certonly --webroot -w /var/www/certbot --preferred-challenges http
+      -d ${DOMAIN:-simorghai.electrokavir.com}
+      -m ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
+      --agree-tos --non-interactive --keep-until-expiring
     networks:
       - app_net
     restart: "no"
@@ -367,13 +376,13 @@ services:
       certbot_init:
         condition: service_completed_successfully
     entrypoint: /bin/sh
-    command: -c "while :; do certbot renew --webroot -w /var/www/certbot ; sleep ${RENEW_INTERVAL:-12h}; done"
+    command: -c "while :; do certbot renew --webroot -w /var/www/certbot; sleep ${RENEW_INTERVAL:-12h}; done"
     volumes:
       - letsencrypt:/etc/letsencrypt
-      - certbot-webroot:/var/www/certbot
+      - certbot_webroot:/var/www/certbot
     networks:
       - app_net
-    restart: no
+    restart: unless-stopped
 
   nginx_reloader:
     image: alpine:3.20
