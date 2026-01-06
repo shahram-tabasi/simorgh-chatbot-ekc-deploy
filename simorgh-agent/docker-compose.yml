@@ -329,6 +329,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "8085:8085"
     environment:
       - TZ=Asia/Tehran
     volumes:
