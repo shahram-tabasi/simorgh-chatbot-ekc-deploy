@@ -322,16 +322,14 @@ services:
       frontend:
         condition: service_started
     ports:
-      - "80:80"
-      - "443:443"
-      - "8085:8085"  # External access port (forwarded from public server)
+      - "80:80"    # HTTP (external via public:8085 redirect + local access)
+      - "443:443"  # HTTPS (direct domain access with Let's Encrypt)
     environment:
       - TZ=Asia/Tehran
     volumes:
       - ./nginx_configs/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx_configs/includes/locations.inc:/etc/nginx/includes/locations.inc:ro
-      - ./nginx_configs/ssl:/etc/nginx/ssl:ro  # Self-signed certs for local/fallback
       - ./static:/usr/share/nginx/html/old:ro
       - certbot_webroot:/var/www/certbot:ro
       - letsencrypt:/etc/letsencrypt
