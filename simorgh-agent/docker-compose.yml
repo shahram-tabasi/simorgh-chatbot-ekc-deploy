@@ -317,6 +317,8 @@ services:
     image: nginx:alpine
     container_name: nginx
     depends_on:
+      certbot_init:
+        condition: service_completed_successfully
       backend:
         condition: service_healthy
       frontend:
@@ -341,11 +343,10 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # CERTBOT - Let's Encrypt SSL Certificate Manager
+  # CERTBOT - Let's Encrypt SSL Certificate Manager (Initial Certificate)
   # ===========================================================================
-  # NOTE: For initial certificate, run manually:
-  #   docker run --rm -p 80:80 -v letsencrypt:/etc/letsencrypt certbot/certbot certonly --standalone -d simorghai.electrokavir.com -m simorgh.ekc.ai@gmail.com --agree-tos --non-interactive
-  # Or use DNS challenge if port 80 is not directly accessible from internet.
+  # Uses standalone mode: binds port 80, handles ACME challenge, exits(0)
+  # After exit, nginx starts and takes over port 80
   # ===========================================================================
   certbot_init:
     image: certbot/certbot:latest
@@ -353,13 +354,12 @@ services:
     environment:
       DOMAIN: ${DOMAIN:-simorghai.electrokavir.com}
       CERTBOT_EMAIL: ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
+    ports:
+      - "80:80"  # Required for ACME challenge (released after exit)
     volumes:
       - letsencrypt:/etc/letsencrypt
-      - certbot_webroot:/var/www/certbot
-    # Use webroot mode - requires nginx to be running with /.well-known/acme-challenge/ configured
-    # For initial cert when nginx isn't running yet, use standalone mode manually (see NOTE above)
     command: >-
-      certonly --webroot -w /var/www/certbot --preferred-challenges http
+      certonly --standalone --preferred-challenges http
       -d ${DOMAIN:-simorghai.electrokavir.com}
       -m ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
       --agree-tos --non-interactive --keep-until-expiring
