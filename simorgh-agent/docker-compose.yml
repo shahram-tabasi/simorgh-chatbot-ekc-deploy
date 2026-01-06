@@ -317,6 +317,8 @@ services:
     image: nginx:alpine
     container_name: nginx
     depends_on:
+      certbot_init:
+        condition: service_completed_successfully
       backend:
         condition: service_healthy
       frontend:
