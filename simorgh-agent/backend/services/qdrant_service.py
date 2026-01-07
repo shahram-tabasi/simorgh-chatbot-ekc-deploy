@@ -387,7 +387,8 @@ class QdrantService:
     def get_document_chunks(
         self,
         project_number: str,
-        document_id: str
+        document_id: str,
+        user_id: str = "system"
     ) -> List[Dict[str, Any]]:
         """
         Get all chunks for a specific document
@@ -395,13 +396,26 @@ class QdrantService:
         Args:
             project_number: Project OE number
             document_id: Document unique identifier
+            user_id: User ID (default: "system" for project-level documents)
 
         Returns:
             List of all chunks for the document
         """
-        collection_name = self._get_collection_name(project_number)
-
         try:
+            # Get the collection name for this project
+            collection_name = self._get_collection_name(
+                user_id=user_id,
+                project_oenum=project_number
+            )
+
+            # Check if collection exists first
+            collections = self.client.get_collections().collections
+            exists = any(c.name == collection_name for c in collections)
+
+            if not exists:
+                logger.info(f"ℹ️ Collection {collection_name} does not exist")
+                return []
+
             # Scroll through all points with document_id filter
             results = self.client.scroll(
                 collection_name=collection_name,
@@ -439,21 +453,39 @@ class QdrantService:
     def delete_document_chunks(
         self,
         project_number: str,
-        document_id: str
+        document_id: str,
+        user_id: str = "system"
     ) -> bool:
         """
-        Delete all chunks for a document
+        Delete all chunks/sections for a specific document
+
+        This method removes all vector data associated with a single document
+        from the project's Qdrant collection. Used when re-uploading or
+        deleting individual documents.
 
         Args:
             project_number: Project OE number
             document_id: Document unique identifier
+            user_id: User ID (default: "system" for project-level documents)
 
         Returns:
             True if successful
         """
-        collection_name = self._get_collection_name(project_number)
-
         try:
+            # Get the collection name for this project
+            collection_name = self._get_collection_name(
+                user_id=user_id,
+                project_oenum=project_number
+            )
+
+            # Check if collection exists first
+            collections = self.client.get_collections().collections
+            exists = any(c.name == collection_name for c in collections)
+
+            if not exists:
+                logger.info(f"ℹ️ Collection {collection_name} does not exist, nothing to delete")
+                return True
+
             # Delete all points with matching document_id
             self.client.delete(
                 collection_name=collection_name,
@@ -467,26 +499,43 @@ class QdrantService:
                 )
             )
 
-            logger.info(f"🗑️ Deleted all chunks for document {document_id}")
+            logger.info(f"🗑️ Deleted all chunks for document {document_id} in {collection_name}")
             return True
 
         except Exception as e:
             logger.error(f"❌ Failed to delete document chunks: {e}")
             return False
 
-    def delete_project_collection(self, project_number: str) -> bool:
+    def delete_project_collection(
+        self,
+        project_number: str,
+        user_id: str = "system"
+    ) -> bool:
         """
         Delete entire collection for a project
 
         Args:
             project_number: Project OE number
+            user_id: User ID (default: "system" for project-level documents)
 
         Returns:
             True if successful
         """
-        collection_name = self._get_collection_name(project_number)
-
         try:
+            # Get the collection name for this project
+            collection_name = self._get_collection_name(
+                user_id=user_id,
+                project_oenum=project_number
+            )
+
+            # Check if collection exists first
+            collections = self.client.get_collections().collections
+            exists = any(c.name == collection_name for c in collections)
+
+            if not exists:
+                logger.info(f"ℹ️ Collection {collection_name} does not exist, nothing to delete")
+                return True
+
             self.client.delete_collection(collection_name=collection_name)
             logger.info(f"🗑️ Deleted collection: {collection_name}")
             return True
@@ -495,27 +544,127 @@ class QdrantService:
             logger.error(f"❌ Failed to delete collection: {e}")
             return False
 
-    def get_collection_stats(self, project_number: str) -> Dict[str, Any]:
+    def delete_all_project_collections(self, project_number: str) -> Dict[str, Any]:
         """
-        Get statistics for project collection
+        Delete ALL collections associated with a project (from all users)
+
+        This method finds and deletes all Qdrant collections that contain
+        the project number, ensuring complete cleanup on project deletion.
 
         Args:
             project_number: Project OE number
 
         Returns:
+            Dictionary with deletion results
+        """
+        try:
+            # Sanitize project number for pattern matching
+            project_clean = project_number.replace("-", "_").replace(" ", "_").lower()
+            project_pattern = f"_project_{project_clean}"
+
+            # Get all collections
+            collections = self.client.get_collections().collections
+            deleted_collections = []
+            failed_collections = []
+
+            for collection in collections:
+                # Check if collection belongs to this project
+                if project_pattern in collection.name:
+                    try:
+                        self.client.delete_collection(collection_name=collection.name)
+                        deleted_collections.append(collection.name)
+                        logger.info(f"🗑️ Deleted project collection: {collection.name}")
+                    except Exception as e:
+                        failed_collections.append({
+                            "name": collection.name,
+                            "error": str(e)
+                        })
+                        logger.error(f"❌ Failed to delete collection {collection.name}: {e}")
+
+            result = {
+                "success": len(failed_collections) == 0,
+                "deleted_count": len(deleted_collections),
+                "deleted_collections": deleted_collections,
+                "failed_collections": failed_collections
+            }
+
+            if deleted_collections:
+                logger.info(f"✅ Deleted {len(deleted_collections)} collections for project {project_number}")
+            else:
+                logger.info(f"ℹ️ No collections found for project {project_number}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Failed to delete project collections: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "deleted_count": 0,
+                "deleted_collections": [],
+                "failed_collections": []
+            }
+
+    def get_collection_stats(
+        self,
+        project_number: Optional[str] = None,
+        user_id: str = "system",
+        session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get statistics for a collection (project or session)
+
+        Flexible method that can get stats for:
+        - Project collections: provide project_number
+        - Session collections: provide session_id
+
+        Args:
+            project_number: Project OE number (for project collections)
+            user_id: User ID (default: "system" for project-level documents)
+            session_id: Session ID (for session collections)
+
+        Returns:
             Dictionary with collection statistics
         """
-        collection_name = self._get_collection_name(project_number)
-
         try:
+            # Determine collection name based on parameters
+            if project_number:
+                collection_name = self._get_collection_name(
+                    user_id=user_id,
+                    project_oenum=project_number
+                )
+            elif session_id:
+                collection_name = self._get_collection_name(
+                    user_id=user_id,
+                    session_id=session_id
+                )
+            else:
+                return {
+                    "error": "Must provide either project_number or session_id",
+                    "exists": False
+                }
+
+            # Check if collection exists first
+            collections = self.client.get_collections().collections
+            exists = any(c.name == collection_name for c in collections)
+
+            if not exists:
+                return {
+                    "collection_name": collection_name,
+                    "exists": False,
+                    "vectors_count": 0,
+                    "points_count": 0
+                }
+
             info = self.client.get_collection(collection_name=collection_name)
 
             return {
                 "collection_name": collection_name,
+                "exists": True,
                 "vectors_count": info.vectors_count,
                 "points_count": info.points_count,
-                "status": info.status,
-                "optimizer_status": info.optimizer_status
+                "status": str(info.status),
+                "optimizer_status": str(info.optimizer_status)
             }
 
         except Exception as e:
