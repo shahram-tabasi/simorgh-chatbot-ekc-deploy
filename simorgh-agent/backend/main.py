@@ -588,20 +588,31 @@ async def delete_project(
     project_number: str,
     current_user: str = Depends(get_current_user),
     neo4j: Neo4jService = Depends(get_neo4j),
-    redis: RedisService = Depends(get_redis)
+    redis: RedisService = Depends(get_redis),
+    llm: LLMService = Depends(get_llm)
 ):
     """
     Delete a project and all its related data (requires authentication)
 
-    Deletes:
-    - Project node in Neo4j
+    Performs COMPLETE cleanup:
+    - Project node in Neo4j (graph database)
     - All entities belonging to the project
+    - All project document vectors in Qdrant
+    - All project document tracking in Redis
     - All project chats and messages in Redis
 
     Authorization: Only the project owner can delete it
     """
     try:
-        # Delete project from Neo4j (includes authorization check)
+        # Track cleanup results
+        cleanup_results = {
+            "neo4j": False,
+            "qdrant": {"success": False, "deleted_count": 0},
+            "redis_documents": {"success": False, "deleted_count": 0},
+            "redis_chats": False
+        }
+
+        # 1. Delete project from Neo4j (includes authorization check)
         deleted = neo4j.delete_project(project_number, owner_id=current_user)
 
         if not deleted:
@@ -609,23 +620,60 @@ async def delete_project(
                 status_code=404,
                 detail=f"Project {project_number} not found or you don't have permission to delete it"
             )
+        cleanup_results["neo4j"] = True
+        logger.info(f"✅ Neo4j: Deleted project {project_number} and all entities")
 
-        # Delete all project chats from Redis
-        # Get all chats for this project
+        # 2. Delete all Qdrant collections for this project
         try:
+            from services.qdrant_service import QdrantService
+            qdrant = QdrantService(llm_service=llm)
+            qdrant_result = qdrant.delete_all_project_collections(project_number)
+            cleanup_results["qdrant"] = qdrant_result
+            if qdrant_result.get("success"):
+                logger.info(f"✅ Qdrant: Deleted {qdrant_result.get('deleted_count', 0)} collections for project {project_number}")
+            else:
+                logger.warning(f"⚠️ Qdrant cleanup partial: {qdrant_result}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to delete Qdrant collections: {e}")
+            cleanup_results["qdrant"] = {"success": False, "error": str(e)}
+
+        # 3. Delete document tracking from Redis
+        try:
+            from services.document_overview_service import DocumentOverviewService
+            doc_overview = DocumentOverviewService(redis_service=redis)
+            redis_doc_result = doc_overview.delete_project_documents(project_number)
+            cleanup_results["redis_documents"] = redis_doc_result
+            if redis_doc_result.get("success"):
+                logger.info(f"✅ Redis: Deleted {redis_doc_result.get('deleted_count', 0)} document records for project {project_number}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to delete document tracking from Redis: {e}")
+            cleanup_results["redis_documents"] = {"success": False, "error": str(e)}
+
+        # 4. Delete all project chats from Redis
+        try:
+            # Pattern for project chats: P-{project_number}-*
             chat_pattern = f"P-{project_number}-*"
-            # Note: This is a simplified approach. In production, you'd maintain a project->chats index
-            logger.info(f"🗑️ Deleted project chats with pattern: {chat_pattern}")
+            # Use Redis SCAN to find and delete matching keys
+            deleted_chats = 0
+            for key in redis.chat_client.scan_iter(match=f"chat:history:{chat_pattern}"):
+                redis.chat_client.delete(key)
+                deleted_chats += 1
+            for key in redis.chat_client.scan_iter(match=f"chat:metadata:{chat_pattern}"):
+                redis.chat_client.delete(key)
+                deleted_chats += 1
+            cleanup_results["redis_chats"] = True
+            logger.info(f"✅ Redis: Deleted {deleted_chats} chat keys for project {project_number}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to delete project chats from Redis: {e}")
-            # Continue anyway - Neo4j deletion succeeded
+            cleanup_results["redis_chats"] = False
 
-        logger.info(f"✅ User {current_user} deleted project: {project_number}")
+        logger.info(f"✅ User {current_user} deleted project: {project_number} (complete cleanup)")
 
         return {
             "status": "success",
             "message": f"Project {project_number} and all its data have been deleted",
-            "project_number": project_number
+            "project_number": project_number,
+            "cleanup_details": cleanup_results
         }
 
     except HTTPException:

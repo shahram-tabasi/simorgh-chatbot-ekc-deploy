@@ -333,6 +333,53 @@ class DocumentOverviewService:
             logger.error(f"❌ Failed to delete document from tracking: {e}")
             return False
 
+    def delete_project_documents(self, project_number: str) -> Dict[str, Any]:
+        """
+        Delete all document tracking for a project
+
+        This method removes all document metadata stored in Redis for a project.
+        Should be called when a project is deleted.
+
+        Args:
+            project_number: Project OE number
+
+        Returns:
+            Dictionary with deletion results
+        """
+        try:
+            key = self._get_project_docs_key(project_number)
+
+            # Get existing documents before deleting (for return info)
+            documents = self.redis.get(key, db="chat") or []
+            doc_count = len(documents)
+
+            # Delete the key
+            deleted = self.redis.delete(key, db="chat")
+
+            if deleted or doc_count == 0:
+                logger.info(f"✅ Deleted document tracking for project {project_number} ({doc_count} documents)")
+                return {
+                    "success": True,
+                    "deleted_count": doc_count,
+                    "project_number": project_number
+                }
+            else:
+                logger.warning(f"⚠️ No document tracking found for project {project_number}")
+                return {
+                    "success": True,
+                    "deleted_count": 0,
+                    "project_number": project_number
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Failed to delete project documents: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "deleted_count": 0,
+                "project_number": project_number
+            }
+
     def get_statistics(
         self,
         project_number: Optional[str] = None,

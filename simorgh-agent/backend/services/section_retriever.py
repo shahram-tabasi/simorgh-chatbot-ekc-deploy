@@ -275,7 +275,7 @@ class SectionRetriever:
             Statistics dictionary
         """
         try:
-            stats = self.qdrant_service.get_collection_stats(project_number)
+            stats = self.qdrant_service.get_collection_stats(project_number=project_number)
             return {
                 "success": True,
                 "stats": stats
