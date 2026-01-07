@@ -311,21 +311,21 @@ services:
       retries: 5
 
   # ===========================================================================
-  # NGINX - Reverse Proxy with Let's Encrypt SSL
+  # NGINX - Reverse Proxy (TEMPORARY: HTTP-only mode)
+  # ===========================================================================
+  # SSL disabled until firewall allows .well-known paths for Let's Encrypt
   # ===========================================================================
   nginx:
     image: nginx:alpine
     container_name: nginx
     depends_on:
-      certbot_init:
-        condition: service_completed_successfully
       backend:
         condition: service_healthy
       frontend:
         condition: service_started
     ports:
-      - "80:80"    # HTTP (external via public:80 + local access)
-      - "443:443"  # HTTPS (direct domain access with Let's Encrypt)
+      - "80:80"    # HTTP only (SSL disabled temporarily)
+      # - "443:443"  # HTTPS disabled - uncomment when SSL is available
     environment:
       - TZ=Asia/Tehran
     volumes:
@@ -334,76 +334,80 @@ services:
       - ./nginx_configs/includes/locations.inc:/etc/nginx/includes/locations.inc:ro
       - ./static:/usr/share/nginx/html/old:ro
       - certbot_webroot:/var/www/certbot:ro
-      - letsencrypt:/etc/letsencrypt
       - nginx-cache:/data/nginx/cache
       - nginx-logs:/var/log/nginx
-      - ./nginx_configs/ssl-dhparams.pem:/etc/letsencrypt/ssl-dhparams.pem:ro
     networks:
       - app_net
     restart: unless-stopped
 
   # ===========================================================================
-  # CERTBOT - Let's Encrypt SSL Certificate Manager (Initial Certificate)
+  # CERTBOT SERVICES - DISABLED (firewall blocks .well-known paths)
   # ===========================================================================
-  # Uses standalone mode: binds port 80, handles ACME challenge, exits(0)
-  # After exit, nginx starts and takes over port 80
+  # To re-enable SSL:
+  # 1. Get firewall admin to whitelist /.well-known/acme-challenge/ paths
+  # 2. Or obtain DNS access for DNS-01 challenge
+  # 3. Uncomment certbot_init, certbot_renew, nginx_reloader below
+  # 4. Add nginx dependency on certbot_init
+  # 5. Add port 443:443 to nginx
+  # 6. Update nginx config to enable HTTPS server blocks
   # ===========================================================================
-  certbot_init:
-    image: certbot/certbot:latest
-    container_name: certbot_init
-    environment:
-      DOMAIN: ${DOMAIN:-simorghai.electrokavir.com}
-      CERTBOT_EMAIL: ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
-    ports:
-      - "80:80"  # Required for ACME challenge (released after exit)
-    volumes:
-      - letsencrypt:/etc/letsencrypt
-    command: >-
-      certonly --standalone --preferred-challenges http
-      --http-01-address 0.0.0.0
-      -d ${DOMAIN:-simorghai.electrokavir.com}
-      -m ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
-      --agree-tos --non-interactive --keep-until-expiring
-    networks:
-      - app_net
-    restart: "no"
 
-  certbot_renew:
-    image: certbot/certbot:latest
-    container_name: certbot_renew
-    depends_on:
-      certbot_init:
-        condition: service_completed_successfully
-    entrypoint: /bin/sh
-    command: -c "while :; do certbot renew --webroot -w /var/www/certbot; sleep ${RENEW_INTERVAL:-12h}; done"
-    volumes:
-      - letsencrypt:/etc/letsencrypt
-      - certbot_webroot:/var/www/certbot
-    networks:
-      - app_net
-    restart: unless-stopped
+  # certbot_init:
+  #   image: certbot/certbot:latest
+  #   container_name: certbot_init
+  #   environment:
+  #     DOMAIN: ${DOMAIN:-simorghai.electrokavir.com}
+  #     CERTBOT_EMAIL: ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - letsencrypt:/etc/letsencrypt
+  #   command: >-
+  #     certonly --standalone --preferred-challenges http
+  #     --http-01-address 0.0.0.0
+  #     -d ${DOMAIN:-simorghai.electrokavir.com}
+  #     -m ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
+  #     --agree-tos --non-interactive --keep-until-expiring
+  #   networks:
+  #     - app_net
+  #   restart: "no"
 
-  nginx_reloader:
-    image: alpine:3.20
-    container_name: nginx_reloader
-    depends_on:
-      - nginx
-    volumes:
-      - letsencrypt:/etc/letsencrypt:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: >
-      sh -c '
-        apk add --no-cache inotify-tools docker-cli >/dev/null;
-        echo "watch /etc/letsencrypt/live changes";
-        while :; do
-          inotifywait -e create,modify,delete,move -r /etc/letsencrypt/live >/dev/null 2>&1;
-          echo "certs changed: reloading nginx";
-          docker kill -s HUP nginx >/dev/null 2>&1 || true;
-        done
-      '
-    networks:
-      - app_net
-    restart: unless-stopped
+  # certbot_renew:
+  #   image: certbot/certbot:latest
+  #   container_name: certbot_renew
+  #   depends_on:
+  #     certbot_init:
+  #       condition: service_completed_successfully
+  #   entrypoint: /bin/sh
+  #   command: -c "while :; do certbot renew --webroot -w /var/www/certbot; sleep ${RENEW_INTERVAL:-12h}; done"
+  #   volumes:
+  #     - letsencrypt:/etc/letsencrypt
+  #     - certbot_webroot:/var/www/certbot
+  #   networks:
+  #     - app_net
+  #   restart: unless-stopped
+
+  # nginx_reloader:
+  #   image: alpine:3.20
+  #   container_name: nginx_reloader
+  #   depends_on:
+  #     - nginx
+  #   volumes:
+  #     - letsencrypt:/etc/letsencrypt:ro
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command: >
+  #     sh -c '
+  #       apk add --no-cache inotify-tools docker-cli >/dev/null;
+  #       echo "watch /etc/letsencrypt/live changes";
+  #       while :; do
+  #         inotifywait -e create,modify,delete,move -r /etc/letsencrypt/live >/dev/null 2>&1;
+  #         echo "certs changed: reloading nginx";
+  #         docker kill -s HUP nginx >/dev/null 2>&1 || true;
+  #       done
+  #     '
+  #   networks:
+  #     - app_net
+  #   restart: unless-stopped
 
 # =============================================================================
 # NETWORKS
