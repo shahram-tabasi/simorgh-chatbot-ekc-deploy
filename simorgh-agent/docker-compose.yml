@@ -324,7 +324,7 @@ services:
       frontend:
         condition: service_started
     ports:
-      - "80:80"    # HTTP (external via public:8085 redirect + local access)
+      - "80:80"    # HTTP (external via public:80 + local access)
       - "443:443"  # HTTPS (direct domain access with Let's Encrypt)
     environment:
       - TZ=Asia/Tehran
