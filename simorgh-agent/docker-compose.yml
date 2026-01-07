@@ -360,6 +360,7 @@ services:
       - letsencrypt:/etc/letsencrypt
     command: >-
       certonly --standalone --preferred-challenges http
+      --http-01-address 0.0.0.0
       -d ${DOMAIN:-simorghai.electrokavir.com}
       -m ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
       --agree-tos --non-interactive --keep-until-expiring
