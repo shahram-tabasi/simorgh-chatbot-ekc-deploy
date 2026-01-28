@@ -28,6 +28,11 @@ ENV CUDA_VISIBLE_DEVICES=0
 ENV TORCH_CUDA_ARCH_LIST="7.0 7.5 8.0 8.6 8.9 9.0+PTX"
 ENV PIP_ROOT_USER_ACTION=ignore
 
+# HuggingFace Model Cache Configuration
+ENV HF_HOME=/root/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/root/.cache/huggingface/hub
+ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+
 # -------------------------------------------------
 #  Remove any broken NVIDIA apt repos (TLS errors)
 # -------------------------------------------------
@@ -119,12 +124,18 @@ RUN echo "=== Downloading NLTK data ===" && \
 # -------------------------------------------------
 #  Pre-download SentenceTransformer model
 #  This avoids HuggingFace timeout issues at runtime
+#  Model is cached in $SENTENCE_TRANSFORMERS_HOME and $HF_HOME
 # -------------------------------------------------
-RUN echo "=== Pre-downloading SentenceTransformer model ===" && \
+RUN mkdir -p /root/.cache/huggingface/hub && \
+    mkdir -p /root/.cache/torch/sentence_transformers && \
+    echo "=== Pre-downloading SentenceTransformer model ===" && \
     python3.11 -c "from sentence_transformers import SentenceTransformer; \
     model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
-    print(f'Model cached: {model.get_sentence_embedding_dimension()} dimensions')" && \
-    echo "=== SentenceTransformer model cached ==="
+    print(f'Model cached: {model.get_sentence_embedding_dimension()} dimensions'); \
+    print(f'Cache locations: HF_HOME=/root/.cache/huggingface, SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers')" && \
+    echo "=== SentenceTransformer model cached ===" && \
+    ls -la /root/.cache/huggingface/hub/ && \
+    ls -la /root/.cache/torch/sentence_transformers/
 
 # -------------------------------------------------
 #  Verify critical packages are installed
@@ -154,7 +165,6 @@ COPY middleware/ ./middleware/
 #  Create necessary directories
 # -------------------------------------------------
 RUN mkdir -p uploads && \
-    mkdir -p /root/.cache/torch/sentence_transformers && \
     chmod -R 755 /app
 
 # -------------------------------------------------

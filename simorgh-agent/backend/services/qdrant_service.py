@@ -97,7 +97,21 @@ class QdrantService:
             # Fallback to SentenceTransformer (legacy mode)
             self.embedding_model_name = embedding_model
             logger.info(f"🔄 Loading SentenceTransformer model: {embedding_model}")
-            self.embedding_model = SentenceTransformer(embedding_model)
+
+            # Try loading from local cache first (offline mode), then fallback to download
+            try:
+                logger.info(f"🔄 Attempting to load model from local cache...")
+                self.embedding_model = SentenceTransformer(embedding_model, local_files_only=True)
+                logger.info(f"✅ Loaded model from local cache")
+            except Exception as cache_error:
+                logger.warning(f"⚠️ Model not in local cache, downloading from HuggingFace: {cache_error}")
+                try:
+                    self.embedding_model = SentenceTransformer(embedding_model, local_files_only=False)
+                    logger.info(f"✅ Model downloaded from HuggingFace")
+                except Exception as download_error:
+                    logger.error(f"❌ Failed to download model: {download_error}")
+                    raise
+
             self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
             logger.info(f"✅ Embedding model loaded (dimension: {self.embedding_dim})")
 
