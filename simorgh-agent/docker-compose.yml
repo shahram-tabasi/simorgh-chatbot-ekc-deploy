@@ -331,7 +331,7 @@ services:
       frontend:
         condition: service_started
     ports:
-      - "80:80"    # HTTP only (SSL disabled temporarily)
+      - "85:80"    # HTTP - mapped to port 85 to avoid conflict with host nginx on port 80
       # - "443:443"  # HTTPS disabled - uncomment when SSL is available
     environment:
       - TZ=Asia/Tehran
