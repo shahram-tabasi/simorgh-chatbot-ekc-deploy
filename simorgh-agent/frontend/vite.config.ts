@@ -10,6 +10,8 @@ const __dirname = path.dirname(__filename);
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // Base path for deployment under /chatbot/ sub-path
+  base: '/chatbot/',
   define: {
     'process.env': {} // این خط مشکل process is not defined رو حل می‌کنه
   },
