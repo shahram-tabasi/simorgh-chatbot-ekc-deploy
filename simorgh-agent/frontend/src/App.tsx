@@ -412,7 +412,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 // App content with routing
 function AppContent() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/chatbot">
       <Routes>
         {/* Smart Login Router - auto-detects local vs external access */}
         <Route path="/login" element={<LoginRouter />} />
