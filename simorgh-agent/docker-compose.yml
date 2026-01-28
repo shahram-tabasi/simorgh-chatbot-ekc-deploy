@@ -31,6 +31,11 @@ services:
     container_name: backend
     environment:
       - PYTHONUNBUFFERED=1
+      # HuggingFace Model Cache - Use cached models first, fallback to download
+      - HF_HOME=/root/.cache/huggingface
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface/hub
+      - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+      - HF_HUB_OFFLINE=0
       # Neo4j
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
@@ -76,6 +81,8 @@ services:
       - ./logs:/app/logs
       - ./backend/cocoindex_flows:/app/cocoindex_flows
       - ./backend/services:/app/services
+      - huggingface_cache:/root/.cache/huggingface
+      - sentence_transformers_cache:/root/.cache/torch/sentence_transformers
     expose:
       - "8890"
     networks:
@@ -443,4 +450,8 @@ volumes:
   nginx-cache:
     driver: local
   nginx-logs:
+    driver: local
+  huggingface_cache:
+    driver: local
+  sentence_transformers_cache:
     driver: local
