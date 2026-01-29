@@ -65,13 +65,19 @@ from middleware.security import (
     RequestValidationMiddleware
 )
 
-# Import chatbot_core for enhanced session management
-from chatbot_core.startup import (
-    initialize_chatbot_on_startup,
-    shutdown_chatbot,
-    include_chatbot_routes,
-)
-from chatbot_core.integration import get_chatbot_core, ChatbotCore
+# Import chatbot_core for enhanced session management (optional)
+try:
+    from chatbot_core.startup import (
+        initialize_chatbot_on_startup,
+        shutdown_chatbot,
+        include_chatbot_routes,
+    )
+    from chatbot_core.integration import get_chatbot_core, ChatbotCore
+    CHATBOT_CORE_AVAILABLE = True
+except ImportError:
+    CHATBOT_CORE_AVAILABLE = False
+    ChatbotCore = None
+    logger.info("chatbot_core module not available - enhanced session features disabled")
 
 # Import output parser for cleaning LLM responses
 try:
@@ -96,8 +102,9 @@ app.include_router(auth_router)
 app.include_router(auth_v2_router)  # Modern auth endpoints (v2)
 app.include_router(documents_rag_router)
 
-# Include enhanced chatbot v2 routes
-include_chatbot_routes(app)
+# Include enhanced chatbot v2 routes (if available)
+if CHATBOT_CORE_AVAILABLE:
+    include_chatbot_routes(app)
 
 # CORS
 app.add_middleware(
@@ -246,18 +253,22 @@ async def startup_event():
         )
         qdrant = None
 
-    # Initialize Chatbot Core (enhanced session management)
-    try:
-        chatbot_core = await initialize_chatbot_on_startup(
-            redis_service=redis_service,
-            qdrant_service=qdrant,
-            neo4j_service=neo4j_service,
-            llm_service=llm_service,
-        )
-        logger.info("✅ Chatbot Core initialized (General/Project sessions enabled)")
-    except Exception as e:
-        logger.warning(f"⚠️ Chatbot Core initialization failed (non-fatal): {e}")
-        chatbot_core = get_chatbot_core()
+    # Initialize Chatbot Core (enhanced session management) - if available
+    if CHATBOT_CORE_AVAILABLE:
+        try:
+            chatbot_core = await initialize_chatbot_on_startup(
+                redis_service=redis_service,
+                qdrant_service=qdrant,
+                neo4j_service=neo4j_service,
+                llm_service=llm_service,
+            )
+            logger.info("✅ Chatbot Core initialized (General/Project sessions enabled)")
+        except Exception as e:
+            logger.warning(f"⚠️ Chatbot Core initialization failed (non-fatal): {e}")
+            chatbot_core = get_chatbot_core()
+    else:
+        chatbot_core = None
+        logger.info("ℹ️ Chatbot Core skipped (module not available)")
 
     logger.info("🎉 All services ready!")
 
@@ -267,12 +278,13 @@ async def shutdown_event():
     """Clean up on shutdown"""
     logger.info("🛑 Shutting down...")
 
-    # Shutdown Chatbot Core first
-    try:
-        await shutdown_chatbot()
-        logger.info("✅ Chatbot Core shutdown complete")
-    except Exception as e:
-        logger.warning(f"⚠️ Chatbot Core shutdown error: {e}")
+    # Shutdown Chatbot Core first (if available)
+    if CHATBOT_CORE_AVAILABLE:
+        try:
+            await shutdown_chatbot()
+            logger.info("✅ Chatbot Core shutdown complete")
+        except Exception as e:
+            logger.warning(f"⚠️ Chatbot Core shutdown error: {e}")
 
     if neo4j_service:
         neo4j_service.close()
@@ -340,8 +352,10 @@ def get_unified_memory() -> UnifiedMemoryService:
     return unified_memory_service
 
 
-def get_chatbot() -> ChatbotCore:
+def get_chatbot():
     """Get Chatbot Core instance for enhanced session management"""
+    if not CHATBOT_CORE_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Chatbot Core module not installed")
     if chatbot_core is None:
         raise HTTPException(status_code=503, detail="Chatbot Core service not available")
     return chatbot_core
