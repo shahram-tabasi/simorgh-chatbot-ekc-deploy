@@ -7,5 +7,8 @@ RUN npm run build   # This creates /app/dist
 
 # Serve with Nginx
 FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
+# Copy to /chatbot/ subdirectory to match vite base path config
+COPY --from=builder /app/dist /usr/share/nginx/html/chatbot
+# Also copy index.html to root for redirect
+RUN echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=/chatbot/"></head></html>' > /usr/share/nginx/html/index.html
 EXPOSE 80
