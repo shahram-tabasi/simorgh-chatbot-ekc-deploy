@@ -299,3 +299,244 @@ export interface PrivacySettings {
   saveHistory: boolean;
   shareAnalytics: boolean;
 }
+
+// ============================================
+// Enhanced Chat Session Types (V2)
+// ============================================
+
+/**
+ * Chat session types:
+ * - general: Isolated chats with full external tool access
+ * - project: Shared project memory with stage-based restrictions
+ */
+export type ChatSessionType = 'general' | 'project';
+
+/**
+ * Project session stages - controls tool availability
+ * - analysis: External tools allowed (internet, wiki, Python)
+ * - design: Project knowledge only
+ * - implementation: Project knowledge only
+ * - review: Project knowledge only
+ */
+export type SessionStage = 'analysis' | 'design' | 'implementation' | 'review';
+
+/**
+ * Document categories for session context
+ */
+export type DocumentCategory = 'specification' | 'process' | 'reference' | 'general';
+
+/**
+ * External tool identifiers
+ */
+export type ExternalToolId = 'internet_search' | 'wikipedia' | 'python_engine';
+
+/**
+ * Enhanced chat session info
+ */
+export interface ChatSession {
+  id: string;
+  chatType: ChatSessionType;
+  title: string;
+  userId: string;
+  createdAt: Date;
+  updatedAt: Date;
+
+  // General chat specific
+  isIsolated?: boolean;
+
+  // Project chat specific
+  projectId?: string;
+  projectNumber?: string;
+  projectName?: string;
+  stage?: SessionStage;
+
+  // Common properties
+  historyCount: number;
+  documentsCount: number;
+  allowsExternalTools: boolean;
+
+  // Messages (loaded on demand)
+  messages?: Message[];
+
+  // Metadata
+  metadata?: ChatSessionMetadata;
+}
+
+export interface ChatSessionMetadata {
+  lastMessageAt?: Date;
+  graphContext?: string;
+  semanticResults?: SemanticSearchResult[];
+  externalSearchResults?: ExternalSearchResult[];
+}
+
+/**
+ * Semantic search result from Qdrant
+ */
+export interface SemanticSearchResult {
+  documentId: string;
+  filename: string;
+  content: string;
+  score: number;
+  chunkIndex?: number;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * External search result (internet, wiki, etc.)
+ */
+export interface ExternalSearchResult {
+  source: string;
+  title: string;
+  content: string;
+  url?: string;
+  relevanceScore: number;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Session document context
+ */
+export interface SessionDocument {
+  documentId: string;
+  filename: string;
+  category: DocumentCategory;
+  contentSummary?: string;
+  embeddingId?: string;
+  uploadedAt: Date;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * External tool configuration
+ */
+export interface ExternalTool {
+  toolId: ExternalToolId;
+  name: string;
+  category: string;
+  enabled: boolean;
+  allowedStages?: SessionStage[];
+}
+
+// ============================================
+// Chatbot V2 API Types
+// ============================================
+
+/**
+ * Request to create a new chat session
+ */
+export interface CreateChatSessionRequest {
+  userId: string;
+  chatType: ChatSessionType;
+  username?: string;
+  // Project chat specific
+  projectNumber?: string;
+  projectName?: string;
+  projectDomain?: string;
+  stage?: SessionStage;
+}
+
+/**
+ * Response from chat session creation
+ */
+export interface CreateChatSessionResponse {
+  success: boolean;
+  chatId: string;
+  chatType: ChatSessionType;
+  message?: string;
+}
+
+/**
+ * Request to send a message
+ */
+export interface SendMessageV2Request {
+  userId: string;
+  message: string;
+  useTools?: boolean;
+  stream?: boolean;
+}
+
+/**
+ * Response from message send
+ */
+export interface SendMessageV2Response {
+  success: boolean;
+  content?: string;
+  model?: string;
+  mode?: 'online' | 'offline';
+  tokensUsed?: number;
+  sources?: string[];
+  error?: string;
+}
+
+/**
+ * Request to upload a document
+ */
+export interface UploadDocumentRequest {
+  userId: string;
+  content: string;
+  filename: string;
+  category?: DocumentCategory;
+}
+
+/**
+ * Response from document upload
+ */
+export interface UploadDocumentResponse {
+  success: boolean;
+  documentId: string;
+  filename: string;
+  chunksCreated: number;
+  entitiesExtracted: number;
+  storedToQdrant: boolean;
+  storedToNeo4j: boolean;
+  errors: string[];
+  warnings: string[];
+  processingTimeMs: number;
+}
+
+/**
+ * Request to update session stage
+ */
+export interface UpdateStageRequest {
+  userId: string;
+  stage: SessionStage;
+}
+
+/**
+ * Chat info response
+ */
+export interface ChatInfoResponse {
+  chatId: string;
+  chatType: ChatSessionType;
+  userId: string;
+  projectNumber?: string;
+  projectName?: string;
+  stage?: SessionStage;
+  historyCount: number;
+  documentsCount: number;
+  allowsExternalTools: boolean;
+}
+
+/**
+ * Available tools response
+ */
+export interface AvailableToolsResponse {
+  chatId: string;
+  chatType: ChatSessionType;
+  tools: {
+    toolId: ExternalToolId;
+    name: string;
+    category: string;
+  }[];
+}
+
+/**
+ * Chatbot stats response
+ */
+export interface ChatbotStatsResponse {
+  initialized: boolean;
+  sessionsActive: number;
+  memoryStats?: Record<string, any>;
+  llmStats?: Record<string, any>;
+  toolsStats?: Record<string, any>;
+}

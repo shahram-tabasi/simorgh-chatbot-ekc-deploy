@@ -65,6 +65,14 @@ from middleware.security import (
     RequestValidationMiddleware
 )
 
+# Import chatbot_core for enhanced session management
+from chatbot_core.startup import (
+    initialize_chatbot_on_startup,
+    shutdown_chatbot,
+    include_chatbot_routes,
+)
+from chatbot_core.integration import get_chatbot_core, ChatbotCore
+
 # Import output parser for cleaning LLM responses
 try:
     from utils.output_parser import OutputParser, parse_llm_output
@@ -87,6 +95,9 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(auth_v2_router)  # Modern auth endpoints (v2)
 app.include_router(documents_rag_router)
+
+# Include enhanced chatbot v2 routes
+include_chatbot_routes(app)
 
 # CORS
 app.add_middleware(
@@ -120,6 +131,7 @@ tpms_auth_service: Optional[TPMSAuthService] = None
 llm_service: Optional[LLMService] = None
 session_id_service: Optional[SessionIDService] = None
 unified_memory_service: Optional[UnifiedMemoryService] = None
+chatbot_core: Optional[ChatbotCore] = None
 
 
 # =============================================================================
@@ -188,7 +200,7 @@ class PowerPathQuery(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service, unified_memory_service
+    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service, unified_memory_service, chatbot_core
 
     logger.info("🚀 Starting Simorgh Industrial Assistant...")
 
@@ -232,6 +244,20 @@ async def startup_event():
             redis_service=redis_service,
             llm_service=llm_service
         )
+        qdrant = None
+
+    # Initialize Chatbot Core (enhanced session management)
+    try:
+        chatbot_core = await initialize_chatbot_on_startup(
+            redis_service=redis_service,
+            qdrant_service=qdrant,
+            neo4j_service=neo4j_service,
+            llm_service=llm_service,
+        )
+        logger.info("✅ Chatbot Core initialized (General/Project sessions enabled)")
+    except Exception as e:
+        logger.warning(f"⚠️ Chatbot Core initialization failed (non-fatal): {e}")
+        chatbot_core = get_chatbot_core()
 
     logger.info("🎉 All services ready!")
 
@@ -240,6 +266,13 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on shutdown"""
     logger.info("🛑 Shutting down...")
+
+    # Shutdown Chatbot Core first
+    try:
+        await shutdown_chatbot()
+        logger.info("✅ Chatbot Core shutdown complete")
+    except Exception as e:
+        logger.warning(f"⚠️ Chatbot Core shutdown error: {e}")
 
     if neo4j_service:
         neo4j_service.close()
@@ -305,6 +338,13 @@ def get_unified_memory() -> UnifiedMemoryService:
             llm_service=llm_service
         )
     return unified_memory_service
+
+
+def get_chatbot() -> ChatbotCore:
+    """Get Chatbot Core instance for enhanced session management"""
+    if chatbot_core is None:
+        raise HTTPException(status_code=503, detail="Chatbot Core service not available")
+    return chatbot_core
 
 
 # =============================================================================
