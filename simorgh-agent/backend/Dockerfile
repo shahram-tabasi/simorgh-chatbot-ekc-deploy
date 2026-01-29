@@ -160,6 +160,10 @@ COPY models/ ./models/
 COPY routes/ ./routes/
 COPY database/ ./database/
 COPY middleware/ ./middleware/
+COPY chatbot_core/ ./chatbot_core/
+COPY utils/ ./utils/
+COPY cocoindex_flows/ ./cocoindex_flows/
+COPY knowledge/ ./knowledge/
 
 # -------------------------------------------------
 #  Create necessary directories
