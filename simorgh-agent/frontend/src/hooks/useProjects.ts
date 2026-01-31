@@ -721,7 +721,9 @@ export function useProjects(userId?: string) {
       `Delete Project "${project.name}"?`,
       `⚠️ This will PERMANENTLY DELETE:\n\n` +
       `✗ All chat history from Redis\n` +
-      `✗ All project data from Neo4j database\n` +
+      `✗ All project data from Neo4j graph\n` +
+      `✗ Project PostgreSQL database\n` +
+      `✗ Project Qdrant vector collection\n` +
       `✗ All documents and specifications\n` +
       `✗ All extraction guides and values\n\n` +
       `THIS ACTION CANNOT BE UNDONE!`,
@@ -767,14 +769,23 @@ export function useProjects(userId?: string) {
       const deletedChatCount = response.data.deleted_chat_count || 0;
       const deletedNeo4jNodes = response.data.deleted_neo4j_nodes || 0;
       const neo4jDeleted = response.data.neo4j_deleted || false;
+      const projectDbDeleted = response.data.project_db_deleted || false;
+      const projectDbDetails = response.data.project_db_details || {};
 
-      console.log(`✅ Project deleted: ${projectId} (${deletedChatCount} chats, ${deletedNeo4jNodes} Neo4j nodes removed)`);
+      console.log(`✅ Project deleted: ${projectId} (${deletedChatCount} chats, ${deletedNeo4jNodes} Neo4j nodes, DB: ${projectDbDeleted})`);
 
       // Show detailed deletion summary
       let summaryMessage = `Project "${project.name}" has been completely deleted!\n\n`;
       summaryMessage += `📊 Deletion Summary:\n`;
       summaryMessage += `• Redis: ${deletedChatCount} chat(s) removed\n`;
       summaryMessage += `• Neo4j: ${deletedNeo4jNodes} node(s) removed\n`;
+
+      if (projectDbDeleted) {
+        summaryMessage += `• PostgreSQL: Database deleted\n`;
+        summaryMessage += `• Qdrant: Collection deleted\n`;
+      } else if (projectDbDetails.message) {
+        summaryMessage += `• Project DB: ${projectDbDetails.message}\n`;
+      }
 
       if (!neo4jDeleted) {
         summaryMessage += `\n⚠️ Note: Project was not found in Neo4j database.`;
