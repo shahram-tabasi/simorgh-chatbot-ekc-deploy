@@ -1,9 +1,11 @@
 // src/hooks/useChat.ts
+// Updated to use v2 API endpoints with chatbot_core integration
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Message, UploadedFile } from '../types';
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const API_V2_CHAT = `${API_BASE}/v2/chat`;
 
 export interface ChatOptions {
   llmMode?: 'online' | 'offline' | null; // null = use default
@@ -153,6 +155,8 @@ export function useChat(
     let messageAdded = false;
 
     try {
+      // Use v1 streaming endpoint for now (v2 streaming format TBD)
+      // The v1 endpoint still benefits from chatbot_core when using session lookup
       const response = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: {
@@ -356,8 +360,8 @@ export function useChat(
       let response;
 
       if (files && files.length > 0 && files[0].file) {
-        // Use FormData for file uploads
-        console.log('📎 Sending with file attachment:', files[0].name);
+        // Use FormData for file uploads - still use v1 for now (v2 document upload is separate)
+        console.log('📎 Sending with file attachment (v1 API):', files[0].name);
         const formData = new FormData();
         formData.append('chat_id', chatId);
         formData.append('user_id', userId);
@@ -376,18 +380,13 @@ export function useChat(
           signal: abortControllerRef.current?.signal
         });
       } else {
-        const conversationHistory = messages.slice(-10).map(msg => ({
-          role: msg.role,
-          content: msg.content
-        }));
-
-        response = await axios.post(`${API_BASE}/chat/send`, {
-          chat_id: chatId,
+        // Use v2 API endpoint with chatbot_core
+        console.log('📤 Sending message via v2 API (batch):', content);
+        response = await axios.post(`${API_V2_CHAT}/${chatId}/message`, {
           user_id: userId,
-          content: content,
-          conversation_history: conversationHistory,
-          llm_mode: llmMode || undefined,
-          use_graph_context: options?.useGraphContext !== false
+          message: content,  // v2 uses 'message' instead of 'content'
+          use_tools: options?.useGraphContext !== false,
+          stream: false
         }, {
           headers: {
             'Content-Type': 'application/json',
@@ -399,16 +398,20 @@ export function useChat(
 
       const data = response.data;
 
+      // Handle v2 response format (content instead of response)
+      const responseContent = data.content || data.response;
+
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: data.response,
+        content: responseContent,
         role: 'assistant',
         timestamp: new Date(),
         metadata: {
-          llm_mode: data.llm_mode,
-          context_used: data.context_used,
+          llm_mode: data.mode || data.llm_mode,
+          context_used: data.sources?.length > 0 || data.context_used,
           cached_response: data.cached_response,
-          tokens: data.tokens
+          tokens: data.tokens_used || data.tokens,
+          sources: data.sources  // v2 provides sources
         }
       };
 
@@ -592,6 +595,7 @@ export function useChat(
       let response;
 
       if (userMessage.files && userMessage.files.length > 0 && userMessage.files[0].file) {
+        // Use v1 for file attachments
         const formData = new FormData();
         formData.append('chat_id', chatId!);
         formData.append('user_id', userId!);
@@ -607,13 +611,12 @@ export function useChat(
           }
         });
       } else {
-        response = await axios.post(`${API_BASE}/chat/send`, {
-          chat_id: chatId,
+        // Use v2 API for regeneration
+        response = await axios.post(`${API_V2_CHAT}/${chatId}/message`, {
           user_id: userId,
-          content: userMessage.content,
-          conversation_history: conversationHistory,
-          llm_mode: llmMode || undefined,
-          use_graph_context: true
+          message: userMessage.content,
+          use_tools: true,
+          stream: false
         }, {
           headers: {
             'Content-Type': 'application/json',
@@ -623,19 +626,21 @@ export function useChat(
       }
 
       const data = response.data;
+      const responseContent = data.content || data.response;
 
       // Update the assistant message with new content
       setMessages(prev => {
         const updated = [...prev];
         updated[assistantMsgIndex] = {
           ...updated[assistantMsgIndex],
-          content: data.response,
+          content: responseContent,
           timestamp: new Date(),
           metadata: {
-            llm_mode: data.llm_mode,
-            context_used: data.context_used,
+            llm_mode: data.mode || data.llm_mode,
+            context_used: data.sources?.length > 0 || data.context_used,
             cached_response: data.cached_response,
-            tokens: data.tokens
+            tokens: data.tokens_used || data.tokens,
+            sources: data.sources
           },
           currentVersionIndex: currentVersion.length
         };

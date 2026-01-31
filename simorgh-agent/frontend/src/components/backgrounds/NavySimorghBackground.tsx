@@ -15,7 +15,8 @@ export function NavySimorghBackground() {
 
     // Load Simorgh SVG image
     const img = new Image();
-    img.src = '/simorgh-sky.svg'; // SVG is in public folder
+    const baseUrl = import.meta.env.BASE_URL || '/';
+    img.src = `${baseUrl}simorgh-sky.svg`; // SVG is in public folder
     img.onload = () => {
       simorghImageRef.current = img;
     };

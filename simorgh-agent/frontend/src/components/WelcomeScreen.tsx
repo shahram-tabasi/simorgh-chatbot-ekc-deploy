@@ -81,7 +81,7 @@ export default function WelcomeScreen({ onHide, onPromptClick, onPromptDoubleCli
       {/* Logo - smaller on mobile, centered */}
       <div className="flex flex-col items-center justify-center mb-2 md:mb-4 w-full">
         <img
-          src="/simorgh.svg"
+          src={`${import.meta.env.BASE_URL}simorgh.svg`}
           alt="Simorgh Logo"
           className="w-20 h-20 sm:w-28 sm:h-28 md:w-40 md:h-40 mb-2 drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
@@ -90,7 +90,7 @@ export default function WelcomeScreen({ onHide, onPromptClick, onPromptDoubleCli
           }}
         />
         <img
-          src="/text_simorgh.svg"
+          src={`${import.meta.env.BASE_URL}text_simorgh.svg`}
           alt="Simorgh"
           className="h-12 sm:h-16 md:h-24 lg:h-28 drop-shadow-2xl select-none animate-fade-in-delay"
           onError={(e) => {

@@ -88,12 +88,12 @@ export function Sidebar({
                 {side === 'right' && !isMobile && (
                   <div className="flex items-left gap-0">
                     <img
-                      src="/simorgh.svg"
+                      src={`${import.meta.env.BASE_URL}simorgh.svg`}
                       alt="Simorgh"
                       className="w-14 h-14"
                     />
                     <img
-                      src="/text_simorgh.svg"
+                      src={`${import.meta.env.BASE_URL}text_simorgh.svg`}
                       alt="Simorgh"
                       className="h-14 mt-3"
                     />
@@ -130,7 +130,7 @@ export function Sidebar({
           {/* Simorgh Logo - only on right sidebar when closed */}
           {side === 'right' && (
             <img
-              src="/simorgh.svg"
+              src={`${import.meta.env.BASE_URL}simorgh.svg`}
               alt="Simorgh"
               className="w-10 h-10 mb-1"
             />
