@@ -106,13 +106,7 @@ class TPMSProjectDataService:
                 SELECT
                     IDProjectMain as IdprojectMain,
                     OENUM as Oenum,
-                    IFNULL(Order_Category, '') as OrderCategory,
-                    IFNULL(OE_Date, '') as Oedate,
-                    IFNULL(Project_Name, '') as ProjectName,
-                    IFNULL(Project_Name_Fa, '') as ProjectNameFa,
-                    IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
-                    IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
-                    IFNULL(Technical_Expert_Label, '') as TechnicalExpertLabel
+                    IFNULL(Project_Name, '') as ProjectName
                 FROM View_Project_Main
                 WHERE OENUM = %s
                 LIMIT 1
@@ -120,31 +114,41 @@ class TPMSProjectDataService:
             cursor.execute(query, (oenum,))
             row = cursor.fetchone()
 
-            # If not found, try suffix match
-            if not row and len(oenum) <= 5:
+            # If not found, try suffix match (last 5 digits like auth service)
+            if not row:
+                # Extract last 5 digits for suffix match
+                oenum_suffix = oenum[-5:] if len(oenum) >= 5 else oenum
                 query = """
                     SELECT
                         IDProjectMain as IdprojectMain,
                         OENUM as Oenum,
-                        IFNULL(Order_Category, '') as OrderCategory,
-                        IFNULL(OE_Date, '') as Oedate,
-                        IFNULL(Project_Name, '') as ProjectName,
-                        IFNULL(Project_Name_Fa, '') as ProjectNameFa,
-                        IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
-                        IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
-                        IFNULL(Technical_Expert_Label, '') as TechnicalExpertLabel
+                        IFNULL(Project_Name, '') as ProjectName
                     FROM View_Project_Main
-                    WHERE RIGHT(OENUM, %s) = %s
+                    WHERE RIGHT(OENUM, 5) = %s
+                    ORDER BY IDProjectMain DESC
                     LIMIT 1
                 """
-                cursor.execute(query, (len(oenum), oenum))
+                cursor.execute(query, (oenum_suffix,))
                 row = cursor.fetchone()
 
             cursor.close()
             connection.close()
 
             if row:
-                return ViewProjectMain(**row)
+                logger.info(f"Found project: {row}")
+                # Create ViewProjectMain with available fields
+                return ViewProjectMain(
+                    id_project_main=row['IdprojectMain'],
+                    oenum=row['Oenum'],
+                    project_name=row['ProjectName'],
+                    # Set defaults for fields not in View_Project_Main
+                    order_category='',
+                    oe_date='',
+                    project_name_fa='',
+                    project_expert_label='',
+                    technical_supervisor_label='',
+                    technical_expert_label=''
+                )
             return None
 
         except MySQLError as e:
@@ -161,13 +165,7 @@ class TPMSProjectDataService:
                 SELECT
                     IDProjectMain as IdprojectMain,
                     OENUM as Oenum,
-                    IFNULL(Order_Category, '') as OrderCategory,
-                    IFNULL(OE_Date, '') as Oedate,
-                    IFNULL(Project_Name, '') as ProjectName,
-                    IFNULL(Project_Name_Fa, '') as ProjectNameFa,
-                    IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
-                    IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
-                    IFNULL(Technical_Expert_Label, '') as TechnicalExpertLabel
+                    IFNULL(Project_Name, '') as ProjectName
                 FROM View_Project_Main
                 WHERE IDProjectMain = %s
                 LIMIT 1
@@ -179,7 +177,17 @@ class TPMSProjectDataService:
             connection.close()
 
             if row:
-                return ViewProjectMain(**row)
+                return ViewProjectMain(
+                    id_project_main=row['IdprojectMain'],
+                    oenum=row['Oenum'],
+                    project_name=row['ProjectName'],
+                    order_category='',
+                    oe_date='',
+                    project_name_fa='',
+                    project_expert_label='',
+                    technical_supervisor_label='',
+                    technical_expert_label=''
+                )
             return None
 
         except MySQLError as e:
