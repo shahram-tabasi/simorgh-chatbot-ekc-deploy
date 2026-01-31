@@ -170,33 +170,105 @@ create_webroot() {
 configure_nginx_for_acme() {
     log_info "Configuring nginx for ACME challenge..."
 
-    # Create a temporary configuration that allows ACME challenges
+    # Create backup directory for disabled configs
+    BACKUP_DIR="/tmp/nginx-backup-$$"
+    mkdir -p "$BACKUP_DIR"
+
+    # Temporarily disable ALL other server configs to avoid conflicts
+    log_info "Temporarily disabling other nginx configs..."
+
+    # Disable sites-enabled configs
+    if [[ -d "$NGINX_CONF_DIR/sites-enabled" ]]; then
+        for conf in "$NGINX_CONF_DIR/sites-enabled"/*; do
+            if [[ -f "$conf" ]] || [[ -L "$conf" ]]; then
+                mv "$conf" "$BACKUP_DIR/" 2>/dev/null || true
+                log_info "  Disabled: $(basename "$conf")"
+            fi
+        done
+    fi
+
+    # Disable conf.d configs (except our ACME config)
+    if [[ -d "$NGINX_CONF_DIR/conf.d" ]]; then
+        for conf in "$NGINX_CONF_DIR/conf.d"/*.conf; do
+            if [[ -f "$conf" ]] && [[ "$(basename "$conf")" != "certbot-acme.conf" ]]; then
+                mv "$conf" "$BACKUP_DIR/" 2>/dev/null || true
+                log_info "  Disabled: $(basename "$conf")"
+            fi
+        done
+    fi
+
+    # Create a standalone ACME challenge configuration
+    # This will be the ONLY server block active during certificate issuance
     cat > /etc/nginx/conf.d/certbot-acme.conf << 'EOF'
 # Temporary ACME challenge configuration
-# This will be removed after certificate is obtained
-server {
-    listen 80;
-    server_name simorghai.electrokavir.com;
+# This is the ONLY active server during certificate issuance
+# Other configs have been temporarily moved to backup
 
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name simorghai.electrokavir.com _;
+
+    # Serve ACME challenge files
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
         allow all;
+        try_files $uri =404;
     }
 
+    # Return 444 for all other requests
     location / {
         return 444;
     }
 }
 EOF
 
+    # Also create the .well-known directory structure
+    mkdir -p "$WEBROOT/.well-known/acme-challenge"
+    chown -R www-data:www-data "$WEBROOT"
+    chmod -R 755 "$WEBROOT"
+
     # Test nginx configuration
-    if nginx -t; then
+    if nginx -t 2>&1; then
         systemctl reload nginx
-        log_info "Nginx configured for ACME challenge"
+        log_info "Nginx configured for ACME challenge (other configs temporarily disabled)"
+
+        # Verify the ACME path is accessible locally
+        echo "acme-test-$$" > "$WEBROOT/.well-known/acme-challenge/test-$$"
+        sleep 1
+        if curl -s "http://localhost/.well-known/acme-challenge/test-$$" | grep -q "acme-test-$$"; then
+            log_info "ACME challenge path verified locally"
+        else
+            log_warn "Could not verify ACME path locally - this might still work"
+        fi
+        rm -f "$WEBROOT/.well-known/acme-challenge/test-$$"
     else
         log_error "Nginx configuration test failed"
-        rm -f /etc/nginx/conf.d/certbot-acme.conf
+        restore_nginx_configs
         exit 1
+    fi
+}
+
+restore_nginx_configs() {
+    log_info "Restoring original nginx configurations..."
+
+    BACKUP_DIR="/tmp/nginx-backup-$$"
+
+    if [[ -d "$BACKUP_DIR" ]]; then
+        # Restore sites-enabled configs
+        for conf in "$BACKUP_DIR"/*; do
+            if [[ -f "$conf" ]] || [[ -L "$conf" ]]; then
+                filename=$(basename "$conf")
+                # Determine where to restore based on extension
+                if [[ "$filename" == *.conf ]]; then
+                    mv "$conf" "$NGINX_CONF_DIR/conf.d/" 2>/dev/null || true
+                else
+                    mv "$conf" "$NGINX_CONF_DIR/sites-enabled/" 2>/dev/null || true
+                fi
+                log_info "  Restored: $filename"
+            fi
+        done
+        rm -rf "$BACKUP_DIR"
     fi
 }
 
@@ -212,6 +284,7 @@ obtain_certificate() {
     fi
 
     # Obtain certificate using webroot method
+    set +e  # Temporarily disable exit on error
     certbot certonly \
         --webroot \
         --webroot-path="$WEBROOT" \
@@ -222,11 +295,23 @@ obtain_certificate() {
         --keep-until-expiring \
         --non-interactive \
         $STAGING
+    local certbot_result=$?
+    set -e  # Re-enable exit on error
 
-    if [[ $? -eq 0 ]]; then
+    if [[ $certbot_result -eq 0 ]]; then
         log_info "Certificate obtained successfully!"
     else
         log_error "Failed to obtain certificate"
+        log_error ""
+        log_error "Troubleshooting tips:"
+        log_error "  1. Ensure domain '$DOMAIN' resolves to this server's public IP"
+        log_error "  2. Ensure port 80 is accessible from the internet"
+        log_error "  3. Check if firewall allows /.well-known/acme-challenge/ requests"
+        log_error "  4. Check /var/log/letsencrypt/letsencrypt.log for details"
+        log_error ""
+
+        # Restore configs before exiting
+        cleanup_temp_config
         exit 1
     fi
 }
@@ -234,6 +319,17 @@ obtain_certificate() {
 cleanup_temp_config() {
     log_info "Cleaning up temporary ACME configuration..."
     rm -f /etc/nginx/conf.d/certbot-acme.conf
+
+    # Restore original nginx configurations
+    restore_nginx_configs
+
+    # Reload nginx with restored configs
+    if nginx -t 2>&1; then
+        systemctl reload nginx
+        log_info "Original nginx configuration restored"
+    else
+        log_warn "Nginx config test failed after restore - please check manually"
+    fi
 }
 
 install_ssl_config() {
