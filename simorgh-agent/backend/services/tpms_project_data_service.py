@@ -19,8 +19,9 @@ import os
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-import mysql.connector
-from mysql.connector import Error as MySQLError
+import pymysql
+import pymysql.cursors
+from pymysql import Error as MySQLError
 
 from models.tpms_project_models import (
     ViewProjectMain,
@@ -65,17 +66,20 @@ class TPMSProjectDataService:
     def _get_connection(self):
         """Create database connection."""
         try:
-            connection = mysql.connector.connect(
+            connection = pymysql.connect(
                 host=self.host,
                 port=self.port,
                 user=self.user,
                 password=self.password,
                 database=self.database,
                 charset='utf8mb4',
-                collation='utf8mb4_unicode_ci'
+                connect_timeout=10,
+                read_timeout=30,
+                write_timeout=30,
+                cursorclass=pymysql.cursors.DictCursor
             )
             return connection
-        except MySQLError as e:
+        except pymysql.Error as e:
             logger.error(f"Failed to connect to TPMS database: {e}")
             raise
 
@@ -95,7 +99,7 @@ class TPMSProjectDataService:
         """
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             # Try exact match first
             query = """
@@ -151,7 +155,7 @@ class TPMSProjectDataService:
         """Get project main info by IdprojectMain."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT
@@ -190,7 +194,7 @@ class TPMSProjectDataService:
         """Get technical project identity for a project."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT
@@ -250,7 +254,7 @@ class TPMSProjectDataService:
         """Get additional fields for project identity."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT
@@ -279,7 +283,7 @@ class TPMSProjectDataService:
         """Get all panels for a project."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT
@@ -328,7 +332,7 @@ class TPMSProjectDataService:
         """Get additional fields for all panels in a project."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT
@@ -357,7 +361,7 @@ class TPMSProjectDataService:
         """Get all draft/feeder entries for a project."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT
@@ -386,7 +390,7 @@ class TPMSProjectDataService:
         """Get all equipment for all drafts in a project."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT
@@ -413,7 +417,7 @@ class TPMSProjectDataService:
         """Get draft column/brand mappings for a project."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT Id, Level, Name, ProjectId
@@ -441,7 +445,7 @@ class TPMSProjectDataService:
         """Get all technical property mappings."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT Id, CategoryId, Type, Title
@@ -465,7 +469,7 @@ class TPMSProjectDataService:
         """Get a specific property value."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT Title
