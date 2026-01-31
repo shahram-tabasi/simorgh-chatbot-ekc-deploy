@@ -520,10 +520,42 @@ async def create_project(
         # via CoCoIndex flows. This keeps the project graph clean with only the
         # Document/Drawing/Identity hierarchy.
 
+        # Initialize per-project databases (PostgreSQL, Qdrant) and sync from TPMS
+        project_db_status = None
+        try:
+            from services.project_database_manager import get_project_database_manager
+            from services.project_sync_service import get_project_sync_service
+
+            db_manager = get_project_database_manager(neo4j_service=neo4j)
+            db_status = db_manager.initialize_project(
+                oenum=project.project_number,
+                project_name=project.project_name
+            )
+            logger.info(f"✅ Per-project databases initialized: {db_status}")
+
+            # Sync data from TPMS (non-blocking, just log if fails)
+            try:
+                sync_service = get_project_sync_service()
+                sync_service.set_neo4j_service(neo4j)
+                # Note: sync_project is async, but we'll run it in background
+                import asyncio
+                sync_result = asyncio.create_task(
+                    sync_service.sync_project(project.project_number)
+                )
+                logger.info(f"🔄 TPMS sync started for project {project.project_number}")
+            except Exception as sync_error:
+                logger.warning(f"⚠️ TPMS sync failed (non-fatal): {sync_error}")
+
+            project_db_status = db_status
+        except Exception as db_error:
+            logger.warning(f"⚠️ Per-project DB init failed (non-fatal): {db_error}")
+            project_db_status = {"error": str(db_error)}
+
         return {
             "status": "success",
             "project": project_node,
-            "guides_initialized": 0  # Guides created during document processing, not here
+            "guides_initialized": 0,  # Guides created during document processing, not here
+            "project_databases": project_db_status
         }
 
     except HTTPException:
