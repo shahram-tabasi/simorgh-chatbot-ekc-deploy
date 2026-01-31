@@ -11,8 +11,9 @@ import logging
 import os
 from typing import Optional, Dict, Any, List
 from functools import lru_cache
-import mysql.connector
-from mysql.connector import Error as MySQLError
+import pymysql
+import pymysql.cursors
+from pymysql import Error as MySQLError
 
 from models.tpms_project_models import (
     TechnicalPropertyType,
@@ -55,17 +56,20 @@ class PropertyResolver:
     def _get_connection(self):
         """Create database connection."""
         try:
-            connection = mysql.connector.connect(
+            connection = pymysql.connect(
                 host=self.host,
                 port=self.port,
                 user=self.user,
                 password=self.password,
                 database=self.database,
                 charset='utf8mb4',
-                collation='utf8mb4_unicode_ci'
+                connect_timeout=10,
+                read_timeout=30,
+                write_timeout=30,
+                cursorclass=pymysql.cursors.DictCursor
             )
             return connection
-        except MySQLError as e:
+        except pymysql.Error as e:
             logger.error(f"Failed to connect to TPMS database: {e}")
             raise
 
@@ -82,7 +86,7 @@ class PropertyResolver:
 
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             # Fetch all technical properties
             query = """
@@ -179,7 +183,7 @@ class PropertyResolver:
         """Direct database lookup for a property value."""
         try:
             connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor()
 
             query = """
                 SELECT Title
