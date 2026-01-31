@@ -673,6 +673,37 @@ async def list_projects(
         )
 
 
+@router.get("/tpms/tables")
+async def list_tpms_tables(
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Diagnostic endpoint to list all accessible TPMS tables/views.
+
+    This helps identify which tables the 'technical' user can access.
+    """
+    try:
+        tpms_service = get_tpms_project_data_service()
+        result = tpms_service.list_available_tables()
+
+        return {
+            "success": True,
+            "database": tpms_service.database,
+            "host": tpms_service.host,
+            "accessible_tables": result.get("accessible", []),
+            "inaccessible_tables": result.get("inaccessible", []),
+            "all_objects": result.get("all_objects", []),
+            "errors": result.get("errors", [])
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list TPMS tables: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list tables: {str(e)}"
+        )
+
+
 @router.delete("/{oenum}")
 async def delete_project(
     oenum: str,

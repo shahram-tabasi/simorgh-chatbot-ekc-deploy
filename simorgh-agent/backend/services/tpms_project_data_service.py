@@ -576,6 +576,107 @@ class TPMSProjectDataService:
             "last_checked": datetime.utcnow()
         }
 
+    def list_available_tables(self) -> Dict[str, List[str]]:
+        """
+        Diagnostic function to list all tables/views accessible by the technical user.
+
+        Returns:
+            Dict with 'tables' and 'views' lists
+        """
+        result = {
+            "tables": [],
+            "views": [],
+            "all_objects": [],
+            "errors": []
+        }
+
+        try:
+            connection = self._get_connection()
+            cursor = connection.cursor()
+
+            # Try to get all tables and views from information_schema
+            try:
+                query = """
+                    SELECT TABLE_NAME, TABLE_TYPE
+                    FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = %s
+                    ORDER BY TABLE_TYPE, TABLE_NAME
+                """
+                cursor.execute(query, (self.database,))
+                rows = cursor.fetchall()
+
+                for row in rows:
+                    table_name = row.get('TABLE_NAME', '')
+                    table_type = row.get('TABLE_TYPE', '')
+                    result["all_objects"].append({"name": table_name, "type": table_type})
+
+                    if 'VIEW' in table_type.upper():
+                        result["views"].append(table_name)
+                    else:
+                        result["tables"].append(table_name)
+
+            except MySQLError as e:
+                result["errors"].append(f"INFORMATION_SCHEMA query failed: {e}")
+
+                # Fallback: try SHOW TABLES
+                try:
+                    cursor.execute("SHOW TABLES")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        # SHOW TABLES returns dict with dynamic key
+                        table_name = list(row.values())[0] if row else None
+                        if table_name:
+                            result["all_objects"].append({"name": table_name, "type": "unknown"})
+                except MySQLError as e2:
+                    result["errors"].append(f"SHOW TABLES failed: {e2}")
+
+            # Test which tables/views we can actually SELECT from
+            test_tables = [
+                "View_Project_Main",
+                "View_Draft",
+                "View_Draft_Equipment",
+                "View_Draft_Column",
+                "TechnicalProjectIdentity",
+                "TechnicalPanelIdentity",
+                "TechnicalProperty",
+                "technical_users",
+                "draft_permission",
+                # Try alternative view names
+                "View_Technical_Project_Identity",
+                "View_Technical_Panel_Identity",
+                "View_Project_Identity",
+                "View_Panel_Identity",
+                "vw_Draft",
+                "vw_Draft_Equipment",
+            ]
+
+            accessible = []
+            inaccessible = []
+
+            for table in test_tables:
+                try:
+                    cursor.execute(f"SELECT 1 FROM {table} LIMIT 1")
+                    cursor.fetchone()
+                    accessible.append(table)
+                except MySQLError:
+                    inaccessible.append(table)
+
+            result["accessible"] = accessible
+            result["inaccessible"] = inaccessible
+
+            cursor.close()
+            connection.close()
+
+            logger.info(f"TPMS accessible tables: {accessible}")
+            logger.info(f"TPMS inaccessible tables: {inaccessible}")
+
+            return result
+
+        except MySQLError as e:
+            logger.error(f"Error listing tables: {e}")
+            result["errors"].append(str(e))
+            return result
+
 
 # =============================================================================
 # SINGLETON INSTANCE
