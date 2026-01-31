@@ -90,13 +90,71 @@ check_prerequisites() {
 install_certbot() {
     log_info "Installing certbot..."
 
-    # Update package list
-    apt update
+    # Check if certbot is already installed
+    if command -v certbot &> /dev/null; then
+        log_info "Certbot is already installed: $(certbot --version 2>&1)"
+        return 0
+    fi
 
-    # Install certbot and nginx plugin
-    apt install -y certbot python3-certbot-nginx
+    # Try Method 1: apt install (with graceful apt update failure handling)
+    log_info "Attempting to install certbot via apt..."
 
-    log_info "Certbot installed successfully"
+    # Run apt update but don't fail on errors (some third-party repos may fail)
+    log_info "Updating package lists (ignoring third-party repo errors)..."
+    apt update 2>&1 | while read line; do
+        if echo "$line" | grep -qE "^(Err|Error):"; then
+            log_warn "$line"
+        elif echo "$line" | grep -qE "^(Hit|Get):"; then
+            echo "  $line"
+        fi
+    done || true  # Don't exit on apt update failure
+
+    # Try to install certbot via apt
+    if apt install -y certbot python3-certbot-nginx 2>/dev/null; then
+        log_info "Certbot installed successfully via apt"
+        return 0
+    fi
+
+    log_warn "apt install failed, trying alternative methods..."
+
+    # Try Method 2: snap (more reliable, doesn't depend on apt repos)
+    if command -v snap &> /dev/null; then
+        log_info "Attempting to install certbot via snap..."
+
+        if snap install --classic certbot 2>/dev/null; then
+            # Create symlink for certbot command
+            ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+            log_info "Certbot installed successfully via snap"
+            return 0
+        fi
+        log_warn "snap install failed"
+    else
+        log_warn "snap is not available"
+    fi
+
+    # Try Method 3: pip (last resort)
+    if command -v pip3 &> /dev/null || command -v pip &> /dev/null; then
+        log_info "Attempting to install certbot via pip..."
+
+        # Install pip if needed
+        apt install -y python3-pip 2>/dev/null || true
+
+        if pip3 install certbot certbot-nginx 2>/dev/null || pip install certbot certbot-nginx 2>/dev/null; then
+            log_info "Certbot installed successfully via pip"
+            return 0
+        fi
+        log_warn "pip install failed"
+    fi
+
+    # All methods failed
+    log_error "Failed to install certbot using all available methods"
+    log_error "Please install certbot manually:"
+    echo ""
+    echo "  Option 1 (snap):  sudo snap install --classic certbot"
+    echo "  Option 2 (apt):   sudo apt install certbot python3-certbot-nginx"
+    echo "  Option 3 (pip):   pip3 install certbot certbot-nginx"
+    echo ""
+    exit 1
 }
 
 create_webroot() {
