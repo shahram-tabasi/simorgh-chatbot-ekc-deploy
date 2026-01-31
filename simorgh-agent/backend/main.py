@@ -533,18 +533,19 @@ async def create_project(
             )
             logger.info(f"✅ Per-project databases initialized: {db_status}")
 
-            # Sync data from TPMS (non-blocking, just log if fails)
+            # Sync data from TPMS (await it to ensure completion)
             try:
                 sync_service = get_project_sync_service()
                 sync_service.set_neo4j_service(neo4j)
-                # Note: sync_project is async, but we'll run it in background
-                import asyncio
-                sync_result = asyncio.create_task(
-                    sync_service.sync_project(project.project_number)
-                )
-                logger.info(f"🔄 TPMS sync started for project {project.project_number}")
+                # Await the sync to ensure it completes
+                sync_result = await sync_service.sync_project(project.project_number)
+                logger.info(f"✅ TPMS sync completed for project {project.project_number}: {sync_result.get('status')}")
+                if sync_result.get('errors'):
+                    logger.warning(f"⚠️ TPMS sync had errors: {sync_result['errors']}")
             except Exception as sync_error:
                 logger.warning(f"⚠️ TPMS sync failed (non-fatal): {sync_error}")
+                import traceback
+                logger.warning(traceback.format_exc())
 
             project_db_status = db_status
         except Exception as db_error:
