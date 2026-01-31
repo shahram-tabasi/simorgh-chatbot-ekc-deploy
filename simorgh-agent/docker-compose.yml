@@ -318,21 +318,17 @@ services:
       retries: 5
 
   # ===========================================================================
-  # PGADMIN - PostgreSQL Administration Tool
+  # ADMINER - Lightweight Database Admin Tool
   # ===========================================================================
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: pgadmin
+  adminer:
+    image: adminer:4.8.1
+    container_name: adminer
     restart: unless-stopped
     environment:
-      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@simorgh.local}
-      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin123}
-      - PGADMIN_CONFIG_SERVER_MODE=True
-      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
+      - ADMINER_DEFAULT_SERVER=postgres_auth
+      - ADMINER_DESIGN=nette
     ports:
-      - "5050:80"
+      - "5050:8080"
     networks:
       - app_net
     depends_on:
@@ -462,8 +458,6 @@ volumes:
   cocoindex_db_data:
     driver: local
   postgres_auth_data:
-    driver: local
-  pgadmin_data:
     driver: local
   stt_models:
     driver: local
