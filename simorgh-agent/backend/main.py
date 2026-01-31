@@ -56,6 +56,7 @@ from models.ontology import *
 from routes.auth import router as auth_router
 from routes.auth_v2 import router as auth_v2_router
 from routes.documents_rag import router as documents_rag_router
+from routes.project_session import include_project_session_routes
 from services.auth_utils import get_current_user
 
 # Import security middleware
@@ -98,6 +99,9 @@ app.include_router(documents_rag_router)
 
 # Include enhanced chatbot v2 routes
 include_chatbot_routes(app)
+
+# Include project session routes (per-project database isolation)
+include_project_session_routes(app)
 
 # CORS
 app.add_middleware(
@@ -219,6 +223,14 @@ async def startup_event():
     # Initialize TPMS Auth (MySQL)
     tpms_auth_service = get_tpms_auth_service()
     logger.info("✅ TPMS Auth service initialized")
+
+    # Initialize PropertyResolver for TPMS code resolution
+    try:
+        from services.property_resolver import get_property_resolver
+        property_resolver = get_property_resolver()
+        logger.info("✅ PropertyResolver initialized (property cache loaded)")
+    except Exception as e:
+        logger.warning(f"⚠️ PropertyResolver initialization failed (non-fatal): {e}")
 
     # Initialize LLM with Redis
     llm_service = get_llm_service(redis_service=redis_service)
