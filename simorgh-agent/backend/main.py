@@ -1259,10 +1259,32 @@ async def delete_all_project_chats(
                 f"{deleted_neo4j_nodes} nodes removed"
             )
 
-        # STEP 3: Return summary
+        # STEP 3: Delete per-project databases (PostgreSQL, Qdrant, Neo4j subgraph)
+        logger.info(f"🗑️ Step 3: Deleting per-project databases for project {project_number}")
+
+        project_db_deleted = False
+        project_db_details = {}
+        try:
+            from services.project_database_manager import get_project_database_manager
+            db_manager = get_project_database_manager()
+
+            # Check if per-project database exists
+            if db_manager.check_project_db_exists(project_number):
+                project_db_details = db_manager.delete_project(project_number)
+                project_db_deleted = project_db_details.get("success", False)
+                logger.info(f"✅ Per-project databases deleted: {project_db_details}")
+            else:
+                logger.info(f"ℹ️ No per-project database found for {project_number}")
+                project_db_details = {"message": "No per-project database found"}
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to delete per-project databases: {e}")
+            project_db_details = {"error": str(e)}
+
+        # STEP 4: Return summary
         logger.info(
             f"✅ Complete deletion for project {project_number}: "
-            f"{deleted_chat_count} chats from Redis, {deleted_neo4j_nodes} nodes from Neo4j"
+            f"{deleted_chat_count} chats from Redis, {deleted_neo4j_nodes} nodes from Neo4j, "
+            f"per-project DB: {project_db_deleted}"
         )
 
         return {
@@ -1274,10 +1296,13 @@ async def delete_all_project_chats(
             "failed_chat_count": len(failed_chats),
             "deleted_neo4j_nodes": deleted_neo4j_nodes,
             "neo4j_deleted": True,
+            "project_db_deleted": project_db_deleted,
+            "project_db_details": project_db_details,
             "message": (
                 f"Project '{project_name}' completely deleted: "
                 f"{deleted_chat_count} chat(s) from Redis, "
-                f"{deleted_neo4j_nodes} node(s) from Neo4j"
+                f"{deleted_neo4j_nodes} node(s) from Neo4j, "
+                f"per-project databases: {'deleted' if project_db_deleted else 'not found/skipped'}"
             )
         }
 

@@ -647,6 +647,106 @@ async def get_panel_details(
         )
 
 
+@router.get("/list")
+async def list_projects(
+    current_user: str = Depends(get_current_user),
+):
+    """
+    List all project databases that have been created.
+
+    Returns list of OENUMs with existing project databases.
+    """
+    try:
+        db_manager = get_project_database_manager()
+        oenumsdata = db_manager.list_project_databases()
+
+        return {
+            "projects": oenumsdata,
+            "count": len(oenumsdata)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list projects: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list projects: {str(e)}"
+        )
+
+
+@router.delete("/{oenum}")
+async def delete_project(
+    oenum: str,
+    confirm: bool = Query(False, description="Must be true to confirm deletion"),
+    current_user: str = Depends(get_current_user),
+    sync_service: ProjectSyncService = Depends(get_sync_service),
+):
+    """
+    DELETE ALL project data from ALL databases.
+
+    WARNING: This is a destructive, irreversible operation!
+
+    Deletes:
+    - PostgreSQL database (project_<oenum>)
+    - Qdrant vector collection (project_<oenum>)
+    - Neo4j knowledge graph (all project nodes and relationships)
+
+    Args:
+        oenum: Project OENUM to delete
+        confirm: Must be true to confirm the deletion
+
+    Returns:
+        Deletion status for each database
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Deletion not confirmed. Set confirm=true to proceed with deletion."
+        )
+
+    try:
+        db_manager = get_project_database_manager()
+
+        # Check if project exists
+        if not db_manager.check_project_db_exists(oenum):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project {oenum} not found"
+            )
+
+        # Perform deletion
+        result = db_manager.delete_project(oenum)
+
+        logger.warning(
+            f"User {current_user} DELETED project {oenum}. "
+            f"Results: PostgreSQL={result['postgresql']}, "
+            f"Qdrant={result['qdrant']}, Neo4j={result['neo4j']}"
+        )
+
+        if not result["success"]:
+            return {
+                "success": False,
+                "oenum": oenum,
+                "message": "Partial deletion - some components failed",
+                "details": result
+            }
+
+        return {
+            "success": True,
+            "oenum": oenum,
+            "message": f"Project {oenum} and all its data have been permanently deleted",
+            "details": result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete project {oenum}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete project: {str(e)}"
+        )
+
+
 # =============================================================================
 # REGISTRATION HELPER
 # =============================================================================
