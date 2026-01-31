@@ -318,6 +318,28 @@ services:
       retries: 5
 
   # ===========================================================================
+  # PGADMIN - PostgreSQL Administration Tool
+  # ===========================================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@simorgh.local}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin123}
+      - PGADMIN_CONFIG_SERVER_MODE=True
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "5050:80"
+    networks:
+      - app_net
+    depends_on:
+      postgres_auth:
+        condition: service_healthy
+
+  # ===========================================================================
   # NGINX - Reverse Proxy (TEMPORARY: HTTP-only mode)
   # ===========================================================================
   # SSL disabled until firewall allows .well-known paths for Let's Encrypt
@@ -440,6 +462,8 @@ volumes:
   cocoindex_db_data:
     driver: local
   postgres_auth_data:
+    driver: local
+  pgadmin_data:
     driver: local
   stt_models:
     driver: local

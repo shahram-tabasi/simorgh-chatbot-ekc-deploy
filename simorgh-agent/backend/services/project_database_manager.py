@@ -54,11 +54,12 @@ class ProjectDatabaseManager:
             qdrant_service: Qdrant service instance
             neo4j_service: Neo4j service instance
         """
-        self.pg_host = pg_host or os.getenv("POSTGRES_HOST", "localhost")
-        self.pg_port = pg_port or int(os.getenv("POSTGRES_PORT", "5432"))
-        self.pg_user = pg_user or os.getenv("POSTGRES_USER", "postgres")
-        self.pg_password = pg_password or os.getenv("POSTGRES_PASSWORD", "")
-        self.pg_admin_db = pg_admin_db or os.getenv("POSTGRES_ADMIN_DB", "postgres")
+        # Use POSTGRES_AUTH_* env vars to match docker-compose postgres_auth service
+        self.pg_host = pg_host or os.getenv("POSTGRES_AUTH_HOST", os.getenv("POSTGRES_HOST", "postgres_auth"))
+        self.pg_port = pg_port or int(os.getenv("POSTGRES_AUTH_PORT", os.getenv("POSTGRES_PORT", "5432")))
+        self.pg_user = pg_user or os.getenv("POSTGRES_AUTH_USER", os.getenv("POSTGRES_USER", "simorgh"))
+        self.pg_password = pg_password or os.getenv("POSTGRES_AUTH_PASSWORD", os.getenv("POSTGRES_PASSWORD", "simorgh_secure_2024"))
+        self.pg_admin_db = pg_admin_db or os.getenv("POSTGRES_AUTH_DATABASE", os.getenv("POSTGRES_ADMIN_DB", "simorgh_auth"))
 
         self.qdrant = qdrant_service
         self.neo4j = neo4j_service
