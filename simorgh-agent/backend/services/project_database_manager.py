@@ -802,6 +802,112 @@ class ProjectDatabaseManager:
             "all_ready": all(init_results.values())
         }
 
+    def delete_project(self, oenum: str) -> Dict[str, Any]:
+        """
+        Delete ALL project data from ALL databases.
+
+        WARNING: This is a destructive operation that cannot be undone!
+
+        Deletes:
+        - PostgreSQL database (project_<oenum>)
+        - Qdrant collection (project_<oenum>)
+        - Neo4j project subgraph (all nodes connected to project)
+
+        Args:
+            oenum: Project OENUM to delete
+
+        Returns:
+            Dict with deletion status for each database type
+        """
+        results = {
+            "postgresql": False,
+            "qdrant": False,
+            "neo4j": False,
+            "errors": []
+        }
+
+        logger.warning(f"DELETING ALL DATA for project {oenum}")
+
+        # Delete PostgreSQL database
+        try:
+            results["postgresql"] = self.delete_project_database(oenum)
+            if results["postgresql"]:
+                logger.info(f"Deleted PostgreSQL database for {oenum}")
+        except Exception as e:
+            error_msg = f"PostgreSQL deletion failed: {e}"
+            logger.error(error_msg)
+            results["errors"].append(error_msg)
+
+        # Delete Qdrant collection
+        try:
+            results["qdrant"] = self.delete_project_collection(oenum)
+            if results["qdrant"]:
+                logger.info(f"Deleted Qdrant collection for {oenum}")
+        except Exception as e:
+            error_msg = f"Qdrant deletion failed: {e}"
+            logger.error(error_msg)
+            results["errors"].append(error_msg)
+
+        # Delete Neo4j graph
+        try:
+            results["neo4j"] = self.delete_project_graph(oenum)
+            if results["neo4j"]:
+                logger.info(f"Deleted Neo4j graph for {oenum}")
+        except Exception as e:
+            error_msg = f"Neo4j deletion failed: {e}"
+            logger.error(error_msg)
+            results["errors"].append(error_msg)
+
+        # Remove from active projects tracking
+        if oenum in self._active_projects:
+            del self._active_projects[oenum]
+
+        # Determine overall success
+        results["success"] = all([
+            results["postgresql"],
+            results["qdrant"] or not self.qdrant,  # OK if Qdrant not configured
+            results["neo4j"] or not self.neo4j     # OK if Neo4j not configured
+        ])
+
+        logger.warning(f"Project {oenum} deletion results: {results}")
+        return results
+
+    def list_project_databases(self) -> List[str]:
+        """
+        List all project databases in PostgreSQL.
+
+        Returns:
+            List of OENUM values for existing project databases
+        """
+        try:
+            conn = self._get_admin_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT datname FROM pg_database
+                WHERE datname LIKE 'project_%'
+                ORDER BY datname
+            """)
+
+            databases = [row[0] for row in cursor.fetchall()]
+            cursor.close()
+            conn.close()
+
+            # Extract OENUM from database names
+            oenumsdata = []
+            for db_name in databases:
+                # Remove 'project_' prefix and handle 'p_' prefix for numeric OENUMs
+                oenum = db_name.replace('project_', '')
+                if oenum.startswith('p_'):
+                    oenum = oenum[2:]
+                oenumsdata.append(oenum)
+
+            return oenumsdata
+
+        except Exception as e:
+            logger.error(f"Error listing project databases: {e}")
+            return []
+
 
 # =============================================================================
 # SINGLETON INSTANCE
