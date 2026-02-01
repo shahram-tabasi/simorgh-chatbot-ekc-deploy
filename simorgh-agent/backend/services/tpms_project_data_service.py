@@ -320,12 +320,18 @@ class TPMSProjectDataService:
             cursor = connection.cursor()
 
             # Note: Table name is uppercase and ends with 'FIELDS' (plural)
+            # Column names use underscores based on C# Entity Framework model pattern
             query = """
                 SELECT
-                    Id, IdtechnicalProjectIdentity, IdprojectMain,
-                    FieldTitle, FieldDescriptions, DateU, Status
+                    Id,
+                    Id_technical_Project_Identity as IdtechnicalProjectIdentity,
+                    Id_project_Main as IdprojectMain,
+                    Field_Title as FieldTitle,
+                    Field_Descriptions as FieldDescriptions,
+                    Date_U as DateU,
+                    Status
                 FROM TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS
-                WHERE IdprojectMain = %s AND Status = 1
+                WHERE Id_project_Main = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -436,12 +442,19 @@ class TPMSProjectDataService:
             cursor = connection.cursor()
 
             # Note: Table name is uppercase and ends with 'FIELDS' (plural)
+            # Column names use underscores based on C# Entity Framework model pattern
             query = """
                 SELECT
-                    Id, IdtechnicalPanelIdentity, IdprojectMain, IdprojectScope,
-                    FieldTitle, FieldDescriptions, DateU, Status
+                    Id,
+                    Id_technical_Panel_Identity as IdtechnicalPanelIdentity,
+                    Id_project_Main as IdprojectMain,
+                    Id_project_Scope as IdprojectScope,
+                    Field_Title as FieldTitle,
+                    Field_Descriptions as FieldDescriptions,
+                    Date_U as DateU,
+                    Status
                 FROM TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELDS
-                WHERE IdprojectMain = %s AND Status = 1
+                WHERE Id_project_Main = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
