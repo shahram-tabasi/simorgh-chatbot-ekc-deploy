@@ -320,14 +320,14 @@ class TPMSProjectDataService:
             cursor = connection.cursor()
 
             # Column names from TPMS database (per screenshot):
-            # ID, IDTechnicalProjectIdentity, IDProjectMain, field_title, field_description, date_u, Status
+            # ID, IDTechnicalProjectIdentity, IDProjectMain, field_title, field_descriptions (plural!), date_u, Status
             query = """
                 SELECT
                     ID as Id,
                     IDTechnicalProjectIdentity as IdtechnicalProjectIdentity,
                     IDProjectMain as IdprojectMain,
                     field_title as FieldTitle,
-                    field_description as FieldDescriptions,
+                    field_descriptions as FieldDescriptions,
                     date_u as DateU,
                     Status
                 FROM TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS
@@ -442,7 +442,7 @@ class TPMSProjectDataService:
             cursor = connection.cursor()
 
             # Column names from TPMS database (per screenshot):
-            # ID, IDTechnicalPanelIdentity, IDProjectMain, IDProjectScope, field_title, field_description, date_u, Status
+            # ID, IDTechnicalPanelIdentity, IDProjectMain, IDProjectScope, field_title, field_descriptions (plural!), date_u, Status
             query = """
                 SELECT
                     ID as Id,
@@ -450,7 +450,7 @@ class TPMSProjectDataService:
                     IDProjectMain as IdprojectMain,
                     IDProjectScope as IdprojectScope,
                     field_title as FieldTitle,
-                    field_description as FieldDescriptions,
+                    field_descriptions as FieldDescriptions,
                     date_u as DateU,
                     Status
                 FROM TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELDS

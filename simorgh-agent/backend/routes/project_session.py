@@ -24,6 +24,7 @@ from services.document_processing_integration import get_qdrant_service
 from services.project_sync_service import get_project_sync_service, ProjectSyncService
 from services.project_database_manager import get_project_database_manager
 from services.tpms_project_data_service import get_tpms_project_data_service
+from services.background_sync_service import get_background_sync_service
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,14 @@ async def select_project(
                 status_code=404,
                 detail=f"Project {oenum} not found in TPMS"
             )
+
+        # Mark project as active for background sync
+        try:
+            bg_sync = get_background_sync_service()
+            bg_sync.mark_project_active(oenum)
+            logger.debug(f"Project {oenum} marked as active for background sync")
+        except Exception as e:
+            logger.warning(f"Could not mark project active: {e}")
 
         # Initialize databases
         db_manager = get_project_database_manager()
