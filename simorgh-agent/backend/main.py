@@ -57,6 +57,7 @@ from routes.auth import router as auth_router
 from routes.auth_v2 import router as auth_v2_router
 from routes.documents_rag import router as documents_rag_router
 from routes.project_session import include_project_session_routes
+from routes.tpms_webhook import router as tpms_webhook_router
 from services.auth_utils import get_current_user
 
 # Import security middleware
@@ -73,6 +74,14 @@ from chatbot_core.startup import (
     include_chatbot_routes,
 )
 from chatbot_core.integration import get_chatbot_core, ChatbotCore
+
+# Import background sync service for real-time TPMS sync
+from services.background_sync_service import (
+    get_background_sync_service,
+    start_background_sync,
+    stop_background_sync,
+    BackgroundSyncService,
+)
 
 # Import output parser for cleaning LLM responses
 try:
@@ -96,6 +105,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(auth_v2_router)  # Modern auth endpoints (v2)
 app.include_router(documents_rag_router)
+app.include_router(tpms_webhook_router)  # TPMS real-time sync webhooks
 
 # Include enhanced chatbot v2 routes
 include_chatbot_routes(app)
@@ -136,6 +146,7 @@ llm_service: Optional[LLMService] = None
 session_id_service: Optional[SessionIDService] = None
 unified_memory_service: Optional[UnifiedMemoryService] = None
 chatbot_core: Optional[ChatbotCore] = None
+background_sync_service: Optional[BackgroundSyncService] = None
 
 
 # =============================================================================
@@ -204,7 +215,7 @@ class PowerPathQuery(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service, unified_memory_service, chatbot_core
+    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service, unified_memory_service, chatbot_core, background_sync_service
 
     logger.info("🚀 Starting Simorgh Industrial Assistant...")
 
@@ -271,6 +282,20 @@ async def startup_event():
         logger.warning(f"⚠️ Chatbot Core initialization failed (non-fatal): {e}")
         chatbot_core = get_chatbot_core()
 
+    # Initialize Background Sync Service for real-time TPMS sync
+    try:
+        background_sync_service = get_background_sync_service(
+            neo4j_service=neo4j_service,
+            redis_service=redis_service
+        )
+        await start_background_sync(
+            neo4j_service=neo4j_service,
+            redis_service=redis_service
+        )
+        logger.info("✅ Background TPMS sync service started")
+    except Exception as e:
+        logger.warning(f"⚠️ Background sync service failed to start (non-fatal): {e}")
+
     logger.info("🎉 All services ready!")
 
 
@@ -279,7 +304,14 @@ async def shutdown_event():
     """Clean up on shutdown"""
     logger.info("🛑 Shutting down...")
 
-    # Shutdown Chatbot Core first
+    # Shutdown Background Sync first
+    try:
+        await stop_background_sync()
+        logger.info("✅ Background sync service stopped")
+    except Exception as e:
+        logger.warning(f"⚠️ Background sync shutdown error: {e}")
+
+    # Shutdown Chatbot Core
     try:
         await shutdown_chatbot()
         logger.info("✅ Chatbot Core shutdown complete")
