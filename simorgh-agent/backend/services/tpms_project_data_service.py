@@ -101,12 +101,18 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Try exact match first
+            # Try exact match first - View_Project_Main has all these columns per C# model
             query = """
                 SELECT
                     IDProjectMain as IdprojectMain,
                     OENUM as Oenum,
-                    IFNULL(Project_Name, '') as ProjectName
+                    IFNULL(Project_Name, '') as ProjectName,
+                    IFNULL(Order_Category, '') as OrderCategory,
+                    IFNULL(OEDATE, '') as OeDate,
+                    IFNULL(Project_Name_Fa, '') as ProjectNameFa,
+                    IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
+                    IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
+                    IFNULL(Technical_Expert_Label, '') as TechnicalExpertLabel
                 FROM View_Project_Main
                 WHERE OENUM = %s
                 LIMIT 1
@@ -122,7 +128,13 @@ class TPMSProjectDataService:
                     SELECT
                         IDProjectMain as IdprojectMain,
                         OENUM as Oenum,
-                        IFNULL(Project_Name, '') as ProjectName
+                        IFNULL(Project_Name, '') as ProjectName,
+                        IFNULL(Order_Category, '') as OrderCategory,
+                        IFNULL(OEDATE, '') as OeDate,
+                        IFNULL(Project_Name_Fa, '') as ProjectNameFa,
+                        IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
+                        IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
+                        IFNULL(Technical_Expert_Label, '') as TechnicalExpertLabel
                     FROM View_Project_Main
                     WHERE RIGHT(OENUM, 5) = %s
                     ORDER BY IDProjectMain DESC
@@ -136,18 +148,17 @@ class TPMSProjectDataService:
 
             if row:
                 logger.info(f"Found project: {row}")
-                # Create ViewProjectMain with available fields
+                # Create ViewProjectMain with all fields from View_Project_Main
                 return ViewProjectMain(
                     id_project_main=row['IdprojectMain'],
                     oenum=row['Oenum'],
                     project_name=row['ProjectName'],
-                    # Set defaults for fields not in View_Project_Main
-                    order_category='',
-                    oe_date='',
-                    project_name_fa='',
-                    project_expert_label='',
-                    technical_supervisor_label='',
-                    technical_expert_label=''
+                    order_category=row['OrderCategory'],
+                    oe_date=row['OeDate'],
+                    project_name_fa=row['ProjectNameFa'],
+                    project_expert_label=row['ProjectExpertLabel'],
+                    technical_supervisor_label=row['TechnicalSupervisorLabel'],
+                    technical_expert_label=row['TechnicalExpertLabel']
                 )
             return None
 
@@ -161,11 +172,18 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # View_Project_Main has all these columns per C# model
             query = """
                 SELECT
                     IDProjectMain as IdprojectMain,
                     OENUM as Oenum,
-                    IFNULL(Project_Name, '') as ProjectName
+                    IFNULL(Project_Name, '') as ProjectName,
+                    IFNULL(Order_Category, '') as OrderCategory,
+                    IFNULL(OEDATE, '') as OeDate,
+                    IFNULL(Project_Name_Fa, '') as ProjectNameFa,
+                    IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
+                    IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
+                    IFNULL(Technical_Expert_Label, '') as TechnicalExpertLabel
                 FROM View_Project_Main
                 WHERE IDProjectMain = %s
                 LIMIT 1
@@ -181,12 +199,12 @@ class TPMSProjectDataService:
                     id_project_main=row['IdprojectMain'],
                     oenum=row['Oenum'],
                     project_name=row['ProjectName'],
-                    order_category='',
-                    oe_date='',
-                    project_name_fa='',
-                    project_expert_label='',
-                    technical_supervisor_label='',
-                    technical_expert_label=''
+                    order_category=row['OrderCategory'],
+                    oe_date=row['OeDate'],
+                    project_name_fa=row['ProjectNameFa'],
+                    project_expert_label=row['ProjectExpertLabel'],
+                    technical_supervisor_label=row['TechnicalSupervisorLabel'],
+                    technical_expert_label=row['TechnicalExpertLabel']
                 )
             return None
 
@@ -204,6 +222,7 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is lowercase 'technical_project_identity' (case-sensitive on Linux)
             query = """
                 SELECT
                     Id, IdprojectMain, ProjectGroup, DeliveryDate,
@@ -236,7 +255,7 @@ class TPMSProjectDataService:
                     LabelBackgroundColor, LabelBackgroundColorRemarkDescription,
                     WireBrand, ControlWireBrand,
                     Type, Finished, UsrUsername, DateCreated
-                FROM TechnicalProjectIdentity
+                FROM technical_project_identity
                 WHERE IdprojectMain = %s
                 ORDER BY Id DESC
                 LIMIT 1
@@ -264,11 +283,12 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is uppercase and ends with 'FIELDS' (plural)
             query = """
                 SELECT
                     Id, IdtechnicalProjectIdentity, IdprojectMain,
                     FieldTitle, FieldDescriptions, DateU, Status
-                FROM TechnicalProjectIdentityAdditionalField
+                FROM TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS
                 WHERE IdprojectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
@@ -293,6 +313,7 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is lowercase 'technical_panel_identity' (case-sensitive on Linux)
             query = """
                 SELECT
                     Id, IdprojectMain, IdprojectScope, ProductTypeLabel,
@@ -317,7 +338,7 @@ class TPMSProjectDataService:
                     Cpcts, Scm, Plsh, Msh, Mbc, MbcRemarkDescription,
                     Rpfwv, Riwv,
                     ProjectIdentityid, Revision, UsrUsername, DateCreated
-                FROM TechnicalPanelIdentity
+                FROM technical_panel_identity
                 WHERE IdprojectMain = %s
                 ORDER BY Id
             """
@@ -342,11 +363,12 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is uppercase and ends with 'FIELDS' (plural)
             query = """
                 SELECT
                     Id, IdtechnicalPanelIdentity, IdprojectMain, IdprojectScope,
                     FieldTitle, FieldDescriptions, DateU, Status
-                FROM TechnicalPanelIdentityAdditionalField
+                FROM TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELDS
                 WHERE IdprojectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
@@ -371,6 +393,7 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'View_draft' (lowercase 'd') - case-sensitive on Linux
             query = """
                 SELECT
                     Id, ProjectId, TabloId, TmpId, ScopeName,
@@ -378,7 +401,7 @@ class TPMSProjectDataService:
                     WiringType, RatingPower, Flc, Module, ModuleType,
                     Size, CableSize, CbRating, OverLoadRating, ContactorRating,
                     SfdHfd, TemplateName, Description, Revision, Ordering
-                FROM View_Draft
+                FROM View_draft
                 WHERE ProjectId = %s
                 ORDER BY TabloId, Ordering, Id
             """
@@ -400,12 +423,13 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table names are 'View_draft_Equipment' and 'View_draft' - case-sensitive on Linux
             query = """
                 SELECT
                     e.DraftId, e.Label, e.Ecode, e.Equipment, e.Qty, e.Priority, e.Color,
                     e.SecDes, e.TypeDes, e.BrandDes, e.ShrDes, e.ShrDes2, e.Scode, e.EngDes
-                FROM View_Draft_Equipment e
-                INNER JOIN View_Draft d ON e.DraftId = d.Id
+                FROM View_draft_Equipment e
+                INNER JOIN View_draft d ON e.DraftId = d.Id
                 WHERE d.ProjectId = %s
                 ORDER BY e.DraftId, e.Priority
             """
@@ -427,9 +451,10 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'View_draft_column' (lowercase) - case-sensitive on Linux
             query = """
                 SELECT Id, Level, Name, ProjectId
-                FROM View_Draft_Column
+                FROM View_draft_column
                 WHERE ProjectId = %s
                 ORDER BY Level, Id
             """
@@ -455,9 +480,10 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'TECHNICAL_PROPERTIES' (uppercase) - case-sensitive on Linux
             query = """
                 SELECT Id, CategoryId, Type, Title
-                FROM TechnicalProperty
+                FROM TECHNICAL_PROPERTIES
                 WHERE Title IS NOT NULL AND Title != ''
                 ORDER BY Type, CategoryId
             """
@@ -479,9 +505,10 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'TECHNICAL_PROPERTIES' (uppercase) - case-sensitive on Linux
             query = """
                 SELECT Title
-                FROM TechnicalProperty
+                FROM TECHNICAL_PROPERTIES
                 WHERE Type = %s AND CategoryId = %s
                 LIMIT 1
             """
@@ -631,23 +658,30 @@ class TPMSProjectDataService:
                     result["errors"].append(f"SHOW TABLES failed: {e2}")
 
             # Test which tables/views we can actually SELECT from
+            # Note: MySQL on Linux is case-sensitive for table names!
+            # Names from C# Entity Framework model (TPMSDbContext)
             test_tables = [
+                # Views (from C# ToView mappings)
                 "View_Project_Main",
-                "View_Draft",
-                "View_Draft_Equipment",
-                "View_Draft_Column",
-                "TechnicalProjectIdentity",
-                "TechnicalPanelIdentity",
-                "TechnicalProperty",
-                "technical_users",
+                "View_draft",              # lowercase 'd'
+                "View_draft_Equipment",    # mixed case
+                "View_draft_column",       # lowercase
+                "view_scope",
+                "view_UserNamefani",
+                "technical_project_identity",   # lowercase view
+                "technical_panel_identity",     # lowercase view
+                "technical_users",              # lowercase view
+                # Tables (from C# ToTable mappings)
+                "TECHNICAL_PROPERTIES",                          # uppercase
+                "TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS",  # uppercase, ends with 'S'
+                "TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELDS",    # uppercase, ends with 'S'
+                "TECHNICAL_CELL_IDENTITY",
+                "TECHNICAL_CELL_IDENTITY_CELL_TYPES",
+                "TECHNICAL_CELL_IDENTITY_MV",
                 "draft_permission",
-                # Try alternative view names
-                "View_Technical_Project_Identity",
-                "View_Technical_Panel_Identity",
-                "View_Project_Identity",
-                "View_Panel_Identity",
-                "vw_Draft",
-                "vw_Draft_Equipment",
+                "Technical_draft_template",
+                "Technical_draft_equipment_template",
+                "CODING_MERCHANDISE_TB",
             ]
 
             accessible = []
