@@ -89,9 +89,10 @@ class PropertyResolver:
             cursor = connection.cursor()
 
             # Fetch all technical properties
+            # Note: Table name is 'TECHNICAL_PROPERTIES' (uppercase) - case-sensitive on Linux
             query = """
                 SELECT Id, CategoryId, Type, Title
-                FROM TechnicalProperty
+                FROM TECHNICAL_PROPERTIES
                 WHERE Title IS NOT NULL AND Title != ''
             """
             cursor.execute(query)
@@ -185,9 +186,10 @@ class PropertyResolver:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'TECHNICAL_PROPERTIES' (uppercase) - case-sensitive on Linux
             query = """
                 SELECT Title
-                FROM TechnicalProperty
+                FROM TECHNICAL_PROPERTIES
                 WHERE Type = %s AND CategoryId = %s
                 LIMIT 1
             """

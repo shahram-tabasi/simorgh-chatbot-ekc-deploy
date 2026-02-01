@@ -204,6 +204,7 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is lowercase 'technical_project_identity' (case-sensitive on Linux)
             query = """
                 SELECT
                     Id, IdprojectMain, ProjectGroup, DeliveryDate,
@@ -236,7 +237,7 @@ class TPMSProjectDataService:
                     LabelBackgroundColor, LabelBackgroundColorRemarkDescription,
                     WireBrand, ControlWireBrand,
                     Type, Finished, UsrUsername, DateCreated
-                FROM TechnicalProjectIdentity
+                FROM technical_project_identity
                 WHERE IdprojectMain = %s
                 ORDER BY Id DESC
                 LIMIT 1
@@ -264,11 +265,12 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is uppercase on this one
             query = """
                 SELECT
                     Id, IdtechnicalProjectIdentity, IdprojectMain,
                     FieldTitle, FieldDescriptions, DateU, Status
-                FROM TechnicalProjectIdentityAdditionalField
+                FROM TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELD
                 WHERE IdprojectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
@@ -293,6 +295,7 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is lowercase 'technical_panel_identity' (case-sensitive on Linux)
             query = """
                 SELECT
                     Id, IdprojectMain, IdprojectScope, ProductTypeLabel,
@@ -317,7 +320,7 @@ class TPMSProjectDataService:
                     Cpcts, Scm, Plsh, Msh, Mbc, MbcRemarkDescription,
                     Rpfwv, Riwv,
                     ProjectIdentityid, Revision, UsrUsername, DateCreated
-                FROM TechnicalPanelIdentity
+                FROM technical_panel_identity
                 WHERE IdprojectMain = %s
                 ORDER BY Id
             """
@@ -342,11 +345,12 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is uppercase on this one
             query = """
                 SELECT
                     Id, IdtechnicalPanelIdentity, IdprojectMain, IdprojectScope,
                     FieldTitle, FieldDescriptions, DateU, Status
-                FROM TechnicalPanelIdentityAdditionalField
+                FROM TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELD
                 WHERE IdprojectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
@@ -371,6 +375,7 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'View_draft' (lowercase 'd') - case-sensitive on Linux
             query = """
                 SELECT
                     Id, ProjectId, TabloId, TmpId, ScopeName,
@@ -378,7 +383,7 @@ class TPMSProjectDataService:
                     WiringType, RatingPower, Flc, Module, ModuleType,
                     Size, CableSize, CbRating, OverLoadRating, ContactorRating,
                     SfdHfd, TemplateName, Description, Revision, Ordering
-                FROM View_Draft
+                FROM View_draft
                 WHERE ProjectId = %s
                 ORDER BY TabloId, Ordering, Id
             """
@@ -400,12 +405,13 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table names are 'View_draft_Equipment' and 'View_draft' - case-sensitive on Linux
             query = """
                 SELECT
                     e.DraftId, e.Label, e.Ecode, e.Equipment, e.Qty, e.Priority, e.Color,
                     e.SecDes, e.TypeDes, e.BrandDes, e.ShrDes, e.ShrDes2, e.Scode, e.EngDes
-                FROM View_Draft_Equipment e
-                INNER JOIN View_Draft d ON e.DraftId = d.Id
+                FROM View_draft_Equipment e
+                INNER JOIN View_draft d ON e.DraftId = d.Id
                 WHERE d.ProjectId = %s
                 ORDER BY e.DraftId, e.Priority
             """
@@ -427,9 +433,10 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'View_draft_column' (lowercase) - case-sensitive on Linux
             query = """
                 SELECT Id, Level, Name, ProjectId
-                FROM View_Draft_Column
+                FROM View_draft_column
                 WHERE ProjectId = %s
                 ORDER BY Level, Id
             """
@@ -455,9 +462,10 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'TECHNICAL_PROPERTIES' (uppercase) - case-sensitive on Linux
             query = """
                 SELECT Id, CategoryId, Type, Title
-                FROM TechnicalProperty
+                FROM TECHNICAL_PROPERTIES
                 WHERE Title IS NOT NULL AND Title != ''
                 ORDER BY Type, CategoryId
             """
@@ -479,9 +487,10 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'TECHNICAL_PROPERTIES' (uppercase) - case-sensitive on Linux
             query = """
                 SELECT Title
-                FROM TechnicalProperty
+                FROM TECHNICAL_PROPERTIES
                 WHERE Type = %s AND CategoryId = %s
                 LIMIT 1
             """
@@ -631,23 +640,22 @@ class TPMSProjectDataService:
                     result["errors"].append(f"SHOW TABLES failed: {e2}")
 
             # Test which tables/views we can actually SELECT from
+            # Note: MySQL on Linux is case-sensitive for table names!
             test_tables = [
+                # Views (from screenshot)
                 "View_Project_Main",
-                "View_Draft",
-                "View_Draft_Equipment",
-                "View_Draft_Column",
-                "TechnicalProjectIdentity",
-                "TechnicalPanelIdentity",
-                "TechnicalProperty",
+                "View_draft",              # lowercase 'd'
+                "View_draft_Equipment",    # mixed case
+                "View_draft_column",       # lowercase
+                "view_scope",
+                # Tables (from screenshot)
+                "technical_project_identity",   # lowercase
+                "technical_panel_identity",     # lowercase
+                "TECHNICAL_PROPERTIES",         # uppercase
+                "TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELD",  # uppercase
+                "TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELD",    # uppercase
                 "technical_users",
                 "draft_permission",
-                # Try alternative view names
-                "View_Technical_Project_Identity",
-                "View_Technical_Panel_Identity",
-                "View_Project_Identity",
-                "View_Panel_Identity",
-                "vw_Draft",
-                "vw_Draft_Equipment",
             ]
 
             accessible = []
