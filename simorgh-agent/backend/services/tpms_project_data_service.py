@@ -319,19 +319,19 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table name is uppercase and ends with 'FIELDS' (plural)
-            # Column names use underscores based on C# Entity Framework model pattern
+            # Column names from TPMS database (per screenshot):
+            # ID, IDTechnicalProjectIdentity, IDProjectMain, field_title, field_description, date_u, Status
             query = """
                 SELECT
-                    Id,
-                    Id_technical_Project_Identity as IdtechnicalProjectIdentity,
-                    Id_project_Main as IdprojectMain,
-                    Field_Title as FieldTitle,
-                    Field_Descriptions as FieldDescriptions,
-                    Date_U as DateU,
+                    ID as Id,
+                    IDTechnicalProjectIdentity as IdtechnicalProjectIdentity,
+                    IDProjectMain as IdprojectMain,
+                    field_title as FieldTitle,
+                    field_description as FieldDescriptions,
+                    date_u as DateU,
                     Status
                 FROM TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS
-                WHERE Id_project_Main = %s AND Status = 1
+                WHERE IDProjectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -441,20 +441,20 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table name is uppercase and ends with 'FIELDS' (plural)
-            # Column names use underscores based on C# Entity Framework model pattern
+            # Column names from TPMS database (per screenshot):
+            # ID, IDTechnicalPanelIdentity, IDProjectMain, IDProjectScope, field_title, field_description, date_u, Status
             query = """
                 SELECT
-                    Id,
-                    Id_technical_Panel_Identity as IdtechnicalPanelIdentity,
-                    Id_project_Main as IdprojectMain,
-                    Id_project_Scope as IdprojectScope,
-                    Field_Title as FieldTitle,
-                    Field_Descriptions as FieldDescriptions,
-                    Date_U as DateU,
+                    ID as Id,
+                    IDTechnicalPanelIdentity as IdtechnicalPanelIdentity,
+                    IDProjectMain as IdprojectMain,
+                    IDProjectScope as IdprojectScope,
+                    field_title as FieldTitle,
+                    field_description as FieldDescriptions,
+                    date_u as DateU,
                     Status
                 FROM TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELDS
-                WHERE Id_project_Main = %s AND Status = 1
+                WHERE IDProjectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
