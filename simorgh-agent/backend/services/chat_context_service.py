@@ -304,15 +304,15 @@ class ProjectChatHandler:
             # 2. Graph context via CoCoIndex
             graph_context = await self._get_graph_context(project_number, query)
 
-            # 3. Project database context from PostgreSQL (TPMS synced data)
-            project_db_context = self._get_project_database_context(project_number)
+            # 3. Project TPMS context from Neo4j (synced data)
+            project_tpms_context = self._get_neo4j_project_context(project_number)
 
             # 4. Combine all contexts
             combined_context = self._format_combined_context(
                 vector_results,
                 graph_context,
                 project_number,
-                project_db_context
+                project_tpms_context
             )
 
             return ChatContext(
@@ -399,97 +399,28 @@ class ProjectChatHandler:
             logger.warning(f"Graph context retrieval failed: {e}")
             return None
 
-    def _get_project_database_context(self, project_number: str) -> Optional[Dict[str, Any]]:
+    def _get_neo4j_project_context(self, project_number: str) -> Optional[Dict[str, Any]]:
         """
-        Get project data from PostgreSQL project database (TPMS synced data).
+        Get project TPMS data from Neo4j (synced project data).
+
+        Uses cocoindex adapter to fetch Project, Panel, Feeder data from Neo4j.
 
         Args:
             project_number: Project OENUM
 
         Returns:
-            Dict with project info, panels, and feeder summary
+            Dict with project info, panels, and counts
         """
         try:
-            from services.project_database_manager import get_project_database_manager
-
-            db_manager = get_project_database_manager()
-
-            # Check if project database exists
-            if not db_manager.check_project_db_exists(project_number):
-                logger.debug(f"No project database for {project_number}")
+            if not self.cocoindex:
+                logger.debug("CoCoIndex adapter not available for Neo4j context")
                 return None
 
-            conn = db_manager._get_project_connection(project_number)
-            cursor = conn.cursor()
-
-            project_data = {}
-
-            # Get project main info
-            cursor.execute("""
-                SELECT project_name, project_name_fa, order_category, oe_date,
-                       project_expert_label, technical_supervisor_label, technical_expert_label
-                FROM project_main LIMIT 1
-            """)
-            row = cursor.fetchone()
-            if row:
-                project_data["project_info"] = {
-                    "name": row[0],
-                    "name_fa": row[1],
-                    "category": row[2],
-                    "date": row[3],
-                    "project_expert": row[4],
-                    "technical_supervisor": row[5],
-                    "technical_expert": row[6]
-                }
-
-            # Get panels summary
-            cursor.execute("""
-                SELECT id_project_scope, plane_name, plane_type, voltage_rate,
-                       rated_voltage, cell_count, ip_value, switch_amperage
-                FROM technical_panel_identity
-                ORDER BY id_project_scope
-                LIMIT 20
-            """)
-            panels = []
-            for row in cursor.fetchall():
-                panels.append({
-                    "panel_id": row[0],
-                    "name": row[1],
-                    "type": row[2],
-                    "voltage_rate": row[3],
-                    "rated_voltage": row[4],
-                    "cell_count": row[5],
-                    "ip": row[6],
-                    "amperage": row[7]
-                })
-            project_data["panels"] = panels
-
-            # Get panel and feeder counts
-            cursor.execute("SELECT COUNT(*) FROM technical_panel_identity")
-            project_data["panel_count"] = cursor.fetchone()[0]
-
-            cursor.execute("SELECT COUNT(*) FROM view_draft")
-            project_data["feeder_count"] = cursor.fetchone()[0]
-
-            cursor.execute("SELECT COUNT(*) FROM view_draft_equipment")
-            project_data["equipment_count"] = cursor.fetchone()[0]
-
-            # Get feeders per panel summary
-            cursor.execute("""
-                SELECT tablo_id, COUNT(*) as feeder_count
-                FROM view_draft
-                GROUP BY tablo_id
-                ORDER BY tablo_id
-                LIMIT 20
-            """)
-            feeder_summary = {row[0]: row[1] for row in cursor.fetchall()}
-            project_data["feeders_per_panel"] = feeder_summary
-
-            cursor.close()
-            conn.close()
-
-            logger.debug(f"Retrieved project DB context: {len(panels)} panels, {project_data.get('feeder_count', 0)} feeders")
-            return project_data
+            # Use the cocoindex adapter's method to get TPMS context
+            context = self.cocoindex.get_project_tpms_context(project_number)
+            if context:
+                logger.debug(f"Retrieved Neo4j project context: {context.get('panel_count', 0)} panels, {context.get('feeder_count', 0)} feeders")
+            return context
 
         except Exception as e:
             logger.warning(f"Failed to get project database context: {e}")
@@ -528,21 +459,38 @@ class ProjectChatHandler:
         parts.append(f"# Project: {project_number}")
         parts.append("")
 
-        # Project database context (TPMS synced data - HIGHEST PRIORITY)
+        # Project TPMS context from Neo4j (synced data - HIGHEST PRIORITY)
         if project_db_context:
-            # Project info
+            # Project info (from Neo4j Project node)
             if project_db_context.get("project_info"):
                 info = project_db_context["project_info"]
                 parts.append("## Project Information (from TPMS)")
-                parts.append(f"- **Project Name**: {info.get('name', 'N/A')}")
-                if info.get('name_fa'):
-                    parts.append(f"- **Project Name (Persian)**: {info.get('name_fa')}")
-                parts.append(f"- **Category**: {info.get('category', 'N/A')}")
-                parts.append(f"- **Date**: {info.get('date', 'N/A')}")
+                parts.append(f"- **Project Name**: {info.get('project_name') or info.get('name', 'N/A')}")
+                if info.get('project_name_fa') or info.get('name_fa'):
+                    parts.append(f"- **Project Name (Persian)**: {info.get('project_name_fa') or info.get('name_fa')}")
+                parts.append(f"- **Category**: {info.get('order_category') or info.get('category', 'N/A')}")
+                parts.append(f"- **Date**: {info.get('oe_date') or info.get('date', 'N/A')}")
                 parts.append(f"- **Project Expert**: {info.get('project_expert', 'N/A')}")
                 parts.append(f"- **Technical Supervisor**: {info.get('technical_supervisor', 'N/A')}")
                 parts.append(f"- **Technical Expert**: {info.get('technical_expert', 'N/A')}")
                 parts.append("")
+
+            # Project identity (additional specs)
+            if project_db_context.get("project_identity"):
+                identity = project_db_context["project_identity"]
+                if any(identity.values()):
+                    parts.append("## Project Technical Specifications")
+                    if identity.get('delivery_date'):
+                        parts.append(f"- **Delivery Date**: {identity.get('delivery_date')}")
+                    if identity.get('above_sea_level'):
+                        parts.append(f"- **Altitude**: {identity.get('above_sea_level')}")
+                    if identity.get('average_temperature'):
+                        parts.append(f"- **Average Temperature**: {identity.get('average_temperature')}")
+                    if identity.get('wire_brand'):
+                        parts.append(f"- **Wire Brand**: {identity.get('wire_brand')}")
+                    if identity.get('isolation_value'):
+                        parts.append(f"- **Isolation**: {identity.get('isolation_value')}")
+                    parts.append("")
 
             # Summary counts
             parts.append("## Project Summary")
@@ -551,18 +499,19 @@ class ProjectChatHandler:
             parts.append(f"- **Total Equipment Items**: {project_db_context.get('equipment_count', 0)}")
             parts.append("")
 
-            # Panels list
+            # Panels list (from Neo4j Panel nodes)
             if project_db_context.get("panels"):
                 parts.append("## Panels/Switchgears")
                 for panel in project_db_context["panels"]:
-                    panel_name = panel.get('name') or f"Panel {panel.get('panel_id')}"
-                    panel_type = panel.get('type') or 'N/A'
+                    panel_name = panel.get('plane_name') or panel.get('name') or f"Panel {panel.get('panel_id')}"
+                    panel_type = panel.get('plane_type') or panel.get('type') or 'N/A'
                     voltage = panel.get('voltage_rate') or panel.get('rated_voltage') or 'N/A'
-                    amperage = panel.get('amperage') or 'N/A'
-                    ip = panel.get('ip') or 'N/A'
+                    amperage = panel.get('switch_amperage') or panel.get('amperage') or 'N/A'
+                    ip = panel.get('ip_value') or panel.get('ip') or 'N/A'
                     cell_count = panel.get('cell_count') or 'N/A'
 
-                    feeder_count = project_db_context.get("feeders_per_panel", {}).get(panel.get('panel_id'), 0)
+                    # feeder_count is included in each panel from Neo4j query
+                    feeder_count = panel.get('feeder_count', 0)
 
                     parts.append(f"### {panel_name}")
                     parts.append(f"- Type: {panel_type}")
