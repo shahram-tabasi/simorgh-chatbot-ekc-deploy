@@ -222,42 +222,78 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table name is lowercase 'technical_project_identity' (case-sensitive on Linux)
+            # Note: Column names from C# model - use exact case and underscores
             query = """
                 SELECT
-                    Id, IdprojectMain, ProjectGroup, DeliveryDate,
-                    AboveSeaLevel, AverageTemperature, AverageTemperatureRemarkDescription,
-                    PackingType, PackingTypeRemarkDescription,
-                    Revision, Isolation, IsolationRemarkDescription,
-                    IsolationType, IsolationTypeRemarkDescription,
-                    PlatingType, PlatingTypeRemarkDescription,
-                    HowToPlating, HowToPlatingRemarkDescription,
-                    ColorThickness, ColorThicknessRemarkDescription,
-                    ColorType, ColorTypeRemarkDescription,
-                    ControlWireSize, ControlWireSizeRemarkDescription,
-                    CtWireSize, CtWireSizeRemarkDescription,
-                    PtWireSize, PtWireSizeRemarkDescription,
-                    PhaseWireColor, PhaseWireColorRemarkDescription,
-                    NaturalWireColor, NaturalWireColorRemarkDescription,
-                    DcPlusWireColor, DcPlusWireColorRemarkDescription,
-                    DcMinesWireColor, DcMinesWireColorRemarkDescription,
-                    DigitalInletWireColor, DigitalInletWireColorRemarkDescription,
-                    DigitalOutletWireColor, DigitalOutletWireColorRemarkDescription,
-                    ThreePhaseWireColor, ThreePhaseWireColorRemarkDescription,
-                    PlcFeedingWireSize, PlcFeedingWireSizeRemarkDescription,
-                    InletWireSize, InletWireSizeRemarkDescription,
-                    OutletWireSize, OutletWireSizeRemarkDescription,
-                    DcPlusPhaseWireColor, DcPlusPhaseWireColorRemarkDescription,
-                    DcMinesNaturalWireColor, DcMinesNaturalWireColorRemarkDescription,
-                    AcPlusPhaseWireColor, AcPlusPhaseWireColorRemarkDescription,
-                    AcPlusNaturalWireColor, AcPlusNaturalWireColorRemarkDescription,
-                    LabelWritingColor, LabelWritingColorRemarkDescription,
-                    LabelBackgroundColor, LabelBackgroundColorRemarkDescription,
-                    WireBrand, ControlWireBrand,
-                    Type, Finished, UsrUsername, DateCreated
+                    ID as Id,
+                    IDProjectMain as IdprojectMain,
+                    Project_Group as ProjectGroup,
+                    Delivery_Date as DeliveryDate,
+                    Above_Sea_Level as AboveSeaLevel,
+                    Average_Temperature as AverageTemperature,
+                    Average_Temperature_Remark_Description as AverageTemperatureRemarkDescription,
+                    Packing_Type as PackingType,
+                    Packing_Type_Remark_Description as PackingTypeRemarkDescription,
+                    Revision,
+                    Isolation,
+                    Isolation_Remark_Description as IsolationRemarkDescription,
+                    Isolation_Type as IsolationType,
+                    Isolation_Type_Remark_Description as IsolationTypeRemarkDescription,
+                    Plating_Type as PlatingType,
+                    Plating_Type_Remark_Description as PlatingTypeRemarkDescription,
+                    How_To_Plating as HowToPlating,
+                    How_To_Plating_Remark_Description as HowToPlatingRemarkDescription,
+                    Color_Thickness as ColorThickness,
+                    Color_Thickness_Remark_Description as ColorThicknessRemarkDescription,
+                    Color_Type as ColorType,
+                    Color_Type_Remark_Description as ColorTypeRemarkDescription,
+                    Control_Wire_Size as ControlWireSize,
+                    Control_Wire_Size_Remark_Description as ControlWireSizeRemarkDescription,
+                    CT_Wire_Size as CtWireSize,
+                    CT_Wire_Size_Remark_Description as CtWireSizeRemarkDescription,
+                    PT_Wire_Size as PtWireSize,
+                    PT_Wire_Size_Remark_Description as PtWireSizeRemarkDescription,
+                    Phase_Wire_Color as PhaseWireColor,
+                    Phase_Wire_Color_Remark_Description as PhaseWireColorRemarkDescription,
+                    Natural_Wire_Color as NaturalWireColor,
+                    Natural_Wire_Color_Remark_Description as NaturalWireColorRemarkDescription,
+                    DC_Plus_Wire_Color as DcPlusWireColor,
+                    DC_Plus_Wire_Color_Remark_Description as DcPlusWireColorRemarkDescription,
+                    DC_Mines_Wire_Color as DcMinesWireColor,
+                    DC_Mines_Wire_Color_Remark_Description as DcMinesWireColorRemarkDescription,
+                    Digital_Inlet_Wire_Color as DigitalInletWireColor,
+                    Digital_Inlet_Wire_Color_Remark_Description as DigitalInletWireColorRemarkDescription,
+                    Digital_Outlet_Wire_Color as DigitalOutletWireColor,
+                    Digital_Outlet_Wire_Color_Remark_Description as DigitalOutletWireColorRemarkDescription,
+                    Three_Phase_Wire_Color as ThreePhaseWireColor,
+                    Three_Phase_Wire_Color_Remark_Description as ThreePhaseWireColorRemarkDescription,
+                    PLC_Feeding_Wire_Size as PlcFeedingWireSize,
+                    PLC_Feeding_Wire_Size_Remark_Description as PlcFeedingWireSizeRemarkDescription,
+                    Inlet_Wire_Size as InletWireSize,
+                    Inlet_Wire_Size_Remark_Description as InletWireSizeRemarkDescription,
+                    Outlet_Wire_Size as OutletWireSize,
+                    Outlet_Wire_Size_Remark_Description as OutletWireSizeRemarkDescription,
+                    DC_Plus_Phase_Wire_Color as DcPlusPhaseWireColor,
+                    DC_Plus_Phase_Wire_Color_Remark_Description as DcPlusPhaseWireColorRemarkDescription,
+                    DC_Mines_Natural_Wire_Color as DcMinesNaturalWireColor,
+                    DC_Mines_Natural_Wire_Color_Remark_Description as DcMinesNaturalWireColorRemarkDescription,
+                    AC_Plus_Phase_Wire_Color as AcPlusPhaseWireColor,
+                    AC_Plus_Phase_Wire_Color_Remark_Description as AcPlusPhaseWireColorRemarkDescription,
+                    AC_Plus_Natural_Wire_Color as AcPlusNaturalWireColor,
+                    AC_Plus_Natural_Wire_Color_Remark_Description as AcPlusNaturalWireColorRemarkDescription,
+                    Label_Writing_Color as LabelWritingColor,
+                    Label_Writing_Color_Remark_Description as LabelWritingColorRemarkDescription,
+                    Label_Background_Color as LabelBackgroundColor,
+                    Label_Background_Color_Remark_Description as LabelBackgroundColorRemarkDescription,
+                    Wire_Brand as WireBrand,
+                    Control_Wire_Brand as ControlWireBrand,
+                    Type,
+                    Finished,
+                    USR_USERNAME as UsrUsername,
+                    Date_Created as DateCreated
                 FROM technical_project_identity
-                WHERE IdprojectMain = %s
-                ORDER BY Id DESC
+                WHERE IDProjectMain = %s
+                ORDER BY ID DESC
                 LIMIT 1
             """
             cursor.execute(query, (id_project_main,))
@@ -313,34 +349,70 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table name is lowercase 'technical_panel_identity' (case-sensitive on Linux)
+            # Note: Column names from C# model - use exact case and underscores
             query = """
                 SELECT
-                    Id, IdprojectMain, IdprojectScope, ProductTypeLabel,
-                    PlaneName1 as PlaneName1, PlaneType, PlaneTypeRemarkDescription,
-                    CellCount, PadLockKeyContactor, PadlockKeyTest, PadlockSwitchTest,
-                    LayoutType, LayoutTypeRemarkDescription,
-                    HowToPlating, HowToPlatingRemarkDescription,
-                    PackingTypeRemarkDescription,
-                    IsolationType, IsolationTypeRemarkDescription,
-                    PlatingType, PlatingTypeRemarkDescription,
-                    Isolation, IsolationRemarkDescription,
+                    ID as Id,
+                    IDProjectMain as IdprojectMain,
+                    IDProjectScope as IdprojectScope,
+                    ProductType_label as ProductTypeLabel,
+                    Plane_Name1 as PlaneName1,
+                    Plane_Type as PlaneType,
+                    Plane_Type_Remark_Description as PlaneTypeRemarkDescription,
+                    Cell_Count as CellCount,
+                    PadLock_KeyContactor as PadLockKeyContactor,
+                    Padlock_KeyTest as PadlockKeyTest,
+                    Padlock_SwitchTest as PadlockSwitchTest,
+                    Layout_Type as LayoutType,
+                    Layout_Type_Remark_Description as LayoutTypeRemarkDescription,
+                    How_To_Plating as HowToPlating,
+                    How_To_Plating_Remark_Description as HowToPlatingRemarkDescription,
+                    Packing_Type_Remark_Description as PackingTypeRemarkDescription,
+                    Isolation_Type as IsolationType,
+                    Isolation_Type_Remark_Description as IsolationTypeRemarkDescription,
+                    Plating_Type as PlatingType,
+                    Plating_Type_Remark_Description as PlatingTypeRemarkDescription,
+                    Isolation,
+                    Isolation_Remark_Description as IsolationRemarkDescription,
                     Height, Width, Depth,
-                    VoltageRate, VoltageRateRemarkDescription,
-                    SwitchAmperage, RatedVoltage, RatedVoltageRemarkDescription,
-                    Frequency, FrequencyRemarkDescription,
-                    Kabus, Abus, MainBusbarSize, EarthSize, NeutralSize, TypeBusbar,
-                    InletContact, InletContactRemarkDescription,
-                    OutletContact, OutletContactRemarkDescription,
-                    AccessFrom, AccessFromRemarkDescription,
-                    Ip, IpRemarkDescription,
-                    ColorReal, ColorRealRemarkDescription,
-                    Cpcts, Scm, Plsh, Msh, Mbc, MbcRemarkDescription,
-                    Rpfwv, Riwv,
-                    ProjectIdentityid, Revision, UsrUsername, DateCreated
+                    Voltage_Rate as VoltageRate,
+                    Voltage_Rate_Remark_Description as VoltageRateRemarkDescription,
+                    Switch_Amperage as SwitchAmperage,
+                    rated_voltage as RatedVoltage,
+                    rated_voltage_Remark_Description as RatedVoltageRemarkDescription,
+                    frequency as Frequency,
+                    frequency_Remark_Description as FrequencyRemarkDescription,
+                    KABUS as Kabus,
+                    ABUS as Abus,
+                    Main_Busbar_Size as MainBusbarSize,
+                    Earth_Size as EarthSize,
+                    Neutral_Size as NeutralSize,
+                    Type_Busbar as TypeBusbar,
+                    Inlet_Contact as InletContact,
+                    Inlet_Contact_Remark_Description as InletContactRemarkDescription,
+                    Outlet_Contact as OutletContact,
+                    Outlet_Contact_Remark_Description as OutletContactRemarkDescription,
+                    Access_From as AccessFrom,
+                    Access_From_Remark_Description as AccessFromRemarkDescription,
+                    IP as Ip,
+                    IP_Remark_Description as IpRemarkDescription,
+                    Color_Real as ColorReal,
+                    Color_Real_Remark_Description as ColorRealRemarkDescription,
+                    cpcts as Cpcts,
+                    scm as Scm,
+                    plsh as Plsh,
+                    msh as Msh,
+                    mbc as Mbc,
+                    mbc_Remark_Description as MbcRemarkDescription,
+                    rpfwv as Rpfwv,
+                    riwv as Riwv,
+                    PROJECT_IDENTITYID as ProjectIdentityid,
+                    Revision,
+                    USR_USERNAME as UsrUsername,
+                    Date_Created as DateCreated
                 FROM technical_panel_identity
-                WHERE IdprojectMain = %s
-                ORDER BY Id
+                WHERE IDProjectMain = %s
+                ORDER BY ID
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -393,17 +465,40 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table name is 'View_draft' (lowercase 'd') - case-sensitive on Linux
+            # Note: Column names from C# model - use exact case and underscores
+            # View_draft view columns: ID, Project_ID, Tablo_ID, tmpId, scopeName,
+            # bus_section, feeder_no, tag, Designation, wiring_type, rating_power,
+            # flc, Module, module_type, Size, cable_size, cb_rating, overLoad_rating,
+            # contactor_rating, sfd_hfd, templateName, description, revision, ordering
             query = """
                 SELECT
-                    Id, ProjectId, TabloId, TmpId, ScopeName,
-                    BusSection, FeederNo, Tag, Designation,
-                    WiringType, RatingPower, Flc, Module, ModuleType,
-                    Size, CableSize, CbRating, OverLoadRating, ContactorRating,
-                    SfdHfd, TemplateName, Description, Revision, Ordering
+                    ID as Id,
+                    Project_ID as ProjectId,
+                    Tablo_ID as TabloId,
+                    tmpId as TmpId,
+                    scopeName as ScopeName,
+                    bus_section as BusSection,
+                    feeder_no as FeederNo,
+                    tag as Tag,
+                    Designation,
+                    wiring_type as WiringType,
+                    rating_power as RatingPower,
+                    flc as Flc,
+                    Module,
+                    module_type as ModuleType,
+                    Size,
+                    cable_size as CableSize,
+                    cb_rating as CbRating,
+                    overLoad_rating as OverLoadRating,
+                    contactor_rating as ContactorRating,
+                    sfd_hfd as SfdHfd,
+                    templateName as TemplateName,
+                    description as Description,
+                    revision as Revision,
+                    ordering as Ordering
                 FROM View_draft
-                WHERE ProjectId = %s
-                ORDER BY TabloId, Ordering, Id
+                WHERE Project_ID = %s
+                ORDER BY Tablo_ID, ordering, ID
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -423,15 +518,29 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table names are 'View_draft_Equipment' and 'View_draft' - case-sensitive on Linux
+            # Note: Column names from C# model - use exact case
+            # View_draft_Equipment columns: draftId, label, Ecode, equipment, QTY, priority, color,
+            # SEC_DES, TYPE_DES, BRAND_DES, SHR_DES, SHR_DES2, SCODE, ENG_DES
             query = """
                 SELECT
-                    e.DraftId, e.Label, e.Ecode, e.Equipment, e.Qty, e.Priority, e.Color,
-                    e.SecDes, e.TypeDes, e.BrandDes, e.ShrDes, e.ShrDes2, e.Scode, e.EngDes
+                    e.draftId as DraftId,
+                    e.label as Label,
+                    e.Ecode,
+                    e.equipment as Equipment,
+                    e.QTY as Qty,
+                    e.priority as Priority,
+                    e.color as Color,
+                    e.SEC_DES as SecDes,
+                    e.TYPE_DES as TypeDes,
+                    e.BRAND_DES as BrandDes,
+                    e.SHR_DES as ShrDes,
+                    e.SHR_DES2 as ShrDes2,
+                    e.SCODE as Scode,
+                    e.ENG_DES as EngDes
                 FROM View_draft_Equipment e
-                INNER JOIN View_draft d ON e.DraftId = d.Id
-                WHERE d.ProjectId = %s
-                ORDER BY e.DraftId, e.Priority
+                INNER JOIN View_draft d ON e.draftId = d.ID
+                WHERE d.Project_ID = %s
+                ORDER BY e.draftId, e.priority
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -451,12 +560,16 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table name is 'View_draft_column' (lowercase) - case-sensitive on Linux
+            # Note: Column names from C# model - View_draft_column columns: id, level, name, Project_ID
             query = """
-                SELECT Id, Level, Name, ProjectId
+                SELECT
+                    id as Id,
+                    level as Level,
+                    name as Name,
+                    Project_ID as ProjectId
                 FROM View_draft_column
-                WHERE ProjectId = %s
-                ORDER BY Level, Id
+                WHERE Project_ID = %s
+                ORDER BY level, id
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
