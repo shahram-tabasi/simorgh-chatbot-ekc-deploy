@@ -36,6 +36,9 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
   // First Page Name
   const [pageTitle, setPageTitle] = useState('New Page');
 
+  // Creating state (for loading animation)
+  const [isCreating, setIsCreating] = useState(false);
+
   // General error state
   const [error, setError] = useState('');
 
@@ -187,7 +190,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
   /**
    * Submit: Create project
    */
-  const handleSubmit = React.useCallback(() => {
+  const handleSubmit = React.useCallback(async () => {
     if (!selectedProject || !hasPermission) {
       setError('Please select a project and ensure you have permission');
       return;
@@ -196,15 +199,27 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
     // Use default "New Page" if empty
     const finalPageTitle = pageTitle.trim() || 'New Page';
 
-    // Pass OENUM (project_number) to parent for creating TPMS project
-    onCreate(
-      selectedProject.OENUM,
-      selectedProject.Project_Name,
-      finalPageTitle
-    );
+    // Show loading state
+    setIsCreating(true);
+    setError('');
 
-    // Reset form
-    handleClose();
+    try {
+      // Pass OENUM (project_number) to parent for creating TPMS project
+      // onCreate now returns a Promise<boolean>
+      await onCreate(
+        selectedProject.OENUM,
+        selectedProject.Project_Name,
+        finalPageTitle
+      );
+
+      // Reset form and close (only on success)
+      handleClose();
+    } catch (err: any) {
+      setError('Failed to create project. Please try again.');
+      console.error('Project creation failed:', err);
+    } finally {
+      setIsCreating(false);
+    }
   }, [selectedProject, hasPermission, pageTitle, onCreate]);
 
   /**
@@ -218,6 +233,7 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
     setPermissionError('');
     setPageTitle('New Page');
     setError('');
+    setIsCreating(false);
     // Note: Keep allOENUMs and filteredResults cached for performance
     onClose();
   }, [onClose]);
@@ -402,25 +418,55 @@ export default function CreateProjectModal({ isOpen, onClose, onCreate }: Props)
             </div>
 
             {/* General Error Message */}
-            {error && (
+            {error && !isCreating && (
               <div className="flex items-center gap-2 px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl">
                 <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
                 <p className="text-sm text-red-400">{error}</p>
               </div>
             )}
 
+            {/* Creating Animation */}
+            {isCreating && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex flex-col items-center gap-4 py-6"
+              >
+                <div className="relative">
+                  <div className="w-16 h-16 border-4 border-emerald-500/30 rounded-full"></div>
+                  <div className="absolute top-0 left-0 w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-semibold text-white">Creating Project...</p>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Setting up databases and syncing TPMS data
+                  </p>
+                </div>
+              </motion.div>
+            )}
+
             {/* Action Buttons */}
             <div className="flex gap-3">
               <button
                 onClick={handleSubmit}
-                disabled={!selectedProject || !hasPermission || isValidatingPermission}
-                className="flex-1 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl font-bold text-white hover:from-emerald-600 hover:to-teal-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!selectedProject || !hasPermission || isValidatingPermission || isCreating}
+                className="flex-1 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl font-bold text-white hover:from-emerald-600 hover:to-teal-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                {isValidatingPermission ? 'Validating...' : 'Create Project'}
+                {isCreating ? (
+                  <>
+                    <Loader className="w-5 h-5 animate-spin" />
+                    Creating...
+                  </>
+                ) : isValidatingPermission ? (
+                  'Validating...'
+                ) : (
+                  'Create Project'
+                )}
               </button>
               <button
                 onClick={handleClose}
-                className="px-6 py-3 bg-white/10 border border-white/20 rounded-xl text-white hover:bg-white/20 transition"
+                disabled={isCreating}
+                className="px-6 py-3 bg-white/10 border border-white/20 rounded-xl text-white hover:bg-white/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
