@@ -319,13 +319,19 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table name is uppercase and ends with 'FIELDS' (plural)
+            # Column names from TPMS database (per screenshot):
+            # ID, IDTechnicalProjectIdentity, IDProjectMain, field_title, field_description, date_u, Status
             query = """
                 SELECT
-                    Id, IdtechnicalProjectIdentity, IdprojectMain,
-                    FieldTitle, FieldDescriptions, DateU, Status
+                    ID as Id,
+                    IDTechnicalProjectIdentity as IdtechnicalProjectIdentity,
+                    IDProjectMain as IdprojectMain,
+                    field_title as FieldTitle,
+                    field_description as FieldDescriptions,
+                    date_u as DateU,
+                    Status
                 FROM TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS
-                WHERE IdprojectMain = %s AND Status = 1
+                WHERE IDProjectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -435,13 +441,20 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Note: Table name is uppercase and ends with 'FIELDS' (plural)
+            # Column names from TPMS database (per screenshot):
+            # ID, IDTechnicalPanelIdentity, IDProjectMain, IDProjectScope, field_title, field_description, date_u, Status
             query = """
                 SELECT
-                    Id, IdtechnicalPanelIdentity, IdprojectMain, IdprojectScope,
-                    FieldTitle, FieldDescriptions, DateU, Status
+                    ID as Id,
+                    IDTechnicalPanelIdentity as IdtechnicalPanelIdentity,
+                    IDProjectMain as IdprojectMain,
+                    IDProjectScope as IdprojectScope,
+                    field_title as FieldTitle,
+                    field_description as FieldDescriptions,
+                    date_u as DateU,
+                    Status
                 FROM TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELDS
-                WHERE IdprojectMain = %s AND Status = 1
+                WHERE IDProjectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
