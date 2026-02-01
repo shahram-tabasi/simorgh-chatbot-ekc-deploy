@@ -525,6 +525,7 @@ async def create_project(
         try:
             from services.project_database_manager import get_project_database_manager
             from services.project_sync_service import get_project_sync_service
+            import asyncio
 
             db_manager = get_project_database_manager(neo4j_service=neo4j)
             db_status = db_manager.initialize_project(
@@ -533,21 +534,27 @@ async def create_project(
             )
             logger.info(f"✅ Per-project databases initialized: {db_status}")
 
-            # Sync data from TPMS (await it to ensure completion)
-            try:
-                sync_service = get_project_sync_service()
-                sync_service.set_neo4j_service(neo4j)
-                # Await the sync to ensure it completes
-                sync_result = await sync_service.sync_project(project.project_number)
-                logger.info(f"✅ TPMS sync completed for project {project.project_number}: {sync_result.get('status')}")
-                if sync_result.get('errors'):
-                    logger.warning(f"⚠️ TPMS sync had errors: {sync_result['errors']}")
-            except Exception as sync_error:
-                logger.warning(f"⚠️ TPMS sync failed (non-fatal): {sync_error}")
-                import traceback
-                logger.warning(traceback.format_exc())
+            # Sync data from TPMS in BACKGROUND (non-blocking)
+            # This allows project creation to return immediately
+            async def background_sync():
+                try:
+                    sync_service = get_project_sync_service()
+                    sync_service.set_neo4j_service(neo4j)
+                    sync_result = await sync_service.sync_project(project.project_number)
+                    logger.info(f"✅ TPMS sync completed for project {project.project_number}: {sync_result.get('status')}")
+                    if sync_result.get('errors'):
+                        logger.warning(f"⚠️ TPMS sync had errors: {sync_result['errors']}")
+                except Exception as sync_error:
+                    logger.warning(f"⚠️ TPMS background sync failed: {sync_error}")
+                    import traceback
+                    logger.warning(traceback.format_exc())
+
+            # Start sync in background - don't wait for it
+            asyncio.create_task(background_sync())
+            logger.info(f"🔄 TPMS sync started in background for project {project.project_number}")
 
             project_db_status = db_status
+            project_db_status["sync_status"] = "in_progress"
         except Exception as db_error:
             logger.warning(f"⚠️ Per-project DB init failed (non-fatal): {db_error}")
             project_db_status = {"error": str(db_error)}

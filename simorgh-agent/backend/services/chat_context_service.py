@@ -279,7 +279,7 @@ class ProjectChatHandler:
         """
         Get context for a project chat query.
 
-        Combines Qdrant vector search with CoCoIndex graph context.
+        Combines Qdrant vector search with CoCoIndex graph context and PostgreSQL project data.
 
         Args:
             user_id: User identifier
@@ -289,7 +289,7 @@ class ProjectChatHandler:
             limit: Max vector results
 
         Returns:
-            ChatContext with both vector and graph results
+            ChatContext with vector, graph, and project database results
         """
         try:
             # 1. Vector search in Qdrant (project-scoped)
@@ -304,11 +304,15 @@ class ProjectChatHandler:
             # 2. Graph context via CoCoIndex
             graph_context = await self._get_graph_context(project_number, query)
 
-            # 3. Combine contexts
+            # 3. Project database context from PostgreSQL (TPMS synced data)
+            project_db_context = self._get_project_database_context(project_number)
+
+            # 4. Combine all contexts
             combined_context = self._format_combined_context(
                 vector_results,
                 graph_context,
-                project_number
+                project_number,
+                project_db_context
             )
 
             return ChatContext(
@@ -395,6 +399,102 @@ class ProjectChatHandler:
             logger.warning(f"Graph context retrieval failed: {e}")
             return None
 
+    def _get_project_database_context(self, project_number: str) -> Optional[Dict[str, Any]]:
+        """
+        Get project data from PostgreSQL project database (TPMS synced data).
+
+        Args:
+            project_number: Project OENUM
+
+        Returns:
+            Dict with project info, panels, and feeder summary
+        """
+        try:
+            from services.project_database_manager import get_project_database_manager
+
+            db_manager = get_project_database_manager()
+
+            # Check if project database exists
+            if not db_manager.check_project_db_exists(project_number):
+                logger.debug(f"No project database for {project_number}")
+                return None
+
+            conn = db_manager._get_project_connection(project_number)
+            cursor = conn.cursor()
+
+            project_data = {}
+
+            # Get project main info
+            cursor.execute("""
+                SELECT project_name, project_name_fa, order_category, oe_date,
+                       project_expert_label, technical_supervisor_label, technical_expert_label
+                FROM project_main LIMIT 1
+            """)
+            row = cursor.fetchone()
+            if row:
+                project_data["project_info"] = {
+                    "name": row[0],
+                    "name_fa": row[1],
+                    "category": row[2],
+                    "date": row[3],
+                    "project_expert": row[4],
+                    "technical_supervisor": row[5],
+                    "technical_expert": row[6]
+                }
+
+            # Get panels summary
+            cursor.execute("""
+                SELECT id_project_scope, plane_name, plane_type, voltage_rate,
+                       rated_voltage, cell_count, ip_value, switch_amperage
+                FROM technical_panel_identity
+                ORDER BY id_project_scope
+                LIMIT 20
+            """)
+            panels = []
+            for row in cursor.fetchall():
+                panels.append({
+                    "panel_id": row[0],
+                    "name": row[1],
+                    "type": row[2],
+                    "voltage_rate": row[3],
+                    "rated_voltage": row[4],
+                    "cell_count": row[5],
+                    "ip": row[6],
+                    "amperage": row[7]
+                })
+            project_data["panels"] = panels
+
+            # Get panel and feeder counts
+            cursor.execute("SELECT COUNT(*) FROM technical_panel_identity")
+            project_data["panel_count"] = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM view_draft")
+            project_data["feeder_count"] = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM view_draft_equipment")
+            project_data["equipment_count"] = cursor.fetchone()[0]
+
+            # Get feeders per panel summary
+            cursor.execute("""
+                SELECT tablo_id, COUNT(*) as feeder_count
+                FROM view_draft
+                GROUP BY tablo_id
+                ORDER BY tablo_id
+                LIMIT 20
+            """)
+            feeder_summary = {row[0]: row[1] for row in cursor.fetchall()}
+            project_data["feeders_per_panel"] = feeder_summary
+
+            cursor.close()
+            conn.close()
+
+            logger.debug(f"Retrieved project DB context: {len(panels)} panels, {project_data.get('feeder_count', 0)} feeders")
+            return project_data
+
+        except Exception as e:
+            logger.warning(f"Failed to get project database context: {e}")
+            return None
+
     def _extract_query_entities(self, query: str) -> List[str]:
         """Extract potential entity references from query"""
         # Simple keyword extraction
@@ -407,15 +507,17 @@ class ProjectChatHandler:
         self,
         vector_results: List[Dict[str, Any]],
         graph_context: Optional[Dict[str, Any]],
-        project_number: str
+        project_number: str,
+        project_db_context: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        Format combined vector + graph context for LLM.
+        Format combined vector + graph + project database context for LLM.
 
         Args:
             vector_results: Qdrant search results
             graph_context: Graph data from CoCoIndex
             project_number: Project number
+            project_db_context: Project data from PostgreSQL
 
         Returns:
             Formatted context string
@@ -425,6 +527,51 @@ class ProjectChatHandler:
         # Project header
         parts.append(f"# Project: {project_number}")
         parts.append("")
+
+        # Project database context (TPMS synced data - HIGHEST PRIORITY)
+        if project_db_context:
+            # Project info
+            if project_db_context.get("project_info"):
+                info = project_db_context["project_info"]
+                parts.append("## Project Information (from TPMS)")
+                parts.append(f"- **Project Name**: {info.get('name', 'N/A')}")
+                if info.get('name_fa'):
+                    parts.append(f"- **Project Name (Persian)**: {info.get('name_fa')}")
+                parts.append(f"- **Category**: {info.get('category', 'N/A')}")
+                parts.append(f"- **Date**: {info.get('date', 'N/A')}")
+                parts.append(f"- **Project Expert**: {info.get('project_expert', 'N/A')}")
+                parts.append(f"- **Technical Supervisor**: {info.get('technical_supervisor', 'N/A')}")
+                parts.append(f"- **Technical Expert**: {info.get('technical_expert', 'N/A')}")
+                parts.append("")
+
+            # Summary counts
+            parts.append("## Project Summary")
+            parts.append(f"- **Total Panels**: {project_db_context.get('panel_count', 0)}")
+            parts.append(f"- **Total Feeders/Loads**: {project_db_context.get('feeder_count', 0)}")
+            parts.append(f"- **Total Equipment Items**: {project_db_context.get('equipment_count', 0)}")
+            parts.append("")
+
+            # Panels list
+            if project_db_context.get("panels"):
+                parts.append("## Panels/Switchgears")
+                for panel in project_db_context["panels"]:
+                    panel_name = panel.get('name') or f"Panel {panel.get('panel_id')}"
+                    panel_type = panel.get('type') or 'N/A'
+                    voltage = panel.get('voltage_rate') or panel.get('rated_voltage') or 'N/A'
+                    amperage = panel.get('amperage') or 'N/A'
+                    ip = panel.get('ip') or 'N/A'
+                    cell_count = panel.get('cell_count') or 'N/A'
+
+                    feeder_count = project_db_context.get("feeders_per_panel", {}).get(panel.get('panel_id'), 0)
+
+                    parts.append(f"### {panel_name}")
+                    parts.append(f"- Type: {panel_type}")
+                    parts.append(f"- Voltage: {voltage}")
+                    parts.append(f"- Amperage: {amperage}")
+                    parts.append(f"- IP Rating: {ip}")
+                    parts.append(f"- Cell Count: {cell_count}")
+                    parts.append(f"- Number of Feeders: {feeder_count}")
+                    parts.append("")
 
         # Graph context (prioritized)
         if graph_context:
