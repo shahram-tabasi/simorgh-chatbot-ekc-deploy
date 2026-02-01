@@ -33,6 +33,7 @@ from services.property_resolver import (
     PropertyResolver,
     get_property_resolver,
 )
+from services.redis_service import get_redis_service, RedisService
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class ProjectSyncService:
         db_manager: ProjectDatabaseManager = None,
         property_resolver: PropertyResolver = None,
         neo4j_service=None,
+        redis_service: RedisService = None,
     ):
         """
         Initialize sync service.
@@ -64,11 +66,13 @@ class ProjectSyncService:
             db_manager: Project database manager
             property_resolver: Property code resolver
             neo4j_service: Neo4j service for graph operations
+            redis_service: Redis service for cache invalidation
         """
         self.tpms = tpms_service or get_tpms_project_data_service()
         self.db_manager = db_manager or get_project_database_manager()
         self.resolver = property_resolver or get_property_resolver()
         self.neo4j = neo4j_service
+        self.redis = redis_service
 
         logger.info("ProjectSyncService initialized")
 
@@ -76,6 +80,10 @@ class ProjectSyncService:
         """Set Neo4j service (for late initialization)."""
         self.neo4j = neo4j_service
         self.db_manager.neo4j = neo4j_service
+
+    def set_redis_service(self, redis_service: RedisService):
+        """Set Redis service (for late initialization)."""
+        self.redis = redis_service
 
     # ==========================================================================
     # MAIN SYNC METHOD
@@ -158,6 +166,21 @@ class ProjectSyncService:
                 logger.info(f"[{oenum}] Step 6: Recording {len(missing)} missing data items")
                 self._record_missing_data(oenum, missing)
 
+            # Step 7: Invalidate Redis cache (ensures fresh data for LLM context)
+            logger.info(f"[{oenum}] Step 7: Invalidating Redis cache")
+            if self.redis:
+                self.redis.invalidate_project_cache(oenum)
+                result["steps"]["cache_invalidation"] = {"status": "success"}
+            else:
+                # Try to get redis service if not set
+                try:
+                    redis = get_redis_service()
+                    redis.invalidate_project_cache(oenum)
+                    result["steps"]["cache_invalidation"] = {"status": "success"}
+                except Exception as cache_err:
+                    logger.warning(f"Cache invalidation skipped: {cache_err}")
+                    result["steps"]["cache_invalidation"] = {"status": "skipped", "reason": str(cache_err)}
+
             # Complete
             result["status"] = "success"
             result["completed_at"] = datetime.utcnow()
@@ -165,7 +188,7 @@ class ProjectSyncService:
                 result["completed_at"] - start_time
             ).total_seconds()
 
-            logger.info(f"Sync completed for {oenum} in {result['duration_seconds']:.2f}s")
+            logger.info(f"✅ Sync completed for {oenum} in {result['duration_seconds']:.2f}s")
 
         except Exception as e:
             logger.error(f"Sync failed for {oenum}: {e}", exc_info=True)

@@ -403,7 +403,8 @@ class ProjectChatHandler:
         """
         Get project TPMS data from Neo4j (synced project data).
 
-        Uses cocoindex adapter to fetch Project, Panel, Feeder data from Neo4j.
+        Uses Redis cache first for fast responses, falls back to Neo4j.
+        Cache is populated on cache miss and invalidated when TPMS syncs.
 
         Args:
             project_number: Project OENUM
@@ -412,14 +413,36 @@ class ProjectChatHandler:
             Dict with project info, panels, and counts
         """
         try:
+            # 1. Check Redis cache first (fast path)
+            if self.redis:
+                cached_context = self.redis.get_cached_project_tpms_context(project_number)
+                if cached_context:
+                    logger.debug(f"📦 Using cached project context for {project_number}")
+                    return cached_context
+
+            # 2. Cache miss - fetch from Neo4j
             if not self.cocoindex:
                 logger.debug("CoCoIndex adapter not available for Neo4j context")
                 return None
 
-            # Use the cocoindex adapter's method to get TPMS context
+            # Fetch from Neo4j (slow path)
             context = self.cocoindex.get_project_tpms_context(project_number)
+
             if context:
                 logger.debug(f"Retrieved Neo4j project context: {context.get('panel_count', 0)} panels, {context.get('feeder_count', 0)} feeders")
+
+                # 3. Cache the result for future requests (30 min TTL)
+                if self.redis:
+                    self.redis.cache_project_tpms_context(project_number, context, ttl=1800)
+
+                    # Also cache panels separately for quick panel lookups
+                    if context.get("panels"):
+                        self.redis.cache_project_panels(
+                            project_number,
+                            context["panels"],
+                            ttl=1800
+                        )
+
             return context
 
         except Exception as e:
