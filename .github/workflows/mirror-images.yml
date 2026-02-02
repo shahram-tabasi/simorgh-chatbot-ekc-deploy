@@ -4,6 +4,11 @@
 # This workflow pulls images from Docker Hub and pushes them to GHCR.
 # This allows deployment servers to only connect to GHCR instead of Docker Hub.
 #
+# CACHING STRATEGY:
+# - Compares image digests between Docker Hub and GHCR
+# - Skips push if image already exists with same digest
+# - Use force_update=true to bypass cache and force re-push
+#
 # Run manually or on schedule to keep images updated.
 # =============================================================================
 
@@ -96,12 +101,64 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
 
+      # =======================================================================
+      # CACHING: Check if image needs update by comparing digests
+      # =======================================================================
+      - name: Check if update needed
+        id: check_cache
+        run: |
+          TARGET="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:${{ matrix.image.tag }}"
+          SOURCE="${{ matrix.image.source }}"
+          FORCE="${{ inputs.force_update }}"
+
+          echo "Checking cache for ${{ matrix.image.target }}..."
+
+          # If force update, skip cache check
+          if [ "$FORCE" = "true" ]; then
+            echo "Force update requested, skipping cache check"
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Get source digest from Docker Hub (without pulling full image)
+          echo "Fetching source digest from Docker Hub..."
+          SOURCE_DIGEST=$(docker manifest inspect "$SOURCE" 2>/dev/null | jq -r '.config.digest // .manifests[0].digest // empty' || echo "")
+
+          if [ -z "$SOURCE_DIGEST" ]; then
+            echo "Could not get source digest, will pull and push"
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "Source digest: $SOURCE_DIGEST"
+
+          # Get target digest from GHCR
+          echo "Fetching target digest from GHCR..."
+          TARGET_DIGEST=$(docker manifest inspect "$TARGET" 2>/dev/null | jq -r '.config.digest // .manifests[0].digest // empty' || echo "")
+
+          if [ -z "$TARGET_DIGEST" ]; then
+            echo "Target image not found in GHCR, will push"
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "Target digest: $TARGET_DIGEST"
+
+          # Compare digests
+          if [ "$SOURCE_DIGEST" = "$TARGET_DIGEST" ]; then
+            echo "✅ Image ${{ matrix.image.target }} is up-to-date (same digest)"
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "Image ${{ matrix.image.target }} has new version, will update"
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Pull image from Docker Hub
+        if: steps.check_cache.outputs.needs_update == 'true'
         run: |
           echo "Pulling ${{ matrix.image.source }} from Docker Hub..."
           docker pull ${{ matrix.image.source }}
 
       - name: Tag image for GHCR
+        if: steps.check_cache.outputs.needs_update == 'true'
         run: |
           SOURCE="${{ matrix.image.source }}"
           TARGET="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:${{ matrix.image.tag }}"
@@ -114,6 +171,7 @@ jobs:
           docker tag "$SOURCE" "$LATEST"
 
       - name: Push to GHCR
+        if: steps.check_cache.outputs.needs_update == 'true'
         run: |
           TARGET="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:${{ matrix.image.tag }}"
           LATEST="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:latest"
@@ -124,7 +182,13 @@ jobs:
           echo "Pushing $LATEST to GHCR..."
           docker push "$LATEST"
 
+      - name: Skip message
+        if: steps.check_cache.outputs.needs_update == 'false'
+        run: |
+          echo "⏭️ Skipped ${{ matrix.image.target }} - already up-to-date in GHCR"
+
       - name: Verify image in GHCR
+        if: steps.check_cache.outputs.needs_update == 'true'
         run: |
           TARGET="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:${{ matrix.image.tag }}"
 
@@ -150,7 +214,7 @@ jobs:
           echo "Docker Image Mirror Summary"
           echo "=============================================="
           echo ""
-          echo "The following images are now available in GHCR:"
+          echo "The following images are available in GHCR:"
           echo ""
           echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-neo4j:5.15.0-community"
           echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-redis:7.2-alpine"
@@ -160,6 +224,6 @@ jobs:
           echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-nginx:alpine"
           echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-python:3.11-bookworm"
           echo ""
-          echo "=============================================="
-          echo "Use these in docker-compose.yml to avoid Docker Hub"
+          echo "Images are only updated when source digest changes."
+          echo "Use force_update=true to bypass cache."
           echo "=============================================="
