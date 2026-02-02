@@ -83,8 +83,15 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
           sbom: false
-          cache-from: type=gha,scope=${{ matrix.service.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+          # Use both GHA cache and registry cache for better hit rate
+          cache-from: |
+            type=gha,scope=${{ matrix.service.name }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/simorgh-${{ matrix.service.name }}:cache
+          cache-to: |
+            type=gha,mode=max,scope=${{ matrix.service.name }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/simorgh-${{ matrix.service.name }}:cache,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
 
   deploy-central-server:
     name: Deploy to Central Server (1.68)
