@@ -1,0 +1,165 @@
+# =============================================================================
+# Mirror Third-Party Docker Images to GHCR
+#
+# This workflow pulls images from Docker Hub and pushes them to GHCR.
+# This allows deployment servers to only connect to GHCR instead of Docker Hub.
+#
+# Run manually or on schedule to keep images updated.
+# =============================================================================
+
+name: Mirror Docker Images to GHCR
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: 'Force update all images (ignore cache)'
+        required: false
+        default: 'false'
+        type: boolean
+
+  # Weekly schedule to keep images updated (Sunday at 2 AM UTC)
+  schedule:
+    - cron: '0 2 * * 0'
+
+  # Also run when this workflow file changes
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/mirror-images.yml'
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  mirror-images:
+    name: Mirror Images to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          # Neo4j - Knowledge Graph Database
+          - source: neo4j:5.15.0-community
+            target: neo4j
+            tag: 5.15.0-community
+
+          # Redis - Caching & Session Store
+          - source: redis:7.2-alpine
+            target: redis
+            tag: 7.2-alpine
+
+          # Qdrant - Vector Database
+          - source: qdrant/qdrant:latest
+            target: qdrant
+            tag: latest
+
+          # PostgreSQL - For CocoIndex and Auth
+          - source: postgres:16-alpine
+            target: postgres
+            tag: 16-alpine
+
+          # pgvector - PostgreSQL with vector extension
+          - source: pgvector/pgvector:pg17
+            target: pgvector
+            tag: pg17
+
+          # Nginx - Reverse Proxy
+          - source: nginx:alpine
+            target: nginx
+            tag: alpine
+
+          # Python - For CocoIndex build
+          - source: python:3.11-bookworm
+            target: python
+            tag: 3.11-bookworm
+
+    steps:
+      - name: Lowercase repository owner
+        run: |
+          OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "OWNER_LC=$OWNER_LC" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Pull image from Docker Hub
+        run: |
+          echo "Pulling ${{ matrix.image.source }} from Docker Hub..."
+          docker pull ${{ matrix.image.source }}
+
+      - name: Tag image for GHCR
+        run: |
+          SOURCE="${{ matrix.image.source }}"
+          TARGET="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:${{ matrix.image.tag }}"
+
+          echo "Tagging $SOURCE as $TARGET"
+          docker tag "$SOURCE" "$TARGET"
+
+          # Also tag as latest for convenience
+          LATEST="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:latest"
+          docker tag "$SOURCE" "$LATEST"
+
+      - name: Push to GHCR
+        run: |
+          TARGET="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:${{ matrix.image.tag }}"
+          LATEST="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:latest"
+
+          echo "Pushing $TARGET to GHCR..."
+          docker push "$TARGET"
+
+          echo "Pushing $LATEST to GHCR..."
+          docker push "$LATEST"
+
+      - name: Verify image in GHCR
+        run: |
+          TARGET="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-${{ matrix.image.target }}:${{ matrix.image.tag }}"
+
+          echo "Verifying $TARGET exists in GHCR..."
+          docker pull "$TARGET"
+          echo "✅ Image verified: $TARGET"
+
+  summary:
+    name: Mirror Summary
+    runs-on: ubuntu-latest
+    needs: mirror-images
+    if: always()
+
+    steps:
+      - name: Lowercase repository owner
+        run: |
+          OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "OWNER_LC=$OWNER_LC" >> $GITHUB_ENV
+
+      - name: Print Summary
+        run: |
+          echo "=============================================="
+          echo "Docker Image Mirror Summary"
+          echo "=============================================="
+          echo ""
+          echo "The following images are now available in GHCR:"
+          echo ""
+          echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-neo4j:5.15.0-community"
+          echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-redis:7.2-alpine"
+          echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-qdrant:latest"
+          echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-postgres:16-alpine"
+          echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-pgvector:pg17"
+          echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-nginx:alpine"
+          echo "  ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/mirror-python:3.11-bookworm"
+          echo ""
+          echo "=============================================="
+          echo "Use these in docker-compose.yml to avoid Docker Hub"
+          echo "=============================================="

@@ -34,6 +34,9 @@ jobs:
           - name: stt-service
             context: ./simorgh-agent/stt-service
             dockerfile: ./simorgh-agent/stt-service/Dockerfile
+          - name: doc-processor
+            context: ./simorgh-agent/doc-processor
+            dockerfile: ./simorgh-agent/doc-processor/Dockerfile
 
     steps:
       - name: Checkout code

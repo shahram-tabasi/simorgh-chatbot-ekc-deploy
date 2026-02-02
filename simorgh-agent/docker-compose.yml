@@ -2,6 +2,9 @@
 # Enhanced Industrial Electrical Assistant - Docker Compose
 # Server: 192.168.1.68
 # Features: Neo4j (Graph), Redis (Cache), CocoIndex (Data Framework), Qdrant (Vector)
+#
+# All images are pulled from GHCR to avoid Docker Hub network issues.
+# Third-party images are mirrored via the mirror-images.yml workflow.
 # =============================================================================
 
 services:
@@ -112,9 +115,7 @@ services:
   # DOC-PROCESSOR - Document to Markdown Conversion Service
   # ===========================================================================
   doc-processor:
-    build:
-      context: ./doc-processor
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-doc-processor:${IMAGE_TAG:-latest}
     container_name: doc-processor
     expose:
       - "8000"
@@ -159,10 +160,10 @@ services:
       - WHISPER_COMPUTE_TYPE=int8 # Optimized for CPU
 
   # ===========================================================================
-  # NEO4J - Knowledge Graph Database
+  # NEO4J - Knowledge Graph Database (Mirrored from Docker Hub to GHCR)
   # ===========================================================================
   neo4j:
-    image: neo4j:5.15.0-community
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-neo4j:5.15.0-community
     container_name: neo4j
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-simorgh_secure_2024}
@@ -191,10 +192,10 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # REDIS - Caching & Session Store
+  # REDIS - Caching & Session Store (Mirrored from Docker Hub to GHCR)
   # ===========================================================================
   redis:
-    image: redis:7.2-alpine
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-redis:7.2-alpine
     container_name: redis
     command: >
       redis-server  --appendonly yes  --maxmemory 512mb  --maxmemory-policy allkeys-lru --save 60 1 --save 300 10
@@ -212,10 +213,10 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # QDRANT - Vector Database (Kept for semantic search)
+  # QDRANT - Vector Database (Mirrored from Docker Hub to GHCR)
   # ===========================================================================
   qdrant:
-    image: qdrant/qdrant:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-qdrant:latest
     container_name: qdrant
     expose:
       - "6333"
@@ -230,10 +231,10 @@ services:
 
   # ===========================================================================
   # COCOINDEX - Data Framework for Graph Building
-  # Builds from source using python:3.11-bookworm base image
+  # Uses python:3.11-bookworm base image (Mirrored from Docker Hub to GHCR)
   # ===========================================================================
   cocoindex:
-    image: python:3.11-bookworm
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-python:3.11-bookworm
     container_name: cocoindex
     restart: unless-stopped
     depends_on:
@@ -271,10 +272,10 @@ services:
       - app_net
 
   # ===========================================================================
-  # COCOINDEX DATABASE - PostgreSQL with pgvector for CocoIndex
+  # COCOINDEX DATABASE - PostgreSQL with pgvector (Mirrored from Docker Hub to GHCR)
   # ===========================================================================
   cocoindex_db:
-    image: pgvector/pgvector:pg17
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-pgvector:pg17
     container_name: cocoindex_db
     restart: unless-stopped
     environment:
@@ -294,10 +295,10 @@ services:
       retries: 5
 
   # ===========================================================================
-  # POSTGRES AUTH - PostgreSQL for Modern Authentication
+  # POSTGRES AUTH - PostgreSQL for Modern Authentication (Mirrored from Docker Hub to GHCR)
   # ===========================================================================
   postgres_auth:
-    image: postgres:16-alpine
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-postgres:16-alpine
     container_name: postgres_auth
     restart: unless-stopped
     environment:
@@ -341,12 +342,12 @@ services:
   #       condition: service_healthy
 
   # ===========================================================================
-  # NGINX - Reverse Proxy (TEMPORARY: HTTP-only mode)
+  # NGINX - Reverse Proxy (Mirrored from Docker Hub to GHCR)
   # ===========================================================================
   # SSL disabled until firewall allows .well-known paths for Let's Encrypt
   # ===========================================================================
   nginx:
-    image: nginx:alpine
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-nginx:alpine
     container_name: nginx
     depends_on:
       backend:
