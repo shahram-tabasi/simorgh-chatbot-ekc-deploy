@@ -1,0 +1,215 @@
+# =============================================================================
+# Export Docker Images as Downloadable Artifacts
+#
+# This workflow pulls images from GHCR and saves them as tar.gz files
+# that can be downloaded and transferred to servers with network issues.
+#
+# Usage:
+# 1. Run this workflow manually
+# 2. Download the artifacts from the workflow run page
+# 3. Transfer to your server via USB/local network
+# 4. Run: gunzip -c image.tar.gz | docker load
+# =============================================================================
+
+name: Export Images for Offline Transfer
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to export (e.g., main-abc123 or latest)'
+        required: true
+        default: 'latest'
+      export_mirrors:
+        description: 'Also export mirrored third-party images'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  export-app-images:
+    name: Export Application Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: simorgh-backend
+          - name: simorgh-frontend
+          - name: simorgh-doc-processor
+          - name: simorgh-stt-service
+
+    steps:
+      - name: Lowercase repository owner
+        run: |
+          echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Pull and save image
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ matrix.image.name }}:${{ inputs.image_tag }}"
+          echo "Pulling $IMAGE..."
+          docker pull "$IMAGE"
+
+          echo "Saving to tar.gz..."
+          docker save "$IMAGE" | gzip > "${{ matrix.image.name }}.tar.gz"
+
+          echo "File size:"
+          ls -lh "${{ matrix.image.name }}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image.name }}
+          path: ${{ matrix.image.name }}.tar.gz
+          retention-days: 7
+
+  export-mirror-images:
+    name: Export Mirrored Images
+    runs-on: ubuntu-latest
+    if: inputs.export_mirrors == 'true'
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: mirror-neo4j
+            tag: 5.15.0-community
+          - name: mirror-redis
+            tag: 7.2-alpine
+          - name: mirror-qdrant
+            tag: latest
+          - name: mirror-postgres
+            tag: 16-alpine
+          - name: mirror-pgvector
+            tag: pg17
+          - name: mirror-nginx
+            tag: alpine
+          - name: mirror-python
+            tag: 3.11-bookworm
+
+    steps:
+      - name: Lowercase repository owner
+        run: |
+          echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Pull and save image
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ matrix.image.name }}:${{ matrix.image.tag }}"
+          echo "Pulling $IMAGE..."
+          docker pull "$IMAGE"
+
+          echo "Saving to tar.gz..."
+          docker save "$IMAGE" | gzip > "${{ matrix.image.name }}.tar.gz"
+
+          echo "File size:"
+          ls -lh "${{ matrix.image.name }}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image.name }}
+          path: ${{ matrix.image.name }}.tar.gz
+          retention-days: 7
+
+  create-load-script:
+    name: Create Load Script
+    runs-on: ubuntu-latest
+    needs: [export-app-images]
+
+    steps:
+      - name: Lowercase repository owner
+        run: |
+          echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Create load script
+        run: |
+          cat > load-images.sh << 'SCRIPT'
+          #!/bin/bash
+          # =============================================================================
+          # Load Docker Images from tar.gz files
+          # Run this script in the directory containing the downloaded .tar.gz files
+          # =============================================================================
+
+          set -e
+
+          echo "Loading Docker images..."
+
+          for tarfile in *.tar.gz; do
+            if [ -f "$tarfile" ]; then
+              echo "Loading $tarfile..."
+              gunzip -c "$tarfile" | docker load
+              echo "✅ Loaded $tarfile"
+            fi
+          done
+
+          echo ""
+          echo "All images loaded successfully!"
+          echo ""
+          echo "Loaded images:"
+          docker images | grep -E "(ghcr.io|REPOSITORY)"
+
+          SCRIPT
+          chmod +x load-images.sh
+
+      - name: Upload load script
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-script
+          path: load-images.sh
+          retention-days: 7
+
+  summary:
+    name: Export Summary
+    runs-on: ubuntu-latest
+    needs: [export-app-images, export-mirror-images, create-load-script]
+    if: always()
+
+    steps:
+      - name: Print instructions
+        run: |
+          echo "=============================================="
+          echo "Docker Images Export Complete"
+          echo "=============================================="
+          echo ""
+          echo "To transfer images to your server:"
+          echo ""
+          echo "1. Download all artifacts from this workflow run"
+          echo "2. Transfer the .tar.gz files to your server"
+          echo "3. Run the load script:"
+          echo ""
+          echo "   chmod +x load-images.sh"
+          echo "   ./load-images.sh"
+          echo ""
+          echo "Or load manually:"
+          echo ""
+          echo "   gunzip -c simorgh-backend.tar.gz | docker load"
+          echo "   gunzip -c mirror-neo4j.tar.gz | docker load"
+          echo "   # ... etc"
+          echo ""
+          echo "4. Then run: docker compose up -d"
+          echo ""
+          echo "=============================================="
