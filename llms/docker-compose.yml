@@ -1,3 +1,8 @@
+# =============================================================================
+# LLM Services - Docker Compose
+# All images are pulled from GHCR to avoid Docker Hub network issues.
+# =============================================================================
+
 services:
   # Model Initializer - Runs once to download models
   model_initializer:
@@ -71,9 +76,9 @@ services:
       start_period: 240s # 4 minutes - model loading takes ~2.5 minutes + buffer
     restart: unless-stopped
 
-  # Nginx for secure routing
+  # Nginx for secure routing (Mirrored from Docker Hub to GHCR)
   nginx:
-    image: nginx:alpine
+    image: ${GITHUB_REGISTRY}/${GITHUB_REPOSITORY_OWNER}/mirror-nginx:alpine
     container_name: nginx_ai
     depends_on:
       ai_service:
