@@ -342,9 +342,12 @@ services:
   #       condition: service_healthy
 
   # ===========================================================================
+  # NGINX - Reverse Proxy (HTTP-only, TLS terminated at host nginx)
+
   # NGINX - Reverse Proxy (Mirrored from Docker Hub to GHCR)
   # ===========================================================================
   # SSL disabled until firewall allows .well-known paths for Let's Encrypt
+
   # ===========================================================================
   nginx:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-nginx:alpine
@@ -355,8 +358,7 @@ services:
       frontend:
         condition: service_started
     ports:
-      - "85:80"    # HTTP - mapped to port 85 to avoid conflict with host nginx on port 80
-      # - "443:443"  # HTTPS disabled - uncomment when SSL is available
+      - "85:80"    # HTTP - mapped to port 85 (host nginx proxies here)
     environment:
       - TZ=Asia/Tehran
     volumes:
@@ -364,7 +366,6 @@ services:
       - ./nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx_configs/includes/locations.inc:/etc/nginx/includes/locations.inc:ro
       - ./static:/usr/share/nginx/html/old:ro
-      - certbot_webroot:/var/www/certbot:ro
       - nginx-cache:/data/nginx/cache
       - nginx-logs:/var/log/nginx
     networks:
