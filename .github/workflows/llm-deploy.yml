@@ -83,8 +83,13 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.service.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+          # Use both GHA cache and registry cache for better hit rate
+          cache-from: |
+            type=gha,scope=${{ matrix.service.name }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}:cache
+          cache-to: |
+            type=gha,mode=max,scope=${{ matrix.service.name }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}:cache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 
@@ -248,10 +253,29 @@ jobs:
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
             "ssh ubuntu@${{ matrix.server.host }} 'docker image prune -f || true'"
 
-      - name: Pull latest images
+      - name: Pull latest images (with retry)
         run: |
           ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && docker compose pull\"'"
+            "ssh ubuntu@\${{ matrix.server.host }} 'bash -c \"
+              cd ~/llm-deployment
+              MAX_RETRIES=4
+              RETRY_DELAY=10
+              for attempt in \\\$(seq 1 \\\$MAX_RETRIES); do
+                echo Pull attempt \\\$attempt/\\\$MAX_RETRIES...
+                if docker compose pull; then
+                  echo Pull successful
+                  break
+                else
+                  if [ \\\$attempt -eq \\\$MAX_RETRIES ]; then
+                    echo All pull attempts failed
+                    exit 1
+                  fi
+                  echo Pull failed, retrying in \\\${RETRY_DELAY}s...
+                  sleep \\\$RETRY_DELAY
+                  RETRY_DELAY=\\\$((RETRY_DELAY * 2))
+                fi
+              done
+            \"'"
 
       - name: Start services
         run: |

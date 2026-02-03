@@ -12,6 +12,7 @@ export function useProjects(userId?: string) {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [showGeneralChats, setShowGeneralChats] = useState(true);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
 
   // Load data from backend and localStorage on mount (per user)
   // CRITICAL: Reset state when userId changes (user logout/login)
@@ -232,18 +233,20 @@ export function useProjects(userId?: string) {
     }
   }, [generalChats, userId]);
 
-  const createProject = async (oenum: string, name: string, firstPageTitle: string) => {
+  const createProject = async (oenum: string, name: string, firstPageTitle: string): Promise<boolean> => {
     if (!userId) {
       console.error('Cannot create project: userId missing');
-      return;
+      return false;
     }
+
+    setIsCreatingProject(true);
 
     try {
       const token = localStorage.getItem('simorgh_token');
       if (!token) {
         console.error('❌ No auth token found');
         showError('Authentication Required', 'Please log in again.');
-        return;
+        return false;
       }
 
       // Create project in Neo4j via backend
@@ -301,7 +304,14 @@ export function useProjects(userId?: string) {
       setActiveChatId(chatId);
 
       console.log('✅ Project and first page created successfully');
-      showSuccess('Success!', `Project "${name}" created successfully!`);
+
+      // Show success with sync info
+      const syncInfo = projectResponse.data.sync_in_progress
+        ? '\n\n🔄 TPMS data is syncing in the background. You can start chatting now!'
+        : '';
+      showSuccess('Project Created!', `Project "${name}" created successfully!${syncInfo}`);
+
+      return true;
     } catch (error: any) {
       console.error('❌ Failed to create project:', error);
       if (error.response?.status === 400 && error.response?.data?.detail?.includes('already exists')) {
@@ -309,6 +319,9 @@ export function useProjects(userId?: string) {
       } else {
         showError('Create Failed', error.response?.data?.detail || 'Failed to create project. Please try again.');
       }
+      return false;
+    } finally {
+      setIsCreatingProject(false);
     }
   };
 
@@ -816,6 +829,7 @@ export function useProjects(userId?: string) {
     activeChatId,
     activeChat,
     showGeneralChats,
+    isCreatingProject,
     createProject,
     createChat,
     createGeneralChat,

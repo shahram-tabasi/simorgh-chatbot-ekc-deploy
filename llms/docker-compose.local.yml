@@ -1,28 +1,41 @@
 # =============================================================================
-# LLM Services - Docker Compose
-# All images are pulled from GHCR to avoid Docker Hub network issues.
+# LLM Services - Docker Compose (LOCAL BUILD)
+# Server: GPU Server
+#
+# This version builds all images locally from Dockerfiles instead of pulling
+# from GitHub Container Registry. Use this when GitHub network is unavailable.
+#
+# Usage: docker-compose -f docker-compose.local.yml up -d --build
 # =============================================================================
 
 services:
-  # Model Initializer - Runs once to download models
+  # ===========================================================================
+  # MODEL INITIALIZER - Downloads and prepares models (LOCAL BUILD)
+  # ===========================================================================
   model_initializer:
-    image: ${GITHUB_REGISTRY}/${GITHUB_REPOSITORY_OWNER}/llm-model-initializer:${IMAGE_TAG:-latest}
+    build:
+      context: ./initializer
+      dockerfile: Dockerfile
+    image: llm-model-initializer:local
     container_name: model_initializer
     volumes:
       # Mount host directory where models will be stored
-      # This needs to persist both HF cache and the 16-bit model
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
     environment:
       - PYTHONUNBUFFERED=1
-      # Optional: HF token for gated models
       - HF_TOKEN=${HF_TOKEN:-}
     networks:
       - ai_net
-    restart: "no" # Run once and exit
+    restart: "no"  # Run once and exit
 
-  # AI Service (Local LLM) - Depends on initializer
+  # ===========================================================================
+  # AI SERVICE - Local LLM with vLLM (LOCAL BUILD)
+  # ===========================================================================
   ai_service:
-    image: ${GITHUB_REGISTRY}/${GITHUB_REPOSITORY_OWNER}/llm-ai-service:${IMAGE_TAG:-latest}
+    build:
+      context: ./ai
+      dockerfile: Dockerfile
+    image: llm-ai-service:local
     container_name: ai_service
     depends_on:
       model_initializer:
@@ -30,7 +43,6 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - CUDA_VISIBLE_DEVICES=0
-      # NOTE: Do NOT use HF_HUB_OFFLINE - Unsloth requires network access for metadata
 
       # vLLM and model configuration
       - MODEL_PATH=/models/unsloth-gpt-oss-20b-16bit
@@ -38,26 +50,22 @@ services:
 
       # LangChain tool configuration
       - ENABLE_SEARCH_TOOL=true
-      - ENABLE_PYTHON_REPL=false  # Disabled by default for security
+      - ENABLE_PYTHON_REPL=false
       - AGENT_VERBOSE=false
 
       # Optional: Self-hosted search API
       - SEARCH_API_URL=${SEARCH_API_URL:-}
       - SEARCH_API_KEY=${SEARCH_API_KEY:-}
 
-      # Python REPL configuration (if enabled)
+      # Python REPL configuration
       - PYTHON_REPL_TIMEOUT=10
       - PYTHON_REPL_SANDBOX=true
-
     expose:
       - "9000"
     volumes:
-      # Mount the models directory (contains both HF cache and 16-bit model)
-      # Read-only for safety - models are already downloaded by initializer
+      # Mount models directory (read-only for safety)
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models:ro
-
-      # Also mount to HF cache location for vLLM and unsloth
-      # Writable to allow vLLM to cache tokenizer and model metadata
+      # HF cache for vLLM tokenizer/metadata
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface/hub
     networks:
       - ai_net
@@ -73,12 +81,14 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 240s # 4 minutes - model loading takes ~2.5 minutes + buffer
+      start_period: 240s  # 4 minutes for model loading
     restart: unless-stopped
 
-  # Nginx for secure routing (Mirrored from Docker Hub to GHCR)
+  # ===========================================================================
+  # NGINX - Reverse Proxy for AI Service
+  # ===========================================================================
   nginx:
-    image: ${GITHUB_REGISTRY}/${GITHUB_REPOSITORY_OWNER}/mirror-nginx:alpine
+    image: nginx:alpine
     container_name: nginx_ai
     depends_on:
       ai_service:
@@ -94,9 +104,14 @@ services:
       - ai_net
     restart: unless-stopped
 
-  # GPU Monitor (Optional but recommended)
+  # ===========================================================================
+  # GPU MONITOR - GPU Health Monitoring (LOCAL BUILD)
+  # ===========================================================================
   gpu_monitor:
-    image: ${GITHUB_REGISTRY}/${GITHUB_REPOSITORY_OWNER}/llm-gpu-monitor:${IMAGE_TAG:-latest}
+    build:
+      context: ./gpu_monitor
+      dockerfile: Dockerfile
+    image: llm-gpu-monitor:local
     container_name: gpu_monitor
     environment:
       - GPU_MEMORY_THRESHOLD=90
@@ -122,6 +137,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+# =============================================================================
+# NETWORKS
+# =============================================================================
 networks:
   ai_net:
     driver: bridge

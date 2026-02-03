@@ -1,13 +1,14 @@
 """
 Redis Caching Service
 =====================
-Multi-database Redis caching for sessions, chat history, LLM responses, and auth.
+Multi-database Redis caching for sessions, chat history, LLM responses, auth, and project data.
 
 Database Layout:
 - DB 0: User sessions & profiles
 - DB 1: Chat history
 - DB 2: LLM response caching
 - DB 3: Project authorization caching (1 hour TTL)
+- DB 4: Project TPMS data caching (Neo4j context cache for faster LLM responses)
 
 Author: Simorgh Industrial Assistant
 """
@@ -44,6 +45,7 @@ class RedisService:
         self.chat_client = self._create_client(db=1)     # Chat history
         self.cache_client = self._create_client(db=2)    # LLM response caching
         self.auth_client = self._create_client(db=3)     # Authorization caching
+        self.project_client = self._create_client(db=4)  # Project TPMS data caching
 
         logger.info(f"✅ Redis service initialized: {self.base_url}")
 
@@ -69,7 +71,8 @@ class RedisService:
                 "session_db": self.session_client,
                 "chat_db": self.chat_client,
                 "cache_db": self.cache_client,
-                "auth_db": self.auth_client
+                "auth_db": self.auth_client,
+                "project_db": self.project_client
             }
 
             db_status = {}
@@ -589,6 +592,288 @@ class RedisService:
             return None
 
     # =========================================================================
+    # PROJECT TPMS DATA CACHING (DB 4)
+    # =========================================================================
+
+    def cache_project_tpms_context(
+        self,
+        project_number: str,
+        context: Dict[str, Any],
+        ttl: int = 1800  # 30 minutes default
+    ) -> bool:
+        """
+        Cache project TPMS context from Neo4j for faster LLM responses.
+
+        This caches the full project context including:
+        - Project info (name, category, experts, etc.)
+        - Project identity (technical specs)
+        - Panels list with feeder counts
+        - Summary counts
+
+        Args:
+            project_number: Project OENUM
+            context: Full project context from Neo4j
+            ttl: Cache lifetime (default 30 minutes)
+
+        Returns:
+            True if successful
+        """
+        try:
+            key = f"project:tpms_context:{project_number}"
+            value = json.dumps({
+                "context": context,
+                "cached_at": self._now()
+            })
+
+            self.project_client.setex(key, ttl, value)
+            logger.info(f"📦 Project TPMS context cached: {project_number} (TTL: {ttl}s)")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to cache project TPMS context: {e}")
+            return False
+
+    def get_cached_project_tpms_context(
+        self,
+        project_number: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get cached project TPMS context.
+
+        Returns:
+            Cached context if available, None if cache miss
+        """
+        try:
+            key = f"project:tpms_context:{project_number}"
+            value = self.project_client.get(key)
+
+            if value:
+                data = json.loads(value)
+                logger.debug(f"📦 Project context cache HIT: {project_number}")
+                return data["context"]
+
+            logger.debug(f"📦 Project context cache MISS: {project_number}")
+            return None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get cached project context: {e}")
+            return None
+
+    def cache_project_panels(
+        self,
+        project_number: str,
+        panels: List[Dict[str, Any]],
+        ttl: int = 1800
+    ) -> bool:
+        """
+        Cache panel details for a project.
+
+        Useful for quick panel lookups without hitting Neo4j.
+
+        Args:
+            project_number: Project OENUM
+            panels: List of panel data dicts
+            ttl: Cache lifetime
+        """
+        try:
+            key = f"project:panels:{project_number}"
+            value = json.dumps({
+                "panels": panels,
+                "count": len(panels),
+                "cached_at": self._now()
+            })
+
+            self.project_client.setex(key, ttl, value)
+            logger.debug(f"Cached {len(panels)} panels for project {project_number}")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to cache project panels: {e}")
+            return False
+
+    def get_cached_project_panels(
+        self,
+        project_number: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Get cached panel list for a project"""
+        try:
+            key = f"project:panels:{project_number}"
+            value = self.project_client.get(key)
+
+            if value:
+                data = json.loads(value)
+                return data["panels"]
+            return None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get cached panels: {e}")
+            return None
+
+    def cache_panel_feeders(
+        self,
+        project_number: str,
+        panel_id: str,
+        feeders: List[Dict[str, Any]],
+        ttl: int = 1800
+    ) -> bool:
+        """
+        Cache feeder details for a specific panel.
+
+        Enables quick feeder lookups without hitting Neo4j.
+
+        Args:
+            project_number: Project OENUM
+            panel_id: Panel identifier
+            feeders: List of feeder data dicts
+            ttl: Cache lifetime
+        """
+        try:
+            key = f"project:panel_feeders:{project_number}:{panel_id}"
+            value = json.dumps({
+                "feeders": feeders,
+                "count": len(feeders),
+                "cached_at": self._now()
+            })
+
+            self.project_client.setex(key, ttl, value)
+            logger.debug(f"Cached {len(feeders)} feeders for panel {panel_id}")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to cache panel feeders: {e}")
+            return False
+
+    def get_cached_panel_feeders(
+        self,
+        project_number: str,
+        panel_id: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Get cached feeder list for a panel"""
+        try:
+            key = f"project:panel_feeders:{project_number}:{panel_id}"
+            value = self.project_client.get(key)
+
+            if value:
+                data = json.loads(value)
+                return data["feeders"]
+            return None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get cached feeders: {e}")
+            return None
+
+    def cache_project_equipment_summary(
+        self,
+        project_number: str,
+        equipment_summary: Dict[str, Any],
+        ttl: int = 1800
+    ) -> bool:
+        """
+        Cache equipment summary (counts by type) for quick stats.
+
+        Args:
+            project_number: Project OENUM
+            equipment_summary: Dict with equipment counts by type
+            ttl: Cache lifetime
+        """
+        try:
+            key = f"project:equipment_summary:{project_number}"
+            value = json.dumps({
+                "summary": equipment_summary,
+                "cached_at": self._now()
+            })
+
+            self.project_client.setex(key, ttl, value)
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to cache equipment summary: {e}")
+            return False
+
+    def get_cached_equipment_summary(
+        self,
+        project_number: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get cached equipment summary"""
+        try:
+            key = f"project:equipment_summary:{project_number}"
+            value = self.project_client.get(key)
+
+            if value:
+                data = json.loads(value)
+                return data["summary"]
+            return None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get cached equipment summary: {e}")
+            return None
+
+    def invalidate_project_cache(self, project_number: str) -> bool:
+        """
+        Invalidate all cached data for a project.
+
+        Should be called when project data is updated (e.g., after TPMS sync).
+
+        Args:
+            project_number: Project OENUM
+        """
+        try:
+            patterns = [
+                f"project:tpms_context:{project_number}",
+                f"project:panels:{project_number}",
+                f"project:panel_feeders:{project_number}:*",
+                f"project:equipment_summary:{project_number}"
+            ]
+
+            deleted_count = 0
+            for pattern in patterns:
+                if "*" in pattern:
+                    for key in self.project_client.scan_iter(match=pattern):
+                        self.project_client.delete(key)
+                        deleted_count += 1
+                else:
+                    if self.project_client.delete(pattern):
+                        deleted_count += 1
+
+            logger.info(f"🗑️ Project cache invalidated: {project_number} ({deleted_count} keys)")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to invalidate project cache: {e}")
+            return False
+
+    def get_project_cache_stats(self, project_number: str) -> Dict[str, Any]:
+        """
+        Get cache statistics for a project.
+
+        Returns info about what's cached and TTL remaining.
+        """
+        try:
+            stats = {
+                "project_number": project_number,
+                "cached_items": {}
+            }
+
+            keys = [
+                f"project:tpms_context:{project_number}",
+                f"project:panels:{project_number}",
+                f"project:equipment_summary:{project_number}"
+            ]
+
+            for key in keys:
+                ttl = self.project_client.ttl(key)
+                exists = ttl >= 0
+                stats["cached_items"][key.split(":")[-2]] = {
+                    "cached": exists,
+                    "ttl_seconds": ttl if exists else 0
+                }
+
+            # Count panel feeders
+            feeder_keys = list(self.project_client.scan_iter(
+                match=f"project:panel_feeders:{project_number}:*"
+            ))
+            stats["cached_items"]["panel_feeders"] = {
+                "cached": len(feeder_keys) > 0,
+                "panels_with_feeders_cached": len(feeder_keys)
+            }
+
+            return stats
+        except RedisError as e:
+            logger.error(f"Failed to get project cache stats: {e}")
+            return {"error": str(e)}
+
+    # =========================================================================
     # GENERAL KEY-VALUE OPERATIONS
     # =========================================================================
 
@@ -669,7 +954,8 @@ class RedisService:
             "session": self.session_client,
             "chat": self.chat_client,
             "cache": self.cache_client,
-            "auth": self.auth_client
+            "auth": self.auth_client,
+            "project": self.project_client
         }
         return clients.get(db_name, self.cache_client)
 
@@ -830,6 +1116,7 @@ class RedisService:
             self.chat_client.close()
             self.cache_client.close()
             self.auth_client.close()
+            self.project_client.close()
             logger.info("Redis connections closed")
         except Exception as e:
             logger.error(f"Error closing Redis connections: {e}")

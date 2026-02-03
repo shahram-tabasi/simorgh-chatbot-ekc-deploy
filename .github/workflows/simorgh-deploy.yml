@@ -34,6 +34,9 @@ jobs:
           - name: stt-service
             context: ./simorgh-agent/stt-service
             dockerfile: ./simorgh-agent/stt-service/Dockerfile
+          - name: doc-processor
+            context: ./simorgh-agent/doc-processor
+            dockerfile: ./simorgh-agent/doc-processor/Dockerfile
 
     steps:
       - name: Checkout code
@@ -80,8 +83,15 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
           sbom: false
-          cache-from: type=gha,scope=${{ matrix.service.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+          # Use both GHA cache and registry cache for better hit rate
+          cache-from: |
+            type=gha,scope=${{ matrix.service.name }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/simorgh-${{ matrix.service.name }}:cache
+          cache-to: |
+            type=gha,mode=max,scope=${{ matrix.service.name }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/simorgh-${{ matrix.service.name }}:cache,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
 
   deploy-central-server:
     name: Deploy to Central Server (1.68)
@@ -223,7 +233,7 @@ jobs:
 
           # Verify environment
           echo "=== Environment File Created ==="
-          echo "File size: \$(wc -l < .env) lines"
+          echo "File size: $(wc -l < .env) lines"
           echo ""
           echo "=== Expected Image Tag ==="
           echo "${{ github.ref_name }}-${{ github.sha }}"
@@ -238,10 +248,26 @@ jobs:
           echo "=== Cleaning up old images ==="
           docker image prune -f || true
 
-          # Pull latest images
+          # Pull latest images with retry logic (network can be unstable)
           echo ""
-          echo "=== Pulling latest images ==="
-          docker compose pull
+          echo "=== Pulling latest images (with retry) ==="
+          MAX_RETRIES=4
+          RETRY_DELAY=10
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "Pull attempt $attempt/$MAX_RETRIES..."
+            if docker compose pull; then
+              echo "✅ Pull successful"
+              break
+            else
+              if [ $attempt -eq $MAX_RETRIES ]; then
+                echo "❌ All pull attempts failed"
+                exit 1
+              fi
+              echo "⏳ Pull failed, retrying in ${RETRY_DELAY}s..."
+              sleep $RETRY_DELAY
+              RETRY_DELAY=$((RETRY_DELAY * 2))
+            fi
+          done
 
           # Start services
           echo ""
@@ -252,7 +278,7 @@ jobs:
           echo ""
           echo "=== Waiting for services to become healthy ==="
           for i in {1..60}; do
-            echo "Check \$i/60..."
+            echo "Check $i/60..."
 
             # Check Neo4j
             if docker compose ps neo4j | grep -q "healthy"; then

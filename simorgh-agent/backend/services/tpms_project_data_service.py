@@ -101,14 +101,14 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
-            # Try exact match first
+            # Try exact match first - View_Project_Main has all these columns per C# model
             query = """
                 SELECT
                     IDProjectMain as IdprojectMain,
                     OENUM as Oenum,
-                    IFNULL(Order_Category, '') as OrderCategory,
-                    IFNULL(OE_Date, '') as Oedate,
                     IFNULL(Project_Name, '') as ProjectName,
+                    IFNULL(Order_Category, '') as OrderCategory,
+                    IFNULL(OEDATE, '') as OeDate,
                     IFNULL(Project_Name_Fa, '') as ProjectNameFa,
                     IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
                     IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
@@ -120,31 +120,46 @@ class TPMSProjectDataService:
             cursor.execute(query, (oenum,))
             row = cursor.fetchone()
 
-            # If not found, try suffix match
-            if not row and len(oenum) <= 5:
+            # If not found, try suffix match (last 5 digits like auth service)
+            if not row:
+                # Extract last 5 digits for suffix match
+                oenum_suffix = oenum[-5:] if len(oenum) >= 5 else oenum
                 query = """
                     SELECT
                         IDProjectMain as IdprojectMain,
                         OENUM as Oenum,
-                        IFNULL(Order_Category, '') as OrderCategory,
-                        IFNULL(OE_Date, '') as Oedate,
                         IFNULL(Project_Name, '') as ProjectName,
+                        IFNULL(Order_Category, '') as OrderCategory,
+                        IFNULL(OEDATE, '') as OeDate,
                         IFNULL(Project_Name_Fa, '') as ProjectNameFa,
                         IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
                         IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
                         IFNULL(Technical_Expert_Label, '') as TechnicalExpertLabel
                     FROM View_Project_Main
-                    WHERE RIGHT(OENUM, %s) = %s
+                    WHERE RIGHT(OENUM, 5) = %s
+                    ORDER BY IDProjectMain DESC
                     LIMIT 1
                 """
-                cursor.execute(query, (len(oenum), oenum))
+                cursor.execute(query, (oenum_suffix,))
                 row = cursor.fetchone()
 
             cursor.close()
             connection.close()
 
             if row:
-                return ViewProjectMain(**row)
+                logger.info(f"Found project: {row}")
+                # Create ViewProjectMain with all fields from View_Project_Main
+                return ViewProjectMain(
+                    id_project_main=row['IdprojectMain'],
+                    oenum=row['Oenum'],
+                    project_name=row['ProjectName'],
+                    order_category=row['OrderCategory'],
+                    oe_date=row['OeDate'],
+                    project_name_fa=row['ProjectNameFa'],
+                    project_expert_label=row['ProjectExpertLabel'],
+                    technical_supervisor_label=row['TechnicalSupervisorLabel'],
+                    technical_expert_label=row['TechnicalExpertLabel']
+                )
             return None
 
         except MySQLError as e:
@@ -157,13 +172,14 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # View_Project_Main has all these columns per C# model
             query = """
                 SELECT
                     IDProjectMain as IdprojectMain,
                     OENUM as Oenum,
-                    IFNULL(Order_Category, '') as OrderCategory,
-                    IFNULL(OE_Date, '') as Oedate,
                     IFNULL(Project_Name, '') as ProjectName,
+                    IFNULL(Order_Category, '') as OrderCategory,
+                    IFNULL(OEDATE, '') as OeDate,
                     IFNULL(Project_Name_Fa, '') as ProjectNameFa,
                     IFNULL(Project_Expert_Label, '') as ProjectExpertLabel,
                     IFNULL(Technical_Supervisor_Label, '') as TechnicalSupervisorLabel,
@@ -179,7 +195,17 @@ class TPMSProjectDataService:
             connection.close()
 
             if row:
-                return ViewProjectMain(**row)
+                return ViewProjectMain(
+                    id_project_main=row['IdprojectMain'],
+                    oenum=row['Oenum'],
+                    project_name=row['ProjectName'],
+                    order_category=row['OrderCategory'],
+                    oe_date=row['OeDate'],
+                    project_name_fa=row['ProjectNameFa'],
+                    project_expert_label=row['ProjectExpertLabel'],
+                    technical_supervisor_label=row['TechnicalSupervisorLabel'],
+                    technical_expert_label=row['TechnicalExpertLabel']
+                )
             return None
 
         except MySQLError as e:
@@ -196,41 +222,78 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Column names from C# model - use exact case and underscores
             query = """
                 SELECT
-                    Id, IdprojectMain, ProjectGroup, DeliveryDate,
-                    AboveSeaLevel, AverageTemperature, AverageTemperatureRemarkDescription,
-                    PackingType, PackingTypeRemarkDescription,
-                    Revision, Isolation, IsolationRemarkDescription,
-                    IsolationType, IsolationTypeRemarkDescription,
-                    PlatingType, PlatingTypeRemarkDescription,
-                    HowToPlating, HowToPlatingRemarkDescription,
-                    ColorThickness, ColorThicknessRemarkDescription,
-                    ColorType, ColorTypeRemarkDescription,
-                    ControlWireSize, ControlWireSizeRemarkDescription,
-                    CtWireSize, CtWireSizeRemarkDescription,
-                    PtWireSize, PtWireSizeRemarkDescription,
-                    PhaseWireColor, PhaseWireColorRemarkDescription,
-                    NaturalWireColor, NaturalWireColorRemarkDescription,
-                    DcPlusWireColor, DcPlusWireColorRemarkDescription,
-                    DcMinesWireColor, DcMinesWireColorRemarkDescription,
-                    DigitalInletWireColor, DigitalInletWireColorRemarkDescription,
-                    DigitalOutletWireColor, DigitalOutletWireColorRemarkDescription,
-                    ThreePhaseWireColor, ThreePhaseWireColorRemarkDescription,
-                    PlcFeedingWireSize, PlcFeedingWireSizeRemarkDescription,
-                    InletWireSize, InletWireSizeRemarkDescription,
-                    OutletWireSize, OutletWireSizeRemarkDescription,
-                    DcPlusPhaseWireColor, DcPlusPhaseWireColorRemarkDescription,
-                    DcMinesNaturalWireColor, DcMinesNaturalWireColorRemarkDescription,
-                    AcPlusPhaseWireColor, AcPlusPhaseWireColorRemarkDescription,
-                    AcPlusNaturalWireColor, AcPlusNaturalWireColorRemarkDescription,
-                    LabelWritingColor, LabelWritingColorRemarkDescription,
-                    LabelBackgroundColor, LabelBackgroundColorRemarkDescription,
-                    WireBrand, ControlWireBrand,
-                    Type, Finished, UsrUsername, DateCreated
-                FROM TechnicalProjectIdentity
-                WHERE IdprojectMain = %s
-                ORDER BY Id DESC
+                    ID as Id,
+                    IDProjectMain as IdprojectMain,
+                    Project_Group as ProjectGroup,
+                    Delivery_Date as DeliveryDate,
+                    Above_Sea_Level as AboveSeaLevel,
+                    Average_Temperature as AverageTemperature,
+                    Average_Temperature_Remark_Description as AverageTemperatureRemarkDescription,
+                    Packing_Type as PackingType,
+                    Packing_Type_Remark_Description as PackingTypeRemarkDescription,
+                    Revision,
+                    Isolation,
+                    Isolation_Remark_Description as IsolationRemarkDescription,
+                    Isolation_Type as IsolationType,
+                    Isolation_Type_Remark_Description as IsolationTypeRemarkDescription,
+                    Plating_Type as PlatingType,
+                    Plating_Type_Remark_Description as PlatingTypeRemarkDescription,
+                    How_To_Plating as HowToPlating,
+                    How_To_Plating_Remark_Description as HowToPlatingRemarkDescription,
+                    Color_Thickness as ColorThickness,
+                    Color_Thickness_Remark_Description as ColorThicknessRemarkDescription,
+                    Color_Type as ColorType,
+                    Color_Type_Remark_Description as ColorTypeRemarkDescription,
+                    Control_Wire_Size as ControlWireSize,
+                    Control_Wire_Size_Remark_Description as ControlWireSizeRemarkDescription,
+                    CT_Wire_Size as CtWireSize,
+                    CT_Wire_Size_Remark_Description as CtWireSizeRemarkDescription,
+                    PT_Wire_Size as PtWireSize,
+                    PT_Wire_Size_Remark_Description as PtWireSizeRemarkDescription,
+                    Phase_Wire_Color as PhaseWireColor,
+                    Phase_Wire_Color_Remark_Description as PhaseWireColorRemarkDescription,
+                    Natural_Wire_Color as NaturalWireColor,
+                    Natural_Wire_Color_Remark_Description as NaturalWireColorRemarkDescription,
+                    DC_Plus_Wire_Color as DcPlusWireColor,
+                    DC_Plus_Wire_Color_Remark_Description as DcPlusWireColorRemarkDescription,
+                    DC_Mines_Wire_Color as DcMinesWireColor,
+                    DC_Mines_Wire_Color_Remark_Description as DcMinesWireColorRemarkDescription,
+                    Digital_Inlet_Wire_Color as DigitalInletWireColor,
+                    Digital_Inlet_Wire_Color_Remark_Description as DigitalInletWireColorRemarkDescription,
+                    Digital_Outlet_Wire_Color as DigitalOutletWireColor,
+                    Digital_Outlet_Wire_Color_Remark_Description as DigitalOutletWireColorRemarkDescription,
+                    Three_Phase_Wire_Color as ThreePhaseWireColor,
+                    Three_Phase_Wire_Color_Remark_Description as ThreePhaseWireColorRemarkDescription,
+                    PLC_Feeding_Wire_Size as PlcFeedingWireSize,
+                    PLC_Feeding_Wire_Size_Remark_Description as PlcFeedingWireSizeRemarkDescription,
+                    Inlet_Wire_Size as InletWireSize,
+                    Inlet_Wire_Size_Remark_Description as InletWireSizeRemarkDescription,
+                    Outlet_Wire_Size as OutletWireSize,
+                    Outlet_Wire_Size_Remark_Description as OutletWireSizeRemarkDescription,
+                    DC_Plus_Phase_Wire_Color as DcPlusPhaseWireColor,
+                    DC_Plus_Phase_Wire_Color_Remark_Description as DcPlusPhaseWireColorRemarkDescription,
+                    DC_Mines_Natural_Wire_Color as DcMinesNaturalWireColor,
+                    DC_Mines_Natural_Wire_Color_Remark_Description as DcMinesNaturalWireColorRemarkDescription,
+                    AC_Plus_Phase_Wire_Color as AcPlusPhaseWireColor,
+                    AC_Plus_Phase_Wire_Color_Remark_Description as AcPlusPhaseWireColorRemarkDescription,
+                    AC_Plus_Natural_Wire_Color as AcPlusNaturalWireColor,
+                    AC_Plus_Natural_Wire_Color_Remark_Description as AcPlusNaturalWireColorRemarkDescription,
+                    Label_Writing_Color as LabelWritingColor,
+                    Label_Writing_Color_Remark_Description as LabelWritingColorRemarkDescription,
+                    Label_Background_Color as LabelBackgroundColor,
+                    Label_Background_Color_Remark_Description as LabelBackgroundColorRemarkDescription,
+                    Wire_Brand as WireBrand,
+                    Control_Wire_Brand as ControlWireBrand,
+                    Type,
+                    Finished,
+                    USR_USERNAME as UsrUsername,
+                    Date_Created as DateCreated
+                FROM technical_project_identity
+                WHERE IDProjectMain = %s
+                ORDER BY ID DESC
                 LIMIT 1
             """
             cursor.execute(query, (id_project_main,))
@@ -256,12 +319,19 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Column names from TPMS database (per screenshot):
+            # ID, IDTechnicalProjectIdentity, IDProjectMain, field_title, field_descriptions (plural!), date_u, Status
             query = """
                 SELECT
-                    Id, IdtechnicalProjectIdentity, IdprojectMain,
-                    FieldTitle, FieldDescriptions, DateU, Status
-                FROM TechnicalProjectIdentityAdditionalField
-                WHERE IdprojectMain = %s AND Status = 1
+                    ID as Id,
+                    IDTechnicalProjectIdentity as IdtechnicalProjectIdentity,
+                    IDProjectMain as IdprojectMain,
+                    field_title as FieldTitle,
+                    field_descriptions as FieldDescriptions,
+                    date_u as DateU,
+                    Status
+                FROM TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS
+                WHERE IDProjectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -285,33 +355,70 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Column names from C# model - use exact case and underscores
             query = """
                 SELECT
-                    Id, IdprojectMain, IdprojectScope, ProductTypeLabel,
-                    PlaneName1 as PlaneName1, PlaneType, PlaneTypeRemarkDescription,
-                    CellCount, PadLockKeyContactor, PadlockKeyTest, PadlockSwitchTest,
-                    LayoutType, LayoutTypeRemarkDescription,
-                    HowToPlating, HowToPlatingRemarkDescription,
-                    PackingTypeRemarkDescription,
-                    IsolationType, IsolationTypeRemarkDescription,
-                    PlatingType, PlatingTypeRemarkDescription,
-                    Isolation, IsolationRemarkDescription,
+                    ID as Id,
+                    IDProjectMain as IdprojectMain,
+                    IDProjectScope as IdprojectScope,
+                    ProductType_label as ProductTypeLabel,
+                    Plane_Name1 as PlaneName1,
+                    Plane_Type as PlaneType,
+                    Plane_Type_Remark_Description as PlaneTypeRemarkDescription,
+                    Cell_Count as CellCount,
+                    PadLock_KeyContactor as PadLockKeyContactor,
+                    Padlock_KeyTest as PadlockKeyTest,
+                    Padlock_SwitchTest as PadlockSwitchTest,
+                    Layout_Type as LayoutType,
+                    Layout_Type_Remark_Description as LayoutTypeRemarkDescription,
+                    How_To_Plating as HowToPlating,
+                    How_To_Plating_Remark_Description as HowToPlatingRemarkDescription,
+                    Packing_Type_Remark_Description as PackingTypeRemarkDescription,
+                    Isolation_Type as IsolationType,
+                    Isolation_Type_Remark_Description as IsolationTypeRemarkDescription,
+                    Plating_Type as PlatingType,
+                    Plating_Type_Remark_Description as PlatingTypeRemarkDescription,
+                    Isolation,
+                    Isolation_Remark_Description as IsolationRemarkDescription,
                     Height, Width, Depth,
-                    VoltageRate, VoltageRateRemarkDescription,
-                    SwitchAmperage, RatedVoltage, RatedVoltageRemarkDescription,
-                    Frequency, FrequencyRemarkDescription,
-                    Kabus, Abus, MainBusbarSize, EarthSize, NeutralSize, TypeBusbar,
-                    InletContact, InletContactRemarkDescription,
-                    OutletContact, OutletContactRemarkDescription,
-                    AccessFrom, AccessFromRemarkDescription,
-                    Ip, IpRemarkDescription,
-                    ColorReal, ColorRealRemarkDescription,
-                    Cpcts, Scm, Plsh, Msh, Mbc, MbcRemarkDescription,
-                    Rpfwv, Riwv,
-                    ProjectIdentityid, Revision, UsrUsername, DateCreated
-                FROM TechnicalPanelIdentity
-                WHERE IdprojectMain = %s
-                ORDER BY Id
+                    Voltage_Rate as VoltageRate,
+                    Voltage_Rate_Remark_Description as VoltageRateRemarkDescription,
+                    Switch_Amperage as SwitchAmperage,
+                    rated_voltage as RatedVoltage,
+                    rated_voltage_Remark_Description as RatedVoltageRemarkDescription,
+                    frequency as Frequency,
+                    frequency_Remark_Description as FrequencyRemarkDescription,
+                    KABUS as Kabus,
+                    ABUS as Abus,
+                    Main_Busbar_Size as MainBusbarSize,
+                    Earth_Size as EarthSize,
+                    Neutral_Size as NeutralSize,
+                    Type_Busbar as TypeBusbar,
+                    Inlet_Contact as InletContact,
+                    Inlet_Contact_Remark_Description as InletContactRemarkDescription,
+                    Outlet_Contact as OutletContact,
+                    Outlet_Contact_Remark_Description as OutletContactRemarkDescription,
+                    Access_From as AccessFrom,
+                    Access_From_Remark_Description as AccessFromRemarkDescription,
+                    IP as Ip,
+                    IP_Remark_Description as IpRemarkDescription,
+                    Color_Real as ColorReal,
+                    Color_Real_Remark_Description as ColorRealRemarkDescription,
+                    cpcts as Cpcts,
+                    scm as Scm,
+                    plsh as Plsh,
+                    msh as Msh,
+                    mbc as Mbc,
+                    mbc_Remark_Description as MbcRemarkDescription,
+                    rpfwv as Rpfwv,
+                    riwv as Riwv,
+                    PROJECT_IDENTITYID as ProjectIdentityid,
+                    Revision,
+                    USR_USERNAME as UsrUsername,
+                    Date_Created as DateCreated
+                FROM technical_panel_identity
+                WHERE IDProjectMain = %s
+                ORDER BY ID
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -334,12 +441,20 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Column names from TPMS database (per screenshot):
+            # ID, IDTechnicalPanelIdentity, IDProjectMain, IDProjectScope, field_title, field_descriptions (plural!), date_u, Status
             query = """
                 SELECT
-                    Id, IdtechnicalPanelIdentity, IdprojectMain, IdprojectScope,
-                    FieldTitle, FieldDescriptions, DateU, Status
-                FROM TechnicalPanelIdentityAdditionalField
-                WHERE IdprojectMain = %s AND Status = 1
+                    ID as Id,
+                    IDTechnicalPanelIdentity as IdtechnicalPanelIdentity,
+                    IDProjectMain as IdprojectMain,
+                    IDProjectScope as IdprojectScope,
+                    field_title as FieldTitle,
+                    field_descriptions as FieldDescriptions,
+                    date_u as DateU,
+                    Status
+                FROM TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELDS
+                WHERE IDProjectMain = %s AND Status = 1
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -363,16 +478,40 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Column names from C# model - use exact case and underscores
+            # View_draft view columns: ID, Project_ID, Tablo_ID, tmpId, scopeName,
+            # bus_section, feeder_no, tag, Designation, wiring_type, rating_power,
+            # flc, Module, module_type, Size, cable_size, cb_rating, overLoad_rating,
+            # contactor_rating, sfd_hfd, templateName, description, revision, ordering
             query = """
                 SELECT
-                    Id, ProjectId, TabloId, TmpId, ScopeName,
-                    BusSection, FeederNo, Tag, Designation,
-                    WiringType, RatingPower, Flc, Module, ModuleType,
-                    Size, CableSize, CbRating, OverLoadRating, ContactorRating,
-                    SfdHfd, TemplateName, Description, Revision, Ordering
-                FROM View_Draft
-                WHERE ProjectId = %s
-                ORDER BY TabloId, Ordering, Id
+                    ID as Id,
+                    Project_ID as ProjectId,
+                    Tablo_ID as TabloId,
+                    tmpId as TmpId,
+                    scopeName as ScopeName,
+                    bus_section as BusSection,
+                    feeder_no as FeederNo,
+                    tag as Tag,
+                    Designation,
+                    wiring_type as WiringType,
+                    rating_power as RatingPower,
+                    flc as Flc,
+                    Module,
+                    module_type as ModuleType,
+                    Size,
+                    cable_size as CableSize,
+                    cb_rating as CbRating,
+                    overLoad_rating as OverLoadRating,
+                    contactor_rating as ContactorRating,
+                    sfd_hfd as SfdHfd,
+                    templateName as TemplateName,
+                    description as Description,
+                    revision as Revision,
+                    ordering as Ordering
+                FROM View_draft
+                WHERE Project_ID = %s
+                ORDER BY Tablo_ID, ordering, ID
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -392,14 +531,29 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Column names from C# model - use exact case
+            # View_draft_Equipment columns: draftId, label, Ecode, equipment, QTY, priority, color,
+            # SEC_DES, TYPE_DES, BRAND_DES, SHR_DES, SHR_DES2, SCODE, ENG_DES
             query = """
                 SELECT
-                    e.DraftId, e.Label, e.Ecode, e.Equipment, e.Qty, e.Priority, e.Color,
-                    e.SecDes, e.TypeDes, e.BrandDes, e.ShrDes, e.ShrDes2, e.Scode, e.EngDes
-                FROM View_Draft_Equipment e
-                INNER JOIN View_Draft d ON e.DraftId = d.Id
-                WHERE d.ProjectId = %s
-                ORDER BY e.DraftId, e.Priority
+                    e.draftId as DraftId,
+                    e.label as Label,
+                    e.Ecode,
+                    e.equipment as Equipment,
+                    e.QTY as Qty,
+                    e.priority as Priority,
+                    e.color as Color,
+                    e.SEC_DES as SecDes,
+                    e.TYPE_DES as TypeDes,
+                    e.BRAND_DES as BrandDes,
+                    e.SHR_DES as ShrDes,
+                    e.SHR_DES2 as ShrDes2,
+                    e.SCODE as Scode,
+                    e.ENG_DES as EngDes
+                FROM View_draft_Equipment e
+                INNER JOIN View_draft d ON e.draftId = d.ID
+                WHERE d.Project_ID = %s
+                ORDER BY e.draftId, e.priority
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -419,11 +573,16 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Column names from C# model - View_draft_column columns: id, level, name, Project_ID
             query = """
-                SELECT Id, Level, Name, ProjectId
-                FROM View_Draft_Column
-                WHERE ProjectId = %s
-                ORDER BY Level, Id
+                SELECT
+                    id as Id,
+                    level as Level,
+                    name as Name,
+                    Project_ID as ProjectId
+                FROM View_draft_column
+                WHERE Project_ID = %s
+                ORDER BY level, id
             """
             cursor.execute(query, (id_project_main,))
             rows = cursor.fetchall()
@@ -447,9 +606,10 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'TECHNICAL_PROPERTIES' (uppercase) - case-sensitive on Linux
             query = """
                 SELECT Id, CategoryId, Type, Title
-                FROM TechnicalProperty
+                FROM TECHNICAL_PROPERTIES
                 WHERE Title IS NOT NULL AND Title != ''
                 ORDER BY Type, CategoryId
             """
@@ -471,9 +631,10 @@ class TPMSProjectDataService:
             connection = self._get_connection()
             cursor = connection.cursor()
 
+            # Note: Table name is 'TECHNICAL_PROPERTIES' (uppercase) - case-sensitive on Linux
             query = """
                 SELECT Title
-                FROM TechnicalProperty
+                FROM TECHNICAL_PROPERTIES
                 WHERE Type = %s AND CategoryId = %s
                 LIMIT 1
             """
@@ -567,6 +728,114 @@ class TPMSProjectDataService:
             "needs_full_sync": True,
             "last_checked": datetime.utcnow()
         }
+
+    def list_available_tables(self) -> Dict[str, List[str]]:
+        """
+        Diagnostic function to list all tables/views accessible by the technical user.
+
+        Returns:
+            Dict with 'tables' and 'views' lists
+        """
+        result = {
+            "tables": [],
+            "views": [],
+            "all_objects": [],
+            "errors": []
+        }
+
+        try:
+            connection = self._get_connection()
+            cursor = connection.cursor()
+
+            # Try to get all tables and views from information_schema
+            try:
+                query = """
+                    SELECT TABLE_NAME, TABLE_TYPE
+                    FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = %s
+                    ORDER BY TABLE_TYPE, TABLE_NAME
+                """
+                cursor.execute(query, (self.database,))
+                rows = cursor.fetchall()
+
+                for row in rows:
+                    table_name = row.get('TABLE_NAME', '')
+                    table_type = row.get('TABLE_TYPE', '')
+                    result["all_objects"].append({"name": table_name, "type": table_type})
+
+                    if 'VIEW' in table_type.upper():
+                        result["views"].append(table_name)
+                    else:
+                        result["tables"].append(table_name)
+
+            except MySQLError as e:
+                result["errors"].append(f"INFORMATION_SCHEMA query failed: {e}")
+
+                # Fallback: try SHOW TABLES
+                try:
+                    cursor.execute("SHOW TABLES")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        # SHOW TABLES returns dict with dynamic key
+                        table_name = list(row.values())[0] if row else None
+                        if table_name:
+                            result["all_objects"].append({"name": table_name, "type": "unknown"})
+                except MySQLError as e2:
+                    result["errors"].append(f"SHOW TABLES failed: {e2}")
+
+            # Test which tables/views we can actually SELECT from
+            # Note: MySQL on Linux is case-sensitive for table names!
+            # Names from C# Entity Framework model (TPMSDbContext)
+            test_tables = [
+                # Views (from C# ToView mappings)
+                "View_Project_Main",
+                "View_draft",              # lowercase 'd'
+                "View_draft_Equipment",    # mixed case
+                "View_draft_column",       # lowercase
+                "view_scope",
+                "view_UserNamefani",
+                "technical_project_identity",   # lowercase view
+                "technical_panel_identity",     # lowercase view
+                "technical_users",              # lowercase view
+                # Tables (from C# ToTable mappings)
+                "TECHNICAL_PROPERTIES",                          # uppercase
+                "TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS",  # uppercase, ends with 'S'
+                "TECHNICAL_PANEL_IDENTITY_ADDITIONAL_FIELDS",    # uppercase, ends with 'S'
+                "TECHNICAL_CELL_IDENTITY",
+                "TECHNICAL_CELL_IDENTITY_CELL_TYPES",
+                "TECHNICAL_CELL_IDENTITY_MV",
+                "draft_permission",
+                "Technical_draft_template",
+                "Technical_draft_equipment_template",
+                "CODING_MERCHANDISE_TB",
+            ]
+
+            accessible = []
+            inaccessible = []
+
+            for table in test_tables:
+                try:
+                    cursor.execute(f"SELECT 1 FROM {table} LIMIT 1")
+                    cursor.fetchone()
+                    accessible.append(table)
+                except MySQLError:
+                    inaccessible.append(table)
+
+            result["accessible"] = accessible
+            result["inaccessible"] = inaccessible
+
+            cursor.close()
+            connection.close()
+
+            logger.info(f"TPMS accessible tables: {accessible}")
+            logger.info(f"TPMS inaccessible tables: {inaccessible}")
+
+            return result
+
+        except MySQLError as e:
+            logger.error(f"Error listing tables: {e}")
+            result["errors"].append(str(e))
+            return result
 
 
 # =============================================================================

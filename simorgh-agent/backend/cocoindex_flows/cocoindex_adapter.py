@@ -159,6 +159,104 @@ class CoCoIndexAdapter:
         record = result.single()
         return dict(record["project"]) if record else None
 
+    def get_project_tpms_context(self, project_number: str) -> Optional[Dict[str, Any]]:
+        """
+        Get full project TPMS context from Neo4j for LLM.
+
+        Returns project info, panels, and feeder summary from synced TPMS data.
+
+        Args:
+            project_number: Project OENUM
+
+        Returns:
+            Dict with project_info, panels, feeders_summary, counts
+        """
+        try:
+            with self.driver.session() as session:
+                # Get project info
+                project_result = session.run("""
+                    MATCH (p:Project {oenum: $oenum})
+                    OPTIONAL MATCH (p)-[:HAS_IDENTITY]->(pi:ProjectIdentity)
+                    RETURN p {
+                        .project_name, .project_name_fa, .order_category, .oe_date,
+                        .project_expert, .technical_supervisor, .technical_expert,
+                        .id_project_main
+                    } as project,
+                    pi {
+                        .delivery_date, .above_sea_level, .average_temperature,
+                        .wire_brand, .control_wire_brand, .isolation_value,
+                        .plating_type_value, .color_type_value
+                    } as identity
+                """, {"oenum": project_number})
+
+                project_record = project_result.single()
+                if not project_record:
+                    # Try with project_number instead of oenum
+                    project_result = session.run("""
+                        MATCH (p:Project {project_number: $project_number})
+                        RETURN p {
+                            .project_name, .project_name_fa, .order_category, .oe_date,
+                            .project_expert, .technical_supervisor, .technical_expert
+                        } as project
+                    """, {"project_number": project_number})
+                    project_record = project_result.single()
+
+                if not project_record:
+                    return None
+
+                context = {
+                    "project_info": dict(project_record["project"]) if project_record["project"] else {},
+                    "project_identity": dict(project_record.get("identity") or {}) if project_record.get("identity") else {},
+                    "panels": [],
+                    "panel_count": 0,
+                    "feeder_count": 0,
+                    "equipment_count": 0
+                }
+
+                # Get panels with feeder counts
+                panels_result = session.run("""
+                    MATCH (p:Project {oenum: $oenum})-[:HAS_PANEL]->(panel:Panel)
+                    OPTIONAL MATCH (panel)-[:HAS_FEEDER]->(f:Feeder)
+                    WITH panel, count(f) as feeder_count
+                    RETURN panel {
+                        .panel_id, .plane_name, .plane_type, .voltage_rate,
+                        .rated_voltage, .cell_count, .ip_value, .switch_amperage,
+                        .height, .width, .depth, .main_busbar_size, .kabus, .abus, .scm
+                    } as panel,
+                    feeder_count
+                    ORDER BY panel.panel_id
+                    LIMIT 30
+                """, {"oenum": project_number})
+
+                for record in panels_result:
+                    panel_data = dict(record["panel"]) if record["panel"] else {}
+                    panel_data["feeder_count"] = record["feeder_count"]
+                    context["panels"].append(panel_data)
+
+                # Get total counts
+                counts_result = session.run("""
+                    MATCH (p:Project {oenum: $oenum})
+                    OPTIONAL MATCH (p)-[:HAS_PANEL]->(panel:Panel)
+                    OPTIONAL MATCH (panel)-[:HAS_FEEDER]->(f:Feeder)
+                    OPTIONAL MATCH (f)-[:HAS_EQUIPMENT]->(e:Equipment)
+                    RETURN count(DISTINCT panel) as panel_count,
+                           count(DISTINCT f) as feeder_count,
+                           count(DISTINCT e) as equipment_count
+                """, {"oenum": project_number})
+
+                counts = counts_result.single()
+                if counts:
+                    context["panel_count"] = counts["panel_count"]
+                    context["feeder_count"] = counts["feeder_count"]
+                    context["equipment_count"] = counts["equipment_count"]
+
+                logger.debug(f"Got Neo4j project context: {context['panel_count']} panels, {context['feeder_count']} feeders")
+                return context
+
+        except Exception as e:
+            logger.warning(f"Failed to get project TPMS context from Neo4j: {e}")
+            return None
+
     def delete_project(self, project_number: str) -> int:
         """
         Delete project and all related entities.

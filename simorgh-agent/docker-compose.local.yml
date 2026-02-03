@@ -1,18 +1,22 @@
 # =============================================================================
-# Enhanced Industrial Electrical Assistant - Docker Compose
+# Simorgh Industrial Electrical Assistant - Docker Compose (LOCAL BUILD)
 # Server: 192.168.1.68
-# Features: Neo4j (Graph), Redis (Cache), CocoIndex (Data Framework), Qdrant (Vector)
 #
-# All images are pulled from GHCR to avoid Docker Hub network issues.
-# Third-party images are mirrored via the mirror-images.yml workflow.
+# This version builds all images locally from Dockerfiles instead of pulling
+# from GitHub Container Registry. Use this when GitHub network is unavailable.
+#
+# Usage: docker-compose -f docker-compose.local.yml up -d --build
 # =============================================================================
 
 services:
   # ===========================================================================
-  # FRONTEND - React Vite Application (Production Build)
+  # FRONTEND - React Vite Application (LOCAL BUILD)
   # ===========================================================================
   frontend:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: simorgh-frontend:local
     container_name: frontend
     expose:
       - "80"
@@ -27,14 +31,17 @@ services:
       start_period: 10s
 
   # ===========================================================================
-  # BACKEND - FastAPI Main Application
+  # BACKEND - FastAPI Main Application (LOCAL BUILD)
   # ===========================================================================
   backend:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-backend:${IMAGE_TAG:-latest}
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: simorgh-backend:local
     container_name: backend
     environment:
       - PYTHONUNBUFFERED=1
-      # HuggingFace Model Cache - Use cached models first, fallback to download
+      # HuggingFace Model Cache
       - HF_HOME=/root/.cache/huggingface
       - TRANSFORMERS_CACHE=/root/.cache/huggingface/hub
       - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
@@ -49,16 +56,16 @@ services:
       - REDIS_CACHE_DB=2
       # Qdrant
       - QDRANT_URL=http://qdrant:6333
-      # CocoIndex (builds from source)
+      # CocoIndex
       - COCOINDEX_PIPELINE_DIR=/app/cocoindex_flows
       - COCOINDEX_DATABASE_URL=postgresql://cocoindex:${COCOINDEX_DB_PASSWORD:-cocoindex_2024}@cocoindex_db:5432/cocoindex
-      # SQL Server (Auth) - Read Only
+      # SQL Server (Auth)
       - SQL_SERVER_HOST=${SQL_SERVER_HOST}
       - SQL_SERVER_PORT=${SQL_SERVER_PORT:-1433}
       - SQL_SERVER_USER=${SQL_SERVER_USER}
       - SQL_SERVER_PASSWORD=${SQL_SERVER_PASSWORD}
       - SQL_SERVER_DATABASE=${SQL_SERVER_DATABASE}
-      # MySQL TPMS (Auth) - Read Only
+      # MySQL TPMS (Auth)
       - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
       - MYSQL_PORT=${MYSQL_PORT:-3306}
       - MYSQL_USER=${MYSQL_USER}
@@ -66,7 +73,7 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
       # JWT Configuration
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
-      # PostgreSQL Auth Database (Modern Auth)
+      # PostgreSQL Auth Database
       - POSTGRES_AUTH_HOST=postgres_auth
       - POSTGRES_AUTH_PORT=5432
       - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
@@ -79,6 +86,9 @@ services:
       - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
       # Document Processor
       - DOC_PROCESSOR_URL=http://doc-processor:8000
+      # TPMS Background Sync
+      - TPMS_SYNC_INTERVAL=${TPMS_SYNC_INTERVAL:-300}
+      - TPMS_SYNC_MAX_CONCURRENT=${TPMS_SYNC_MAX_CONCURRENT:-3}
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
@@ -112,10 +122,13 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # DOC-PROCESSOR - Document to Markdown Conversion Service
+  # DOC-PROCESSOR - Document to Markdown Conversion (LOCAL BUILD)
   # ===========================================================================
   doc-processor:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-doc-processor:${IMAGE_TAG:-latest}
+    build:
+      context: ./doc-processor
+      dockerfile: Dockerfile
+    image: simorgh-doc-processor:local
     container_name: doc-processor
     expose:
       - "8000"
@@ -135,15 +148,18 @@ services:
       - PYTHONUNBUFFERED=1
 
   # ===========================================================================
-  # STT-SERVICE - Speech-to-Text using Faster-Whisper (CPU)
+  # STT-SERVICE - Speech-to-Text (LOCAL BUILD)
   # ===========================================================================
   stt-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-stt-service:${IMAGE_TAG:-latest}
+    build:
+      context: ./stt-service
+      dockerfile: Dockerfile
+    image: simorgh-stt-service:local
     container_name: stt-service
     expose:
       - "8001"
     volumes:
-      - stt_models:/app/models # Cache Whisper models
+      - stt_models:/app/models
     networks:
       - app_net
     healthcheck:
@@ -151,32 +167,31 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s # Model loading takes time
+      start_period: 120s
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
-      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-base} # tiny, base, small, medium
-      - WHISPER_DEVICE=cpu # Use CPU to avoid GPU memory conflicts
-      - WHISPER_COMPUTE_TYPE=int8 # Optimized for CPU
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-base}
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
 
   # ===========================================================================
-  # NEO4J - Knowledge Graph Database (Mirrored from Docker Hub to GHCR)
+  # NEO4J - Knowledge Graph Database
   # ===========================================================================
   neo4j:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-neo4j:5.15.0-community
+    image: neo4j:5.15.0-community
     container_name: neo4j
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-simorgh_secure_2024}
       - NEO4J_PLUGINS=["apoc", "graph-data-science"]
-      # Use new setting names (Neo4j 5.x)
       - NEO4J_server_memory_heap_initial__size=512m
       - NEO4J_server_memory_heap_max__size=2G
       - NEO4J_server_memory_pagecache_size=512m
       - NEO4J_dbms_security_procedures_unrestricted=apoc.*,gds.*
       - NEO4J_dbms_security_procedures_allowlist=apoc.*,gds.*
     ports:
-      - "7474:7474" # HTTP Browser
-      - "7687:7687" # Bolt
+      - "7474:7474"
+      - "7687:7687"
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -188,17 +203,17 @@ services:
       interval: 15s
       timeout: 10s
       retries: 30
-      start_period: 180s # GDS plugin download can take time
+      start_period: 180s
     restart: unless-stopped
 
   # ===========================================================================
-  # REDIS - Caching & Session Store (Mirrored from Docker Hub to GHCR)
+  # REDIS - Caching & Session Store
   # ===========================================================================
   redis:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-redis:7.2-alpine
+    image: redis:7.2-alpine
     container_name: redis
     command: >
-      redis-server  --appendonly yes  --maxmemory 512mb  --maxmemory-policy allkeys-lru --save 60 1 --save 300 10
+      redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1 --save 300 10
     volumes:
       - redis_data:/data
     expose:
@@ -213,10 +228,10 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # QDRANT - Vector Database (Mirrored from Docker Hub to GHCR)
+  # QDRANT - Vector Database
   # ===========================================================================
   qdrant:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-qdrant:latest
+    image: qdrant/qdrant:latest
     container_name: qdrant
     expose:
       - "6333"
@@ -230,11 +245,10 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # COCOINDEX - Data Framework for Graph Building
-  # Uses python:3.11-bookworm base image (Mirrored from Docker Hub to GHCR)
+  # COCOINDEX - Data Framework (builds from source)
   # ===========================================================================
   cocoindex:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-python:3.11-bookworm
+    image: python:3.11-bookworm
     container_name: cocoindex
     restart: unless-stopped
     depends_on:
@@ -252,10 +266,10 @@ services:
         apt-get update && apt-get install -y git build-essential curl &&
         rm -rf /tmp/coco || true &&
         echo 'Downloading Rust installer...' &&
-        (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || (echo 'WARNING: Rust install failed - network issue. CocoIndex disabled.' && tail -f /dev/null)) &&
+        (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || (echo 'WARNING: Rust install failed. CocoIndex disabled.' && tail -f /dev/null)) &&
         . /root/.cargo/env &&
         echo 'Cloning CocoIndex...' &&
-        (git clone --depth 1 https://github.com/cocoindex-io/cocoindex.git /tmp/coco || (echo 'WARNING: CocoIndex clone failed - network issue. Service disabled.' && tail -f /dev/null)) &&
+        (git clone --depth 1 https://github.com/cocoindex-io/cocoindex.git /tmp/coco || (echo 'WARNING: CocoIndex clone failed. Service disabled.' && tail -f /dev/null)) &&
         cd /tmp/coco &&
         pip install --no-cache-dir . openai &&
         cd /app &&
@@ -272,10 +286,10 @@ services:
       - app_net
 
   # ===========================================================================
-  # COCOINDEX DATABASE - PostgreSQL with pgvector (Mirrored from Docker Hub to GHCR)
+  # COCOINDEX DATABASE - PostgreSQL with pgvector
   # ===========================================================================
   cocoindex_db:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-pgvector:pg17
+    image: pgvector/pgvector:pg17
     container_name: cocoindex_db
     restart: unless-stopped
     environment:
@@ -295,10 +309,10 @@ services:
       retries: 5
 
   # ===========================================================================
-  # POSTGRES AUTH - PostgreSQL for Modern Authentication (Mirrored from Docker Hub to GHCR)
+  # POSTGRES AUTH - PostgreSQL for Authentication
   # ===========================================================================
   postgres_auth:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-postgres:16-alpine
+    image: postgres:16-alpine
     container_name: postgres_auth
     restart: unless-stopped
     environment:
@@ -319,38 +333,10 @@ services:
       retries: 5
 
   # ===========================================================================
-  # PGADMIN - PostgreSQL Administration Tool (DISABLED - Docker Hub issues)
-  # ===========================================================================
-  # Uncomment when Docker Hub is accessible:
-  # pgadmin:
-  #   image: dpage/pgadmin4:latest
-  #   container_name: pgadmin
-  #   restart: unless-stopped
-  #   environment:
-  #     - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@simorgh.local}
-  #     - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin123}
-  #     - PGADMIN_CONFIG_SERVER_MODE=True
-  #     - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
-  #   volumes:
-  #     - pgadmin_data:/var/lib/pgadmin
-  #   ports:
-  #     - "5050:80"
-  #   networks:
-  #     - app_net
-  #   depends_on:
-  #     postgres_auth:
-  #       condition: service_healthy
-
-  # ===========================================================================
-  # NGINX - Reverse Proxy (HTTP-only, TLS terminated at host nginx)
-
-  # NGINX - Reverse Proxy (Mirrored from Docker Hub to GHCR)
-  # ===========================================================================
-  # SSL disabled until firewall allows .well-known paths for Let's Encrypt
-
+  # NGINX - Reverse Proxy
   # ===========================================================================
   nginx:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-nginx:alpine
+    image: nginx:alpine
     container_name: nginx
     depends_on:
       backend:
@@ -358,7 +344,7 @@ services:
       frontend:
         condition: service_started
     ports:
-      - "85:80"    # HTTP - mapped to port 85 (host nginx proxies here)
+      - "85:80"
     environment:
       - TZ=Asia/Tehran
     volumes:
@@ -366,80 +352,12 @@ services:
       - ./nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx_configs/includes/locations.inc:/etc/nginx/includes/locations.inc:ro
       - ./static:/usr/share/nginx/html/old:ro
+      - certbot_webroot:/var/www/certbot:ro
       - nginx-cache:/data/nginx/cache
       - nginx-logs:/var/log/nginx
     networks:
       - app_net
     restart: unless-stopped
-
-  # ===========================================================================
-  # CERTBOT SERVICES - DISABLED (firewall blocks .well-known paths)
-  # ===========================================================================
-  # To re-enable SSL:
-  # 1. Get firewall admin to whitelist /.well-known/acme-challenge/ paths
-  # 2. Or obtain DNS access for DNS-01 challenge
-  # 3. Uncomment certbot_init, certbot_renew, nginx_reloader below
-  # 4. Add nginx dependency on certbot_init
-  # 5. Add port 443:443 to nginx
-  # 6. Update nginx config to enable HTTPS server blocks
-  # ===========================================================================
-
-  # certbot_init:
-  #   image: certbot/certbot:latest
-  #   container_name: certbot_init
-  #   environment:
-  #     DOMAIN: ${DOMAIN:-simorghai.electrokavir.com}
-  #     CERTBOT_EMAIL: ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
-  #   ports:
-  #     - "80:80"
-  #   volumes:
-  #     - letsencrypt:/etc/letsencrypt
-  #   command: >-
-  #     certonly --standalone --preferred-challenges http
-  #     --http-01-address 0.0.0.0
-  #     -d ${DOMAIN:-simorghai.electrokavir.com}
-  #     -m ${CERTBOT_EMAIL:-simorgh.ekc.ai@gmail.com}
-  #     --agree-tos --non-interactive --keep-until-expiring
-  #   networks:
-  #     - app_net
-  #   restart: "no"
-
-  # certbot_renew:
-  #   image: certbot/certbot:latest
-  #   container_name: certbot_renew
-  #   depends_on:
-  #     certbot_init:
-  #       condition: service_completed_successfully
-  #   entrypoint: /bin/sh
-  #   command: -c "while :; do certbot renew --webroot -w /var/www/certbot; sleep ${RENEW_INTERVAL:-12h}; done"
-  #   volumes:
-  #     - letsencrypt:/etc/letsencrypt
-  #     - certbot_webroot:/var/www/certbot
-  #   networks:
-  #     - app_net
-  #   restart: unless-stopped
-
-  # nginx_reloader:
-  #   image: alpine:3.20
-  #   container_name: nginx_reloader
-  #   depends_on:
-  #     - nginx
-  #   volumes:
-  #     - letsencrypt:/etc/letsencrypt:ro
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #   command: >
-  #     sh -c '
-  #       apk add --no-cache inotify-tools docker-cli >/dev/null;
-  #       echo "watch /etc/letsencrypt/live changes";
-  #       while :; do
-  #         inotifywait -e create,modify,delete,move -r /etc/letsencrypt/live >/dev/null 2>&1;
-  #         echo "certs changed: reloading nginx";
-  #         docker kill -s HUP nginx >/dev/null 2>&1 || true;
-  #       done
-  #     '
-  #   networks:
-  #     - app_net
-  #   restart: unless-stopped
 
 # =============================================================================
 # NETWORKS

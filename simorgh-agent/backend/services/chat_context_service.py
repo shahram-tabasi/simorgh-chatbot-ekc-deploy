@@ -279,7 +279,7 @@ class ProjectChatHandler:
         """
         Get context for a project chat query.
 
-        Combines Qdrant vector search with CoCoIndex graph context.
+        Combines Qdrant vector search with CoCoIndex graph context and PostgreSQL project data.
 
         Args:
             user_id: User identifier
@@ -289,7 +289,7 @@ class ProjectChatHandler:
             limit: Max vector results
 
         Returns:
-            ChatContext with both vector and graph results
+            ChatContext with vector, graph, and project database results
         """
         try:
             # 1. Vector search in Qdrant (project-scoped)
@@ -304,11 +304,15 @@ class ProjectChatHandler:
             # 2. Graph context via CoCoIndex
             graph_context = await self._get_graph_context(project_number, query)
 
-            # 3. Combine contexts
+            # 3. Project TPMS context from Neo4j (synced data)
+            project_tpms_context = self._get_neo4j_project_context(project_number)
+
+            # 4. Combine all contexts
             combined_context = self._format_combined_context(
                 vector_results,
                 graph_context,
-                project_number
+                project_number,
+                project_tpms_context
             )
 
             return ChatContext(
@@ -395,6 +399,56 @@ class ProjectChatHandler:
             logger.warning(f"Graph context retrieval failed: {e}")
             return None
 
+    def _get_neo4j_project_context(self, project_number: str) -> Optional[Dict[str, Any]]:
+        """
+        Get project TPMS data from Neo4j (synced project data).
+
+        Uses Redis cache first for fast responses, falls back to Neo4j.
+        Cache is populated on cache miss and invalidated when TPMS syncs.
+
+        Args:
+            project_number: Project OENUM
+
+        Returns:
+            Dict with project info, panels, and counts
+        """
+        try:
+            # 1. Check Redis cache first (fast path)
+            if self.redis:
+                cached_context = self.redis.get_cached_project_tpms_context(project_number)
+                if cached_context:
+                    logger.debug(f"📦 Using cached project context for {project_number}")
+                    return cached_context
+
+            # 2. Cache miss - fetch from Neo4j
+            if not self.cocoindex:
+                logger.debug("CoCoIndex adapter not available for Neo4j context")
+                return None
+
+            # Fetch from Neo4j (slow path)
+            context = self.cocoindex.get_project_tpms_context(project_number)
+
+            if context:
+                logger.debug(f"Retrieved Neo4j project context: {context.get('panel_count', 0)} panels, {context.get('feeder_count', 0)} feeders")
+
+                # 3. Cache the result for future requests (30 min TTL)
+                if self.redis:
+                    self.redis.cache_project_tpms_context(project_number, context, ttl=1800)
+
+                    # Also cache panels separately for quick panel lookups
+                    if context.get("panels"):
+                        self.redis.cache_project_panels(
+                            project_number,
+                            context["panels"],
+                            ttl=1800
+                        )
+
+            return context
+
+        except Exception as e:
+            logger.warning(f"Failed to get project database context: {e}")
+            return None
+
     def _extract_query_entities(self, query: str) -> List[str]:
         """Extract potential entity references from query"""
         # Simple keyword extraction
@@ -407,15 +461,17 @@ class ProjectChatHandler:
         self,
         vector_results: List[Dict[str, Any]],
         graph_context: Optional[Dict[str, Any]],
-        project_number: str
+        project_number: str,
+        project_db_context: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        Format combined vector + graph context for LLM.
+        Format combined vector + graph + project database context for LLM.
 
         Args:
             vector_results: Qdrant search results
             graph_context: Graph data from CoCoIndex
             project_number: Project number
+            project_db_context: Project data from PostgreSQL
 
         Returns:
             Formatted context string
@@ -425,6 +481,69 @@ class ProjectChatHandler:
         # Project header
         parts.append(f"# Project: {project_number}")
         parts.append("")
+
+        # Project TPMS context from Neo4j (synced data - HIGHEST PRIORITY)
+        if project_db_context:
+            # Project info (from Neo4j Project node)
+            if project_db_context.get("project_info"):
+                info = project_db_context["project_info"]
+                parts.append("## Project Information (from TPMS)")
+                parts.append(f"- **Project Name**: {info.get('project_name') or info.get('name', 'N/A')}")
+                if info.get('project_name_fa') or info.get('name_fa'):
+                    parts.append(f"- **Project Name (Persian)**: {info.get('project_name_fa') or info.get('name_fa')}")
+                parts.append(f"- **Category**: {info.get('order_category') or info.get('category', 'N/A')}")
+                parts.append(f"- **Date**: {info.get('oe_date') or info.get('date', 'N/A')}")
+                parts.append(f"- **Project Expert**: {info.get('project_expert', 'N/A')}")
+                parts.append(f"- **Technical Supervisor**: {info.get('technical_supervisor', 'N/A')}")
+                parts.append(f"- **Technical Expert**: {info.get('technical_expert', 'N/A')}")
+                parts.append("")
+
+            # Project identity (additional specs)
+            if project_db_context.get("project_identity"):
+                identity = project_db_context["project_identity"]
+                if any(identity.values()):
+                    parts.append("## Project Technical Specifications")
+                    if identity.get('delivery_date'):
+                        parts.append(f"- **Delivery Date**: {identity.get('delivery_date')}")
+                    if identity.get('above_sea_level'):
+                        parts.append(f"- **Altitude**: {identity.get('above_sea_level')}")
+                    if identity.get('average_temperature'):
+                        parts.append(f"- **Average Temperature**: {identity.get('average_temperature')}")
+                    if identity.get('wire_brand'):
+                        parts.append(f"- **Wire Brand**: {identity.get('wire_brand')}")
+                    if identity.get('isolation_value'):
+                        parts.append(f"- **Isolation**: {identity.get('isolation_value')}")
+                    parts.append("")
+
+            # Summary counts
+            parts.append("## Project Summary")
+            parts.append(f"- **Total Panels**: {project_db_context.get('panel_count', 0)}")
+            parts.append(f"- **Total Feeders/Loads**: {project_db_context.get('feeder_count', 0)}")
+            parts.append(f"- **Total Equipment Items**: {project_db_context.get('equipment_count', 0)}")
+            parts.append("")
+
+            # Panels list (from Neo4j Panel nodes)
+            if project_db_context.get("panels"):
+                parts.append("## Panels/Switchgears")
+                for panel in project_db_context["panels"]:
+                    panel_name = panel.get('plane_name') or panel.get('name') or f"Panel {panel.get('panel_id')}"
+                    panel_type = panel.get('plane_type') or panel.get('type') or 'N/A'
+                    voltage = panel.get('voltage_rate') or panel.get('rated_voltage') or 'N/A'
+                    amperage = panel.get('switch_amperage') or panel.get('amperage') or 'N/A'
+                    ip = panel.get('ip_value') or panel.get('ip') or 'N/A'
+                    cell_count = panel.get('cell_count') or 'N/A'
+
+                    # feeder_count is included in each panel from Neo4j query
+                    feeder_count = panel.get('feeder_count', 0)
+
+                    parts.append(f"### {panel_name}")
+                    parts.append(f"- Type: {panel_type}")
+                    parts.append(f"- Voltage: {voltage}")
+                    parts.append(f"- Amperage: {amperage}")
+                    parts.append(f"- IP Rating: {ip}")
+                    parts.append(f"- Cell Count: {cell_count}")
+                    parts.append(f"- Number of Feeders: {feeder_count}")
+                    parts.append("")
 
         # Graph context (prioritized)
         if graph_context:
