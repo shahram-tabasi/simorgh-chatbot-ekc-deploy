@@ -341,7 +341,7 @@ services:
   #       condition: service_healthy
 
   # ===========================================================================
-  # NGINX - Reverse Proxy with Self-Signed SSL
+  # NGINX - Reverse Proxy (HTTP-only, TLS terminated at host nginx)
   # ===========================================================================
   nginx:
     image: nginx:alpine
@@ -352,16 +352,13 @@ services:
       frontend:
         condition: service_started
     ports:
-      - "85:80"      # HTTP (redirects to HTTPS)
-      - "8443:443"   # HTTPS with self-signed certificate
+      - "85:80"    # HTTP - mapped to port 85 (host nginx proxies here)
     environment:
       - TZ=Asia/Tehran
     volumes:
       - ./nginx_configs/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx_configs/includes/locations.inc:/etc/nginx/includes/locations.inc:ro
-      - ./nginx_configs/ssl/server.crt:/etc/nginx/ssl/server.crt:ro
-      - ./nginx_configs/ssl/server.key:/etc/nginx/ssl/server.key:ro
       - ./static:/usr/share/nginx/html/old:ro
       - nginx-cache:/data/nginx/cache
       - nginx-logs:/var/log/nginx
