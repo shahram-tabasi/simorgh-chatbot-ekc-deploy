@@ -23,7 +23,7 @@ on:
       export_mirrors:
         description: 'Also export mirrored third-party images'
         required: false
-        default: 'true'
+        default: true
         type: boolean
 
 env:
@@ -80,7 +80,7 @@ jobs:
   export-mirror-images:
     name: Export Mirrored Images
     runs-on: ubuntu-latest
-    if: inputs.export_mirrors == 'true'
+    if: inputs.export_mirrors
     permissions:
       contents: read
       packages: read
