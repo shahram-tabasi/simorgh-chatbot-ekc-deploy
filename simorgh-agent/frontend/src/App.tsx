@@ -51,7 +51,9 @@ function MainChat() {
   const [currentAiMode, setCurrentAiMode] = React.useState<'online' | 'offline'>('online');
 
   // Derive a unified userId that works for both legacy (TPMS) and modern (email/Google) users
-  const userId = user ? (isLegacyUser(user) ? user.EMPUSERNAME : isModernUser(user) ? user.email : undefined) : undefined;
+  // Modern users: use user.id (UUID from PostgreSQL) which matches JWT "sub" claim
+  // Legacy users: use EMPUSERNAME which matches JWT "sub" claim
+  const userId = user ? (isLegacyUser(user) ? user.EMPUSERNAME : isModernUser(user) ? user.id : undefined) : undefined;
 
   const {
     projects,
