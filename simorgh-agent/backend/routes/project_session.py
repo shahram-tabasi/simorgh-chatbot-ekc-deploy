@@ -14,6 +14,7 @@ Author: Simorgh Industrial Assistant
 """
 
 import logging
+from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel, Field
@@ -120,12 +121,13 @@ async def select_project(
 
     This will:
     1. Initialize project databases if needed (PostgreSQL, Qdrant, Neo4j)
-    2. Fetch latest data from TPMS
-    3. Sync to project-specific databases
-    4. Return project details and sync status
+    2. Start background sync from TPMS (non-blocking)
+    3. Return immediately with sync_status = "in_progress"
 
-    The sync runs asynchronously - check /sync/status for completion.
+    Poll /sync/progress/{oenum} to check sync progress.
     """
+    import asyncio
+    import json
     oenum = request.oenum.strip()
 
     try:
@@ -147,22 +149,54 @@ async def select_project(
         except Exception as e:
             logger.warning(f"Could not mark project active: {e}")
 
-        # Initialize databases
+        # Quick database check (fast, synchronous)
         db_manager = get_project_database_manager()
-        db_status = db_manager.select_project(oenum, project_main.project_name)
+        db_status = {
+            "postgresql": db_manager.check_project_db_exists(oenum),
+            "qdrant": db_manager.check_project_collection_exists(oenum),
+            "neo4j": db_manager.check_project_graph_exists(oenum),
+        }
+        all_ready = all(db_status.values())
 
-        # Start sync (can run in background for large projects)
-        if request.force_sync or not db_status.get("all_ready"):
-            # Run sync synchronously for now (can be made async)
-            sync_result = await sync_service.sync_project(oenum)
-            sync_status = sync_result.get("status", "unknown")
-            missing_count = len(sync_result.get("missing_data", []))
-        else:
-            # Quick check if data is fresh
-            sync_status = "cached"
-            missing_count = 0
-            sync_result = None
+        # Initialize sync progress in Redis
+        try:
+            from services.redis_service import get_redis_service
+            redis = get_redis_service()
+            initial_progress = {
+                "oenum": oenum,
+                "status": "in_progress",
+                "current_step": 0,
+                "total_steps": 7,
+                "step_name": "starting",
+                "progress_percent": 0,
+                "started_at": datetime.utcnow().isoformat(),
+            }
+            redis.set(f"project_sync:{oenum}", json.dumps(initial_progress), ex=3600, db="project")
+        except Exception as e:
+            logger.warning(f"Failed to init progress in Redis: {e}")
 
+        # Start sync in background (non-blocking)
+        async def background_sync():
+            try:
+                await sync_service.sync_project(oenum, track_progress=True)
+            except Exception as e:
+                logger.error(f"Background sync failed for {oenum}: {e}", exc_info=True)
+                # Update Redis with error
+                try:
+                    redis = get_redis_service()
+                    error_status = {
+                        "oenum": oenum,
+                        "status": "failed",
+                        "error": str(e),
+                        "completed_at": datetime.utcnow().isoformat(),
+                    }
+                    redis.set(f"project_sync:{oenum}", json.dumps(error_status), ex=3600, db="project")
+                except:
+                    pass
+
+        # Launch background task - returns immediately
+        asyncio.create_task(background_sync())
+        logger.info(f"🔄 Background sync started for project {oenum}")
         logger.info(f"User {current_user} selected project {oenum}")
 
         return ProjectSelectResponse(
@@ -171,10 +205,10 @@ async def select_project(
             project_name=project_main.project_name,
             id_project_main=project_main.id_project_main,
             databases=db_status,
-            sync_status=sync_status,
-            sync_details=sync_result,
-            missing_data_count=missing_count,
-            message=f"Project {oenum} activated successfully"
+            sync_status="in_progress",  # Always in_progress since sync runs in background
+            sync_details=None,
+            missing_data_count=0,
+            message=f"Project {oenum} sync started. Poll /sync/progress/{oenum} for status."
         )
 
     except HTTPException:
@@ -194,19 +228,84 @@ async def sync_project(
     sync_service: ProjectSyncService = Depends(get_sync_service),
 ):
     """
-    Manually trigger a full sync for a project.
+    Manually trigger a full sync for a project (runs in background).
 
     Use this to refresh project data from TPMS.
+    Poll /sync/progress/{oenum} to check progress.
     """
+    import asyncio
+    import json
+
     try:
-        result = await sync_service.sync_project(oenum)
-        return result
+        # Initialize progress in Redis
+        try:
+            from services.redis_service import get_redis_service
+            redis = get_redis_service()
+            initial_progress = {
+                "oenum": oenum,
+                "status": "in_progress",
+                "current_step": 0,
+                "total_steps": 7,
+                "step_name": "starting",
+                "progress_percent": 0,
+                "started_at": datetime.utcnow().isoformat(),
+            }
+            redis.set(f"project_sync:{oenum}", json.dumps(initial_progress), ex=3600, db="project")
+        except Exception as e:
+            logger.warning(f"Failed to init progress in Redis: {e}")
+
+        # Run sync in background
+        async def background_sync():
+            try:
+                await sync_service.sync_project(oenum, track_progress=True)
+            except Exception as e:
+                logger.error(f"Background sync failed for {oenum}: {e}", exc_info=True)
+
+        asyncio.create_task(background_sync())
+        return {"status": "started", "message": f"Sync started for {oenum}. Poll /sync/progress/{oenum} for status."}
     except Exception as e:
         logger.error(f"Sync failed for {oenum}: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Sync failed: {str(e)}"
         )
+
+
+@router.get("/sync/progress/{oenum}")
+async def get_sync_progress(
+    oenum: str,
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Get real-time sync progress for a project.
+
+    Returns current step, progress percentage, and status.
+    Poll this endpoint during project creation/sync to show progress to user.
+    """
+    import json
+    try:
+        from services.redis_service import get_redis_service
+        redis = get_redis_service()
+
+        progress_data = redis.get(f"project_sync:{oenum}", db="project")
+
+        if not progress_data:
+            # No sync in progress or completed
+            return {
+                "oenum": oenum,
+                "status": "no_sync_data",
+                "message": "No sync in progress or data expired"
+            }
+
+        return json.loads(progress_data)
+
+    except Exception as e:
+        logger.error(f"Failed to get sync progress for {oenum}: {e}")
+        return {
+            "oenum": oenum,
+            "status": "error",
+            "error": str(e)
+        }
 
 
 @router.get("/sync/status/{oenum}", response_model=ProjectSyncStatusResponse)

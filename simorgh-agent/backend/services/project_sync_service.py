@@ -89,7 +89,7 @@ class ProjectSyncService:
     # MAIN SYNC METHOD
     # ==========================================================================
 
-    async def sync_project(self, oenum: str) -> Dict[str, Any]:
+    async def sync_project(self, oenum: str, track_progress: bool = True) -> Dict[str, Any]:
         """
         Synchronize project data from TPMS.
 
@@ -97,6 +97,7 @@ class ProjectSyncService:
 
         Args:
             oenum: Project OENUM
+            track_progress: Whether to track progress in Redis for polling
 
         Returns:
             Dict with sync results
@@ -106,23 +107,48 @@ class ProjectSyncService:
 
         result = {
             "oenum": oenum,
-            "started_at": start_time,
+            "started_at": start_time.isoformat(),
             "completed_at": None,
             "status": "in_progress",
+            "current_step": 0,
+            "total_steps": 7,
+            "step_name": "initializing",
             "steps": {},
             "errors": [],
             "warnings": [],
             "missing_data": [],
         }
 
+        # Helper to update progress in Redis
+        def update_progress(step: int, step_name: str, details: dict = None):
+            result["current_step"] = step
+            result["step_name"] = step_name
+            result["progress_percent"] = int((step / 7) * 100)
+            if details:
+                result["steps"][step_name] = details
+            if track_progress:
+                try:
+                    redis = self.redis or get_redis_service()
+                    import json
+                    redis.set(
+                        f"project_sync:{oenum}",
+                        json.dumps(result, default=str),
+                        ex=3600,  # 1 hour TTL
+                        db="project"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update progress in Redis: {e}")
+
         try:
             # Step 1: Fetch from TPMS
+            update_progress(1, "Fetching project data from TPMS")
             logger.info(f"[{oenum}] Step 1: Fetching data from TPMS")
             tpms_data = self.tpms.fetch_complete_project_data(oenum)
 
             if not tpms_data:
                 result["status"] = "failed"
                 result["errors"].append(f"Project {oenum} not found in TPMS")
+                update_progress(1, "failed", {"error": "Project not found"})
                 return result
 
             result["steps"]["tpms_fetch"] = {
@@ -133,6 +159,7 @@ class ProjectSyncService:
             }
 
             # Step 2: Initialize project databases if needed
+            update_progress(2, "Initializing project databases")
             logger.info(f"[{oenum}] Step 2: Initializing databases")
             project_name = tpms_data.project_main.project_name
             db_status = self.db_manager.select_project(oenum, project_name)
@@ -143,6 +170,7 @@ class ProjectSyncService:
                 result["warnings"].append("Some databases failed to initialize")
 
             # Step 3: Resolve property codes
+            update_progress(3, "Resolving technical properties")
             logger.info(f"[{oenum}] Step 3: Resolving property codes")
             resolved_data, missing = self._resolve_properties(tpms_data)
             result["missing_data"] = missing
@@ -152,21 +180,25 @@ class ProjectSyncService:
             }
 
             # Step 4: Store in PostgreSQL
+            update_progress(4, "Storing data in PostgreSQL")
             logger.info(f"[{oenum}] Step 4: Storing in PostgreSQL")
             pg_result = self._store_in_postgresql(oenum, tpms_data, resolved_data)
             result["steps"]["postgresql_store"] = pg_result
 
             # Step 5: Build Neo4j graph
+            update_progress(5, "Building knowledge graph (Neo4j)")
             logger.info(f"[{oenum}] Step 5: Building Neo4j graph")
             neo4j_result = await self._build_neo4j_graph(oenum, tpms_data, resolved_data)
             result["steps"]["neo4j_graph"] = neo4j_result
 
             # Step 6: Track missing data
+            update_progress(6, "Recording missing data items")
             if missing:
                 logger.info(f"[{oenum}] Step 6: Recording {len(missing)} missing data items")
                 self._record_missing_data(oenum, missing)
 
             # Step 7: Invalidate Redis cache (ensures fresh data for LLM context)
+            update_progress(7, "Finalizing and clearing cache")
             logger.info(f"[{oenum}] Step 7: Invalidating Redis cache")
             if self.redis:
                 self.redis.invalidate_project_cache(oenum)
@@ -183,10 +215,16 @@ class ProjectSyncService:
 
             # Complete
             result["status"] = "success"
-            result["completed_at"] = datetime.utcnow()
+            result["completed_at"] = datetime.utcnow().isoformat()
             result["duration_seconds"] = (
-                result["completed_at"] - start_time
+                datetime.utcnow() - start_time
             ).total_seconds()
+            result["current_step"] = 7
+            result["step_name"] = "completed"
+            result["progress_percent"] = 100
+
+            # Final update to Redis
+            update_progress(7, "completed", {"duration": result["duration_seconds"]})
 
             logger.info(f"✅ Sync completed for {oenum} in {result['duration_seconds']:.2f}s")
 
@@ -194,7 +232,8 @@ class ProjectSyncService:
             logger.error(f"Sync failed for {oenum}: {e}", exc_info=True)
             result["status"] = "failed"
             result["errors"].append(str(e))
-            result["completed_at"] = datetime.utcnow()
+            result["completed_at"] = datetime.utcnow().isoformat()
+            update_progress(result["current_step"], "failed", {"error": str(e)})
 
         return result
 

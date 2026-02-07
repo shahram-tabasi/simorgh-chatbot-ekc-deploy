@@ -1,10 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Project, Chat, Message } from '../types';
 import axios from 'axios';
 import { showSuccess, showError, showInfo, showConfirm } from '../utils/alerts';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const initialProjects: Project[] = [];
+
+// Type for sync progress
+interface SyncProgress {
+  oenum: string;
+  status: 'in_progress' | 'success' | 'failed' | 'no_sync_data';
+  current_step?: number;
+  total_steps?: number;
+  step_name?: string;
+  progress_percent?: number;
+  error?: string;
+}
 
 export function useProjects(userId?: string) {
   const [projects, setProjects] = useState<Project[]>(initialProjects);
@@ -13,6 +24,7 @@ export function useProjects(userId?: string) {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [showGeneralChats, setShowGeneralChats] = useState(true);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
 
   // Load data from backend and localStorage on mount (per user)
   // CRITICAL: Reset state when userId changes (user logout/login)
@@ -233,6 +245,56 @@ export function useProjects(userId?: string) {
     }
   }, [generalChats, userId]);
 
+  // Poll for sync progress
+  const pollSyncProgress = useCallback(async (oenum: string, maxAttempts: number = 120): Promise<void> => {
+    const token = localStorage.getItem('simorgh_token');
+    if (!token) return;
+
+    let attempts = 0;
+    const pollInterval = 1000; // 1 second
+
+    const poll = async (): Promise<void> => {
+      try {
+        const response = await axios.get(`${API_BASE}/project-session/sync/progress/${oenum}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        const progress: SyncProgress = response.data;
+        setSyncProgress(progress);
+
+        if (progress.status === 'success') {
+          console.log('✅ Project sync completed:', oenum);
+          showSuccess('Project Ready!', 'All project data has been synced successfully.');
+          setTimeout(() => setSyncProgress(null), 3000);
+          return;
+        }
+
+        if (progress.status === 'failed') {
+          console.error('❌ Project sync failed:', progress.error);
+          showError('Sync Failed', progress.error || 'Project data sync failed. Some features may be limited.');
+          setTimeout(() => setSyncProgress(null), 5000);
+          return;
+        }
+
+        attempts++;
+        if (attempts < maxAttempts && progress.status === 'in_progress') {
+          setTimeout(poll, pollInterval);
+        } else if (attempts >= maxAttempts) {
+          console.warn('⚠️ Sync polling timeout');
+          setSyncProgress(null);
+        }
+      } catch (error) {
+        console.error('Error polling sync status:', error);
+        attempts++;
+        if (attempts < maxAttempts) {
+          setTimeout(poll, pollInterval * 2); // Slower retry on error
+        }
+      }
+    };
+
+    await poll();
+  }, []);
+
   const createProject = async (oenum: string, name: string, firstPageTitle: string): Promise<boolean> => {
     if (!userId) {
       console.error('Cannot create project: userId missing');
@@ -240,6 +302,14 @@ export function useProjects(userId?: string) {
     }
 
     setIsCreatingProject(true);
+    setSyncProgress({
+      oenum,
+      status: 'in_progress',
+      current_step: 0,
+      total_steps: 7,
+      step_name: 'Starting project creation...',
+      progress_percent: 0
+    });
 
     try {
       const token = localStorage.getItem('simorgh_token');
@@ -249,7 +319,7 @@ export function useProjects(userId?: string) {
         return false;
       }
 
-      // Create project in Neo4j via backend
+      // Create project in Neo4j via backend (returns immediately, sync runs in background)
       console.log('📤 Creating TPMS project:', oenum, name);
       const projectResponse = await axios.post(`${API_BASE}/projects`, {
         project_number: oenum,
@@ -261,10 +331,11 @@ export function useProjects(userId?: string) {
       }, {
         headers: {
           'Authorization': `Bearer ${token}`
-        }
+        },
+        timeout: 30000 // 30 second timeout for initial request
       });
 
-      console.log('✅ Project created in Neo4j:', projectResponse.data);
+      console.log('✅ Project node created:', projectResponse.data);
 
       // Create first page/chat for the project
       const chatResponse = await axios.post(`${API_BASE}/chats`, {
@@ -305,15 +376,20 @@ export function useProjects(userId?: string) {
 
       console.log('✅ Project and first page created successfully');
 
-      // Show success with sync info
-      const syncInfo = projectResponse.data.sync_in_progress
-        ? '\n\n🔄 TPMS data is syncing in the background. You can start chatting now!'
-        : '';
-      showSuccess('Project Created!', `Project "${name}" created successfully!${syncInfo}`);
+      // Show initial success - user can start chatting while sync continues
+      showInfo('Project Created!', 'You can start chatting now. Data sync is running in background.');
+
+      // Start polling for sync progress in background
+      if (projectResponse.data.sync_in_progress) {
+        pollSyncProgress(oenum);
+      } else {
+        setSyncProgress(null);
+      }
 
       return true;
     } catch (error: any) {
       console.error('❌ Failed to create project:', error);
+      setSyncProgress(null);
       if (error.response?.status === 400 && error.response?.data?.detail?.includes('already exists')) {
         showError('Project Exists', error.response.data.detail);
       } else {
@@ -830,6 +906,7 @@ export function useProjects(userId?: string) {
     activeChat,
     showGeneralChats,
     isCreatingProject,
+    syncProgress,
     createProject,
     createChat,
     createGeneralChat,

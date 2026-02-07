@@ -524,17 +524,22 @@ async def create_project(
     Create a new project (requires authentication)
 
     Creates the root Project node in Neo4j with owner information.
-    Validates that project name is unique for this user.
+    All heavy initialization (PostgreSQL, Qdrant, TPMS sync) runs in background.
+
+    Poll /api/project-session/sync/progress/{oenum} to check initialization status.
     """
+    import asyncio
+    import json
+
     try:
-        # Check for duplicate project name
+        # Check for duplicate project name (fast check)
         if neo4j.check_duplicate_project(current_user, project.project_name):
             raise HTTPException(
                 status_code=400,
                 detail=f"Project with name '{project.project_name}' already exists. Please choose a different name."
             )
 
-        # Create project with owner_id
+        # Create minimal project node in Neo4j (fast - just a node)
         project_node = neo4j.create_project(
             project_number=project.project_number,
             project_name=project.project_name,
@@ -545,57 +550,120 @@ async def create_project(
             description=project.description or ""
         )
 
-        logger.info(f"✅ User {current_user} created project: {project.project_name}")
+        logger.info(f"✅ User {current_user} created project node: {project.project_name}")
 
-        # NOTE: Extraction guides are NO LONGER created at project initialization.
-        # They will be created dynamically when specification documents are processed
-        # via CoCoIndex flows. This keeps the project graph clean with only the
-        # Document/Drawing/Identity hierarchy.
-
-        # Initialize per-project databases (PostgreSQL, Qdrant) and sync from TPMS
-        project_db_status = None
+        # Initialize progress tracking in Redis
         try:
-            from services.project_database_manager import get_project_database_manager
-            from services.project_sync_service import get_project_sync_service
-            import asyncio
+            from services.redis_service import get_redis_service
+            redis = get_redis_service()
+            initial_progress = {
+                "oenum": project.project_number,
+                "project_name": project.project_name,
+                "status": "in_progress",
+                "current_step": 0,
+                "total_steps": 7,
+                "step_name": "Project node created, starting initialization...",
+                "progress_percent": 5,
+                "started_at": datetime.now().isoformat(),
+            }
+            redis.set(f"project_sync:{project.project_number}", json.dumps(initial_progress), ex=3600, db="project")
+        except Exception as e:
+            logger.warning(f"Failed to init progress in Redis: {e}")
 
-            db_manager = get_project_database_manager(neo4j_service=neo4j)
-            db_status = db_manager.initialize_project(
-                oenum=project.project_number,
-                project_name=project.project_name
-            )
-            logger.info(f"✅ Per-project databases initialized: {db_status}")
+        # Run ALL heavy initialization in background (non-blocking)
+        async def background_initialization():
+            try:
+                from services.project_database_manager import get_project_database_manager
+                from services.project_sync_service import get_project_sync_service
+                from services.redis_service import get_redis_service
 
-            # Sync data from TPMS in BACKGROUND (non-blocking)
-            # This allows project creation to return immediately
-            async def background_sync():
+                redis = get_redis_service()
+
+                def update_progress(step: int, step_name: str, percent: int):
+                    try:
+                        progress = {
+                            "oenum": project.project_number,
+                            "project_name": project.project_name,
+                            "status": "in_progress",
+                            "current_step": step,
+                            "total_steps": 7,
+                            "step_name": step_name,
+                            "progress_percent": percent,
+                        }
+                        redis.set(f"project_sync:{project.project_number}", json.dumps(progress), ex=3600, db="project")
+                    except:
+                        pass
+
+                # Step 1: Initialize databases
+                update_progress(1, "Creating PostgreSQL database...", 10)
+                db_manager = get_project_database_manager(neo4j_service=neo4j)
+
+                # Create PostgreSQL database
                 try:
-                    sync_service = get_project_sync_service()
-                    sync_service.set_neo4j_service(neo4j)
-                    sync_result = await sync_service.sync_project(project.project_number)
-                    logger.info(f"✅ TPMS sync completed for project {project.project_number}: {sync_result.get('status')}")
-                    if sync_result.get('errors'):
-                        logger.warning(f"⚠️ TPMS sync had errors: {sync_result['errors']}")
-                except Exception as sync_error:
-                    logger.warning(f"⚠️ TPMS background sync failed: {sync_error}")
-                    import traceback
-                    logger.warning(traceback.format_exc())
+                    db_manager.create_project_database(project.project_number)
+                    logger.info(f"✅ PostgreSQL database created for {project.project_number}")
+                except Exception as e:
+                    logger.warning(f"PostgreSQL init warning: {e}")
 
-            # Start sync in background - don't wait for it
-            asyncio.create_task(background_sync())
-            logger.info(f"🔄 TPMS sync started in background for project {project.project_number}")
+                # Step 2: Create Qdrant collection
+                update_progress(2, "Creating Qdrant vector collection...", 20)
+                try:
+                    db_manager.create_project_collection(project.project_number)
+                    logger.info(f"✅ Qdrant collection created for {project.project_number}")
+                except Exception as e:
+                    logger.warning(f"Qdrant init warning: {e}")
 
-            project_db_status = db_status
-            project_db_status["sync_status"] = "in_progress"
-        except Exception as db_error:
-            logger.warning(f"⚠️ Per-project DB init failed (non-fatal): {db_error}")
-            project_db_status = {"error": str(db_error)}
+                # Step 3: Sync from TPMS (this includes graph building)
+                update_progress(3, "Syncing data from TPMS...", 30)
+                sync_service = get_project_sync_service()
+                sync_service.set_neo4j_service(neo4j)
+                sync_result = await sync_service.sync_project(project.project_number, track_progress=True)
+
+                if sync_result.get('status') == 'success':
+                    logger.info(f"✅ Project initialization completed for {project.project_number}")
+                    # Final success status
+                    final_status = {
+                        "oenum": project.project_number,
+                        "project_name": project.project_name,
+                        "status": "success",
+                        "current_step": 7,
+                        "total_steps": 7,
+                        "step_name": "Project ready!",
+                        "progress_percent": 100,
+                        "completed_at": datetime.now().isoformat(),
+                        "sync_details": sync_result,
+                    }
+                    redis.set(f"project_sync:{project.project_number}", json.dumps(final_status, default=str), ex=3600, db="project")
+                else:
+                    logger.warning(f"⚠️ Project sync had issues: {sync_result.get('errors')}")
+
+            except Exception as init_error:
+                logger.error(f"❌ Background initialization failed for {project.project_number}: {init_error}")
+                import traceback
+                logger.error(traceback.format_exc())
+                # Update Redis with error
+                try:
+                    error_status = {
+                        "oenum": project.project_number,
+                        "status": "failed",
+                        "error": str(init_error),
+                        "completed_at": datetime.now().isoformat(),
+                    }
+                    redis.set(f"project_sync:{project.project_number}", json.dumps(error_status), ex=3600, db="project")
+                except:
+                    pass
+
+        # Start background initialization - returns immediately
+        asyncio.create_task(background_initialization())
+        logger.info(f"🔄 Background initialization started for project {project.project_number}")
 
         return {
             "status": "success",
             "project": project_node,
-            "guides_initialized": 0,  # Guides created during document processing, not here
-            "project_databases": project_db_status
+            "guides_initialized": 0,
+            "sync_in_progress": True,
+            "message": "Project created. Databases initializing in background.",
+            "poll_status_url": f"/api/project-session/sync/progress/{project.project_number}"
         }
 
     except HTTPException:
