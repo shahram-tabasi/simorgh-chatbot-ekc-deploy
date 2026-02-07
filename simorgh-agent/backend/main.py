@@ -2528,6 +2528,19 @@ async def send_chat_message(
 You help users with electrical panel specifications, power distribution, protection devices, and system design.
 Provide accurate, technical responses based on IEC and IEEE standards."""
 
+        # Always inject user identity into system prompt (independent of context service)
+        try:
+            user_profile = redis.get_user_profile(_user_id) if redis else None
+            if user_profile:
+                user_display = user_profile.get('display_name') or user_profile.get('first_name') or _user_id
+                system_prompt += f"\n\nYou are talking to {user_display} (username: {_user_id})."
+            else:
+                # Fallback: prettify username
+                user_display = _user_id.replace(".", " ").replace("_", " ").title()
+                system_prompt += f"\n\nYou are talking to {user_display} (username: {_user_id})."
+        except Exception as e:
+            logger.debug(f"Could not inject user identity: {e}")
+
         # Add file context if document was uploaded
         if file_context:
             system_prompt += file_context
@@ -2911,6 +2924,19 @@ async def send_chat_message_stream(
     system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
 You help users with electrical panel specifications, power distribution, protection devices, and system design.
 Provide accurate, technical responses based on IEC and IEEE standards."""
+
+    # Always inject user identity into system prompt (independent of context service)
+    try:
+        user_profile = redis.get_user_profile(message.user_id) if redis else None
+        if user_profile:
+            user_display = user_profile.get('display_name') or user_profile.get('first_name') or message.user_id
+            system_prompt += f"\n\nYou are talking to {user_display} (username: {message.user_id})."
+        else:
+            # Fallback: prettify username
+            user_display = message.user_id.replace(".", " ").replace("_", " ").title()
+            system_prompt += f"\n\nYou are talking to {user_display} (username: {message.user_id})."
+    except Exception as e:
+        logger.debug(f"Could not inject user identity: {e}")
 
     # Add unified context if available
     if stream_context_result and stream_context_result.context_text:
