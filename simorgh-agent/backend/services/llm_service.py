@@ -19,6 +19,7 @@ import logging
 import hashlib
 import json
 import asyncio
+import requests
 from typing import List, Dict, Any, Optional, Iterator, Union, AsyncIterator
 from enum import Enum
 import openai
