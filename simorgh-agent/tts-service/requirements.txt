@@ -1,0 +1,12 @@
+# TTS Service - edge-tts based Text-to-Speech
+# Lightweight, no GPU required
+
+# Web framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# Text-to-Speech
+edge-tts>=6.1.0
+
+# Utilities
+python-dotenv==1.0.0

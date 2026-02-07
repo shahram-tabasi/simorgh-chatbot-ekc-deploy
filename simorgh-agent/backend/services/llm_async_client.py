@@ -330,8 +330,11 @@ class AsyncLLMClient:
 
                         if "chunk" in data:
                             yield data["chunk"]
-                        elif "output" in data:
-                            yield data["output"]
+                        elif data.get("status") == "completed":
+                            # Don't yield the 'output' field from completion events
+                            # because all content was already yielded via chunks.
+                            # Yielding 'output' here would duplicate the entire response.
+                            pass
                         elif "text" in data:
                             yield data["text"]
 

@@ -148,6 +148,31 @@ services:
       - PYTHONUNBUFFERED=1
 
   # ===========================================================================
+  # TTS-SERVICE - Text-to-Speech (LOCAL BUILD)
+  # ===========================================================================
+  tts-service:
+    build:
+      context: ./tts-service
+      dockerfile: Dockerfile
+    image: simorgh-tts-service:local
+    container_name: tts-service
+    expose:
+      - "8002"
+    volumes:
+      - tts_cache:/app/cache
+    networks:
+      - app_net
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8002/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # ===========================================================================
   # STT-SERVICE - Speech-to-Text (LOCAL BUILD)
   # ===========================================================================
   stt-service:
@@ -385,6 +410,8 @@ volumes:
   postgres_auth_data:
     driver: local
   stt_models:
+    driver: local
+  tts_cache:
     driver: local
   certbot_webroot:
     driver: local

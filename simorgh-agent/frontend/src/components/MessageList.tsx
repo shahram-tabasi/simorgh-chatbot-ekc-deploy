@@ -11,7 +11,10 @@ import {
   Share2Icon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  Edit2Icon
+  Edit2Icon,
+  Volume2Icon,
+  LoaderIcon,
+  SquareIcon
 } from 'lucide-react';
 import { Message } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -85,6 +88,9 @@ export function MessageList({
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
   const [showCopyConfirmation, setShowCopyConfirmation] = React.useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = React.useState<string | null>(null);
+  const [speechLoading, setSpeechLoading] = React.useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollAnimationRef = useRef<number | null>(null);
   const lastMessageCountRef = useRef(messages.length);
 
@@ -217,6 +223,98 @@ export function MessageList({
       await handleCopy(content);
     }
   };
+
+  // Text-to-Speech: synthesize and play audio for a message
+  const handleSpeak = async (messageId: string, content: string) => {
+    // If already speaking this message, stop it
+    if (speakingMessageId === messageId) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        audioRef.current = null;
+      }
+      setSpeakingMessageId(null);
+      return;
+    }
+
+    // Stop any currently playing audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+
+    if (!content || content.trim().length === 0) return;
+
+    setSpeechLoading(messageId);
+
+    try {
+      // Strip markdown for cleaner speech
+      const plainText = content
+        .replace(/```[\s\S]*?```/g, '') // remove code blocks
+        .replace(/`[^`]+`/g, '') // remove inline code
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links to text
+        .replace(/[#*_~>|]/g, '') // remove markdown symbols
+        .replace(/\n{2,}/g, '. ') // paragraph breaks to periods
+        .replace(/\n/g, ' ') // newlines to spaces
+        .trim();
+
+      // Detect language for voice selection
+      const persianArabicRegex = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+      const voice = persianArabicRegex.test(plainText) ? 'fa-female' : 'en-male';
+
+      const response = await fetch('/api/tts/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: plainText.substring(0, 5000), // Limit text length
+          voice: voice,
+          rate: '+0%',
+          volume: '+0%'
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`TTS failed: ${response.status}`);
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+
+      audio.onended = () => {
+        setSpeakingMessageId(null);
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+      };
+
+      audio.onerror = () => {
+        setSpeakingMessageId(null);
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+        console.error('Audio playback failed');
+      };
+
+      audioRef.current = audio;
+      setSpeechLoading(null);
+      setSpeakingMessageId(messageId);
+      await audio.play();
+    } catch (error) {
+      console.error('TTS error:', error);
+      setSpeechLoading(null);
+      setSpeakingMessageId(null);
+    }
+  };
+
+  // Cleanup audio on unmount
+  React.useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
 
   // Handle reaction (like/dislike)
   const handleReaction = (messageId: string, currentReaction: 'like' | 'dislike' | 'none', newReaction: 'like' | 'dislike') => {
@@ -409,6 +507,28 @@ export function MessageList({
                     title="Copy response"
                   >
                     <CopyIcon className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Text-to-Speech */}
+                  <button
+                    onClick={() => handleSpeak(message.id, message.content)}
+                    disabled={speechLoading === message.id}
+                    className={`p-1.5 rounded-lg hover:bg-white/10 transition-colors ${
+                      speakingMessageId === message.id
+                        ? 'text-blue-400 bg-blue-400/10'
+                        : speechLoading === message.id
+                          ? 'text-yellow-400'
+                          : 'text-gray-400'
+                    }`}
+                    title={speakingMessageId === message.id ? 'Stop speaking' : 'Read aloud'}
+                  >
+                    {speechLoading === message.id ? (
+                      <LoaderIcon className="w-3.5 h-3.5 animate-spin" />
+                    ) : speakingMessageId === message.id ? (
+                      <SquareIcon className="w-3.5 h-3.5" />
+                    ) : (
+                      <Volume2Icon className="w-3.5 h-3.5" />
+                    )}
                   </button>
 
                   {/* Regenerate */}
