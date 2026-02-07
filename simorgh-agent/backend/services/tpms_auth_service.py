@@ -148,7 +148,7 @@ class TPMSAuthService:
 
                 # Query technical_users table
                 query = """
-                SELECT ID, EMPUSERNAME, USER_UID, DraftPassword
+                SELECT *
                 FROM technical_users
                 WHERE EMPUSERNAME = %s
                 LIMIT 1
@@ -182,11 +182,21 @@ class TPMSAuthService:
                 logger.info(f"Authentication successful for {username} (hash type: {hash_type})")
 
                 # Authentication successful - return user info (without password)
-                return {
+                # Include all available fields for profile caching
+                user_info = {
                     "ID": user["ID"],
                     "EMPUSERNAME": user["EMPUSERNAME"],
-                    "USER_UID": user["USER_UID"]
+                    "USER_UID": user.get("USER_UID"),
                 }
+                # Include name/email fields if available in the table
+                for field in ("EMPFIRSTNAME", "EMPLASTNAME", "EMAIL", "EMPROLE",
+                              "EmpFirstName", "EmpLastName", "Email",
+                              "first_name", "last_name", "email"):
+                    if field in user and user[field]:
+                        user_info[field] = user[field]
+
+                logger.debug(f"User fields available: {list(user.keys())}")
+                return user_info
 
         except Exception as e:
             logger.error(f"Authentication error: {e}")
