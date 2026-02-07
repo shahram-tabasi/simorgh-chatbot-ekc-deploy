@@ -7,12 +7,13 @@ FROM python:3.11-slim-bookworm
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
+# Install system dependencies (with BuildKit cache)
 # ffmpeg is required for pydub audio conversion
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
     wget \
@@ -24,8 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libswscale-dev \
     libswresample-dev \
     libavfilter-dev \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    build-essential
 
 # Create app directory
 WORKDIR /app
@@ -36,8 +36,9 @@ RUN mkdir -p /app/models
 # Copy requirements first for layer caching
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies (with BuildKit cache)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # Copy application code
 COPY app.py .
