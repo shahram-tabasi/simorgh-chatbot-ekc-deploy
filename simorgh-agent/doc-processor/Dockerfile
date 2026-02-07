@@ -1,7 +1,11 @@
-FROM python:3.11-slim
+# Pin to specific release for consistent caching
+FROM python:3.11-slim-bookworm
 
 # Install system dependencies for document processing
-RUN apt-get update && apt-get install -y \
+# Use BuildKit cache mount for apt to speed up rebuilds
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     # For PDF processing
     poppler-utils \
     ghostscript \
@@ -17,15 +21,17 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     # For health check
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+    wget
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
+# Copy requirements first (for better layer caching)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Use BuildKit cache mount for pip to speed up rebuilds
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # Copy application code
 COPY main.py .

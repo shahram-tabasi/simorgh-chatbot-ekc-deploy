@@ -39,21 +39,24 @@ ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
 RUN rm -f /etc/apt/sources.list.d/cuda* /etc/apt/sources.list.d/nvidia* || true
 
 # -------------------------------------------------
-#  Install Python 3.11
+#  Install Python 3.11 (with BuildKit cache)
 # -------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-dev \
     python3.11-venv \
     python3-pip \
     curl \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+    wget
 
 # -------------------------------------------------
-#  System tools for OCR & PDF processing
+#  System tools for OCR & PDF processing (with BuildKit cache)
 # -------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     # PDF & OCR tools
     poppler-utils \
     tesseract-ocr \
@@ -73,8 +76,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     # Utilities
     vim \
-    htop \
-    && rm -rf /var/lib/apt/lists/*
+    htop
 
 # -------------------------------------------------
 #  Upgrade pip, setuptools, wheel
@@ -103,11 +105,12 @@ WORKDIR /app
 COPY requirements.txt .
 
 # -------------------------------------------------
-#  Install Python packages
+#  Install Python packages (with BuildKit cache)
 #  Single clean installation from requirements.txt
 # -------------------------------------------------
-RUN echo "=== Installing Python dependencies ===" && \
-    python3.11 -m pip install --no-cache-dir -r requirements.txt && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "=== Installing Python dependencies ===" && \
+    python3.11 -m pip install -r requirements.txt && \
     echo "=== Python dependencies installed ==="
 
 # -------------------------------------------------
