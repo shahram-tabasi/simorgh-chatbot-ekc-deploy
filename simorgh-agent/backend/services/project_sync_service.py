@@ -133,7 +133,7 @@ class ProjectSyncService:
                     redis.set(
                         f"project_sync:{oenum}",
                         json.dumps(result, default=str),
-                        ex=3600,  # 1 hour TTL
+                        ttl=3600,  # 1 hour TTL
                         db="project"
                     )
                 except Exception as e:

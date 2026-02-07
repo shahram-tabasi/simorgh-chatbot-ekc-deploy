@@ -567,7 +567,7 @@ async def create_project(
                 "progress_percent": 5,
                 "started_at": datetime.now().isoformat(),
             }
-            redis.set(f"project_sync:{project.project_number}", json.dumps(initial_progress), ex=3600, db="project")
+            redis.set(f"project_sync:{project.project_number}", json.dumps(initial_progress), ttl=3600, db="project")
         except Exception as e:
             logger.warning(f"Failed to init progress in Redis: {e}")
 
@@ -591,7 +591,7 @@ async def create_project(
                             "step_name": step_name,
                             "progress_percent": percent,
                         }
-                        redis.set(f"project_sync:{project.project_number}", json.dumps(progress), ex=3600, db="project")
+                        redis.set(f"project_sync:{project.project_number}", json.dumps(progress), ttl=3600, db="project")
                     except:
                         pass
 
@@ -645,7 +645,7 @@ async def create_project(
                         "completed_at": datetime.now().isoformat(),
                         "sync_details": sync_result,
                     }
-                    redis.set(f"project_sync:{project.project_number}", json.dumps(final_status, default=str), ex=3600, db="project")
+                    redis.set(f"project_sync:{project.project_number}", json.dumps(final_status, default=str), ttl=3600, db="project")
                 else:
                     logger.warning(f"⚠️ Project sync had issues: {sync_result.get('errors')}")
 
@@ -661,7 +661,7 @@ async def create_project(
                         "error": str(init_error),
                         "completed_at": datetime.now().isoformat(),
                     }
-                    redis.set(f"project_sync:{project.project_number}", json.dumps(error_status), ex=3600, db="project")
+                    redis.set(f"project_sync:{project.project_number}", json.dumps(error_status), ttl=3600, db="project")
                 except:
                     pass
 
@@ -2491,9 +2491,11 @@ async def send_chat_message(
             try:
                 from services.graph_rag_service import GraphRAGService
                 from services.document_overview_service import DocumentOverviewService
+                from cocoindex_flows.cocoindex_adapter import get_cocoindex_adapter
 
                 graph_rag = GraphRAGService(neo4j.driver)
                 doc_overview = DocumentOverviewService(redis_service=redis)
+                cocoindex = get_cocoindex_adapter()
 
                 # 0. DOCUMENT OVERVIEW: Always provide overview of uploaded documents
                 logger.info(f"📚 Generating document overview for project")
@@ -2504,6 +2506,69 @@ async def send_chat_message(
 
                 # Build rich context from multiple sources
                 context_parts = []
+
+                # 0.5. TPMS PROJECT DATA: Get structured project data from Neo4j (panels, feeders, equipment)
+                logger.info(f"🏭 Retrieving TPMS project data from Neo4j")
+                try:
+                    tpms_context = cocoindex.get_project_tpms_context(project_number)
+                    if tpms_context:
+                        tpms_context_parts = []
+
+                        # Project info
+                        if tpms_context.get("project_info"):
+                            info = tpms_context["project_info"]
+                            tpms_context_parts.append("## 🏭 Project Information (from TPMS)")
+                            tpms_context_parts.append(f"- **Project Name**: {info.get('project_name') or info.get('name', 'N/A')}")
+                            if info.get('project_name_fa'):
+                                tpms_context_parts.append(f"- **Project Name (Persian)**: {info.get('project_name_fa')}")
+                            if info.get('order_category'):
+                                tpms_context_parts.append(f"- **Category**: {info.get('order_category')}")
+                            if info.get('oe_date'):
+                                tpms_context_parts.append(f"- **Date**: {info.get('oe_date')}")
+                            if info.get('project_expert'):
+                                tpms_context_parts.append(f"- **Project Expert**: {info.get('project_expert')}")
+                            if info.get('technical_supervisor'):
+                                tpms_context_parts.append(f"- **Technical Supervisor**: {info.get('technical_supervisor')}")
+
+                        # Project identity (technical specs)
+                        if tpms_context.get("project_identity"):
+                            identity = tpms_context["project_identity"]
+                            identity_items = [f"- **{k.replace('_', ' ').title()}**: {v}" for k, v in identity.items() if v]
+                            if identity_items:
+                                tpms_context_parts.append("\n## 📋 Project Technical Specifications")
+                                tpms_context_parts.extend(identity_items)
+
+                        # Summary counts
+                        tpms_context_parts.append("\n## 📊 Project Summary")
+                        tpms_context_parts.append(f"- **Total Panels**: {tpms_context.get('panel_count', 0)}")
+                        tpms_context_parts.append(f"- **Total Feeders/Loads**: {tpms_context.get('feeder_count', 0)}")
+                        tpms_context_parts.append(f"- **Total Equipment Items**: {tpms_context.get('equipment_count', 0)}")
+
+                        # Panels list
+                        if tpms_context.get("panels"):
+                            tpms_context_parts.append("\n## 🔌 Panels/Switchgears")
+                            for panel in tpms_context["panels"][:15]:  # Limit to 15 panels
+                                panel_name = panel.get('plane_name') or panel.get('name') or f"Panel {panel.get('panel_id')}"
+                                panel_type = panel.get('plane_type') or panel.get('type') or 'N/A'
+                                voltage = panel.get('voltage_rate') or panel.get('rated_voltage') or 'N/A'
+                                amperage = panel.get('switch_amperage') or panel.get('amperage') or 'N/A'
+                                ip = panel.get('ip_value') or panel.get('ip') or 'N/A'
+                                feeder_count = panel.get('feeder_count', 0)
+
+                                tpms_context_parts.append(f"\n### {panel_name}")
+                                tpms_context_parts.append(f"- Type: {panel_type}")
+                                tpms_context_parts.append(f"- Voltage: {voltage}")
+                                tpms_context_parts.append(f"- Amperage: {amperage}")
+                                tpms_context_parts.append(f"- IP Rating: {ip}")
+                                tpms_context_parts.append(f"- Number of Feeders: {feeder_count}")
+
+                        tpms_context_str = "\n".join(tpms_context_parts)
+                        context_parts.append(tpms_context_str)
+                        logger.info(f"🏭 Retrieved TPMS context: {tpms_context.get('panel_count', 0)} panels, {tpms_context.get('feeder_count', 0)} feeders")
+                    else:
+                        logger.info(f"ℹ️ No TPMS data found for project {project_number}")
+                except Exception as tpms_e:
+                    logger.warning(f"⚠️ TPMS context retrieval failed: {tpms_e}")
 
                 # 1. GRAPH SPECIFICATIONS: Query specs from Neo4j
                 # Special handling for common queries
@@ -2928,18 +2993,48 @@ async def send_chat_message_stream(
     graph_context = ""
     if project_number and message.use_graph_context:
         try:
-            # Get graph entities
-            entities = neo4j.semantic_search(
-                project_number=project_number,
-                filters=None,
-                limit=10
-            )
-            if entities:
-                graph_context = "\n\n## Project Knowledge Graph\n"
-                for entity in entities[:5]:
-                    graph_context += f"- {entity.get('entity_type')}: {entity.get('description', 'N/A')}\n"
+            from cocoindex_flows.cocoindex_adapter import get_cocoindex_adapter
 
-            # Get vector context from Qdrant
+            context_parts = []
+
+            # 1. TPMS PROJECT DATA: Get structured project data from Neo4j (panels, feeders, equipment)
+            try:
+                cocoindex = get_cocoindex_adapter()
+                tpms_context = cocoindex.get_project_tpms_context(project_number)
+                if tpms_context:
+                    tpms_context_parts = []
+
+                    # Project info
+                    if tpms_context.get("project_info"):
+                        info = tpms_context["project_info"]
+                        tpms_context_parts.append("## 🏭 Project Information (from TPMS)")
+                        tpms_context_parts.append(f"- **Project Name**: {info.get('project_name') or info.get('name', 'N/A')}")
+                        if info.get('project_name_fa'):
+                            tpms_context_parts.append(f"- **Project Name (Persian)**: {info.get('project_name_fa')}")
+                        if info.get('order_category'):
+                            tpms_context_parts.append(f"- **Category**: {info.get('order_category')}")
+
+                    # Summary counts
+                    tpms_context_parts.append("\n## 📊 Project Summary")
+                    tpms_context_parts.append(f"- **Total Panels**: {tpms_context.get('panel_count', 0)}")
+                    tpms_context_parts.append(f"- **Total Feeders/Loads**: {tpms_context.get('feeder_count', 0)}")
+                    tpms_context_parts.append(f"- **Total Equipment Items**: {tpms_context.get('equipment_count', 0)}")
+
+                    # Panels list (limited for streaming)
+                    if tpms_context.get("panels"):
+                        tpms_context_parts.append("\n## 🔌 Panels/Switchgears")
+                        for panel in tpms_context["panels"][:10]:
+                            panel_name = panel.get('plane_name') or panel.get('name') or f"Panel {panel.get('panel_id')}"
+                            panel_type = panel.get('plane_type') or 'N/A'
+                            voltage = panel.get('voltage_rate') or 'N/A'
+                            tpms_context_parts.append(f"- **{panel_name}**: {panel_type}, {voltage}V, {panel.get('feeder_count', 0)} feeders")
+
+                    context_parts.append("\n".join(tpms_context_parts))
+                    logger.info(f"🏭 TPMS context: {tpms_context.get('panel_count', 0)} panels, {tpms_context.get('feeder_count', 0)} feeders")
+            except Exception as tpms_e:
+                logger.warning(f"TPMS context retrieval failed: {tpms_e}")
+
+            # 2. Get vector context from Qdrant
             try:
                 qdrant = get_qdrant_service()
                 vector_results = qdrant.search_section_summaries(
@@ -2950,12 +3045,17 @@ async def send_chat_message_stream(
                     score_threshold=0.3
                 )
                 if vector_results:
-                    graph_context += "\n\n## Relevant Document Sections\n"
+                    vector_context = "\n\n## 📄 Relevant Document Sections\n"
                     for idx, result in enumerate(vector_results[:3], 1):
-                        graph_context += f"\n**{idx}. {result.get('section_title', 'Section')}** (Score: {result.get('score', 0):.2f})\n"
-                        graph_context += f"{result.get('full_content', '')[:1000]}\n"
+                        vector_context += f"\n**{idx}. {result.get('section_title', 'Section')}** (Score: {result.get('score', 0):.2f})\n"
+                        vector_context += f"{result.get('full_content', '')[:1000]}\n"
+                    context_parts.append(vector_context)
             except Exception as e:
                 logger.warning(f"Vector context retrieval failed: {e}")
+
+            # Combine all context
+            if context_parts:
+                graph_context = "\n\n" + "\n\n".join(context_parts)
 
         except Exception as e:
             logger.warning(f"Graph context retrieval failed: {e}")
