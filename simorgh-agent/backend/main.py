@@ -2907,7 +2907,7 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
         ]
         context_metadata = {"fallback": True}
 
-    def event_stream():
+    async def event_stream():
         try:
             context_used = context_metadata.get("has_graph_context", False) or \
                           context_metadata.get("recent_message_count", 0) > 0 or \
@@ -2935,10 +2935,12 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
             think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
 
-            for chunk in llm.generate_stream(
+            # Use async streaming for non-blocking concurrent requests
+            async for chunk in llm.async_generate_stream(
                 messages=llm_messages,
                 mode=llm_mode,
-                temperature=0.7
+                temperature=0.7,
+                user_id=message.user_id
             ):
                 # Track thinking depth
                 open_matches = think_open_pattern.findall(chunk)
