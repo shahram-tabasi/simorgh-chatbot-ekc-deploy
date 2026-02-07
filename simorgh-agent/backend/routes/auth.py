@@ -12,6 +12,7 @@ from typing import Optional
 import logging
 from services.tpms_auth_service import get_tpms_auth_service, TPMSAuthService
 from services.auth_utils import create_access_token, get_current_username_from_token
+from services.redis_service import get_redis_service
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,24 @@ async def login(
 
     # Create JWT token
     access_token = create_access_token(data={"sub": user["EMPUSERNAME"]})
+
+    # Cache user profile in Redis for LLM context (so chatbot knows the user's name)
+    try:
+        redis = get_redis_service()
+        redis.cache_user_profile_on_login(
+            user_id=user["EMPUSERNAME"],
+            user_data={
+                "email": user.get("EMAIL", ""),
+                "first_name": user.get("EMPFIRSTNAME", user.get("EMPUSERNAME", "")),
+                "last_name": user.get("EMPLASTNAME", ""),
+                "display_name": f"{user.get('EMPFIRSTNAME', '')} {user.get('EMPLASTNAME', '')}".strip() or user["EMPUSERNAME"],
+                "role": user.get("EMPROLE", "user"),
+                "language": "en",
+            }
+        )
+        logger.debug(f"User profile cached for LLM context: {user['EMPUSERNAME']}")
+    except Exception as e:
+        logger.warning(f"Failed to cache user profile: {e}")
 
     logger.info(f"✅ User logged in: {user['EMPUSERNAME']}")
 

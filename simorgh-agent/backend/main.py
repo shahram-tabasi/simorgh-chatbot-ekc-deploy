@@ -1892,6 +1892,8 @@ async def send_chat_message(
             _llm_mode = form.get("llm_mode")
             _use_graph_context_str = form.get("use_graph_context", "true")
             _use_graph_context = _use_graph_context_str.lower() in ("true", "1", "yes") if isinstance(_use_graph_context_str, str) else True
+            _grounded_mode_str = form.get("grounded_mode", "false")
+            _grounded_mode = _grounded_mode_str.lower() in ("true", "1", "yes") if isinstance(_grounded_mode_str, str) else False
             _file = form.get("file")
 
             # Validate required fields (content can be empty if file is present)
@@ -1915,6 +1917,7 @@ async def send_chat_message(
             _content = body.get("content")
             _llm_mode = body.get("llm_mode")
             _use_graph_context = body.get("use_graph_context", True)
+            _grounded_mode = body.get("grounded_mode", False)
             _file = None
 
             if not all([_chat_id, _user_id, _content]):
@@ -2555,18 +2558,58 @@ Project data takes precedence over general knowledge."""
         # Add current user message
         llm_messages.append({"role": "user", "content": _content})
 
-        # Generate response
-        logger.info(f"💬 Generating LLM response - Mode: {_llm_mode or 'default'}, Chat: {_chat_id}")
+        # Generate response - check grounded mode first
+        if _grounded_mode:
+            # Grounded mode: responses strictly from documents with citations
+            logger.info(f"📚 Grounded mode - generating response from documents only for chat {_chat_id}")
+            try:
+                from services.grounded_response_service import get_grounded_response_service
 
-        result = llm.generate(
-            messages=llm_messages,
-            mode=_llm_mode,
-            temperature=0.7,
-            use_cache=True
-        )
+                qdrant = get_qdrant_service()
+                grounded_service = get_grounded_response_service(
+                    llm_service=llm,
+                    qdrant_service=qdrant
+                )
 
-        logger.info(f"✅ LLM response generated - Actual mode used: {result.get('mode')}, Tokens: {result.get('tokens', {}).get('total', 0)}")
-        ai_response = result["response"]
+                grounded_result = await grounded_service.generate_grounded_response(
+                    query=_content,
+                    project_number=project_number,
+                    chat_id=_chat_id,
+                    user_id=_user_id,
+                    max_sources=5,
+                    llm_mode=_llm_mode
+                )
+
+                formatted = grounded_service.format_response_with_citations(grounded_result)
+                ai_response = formatted["response"]
+                result = {
+                    "response": ai_response,
+                    "mode": _llm_mode or "online",
+                    "cached": False,
+                    "tokens": {"total": 0},
+                    "grounded": True,
+                    "citations": formatted.get("citations", []),
+                    "confidence_score": formatted.get("metadata", {}).get("confidence_score", 0)
+                }
+                context_used = True
+                logger.info(f"✅ Grounded response generated with {len(formatted.get('citations', []))} citations")
+            except Exception as e:
+                logger.warning(f"⚠️ Grounded mode failed, falling back to regular mode: {e}")
+                _grounded_mode = False  # Fall through to regular mode
+
+        if not _grounded_mode:
+            # Regular mode
+            logger.info(f"💬 Generating LLM response - Mode: {_llm_mode or 'default'}, Chat: {_chat_id}")
+
+            result = llm.generate(
+                messages=llm_messages,
+                mode=_llm_mode,
+                temperature=0.7,
+                use_cache=True
+            )
+
+            logger.info(f"✅ LLM response generated - Actual mode used: {result.get('mode')}, Tokens: {result.get('tokens', {}).get('total', 0)}")
+            ai_response = result["response"]
 
         # 🧠 USER MEMORY: Store this conversation in Qdrant for future reference
         try:
@@ -2764,6 +2807,75 @@ async def send_chat_message_stream(
     project_id_for_memory = chat_metadata.get("project_id_main") or project_number
     chat_type = chat_metadata.get("chat_type", "general")
 
+    # Update user activity (was missing in stream endpoint)
+    try:
+        redis.update_user_activity(message.user_id, "chat", {"chat_id": message.chat_id})
+    except Exception:
+        pass  # Non-critical
+
+    # Grounded mode: return non-streaming grounded response with citations
+    if message.grounded_mode:
+        async def grounded_stream():
+            try:
+                from services.grounded_response_service import get_grounded_response_service
+
+                qdrant = get_qdrant_service()
+                grounded_service = get_grounded_response_service(
+                    llm_service=llm,
+                    qdrant_service=qdrant
+                )
+
+                grounded_result = await grounded_service.generate_grounded_response(
+                    query=message.content,
+                    project_number=project_number,
+                    chat_id=message.chat_id,
+                    user_id=message.user_id,
+                    max_sources=5,
+                    llm_mode=message.llm_mode
+                )
+
+                formatted = grounded_service.format_response_with_citations(grounded_result)
+                ai_response = formatted["response"]
+
+                # Send as single chunk
+                yield f"data: {json.dumps({'context_used': True, 'streaming': True, 'grounded': True})}\n\n"
+                yield f"data: {json.dumps({'chunk': ai_response})}\n\n"
+
+                # Store messages
+                created_at = datetime.now().isoformat()
+                user_msg = {
+                    "message_id": str(uuid.uuid4()),
+                    "chat_id": message.chat_id,
+                    "project_id": project_number,
+                    "role": "user", "sender": "user",
+                    "content": message.content, "text": message.content,
+                    "timestamp": created_at, "created_at": created_at,
+                    "user_id": message.user_id
+                }
+                assistant_msg = {
+                    "message_id": str(uuid.uuid4()),
+                    "chat_id": message.chat_id,
+                    "project_id": project_number,
+                    "role": "assistant", "sender": "assistant",
+                    "content": ai_response, "text": ai_response,
+                    "timestamp": created_at, "created_at": created_at,
+                    "grounded": True
+                }
+                redis.cache_chat_message(message.chat_id, user_msg)
+                redis.cache_chat_message(message.chat_id, assistant_msg)
+
+                yield f"data: {json.dumps({'done': True, 'llm_mode': message.llm_mode, 'grounded': True})}\n\n"
+
+            except Exception as e:
+                logger.error(f"Grounded stream error: {e}", exc_info=True)
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        return StreamingResponse(
+            grounded_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
+        )
+
     # Build context using unified service
     stream_context_result = None
     context_metadata = {}
@@ -2847,6 +2959,8 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             thinking_depth = 0
             think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
             think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
+            # Pattern to strip entire <think>...</think> blocks within a single chunk
+            think_block_pattern = re.compile(r'<think(?:ing)?>.*?</think(?:ing)?>', re.IGNORECASE | re.DOTALL)
 
             # Use async streaming for non-blocking concurrent requests
             async for chunk in llm.async_generate_stream(
@@ -2855,21 +2969,36 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                 temperature=0.7,
                 user_id=message.user_id
             ):
-                # Track thinking depth
-                open_matches = think_open_pattern.findall(chunk)
-                close_matches = think_close_pattern.findall(chunk)
-                thinking_depth += len(open_matches) - len(close_matches)
-                thinking_depth = max(0, thinking_depth)
-
                 # Always accumulate for storage
                 full_response += chunk
 
-                # Only send to client if not inside thinking section
-                if thinking_depth == 0:
-                    clean_chunk = think_open_pattern.sub('', chunk)
+                # First, strip any complete <think>...</think> blocks within this chunk
+                clean_chunk = think_block_pattern.sub('', chunk)
+
+                # Track thinking depth on the ORIGINAL chunk (before stripping)
+                open_matches = think_open_pattern.findall(chunk)
+                close_matches = think_close_pattern.findall(chunk)
+                prev_depth = thinking_depth
+                thinking_depth += len(open_matches) - len(close_matches)
+                thinking_depth = max(0, thinking_depth)
+
+                # Determine what to send to client
+                if thinking_depth == 0 and prev_depth == 0:
+                    # Not in thinking section - send cleaned chunk
+                    clean_chunk = think_open_pattern.sub('', clean_chunk)
                     clean_chunk = think_close_pattern.sub('', clean_chunk)
-                    if clean_chunk:
+                    if clean_chunk.strip():
                         yield f"data: {json.dumps({'chunk': clean_chunk})}\n\n"
+                elif thinking_depth == 0 and prev_depth > 0:
+                    # Just exited thinking section - only send text AFTER the close tag
+                    close_match = think_close_pattern.search(chunk)
+                    if close_match:
+                        after_think = chunk[close_match.end():]
+                        after_think = think_open_pattern.sub('', after_think)
+                        after_think = think_close_pattern.sub('', after_think)
+                        if after_think.strip():
+                            yield f"data: {json.dumps({'chunk': after_think})}\n\n"
+                # else: inside thinking section, don't send anything
 
             # Parse full response
             clean_response = full_response

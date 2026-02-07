@@ -21,7 +21,7 @@ from pathlib import Path
 from services.auth_utils import get_current_user
 from services.redis_service import get_redis_service, RedisService
 from services.llm_service import get_llm_service, LLMService
-from services.qdrant_service import get_qdrant_service
+from services.document_processing_integration import get_qdrant_service
 from services.neo4j_service import get_neo4j_service
 
 logger = logging.getLogger(__name__)
