@@ -190,6 +190,149 @@ class RedisService:
             logger.error(f"Failed to get user preference: {e}")
             return default
 
+    def update_user_activity(
+        self,
+        user_id: str,
+        activity_type: str = "chat",
+        metadata: Dict[str, Any] = None
+    ) -> bool:
+        """
+        Update user's last activity timestamp and type.
+
+        Call this on each user interaction to track activity.
+
+        Args:
+            user_id: User identifier
+            activity_type: Type of activity (chat, upload, login, etc.)
+            metadata: Optional additional activity metadata
+        """
+        try:
+            from datetime import datetime
+
+            activity = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "type": activity_type,
+                "metadata": metadata or {}
+            }
+
+            # Update last activity
+            key = f"user:activity:{user_id}"
+            self.session_client.set(key, json.dumps(activity))
+
+            # Also update the profile's last_active field
+            profile = self.get_user_profile(user_id)
+            if profile:
+                profile["last_active"] = activity["timestamp"]
+                profile["last_activity_type"] = activity_type
+                self.set_user_profile(user_id, profile)
+
+            logger.debug(f"User activity updated: {user_id} - {activity_type}")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to update user activity: {e}")
+            return False
+
+    def get_user_activity(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user's last activity info"""
+        try:
+            key = f"user:activity:{user_id}"
+            value = self.session_client.get(key)
+            if value:
+                return json.loads(value)
+            return None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get user activity: {e}")
+            return None
+
+    def cache_user_profile_on_login(
+        self,
+        user_id: str,
+        user_data: Dict[str, Any],
+        ttl: int = 86400  # 24 hours
+    ) -> bool:
+        """
+        Cache complete user profile on login for LLM context.
+
+        Call this after successful authentication.
+
+        Args:
+            user_id: User identifier
+            user_data: User data from database (UserResponse or dict)
+            ttl: Cache TTL in seconds (default 24 hours)
+
+        Returns:
+            True if successful
+        """
+        try:
+            from datetime import datetime
+
+            # Build comprehensive profile for LLM context
+            profile = {
+                "user_id": user_id,
+                "email": user_data.get("email", ""),
+                "first_name": user_data.get("first_name"),
+                "last_name": user_data.get("last_name"),
+                "display_name": user_data.get("display_name"),
+                "role": user_data.get("role") or user_data.get("user_role"),
+                "language": user_data.get("language", "en"),
+                "ai_mode": user_data.get("ai_mode") or user_data.get("preferred_llm_mode"),
+                "last_login_at": datetime.utcnow().isoformat(),
+                "last_active": datetime.utcnow().isoformat(),
+                "login_count": (self.get_user_profile(user_id) or {}).get("login_count", 0) + 1,
+                "created_at": user_data.get("created_at"),
+                "is_active": user_data.get("is_active", True),
+            }
+
+            # Store with TTL
+            key = f"user:profile:{user_id}"
+            self.session_client.setex(key, ttl, json.dumps(profile, default=str))
+
+            logger.info(f"User profile cached on login: {user_id}")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to cache user profile on login: {e}")
+            return False
+
+    def get_user_context_for_llm(self, user_id: str) -> Dict[str, Any]:
+        """
+        Get user context specifically formatted for LLM consumption.
+
+        Returns a clean, LLM-friendly user context dict.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Dict with user context for LLM
+        """
+        try:
+            profile = self.get_user_profile(user_id)
+            if not profile:
+                return {"user_id": user_id}
+
+            # Build LLM-friendly context
+            context = {
+                "user_id": user_id,
+                "name": profile.get("display_name") or
+                        f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip() or
+                        "User",
+                "language": profile.get("language", "en"),
+                "preferred_ai_mode": profile.get("ai_mode"),
+                "role": profile.get("role"),
+                "is_returning_user": profile.get("login_count", 0) > 1,
+                "last_active": profile.get("last_active"),
+            }
+
+            # Get recent activity
+            activity = self.get_user_activity(user_id)
+            if activity:
+                context["last_activity_type"] = activity.get("type")
+
+            return context
+        except Exception as e:
+            logger.error(f"Failed to get user context for LLM: {e}")
+            return {"user_id": user_id}
+
     def set_session(
         self,
         session_id: str,

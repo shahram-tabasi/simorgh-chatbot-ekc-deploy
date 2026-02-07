@@ -147,6 +147,7 @@ session_id_service: Optional[SessionIDService] = None
 unified_memory_service: Optional[UnifiedMemoryService] = None
 chatbot_core: Optional[ChatbotCore] = None
 background_sync_service: Optional[BackgroundSyncService] = None
+unified_context_service = None  # UnifiedLLMContextService instance
 
 
 # =============================================================================
@@ -215,7 +216,7 @@ class PowerPathQuery(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service, unified_memory_service, chatbot_core, background_sync_service
+    global neo4j_service, redis_service, sql_auth_service, tpms_auth_service, llm_service, session_id_service, unified_memory_service, chatbot_core, background_sync_service, unified_context_service
 
     logger.info("🚀 Starting Simorgh Industrial Assistant...")
 
@@ -276,6 +277,32 @@ async def startup_event():
             llm_service=llm_service
         )
         qdrant = None
+
+    # Initialize Unified LLM Context Service
+    try:
+        from services.unified_llm_context_service import get_unified_context_service, ContextConfig
+        context_config = ContextConfig(
+            max_total_tokens=8000,
+            include_user_profile=True,
+            include_tpms_data=True,
+            include_graph_specs=True,
+            include_vector_search=True,
+            include_user_memory=True,
+            include_chat_history=True,
+            vector_search_limit=5,
+            chat_history_limit=10,
+            max_panels_to_show=15
+        )
+        unified_context_service = get_unified_context_service(
+            redis_service=redis_service,
+            neo4j_driver=neo4j_service.driver if neo4j_service else None,
+            qdrant_service=qdrant,
+            config=context_config
+        )
+        logger.info("✅ Unified LLM Context service initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Unified LLM Context service initialization failed (non-fatal): {e}")
+        unified_context_service = None
 
     # Initialize Chatbot Core (enhanced session management)
     try:
@@ -2453,272 +2480,44 @@ async def send_chat_message(
                     temp_file.unlink()
 
         # ============================================================
-        # ENHANCED CONTEXT BUILDING: Document Overview + Graph + Vector
+        # UNIFIED CONTEXT BUILDING (Using UnifiedLLMContextService)
         # ============================================================
-        graph_context = ""
-        document_overview_context = ""
         context_used = False
+        context_result = None
 
-        # Handle general chats (no project) - retrieve document context from per-chat collection
-        if not project_number and chat_type == "general":
-            logger.info(f"🔍 Retrieving document context for general chat {_chat_id}")
+        # Update user activity
+        try:
+            redis.update_user_activity(_user_id, "chat", {"chat_id": _chat_id})
+        except Exception:
+            pass  # Non-critical
+
+        # Build context using unified service
+        if _use_graph_context and unified_context_service:
             try:
-                from services.section_retriever import SectionRetriever
-                from services.document_overview_service import DocumentOverviewService
+                logger.info(f"🔍 Building unified context for {'project ' + project_number if project_number else 'general'} chat")
 
-                qdrant = get_qdrant_service()
-                section_retriever = SectionRetriever(
-                    llm_service=llm_service,
-                    qdrant_service=qdrant
-                )
-                doc_overview = DocumentOverviewService(redis_service=redis)
-
-                # Per-chat isolation key (must match storage)
-                general_chat_key = f"general_{_chat_id}"
-
-                # Get document overview for this chat
-                document_overview_context = doc_overview.generate_overview(
+                context_result = await unified_context_service.build_context(
+                    user_id=_user_id,
+                    query=_content,
                     chat_id=_chat_id,
-                    max_documents=10
+                    project_number=project_number,
+                    chat_type=chat_type
                 )
 
-                # Retrieve relevant sections from uploaded documents
-                sections_result = section_retriever.retrieve_relevant_sections(
-                    project_number=general_chat_key,
-                    query=_content,
-                    limit=5,
-                    score_threshold=0.3
-                )
-
-                if sections_result.get("success") and sections_result.get("sections"):
-                    graph_context = section_retriever.format_sections_for_context(
-                        sections=sections_result["sections"],
-                        max_sections=3
-                    )
+                if context_result.sources_used:
                     context_used = True
-                    logger.info(f"📄 Retrieved {len(sections_result['sections'])} sections for general chat")
+                    logger.info(
+                        f"✅ Context built: {len(context_result.sources_used)} sources, "
+                        f"~{context_result.total_tokens_estimated} tokens, "
+                        f"{context_result.build_time_ms:.1f}ms"
+                    )
+                    logger.info(f"📊 Sources: {', '.join(context_result.sources_used)}")
 
             except Exception as e:
-                logger.warning(f"⚠️ General chat context retrieval failed: {e}", exc_info=True)
-
-        elif project_number and _use_graph_context:
-            logger.info(f"🔍 Retrieving enhanced context for project {project_number}")
-
-            try:
-                from services.graph_rag_service import GraphRAGService
-                from services.document_overview_service import DocumentOverviewService
-                from cocoindex_flows.cocoindex_adapter import get_cocoindex_adapter
-
-                graph_rag = GraphRAGService(neo4j.driver)
-                doc_overview = DocumentOverviewService(redis_service=redis)
-                cocoindex = get_cocoindex_adapter()
-
-                # 0. DOCUMENT OVERVIEW: Always provide overview of uploaded documents
-                logger.info(f"📚 Generating document overview for project")
-                document_overview_context = doc_overview.generate_overview(
-                    project_number=project_number,
-                    max_documents=10
-                )
-
-                # Build rich context from multiple sources
-                context_parts = []
-
-                # 0.5. TPMS PROJECT DATA: Get structured project data from Neo4j (panels, feeders, equipment)
-                logger.info(f"🏭 Retrieving TPMS project data from Neo4j")
-                try:
-                    tpms_context = cocoindex.get_project_tpms_context(project_number)
-                    if tpms_context:
-                        tpms_context_parts = []
-
-                        # Project info
-                        if tpms_context.get("project_info"):
-                            info = tpms_context["project_info"]
-                            tpms_context_parts.append("## 🏭 Project Information (from TPMS)")
-                            tpms_context_parts.append(f"- **Project Name**: {info.get('project_name') or info.get('name', 'N/A')}")
-                            if info.get('project_name_fa'):
-                                tpms_context_parts.append(f"- **Project Name (Persian)**: {info.get('project_name_fa')}")
-                            if info.get('order_category'):
-                                tpms_context_parts.append(f"- **Category**: {info.get('order_category')}")
-                            if info.get('oe_date'):
-                                tpms_context_parts.append(f"- **Date**: {info.get('oe_date')}")
-                            if info.get('project_expert'):
-                                tpms_context_parts.append(f"- **Project Expert**: {info.get('project_expert')}")
-                            if info.get('technical_supervisor'):
-                                tpms_context_parts.append(f"- **Technical Supervisor**: {info.get('technical_supervisor')}")
-
-                        # Project identity (technical specs)
-                        if tpms_context.get("project_identity"):
-                            identity = tpms_context["project_identity"]
-                            identity_items = [f"- **{k.replace('_', ' ').title()}**: {v}" for k, v in identity.items() if v]
-                            if identity_items:
-                                tpms_context_parts.append("\n## 📋 Project Technical Specifications")
-                                tpms_context_parts.extend(identity_items)
-
-                        # Summary counts
-                        tpms_context_parts.append("\n## 📊 Project Summary")
-                        tpms_context_parts.append(f"- **Total Panels**: {tpms_context.get('panel_count', 0)}")
-                        tpms_context_parts.append(f"- **Total Feeders/Loads**: {tpms_context.get('feeder_count', 0)}")
-                        tpms_context_parts.append(f"- **Total Equipment Items**: {tpms_context.get('equipment_count', 0)}")
-
-                        # Panels list
-                        if tpms_context.get("panels"):
-                            tpms_context_parts.append("\n## 🔌 Panels/Switchgears")
-                            for panel in tpms_context["panels"][:15]:  # Limit to 15 panels
-                                panel_name = panel.get('plane_name') or panel.get('name') or f"Panel {panel.get('panel_id')}"
-                                panel_type = panel.get('plane_type') or panel.get('type') or 'N/A'
-                                voltage = panel.get('voltage_rate') or panel.get('rated_voltage') or 'N/A'
-                                amperage = panel.get('switch_amperage') or panel.get('amperage') or 'N/A'
-                                ip = panel.get('ip_value') or panel.get('ip') or 'N/A'
-                                feeder_count = panel.get('feeder_count', 0)
-
-                                tpms_context_parts.append(f"\n### {panel_name}")
-                                tpms_context_parts.append(f"- Type: {panel_type}")
-                                tpms_context_parts.append(f"- Voltage: {voltage}")
-                                tpms_context_parts.append(f"- Amperage: {amperage}")
-                                tpms_context_parts.append(f"- IP Rating: {ip}")
-                                tpms_context_parts.append(f"- Number of Feeders: {feeder_count}")
-
-                        tpms_context_str = "\n".join(tpms_context_parts)
-                        context_parts.append(tpms_context_str)
-                        logger.info(f"🏭 Retrieved TPMS context: {tpms_context.get('panel_count', 0)} panels, {tpms_context.get('feeder_count', 0)} feeders")
-                    else:
-                        logger.info(f"ℹ️ No TPMS data found for project {project_number}")
-                except Exception as tpms_e:
-                    logger.warning(f"⚠️ TPMS context retrieval failed: {tpms_e}")
-
-                # 1. GRAPH SPECIFICATIONS: Query specs from Neo4j
-                # Special handling for common queries
-                if any(word in _content.lower() for word in ['protection', 'protections', 'protective', 'relay', 'trip']):
-                    # Get all protection-related specs
-                    graph_result = graph_rag.get_protection_specifications(project_number=project_number)
-                else:
-                    # General query
-                    graph_result = graph_rag.search_by_natural_query(
-                        project_number=project_number,
-                        query=_content
-                    )
-
-                # Add graph specifications if found
-                if graph_result.get("success"):
-                    # Handle protection specs (different key)
-                    specs_list = graph_result.get("protections") or graph_result.get("specs")
-
-                    if specs_list:
-                        # Count specs with actual values
-                        specs_with_values = [s for s in specs_list if s.get("value") and s["value"].strip() and s["value"] != "Not specified"]
-
-                        specs_context = graph_rag.build_context_from_specs(
-                            specs=specs_list,
-                            query=_content
-                        )
-                        if specs_context:
-                            context_parts.append(specs_context)
-                            logger.info(f"📊 Retrieved {len(specs_list)} specifications from graph ({len(specs_with_values)} with values)")
-                        else:
-                            logger.warning(f"⚠️ Retrieved {len(specs_list)} specs but all values are empty/not specified")
-
-                # 2. KNOWLEDGE GRAPH BFS: Find related subgraph
-                logger.info(f"🕸️ Performing BFS graph traversal")
-                subgraph = graph_rag.find_related_subgraph(
-                    project_number=project_number,
-                    query=_content,
-                    max_depth=2
-                )
-
-                if subgraph.get("success") and subgraph.get("nodes"):
-                    subgraph_context = graph_rag.format_subgraph_for_context(subgraph)
-                    if subgraph_context:
-                        context_parts.append(subgraph_context)
-                        logger.info(f"🕸️ Retrieved subgraph: {subgraph.get('node_count', 0)} nodes, {subgraph.get('relationship_count', 0)} relationships")
-
-                # 3. ENHANCED VECTOR SEARCH: Section-based search with FULL content
-                # IMPORTANT: Documents are stored with user_id="system" during upload
-                # so we must search with the same user_id to find them
-                logger.info(f"🔍 Performing enhanced section-based search")
-                qdrant = get_qdrant_service()
-                vector_results = qdrant.search_section_summaries(
-                    user_id="system",  # Must match how documents are stored in section_retriever
-                    project_oenum=project_number,
-                    query=_content,
-                    limit=5,
-                    score_threshold=0.3
-                )
-
-                # Add vector search results with FULL sections (NO truncation!)
-                if vector_results:
-                    vector_context = "\n\n## 📄 Related Document Sections (Semantic Search)\n"
-                    for idx, result in enumerate(vector_results[:3], 1):
-                        vector_context += f"\n**{idx}. [{result['section_title']}]** (Relevance: {result['score']:.2%})\n"
-
-                        # Show subjects if available
-                        if result.get('subjects'):
-                            vector_context += f"**Subjects:** {', '.join(result['subjects'][:5])}\n\n"
-
-                        # Include FULL content (not truncated!)
-                        vector_context += f"{result['full_content']}\n\n"
-                        vector_context += "---\n"
-
-                    context_parts.append(vector_context)
-                    logger.info(f"📝 Retrieved {len(vector_results)} full sections from vector DB")
-
-                # Combine all context
-                if context_parts:
-                    graph_context = "\n\n" + "\n\n".join(context_parts)
-                    context_used = True
-                    logger.info(f"✅ Combined context from {len(context_parts)} sources")
-                else:
-                    logger.info(f"ℹ️ No specific context found, using general knowledge")
-
-            except Exception as e:
-                logger.warning(f"⚠️ Enhanced context retrieval failed: {e}", exc_info=True)
+                logger.warning(f"⚠️ Unified context building failed: {e}", exc_info=True)
                 # Continue without context rather than failing
 
-        # 🧠 USER MEMORY: Retrieve similar past conversations from Qdrant (session-isolated)
-        user_memory_context = ""
-        try:
-            qdrant = get_qdrant_service()
-            similar_conversations = qdrant.retrieve_similar_conversations(
-                user_id=_user_id,
-                current_query=_content,
-                limit=5,  # Get top 5 semantically similar conversations
-                score_threshold=0.65,  # Only include relevant conversations
-                project_filter=project_number if project_number else None,
-                chat_id=_chat_id,  # Filter by current chat for session isolation
-                fallback_to_recent=True,  # Fallback to recent if no semantic matches
-                fallback_limit=10  # Return last 10 conversations as fallback
-            )
-
-            if similar_conversations:
-                # Check if these are fallback results (recent conversations)
-                is_fallback = similar_conversations[0].get("is_fallback", False)
-
-                if is_fallback:
-                    user_memory_context = "\n\n## 📚 Your Recent Conversation History\n"
-                    user_memory_context += "Here are your most recent conversations (no specific semantic match found):\n\n"
-                else:
-                    user_memory_context = "\n\n## 💭 Your Past Relevant Conversations\n"
-                    user_memory_context += "Here are some of your previous related discussions:\n\n"
-
-                for idx, conv in enumerate(similar_conversations, 1):
-                    if is_fallback:
-                        # For fallback, show timestamp instead of relevance score
-                        user_memory_context += f"**{idx}. Previous Q&A**\n"
-                    else:
-                        user_memory_context += f"**{idx}. Previous Q&A** (Relevance: {conv['score']:.0%})\n"
-
-                    user_memory_context += f"  - You asked: \"{conv['user_message'][:150]}{'...' if len(conv['user_message']) > 150 else ''}\"\n"
-                    user_memory_context += f"  - I responded: \"{conv['assistant_response'][:200]}{'...' if len(conv['assistant_response']) > 200 else ''}\"\n\n"
-
-                logger.info(f"🧠 Retrieved {len(similar_conversations)} {'recent' if is_fallback else 'semantically similar'} past conversations for user memory context")
-                context_used = True
-            else:
-                logger.info(f"🧠 No past conversations found for user {_user_id}")
-
-        except Exception as e:
-            logger.warning(f"⚠️ User memory retrieval failed: {e}")
-            # Continue without user memory context rather than failing
-
-        # Build LLM messages
+        # Build system prompt
         system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
 You help users with electrical panel specifications, power distribution, protection devices, and system design.
 Provide accurate, technical responses based on IEC and IEEE standards."""
@@ -2728,71 +2527,27 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             system_prompt += file_context
             context_used = True
 
-        # Add document overview context (always for project chats)
-        if document_overview_context:
-            system_prompt += f"\n\n{document_overview_context}"
-            context_used = True
-            logger.info(f"📚 Added document overview to context")
+        # Add unified context if available
+        if context_result and context_result.context_text:
+            system_prompt += f"\n\n{'=' * 50}\n# PROJECT CONTEXT\n{'=' * 50}\n"
+            system_prompt += context_result.context_text
+            system_prompt += f"\n\n{'=' * 50}"
+            system_prompt += """\n\n🎯 CRITICAL INSTRUCTION: The information above is ACTUAL data from this project.
+You MUST use these specific values in your response. Do NOT say "information not provided" when data is listed above.
+Answer the user's question using the exact values shown. Be specific and cite the actual data.
+Project data takes precedence over general knowledge."""
 
-        if graph_context:
-            system_prompt += f"\n\n{graph_context}"
-            # Add directive to use the provided specs - HIGHEST PRIORITY
-            system_prompt += """\n\n🎯 CRITICAL INSTRUCTION - HIGHEST PRIORITY: The specifications above are ACTUAL data from this project's documents.
-You MUST use these specific values in your response. Do NOT say "information not provided" when specifications are listed above.
-Answer the user's question using the exact values shown. Be specific and cite the actual specifications.
-The project specifications and technical data above are THE PRIMARY SOURCE OF TRUTH - they take precedence over everything else."""
-
-        # Add user memory context if available
-        if user_memory_context:
-            system_prompt += f"\n\n{user_memory_context}"
-            system_prompt += """\n\n💡 CONTEXT NOTE: The conversation history above is provided for reference to help you give more personalized responses.
-You may reference past conversations when relevant (e.g., if user asks about something they mentioned before),
-but ALWAYS prioritize technical specifications and project data over conversation history.
-If there's any conflict between conversation history and project specifications, the specifications are correct."""
-
-        # 🆕 ENHANCED: Get recent chat history from Redis for conversation continuity
-        # For PROJECT chats: Use cross-chat memory (all chats in the project)
-        # For GENERAL chats: Use single-chat memory (current chat only)
+        # Build LLM messages with chat history
         llm_messages = [{"role": "system", "content": system_prompt}]
 
-        try:
-            if chat_type == "project" and project_id_for_memory:
-                # PROJECT CHAT: Get cross-chat memory from all project chats
-                logger.info(f"🔗 Using project-wide memory for project {project_id_for_memory}")
-                recent_messages = redis.get_project_chat_history(
-                    user_id=_user_id,
-                    project_number=project_id_for_memory,
-                    current_chat_id=_chat_id,
-                    limit=30,  # More messages since we're aggregating from multiple chats
-                    include_current_chat=True
-                )
-
-                # Count source chats for logging
-                source_chats = set(m.get('source_chat_id', _chat_id) for m in recent_messages)
-                logger.info(f"📚 Retrieved {len(recent_messages)} messages from {len(source_chats)} project chat(s)")
-            else:
-                # GENERAL CHAT: Use current chat history only (isolated)
-                recent_messages = redis.get_chat_history(_chat_id, limit=10)
-
-            if recent_messages:
-                # Add historical messages to context
-                for msg in recent_messages:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", msg.get("text", ""))
-
-                    # For project-wide memory, prefix messages from other chats
-                    if chat_type == "project" and msg.get('source_chat_id') and msg.get('source_chat_id') != _chat_id:
-                        content = f"[From earlier project discussion] {content}"
-
-                    if role in ["user", "assistant"] and content:
-                        # Truncate very long messages to save context space
-                        if len(content) > 500:
-                            content = content[:500] + "..."
-                        llm_messages.append({"role": role, "content": content})
-
-                logger.info(f"📝 Added {len(recent_messages)} messages to LLM context")
-        except Exception as e:
-            logger.warning(f"Failed to retrieve chat history: {e}")
+        # Add chat history from context result (already retrieved by unified service)
+        if context_result and context_result.chat_history:
+            for msg in context_result.chat_history[-10:]:  # Last 10 messages
+                role = msg.get("role", "user")
+                content = msg.get("content", msg.get("text", ""))[:500]  # Truncate
+                if role in ["user", "assistant"] and content:
+                    llm_messages.append({"role": role, "content": content})
+            logger.info(f"📝 Added {min(len(context_result.chat_history), 10)} messages to LLM context")
 
         # Add current user message
         llm_messages.append({"role": "user", "content": _content})
@@ -3004,104 +2759,63 @@ async def send_chat_message_stream(
     project_number = chat_metadata.get("project_number")
     # For memory lookups, use project_id_main (IDProjectMain) since that's what the index uses
     project_id_for_memory = chat_metadata.get("project_id_main") or project_number
+    chat_type = chat_metadata.get("chat_type", "general")
 
-    # Build graph context if project chat
-    graph_context = ""
-    if project_number and message.use_graph_context:
+    # Build context using unified service
+    stream_context_result = None
+    context_metadata = {}
+
+    if message.use_graph_context and unified_context_service:
         try:
-            from cocoindex_flows.cocoindex_adapter import get_cocoindex_adapter
+            logger.info(f"🔍 [Stream] Building unified context for {'project ' + project_number if project_number else 'general'} chat")
 
-            context_parts = []
+            stream_context_result = await unified_context_service.build_context(
+                user_id=message.user_id,
+                query=message.content,
+                chat_id=message.chat_id,
+                project_number=project_number,
+                chat_type=chat_type
+            )
 
-            # 1. TPMS PROJECT DATA: Get structured project data from Neo4j (panels, feeders, equipment)
-            try:
-                cocoindex = get_cocoindex_adapter()
-                tpms_context = cocoindex.get_project_tpms_context(project_number)
-                if tpms_context:
-                    tpms_context_parts = []
-
-                    # Project info
-                    if tpms_context.get("project_info"):
-                        info = tpms_context["project_info"]
-                        tpms_context_parts.append("## 🏭 Project Information (from TPMS)")
-                        tpms_context_parts.append(f"- **Project Name**: {info.get('project_name') or info.get('name', 'N/A')}")
-                        if info.get('project_name_fa'):
-                            tpms_context_parts.append(f"- **Project Name (Persian)**: {info.get('project_name_fa')}")
-                        if info.get('order_category'):
-                            tpms_context_parts.append(f"- **Category**: {info.get('order_category')}")
-
-                    # Summary counts
-                    tpms_context_parts.append("\n## 📊 Project Summary")
-                    tpms_context_parts.append(f"- **Total Panels**: {tpms_context.get('panel_count', 0)}")
-                    tpms_context_parts.append(f"- **Total Feeders/Loads**: {tpms_context.get('feeder_count', 0)}")
-                    tpms_context_parts.append(f"- **Total Equipment Items**: {tpms_context.get('equipment_count', 0)}")
-
-                    # Panels list (limited for streaming)
-                    if tpms_context.get("panels"):
-                        tpms_context_parts.append("\n## 🔌 Panels/Switchgears")
-                        for panel in tpms_context["panels"][:10]:
-                            panel_name = panel.get('plane_name') or panel.get('name') or f"Panel {panel.get('panel_id')}"
-                            panel_type = panel.get('plane_type') or 'N/A'
-                            voltage = panel.get('voltage_rate') or 'N/A'
-                            tpms_context_parts.append(f"- **{panel_name}**: {panel_type}, {voltage}V, {panel.get('feeder_count', 0)} feeders")
-
-                    context_parts.append("\n".join(tpms_context_parts))
-                    logger.info(f"🏭 TPMS context: {tpms_context.get('panel_count', 0)} panels, {tpms_context.get('feeder_count', 0)} feeders")
-            except Exception as tpms_e:
-                logger.warning(f"TPMS context retrieval failed: {tpms_e}")
-
-            # 2. Get vector context from Qdrant
-            try:
-                qdrant = get_qdrant_service()
-                vector_results = qdrant.search_section_summaries(
-                    user_id="system",
-                    project_oenum=project_number,
-                    query=message.content,
-                    limit=3,
-                    score_threshold=0.3
+            if stream_context_result.sources_used:
+                context_metadata = {
+                    "has_graph_context": True,
+                    "sources": stream_context_result.sources_used,
+                    "tokens": stream_context_result.total_tokens_estimated
+                }
+                logger.info(
+                    f"✅ [Stream] Context built: {len(stream_context_result.sources_used)} sources, "
+                    f"~{stream_context_result.total_tokens_estimated} tokens"
                 )
-                if vector_results:
-                    vector_context = "\n\n## 📄 Relevant Document Sections\n"
-                    for idx, result in enumerate(vector_results[:3], 1):
-                        vector_context += f"\n**{idx}. {result.get('section_title', 'Section')}** (Score: {result.get('score', 0):.2f})\n"
-                        vector_context += f"{result.get('full_content', '')[:1000]}\n"
-                    context_parts.append(vector_context)
-            except Exception as e:
-                logger.warning(f"Vector context retrieval failed: {e}")
-
-            # Combine all context
-            if context_parts:
-                graph_context = "\n\n" + "\n\n".join(context_parts)
 
         except Exception as e:
-            logger.warning(f"Graph context retrieval failed: {e}")
+            logger.warning(f"⚠️ [Stream] Unified context building failed: {e}")
+            context_metadata = {"fallback": True}
 
-    # Get full context using unified memory service
+    # Build system prompt
     system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
 You help users with electrical panel specifications, power distribution, protection devices, and system design.
 Provide accurate, technical responses based on IEC and IEEE standards."""
 
-    try:
-        context_result = await memory.get_context_for_llm(
-            chat_id=message.chat_id,
-            user_id=message.user_id,
-            current_query=message.content,
-            project_number=project_id_for_memory,  # Use IDProjectMain for memory lookup
-            system_prompt=system_prompt,
-            graph_context=graph_context,
-            use_semantic_memory=True,
-            use_summary=True
-        )
-        llm_messages = context_result["messages"]
-        context_metadata = context_result.get("metadata", {})
-    except Exception as e:
-        logger.warning(f"Memory context retrieval failed: {e}")
-        # Fallback to basic context
-        llm_messages = [
-            {"role": "system", "content": system_prompt + (f"\n\n{graph_context}" if graph_context else "")},
-            {"role": "user", "content": message.content}
-        ]
-        context_metadata = {"fallback": True}
+    # Add unified context if available
+    if stream_context_result and stream_context_result.context_text:
+        system_prompt += f"\n\n{'=' * 50}\n# PROJECT CONTEXT\n{'=' * 50}\n"
+        system_prompt += stream_context_result.context_text
+        system_prompt += """\n\n🎯 CRITICAL: Use the above project data to answer. Be specific and cite actual values."""
+
+    # Build LLM messages
+    llm_messages = [{"role": "system", "content": system_prompt}]
+
+    # Add chat history from context result
+    if stream_context_result and stream_context_result.chat_history:
+        for msg in stream_context_result.chat_history[-5:]:  # Last 5 for streaming (lighter)
+            role = msg.get("role", "user")
+            content = msg.get("content", msg.get("text", ""))[:300]  # Shorter truncation for streaming
+            if role in ["user", "assistant"] and content:
+                llm_messages.append({"role": role, "content": content})
+
+    # Add current message
+    llm_messages.append({"role": "user", "content": message.content})
 
     async def event_stream():
         try:
