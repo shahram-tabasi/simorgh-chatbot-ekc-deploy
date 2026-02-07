@@ -140,10 +140,12 @@ class ProjectSyncService:
                     logger.warning(f"Failed to update progress in Redis: {e}")
 
         try:
-            # Step 1: Fetch from TPMS
+            import asyncio
+
+            # Step 1: Fetch from TPMS (run in thread to avoid blocking event loop)
             update_progress(1, "Fetching project data from TPMS")
             logger.info(f"[{oenum}] Step 1: Fetching data from TPMS")
-            tpms_data = self.tpms.fetch_complete_project_data(oenum)
+            tpms_data = await asyncio.to_thread(self.tpms.fetch_complete_project_data, oenum)
 
             if not tpms_data:
                 result["status"] = "failed"
@@ -158,60 +160,55 @@ class ProjectSyncService:
                 "equipment": len(tpms_data.draft_equipment),
             }
 
-            # Step 2: Initialize project databases if needed
+            # Step 2: Initialize project databases if needed (run in thread)
             update_progress(2, "Initializing project databases")
             logger.info(f"[{oenum}] Step 2: Initializing databases")
             project_name = tpms_data.project_main.project_name
-            db_status = self.db_manager.select_project(oenum, project_name)
+            db_status = await asyncio.to_thread(self.db_manager.select_project, oenum, project_name)
 
             result["steps"]["db_init"] = db_status
 
             if not db_status.get("all_ready"):
                 result["warnings"].append("Some databases failed to initialize")
 
-            # Step 3: Resolve property codes
+            # Step 3: Resolve property codes (run in thread - CPU bound)
             update_progress(3, "Resolving technical properties")
             logger.info(f"[{oenum}] Step 3: Resolving property codes")
-            resolved_data, missing = self._resolve_properties(tpms_data)
+            resolved_data, missing = await asyncio.to_thread(self._resolve_properties, tpms_data)
             result["missing_data"] = missing
             result["steps"]["property_resolution"] = {
                 "status": "success",
                 "missing_count": len(missing),
             }
 
-            # Step 4: Store in PostgreSQL
+            # Step 4: Store in PostgreSQL (run in thread)
             update_progress(4, "Storing data in PostgreSQL")
             logger.info(f"[{oenum}] Step 4: Storing in PostgreSQL")
-            pg_result = self._store_in_postgresql(oenum, tpms_data, resolved_data)
+            pg_result = await asyncio.to_thread(self._store_in_postgresql, oenum, tpms_data, resolved_data)
             result["steps"]["postgresql_store"] = pg_result
 
-            # Step 5: Build Neo4j graph
+            # Step 5: Build Neo4j graph (run in thread - uses sync Neo4j driver)
             update_progress(5, "Building knowledge graph (Neo4j)")
             logger.info(f"[{oenum}] Step 5: Building Neo4j graph")
-            neo4j_result = await self._build_neo4j_graph(oenum, tpms_data, resolved_data)
+            neo4j_result = await asyncio.to_thread(self._build_neo4j_graph_sync, oenum, tpms_data, resolved_data)
             result["steps"]["neo4j_graph"] = neo4j_result
 
-            # Step 6: Track missing data
+            # Step 6: Track missing data (run in thread)
             update_progress(6, "Recording missing data items")
             if missing:
                 logger.info(f"[{oenum}] Step 6: Recording {len(missing)} missing data items")
-                self._record_missing_data(oenum, missing)
+                await asyncio.to_thread(self._record_missing_data, oenum, missing)
 
             # Step 7: Invalidate Redis cache (ensures fresh data for LLM context)
             update_progress(7, "Finalizing and clearing cache")
             logger.info(f"[{oenum}] Step 7: Invalidating Redis cache")
-            if self.redis:
-                self.redis.invalidate_project_cache(oenum)
+            try:
+                redis = self.redis or get_redis_service()
+                await asyncio.to_thread(redis.invalidate_project_cache, oenum)
                 result["steps"]["cache_invalidation"] = {"status": "success"}
-            else:
-                # Try to get redis service if not set
-                try:
-                    redis = get_redis_service()
-                    redis.invalidate_project_cache(oenum)
-                    result["steps"]["cache_invalidation"] = {"status": "success"}
-                except Exception as cache_err:
-                    logger.warning(f"Cache invalidation skipped: {cache_err}")
-                    result["steps"]["cache_invalidation"] = {"status": "skipped", "reason": str(cache_err)}
+            except Exception as cache_err:
+                logger.warning(f"Cache invalidation skipped: {cache_err}")
+                result["steps"]["cache_invalidation"] = {"status": "skipped", "reason": str(cache_err)}
 
             # Complete
             result["status"] = "success"
@@ -670,13 +667,13 @@ class ProjectSyncService:
     # NEO4J GRAPH BUILDING
     # ==========================================================================
 
-    async def _build_neo4j_graph(
+    def _build_neo4j_graph_sync(
         self,
         oenum: str,
         data: TPMSProjectData,
         resolved: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Build Neo4j graph for the project."""
+        """Build Neo4j graph for the project (sync version for thread pool)."""
         result = {
             "status": "pending",
             "nodes_created": 0,
