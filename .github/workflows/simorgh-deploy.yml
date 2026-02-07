@@ -168,6 +168,37 @@ jobs:
           SQL_SERVER_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
           SQL_SERVER_DATABASE=${{ secrets.MYSQL_DATABASE }}
 
+          # JWT & Security
+          JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
+          JWT_ALGORITHM=HS256
+          ACCESS_TOKEN_EXPIRE_MINUTES=60
+          REFRESH_TOKEN_EXPIRE_DAYS=30
+          MAX_LOGIN_ATTEMPTS=5
+          LOCKOUT_DURATION_MINUTES=30
+
+          # Google OAuth 2.0
+          GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REDIRECT_URI=https://simorghai.electrokavir.com/chatbot/auth/google/callback
+          VITE_GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+
+          # Email Service (SMTP - Gmail)
+          EMAIL_PROVIDER=smtp
+          SMTP_HOST=smtp.gmail.com
+          SMTP_PORT=587
+          SMTP_USER=${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_TLS=true
+          FROM_EMAIL=${{ secrets.SMTP_USER }}
+          FROM_NAME=Simorgh AI
+
+          # Frontend URL (used in email verification/reset links)
+          FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
+
+          # Cookie & Security Settings (HTTPS enabled)
+          SECURE_COOKIES=true
+          COOKIE_DOMAIN=.electrokavir.com
+
           # LLM - OpenAI (Online Mode)
           OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL=gpt-4o
@@ -182,7 +213,7 @@ jobs:
           DEFAULT_LLM_MODE=auto
 
           # Frontend
-          VITE_API_URL=/api          
+          VITE_API_URL=/api
           CHOKIDAR_USEPOLLING=true
 
           # Timezone
@@ -210,6 +241,29 @@ jobs:
             echo "WARNING: COCOINDEX_DB_PASSWORD not set, using default"
           else
             echo "COCOINDEX_DB_PASSWORD: [SET]"
+          fi
+
+          # JWT
+          if [ -z "${{ secrets.JWT_SECRET_KEY }}" ]; then
+            echo "WARNING: JWT_SECRET_KEY not set - authentication will not work!"
+          else
+            echo "JWT_SECRET_KEY: [SET]"
+          fi
+
+          # Google OAuth
+          if [ -z "${{ secrets.GOOGLE_CLIENT_ID }}" ]; then
+            echo "WARNING: GOOGLE_CLIENT_ID not set - Google login disabled"
+          else
+            echo "GOOGLE_CLIENT_ID: [SET]"
+            echo "GOOGLE_CLIENT_SECRET: [SET]"
+          fi
+
+          # Email / SMTP
+          if [ -z "${{ secrets.SMTP_USER }}" ]; then
+            echo "WARNING: SMTP_USER not set - email sending disabled"
+          else
+            echo "SMTP_USER: [SET]"
+            echo "SMTP_PASSWORD: [SET]"
           fi
 
           # MySQL (optional - may be disabled)
