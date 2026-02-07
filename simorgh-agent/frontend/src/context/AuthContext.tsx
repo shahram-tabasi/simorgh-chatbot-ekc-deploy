@@ -332,8 +332,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
         console.log('Logging out user:', currentUser.EMPUSERNAME);
         clearUserData(currentUser.EMPUSERNAME);
       } else if (isModernUser(currentUser)) {
-        console.log('Logging out user:', currentUser.email);
-        clearUserData(currentUser.email);
+        console.log('Logging out user:', currentUser.id);
+        clearUserData(currentUser.id);
       }
     }
     clearAuth();
