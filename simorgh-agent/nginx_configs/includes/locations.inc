@@ -159,6 +159,28 @@ location /api/stt/ws/ {
 }
 
 # ====================================================================
+# TTS (Text-to-Speech) API
+# ====================================================================
+location /api/tts/ {
+    limit_req zone=api_limit burst=10 nodelay;
+
+    rewrite ^/api/tts/(.*) /$1 break;
+    proxy_pass http://tts_service;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_connect_timeout 30s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+}
+
+# ====================================================================
 # HEALTH CHECK ENDPOINTS
 # ====================================================================
 location /health {

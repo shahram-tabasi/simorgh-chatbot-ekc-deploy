@@ -274,7 +274,9 @@ class UnifiedLLMContextService:
                     project_number,
                     config.vector_search_limit,
                     config.vector_score_threshold,
-                    config.max_sections_to_show
+                    config.max_sections_to_show,
+                    chat_id=chat_id,
+                    chat_type=chat_type
                 )
                 if vector_context:
                     context_parts.append(vector_context)
@@ -598,17 +600,24 @@ class UnifiedLLMContextService:
         project_number: Optional[str],
         limit: int,
         score_threshold: float,
-        max_to_show: int
+        max_to_show: int,
+        chat_id: Optional[str] = None,
+        chat_type: str = "general"
     ) -> tuple[Optional[str], Optional[List]]:
         """Build vector search context from Qdrant"""
         if not self.qdrant:
             return None, None
 
+        # For general chats, documents are stored with project_oenum=f"general_{chat_id}"
+        effective_project_oenum = project_number
+        if not project_number and chat_id and chat_type == "general":
+            effective_project_oenum = f"general_{chat_id}"
+
         results = self.qdrant.search_section_summaries(
             user_id="system",  # Documents stored with user_id="system"
             query=query,
             limit=limit,
-            project_oenum=project_number,
+            project_oenum=effective_project_oenum,
             score_threshold=score_threshold
         )
 
