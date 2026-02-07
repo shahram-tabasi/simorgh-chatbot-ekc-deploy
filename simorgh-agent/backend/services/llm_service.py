@@ -19,11 +19,14 @@ import logging
 import hashlib
 import json
 import asyncio
-from typing import List, Dict, Any, Optional, Iterator, Union
+from typing import List, Dict, Any, Optional, Iterator, Union, AsyncIterator
 from enum import Enum
 import openai
-import requests
-from requests.exceptions import RequestException, Timeout
+import httpx
+from contextlib import asynccontextmanager
+
+# Import async LLM client for non-blocking offline calls
+from services.llm_async_client import get_async_llm_client, AsyncLLMClient
 
 # Import output parser for extracting clean responses
 try:
@@ -971,6 +974,212 @@ Please answer the current question, keeping in mind the context from our previou
         except Exception as e:
             logger.error(f"Local LLM streaming failed: {e}")
             raise
+
+    # =========================================================================
+    # ASYNC METHODS (Non-blocking for concurrent users)
+    # =========================================================================
+
+    async def async_generate(
+        self,
+        messages: List[Dict[str, str]],
+        mode: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        user_id: str = "anonymous",
+        use_cache: bool = True,
+        cache_ttl: int = 3600,
+    ) -> Dict[str, Any]:
+        """
+        Generate LLM response asynchronously (non-blocking).
+
+        This method allows multiple users to make concurrent requests
+        without blocking each other.
+
+        Args:
+            messages: Chat messages in OpenAI format
+            mode: "online", "offline", or "auto"
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens
+            user_id: User identifier for rate limiting
+            use_cache: Whether to use Redis cache
+            cache_ttl: Cache lifetime in seconds
+
+        Returns:
+            Response dict
+        """
+        self.stats["total_requests"] += 1
+        effective_mode = LLMMode(mode) if mode else self.default_mode
+
+        # Check cache first
+        if use_cache and self.redis_service:
+            cache_key = self._generate_cache_key(
+                messages, effective_mode, temperature, max_tokens
+            )
+            cached = self.redis_service.get_cached_llm_response(cache_key)
+            if cached:
+                self.stats["cache_hits"] += 1
+                cached["cached"] = True
+                return cached
+
+        try:
+            if effective_mode == LLMMode.ONLINE:
+                # Online uses sync OpenAI client (already fast enough)
+                result = await asyncio.to_thread(
+                    self._generate_online, messages, temperature, max_tokens, None
+                )
+                self.stats["online_requests"] += 1
+
+            elif effective_mode == LLMMode.OFFLINE:
+                # Use async client for offline (non-blocking!)
+                result = await self._async_generate_offline(
+                    messages, temperature, user_id
+                )
+                self.stats["offline_requests"] += 1
+
+            elif effective_mode == LLMMode.AUTO:
+                try:
+                    result = await asyncio.to_thread(
+                        self._generate_online, messages, temperature, max_tokens, None
+                    )
+                    self.stats["online_requests"] += 1
+                except Exception as e:
+                    logger.warning(f"Online failed, using async offline: {e}")
+                    result = await self._async_generate_offline(
+                        messages, temperature, user_id
+                    )
+                    self.stats["offline_requests"] += 1
+
+            result["cached"] = False
+
+            # Cache response
+            if use_cache and self.redis_service:
+                self.redis_service.cache_llm_response(
+                    cache_key,
+                    result["response"],
+                    metadata={
+                        "mode": result["mode"],
+                        "model": result["model"],
+                        "tokens": result.get("tokens")
+                    },
+                    ttl=cache_ttl
+                )
+
+            return result
+
+        except Exception as e:
+            self.stats["failures"] += 1
+            logger.error(f"Async LLM generation failed: {e}")
+            raise
+
+    async def _async_generate_offline(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        user_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Generate response using async LLM client (non-blocking).
+        """
+        # Format messages for local LLM
+        system_prompt, user_prompt = self._format_messages_for_local_llm(messages)
+
+        # Get async client
+        async_client = get_async_llm_client()
+
+        # Make async request
+        result = await async_client.generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            user_id=user_id,
+            thinking_level="medium",
+        )
+
+        # Handle rate limit error
+        if result.get("error") == "rate_limit_exceeded":
+            return result
+
+        # Extract final answer
+        clean_response = self._extract_final_answer(result.get("response", ""))
+
+        return {
+            "response": clean_response,
+            "mode": "offline",
+            "model": "local-llm",
+            "finish_reason": result.get("finish_reason", "stop"),
+            "tokens": {"prompt": 0, "completion": 0, "total": 0},
+            "server": result.get("server"),
+        }
+
+    async def async_generate_stream(
+        self,
+        messages: List[Dict[str, str]],
+        mode: Optional[str] = None,
+        temperature: float = 0.7,
+        user_id: str = "anonymous",
+    ) -> AsyncIterator[str]:
+        """
+        Generate streaming LLM response asynchronously.
+
+        Args:
+            messages: Chat messages
+            mode: LLM mode
+            temperature: Sampling temperature
+            user_id: User identifier for rate limiting
+
+        Yields:
+            Response chunks as they arrive
+        """
+        effective_mode = LLMMode(mode) if mode else self.default_mode
+
+        if effective_mode == LLMMode.ONLINE:
+            # Use sync generator wrapped in async
+            for chunk in self._stream_online(messages, temperature, None):
+                yield chunk
+                await asyncio.sleep(0)  # Yield control
+        else:
+            # Use async streaming
+            async for chunk in self._async_stream_offline(messages, user_id):
+                yield chunk
+
+    async def _async_stream_offline(
+        self,
+        messages: List[Dict[str, str]],
+        user_id: str,
+    ) -> AsyncIterator[str]:
+        """
+        Async streaming from local LLM.
+        """
+        system_prompt, user_prompt = self._format_messages_for_local_llm(messages)
+
+        async_client = get_async_llm_client()
+
+        # Track if in thinking section
+        in_thinking = False
+        import re
+        think_open = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
+        think_close = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
+
+        async for chunk in async_client.generate_stream(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            user_id=user_id,
+            thinking_level="medium",
+        ):
+            # Filter thinking sections
+            if think_open.search(chunk):
+                in_thinking = True
+                continue
+            if think_close.search(chunk):
+                in_thinking = False
+                continue
+            if in_thinking:
+                continue
+
+            # Clean and yield
+            clean_chunk = think_open.sub('', chunk)
+            clean_chunk = think_close.sub('', clean_chunk)
+            if clean_chunk:
+                yield clean_chunk
 
     # =========================================================================
     # SPECIALIZED METHODS

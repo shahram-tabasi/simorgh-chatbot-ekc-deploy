@@ -14,7 +14,8 @@ Author: Simorgh Industrial Assistant
 
 import logging
 import time
-from typing import List, Dict, Any, Optional, Iterator
+import asyncio
+from typing import List, Dict, Any, Optional, Iterator, AsyncIterator
 from dataclasses import dataclass, field
 
 from .models import (
@@ -530,14 +531,31 @@ class EnhancedLLMWrapper:
                 include_search_results=include_search_results,
             )
 
-            # Generate response
-            result = self.llm.generate(
-                messages=messages,
-                mode=mode,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                use_cache=use_cache,
-            )
+            # Generate response using async method for non-blocking
+            # Extract user_id from context for rate limiting
+            user_id = context.user.user_id if context.user else "anonymous"
+
+            # Use async method if available (for concurrent user support)
+            if hasattr(self.llm, 'async_generate'):
+                result = await self.llm.async_generate(
+                    messages=messages,
+                    mode=mode,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    user_id=user_id,
+                    use_cache=use_cache,
+                )
+            else:
+                # Fallback to sync method (wrapped in thread)
+                import asyncio
+                result = await asyncio.to_thread(
+                    self.llm.generate,
+                    messages=messages,
+                    mode=mode,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    use_cache=use_cache,
+                )
 
             response_content = result.get("response", "")
             model = result.get("model", "unknown")
@@ -644,6 +662,80 @@ class EnhancedLLMWrapper:
 
         except Exception as e:
             logger.error(f"LLM streaming error: {e}")
+            yield f"Error: {str(e)}"
+
+    async def async_generate_stream(
+        self,
+        context: ChatContext,
+        current_message: str,
+        mode: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        include_documents: bool = True,
+        include_search_results: bool = True,
+    ) -> AsyncIterator[str]:
+        """
+        Generate streaming LLM response asynchronously (non-blocking).
+
+        This allows multiple users to stream responses concurrently.
+
+        Args:
+            context: Chat context
+            current_message: User's message
+            mode: LLM mode
+            temperature: Sampling temperature
+            max_tokens: Max tokens
+            include_documents: Include document context
+            include_search_results: Include search results
+
+        Yields:
+            Response chunks
+        """
+        self.stats["total_requests"] += 1
+
+        if context.chat_type == ChatType.GENERAL:
+            self.stats["general_requests"] += 1
+        else:
+            self.stats["project_requests"] += 1
+
+        if not self.llm:
+            yield "Error: LLM service not available"
+            return
+
+        try:
+            # Build messages
+            messages = self.build_messages(
+                context=context,
+                current_message=current_message,
+                include_documents=include_documents,
+                include_search_results=include_search_results,
+            )
+
+            # Get user_id for rate limiting
+            user_id = context.user.user_id if context.user else "anonymous"
+
+            # Use async streaming if available
+            if hasattr(self.llm, 'async_generate_stream'):
+                async for chunk in self.llm.async_generate_stream(
+                    messages=messages,
+                    mode=mode,
+                    temperature=temperature,
+                    user_id=user_id,
+                ):
+                    yield chunk
+            else:
+                # Fallback to sync streaming
+                for chunk in self.llm.generate_stream(
+                    messages=messages,
+                    mode=mode,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ):
+                    yield chunk
+                    await asyncio.sleep(0)  # Yield control
+
+        except Exception as e:
+            logger.error(f"Async LLM streaming error: {e}")
             yield f"Error: {str(e)}"
 
     # =========================================================================
