@@ -255,7 +255,7 @@ export function useProjects(userId?: string) {
 
     const poll = async (): Promise<void> => {
       try {
-        const response = await axios.get(`${API_BASE}/project-session/sync/progress/${oenum}`, {
+        const response = await axios.get(`${API_BASE}/v2/project/sync/progress/${oenum}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 

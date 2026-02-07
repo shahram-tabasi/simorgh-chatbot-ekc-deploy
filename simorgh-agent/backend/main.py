@@ -526,7 +526,7 @@ async def create_project(
     Creates the root Project node in Neo4j with owner information.
     All heavy initialization (PostgreSQL, Qdrant, TPMS sync) runs in background.
 
-    Poll /api/project-session/sync/progress/{oenum} to check initialization status.
+    Poll /api/v2/project/sync/progress/{oenum} to check initialization status.
     """
     import asyncio
     import json
@@ -675,7 +675,7 @@ async def create_project(
             "guides_initialized": 0,
             "sync_in_progress": True,
             "message": "Project created. Databases initializing in background.",
-            "poll_status_url": f"/api/project-session/sync/progress/{project.project_number}"
+            "poll_status_url": f"/api/v2/project/sync/progress/{project.project_number}"
         }
 
     except HTTPException:
