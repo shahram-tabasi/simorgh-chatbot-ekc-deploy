@@ -58,6 +58,7 @@ from routes.auth_v2 import router as auth_v2_router
 from routes.documents_rag import router as documents_rag_router
 from routes.project_session import include_project_session_routes
 from routes.tpms_webhook import router as tpms_webhook_router
+from routes.document_intelligence import router as document_intelligence_router
 from services.auth_utils import get_current_user
 
 # Import security middleware
@@ -106,6 +107,7 @@ app.include_router(auth_router)
 app.include_router(auth_v2_router)  # Modern auth endpoints (v2)
 app.include_router(documents_rag_router)
 app.include_router(tpms_webhook_router)  # TPMS real-time sync webhooks
+app.include_router(document_intelligence_router)  # NotebookLM-like features
 
 # Include enhanced chatbot v2 routes
 include_chatbot_routes(app)
@@ -191,6 +193,7 @@ class ChatMessage(BaseModel):
     content: str
     llm_mode: Optional[str] = None  # "online", "offline", or None (use default)
     use_graph_context: bool = True
+    grounded_mode: bool = False  # If True, responses are strictly from documents with citations
 
 
 class GraphQuery(BaseModel):
