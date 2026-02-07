@@ -107,7 +107,8 @@ class Neo4jService:
         contract_number: str = "",
         contract_date: str = "",
         description: str = "",
-        metadata: Dict[str, Any] = None
+        metadata: Dict[str, Any] = None,
+        skip_graph_init: bool = False
     ) -> Dict[str, Any]:
         """
         Create a new Project node - the root of all project entities
@@ -121,6 +122,7 @@ class Neo4jService:
             contract_date: Contract signing date (ISO format)
             description: Project description
             metadata: Additional project metadata (will be stored as JSON string)
+            skip_graph_init: If True, skip the slow graph structure initialization (for background processing)
 
         Returns:
             Created project node properties
@@ -161,13 +163,15 @@ class Neo4jService:
             logger.info(f"✅ Project created/updated: {project_number} (owner: {owner_id})")
 
             # Initialize full project graph structure (categories, document types, etc.)
-            from services.project_graph_init import ProjectGraphInitializer
-            graph_init = ProjectGraphInitializer(self.driver)
-            init_result = graph_init.initialize_project_structure(
-                project_oenum=project_number,
-                project_name=project_name
-            )
-            logger.info(f"📊 Graph structure initialized: {init_result}")
+            # Skip if called with skip_graph_init=True (for background processing)
+            if not skip_graph_init:
+                from services.project_graph_init import ProjectGraphInitializer
+                graph_init = ProjectGraphInitializer(self.driver)
+                init_result = graph_init.initialize_project_structure(
+                    project_oenum=project_number,
+                    project_name=project_name
+                )
+                logger.info(f"📊 Graph structure initialized: {init_result}")
 
             # Convert result to dict and parse metadata_json back to dict for response
             project_dict = dict(project)

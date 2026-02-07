@@ -539,7 +539,7 @@ async def create_project(
                 detail=f"Project with name '{project.project_name}' already exists. Please choose a different name."
             )
 
-        # Create minimal project node in Neo4j (fast - just a node)
+        # Create minimal project node in Neo4j (fast - just a node, skip heavy graph init)
         project_node = neo4j.create_project(
             project_number=project.project_number,
             project_name=project.project_name,
@@ -547,7 +547,8 @@ async def create_project(
             client=project.client or "",
             contract_number=project.contract_number or "",
             contract_date=project.contract_date or "",
-            description=project.description or ""
+            description=project.description or "",
+            skip_graph_init=True  # Skip slow graph structure init - will do in background
         )
 
         logger.info(f"✅ User {current_user} created project node: {project.project_name}")
@@ -594,27 +595,38 @@ async def create_project(
                     except:
                         pass
 
-                # Step 1: Initialize databases
-                update_progress(1, "Creating PostgreSQL database...", 10)
-                db_manager = get_project_database_manager(neo4j_service=neo4j)
+                # Step 1: Initialize graph structure (categories, document types, etc.)
+                update_progress(1, "Creating project graph structure...", 10)
+                try:
+                    from services.project_graph_init import ProjectGraphInitializer
+                    graph_init = ProjectGraphInitializer(neo4j.driver)
+                    init_result = graph_init.initialize_project_structure(
+                        project_oenum=project.project_number,
+                        project_name=project.project_name
+                    )
+                    logger.info(f"✅ Graph structure initialized: {init_result}")
+                except Exception as e:
+                    logger.warning(f"Graph init warning: {e}")
 
-                # Create PostgreSQL database
+                # Step 2: Create PostgreSQL database
+                update_progress(2, "Creating PostgreSQL database...", 20)
+                db_manager = get_project_database_manager(neo4j_service=neo4j)
                 try:
                     db_manager.create_project_database(project.project_number)
                     logger.info(f"✅ PostgreSQL database created for {project.project_number}")
                 except Exception as e:
                     logger.warning(f"PostgreSQL init warning: {e}")
 
-                # Step 2: Create Qdrant collection
-                update_progress(2, "Creating Qdrant vector collection...", 20)
+                # Step 3: Create Qdrant collection
+                update_progress(3, "Creating Qdrant vector collection...", 30)
                 try:
                     db_manager.create_project_collection(project.project_number)
                     logger.info(f"✅ Qdrant collection created for {project.project_number}")
                 except Exception as e:
                     logger.warning(f"Qdrant init warning: {e}")
 
-                # Step 3: Sync from TPMS (this includes graph building)
-                update_progress(3, "Syncing data from TPMS...", 30)
+                # Step 4: Sync from TPMS
+                update_progress(4, "Syncing data from TPMS...", 40)
                 sync_service = get_project_sync_service()
                 sync_service.set_neo4j_service(neo4j)
                 sync_result = await sync_service.sync_project(project.project_number, track_progress=True)
