@@ -1,9 +1,10 @@
 // src/components/auth/VerifyEmail.tsx
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, X, Loader, ArrowRight, Mail, Sparkles } from 'lucide-react';
+import { Check, X, Loader, ArrowRight, Mail } from 'lucide-react';
 import { useSearchParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import SimorghIcon from '../icons/SimorghIcon';
 
 type VerificationStatus = 'loading' | 'success' | 'error';
 
@@ -46,7 +47,7 @@ export default function VerifyEmail() {
         {/* Logo */}
         <div className="mb-8">
           <div className="w-16 h-16 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-            <Sparkles className="w-8 h-8 text-white" />
+            <SimorghIcon className="w-8 h-8 text-white" />
           </div>
         </div>
 

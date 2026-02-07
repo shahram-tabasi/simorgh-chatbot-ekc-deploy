@@ -1,9 +1,10 @@
 // src/components/auth/ForgotPassword.tsx
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, AlertCircle, Loader, ArrowLeft, Check, Sparkles } from 'lucide-react';
+import { Mail, AlertCircle, Loader, ArrowLeft, Check } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import SimorghIcon from '../icons/SimorghIcon';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -76,7 +77,7 @@ export default function ForgotPassword() {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-            <Sparkles className="w-8 h-8 text-white" />
+            <SimorghIcon className="w-8 h-8 text-white" />
           </div>
         </div>
 

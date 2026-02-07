@@ -12,6 +12,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, List
 from uuid import UUID
+import asyncpg
 import bcrypt
 from passlib.context import CryptContext
 import jwt
@@ -182,15 +183,28 @@ class PostgresAuthService:
                 query, email, password_hash, first_name, last_name, display_name
             )
 
+            if not user:
+                logger.error(f"Registration returned no user for: {email}")
+                return None, "Registration failed: no user returned from database."
+
             # Create default preferences
             await self._create_default_preferences(user['id'])
 
             logger.info(f"User registered: {email}")
             return dict(user), None
 
+        except asyncpg.UniqueViolationError:
+            logger.warning(f"Registration duplicate email (race condition): {email}")
+            return None, "A user with this email already exists"
+        except asyncpg.UndefinedTableError as e:
+            logger.error(f"Auth tables missing during registration: {e}")
+            return None, "Database tables not initialized. Please contact administrator."
+        except asyncpg.PostgresConnectionError as e:
+            logger.error(f"Database connection error during registration: {e}")
+            return None, "Database connection error. Please try again later."
         except Exception as e:
-            logger.error(f"Registration error: {e}")
-            return None, "Registration failed. Please try again."
+            logger.error(f"Registration error for {email}: {type(e).__name__}: {e}")
+            return None, f"Registration failed ({type(e).__name__}). Please try again."
 
     async def _create_default_preferences(self, user_id: UUID) -> None:
         """Create default preferences for a new user."""
@@ -385,7 +399,7 @@ class PostgresAuthService:
             user = await self.db.execute_one_async(query, email)
             return dict(user) if user else None
         except Exception as e:
-            logger.error(f"Error getting user by email: {e}")
+            logger.error(f"Error getting user by email ({email}): {type(e).__name__}: {e}")
             return None
 
     # =========================================================================

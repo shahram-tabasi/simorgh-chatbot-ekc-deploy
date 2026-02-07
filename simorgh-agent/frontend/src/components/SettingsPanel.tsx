@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { showWarning } from '../utils/alerts';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, isModernUser, isLegacyUser } from '../context/AuthContext';
 import { useTheme, ThemeType } from '../context/ThemeContext';
 
 const languages = [
@@ -52,7 +52,11 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
   const { theme, setTheme, notificationsEnabled, setNotificationsEnabled } = useTheme();
 
   const currentLang = languages.find(l => l.code === language) || languages[0];
-  const displayName = user?.EMPUSERNAME || 'Guest User';
+  const displayName = user
+    ? isLegacyUser(user) ? user.EMPUSERNAME
+    : isModernUser(user) ? (user.display_name || user.first_name || user.email)
+    : 'Guest User'
+    : 'Guest User';
   const userStatus = user ? 'Pro Member • Online' : 'Guest';
 
   // Sync with external control (both open and close)

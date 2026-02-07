@@ -23,6 +23,7 @@ import {
   ResetPassword,
   VerifyEmail,
   VerifyEmailSent,
+  GoogleCallback,
   LoginRouter
 } from './components/auth';
 
@@ -30,7 +31,7 @@ import { useSidebar } from './hooks/useSidebar';
 import { useProjects } from './hooks/useProjects';
 import { useChat } from './hooks/useChat';
 import { LanguageProvider } from './context/LanguageContext';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider, useAuth, isModernUser, isLegacyUser } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { Message } from './types';
 
@@ -48,6 +49,11 @@ function MainChat() {
   const [notifications, setNotifications] = React.useState<ToastNotification[]>([]);
   const [settingsPanelOpen, setSettingsPanelOpen] = React.useState(false);
   const [currentAiMode, setCurrentAiMode] = React.useState<'online' | 'offline'>('online');
+
+  // Derive a unified userId that works for both legacy (TPMS) and modern (email/Google) users
+  // Modern users: use user.id (UUID from PostgreSQL) which matches JWT "sub" claim
+  // Legacy users: use EMPUSERNAME which matches JWT "sub" claim
+  const userId = user ? (isLegacyUser(user) ? user.EMPUSERNAME : isModernUser(user) ? user.id : undefined) : undefined;
 
   const {
     projects,
@@ -67,10 +73,9 @@ function MainChat() {
     toggleProject,
     toggleGeneralChats,
     selectChat
-  } = useProjects(user?.EMPUSERNAME);
+  } = useProjects(userId);
 
-  // Get userId and projectNumber for chat
-  const userId = user?.EMPUSERNAME;
+  // Get projectNumber for chat
   const projectNumber = activeProjectId || null;
 
   const handleSpecTaskCreated = (taskId: string) => {
@@ -450,6 +455,7 @@ function AppContent() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/verify-email-sent" element={<VerifyEmailSent />} />
+        <Route path="/auth/google/callback" element={<GoogleCallback />} />
 
         {/* Protected Routes */}
         <Route
