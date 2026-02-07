@@ -1,10 +1,11 @@
 // src/components/auth/Signup.tsx
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, Lock, User, AlertCircle, Loader, Eye, EyeOff, ArrowRight, Check, X, Sparkles } from 'lucide-react';
+import { Mail, Lock, User, AlertCircle, Loader, Eye, EyeOff, ArrowRight, Check, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import GoogleButton from './GoogleButton';
+import SimorghIcon from '../icons/SimorghIcon';
 
 interface PasswordRequirement {
   label: string;
@@ -119,7 +120,7 @@ export default function Signup() {
                 whileHover={{ scale: 1.05, rotate: 5 }}
                 transition={{ type: "spring", stiffness: 300 }}
               >
-                <Sparkles className="w-12 h-12 text-white" />
+                <SimorghIcon className="w-12 h-12 text-white" />
               </motion.div>
               <h1 className="text-4xl font-bold mb-3">Join Simorgh AI</h1>
               <p className="text-xl text-white/80">Start your intelligent journey</p>
@@ -159,7 +160,7 @@ export default function Signup() {
           {/* Mobile Logo */}
           <div className="lg:hidden text-center mb-6">
             <div className="w-16 h-16 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-              <Sparkles className="w-8 h-8 text-white" />
+              <SimorghIcon className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Simorgh AI</h1>
           </div>
