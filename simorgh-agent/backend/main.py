@@ -567,7 +567,7 @@ async def create_project(
                 "progress_percent": 5,
                 "started_at": datetime.now().isoformat(),
             }
-            redis.set(f"project_sync:{project.project_number}", json.dumps(initial_progress), ex=3600, db="project")
+            redis.set(f"project_sync:{project.project_number}", json.dumps(initial_progress), ttl=3600, db="project")
         except Exception as e:
             logger.warning(f"Failed to init progress in Redis: {e}")
 
@@ -591,7 +591,7 @@ async def create_project(
                             "step_name": step_name,
                             "progress_percent": percent,
                         }
-                        redis.set(f"project_sync:{project.project_number}", json.dumps(progress), ex=3600, db="project")
+                        redis.set(f"project_sync:{project.project_number}", json.dumps(progress), ttl=3600, db="project")
                     except:
                         pass
 
@@ -645,7 +645,7 @@ async def create_project(
                         "completed_at": datetime.now().isoformat(),
                         "sync_details": sync_result,
                     }
-                    redis.set(f"project_sync:{project.project_number}", json.dumps(final_status, default=str), ex=3600, db="project")
+                    redis.set(f"project_sync:{project.project_number}", json.dumps(final_status, default=str), ttl=3600, db="project")
                 else:
                     logger.warning(f"⚠️ Project sync had issues: {sync_result.get('errors')}")
 
@@ -661,7 +661,7 @@ async def create_project(
                         "error": str(init_error),
                         "completed_at": datetime.now().isoformat(),
                     }
-                    redis.set(f"project_sync:{project.project_number}", json.dumps(error_status), ex=3600, db="project")
+                    redis.set(f"project_sync:{project.project_number}", json.dumps(error_status), ttl=3600, db="project")
                 except:
                     pass
 

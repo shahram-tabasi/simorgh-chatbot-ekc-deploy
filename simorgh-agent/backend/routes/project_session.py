@@ -171,7 +171,7 @@ async def select_project(
                 "progress_percent": 0,
                 "started_at": datetime.utcnow().isoformat(),
             }
-            redis.set(f"project_sync:{oenum}", json.dumps(initial_progress), ex=3600, db="project")
+            redis.set(f"project_sync:{oenum}", json.dumps(initial_progress), ttl=3600, db="project")
         except Exception as e:
             logger.warning(f"Failed to init progress in Redis: {e}")
 
@@ -190,7 +190,7 @@ async def select_project(
                         "error": str(e),
                         "completed_at": datetime.utcnow().isoformat(),
                     }
-                    redis.set(f"project_sync:{oenum}", json.dumps(error_status), ex=3600, db="project")
+                    redis.set(f"project_sync:{oenum}", json.dumps(error_status), ttl=3600, db="project")
                 except:
                     pass
 
@@ -250,7 +250,7 @@ async def sync_project(
                 "progress_percent": 0,
                 "started_at": datetime.utcnow().isoformat(),
             }
-            redis.set(f"project_sync:{oenum}", json.dumps(initial_progress), ex=3600, db="project")
+            redis.set(f"project_sync:{oenum}", json.dumps(initial_progress), ttl=3600, db="project")
         except Exception as e:
             logger.warning(f"Failed to init progress in Redis: {e}")
 
