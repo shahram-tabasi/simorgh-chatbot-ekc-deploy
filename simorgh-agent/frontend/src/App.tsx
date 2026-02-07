@@ -266,29 +266,6 @@ function MainChat() {
 
       <div className="w-full h-[100dvh] relative">
 
-        {/* Project Sync Progress Indicator */}
-        {syncProgress && syncProgress.status === 'in_progress' && (
-          <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50 bg-gray-900/95 backdrop-blur-sm rounded-lg shadow-xl border border-purple-500/30 px-6 py-3 min-w-[300px] max-w-[500px]">
-            <div className="flex items-center gap-3">
-              <div className="animate-spin rounded-full h-5 w-5 border-2 border-purple-500 border-t-transparent"></div>
-              <div className="flex-1">
-                <div className="text-white text-sm font-medium">
-                  {syncProgress.step_name || 'Initializing project...'}
-                </div>
-                <div className="mt-1 w-full bg-gray-700 rounded-full h-2">
-                  <div
-                    className="bg-gradient-to-r from-purple-500 to-blue-500 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${syncProgress.progress_percent || 0}%` }}
-                  ></div>
-                </div>
-                <div className="text-gray-400 text-xs mt-1">
-                  Step {syncProgress.current_step || 0} of {syncProgress.total_steps || 7}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Mobile Header - only visible on mobile */}
         <MobileHeader
           onMenuClick={rightSidebar.toggle}
@@ -326,6 +303,28 @@ function MainChat() {
 
           {/* چت اصلی */}
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+            {/* Project Sync Progress - Above Chat Input */}
+            {syncProgress && syncProgress.status === 'in_progress' && (
+              <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 z-40 bg-gray-900/95 backdrop-blur-sm rounded-lg shadow-xl border border-purple-500/30 px-4 py-2 min-w-[280px] max-w-[400px]">
+                <div className="flex items-center gap-3">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-purple-500 border-t-transparent flex-shrink-0"></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-white text-xs font-medium truncate">
+                      {syncProgress.step_name || 'Initializing project...'}
+                    </div>
+                    <div className="mt-1 w-full bg-gray-700 rounded-full h-1.5">
+                      <div
+                        className="bg-gradient-to-r from-purple-500 to-blue-500 h-1.5 rounded-full transition-all duration-300"
+                        style={{ width: `${syncProgress.progress_percent || 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                  <div className="text-gray-400 text-xs flex-shrink-0">
+                    {syncProgress.progress_percent || 0}%
+                  </div>
+                </div>
+              </div>
+            )}
             <ChatArea
               messages={messages}
               isTyping={isTyping}
