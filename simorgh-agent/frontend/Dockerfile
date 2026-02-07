@@ -10,8 +10,10 @@ RUN npm run build   # This creates /app/dist
 
 # Serve with Nginx (pinned version)
 FROM nginx:alpine3.18
+# Remove default nginx config
+RUN rm /etc/nginx/conf.d/default.conf
+# Copy custom nginx config with SPA try_files support
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Copy to /chatbot/ subdirectory to match vite base path config
 COPY --from=builder /app/dist /usr/share/nginx/html/chatbot
-# Also copy index.html to root for redirect
-RUN echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=/chatbot/"></head></html>' > /usr/share/nginx/html/index.html
 EXPOSE 80

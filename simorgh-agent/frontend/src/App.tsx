@@ -23,6 +23,7 @@ import {
   ResetPassword,
   VerifyEmail,
   VerifyEmailSent,
+  GoogleCallback,
   LoginRouter
 } from './components/auth';
 
@@ -450,6 +451,7 @@ function AppContent() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/verify-email-sent" element={<VerifyEmailSent />} />
+        <Route path="/auth/google/callback" element={<GoogleCallback />} />
 
         {/* Protected Routes */}
         <Route

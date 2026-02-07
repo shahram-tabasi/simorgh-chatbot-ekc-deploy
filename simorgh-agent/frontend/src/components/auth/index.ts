@@ -8,4 +8,5 @@ export { default as ResetPassword } from './ResetPassword';
 export { default as VerifyEmail } from './VerifyEmail';
 export { default as VerifyEmailSent } from './VerifyEmailSent';
 export { default as GoogleButton } from './GoogleButton';
+export { default as GoogleCallback } from './GoogleCallback';
 export { default as LoginRouter } from './LoginRouter';

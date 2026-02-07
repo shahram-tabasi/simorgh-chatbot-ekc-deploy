@@ -79,6 +79,24 @@ services:
       - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
       # Document Processor
       - DOC_PROCESSOR_URL=http://doc-processor:8000
+      # Google OAuth 2.0
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-https://simorghai.electrokavir.com/chatbot/auth/google/callback}
+      # Email Service (SMTP)
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-smtp}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@simorgh.ai}
+      - FROM_NAME=${FROM_NAME:-Simorgh AI}
+      # Frontend URL (used in email verification/reset links)
+      - FRONTEND_URL=${FRONTEND_URL:-https://simorghai.electrokavir.com/chatbot}
+      # Cookie & Security Settings (true for HTTPS)
+      - SECURE_COOKIES=${SECURE_COOKIES:-true}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN}
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
