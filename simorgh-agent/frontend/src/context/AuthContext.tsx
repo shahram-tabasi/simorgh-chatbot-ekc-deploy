@@ -327,8 +327,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Logout function
   const logout = () => {
     const currentUser = user;
-    if (currentUser && isLegacyUser(currentUser)) {
-      console.log('🚪 Logging out user:', currentUser.EMPUSERNAME);
+    if (currentUser) {
+      if (isLegacyUser(currentUser)) {
+        console.log('Logging out user:', currentUser.EMPUSERNAME);
+        clearUserData(currentUser.EMPUSERNAME);
+      } else if (isModernUser(currentUser)) {
+        console.log('Logging out user:', currentUser.email);
+        clearUserData(currentUser.email);
+      }
     }
     clearAuth();
   };
