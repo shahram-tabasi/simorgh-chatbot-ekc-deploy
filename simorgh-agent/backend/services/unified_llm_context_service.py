@@ -368,11 +368,15 @@ class UnifiedLLMContextService:
     def _build_user_profile_context(self, user_id: str) -> Optional[str]:
         """Build user profile context from Redis"""
         if not self.redis:
+            logger.warning(f"Redis not available for user profile lookup: {user_id}")
             return None
 
         profile = self.redis.get_user_profile(user_id)
         if not profile:
-            return None
+            logger.warning(f"No user profile found in Redis for: {user_id}")
+            # Fallback: generate basic profile from user_id
+            display_name = user_id.replace(".", " ").replace("_", " ").title()
+            return f"## User Profile\n- **Name**: {display_name}\n- **Username**: {user_id}"
 
         parts = ["## 👤 User Profile"]
 

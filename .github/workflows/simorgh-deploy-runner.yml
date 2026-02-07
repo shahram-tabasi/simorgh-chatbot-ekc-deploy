@@ -31,6 +31,15 @@ jobs:
           - name: frontend
             context: ./simorgh-agent/frontend
             dockerfile: ./simorgh-agent/frontend/Dockerfile
+          - name: stt-service
+            context: ./simorgh-agent/stt-service
+            dockerfile: ./simorgh-agent/stt-service/Dockerfile
+          - name: tts-service
+            context: ./simorgh-agent/tts-service
+            dockerfile: ./simorgh-agent/tts-service/Dockerfile
+          - name: doc-processor
+            context: ./simorgh-agent/doc-processor
+            dockerfile: ./simorgh-agent/doc-processor/Dockerfile
 
     steps:
       - name: Checkout code
@@ -435,6 +444,9 @@ jobs:
           echo "  ✅ CocoIndex (Document Processing)"
           echo "  ✅ FastAPI Backend"
           echo "  ✅ React Frontend"
+          echo "  ✅ STT Service (Faster-Whisper)"
+          echo "  ✅ TTS Service (Edge-TTS)"
+          echo "  ✅ Doc Processor"
           echo ""
           echo "========================================"
           echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
