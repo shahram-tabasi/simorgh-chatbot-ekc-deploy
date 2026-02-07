@@ -49,6 +49,7 @@ interface AuthContextType {
   // Core auth methods
   login: (emailOrUsername: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
+  handleGoogleCallback: (code: string) => Promise<void>;
   logout: () => void;
 
   // Registration & verification
@@ -207,6 +208,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
+  // Handle Google OAuth callback
+  const handleGoogleCallback = async (code: string) => {
+    try {
+      setError(null);
+      setIsLoading(true);
+
+      const response = await axios.post(`${API_BASE}/auth/v2/google/callback`, {
+        code,
+        redirect_uri: window.location.origin + '/chatbot/auth/google/callback'
+      });
+
+      const { access_token, refresh_token, user: userData } = response.data;
+
+      storeAuth(access_token, userData);
+      if (refresh_token) {
+        localStorage.setItem('simorgh_refresh_token', refresh_token);
+      }
+
+      setIsLoading(false);
+    } catch (error: any) {
+      setIsLoading(false);
+      handleAuthError(error);
+      throw error;
+    }
+  };
+
   // Register
   const register = async (email: string, password: string, firstName?: string, lastName?: string) => {
     try {
@@ -358,6 +385,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     error,
     login,
     loginWithGoogle,
+    handleGoogleCallback,
     logout,
     register,
     verifyEmail,
