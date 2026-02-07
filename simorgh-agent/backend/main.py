@@ -235,6 +235,14 @@ async def startup_event():
     tpms_auth_service = get_tpms_auth_service()
     logger.info("✅ TPMS Auth service initialized")
 
+    # Initialize PostgreSQL Auth Database (Modern Auth)
+    try:
+        from database.postgres_connection import init_database
+        await init_database()
+        logger.info("✅ PostgreSQL Auth database initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ PostgreSQL Auth initialization failed (non-fatal): {e}")
+
     # Initialize PropertyResolver for TPMS code resolution
     try:
         from services.property_resolver import get_property_resolver
@@ -323,6 +331,14 @@ async def shutdown_event():
 
     if redis_service:
         redis_service.close()
+
+    # Close PostgreSQL Auth connections
+    try:
+        from database.postgres_connection import close_database
+        await close_database()
+        logger.info("✅ PostgreSQL Auth connections closed")
+    except Exception as e:
+        logger.warning(f"⚠️ PostgreSQL Auth shutdown error: {e}")
 
     logger.info("✅ Shutdown complete")
 

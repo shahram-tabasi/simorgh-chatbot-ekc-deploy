@@ -745,3 +745,47 @@ async def legacy_login(
         "user": user,
         "auth_method": "legacy_tpms"
     }
+
+
+# =============================================================================
+# AUTH HEALTH CHECK (Diagnostic endpoint)
+# =============================================================================
+
+@router.get("/health")
+async def auth_health_check(
+    auth_service: PostgresAuthService = Depends(get_postgres_auth_service)
+):
+    """
+    Check the health of the authentication system.
+    Verifies database connectivity and table existence.
+    """
+    checks = {
+        "database_connected": False,
+        "tables_exist": False,
+        "smtp_configured": bool(os.getenv("SMTP_USER")),
+        "google_oauth_configured": bool(os.getenv("GOOGLE_CLIENT_ID")),
+        "jwt_configured": os.getenv("JWT_SECRET_KEY", "change-this") != "change-this-secret-key-in-production",
+    }
+
+    try:
+        health = await auth_service.db.health_check()
+        checks["database_connected"] = health
+
+        if health:
+            # Check if users table exists
+            async with auth_service.db.get_async_connection() as conn:
+                table_exists = await conn.fetchval(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users')"
+                )
+                checks["tables_exist"] = table_exists
+
+                if table_exists:
+                    user_count = await conn.fetchval("SELECT COUNT(*) FROM users")
+                    checks["user_count"] = user_count
+    except Exception as e:
+        checks["error"] = str(e)
+
+    status = "healthy" if checks["database_connected"] and checks["tables_exist"] else "unhealthy"
+    checks["status"] = status
+
+    return checks

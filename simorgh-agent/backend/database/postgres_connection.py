@@ -190,9 +190,36 @@ def get_db() -> PostgresConnection:
 
 
 async def init_database() -> None:
-    """Initialize the database connection pools."""
+    """Initialize the database connection pools and ensure auth tables exist."""
     db = get_db()
     await db.init_async_pool()
+
+    # Verify auth tables exist; run migration if they don't
+    try:
+        async with db.get_async_connection() as conn:
+            table_exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users')"
+            )
+            if not table_exists:
+                logger.warning("Auth tables not found - running migration...")
+                import os
+                migration_path = os.path.join(
+                    os.path.dirname(__file__),
+                    "migrations",
+                    "001_create_auth_tables.sql"
+                )
+                if os.path.exists(migration_path):
+                    success = await db.run_migration(migration_path)
+                    if success:
+                        logger.info("Auth tables created successfully via migration")
+                    else:
+                        logger.error("Failed to create auth tables via migration")
+                else:
+                    logger.error(f"Migration file not found: {migration_path}")
+            else:
+                logger.info("Auth tables verified")
+    except Exception as e:
+        logger.error(f"Error verifying auth tables: {e}")
 
 
 async def close_database() -> None:
