@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ElectroQuire Dashboard</title>
+  <title>ElectroKavir Dashboard</title>
   <link rel="stylesheet" href="Contents/all.min.css" />
   <style>
     * {
@@ -21,6 +21,7 @@
       display: flex;
     }
 
+    /* Sidebar */
     .sidebar {
       width: 280px;
       background: linear-gradient(180deg, #1e293b 0%, #334155 100%);
@@ -35,6 +36,7 @@
       padding: 2.5rem 1.8rem;
       border-right: 1px solid rgba(255, 255, 255, 0.06);
       box-shadow: 6px 0 25px rgba(0, 0, 0, 0.35);
+      z-index: 100;
     }
 
     .logo-container {
@@ -51,8 +53,6 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: none;
-      /* اگر سایه نمی‌خوای */
       transition: transform 0.3s ease;
     }
 
@@ -60,6 +60,7 @@
       width: 100%;
       height: 100%;
       object-fit: contain;
+      border-radius: 18px;
     }
 
     .logo:hover {
@@ -73,6 +74,7 @@
       background: linear-gradient(90deg, #60a5fa, #c084fc, #f472b6);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
+      background-clip: text;
     }
 
     .sidebar h2 {
@@ -105,6 +107,7 @@
       background: linear-gradient(90deg, #60a5fa, #c084fc, #f472b6);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
+      background-clip: text;
     }
 
     .footer-tag {
@@ -119,18 +122,60 @@
       color: #64748b;
     }
 
+    /* Main Content */
     .main-content {
       flex: 1;
       margin-left: 280px;
       padding: 2.5rem 2rem;
+      min-height: 100vh;
     }
 
+    /* Mobile Header (hidden on desktop) */
+    .mobile-header {
+      display: none;
+      background: linear-gradient(180deg, #1e293b 0%, #334155 100%);
+      padding: 1rem 1.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .mobile-header-content {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .mobile-logo {
+      width: 50px;
+      height: 50px;
+    }
+
+    .mobile-logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 12px;
+    }
+
+    .mobile-title {
+      font-size: 1.3rem;
+      font-weight: 700;
+      background: linear-gradient(90deg, #60a5fa, #c084fc, #f472b6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Grid */
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
       gap: 1.8rem;
     }
 
+    /* Card - Now an <a> tag for full clickability */
     .card {
       background: rgba(30, 41, 59, 0.42);
       backdrop-filter: blur(16px);
@@ -143,6 +188,8 @@
       cursor: pointer;
       display: flex;
       height: 160px;
+      text-decoration: none;
+      color: inherit;
     }
 
     .card:hover {
@@ -152,11 +199,21 @@
       background: rgba(30, 41, 59, 0.58);
     }
 
-    .card-img {
+    .card:active {
+      transform: translateY(-8px) scale(1.02);
+    }
+
+    .card-img-container {
       width: 160px;
       height: 160px;
-      object-fit: cover;
       flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    .card-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
       transition: transform 0.6s ease;
     }
 
@@ -176,10 +233,10 @@
       font-size: 1.28rem;
       font-weight: 700;
       margin-bottom: 0.7rem;
-      color: #e2e8f0;
       background: linear-gradient(90deg, #93c5fd, #d8b4fe, #f9a8d4);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
+      background-clip: text;
     }
 
     .card p {
@@ -188,12 +245,44 @@
       line-height: 1.55;
     }
 
+    /* Disabled card style */
+    .card.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .card.disabled:hover {
+      transform: none;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+      border-color: rgba(255, 255, 255, 0.07);
+      background: rgba(30, 41, 59, 0.42);
+    }
+
+    .card.disabled .card-img {
+      filter: grayscale(50%);
+    }
+
+    .card.disabled:hover .card-img {
+      transform: none;
+    }
+
+    .coming-soon {
+      font-size: 0.75rem;
+      color: #f472b6;
+      margin-top: 0.5rem;
+      font-style: italic;
+    }
+
+    /* Responsive Styles */
+
+    /* Large tablets and small desktops */
     @media (max-width: 1400px) {
       .grid {
         grid-template-columns: repeat(3, 1fr);
       }
     }
 
+    /* Tablets */
     @media (max-width: 1024px) {
       .sidebar {
         width: 90px;
@@ -201,9 +290,9 @@
       }
 
       .logo {
-        width: 70px;
-        height: 70px;
-        font-size: 2.2rem;
+        width: 60px;
+        height: 60px;
+        margin-bottom: 1rem;
       }
 
       .sidebar h1,
@@ -212,6 +301,12 @@
       .footer-tag,
       .copyright {
         display: none;
+      }
+
+      .footer-brand {
+        font-size: 0.7rem;
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
       }
 
       .main-content {
@@ -223,18 +318,54 @@
       }
     }
 
+    /* Small tablets */
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1.2rem;
+      }
+
+      .card {
+        height: 140px;
+      }
+
+      .card-img-container {
+        width: 120px;
+        height: 140px;
+      }
+
+      .card-content {
+        padding: 1rem 1.2rem;
+      }
+
+      .card h3 {
+        font-size: 1.1rem;
+      }
+
+      .card p {
+        font-size: 0.85rem;
+      }
+    }
+
+    /* Mobile phones */
     @media (max-width: 600px) {
       .sidebar {
         display: none;
       }
 
+      .mobile-header {
+        display: block;
+      }
+
       .main-content {
         margin-left: 0;
-        padding: 1.4rem;
+        padding: 1.2rem;
+        padding-top: 0;
       }
 
       .grid {
         grid-template-columns: 1fr;
+        gap: 1rem;
       }
 
       .card {
@@ -242,9 +373,49 @@
         flex-direction: column;
       }
 
-      .card-img {
+      .card-img-container {
         width: 100%;
-        height: 180px;
+        height: 160px;
+      }
+
+      .card-content {
+        padding: 1.2rem 1.5rem;
+      }
+
+      .card h3 {
+        font-size: 1.2rem;
+      }
+
+      .card p {
+        font-size: 0.9rem;
+      }
+    }
+
+    /* Very small phones */
+    @media (max-width: 380px) {
+      .mobile-header {
+        padding: 0.8rem 1rem;
+      }
+
+      .mobile-logo {
+        width: 40px;
+        height: 40px;
+      }
+
+      .mobile-title {
+        font-size: 1.1rem;
+      }
+
+      .main-content {
+        padding: 1rem;
+      }
+
+      .card-img-container {
+        height: 140px;
+      }
+
+      .card-content {
+        padding: 1rem 1.2rem;
       }
     }
   </style>
@@ -252,11 +423,11 @@
 
 <body>
 
+  <!-- Sidebar (hidden on mobile) -->
   <div class="sidebar">
     <div class="logo-container">
       <div class="logo">
-        <!-- <i class="fas fa-bolt"></i> -->
-        <img class="fas fa-bolt" src="Contents/electrokavir_logo.jpg" alt="electrokavir-logo">
+        <img src="Contents/electrokavir_logo.jpg" alt="ElectroKavir Logo">
       </div>
       <h1>ElectroKavir</h1>
       <h2>Dashboard</h2>
@@ -272,74 +443,110 @@
     </div>
   </div>
 
+  <!-- Mobile Header (shown only on mobile) -->
+  <div class="mobile-header">
+    <div class="mobile-header-content">
+      <div class="mobile-logo">
+        <img src="Contents/electrokavir_logo.jpg" alt="ElectroKavir Logo">
+      </div>
+      <div class="mobile-title">ElectroKavir Dashboard</div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
   <div class="main-content">
     <div class="grid">
 
-      <div class="card">
-        <img class="card-img" src="Contents/simorgh.jpg" alt="Chat Bot">
-        <div class="card-content">
-          <h3><a href="https://simorghai.electrokavir.com/chatbot" target="_blank" class="stretched-link">CHAT BOT</a>
-          </h3>
-          <p>Intelligent conversational interface for support and automation "Simorgh AI"</p>
+      <!-- Simorgh Chat Bot -->
+      <a href="https://simorghai.electrokavir.com/chatbot/" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/simorgh.jpg" alt="Simorgh Chat Bot">
         </div>
-      </div>
-
-      <div class="card">
-        <img class="card-img" src="Contents/EpalnLogo.jpg" alt="EPLANIX">
         <div class="card-content">
-          <h3><a href="https://simorghai.electrokavir.com/eplanix" target="_blank" class="stretched-link">EPLANIX</a>
-          </h3>
+          <h3>SIMORGH AI</h3>
+          <p>Intelligent conversational interface for support and automation</p>
+        </div>
+      </a>
+
+      <!-- EPLANIX -->
+      <a href="https://simorghai.electrokavir.com/eplanix/" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/EpalnLogo.jpg" alt="EPLANIX">
+        </div>
+        <div class="card-content">
+          <h3>EPLANIX</h3>
           <p>Advanced electrical design and documentation platform</p>
         </div>
-      </div>
+      </a>
 
-      <div class="card">
-        <img class="card-img" src="Contents/bpms.jpg" alt="BPMS">
+      <!-- BPMS -->
+      <a href="http://bpms.electrokavir.com/" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/bpms.jpg" alt="BPMS">
+        </div>
         <div class="card-content">
-          <h3><a href="http://bpms.electrokavir.com/" target="_blank" class="stretched-link">BPMS</a></h3>
+          <h3>BPMS</h3>
           <p>Business Process Management – modeling and automation</p>
         </div>
-      </div>
+      </a>
 
-      <div class="card">
-        <img class="card-img" src="Contents/kasra-org.png" alt="Kasra">
-        <div class="card-content">
-          <h3><a href="http://kasra.electrokavir.com" target="_blank" class="stretched-link">KASRA</a></h3>
-          <p>Software for Attendance Registration , and Nutrition System</p>
+      <!-- KASRA -->
+      <a href="http://kasra.electrokavir.com/lego.web/Kevlar/Account/Login?ReturnUrl=%2Flego.web%2F" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/kasra-org.png" alt="KASRA">
         </div>
-      </div>
-
-      <div class="card">
-        <img class="card-img" src="Contents/OIP.jpg" alt="Rahkaran">
         <div class="card-content">
-          <h3><a href="http://hr.electrokavir.com/employee/" target="_blank" class="stretched-link">RAHKARAN</a></h3>
+          <h3>KASRA</h3>
+          <p>Software for Attendance Registration and Nutrition System</p>
+        </div>
+      </a>
+
+      <!-- RAHKARAN -->
+      <a href="http://hr.electrokavir.com/employee/~/identity/login/?return=%2Femployee" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/OIP.jpg" alt="RAHKARAN">
+        </div>
+        <div class="card-content">
+          <h3>RAHKARAN</h3>
           <p>Personnel and Payroll Management System</p>
         </div>
-      </div>
+      </a>
 
-      <div class="card">
-        <img class="card-img" src="Contents/telephone_x.jpg" alt="Internal Phones">
+      <!-- Internal Phones -->
+      <a href="http://192.168.0.150" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/telephone_x.jpg" alt="Internal Phones">
+        </div>
         <div class="card-content">
-          <h3><a href="http://192.168.0.150" target="_blank" class="stretched-link">INTERNAL PHONES</a></h3>
+          <h3>INTERNAL PHONES</h3>
           <p>Company PBX directory and call management</p>
         </div>
-      </div>
+      </a>
 
-      <div class="card">
-        <img class="card-img" src="Contents/ddm.avif" alt="DDM">
+      <!-- DDM (Coming Soon) -->
+      <div class="card disabled">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/ddm.avif" alt="DDM">
+        </div>
         <div class="card-content">
           <h3>DDM</h3>
           <p>Document & Digital Management with version control</p>
+          <span class="coming-soon">Coming Soon</span>
         </div>
       </div>
 
-      <div class="card">
-        <img class="card-img" src="Contents/timesheet.webp" alt="MIS">
+      <!-- MIS (Coming Soon) -->
+      <div class="card disabled">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/timesheet.webp" alt="MIS">
+        </div>
         <div class="card-content">
           <h3>MIS</h3>
           <p>Management Information System – reports & analytics</p>
+          <span class="coming-soon">Coming Soon</span>
         </div>
       </div>
+
     </div>
   </div>
 
