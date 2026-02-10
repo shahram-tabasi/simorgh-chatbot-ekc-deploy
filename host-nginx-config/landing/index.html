@@ -613,6 +613,11 @@
         background: linear-gradient(160deg, #141b2d 0%, #0f1525 100%);
       }
 
+      /* Hide desktop-only cards on mobile */
+      .desktop-only {
+        display: none !important;
+      }
+
       /* Mobile Footer Bar */
       .mobile-footer {
         display: flex;
@@ -933,7 +938,7 @@
       </a>
 
       <!-- DDM -->
-      <a href="javascript:void(0)" class="card" onclick="sendCommand('open ddm', 'DDM')">
+      <a href="javascript:void(0)" class="card desktop-only" onclick="sendCommand('open ddm', 'DDM')">
         <div class="card-img-container">
           <img class="card-img" src="Contents/ddm.avif" alt="DDM">
         </div>
@@ -944,7 +949,7 @@
       </a>
 
       <!-- MIS -->
-      <a href="javascript:void(0)" class="card" onclick="sendCommand('open mis', 'MIS')">
+      <a href="javascript:void(0)" class="card desktop-only" onclick="sendCommand('open mis', 'MIS')">
         <div class="card-img-container">
           <img class="card-img" src="Contents/timesheet.webp" alt="MIS">
         </div>
