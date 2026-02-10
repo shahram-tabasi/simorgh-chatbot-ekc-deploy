@@ -396,140 +396,196 @@
     }
 
     /* ================================================
-       MOBILE PHONES - Complete Redesign
+       MOBILE PHONES - Modern App-Like Redesign
        ================================================ */
     @media (max-width: 600px) {
       body {
-        background: linear-gradient(160deg, #0c1222 0%, #1a1f35 50%, #0f172a 100%);
+        background: #0a0e1a;
         display: block;
+        min-height: 100vh;
       }
 
       .sidebar {
         display: none;
       }
 
+      /* Mobile Header - Clean & Modern */
       .mobile-header {
         display: block;
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(51, 65, 85, 0.9) 100%);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        padding: 1.5rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+        background: linear-gradient(180deg, #0f1629 0%, #0a0e1a 100%);
+        padding: 2rem 1.5rem 1.5rem;
+        text-align: center;
+        border-bottom: none;
+        position: relative;
+      }
+
+      .mobile-header::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 10%;
+        right: 10%;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.3), transparent);
       }
 
       .mobile-header-content {
         flex-direction: column;
         align-items: center;
         text-align: center;
-        gap: 0.8rem;
+        gap: 1rem;
       }
 
       .mobile-logo {
-        width: 70px;
-        height: 70px;
-        border-radius: 18px;
-        box-shadow: 0 8px 32px rgba(96, 165, 250, 0.3);
-        border: 2px solid rgba(96, 165, 250, 0.3);
+        width: 80px;
+        height: 80px;
+        border-radius: 20px;
+        box-shadow: 0 10px 40px rgba(96, 165, 250, 0.25),
+                    0 0 0 1px rgba(96, 165, 250, 0.2);
+        overflow: hidden;
       }
 
       .mobile-logo img {
-        border-radius: 16px;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 20px;
       }
 
       .mobile-title {
-        font-size: 1.6rem;
+        font-size: 1.8rem;
         font-weight: 800;
         letter-spacing: -0.5px;
+        margin-bottom: 0.2rem;
       }
 
       .mobile-subtitle {
         display: block;
-        font-size: 0.85rem;
-        color: #94a3b8;
-        margin-top: 0.3rem;
+        font-size: 0.9rem;
+        color: #64748b;
+        font-weight: 400;
+        letter-spacing: 1px;
       }
 
+      /* Main Content Area */
       .main-content {
         margin-left: 0;
-        padding: 1.2rem;
-        padding-bottom: 100px;
+        padding: 1.5rem 1rem;
+        padding-bottom: 90px;
+        background: #0a0e1a;
       }
 
-      /* Mobile Grid - 2 columns of square cards */
+      /* Section Title for Mobile */
+      .grid::before {
+        content: 'Services';
+        display: block;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 1rem;
+        padding-left: 0.5rem;
+        grid-column: 1 / -1;
+      }
+
+      /* Mobile Grid - 2 columns */
       .grid {
         grid-template-columns: repeat(2, 1fr);
-        gap: 0.9rem;
+        gap: 1rem;
       }
 
-      /* Mobile Card - Square app-like design */
+      /* Mobile Card - Modern App Style */
       .card {
         height: auto;
         flex-direction: column;
-        border-radius: 24px;
-        background: linear-gradient(145deg, rgba(30, 41, 59, 0.6) 0%, rgba(51, 65, 85, 0.4) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
-        transition: all 0.3s ease;
+        border-radius: 20px;
+        background: linear-gradient(160deg, #141b2d 0%, #0f1525 100%);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        transition: all 0.25s ease;
         overflow: hidden;
+        position: relative;
       }
 
-      .card:hover {
-        transform: scale(1.02);
-        box-shadow: 0 8px 30px rgba(96, 165, 250, 0.2);
+      .card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #60a5fa, #c084fc);
+        opacity: 0;
+        transition: opacity 0.25s ease;
       }
 
       .card:active {
-        transform: scale(0.97);
-        background: rgba(30, 41, 59, 0.8);
+        transform: scale(0.96);
+        background: linear-gradient(160deg, #1a2340 0%, #141b2d 100%);
       }
 
+      .card:active::before {
+        opacity: 1;
+      }
+
+      /* Card Image */
       .card-img-container {
         width: 100%;
-        height: 100px;
+        height: 90px;
         position: relative;
         overflow: hidden;
+        background: #0a0e1a;
       }
 
       .card-img {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        transition: transform 0.4s ease;
+        opacity: 0.9;
+        transition: all 0.3s ease;
       }
 
       .card:active .card-img {
+        opacity: 1;
         transform: scale(1.05);
       }
 
-      /* Gradient overlay on image */
+      /* Gradient overlay */
       .card-img-container::after {
         content: '';
         position: absolute;
         bottom: 0;
         left: 0;
         right: 0;
-        height: 40px;
-        background: linear-gradient(to top, rgba(15, 23, 42, 0.8), transparent);
+        height: 50%;
+        background: linear-gradient(to top, #141b2d, transparent);
         pointer-events: none;
       }
 
+      /* Card Content */
       .card-content {
-        padding: 0.9rem 1rem 1.1rem;
+        padding: 1rem;
         text-align: center;
+        position: relative;
       }
 
       .card h3 {
-        font-size: 0.95rem;
+        font-size: 0.9rem;
         font-weight: 700;
         margin-bottom: 0.4rem;
-        letter-spacing: 0.3px;
+        letter-spacing: 0.5px;
+        background: linear-gradient(90deg, #e2e8f0, #94a3b8);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
       }
 
       .card p {
-        font-size: 0.72rem;
-        line-height: 1.4;
-        color: #8896ab;
+        font-size: 0.7rem;
+        line-height: 1.5;
+        color: #4b5563;
         display: -webkit-box;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
@@ -537,22 +593,24 @@
       }
 
       .coming-soon {
-        font-size: 0.65rem;
-        margin-top: 0.4rem;
-        padding: 0.2rem 0.6rem;
-        background: rgba(244, 114, 182, 0.15);
-        border-radius: 12px;
+        font-size: 0.6rem;
+        margin-top: 0.5rem;
+        padding: 0.25rem 0.75rem;
+        background: linear-gradient(90deg, rgba(244, 114, 182, 0.1), rgba(192, 132, 252, 0.1));
+        border: 1px solid rgba(244, 114, 182, 0.2);
+        border-radius: 20px;
         display: inline-block;
+        color: #f472b6;
       }
 
-      /* Disabled card mobile style */
+      /* Disabled card */
       .card.disabled {
-        opacity: 0.45;
+        opacity: 0.4;
       }
 
       .card.disabled:active {
         transform: none;
-        background: linear-gradient(145deg, rgba(30, 41, 59, 0.6) 0%, rgba(51, 65, 85, 0.4) 100%);
+        background: linear-gradient(160deg, #141b2d 0%, #0f1525 100%);
       }
 
       /* Mobile Footer Bar */
@@ -562,94 +620,119 @@
         bottom: 0;
         left: 0;
         right: 0;
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.98) 0%, rgba(51, 65, 85, 0.95) 100%);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        padding: 1rem 1.5rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.3);
+        background: linear-gradient(180deg, #0f1629 0%, #0a0e1a 100%);
+        padding: 1.2rem 1.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
         justify-content: center;
         align-items: center;
-        gap: 0.5rem;
+        gap: 0.6rem;
         z-index: 100;
       }
 
       .mobile-footer-brand {
-        font-size: 1rem;
+        font-size: 0.95rem;
         font-weight: 700;
-        background: linear-gradient(90deg, #60a5fa, #c084fc, #f472b6);
+        background: linear-gradient(90deg, #60a5fa, #c084fc);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
       }
 
       .mobile-footer-divider {
-        width: 4px;
-        height: 4px;
-        background: #64748b;
+        width: 3px;
+        height: 3px;
+        background: #374151;
         border-radius: 50%;
       }
 
       .mobile-footer-text {
-        font-size: 0.75rem;
-        color: #64748b;
-      }
-    }
-
-    @media (max-width: 380px) {
-      .mobile-header {
-        padding: 1.2rem 1rem;
+        font-size: 0.72rem;
+        color: #4b5563;
       }
 
-      .mobile-logo {
-        width: 60px;
-        height: 60px;
+      /* Launch Modal Mobile */
+      .launch-modal-content {
+        max-width: 90%;
+        padding: 2rem 1.5rem;
       }
 
-      .mobile-title {
+      .launch-modal-icon {
+        font-size: 3.5rem;
+      }
+
+      .launch-modal-title {
         font-size: 1.4rem;
       }
 
+      .launch-modal-text {
+        font-size: 0.95rem;
+      }
+    }
+
+    /* Very small phones (< 380px) */
+    @media (max-width: 380px) {
+      .mobile-header {
+        padding: 1.5rem 1rem 1.2rem;
+      }
+
+      .mobile-logo {
+        width: 70px;
+        height: 70px;
+        border-radius: 18px;
+      }
+
+      .mobile-title {
+        font-size: 1.5rem;
+      }
+
+      .mobile-subtitle {
+        font-size: 0.8rem;
+      }
+
       .main-content {
-        padding: 0.8rem;
-        padding-bottom: 90px;
+        padding: 1rem 0.8rem;
+        padding-bottom: 85px;
       }
 
       .grid {
-        gap: 0.7rem;
+        gap: 0.8rem;
+      }
+
+      .grid::before {
+        font-size: 0.75rem;
+        margin-bottom: 0.8rem;
       }
 
       .card {
-        border-radius: 20px;
+        border-radius: 16px;
       }
 
       .card-img-container {
-        height: 85px;
+        height: 75px;
       }
 
       .card-content {
-        padding: 0.7rem 0.8rem 0.9rem;
+        padding: 0.8rem;
       }
 
       .card h3 {
-        font-size: 0.85rem;
+        font-size: 0.8rem;
       }
 
       .card p {
-        font-size: 0.68rem;
-        -webkit-line-clamp: 2;
+        font-size: 0.65rem;
       }
 
       .mobile-footer {
-        padding: 0.8rem 1rem;
+        padding: 1rem;
       }
 
       .mobile-footer-brand {
-        font-size: 0.9rem;
+        font-size: 0.85rem;
       }
 
       .mobile-footer-text {
-        font-size: 0.7rem;
+        font-size: 0.65rem;
       }
     }
 
@@ -658,20 +741,27 @@
       .mobile-header {
         display: block;
         padding: 0.8rem 1.5rem;
+        background: linear-gradient(180deg, #0f1629 0%, #0a0e1a 100%);
+      }
+
+      .mobile-header::after {
+        display: none;
       }
 
       .mobile-header-content {
         flex-direction: row;
         justify-content: flex-start;
+        gap: 1rem;
       }
 
       .mobile-logo {
-        width: 45px;
-        height: 45px;
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
       }
 
       .mobile-title {
-        font-size: 1.2rem;
+        font-size: 1.1rem;
       }
 
       .mobile-subtitle {
@@ -684,31 +774,34 @@
 
       .main-content {
         margin-left: 0;
-        padding: 1rem;
-        padding-bottom: 70px;
+        padding: 0.8rem 1rem;
+        padding-bottom: 60px;
       }
 
       .grid {
         grid-template-columns: repeat(4, 1fr);
-        gap: 0.8rem;
+        gap: 0.6rem;
+      }
+
+      .grid::before {
+        display: none;
       }
 
       .card {
-        height: auto;
-        flex-direction: column;
-        border-radius: 16px;
+        border-radius: 14px;
       }
 
       .card-img-container {
-        height: 70px;
+        height: 55px;
       }
 
       .card-content {
-        padding: 0.6rem 0.8rem;
+        padding: 0.5rem 0.6rem;
       }
 
       .card h3 {
-        font-size: 0.8rem;
+        font-size: 0.7rem;
+        margin-bottom: 0;
       }
 
       .card p {
@@ -717,7 +810,15 @@
 
       .mobile-footer {
         display: flex;
-        padding: 0.6rem 1rem;
+        padding: 0.5rem 1rem;
+      }
+
+      .mobile-footer-brand {
+        font-size: 0.8rem;
+      }
+
+      .mobile-footer-text {
+        font-size: 0.6rem;
       }
     }
   </style>
