@@ -175,7 +175,7 @@
       gap: 1.8rem;
     }
 
-    /* Card - Now an <a> tag for full clickability */
+    /* Card */
     .card {
       background: rgba(30, 41, 59, 0.42);
       backdrop-filter: blur(16px);
@@ -245,44 +245,83 @@
       line-height: 1.55;
     }
 
-    /* Disabled card style */
-    .card.disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
+    /* Launch Modal */
+    .launch-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      backdrop-filter: blur(8px);
     }
 
-    .card.disabled:hover {
-      transform: none;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
-      border-color: rgba(255, 255, 255, 0.07);
-      background: rgba(30, 41, 59, 0.42);
+    .launch-modal-content {
+      background: rgba(30, 41, 59, 0.92);
+      border-radius: 20px;
+      border: 1px solid rgba(34, 211, 238, 0.4);
+      padding: 2.5rem;
+      max-width: 480px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 0 60px rgba(34, 211, 238, 0.5);
+      animation: modalIn 0.4s ease;
     }
 
-    .card.disabled .card-img {
-      filter: grayscale(50%);
+    @keyframes modalIn {
+      from {
+        opacity: 0;
+        transform: scale(0.85);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
     }
 
-    .card.disabled:hover .card-img {
-      transform: none;
+    .launch-modal-icon {
+      font-size: 5rem;
+      margin-bottom: 1rem;
     }
 
-    .coming-soon {
-      font-size: 0.75rem;
-      color: #f472b6;
-      margin-top: 0.5rem;
-      font-style: italic;
+    .launch-modal-title {
+      font-size: 1.8rem;
+      margin-bottom: 1rem;
+      color: #22d3ee;
+    }
+
+    .launch-modal-text {
+      font-size: 1.1rem;
+      color: #cbd5e1;
+      margin-bottom: 2rem;
+      white-space: pre-line;
+    }
+
+    .launch-modal-btn {
+      padding: 0.9rem 2rem;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 1rem;
+      background: #22d3ee;
+      color: #0f172a;
+      transition: background 0.3s ease;
+    }
+
+    .launch-modal-btn:hover {
+      background: #06b6d4;
     }
 
     /* Responsive Styles */
-
-    /* Large tablets and small desktops */
     @media (max-width: 1400px) {
       .grid {
         grid-template-columns: repeat(3, 1fr);
       }
     }
 
-    /* Tablets */
     @media (max-width: 1024px) {
       .sidebar {
         width: 90px;
@@ -318,7 +357,6 @@
       }
     }
 
-    /* Small tablets */
     @media (max-width: 768px) {
       .grid {
         grid-template-columns: repeat(2, 1fr);
@@ -347,7 +385,6 @@
       }
     }
 
-    /* Mobile phones */
     @media (max-width: 600px) {
       .sidebar {
         display: none;
@@ -391,7 +428,6 @@
       }
     }
 
-    /* Very small phones */
     @media (max-width: 380px) {
       .mobile-header {
         padding: 0.8rem 1rem;
@@ -433,13 +469,14 @@
       <h2>Dashboard</h2>
     </div>
     <div class="description">
-      This dashboard is designed for easy access and centralized management of all systems. All ElectroKavir platforms
+      This dashboard is designed for easy access and centralized management of all systems. All ElectroKavir
+      platforms
       are integrated here for your convenience.
     </div>
     <div class="sidebar-footer">
       <div class="footer-brand">ElectroKavir</div>
       <div class="footer-tag">Intelligent. Integrated. Infinite.</div>
-      <div class="copyright">© 2026 ElectroKavir<br>All rights reserved.</div>
+      <div class="copyright">&copy; 2026 ElectroKavir<br>All rights reserved.</div>
     </div>
   </div>
 
@@ -491,7 +528,8 @@
       </a>
 
       <!-- KASRA -->
-      <a href="http://kasra.electrokavir.com/lego.web/Kevlar/Account/Login?ReturnUrl=%2Flego.web%2F" class="card" target="_blank" rel="noopener">
+      <a href="http://kasra.electrokavir.com/lego.web/Kevlar/Account/Login?ReturnUrl=%2Flego.web%2F" class="card"
+        target="_blank" rel="noopener">
         <div class="card-img-container">
           <img class="card-img" src="Contents/kasra-org.png" alt="KASRA">
         </div>
@@ -502,7 +540,8 @@
       </a>
 
       <!-- RAHKARAN -->
-      <a href="http://hr.electrokavir.com/employee/~/identity/login/?return=%2Femployee" class="card" target="_blank" rel="noopener">
+      <a href="http://hr.electrokavir.com/employee/~/identity/login/?return=%2Femployee" class="card" target="_blank"
+        rel="noopener">
         <div class="card-img-container">
           <img class="card-img" src="Contents/OIP.jpg" alt="RAHKARAN">
         </div>
@@ -523,32 +562,77 @@
         </div>
       </a>
 
-      <!-- DDM (Coming Soon) -->
-      <div class="card disabled">
+      <!-- DDM -->
+      <a href="javascript:void(0)" class="card" onclick="sendCommand('open ddm', 'DDM')">
         <div class="card-img-container">
           <img class="card-img" src="Contents/ddm.avif" alt="DDM">
         </div>
         <div class="card-content">
           <h3>DDM</h3>
           <p>Document & Digital Management with version control</p>
-          <span class="coming-soon">Coming Soon</span>
         </div>
-      </div>
+      </a>
 
-      <!-- MIS (Coming Soon) -->
-      <div class="card disabled">
+      <!-- MIS -->
+      <a href="javascript:void(0)" class="card" onclick="sendCommand('open mis', 'MIS')">
         <div class="card-img-container">
           <img class="card-img" src="Contents/timesheet.webp" alt="MIS">
         </div>
         <div class="card-content">
           <h3>MIS</h3>
           <p>Management Information System – reports & analytics</p>
-          <span class="coming-soon">Coming Soon</span>
         </div>
-      </div>
+      </a>
 
     </div>
   </div>
+
+  <!-- Launch Modal -->
+  <div id="launchModal" class="launch-modal">
+    <div class="launch-modal-content">
+      <div class="launch-modal-icon" id="launchIcon"></div>
+      <div class="launch-modal-title" id="launchTitle"></div>
+      <div class="launch-modal-text" id="launchText"></div>
+      <button class="launch-modal-btn" onclick="document.getElementById('launchModal').style.display='none'">OK</button>
+    </div>
+  </div>
+
+  <script>
+    function sendCommand(command, appName) {
+      var modal = document.getElementById('launchModal');
+      var icon = document.getElementById('launchIcon');
+      var title = document.getElementById('launchTitle');
+      var text = document.getElementById('launchText');
+
+      icon.textContent = '\u26A1';
+      icon.style.color = '#22d3ee';
+      icon.style.filter = 'drop-shadow(0 0 15px #22d3ee)';
+      title.textContent = 'Launching ' + appName + '...';
+      text.textContent = 'Sending command to local listener.';
+      modal.style.display = 'flex';
+
+      fetch('http://localhost:8080', {
+        method: 'POST',
+        body: command,
+        headers: { 'Content-Type': 'text/plain' }
+      })
+        .then(function (res) { return res.text(); })
+        .then(function (msg) {
+          icon.textContent = '\u2705';
+          icon.style.color = '#34d399';
+          icon.style.filter = 'drop-shadow(0 0 15px #34d399)';
+          title.textContent = appName + ' Opened';
+          text.textContent = msg;
+        })
+        .catch(function (err) {
+          icon.textContent = '\u274C';
+          icon.style.color = '#f87171';
+          icon.style.filter = 'drop-shadow(0 0 15px #f87171)';
+          title.textContent = 'Connection Failed';
+          text.textContent = 'Could not connect to local listener on port 8080.\nMake sure the launcher is running on your computer.\n\n' + err.message;
+        });
+    }
+  </script>
 
 </body>
 
