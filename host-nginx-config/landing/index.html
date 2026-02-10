@@ -151,6 +151,11 @@
       display: none;
     }
 
+    /* Mobile-only elements (hidden on desktop) */
+    .mobile-only {
+      display: none !important;
+    }
+
     .mobile-header-content {
       display: flex;
       align-items: center;
@@ -618,6 +623,11 @@
         display: none !important;
       }
 
+      /* Show mobile-only cards on mobile */
+      .mobile-only {
+        display: flex !important;
+      }
+
       /* Mobile Footer Bar */
       .mobile-footer {
         display: flex;
@@ -927,13 +937,24 @@
       </a>
 
       <!-- Internal Phones -->
-      <a href="http://192.168.0.150" class="card" target="_blank" rel="noopener">
+      <a href="http://192.168.0.150" class="card desktop-only" target="_blank" rel="noopener">
         <div class="card-img-container">
           <img class="card-img" src="Contents/telephone_x.jpg" alt="Internal Phones">
         </div>
         <div class="card-content">
           <h3>INTERNAL PHONES</h3>
           <p>Company PBX directory and call management</p>
+        </div>
+      </a>
+
+      <!-- About Us (Mobile Only) -->
+      <a href="about.html" class="card mobile-only">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/electrokavir_logo.jpg" alt="About Us">
+        </div>
+        <div class="card-content">
+          <h3>ABOUT US</h3>
+          <p>Learn about ElectroKavir's mission and services</p>
         </div>
       </a>
 
