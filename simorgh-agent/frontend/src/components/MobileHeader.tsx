@@ -1,6 +1,6 @@
 // src/components/MobileHeader.tsx
 import React from 'react';
-import { Menu, Settings, ChevronDown, History, Search, MessageSquare } from 'lucide-react';
+import { Menu, Settings, ChevronDown, History, Search, MessageSquare, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface MobileHeaderProps {
@@ -8,9 +8,11 @@ interface MobileHeaderProps {
   onHistoryClick: () => void;
   onSettingsClick: () => void;
   currentModel: 'online' | 'offline';
+  userTier?: string;
+  offlineLocked?: boolean;
 }
 
-export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsClick, currentModel }: MobileHeaderProps) {
+export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsClick, currentModel, userTier, offlineLocked }: MobileHeaderProps) {
   const [showModelSelector, setShowModelSelector] = React.useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = React.useState(false);
   const [selectedModel, setSelectedModel] = React.useState<'online' | 'offline'>(currentModel);
@@ -20,6 +22,7 @@ export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsCl
   }, [currentModel]);
 
   const handleModelChange = (mode: 'online' | 'offline') => {
+    if (mode === 'offline' && offlineLocked) return; // Modern users can't use offline
     setSelectedModel(mode);
     localStorage.setItem('llm_mode', mode);
     window.dispatchEvent(new CustomEvent('llm-mode-changed', { detail: mode }));
@@ -192,20 +195,29 @@ export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsCl
                 {/* Local AI Option */}
                 <button
                   onClick={() => handleModelChange('offline')}
+                  disabled={offlineLocked}
                   className={`w-full p-4 rounded-xl border-2 flex items-start gap-3 transition-all ${
-                    selectedModel === 'offline'
-                      ? 'border-purple-500 bg-purple-500/10'
-                      : 'border-white/10 hover:border-white/30'
+                    offlineLocked
+                      ? 'border-white/5 opacity-50 cursor-not-allowed'
+                      : selectedModel === 'offline'
+                        ? 'border-purple-500 bg-purple-500/10'
+                        : 'border-white/10 hover:border-white/30'
                   }`}
                 >
                   <div className="flex-shrink-0 w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-                    <div className="w-5 h-5 rounded-full bg-purple-500" />
+                    {offlineLocked ? (
+                      <Lock className="w-5 h-5 text-gray-500" />
+                    ) : (
+                      <div className="w-5 h-5 rounded-full bg-purple-500" />
+                    )}
                   </div>
                   <div className="text-left flex-1">
                     <div className="text-white font-semibold">Local AI</div>
-                    <div className="text-xs text-gray-400 mt-0.5">On-premise • 192.168.1.61/62 • Private</div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {offlineLocked ? 'Available for legacy network users' : 'On-premise • 192.168.1.61/62 • Private'}
+                    </div>
                   </div>
-                  {selectedModel === 'offline' && (
+                  {selectedModel === 'offline' && !offlineLocked && (
                     <div className="flex-shrink-0 w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center">
                       <div className="w-2 h-2 rounded-full bg-white" />
                     </div>
