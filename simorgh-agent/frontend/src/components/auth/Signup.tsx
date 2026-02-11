@@ -62,8 +62,13 @@ export default function Signup() {
     if (!isValid) return;
 
     try {
-      await register?.(formData.email, formData.password, formData.firstName, formData.lastName);
-      navigate('/verify-email-sent', { state: { email: formData.email } });
+      const result = await register?.(formData.email, formData.password, formData.firstName, formData.lastName);
+      // If auto-verified (message contains "log in"), go to login page directly
+      if (result?.message?.includes('log in')) {
+        navigate('/login', { state: { message: result.message } });
+      } else {
+        navigate('/verify-email-sent', { state: { email: formData.email } });
+      }
     } catch (error) {
       console.error('Signup error:', error);
     }

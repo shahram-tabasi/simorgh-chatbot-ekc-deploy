@@ -1,9 +1,9 @@
 // src/components/auth/ModernLogin.tsx
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, Lock, AlertCircle, Loader, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { Mail, Lock, AlertCircle, CheckCircle, Loader, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import GoogleButton from './GoogleButton';
 import SimorghIcon from '../icons/SimorghIcon';
 
@@ -14,6 +14,8 @@ export default function ModernLogin() {
   const [rememberMe, setRememberMe] = useState(false);
   const { login, loginWithGoogle, isLoading, error, isAuthenticated, clearError } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const successMessage = (location.state as any)?.message;
 
   // Redirect to main page if already authenticated
   useEffect(() => {
@@ -163,6 +165,21 @@ export default function ModernLogin() {
               </span>
             </div>
           </div>
+
+          {/* Success Message (from registration) */}
+          <AnimatePresence>
+            {successMessage && !error && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="mb-6 p-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-center gap-3"
+              >
+                <CheckCircle className="w-5 h-5 text-emerald-500 flex-shrink-0" />
+                <p className="text-emerald-600 dark:text-emerald-400 text-sm">{successMessage}</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Error Alert */}
           <AnimatePresence>

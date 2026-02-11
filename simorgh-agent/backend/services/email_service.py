@@ -37,10 +37,8 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 # SendGrid
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 
-# AWS SES
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+# Resend (HTTPS API - works when SMTP is blocked)
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 
 
 # =============================================================================
@@ -346,6 +344,56 @@ class SendGridProvider(EmailProvider):
 
 
 # =============================================================================
+# Resend Provider (HTTPS API - works when SMTP is blocked)
+# =============================================================================
+
+class ResendProvider(EmailProvider):
+    """Resend email provider. Free tier: 100 emails/day, 3000/month."""
+
+    async def send(
+        self,
+        to_email: str,
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None
+    ) -> bool:
+        """Send email via Resend API."""
+        if not RESEND_API_KEY:
+            logger.error("Resend API key not configured")
+            return False
+
+        try:
+            url = "https://api.resend.com/emails"
+            headers = {
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json"
+            }
+
+            data = {
+                "from": f"{FROM_NAME} <{FROM_EMAIL}>",
+                "to": [to_email],
+                "subject": subject,
+                "html": html_content,
+            }
+            if text_content:
+                data["text"] = text_content
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data, headers=headers) as response:
+                    if response.status == 200:
+                        logger.info(f"Email sent via Resend to: {to_email}")
+                        return True
+                    else:
+                        error = await response.text()
+                        logger.error(f"Resend error ({response.status}): {error}")
+                        return False
+
+        except Exception as e:
+            logger.error(f"Resend email error: {e}")
+            return False
+
+
+# =============================================================================
 # Email Service
 # =============================================================================
 
@@ -358,7 +406,9 @@ class EmailService:
 
     def _get_provider(self) -> EmailProvider:
         """Get the configured email provider."""
-        if EMAIL_PROVIDER == "sendgrid":
+        if EMAIL_PROVIDER == "resend":
+            return ResendProvider()
+        elif EMAIL_PROVIDER == "sendgrid":
             return SendGridProvider()
         else:
             return SMTPProvider()
