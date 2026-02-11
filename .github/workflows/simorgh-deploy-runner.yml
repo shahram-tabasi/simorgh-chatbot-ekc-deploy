@@ -158,20 +158,21 @@ jobs:
           GOOGLE_REDIRECT_URI=https://simorghai.electrokavir.com/chatbot/auth/google/callback
           VITE_GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
 
-          # Email Service (SMTP - Gmail)
-          # NOTE: SMTP_USER = your Gmail address (e.g. user@gmail.com)
-          # NOTE: SMTP_PASSWORD = Gmail App Password (NOT Google OAuth Secret!)
-          #   Generate at: https://myaccount.google.com/apppasswords
-          EMAIL_PROVIDER=smtp
+          # Email Service (Resend - HTTPS API, works when SMTP is blocked)
+          # Sign up at https://resend.com (free: 100 emails/day, 3000/month)
+          # Set RESEND_API_KEY in GitHub Secrets
+          # FROM_EMAIL must use a verified domain in Resend, or use onboarding@resend.dev for testing
+          EMAIL_PROVIDER=resend
+          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+          FROM_EMAIL=${FROM_EMAIL:-onboarding@resend.dev}
+          FROM_NAME=Simorgh AI
+          # SMTP config (kept as fallback - set EMAIL_PROVIDER=smtp to use)
           SMTP_HOST=smtp.gmail.com
           SMTP_PORT=587
           SMTP_USER=${{ secrets.SMTP_USER }}
           SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
           SMTP_USE_TLS=true
-          FROM_EMAIL=${{ secrets.SMTP_USER }}
-          FROM_NAME=Simorgh AI
-          # Auto-verify email on registration (bypass SMTP when unavailable)
-          AUTO_VERIFY_EMAIL=true
+          AUTO_VERIFY_EMAIL=false
 
           # Frontend URL (used in email verification/reset links)
           FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
