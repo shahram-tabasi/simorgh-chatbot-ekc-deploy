@@ -242,12 +242,19 @@ jobs:
             echo "GOOGLE_CLIENT_SECRET: [SET]"
           fi
 
-          # Email / SMTP
+          # Email / SMTP (fallback)
           if [ -z "${{ secrets.SMTP_USER }}" ]; then
-            echo "WARNING: SMTP_USER not set - email sending disabled"
+            echo "INFO: SMTP_USER not set - SMTP fallback disabled"
           else
             echo "SMTP_USER: [SET]"
             echo "SMTP_PASSWORD: [SET]"
+          fi
+
+          # Resend (primary email provider - HTTPS API)
+          if [ -z "${{ secrets.RESEND_API_KEY }}" ]; then
+            echo "WARNING: RESEND_API_KEY not set - email verification/reset will not work"
+          else
+            echo "RESEND_API_KEY: [SET]"
           fi
 
           # MySQL (optional - may be disabled)

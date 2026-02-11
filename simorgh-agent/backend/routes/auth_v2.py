@@ -776,12 +776,19 @@ async def auth_health_check(
     Check the health of the authentication system.
     Verifies database connectivity and table existence.
     """
+    email_provider = os.getenv("EMAIL_PROVIDER", "smtp")
     checks = {
         "database_connected": False,
         "tables_exist": False,
-        "smtp_configured": bool(os.getenv("SMTP_USER")),
+        "email_provider": email_provider,
+        "email_configured": (
+            bool(os.getenv("RESEND_API_KEY")) if email_provider == "resend"
+            else bool(os.getenv("SMTP_USER")) if email_provider == "smtp"
+            else bool(os.getenv("SENDGRID_API_KEY"))
+        ),
         "google_oauth_configured": bool(os.getenv("GOOGLE_CLIENT_ID")),
         "jwt_configured": os.getenv("JWT_SECRET_KEY", "change-this") != "change-this-secret-key-in-production",
+        "auto_verify_email": AUTO_VERIFY_EMAIL,
     }
 
     try:
