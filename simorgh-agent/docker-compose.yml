@@ -99,6 +99,8 @@ services:
       # Cookie & Security Settings (true for HTTPS)
       - SECURE_COOKIES=${SECURE_COOKIES:-true}
       - COOKIE_DOMAIN=${COOKIE_DOMAIN}
+      # User Tiers & Admin
+      - ADMIN_SETUP_SECRET=${ADMIN_SETUP_SECRET}
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs

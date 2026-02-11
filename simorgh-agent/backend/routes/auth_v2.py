@@ -806,6 +806,12 @@ async def auth_health_check(
                 if table_exists:
                     user_count = await conn.fetchval("SELECT COUNT(*) FROM users")
                     checks["user_count"] = user_count
+
+                    # Check tier system
+                    tier_table_exists = await conn.fetchval(
+                        "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'tier_quotas')"
+                    )
+                    checks["tier_system_ready"] = tier_table_exists
     except Exception as e:
         checks["error"] = str(e)
 

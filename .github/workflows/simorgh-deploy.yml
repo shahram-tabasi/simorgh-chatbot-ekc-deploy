@@ -198,6 +198,9 @@ jobs:
           SMTP_USE_TLS=true
           AUTO_VERIFY_EMAIL=false
 
+          # User Tiers & Admin
+          ADMIN_SETUP_SECRET=${{ secrets.ADMIN_SETUP_SECRET }}
+
           # Frontend URL (used in email verification/reset links)
           FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
 
