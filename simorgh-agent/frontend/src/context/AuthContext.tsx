@@ -240,7 +240,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setError(null);
       setIsLoading(true);
 
-      await axios.post(`${API_BASE}/auth/v2/register`, {
+      const response = await axios.post(`${API_BASE}/auth/v2/register`, {
         email,
         password,
         first_name: firstName,
@@ -248,6 +248,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
 
       setIsLoading(false);
+      return response.data;
     } catch (error: any) {
       setIsLoading(false);
       handleAuthError(error);

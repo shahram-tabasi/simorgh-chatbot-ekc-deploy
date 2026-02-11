@@ -194,6 +194,8 @@ jobs:
           SMTP_USE_TLS=true
           FROM_EMAIL=${{ secrets.SMTP_USER }}
           FROM_NAME=Simorgh AI
+          # Auto-verify email on registration (bypass SMTP when unavailable)
+          AUTO_VERIFY_EMAIL=true
 
           # Frontend URL (used in email verification/reset links)
           FRONTEND_URL=https://simorghai.electrokavir.com/chatbot

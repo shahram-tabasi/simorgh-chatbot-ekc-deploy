@@ -57,6 +57,7 @@ router = APIRouter(prefix="/auth/v2", tags=["Authentication v2"])
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 SECURE_COOKIES = os.getenv("SECURE_COOKIES", "false").lower() == "true"
 COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN", None)
+AUTO_VERIFY_EMAIL = os.getenv("AUTO_VERIFY_EMAIL", "false").lower() == "true"
 
 # Rate limiting settings
 RATE_LIMIT_WINDOW = 15  # minutes
@@ -187,6 +188,22 @@ async def register(
 
     if error:
         raise HTTPException(status_code=400, detail=error)
+
+    if AUTO_VERIFY_EMAIL:
+        # Auto-verify: mark email as verified immediately (no email service needed)
+        try:
+            await auth_service.db.execute_query_async(
+                "UPDATE users SET email_verified = TRUE, email_verified_at = CURRENT_TIMESTAMP WHERE id = $1",
+                user['id']
+            )
+            logger.info(f"User registered and auto-verified: {data.email}")
+            return MessageResponse(
+                message="Registration successful! Your account is ready. You can now log in.",
+                success=True
+            )
+        except Exception as e:
+            logger.error(f"Auto-verify failed for {data.email}: {e}")
+            # Fall through to email verification flow
 
     # Create verification token and send email
     verification_token = await auth_service.create_email_verification_token(user['id'])
