@@ -366,7 +366,8 @@ class ResendProvider(EmailProvider):
             url = "https://api.resend.com/emails"
             headers = {
                 "Authorization": f"Bearer {RESEND_API_KEY}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "Accept-Encoding": "gzip, deflate",
             }
 
             data = {
@@ -378,14 +379,22 @@ class ResendProvider(EmailProvider):
             if text_content:
                 data["text"] = text_content
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(auto_decompress=False) as session:
                 async with session.post(url, json=data, headers=headers) as response:
+                    body = await response.read()
+                    try:
+                        import gzip
+                        if response.headers.get('Content-Encoding') == 'gzip':
+                            body = gzip.decompress(body)
+                    except Exception:
+                        pass
+                    response_text = body.decode('utf-8', errors='replace')
+
                     if response.status == 200:
                         logger.info(f"Email sent via Resend to: {to_email}")
                         return True
                     else:
-                        error = await response.text()
-                        logger.error(f"Resend error ({response.status}): {error}")
+                        logger.error(f"Resend error ({response.status}): {response_text}")
                         return False
 
         except Exception as e:
