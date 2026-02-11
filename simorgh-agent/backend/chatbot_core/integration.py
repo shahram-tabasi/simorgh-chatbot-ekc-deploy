@@ -198,6 +198,7 @@ class ChatbotCore:
         message: str,
         use_tools: bool = True,
         stream: bool = False,
+        llm_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send a message and get response.
@@ -208,6 +209,7 @@ class ChatbotCore:
             message: User message
             use_tools: Whether to use external tools
             stream: Whether to stream response
+            llm_mode: Force LLM mode (online/offline/auto). None = use default.
 
         Returns:
             Response dict with content and metadata
@@ -259,12 +261,14 @@ class ChatbotCore:
                 "stream": self.llm.generate_stream(
                     context=context,
                     current_message=message,
+                    mode=llm_mode,
                 ),
             }
         else:
             response = await self.llm.generate(
                 context=context,
                 current_message=message,
+                mode=llm_mode,
             )
 
             # Store assistant response

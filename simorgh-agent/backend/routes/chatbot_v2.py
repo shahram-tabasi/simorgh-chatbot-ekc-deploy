@@ -8,12 +8,15 @@ Features:
 - Unified memory management
 - Context-aware LLM responses
 - Stage-based tool restrictions
+- Per-user quota enforcement for modern users
+- LLM mode enforcement (online-only for modern users)
 
 Author: Simorgh Industrial Assistant
 """
 
 import logging
 from typing import Optional, List
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -29,6 +32,65 @@ from chatbot_core.integration import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# USER TYPE DETECTION & TIER HELPERS
+# =============================================================================
+
+def _is_modern_user(user_id: str) -> bool:
+    """Check if user_id is a UUID (modern user) vs TPMS username (legacy)."""
+    try:
+        UUID(user_id)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
+async def _get_modern_user_info(user_id: str) -> Optional[dict]:
+    """Look up a modern user's tier info from PostgreSQL."""
+    try:
+        from services.postgres_auth_service import get_postgres_auth_service
+        auth_service = get_postgres_auth_service()
+        return await auth_service.get_user_by_id(UUID(user_id))
+    except Exception as e:
+        logger.warning(f"Could not look up modern user {user_id}: {e}")
+        return None
+
+
+async def _check_modern_quota(user_id: str, user_role: str) -> dict:
+    """Check quota for a modern user. Raises HTTPException(429) if exceeded."""
+    from services.user_tier_service import get_tier_service
+    tier_service = get_tier_service()
+    if not tier_service:
+        return {"quota_check": "skipped"}
+
+    allowed, quota_info = await tier_service.check_quota(UUID(user_id), user_role)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "quota_exceeded",
+                "message": f"Daily question limit reached ({quota_info['questions_limit']}). Resets at {quota_info['resets_at']}.",
+                "questions_used": quota_info["questions_used"],
+                "questions_limit": quota_info["questions_limit"],
+                "questions_remaining": 0,
+                "resets_at": quota_info["resets_at"],
+                "upgrade_url": "/upgrade",
+            },
+        )
+    return quota_info
+
+
+async def _increment_modern_usage(user_id: str):
+    """Increment daily usage count after successful response."""
+    try:
+        from services.user_tier_service import get_tier_service
+        tier_service = get_tier_service()
+        if tier_service:
+            await tier_service.increment_usage(UUID(user_id))
+    except Exception as e:
+        logger.warning(f"Failed to increment usage for {user_id}: {e}")
 
 router = APIRouter(prefix="/api/v2/chat", tags=["Chatbot V2"])
 
@@ -73,6 +135,7 @@ class SendMessageResponse(BaseModel):
     tokens_used: int = 0
     sources: List[str] = []
     error: Optional[str] = None
+    quota: Optional[dict] = None
 
 
 class UploadDocumentRequest(BaseModel):
@@ -152,12 +215,29 @@ async def create_chat(
     """
     Create a new chat session.
 
-    - **general** chats: Isolated sessions with general responses
-    - **project** chats: Project-specific sessions with shared memory
+    - **general** chats: Available to all users
+    - **project** chats: Modern users need pro/max/admin tier. Legacy users: unrestricted.
     """
     try:
         chat_type = ChatType(request.chat_type)
         stage = SessionStage(request.stage) if request.stage else SessionStage.ANALYSIS
+
+        # Tier-based project creation guard for modern users
+        if chat_type == ChatType.PROJECT and _is_modern_user(request.user_id):
+            user_info = await _get_modern_user_info(request.user_id)
+            if user_info:
+                user_role = user_info.get("user_role", "free")
+                if user_role not in ("pro", "max", "admin"):
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "insufficient_tier",
+                            "message": "Project chats require Pro, Max, or Admin tier.",
+                            "current_tier": user_role,
+                            "required_tiers": ["pro", "max", "admin"],
+                            "upgrade_url": "/upgrade",
+                        },
+                    )
 
         context = await core.create_chat(
             user_id=request.user_id,
@@ -176,6 +256,8 @@ async def create_chat(
             message=f"Created {context.chat_type.value} chat successfully",
         )
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -192,21 +274,44 @@ async def send_message(
     """
     Send a message to a chat and get response.
 
-    For project chats:
-    - Responses are restricted to project knowledge
-    - External tools only allowed in 'analysis' stage
+    Modern users: quota enforced, online LLM only, tools restricted by tier.
+    Legacy (TPMS) users: unlimited, all LLM modes, all tools.
     """
     try:
+        llm_mode = None  # None = use server default (allows offline for legacy)
+        use_tools = request.use_tools
+
+        # --- Modern user enforcement ---
+        if _is_modern_user(request.user_id):
+            user_info = await _get_modern_user_info(request.user_id)
+            user_role = user_info.get("user_role", "free") if user_info else "free"
+
+            # 1. Quota check (raises 429 if exceeded)
+            if user_role != "admin":
+                await _check_modern_quota(request.user_id, user_role)
+
+            # 2. Force online LLM mode for all modern users
+            llm_mode = "online"
+
+            # 3. Tool access: only max/admin can use tools
+            if use_tools and user_role not in ("max", "admin"):
+                use_tools = False
+
+        # --- Send message ---
         result = await core.send_message(
             chat_id=chat_id,
             user_id=request.user_id,
             message=request.message,
-            use_tools=request.use_tools,
+            use_tools=use_tools,
             stream=request.stream,
+            llm_mode=llm_mode,
         )
 
+        # --- Increment usage for modern users on success ---
+        if _is_modern_user(request.user_id) and result.get("success"):
+            await _increment_modern_usage(request.user_id)
+
         if request.stream and result.get("stream"):
-            # Return streaming response
             async def generate():
                 for chunk in result["stream"]:
                     yield chunk
@@ -226,6 +331,8 @@ async def send_message(
             error=result.get("error"),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
