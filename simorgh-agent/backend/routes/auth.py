@@ -12,6 +12,7 @@ from typing import Optional
 import logging
 from services.tpms_auth_service import get_tpms_auth_service, TPMSAuthService
 from services.auth_utils import create_access_token, get_current_username_from_token
+from services.redis_service import get_redis_service
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,39 @@ async def login(
 
     # Create JWT token
     access_token = create_access_token(data={"sub": user["EMPUSERNAME"]})
+
+    # Cache user profile in Redis for LLM context (so chatbot knows the user's name)
+    try:
+        redis = get_redis_service()
+
+        # Extract name fields (case-insensitive lookup for TPMS column variants)
+        first_name = (user.get("EMPFIRSTNAME") or user.get("EmpFirstName")
+                      or user.get("first_name") or "")
+        last_name = (user.get("EMPLASTNAME") or user.get("EmpLastName")
+                     or user.get("last_name") or "")
+        email = user.get("EMAIL") or user.get("Email") or user.get("email") or ""
+
+        # Build display name: prefer real names, fallback to prettified username
+        if first_name or last_name:
+            display_name = f"{first_name} {last_name}".strip()
+        else:
+            # Convert "shahram.tabasi" → "Shahram Tabasi"
+            display_name = user["EMPUSERNAME"].replace(".", " ").replace("_", " ").title()
+
+        redis.cache_user_profile_on_login(
+            user_id=user["EMPUSERNAME"],
+            user_data={
+                "email": email,
+                "first_name": first_name or display_name.split()[0] if display_name else "",
+                "last_name": last_name or (display_name.split()[-1] if len(display_name.split()) > 1 else ""),
+                "display_name": display_name,
+                "role": user.get("EMPROLE") or user.get("role") or "user",
+                "language": "en",
+            }
+        )
+        logger.info(f"User profile cached for LLM context: {user['EMPUSERNAME']} (display: {display_name})")
+    except Exception as e:
+        logger.warning(f"Failed to cache user profile: {e}")
 
     logger.info(f"✅ User logged in: {user['EMPUSERNAME']}")
 

@@ -1,0 +1,1295 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ElectroKavir Dashboard</title>
+  <link rel="stylesheet" href="Contents/all.min.css" />
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 280px;
+      background: linear-gradient(180deg, #1e293b 0%, #334155 100%);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      color: white;
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 2.5rem 1.8rem;
+      border-right: 1px solid rgba(255, 255, 255, 0.06);
+      box-shadow: 6px 0 25px rgba(0, 0, 0, 0.35);
+      z-index: 100;
+    }
+
+    .logo-container {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+
+    .logo {
+      width: 90px;
+      height: 90px;
+      margin: 0 auto 1.8rem;
+      background: transparent;
+      border-radius: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.3s ease;
+    }
+
+    .logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 18px;
+    }
+
+    .logo:hover {
+      transform: scale(1.1);
+    }
+
+    .sidebar h1 {
+      font-size: 1.9rem;
+      font-weight: 800;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(90deg, #60a5fa, #c084fc, #f472b6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .sidebar h2 {
+      font-size: 1.2rem;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 2rem;
+    }
+
+    .description {
+      font-size: 0.95rem;
+      line-height: 1.7;
+      color: #cbd5e1;
+      text-align: center;
+      padding: 0 0.8rem;
+      margin-bottom: 3rem;
+      opacity: 0.92;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding-top: 2.5rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      text-align: center;
+    }
+
+    .footer-brand {
+      font-size: 1.45rem;
+      font-weight: 800;
+      background: linear-gradient(90deg, #60a5fa, #c084fc, #f472b6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .footer-tag {
+      font-size: 0.92rem;
+      font-style: italic;
+      color: #94a3b8;
+      margin: 0.7rem 0 1.3rem;
+    }
+
+    .copyright {
+      font-size: 0.82rem;
+      color: #64748b;
+    }
+
+    /* Social Links in Sidebar */
+    .social-links {
+      display: flex;
+      justify-content: center;
+      gap: 0.8rem;
+      margin: 1.5rem 0;
+    }
+
+    .social-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #94a3b8;
+      text-decoration: none;
+      transition: all 0.3s ease;
+    }
+
+    .social-link:hover {
+      background: rgba(96, 165, 250, 0.15);
+      border-color: rgba(96, 165, 250, 0.4);
+      color: #60a5fa;
+      transform: translateY(-2px);
+    }
+
+    .social-link svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .contact-email {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      color: #64748b;
+      text-decoration: none;
+      padding: 0.6rem 1rem;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      transition: all 0.3s ease;
+    }
+
+    .contact-email:hover {
+      background: rgba(96, 165, 250, 0.1);
+      color: #60a5fa;
+    }
+
+    .contact-email svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    /* Featured About Section (Desktop) - Compact Design */
+    .featured-section {
+      margin-top: 2rem;
+      display: block;
+    }
+
+    .featured-card {
+      background: linear-gradient(160deg, rgba(30, 41, 59, 0.5) 0%, rgba(51, 65, 85, 0.3) 100%);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+      display: flex;
+      align-items: center;
+      text-decoration: none;
+      color: inherit;
+      transition: all 0.3s ease;
+      position: relative;
+      padding: 1.25rem 1.5rem;
+      gap: 1.5rem;
+    }
+
+    .featured-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg, #60a5fa, #c084fc);
+    }
+
+    .featured-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 35px rgba(96, 165, 250, 0.15);
+      border-color: rgba(96, 165, 250, 0.2);
+    }
+
+    .featured-img {
+      width: 60px;
+      height: 60px;
+      flex-shrink: 0;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      padding: 0;
+    }
+
+    .featured-img img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 12px;
+      transition: transform 0.4s ease;
+    }
+
+    .featured-card:hover .featured-img img {
+      transform: scale(1.1);
+    }
+
+    .featured-content {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      padding: 0;
+    }
+
+    .featured-text {
+      flex: 1;
+    }
+
+    .featured-label {
+      display: none;
+    }
+
+    .featured-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+      background: linear-gradient(90deg, #e2e8f0, #cbd5e1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .featured-desc {
+      font-size: 0.85rem;
+      color: #64748b;
+      line-height: 1.5;
+      margin-bottom: 0;
+    }
+
+    .featured-links {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-shrink: 0;
+    }
+
+    .featured-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.55rem 1.1rem;
+      background: linear-gradient(90deg, #60a5fa, #a78bfa);
+      color: #0f172a;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.8rem;
+      transition: all 0.3s ease;
+    }
+
+    .featured-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 6px 20px rgba(96, 165, 250, 0.3);
+    }
+
+    .featured-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .featured-social {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .featured-social-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #64748b;
+      text-decoration: none;
+      transition: all 0.3s ease;
+    }
+
+    .featured-social-link:hover {
+      background: rgba(96, 165, 250, 0.12);
+      border-color: rgba(96, 165, 250, 0.3);
+      color: #60a5fa;
+    }
+
+    .featured-social-link svg {
+      width: 15px;
+      height: 15px;
+    }
+
+    /* Main Content */
+    .main-content {
+      flex: 1;
+      margin-left: 280px;
+      padding: 2.5rem 2rem;
+      min-height: 100vh;
+    }
+
+    /* Mobile Header (hidden on desktop) */
+    .mobile-header {
+      display: none;
+      background: linear-gradient(180deg, #1e293b 0%, #334155 100%);
+      padding: 1rem 1.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    /* Mobile Footer (hidden on desktop) */
+    .mobile-footer {
+      display: none;
+    }
+
+    /* Mobile subtitle (hidden on desktop) */
+    .mobile-subtitle {
+      display: none;
+    }
+
+    /* Mobile-only elements (hidden on desktop) */
+    .mobile-only {
+      display: none !important;
+    }
+
+    .mobile-header-content {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .mobile-logo {
+      width: 50px;
+      height: 50px;
+    }
+
+    .mobile-logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 12px;
+    }
+
+    .mobile-title {
+      font-size: 1.3rem;
+      font-weight: 700;
+      background: linear-gradient(90deg, #60a5fa, #c084fc, #f472b6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Grid */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.8rem;
+    }
+
+    /* Card */
+    .card {
+      background: rgba(30, 41, 59, 0.42);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+      transition: all 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+      cursor: pointer;
+      display: flex;
+      height: 160px;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .card:hover {
+      transform: translateY(-14px) scale(1.035);
+      box-shadow: 0 24px 60px rgba(59, 130, 246, 0.28);
+      border-color: rgba(96, 165, 250, 0.45);
+      background: rgba(30, 41, 59, 0.58);
+    }
+
+    .card:active {
+      transform: translateY(-8px) scale(1.02);
+    }
+
+    .card-img-container {
+      width: 160px;
+      height: 160px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    .card-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.6s ease;
+    }
+
+    .card:hover .card-img {
+      transform: scale(1.15);
+    }
+
+    .card-content {
+      padding: 1.5rem 1.7rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      flex: 1;
+    }
+
+    .card h3 {
+      font-size: 1.28rem;
+      font-weight: 700;
+      margin-bottom: 0.7rem;
+      background: linear-gradient(90deg, #93c5fd, #d8b4fe, #f9a8d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .card p {
+      font-size: 0.96rem;
+      color: #94a3b8;
+      line-height: 1.55;
+    }
+
+    /* Launch Modal */
+    .launch-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      backdrop-filter: blur(8px);
+    }
+
+    .launch-modal-content {
+      background: rgba(30, 41, 59, 0.92);
+      border-radius: 20px;
+      border: 1px solid rgba(34, 211, 238, 0.4);
+      padding: 2.5rem;
+      max-width: 480px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 0 60px rgba(34, 211, 238, 0.5);
+      animation: modalIn 0.4s ease;
+    }
+
+    @keyframes modalIn {
+      from {
+        opacity: 0;
+        transform: scale(0.85);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    .launch-modal-icon {
+      font-size: 5rem;
+      margin-bottom: 1rem;
+    }
+
+    .launch-modal-title {
+      font-size: 1.8rem;
+      margin-bottom: 1rem;
+      color: #22d3ee;
+    }
+
+    .launch-modal-text {
+      font-size: 1.1rem;
+      color: #cbd5e1;
+      margin-bottom: 2rem;
+      white-space: pre-line;
+    }
+
+    .launch-modal-btn {
+      padding: 0.9rem 2rem;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 1rem;
+      background: #22d3ee;
+      color: #0f172a;
+      transition: background 0.3s ease;
+    }
+
+    .launch-modal-btn:hover {
+      background: #06b6d4;
+    }
+
+    /* Responsive Styles */
+    @media (max-width: 1400px) {
+      .grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    @media (max-width: 1024px) {
+      .sidebar {
+        width: 90px;
+        padding: 2rem 0.8rem;
+      }
+
+      .logo {
+        width: 60px;
+        height: 60px;
+        margin-bottom: 1rem;
+      }
+
+      .sidebar h1,
+      .sidebar h2,
+      .description,
+      .footer-tag,
+      .copyright {
+        display: none;
+      }
+
+      .footer-brand {
+        font-size: 0.7rem;
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
+      }
+
+      .main-content {
+        margin-left: 90px;
+      }
+
+      .grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1.2rem;
+      }
+
+      .card {
+        height: 140px;
+      }
+
+      .card-img-container {
+        width: 120px;
+        height: 140px;
+      }
+
+      .card-content {
+        padding: 1rem 1.2rem;
+      }
+
+      .card h3 {
+        font-size: 1.1rem;
+      }
+
+      .card p {
+        font-size: 0.85rem;
+      }
+    }
+
+    /* ================================================
+       MOBILE PHONES - Modern App-Like Redesign
+       ================================================ */
+    @media (max-width: 600px) {
+      body {
+        background: #0a0e1a;
+        display: block;
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      /* Mobile Header - Clean & Modern */
+      .mobile-header {
+        display: block;
+        background: linear-gradient(180deg, #0f1629 0%, #0a0e1a 100%);
+        padding: 2rem 1.5rem 1.5rem;
+        text-align: center;
+        border-bottom: none;
+        position: relative;
+      }
+
+      .mobile-header::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 10%;
+        right: 10%;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.3), transparent);
+      }
+
+      .mobile-header-content {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: 1rem;
+      }
+
+      .mobile-logo {
+        width: 80px;
+        height: 80px;
+        border-radius: 20px;
+        box-shadow: 0 10px 40px rgba(96, 165, 250, 0.25),
+                    0 0 0 1px rgba(96, 165, 250, 0.2);
+        overflow: hidden;
+      }
+
+      .mobile-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 20px;
+      }
+
+      .mobile-title {
+        font-size: 1.8rem;
+        font-weight: 800;
+        letter-spacing: -0.5px;
+        margin-bottom: 0.2rem;
+      }
+
+      .mobile-subtitle {
+        display: block;
+        font-size: 0.9rem;
+        color: #64748b;
+        font-weight: 400;
+        letter-spacing: 1px;
+      }
+
+      /* Main Content Area */
+      .main-content {
+        margin-left: 0;
+        padding: 1.5rem 1rem;
+        padding-bottom: 90px;
+        background: #0a0e1a;
+      }
+
+      /* Section Title for Mobile */
+      .grid::before {
+        content: 'Services';
+        display: block;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 1rem;
+        padding-left: 0.5rem;
+        grid-column: 1 / -1;
+      }
+
+      /* Mobile Grid - 2 columns */
+      .grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+      }
+
+      /* Mobile Card - Modern App Style */
+      .card {
+        height: auto;
+        flex-direction: column;
+        border-radius: 20px;
+        background: linear-gradient(160deg, #141b2d 0%, #0f1525 100%);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        transition: all 0.25s ease;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #60a5fa, #c084fc);
+        opacity: 0;
+        transition: opacity 0.25s ease;
+      }
+
+      .card:active {
+        transform: scale(0.96);
+        background: linear-gradient(160deg, #1a2340 0%, #141b2d 100%);
+      }
+
+      .card:active::before {
+        opacity: 1;
+      }
+
+      /* Card Image */
+      .card-img-container {
+        width: 100%;
+        height: 90px;
+        position: relative;
+        overflow: hidden;
+        background: #0a0e1a;
+      }
+
+      .card-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        opacity: 0.9;
+        transition: all 0.3s ease;
+      }
+
+      .card:active .card-img {
+        opacity: 1;
+        transform: scale(1.05);
+      }
+
+      /* Gradient overlay */
+      .card-img-container::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 50%;
+        background: linear-gradient(to top, #141b2d, transparent);
+        pointer-events: none;
+      }
+
+      /* Card Content */
+      .card-content {
+        padding: 1rem;
+        text-align: center;
+        position: relative;
+      }
+
+      .card h3 {
+        font-size: 0.9rem;
+        font-weight: 700;
+        margin-bottom: 0.4rem;
+        letter-spacing: 0.5px;
+        background: linear-gradient(90deg, #e2e8f0, #94a3b8);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+
+      .card p {
+        font-size: 0.7rem;
+        line-height: 1.5;
+        color: #4b5563;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .coming-soon {
+        font-size: 0.6rem;
+        margin-top: 0.5rem;
+        padding: 0.25rem 0.75rem;
+        background: linear-gradient(90deg, rgba(244, 114, 182, 0.1), rgba(192, 132, 252, 0.1));
+        border: 1px solid rgba(244, 114, 182, 0.2);
+        border-radius: 20px;
+        display: inline-block;
+        color: #f472b6;
+      }
+
+      /* Disabled card */
+      .card.disabled {
+        opacity: 0.4;
+      }
+
+      .card.disabled:active {
+        transform: none;
+        background: linear-gradient(160deg, #141b2d 0%, #0f1525 100%);
+      }
+
+      /* Hide desktop-only cards on mobile */
+      .desktop-only {
+        display: none !important;
+      }
+
+      /* Show mobile-only cards on mobile */
+      .mobile-only {
+        display: flex !important;
+      }
+
+      /* Hide featured section on mobile */
+      .featured-section {
+        display: none !important;
+      }
+
+      /* Hide social links in sidebar on mobile (sidebar is hidden anyway) */
+      .social-links,
+      .contact-email {
+        display: none;
+      }
+
+      /* Mobile Footer Bar */
+      .mobile-footer {
+        display: flex;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(180deg, #0f1629 0%, #0a0e1a 100%);
+        padding: 1.2rem 1.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        justify-content: center;
+        align-items: center;
+        gap: 0.6rem;
+        z-index: 100;
+      }
+
+      .mobile-footer-brand {
+        font-size: 0.95rem;
+        font-weight: 700;
+        background: linear-gradient(90deg, #60a5fa, #c084fc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+
+      .mobile-footer-divider {
+        width: 3px;
+        height: 3px;
+        background: #374151;
+        border-radius: 50%;
+      }
+
+      .mobile-footer-text {
+        font-size: 0.72rem;
+        color: #4b5563;
+      }
+
+      /* Launch Modal Mobile */
+      .launch-modal-content {
+        max-width: 90%;
+        padding: 2rem 1.5rem;
+      }
+
+      .launch-modal-icon {
+        font-size: 3.5rem;
+      }
+
+      .launch-modal-title {
+        font-size: 1.4rem;
+      }
+
+      .launch-modal-text {
+        font-size: 0.95rem;
+      }
+    }
+
+    /* Very small phones (< 380px) */
+    @media (max-width: 380px) {
+      .mobile-header {
+        padding: 1.5rem 1rem 1.2rem;
+      }
+
+      .mobile-logo {
+        width: 70px;
+        height: 70px;
+        border-radius: 18px;
+      }
+
+      .mobile-title {
+        font-size: 1.5rem;
+      }
+
+      .mobile-subtitle {
+        font-size: 0.8rem;
+      }
+
+      .main-content {
+        padding: 1rem 0.8rem;
+        padding-bottom: 85px;
+      }
+
+      .grid {
+        gap: 0.8rem;
+      }
+
+      .grid::before {
+        font-size: 0.75rem;
+        margin-bottom: 0.8rem;
+      }
+
+      .card {
+        border-radius: 16px;
+      }
+
+      .card-img-container {
+        height: 75px;
+      }
+
+      .card-content {
+        padding: 0.8rem;
+      }
+
+      .card h3 {
+        font-size: 0.8rem;
+      }
+
+      .card p {
+        font-size: 0.65rem;
+      }
+
+      .mobile-footer {
+        padding: 1rem;
+      }
+
+      .mobile-footer-brand {
+        font-size: 0.85rem;
+      }
+
+      .mobile-footer-text {
+        font-size: 0.65rem;
+      }
+    }
+
+    /* Landscape mode on phones */
+    @media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
+      .mobile-header {
+        display: block;
+        padding: 0.8rem 1.5rem;
+        background: linear-gradient(180deg, #0f1629 0%, #0a0e1a 100%);
+      }
+
+      .mobile-header::after {
+        display: none;
+      }
+
+      .mobile-header-content {
+        flex-direction: row;
+        justify-content: flex-start;
+        gap: 1rem;
+      }
+
+      .mobile-logo {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+      }
+
+      .mobile-title {
+        font-size: 1.1rem;
+      }
+
+      .mobile-subtitle {
+        display: none;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .main-content {
+        margin-left: 0;
+        padding: 0.8rem 1rem;
+        padding-bottom: 60px;
+      }
+
+      .grid {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0.6rem;
+      }
+
+      .grid::before {
+        display: none;
+      }
+
+      .card {
+        border-radius: 14px;
+      }
+
+      .card-img-container {
+        height: 55px;
+      }
+
+      .card-content {
+        padding: 0.5rem 0.6rem;
+      }
+
+      .card h3 {
+        font-size: 0.7rem;
+        margin-bottom: 0;
+      }
+
+      .card p {
+        display: none;
+      }
+
+      .mobile-footer {
+        display: flex;
+        padding: 0.5rem 1rem;
+      }
+
+      .mobile-footer-brand {
+        font-size: 0.8rem;
+      }
+
+      .mobile-footer-text {
+        font-size: 0.6rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Sidebar (hidden on mobile) -->
+  <div class="sidebar">
+    <div class="logo-container">
+      <div class="logo">
+        <img src="Contents/electrokavir_logo.jpg" alt="ElectroKavir Logo">
+      </div>
+      <h1>ElectroKavir</h1>
+      <h2>Dashboard</h2>
+    </div>
+    <div class="description">
+      This dashboard is designed for easy access and centralized management of all systems. All ElectroKavir
+      platforms
+      are integrated here for your convenience.
+    </div>
+    <div class="sidebar-footer">
+      <div class="footer-brand">ElectroKavir</div>
+      <div class="footer-tag">Intelligent. Integrated. Infinite.</div>
+      <div class="copyright">&copy; 2026 ElectroKavir<br>All rights reserved.</div>
+    </div>
+  </div>
+
+  <!-- Mobile Header (shown only on mobile) -->
+  <div class="mobile-header">
+    <div class="mobile-header-content">
+      <div class="mobile-logo">
+        <img src="Contents/electrokavir_logo.jpg" alt="ElectroKavir Logo">
+      </div>
+      <div>
+        <div class="mobile-title">ElectroKavir</div>
+        <div class="mobile-subtitle">Intelligent. Integrated. Infinite.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <div class="grid">
+
+      <!-- Simorgh Chat Bot -->
+      <a href="https://simorghai.electrokavir.com/chatbot/" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/simorgh.jpg" alt="Simorgh Chat Bot">
+        </div>
+        <div class="card-content">
+          <h3>SIMORGH AI</h3>
+          <p>Intelligent conversational interface for support and automation</p>
+        </div>
+      </a>
+
+      <!-- EPLANIX -->
+      <a href="https://simorghai.electrokavir.com/eplanix/" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/EpalnLogo.jpg" alt="EPLANIX">
+        </div>
+        <div class="card-content">
+          <h3>EPLANIX</h3>
+          <p>Advanced electrical design and documentation platform</p>
+        </div>
+      </a>
+
+      <!-- BPMS -->
+      <a href="http://bpms.electrokavir.com/" class="card" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/bpms.jpg" alt="BPMS">
+        </div>
+        <div class="card-content">
+          <h3>BPMS</h3>
+          <p>Business Process Management – modeling and automation</p>
+        </div>
+      </a>
+
+      <!-- KASRA -->
+      <a href="http://kasra.electrokavir.com/lego.web/Kevlar/Account/Login?ReturnUrl=%2Flego.web%2F" class="card"
+        target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/kasra-org.png" alt="KASRA">
+        </div>
+        <div class="card-content">
+          <h3>KASRA</h3>
+          <p>Software for Attendance Registration and Nutrition System</p>
+        </div>
+      </a>
+
+      <!-- RAHKARAN -->
+      <a href="http://hr.electrokavir.com/employee/~/identity/login/?return=%2Femployee" class="card" target="_blank"
+        rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/OIP.jpg" alt="RAHKARAN">
+        </div>
+        <div class="card-content">
+          <h3>RAHKARAN</h3>
+          <p>Personnel and Payroll Management System</p>
+        </div>
+      </a>
+
+      <!-- Internal Phones -->
+      <a href="http://192.168.0.150" class="card desktop-only" target="_blank" rel="noopener">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/telephone_x.jpg" alt="Internal Phones">
+        </div>
+        <div class="card-content">
+          <h3>INTERNAL PHONES</h3>
+          <p>Company PBX directory and call management</p>
+        </div>
+      </a>
+
+      <!-- About Us (Mobile Only - Desktop has featured section) -->
+      <a href="about.html" class="card mobile-only">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/electrokavir_logo.jpg" alt="About Us">
+        </div>
+        <div class="card-content">
+          <h3>ABOUT US</h3>
+          <p>Learn about ElectroKavir's mission and services</p>
+        </div>
+      </a>
+
+      <!-- DDM -->
+      <a href="javascript:void(0)" class="card desktop-only" onclick="sendCommand('open ddm', 'DDM')">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/ddm.avif" alt="DDM">
+        </div>
+        <div class="card-content">
+          <h3>DDM</h3>
+          <p>Document & Digital Management with version control</p>
+        </div>
+      </a>
+
+      <!-- MIS -->
+      <a href="javascript:void(0)" class="card desktop-only" onclick="sendCommand('open mis', 'MIS')">
+        <div class="card-img-container">
+          <img class="card-img" src="Contents/timesheet.webp" alt="MIS">
+        </div>
+        <div class="card-content">
+          <h3>MIS</h3>
+          <p>Management Information System – reports & analytics</p>
+        </div>
+      </a>
+
+    </div>
+
+    <!-- Featured About & Contact Section (Desktop Only) - Compact Bar -->
+    <div class="featured-section">
+      <div class="featured-card">
+        <div class="featured-img">
+          <img src="Contents/electrokavir_logo.jpg" alt="ElectroKavir">
+        </div>
+        <div class="featured-content">
+          <div class="featured-text">
+            <h2 class="featured-title">About ElectroKavir</h2>
+            <p class="featured-desc">Industrial electrical engineering with AI-powered solutions</p>
+          </div>
+          <div class="featured-links">
+            <a href="about.html" class="featured-btn">
+              <span>Learn More</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 12h14M12 5l7 7-7 7"/>
+              </svg>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Mobile Footer Bar (shown only on mobile) -->
+  <div class="mobile-footer">
+    <span class="mobile-footer-brand">ElectroKavir</span>
+    <span class="mobile-footer-divider"></span>
+    <span class="mobile-footer-text">© 2026 All rights reserved</span>
+  </div>
+
+  <!-- Launch Modal -->
+  <div id="launchModal" class="launch-modal">
+    <div class="launch-modal-content">
+      <div class="launch-modal-icon" id="launchIcon"></div>
+      <div class="launch-modal-title" id="launchTitle"></div>
+      <div class="launch-modal-text" id="launchText"></div>
+      <button class="launch-modal-btn" onclick="document.getElementById('launchModal').style.display='none'">OK</button>
+    </div>
+  </div>
+
+  <script>
+    function sendCommand(command, appName) {
+      var modal = document.getElementById('launchModal');
+      var icon = document.getElementById('launchIcon');
+      var title = document.getElementById('launchTitle');
+      var text = document.getElementById('launchText');
+
+      icon.textContent = '\u26A1';
+      icon.style.color = '#22d3ee';
+      icon.style.filter = 'drop-shadow(0 0 15px #22d3ee)';
+      title.textContent = 'Launching ' + appName + '...';
+      text.textContent = 'Sending command to local listener.';
+      modal.style.display = 'flex';
+
+      fetch('http://localhost:8080', {
+        method: 'POST',
+        body: command,
+        headers: { 'Content-Type': 'text/plain' }
+      })
+        .then(function (res) { return res.text(); })
+        .then(function (msg) {
+          icon.textContent = '\u2705';
+          icon.style.color = '#34d399';
+          icon.style.filter = 'drop-shadow(0 0 15px #34d399)';
+          title.textContent = appName + ' Opened';
+          text.textContent = msg;
+        })
+        .catch(function (err) {
+          icon.textContent = '\u274C';
+          icon.style.color = '#f87171';
+          icon.style.filter = 'drop-shadow(0 0 15px #f87171)';
+          title.textContent = 'Connection Failed';
+          text.textContent = 'Could not connect to local listener on port 8080.\nMake sure the launcher is running on your computer.\n\n' + err.message;
+        });
+    }
+  </script>
+
+</body>
+
+</html>

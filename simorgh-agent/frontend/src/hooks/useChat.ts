@@ -11,6 +11,7 @@ export interface ChatOptions {
   llmMode?: 'online' | 'offline' | null; // null = use default
   useGraphContext?: boolean;
   useStreaming?: boolean; // Enable streaming responses (default: true)
+  groundedMode?: boolean; // If true, responses strictly from documents with citations
 }
 
 export function useChat(
@@ -169,7 +170,8 @@ export function useChat(
           user_id: userId,
           content: content,
           llm_mode: llmMode || undefined,
-          use_graph_context: options?.useGraphContext !== false
+          use_graph_context: options?.useGraphContext !== false,
+          grounded_mode: options?.groundedMode || false
         }),
         signal: abortControllerRef.current?.signal
       });
@@ -370,6 +372,7 @@ export function useChat(
           formData.append('llm_mode', llmMode);
         }
         formData.append('use_graph_context', String(options?.useGraphContext !== false));
+        formData.append('grounded_mode', String(options?.groundedMode || false));
         formData.append('file', files[0].file);
 
         response = await axios.post(`${API_BASE}/chat/send`, formData, {

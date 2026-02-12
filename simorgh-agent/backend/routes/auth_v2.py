@@ -48,6 +48,7 @@ from services.oauth_service import get_oauth_service, OAuthService
 from services.email_service import get_email_service, EmailService
 from services.tpms_auth_service import get_tpms_auth_service, TPMSAuthService
 from services.auth_utils import create_access_token, get_current_username_from_token
+from services.redis_service import get_redis_service, RedisService
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +302,8 @@ async def login(
     request: Request,
     response: Response,
     data: UserLoginRequest,
-    auth_service: PostgresAuthService = Depends(get_postgres_auth_service)
+    auth_service: PostgresAuthService = Depends(get_postgres_auth_service),
+    redis: "RedisService" = Depends(get_redis_service)
 ):
     """
     Login with email and password.
@@ -350,6 +352,26 @@ async def login(
 
     # Set cookies
     set_auth_cookies(response, access_token, refresh_token)
+
+    # Cache user profile for LLM context
+    try:
+        redis.cache_user_profile_on_login(
+            user_id=str(user['id']),
+            user_data={
+                "email": user.get("email"),
+                "first_name": user.get("first_name"),
+                "last_name": user.get("last_name"),
+                "display_name": user.get("display_name"),
+                "role": user.get("role"),
+                "language": user.get("language", "en"),
+                "ai_mode": user.get("ai_mode"),
+                "created_at": str(user.get("created_at")) if user.get("created_at") else None
+            }
+        )
+        logger.debug(f"User profile cached for LLM context: {user['email']}")
+    except Exception as e:
+        logger.warning(f"Failed to cache user profile: {e}")
+        # Non-critical, continue with login
 
     logger.info(f"User logged in: {user['email']}")
 
