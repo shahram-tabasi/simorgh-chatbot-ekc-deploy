@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth, isModernUser } from '../context/AuthContext';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 export interface QuotaInfo {
   user_role: string;
@@ -53,7 +53,7 @@ export function useQuota() {
 
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE}/api/v2/quota/me`, {
+      const response = await fetch(`${API_BASE}/v2/quota/me`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
 
@@ -70,7 +70,7 @@ export function useQuota() {
 
   const fetchTiers = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/v2/quota/tiers`);
+      const response = await fetch(`${API_BASE}/v2/quota/tiers`);
       if (response.ok) {
         const data = await response.json();
         setTiers(data);

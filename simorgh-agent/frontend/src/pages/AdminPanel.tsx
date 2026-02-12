@@ -90,7 +90,7 @@ export default function AdminPanel() {
   // Fetch stats
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v2/admin/stats`, { headers });
+      const res = await fetch(`${API_BASE}/v2/admin/stats`, { headers });
       if (res.ok) setStats(await res.json());
     } catch (e) {
       console.error('Failed to fetch stats:', e);
@@ -105,7 +105,7 @@ export default function AdminPanel() {
       if (searchQuery) params.set('search', searchQuery);
       if (roleFilter) params.set('role', roleFilter);
 
-      const res = await fetch(`${API_BASE}/api/v2/admin/users?${params}`, { headers });
+      const res = await fetch(`${API_BASE}/v2/admin/users?${params}`, { headers });
       if (res.ok) {
         const data = await res.json();
         setUsers(data.users);
@@ -123,7 +123,7 @@ export default function AdminPanel() {
   // Fetch tiers
   const fetchTiers = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v2/admin/tiers`, { headers });
+      const res = await fetch(`${API_BASE}/v2/admin/tiers`, { headers });
       if (res.ok) setTiers(await res.json());
     } catch (e) {
       console.error('Failed to fetch tiers:', e);
@@ -151,7 +151,7 @@ export default function AdminPanel() {
       const body: any = { user_role: newRole };
       if (subDays) body.subscription_days = subDays;
 
-      const res = await fetch(`${API_BASE}/api/v2/admin/users/${userId}/role`, {
+      const res = await fetch(`${API_BASE}/v2/admin/users/${userId}/role`, {
         method: 'PATCH',
         headers,
         body: JSON.stringify(body),
@@ -173,7 +173,7 @@ export default function AdminPanel() {
   // Toggle user active
   const handleToggleActive = async (userId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v2/admin/users/${userId}/active`, {
+      const res = await fetch(`${API_BASE}/v2/admin/users/${userId}/active`, {
         method: 'PATCH',
         headers,
       });
@@ -192,7 +192,7 @@ export default function AdminPanel() {
   // Update tier config
   const handleTierSave = async (tierName: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v2/admin/tiers/${tierName}`, {
+      const res = await fetch(`${API_BASE}/v2/admin/tiers/${tierName}`, {
         method: 'PATCH',
         headers,
         body: JSON.stringify(tierEdits),
