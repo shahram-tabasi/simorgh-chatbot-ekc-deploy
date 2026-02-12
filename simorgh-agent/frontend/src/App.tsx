@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { ThemeBackground } from './components/ThemeBackground';
 import { Sidebar } from './components/Sidebar';
 import { ProjectTree } from './components/ProjectTree';
@@ -15,6 +15,7 @@ import SpecTaskNotification from './components/SpecTaskNotification';
 import NotificationToast, { ToastNotification } from './components/NotificationToast';
 import SpecReview from './pages/SpecReview';
 import AdminPanel from './pages/AdminPanel';
+import UpgradePage from './pages/UpgradePage';
 
 // Auth components (modern + auto-routing)
 import {
@@ -316,6 +317,11 @@ function MainChat() {
                     style={{ width: `${Math.min(100, (quota.questions_used_today / Math.max(1, quota.questions_limit)) * 100)}%` }}
                   />
                 </div>
+                {quota.user_role !== 'admin' && quota.user_role !== 'max' && (
+                  <Link to="/upgrade" className="block mt-1.5 text-center text-xs text-blue-400 hover:text-blue-300 transition">
+                    Upgrade plan
+                  </Link>
+                )}
               </div>
             )}
             <ProjectTree
@@ -510,6 +516,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <AdminPanel />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/upgrade"
+          element={
+            <ProtectedRoute>
+              <UpgradePage />
             </ProtectedRoute>
           }
         />

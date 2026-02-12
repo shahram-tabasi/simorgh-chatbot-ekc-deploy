@@ -3,6 +3,7 @@ import {
   SendIcon, PaperclipIcon, MicIcon, StopCircleIcon,
   FileTextIcon, XIcon, LoaderIcon, Loader2Icon
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { UploadedFile } from '../types';
 import { showError, showInfo } from '../utils/alerts';
 
@@ -263,7 +264,10 @@ export function ChatInput({
       {/* Quota exceeded warning */}
       {quotaExceeded && (
         <div className="mb-2 px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-center">
-          <span className="text-sm text-red-400">Daily quota exceeded. Resets at midnight UTC.</span>
+          <span className="text-sm text-red-400">Daily quota exceeded. Resets at midnight UTC. </span>
+          <Link to="/upgrade" className="text-sm text-blue-400 hover:text-blue-300 underline">
+            Upgrade plan
+          </Link>
         </div>
       )}
 
