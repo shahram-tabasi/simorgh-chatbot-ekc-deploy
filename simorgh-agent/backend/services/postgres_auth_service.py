@@ -175,7 +175,8 @@ class PostgresAuthService:
             INSERT INTO users (email, password_hash, first_name, last_name, display_name)
             VALUES ($1, $2, $3, $4, $5)
             RETURNING id, email, first_name, last_name, display_name, email_verified,
-                      is_active, created_at, last_login_at, avatar_url
+                      is_active, created_at, last_login_at, avatar_url,
+                      user_role, subscription_expires_at
         """
 
         try:
@@ -363,7 +364,8 @@ class PostgresAuthService:
         fields = """
             id, email, first_name, last_name, display_name, avatar_url,
             email_verified, is_active, is_superuser, failed_login_attempts,
-            locked_until, last_login_at, last_login_ip, created_at, updated_at
+            locked_until, last_login_at, last_login_ip, created_at, updated_at,
+            user_role, subscription_expires_at
         """
         if include_password:
             fields += ", password_hash"
@@ -388,7 +390,8 @@ class PostgresAuthService:
         fields = """
             id, email, first_name, last_name, display_name, avatar_url,
             email_verified, is_active, is_superuser, failed_login_attempts,
-            locked_until, last_login_at, last_login_ip, created_at, updated_at
+            locked_until, last_login_at, last_login_ip, created_at, updated_at,
+            user_role, subscription_expires_at
         """
         if include_password:
             fields += ", password_hash"
@@ -742,7 +745,8 @@ class PostgresAuthService:
             SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP
             WHERE id = ${param_count}
             RETURNING id, email, first_name, last_name, display_name, avatar_url,
-                      email_verified, is_active, created_at, last_login_at
+                      email_verified, is_active, created_at, last_login_at,
+                      user_role, subscription_expires_at
         """
 
         try:

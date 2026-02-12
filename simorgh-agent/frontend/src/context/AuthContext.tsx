@@ -14,6 +14,8 @@ export interface ModernUser {
   avatar_url?: string;
   email_verified: boolean;
   is_active: boolean;
+  user_role: string;  // 'free' | 'pro' | 'max' | 'admin'
+  subscription_expires_at?: string;
   created_at: string;
   last_login_at?: string;
 }

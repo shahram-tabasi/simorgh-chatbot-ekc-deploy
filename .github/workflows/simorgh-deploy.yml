@@ -201,6 +201,14 @@ jobs:
           SMTP_USE_TLS=true
           AUTO_VERIFY_EMAIL=false
 
+          # User Tiers & Admin
+          ADMIN_SETUP_SECRET=${{ secrets.ADMIN_SETUP_SECRET }}
+
+          # NOWPayments (Crypto Payments)
+          NOWPAYMENTS_API_KEY=${{ secrets.NOWPAYMENTS_API_KEY }}
+          NOWPAYMENTS_IPN_SECRET=${{ secrets.NOWPAYMENTS_IPN_SECRET }}
+          NOWPAYMENTS_SANDBOX=${{ secrets.NOWPAYMENTS_SANDBOX }}
+
           # Frontend URL (used in email verification/reset links)
           FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
 

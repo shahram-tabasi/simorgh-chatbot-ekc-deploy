@@ -18,6 +18,7 @@ interface ChatAreaProps {
   disabled?: boolean;
   editingMessage?: Message | null;
   isProjectChat?: boolean; // NEW: Indicates if this is a project-specific chat
+  quotaExceeded?: boolean;
 }
 
 export function ChatArea({
@@ -31,7 +32,8 @@ export function ChatArea({
   onCancelGeneration,
   disabled = false,
   editingMessage = null,
-  isProjectChat = false
+  isProjectChat = false,
+  quotaExceeded = false
 }: ChatAreaProps) {
   const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
   // Track chatting state: starts as false (idle), becomes true after first message send
@@ -100,6 +102,7 @@ export function ChatArea({
                 editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
                 promptToInsert={promptToInsert}
                 centered={true}
+                quotaExceeded={quotaExceeded}
               />
             </div>
           </div>
@@ -135,6 +138,7 @@ export function ChatArea({
                 editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
                 promptToInsert={promptToInsert}
                 centered={false}
+                quotaExceeded={quotaExceeded}
               />
             </div>
           </div>

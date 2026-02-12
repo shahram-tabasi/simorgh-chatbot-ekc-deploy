@@ -3,6 +3,7 @@ import {
   SendIcon, PaperclipIcon, MicIcon, StopCircleIcon,
   FileTextIcon, XIcon, LoaderIcon, Loader2Icon
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { UploadedFile } from '../types';
 import { showError, showInfo } from '../utils/alerts';
 
@@ -14,6 +15,7 @@ interface ChatInputProps {
   isGenerating?: boolean;
   editMessage?: { content: string; files?: UploadedFile[] } | null;
   promptToInsert?: string | null;
+  quotaExceeded?: boolean;
 }
 
 export function ChatInput({
@@ -23,7 +25,8 @@ export function ChatInput({
   centered = false,
   isGenerating = false,
   editMessage = null,
-  promptToInsert = null
+  promptToInsert = null,
+  quotaExceeded = false
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -258,6 +261,16 @@ export function ChatInput({
 
   return (
     <div className={`${inputClasses} relative z-10`}>
+      {/* Quota exceeded warning */}
+      {quotaExceeded && (
+        <div className="mb-2 px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-center">
+          <span className="text-sm text-red-400">Daily quota exceeded. Resets at midnight UTC. </span>
+          <Link to="/upgrade" className="text-sm text-blue-400 hover:text-blue-300 underline">
+            Upgrade plan
+          </Link>
+        </div>
+      )}
+
       {/* File attachments */}
       {files.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
@@ -379,7 +392,7 @@ export function ChatInput({
         ) : (
           <button
             onClick={handleSend}
-            disabled={disabled || (!message.trim() && files.length === 0)}
+            disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
             className="p-2 md:p-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
           >
             <SendIcon className="w-5 h-5 text-white" />

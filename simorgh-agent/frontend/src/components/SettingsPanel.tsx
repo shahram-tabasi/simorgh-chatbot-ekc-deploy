@@ -15,8 +15,11 @@ import {
   BellOff,
   Star,
   Code2,
-  Feather
+  Feather,
+  Lock,
+  Shield
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
 import { showWarning } from '../utils/alerts';
 import { useAuth, isModernUser, isLegacyUser } from '../context/AuthContext';
@@ -49,31 +52,43 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
 
   const { language, setLanguage } = useLanguage();
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const { theme, setTheme, notificationsEnabled, setNotificationsEnabled } = useTheme();
 
   const currentLang = languages.find(l => l.code === language) || languages[0];
+  const isModern = user ? isModernUser(user) : false;
+  const isLegacy = user ? isLegacyUser(user) : false;
   const displayName = user
     ? isLegacyUser(user) ? user.EMPUSERNAME
     : isModernUser(user) ? (user.display_name || user.first_name || user.email)
     : 'Guest User'
     : 'Guest User';
-  const userStatus = user ? 'Pro Member • Online' : 'Guest';
+  const userStatus = user
+    ? isModernUser(user) ? `${user.user_role?.charAt(0).toUpperCase()}${user.user_role?.slice(1) || 'Free'} • Online`
+    : isLegacyUser(user) ? 'Enterprise • Local Network'
+    : 'Guest'
+    : 'Guest';
 
   // Sync with external control (both open and close)
   React.useEffect(() => {
     setIsOpen(externalOpen);
   }, [externalOpen]);
 
-  // Load AI mode from localStorage on mount
+  // Load AI mode from localStorage on mount (modern users forced to online)
   React.useEffect(() => {
+    if (isModern) {
+      setAiMode('online');
+      return;
+    }
     const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
     if (savedMode) {
       setAiMode(savedMode);
     }
-  }, []);
+  }, [isModern]);
 
-  // Handle AI mode change
+  // Handle AI mode change - modern users are locked to online
   const handleAiModeChange = (mode: 'online' | 'offline') => {
+    if (mode === 'offline' && isModern) return;
     setAiMode(mode);
     localStorage.setItem('llm_mode', mode);
     window.dispatchEvent(new CustomEvent('llm-mode-changed', { detail: mode }));
@@ -147,8 +162,11 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                     <div>
                       <p className="text-white font-bold text-lg">{displayName}</p>
                       <p className="text-gray-400 text-sm">{userStatus}</p>
-                      {user?.USER_UID && (
+                      {user && isLegacyUser(user) && user.USER_UID && (
                         <p className="text-gray-500 text-xs mt-0.5">ID: {user.USER_UID}</p>
+                      )}
+                      {user && isModernUser(user) && (
+                        <p className="text-gray-500 text-xs mt-0.5">{user.email}</p>
                       )}
                     </div>
                   </div>
@@ -219,16 +237,25 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                     </button>
                     <button
                       onClick={() => handleAiModeChange('offline')}
+                      disabled={isModern}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        aiMode === 'offline'
-                          ? 'border-purple-500 bg-purple-500/10'
-                          : 'border-white/10 hover:border-white/30'
+                        isModern
+                          ? 'border-white/5 opacity-50 cursor-not-allowed'
+                          : aiMode === 'offline'
+                            ? 'border-purple-500 bg-purple-500/10'
+                            : 'border-white/10 hover:border-white/30'
                       }`}
                     >
-                      <WifiOff className="w-6 h-6 text-purple-400" />
+                      {isModern ? (
+                        <Lock className="w-6 h-6 text-gray-500" />
+                      ) : (
+                        <WifiOff className="w-6 h-6 text-purple-400" />
+                      )}
                       <div className="text-left">
                         <div className="text-white font-medium">Local AI</div>
-                        <div className="text-xs text-gray-400">On-premise • 192.168.1.61/62 • Private</div>
+                        <div className="text-xs text-gray-400">
+                          {isModern ? 'Available for local network users' : 'On-premise • 192.168.1.61/62 • Private'}
+                        </div>
                       </div>
                     </button>
                   </div>
@@ -287,6 +314,17 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                     ))}
                   </div>
                 </div>
+
+                {/* Admin Panel Link */}
+                {isModern && user && isModernUser(user) && user.user_role === 'admin' && (
+                  <button
+                    onClick={() => { handleClose(); navigate('/admin'); }}
+                    className="w-full py-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 font-medium hover:bg-amber-500/20 transition"
+                  >
+                    <Shield className="w-5 h-5 inline mr-2" />
+                    Admin Panel
+                  </button>
+                )}
 
                 {/* خروج */}
                 <button

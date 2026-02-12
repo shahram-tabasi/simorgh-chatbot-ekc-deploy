@@ -99,6 +99,12 @@ services:
       # Cookie & Security Settings (true for HTTPS)
       - SECURE_COOKIES=${SECURE_COOKIES:-true}
       - COOKIE_DOMAIN=${COOKIE_DOMAIN}
+      # User Tiers & Admin
+      - ADMIN_SETUP_SECRET=${ADMIN_SETUP_SECRET}
+      # NOWPayments (Crypto Payments)
+      - NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY}
+      - NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET}
+      - NOWPAYMENTS_SANDBOX=${NOWPAYMENTS_SANDBOX:-false}
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs

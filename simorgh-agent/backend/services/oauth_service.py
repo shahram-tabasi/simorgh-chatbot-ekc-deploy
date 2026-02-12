@@ -300,7 +300,8 @@ class OAuthService:
             )
             VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $7::inet)
             RETURNING id, email, first_name, last_name, display_name, avatar_url,
-                      email_verified, is_active, created_at, last_login_at
+                      email_verified, is_active, created_at, last_login_at,
+                      user_role, subscription_expires_at
         """
 
         try:

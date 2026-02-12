@@ -194,32 +194,62 @@ async def init_database() -> None:
     db = get_db()
     await db.init_async_pool()
 
-    # Verify auth tables exist; run migration if they don't
+    migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
+
+    # Migration 001: Core auth tables
     try:
         async with db.get_async_connection() as conn:
             table_exists = await conn.fetchval(
                 "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users')"
             )
             if not table_exists:
-                logger.warning("Auth tables not found - running migration...")
-                import os
-                migration_path = os.path.join(
-                    os.path.dirname(__file__),
-                    "migrations",
-                    "001_create_auth_tables.sql"
-                )
+                logger.warning("Auth tables not found - running migration 001...")
+                migration_path = os.path.join(migrations_dir, "001_create_auth_tables.sql")
                 if os.path.exists(migration_path):
                     success = await db.run_migration(migration_path)
                     if success:
-                        logger.info("Auth tables created successfully via migration")
+                        logger.info("Auth tables created successfully via migration 001")
                     else:
-                        logger.error("Failed to create auth tables via migration")
+                        logger.error("Failed to create auth tables via migration 001")
                 else:
                     logger.error(f"Migration file not found: {migration_path}")
             else:
                 logger.info("Auth tables verified")
     except Exception as e:
         logger.error(f"Error verifying auth tables: {e}")
+
+    # Migration 002: User tiers, quotas, daily usage tracking
+    try:
+        async with db.get_async_connection() as conn:
+            col_exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'users' AND column_name = 'user_role')"
+            )
+            if not col_exists:
+                logger.warning("user_role column not found - running migration 002...")
+                migration_path = os.path.join(migrations_dir, "002_add_user_tiers.sql")
+                if os.path.exists(migration_path):
+                    success = await db.run_migration(migration_path)
+                    if success:
+                        logger.info("User tiers migration 002 completed successfully")
+                    else:
+                        logger.error("Failed to run user tiers migration 002")
+                else:
+                    logger.error(f"Migration file not found: {migration_path}")
+            else:
+                # Column exists, ensure tier_quotas table also exists
+                tier_table_exists = await conn.fetchval(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'tier_quotas')"
+                )
+                if not tier_table_exists:
+                    logger.warning("tier_quotas table missing - running migration 002...")
+                    migration_path = os.path.join(migrations_dir, "002_add_user_tiers.sql")
+                    if os.path.exists(migration_path):
+                        await db.run_migration(migration_path)
+                else:
+                    logger.info("User tiers schema verified")
+    except Exception as e:
+        logger.error(f"Error verifying user tiers schema: {e}")
 
 
 async def close_database() -> None:

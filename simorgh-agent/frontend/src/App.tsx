@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { ThemeBackground } from './components/ThemeBackground';
 import { Sidebar } from './components/Sidebar';
 import { ProjectTree } from './components/ProjectTree';
@@ -14,6 +14,8 @@ import Login from './components/Login';
 import SpecTaskNotification from './components/SpecTaskNotification';
 import NotificationToast, { ToastNotification } from './components/NotificationToast';
 import SpecReview from './pages/SpecReview';
+import AdminPanel from './pages/AdminPanel';
+import UpgradePage from './pages/UpgradePage';
 
 // Auth components (modern + auto-routing)
 import {
@@ -30,6 +32,7 @@ import {
 import { useSidebar } from './hooks/useSidebar';
 import { useProjects } from './hooks/useProjects';
 import { useChat } from './hooks/useChat';
+import { useQuota } from './hooks/useQuota';
 import { LanguageProvider } from './context/LanguageContext';
 import { AuthProvider, useAuth, isModernUser, isLegacyUser } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
@@ -39,6 +42,7 @@ import { Message } from './types';
 function MainChat() {
   const { user } = useAuth();
   const { notificationsEnabled } = useTheme();
+  const { quota, isModern: isModernTier, canUseOfflineLlm, canCreateProjects, canUseTools, quotaExceeded, quotaWarning, decrementLocal, fetchQuota } = useQuota();
   const rightSidebar = useSidebar(true);
   const leftSidebar = useSidebar(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
@@ -120,7 +124,14 @@ function MainChat() {
   const [editingMessage, setEditingMessage] = React.useState<Message | null>(null);
 
   // Load AI mode on mount and listen for changes
+  // Modern users are forced to online mode (offline is legacy-only)
   React.useEffect(() => {
+    if (isModernTier) {
+      setCurrentAiMode('online');
+      localStorage.setItem('llm_mode', 'online');
+      return;
+    }
+
     const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
     if (savedMode) {
       setCurrentAiMode(savedMode);
@@ -128,12 +139,13 @@ function MainChat() {
 
     const handleModeChange = (e: Event) => {
       const customEvent = e as CustomEvent<'online' | 'offline'>;
+      if (isModernTier && customEvent.detail === 'offline') return; // Block for modern
       setCurrentAiMode(customEvent.detail);
     };
 
     window.addEventListener('llm-mode-changed', handleModeChange);
     return () => window.removeEventListener('llm-mode-changed', handleModeChange);
-  }, []);
+  }, [isModernTier]);
 
   // Handle back button for settings panel on mobile
   React.useEffect(() => {
@@ -277,6 +289,8 @@ function MainChat() {
           onHistoryClick={leftSidebar.toggle}
           onSettingsClick={handleOpenSettings}
           currentModel={currentAiMode}
+          userTier={quota.user_role}
+          offlineLocked={!canUseOfflineLlm}
         />
 
         <div className="relative z-10 flex h-full mt-0 md:mt-0 overflow-hidden">
@@ -285,9 +299,31 @@ function MainChat() {
             isOpen={rightSidebar.isOpen}
             onToggle={rightSidebar.toggle}
             side="right"
-            onNewProject={handleCreateProject}
+            onNewProject={canCreateProjects ? handleCreateProject : undefined}
             onNewGeneralChat={handleCreateGeneralChat}
           >
+            {/* Quota Badge for modern users */}
+            {isModernTier && (
+              <div className="px-3 py-2 mx-2 mb-2 rounded-lg bg-white/5 border border-white/10">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-400 capitalize">{quota.user_role} tier</span>
+                  <span className={`font-medium ${quotaExceeded ? 'text-red-400' : quotaWarning ? 'text-amber-400' : 'text-emerald-400'}`}>
+                    {quota.questions_remaining}/{quota.questions_limit}
+                  </span>
+                </div>
+                <div className="mt-1 w-full bg-gray-700 rounded-full h-1">
+                  <div
+                    className={`h-1 rounded-full transition-all ${quotaExceeded ? 'bg-red-500' : quotaWarning ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.min(100, (quota.questions_used_today / Math.max(1, quota.questions_limit)) * 100)}%` }}
+                  />
+                </div>
+                {quota.user_role !== 'admin' && quota.user_role !== 'max' && (
+                  <Link to="/upgrade" className="block mt-1.5 text-center text-xs text-blue-400 hover:text-blue-300 transition">
+                    Upgrade plan
+                  </Link>
+                )}
+              </div>
+            )}
             <ProjectTree
               projects={displayProjects}
               generalChats={generalChats}
@@ -342,6 +378,7 @@ function MainChat() {
               editingMessage={editingMessage}
               disabled={!activeChatId}
               isProjectChat={activeProjectId !== null}
+              quotaExceeded={quotaExceeded}
             />
           </div>
 
@@ -471,6 +508,22 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <SpecReview />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute>
+              <AdminPanel />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/upgrade"
+          element={
+            <ProtectedRoute>
+              <UpgradePage />
             </ProtectedRoute>
           }
         />

@@ -137,6 +137,8 @@ class UserResponse(BaseModel):
     avatar_url: Optional[str] = None
     email_verified: bool = False
     is_active: bool = True
+    user_role: str = "free"
+    subscription_expires_at: Optional[datetime] = None
     created_at: datetime
     last_login_at: Optional[datetime] = None
 
@@ -237,6 +239,8 @@ class UserInDB(BaseModel):
     email_verified: bool = False
     is_active: bool = True
     is_superuser: bool = False
+    user_role: str = "free"
+    subscription_expires_at: Optional[datetime] = None
     failed_login_attempts: int = 0
     locked_until: Optional[datetime] = None
     last_login_at: Optional[datetime] = None
