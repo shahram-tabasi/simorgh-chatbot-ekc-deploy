@@ -16,8 +16,10 @@ import {
   Star,
   Code2,
   Feather,
-  Lock
+  Lock,
+  Shield
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
 import { showWarning } from '../utils/alerts';
 import { useAuth, isModernUser, isLegacyUser } from '../context/AuthContext';
@@ -50,6 +52,7 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
 
   const { language, setLanguage } = useLanguage();
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const { theme, setTheme, notificationsEnabled, setNotificationsEnabled } = useTheme();
 
   const currentLang = languages.find(l => l.code === language) || languages[0];
@@ -311,6 +314,17 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                     ))}
                   </div>
                 </div>
+
+                {/* Admin Panel Link */}
+                {isModern && user && isModernUser(user) && user.user_role === 'admin' && (
+                  <button
+                    onClick={() => { handleClose(); navigate('/admin'); }}
+                    className="w-full py-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 font-medium hover:bg-amber-500/20 transition"
+                  >
+                    <Shield className="w-5 h-5 inline mr-2" />
+                    Admin Panel
+                  </button>
+                )}
 
                 {/* خروج */}
                 <button

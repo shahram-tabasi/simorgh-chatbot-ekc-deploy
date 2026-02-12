@@ -14,6 +14,7 @@ import Login from './components/Login';
 import SpecTaskNotification from './components/SpecTaskNotification';
 import NotificationToast, { ToastNotification } from './components/NotificationToast';
 import SpecReview from './pages/SpecReview';
+import AdminPanel from './pages/AdminPanel';
 
 // Auth components (modern + auto-routing)
 import {
@@ -501,6 +502,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <SpecReview />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute>
+              <AdminPanel />
             </ProtectedRoute>
           }
         />

@@ -59,6 +59,7 @@ from routes.documents_rag import router as documents_rag_router
 from routes.project_session import include_project_session_routes
 from routes.tpms_webhook import router as tpms_webhook_router
 from routes.quota import router as quota_router
+from routes.admin import router as admin_router
 from services.auth_utils import get_current_user
 
 # Import security middleware
@@ -108,6 +109,7 @@ app.include_router(auth_v2_router)  # Modern auth endpoints (v2)
 app.include_router(documents_rag_router)
 app.include_router(tpms_webhook_router)  # TPMS real-time sync webhooks
 app.include_router(quota_router)  # User quota/tier endpoints
+app.include_router(admin_router)  # Admin panel endpoints
 
 # Include enhanced chatbot v2 routes
 include_chatbot_routes(app)
