@@ -5,6 +5,7 @@ Handles OAuth 2.0 authentication with external providers (Google, etc.).
 """
 
 import os
+import json
 import logging
 from typing import Optional, Tuple
 from uuid import UUID
@@ -360,6 +361,7 @@ class OAuthService:
         """
 
         try:
+            raw_data_json = json.dumps(user_info.raw_data) if isinstance(user_info.raw_data, dict) else user_info.raw_data
             result = await self.db.execute_one_async(
                 query,
                 user_id,
@@ -368,7 +370,7 @@ class OAuthService:
                 user_info.email,
                 access_token,
                 refresh_token,
-                user_info.raw_data
+                raw_data_json
             )
             return dict(result) if result else None
 
@@ -415,7 +417,7 @@ class OAuthService:
 
         if raw_data:
             updates.append(f"raw_user_data = ${param_count}")
-            values.append(raw_data)
+            values.append(json.dumps(raw_data) if isinstance(raw_data, dict) else raw_data)
 
         query = f"""
             UPDATE oauth_accounts

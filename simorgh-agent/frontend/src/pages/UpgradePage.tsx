@@ -63,7 +63,7 @@ export default function UpgradePage() {
   useEffect(() => {
     const fetchPricing = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v2/payments/pricing`);
+        const res = await fetch(`${API_BASE}/v2/payments/pricing`);
         if (res.ok) {
           const data = await res.json();
           setTiers(data.tiers);
@@ -86,7 +86,7 @@ export default function UpgradePage() {
 
     setPurchasing(tierName);
     try {
-      const res = await fetch(`${API_BASE}/api/v2/payments/create-invoice`, {
+      const res = await fetch(`${API_BASE}/v2/payments/create-invoice`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ tier: tierName }),

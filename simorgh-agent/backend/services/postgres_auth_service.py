@@ -6,6 +6,7 @@ This service manages user registration, login, token management, and account ope
 """
 
 import os
+import json
 import logging
 import secrets
 import hashlib
@@ -630,9 +631,10 @@ class PostgresAuthService:
 
         try:
             ip = ip_address if ip_address else None
+            device_info_str = json.dumps(device_info) if isinstance(device_info, dict) else device_info
             await self.db.execute_async(
                 query, user_id, token_hash,
-                device_info, ip, expires_at
+                device_info_str, ip, expires_at
             )
             return True
         except Exception as e:
