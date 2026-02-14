@@ -98,14 +98,32 @@ class PaymentService:
             payload["pay_currency"] = pay_currency
 
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{NOWPAYMENTS_BASE}/invoice",
-                json=payload,
-                headers={
-                    "x-api-key": NOWPAYMENTS_API_KEY,
-                    "Content-Type": "application/json",
-                },
-            )
+            try:
+                response = await client.post(
+                    f"{NOWPAYMENTS_BASE}/invoice",
+                    json=payload,
+                    headers={
+                        "x-api-key": NOWPAYMENTS_API_KEY,
+                        "Content-Type": "application/json",
+                    },
+                )
+            except httpx.ConnectError as e:
+                logger.error(f"Cannot connect to NOWPayments API: {e}")
+                await self.db.execute_async(
+                    "UPDATE payment_transactions SET status = 'failed' WHERE id = $1",
+                    UUID(tx_id)
+                )
+                raise RuntimeError(
+                    "Cannot reach payment provider. This may be a network issue. "
+                    "Please try again later or contact support."
+                )
+            except httpx.TimeoutException as e:
+                logger.error(f"NOWPayments API timeout: {e}")
+                await self.db.execute_async(
+                    "UPDATE payment_transactions SET status = 'failed' WHERE id = $1",
+                    UUID(tx_id)
+                )
+                raise RuntimeError("Payment provider timed out. Please try again.")
 
         if response.status_code != 200:
             logger.error(f"NOWPayments invoice creation failed: {response.text}")
