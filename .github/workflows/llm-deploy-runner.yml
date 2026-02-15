@@ -155,8 +155,7 @@ jobs:
             echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env && \
             echo HF_TOKEN=${{ secrets.HF_TOKEN }} >> .env && \
             echo ENABLE_SIEMENS_API=${{ secrets.ENABLE_SIEMENS_API }} >> .env && \
-            echo SIEMENS_CLIENT_ID=${{ secrets.SIEMENS_CLIENT_ID }} >> .env && \
-            echo SIEMENS_CLIENT_SECRET=${{ secrets.SIEMENS_CLIENT_SECRET }} >> .env\""
+            echo SIEMENS_API_KEY=${{ secrets.SIEMENS_API_KEY }} >> .env\""
 
       - name: Verify .env file on ${{ matrix.server.name }}
         run: |

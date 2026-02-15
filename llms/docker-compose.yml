@@ -47,8 +47,7 @@ services:
       - SEARCH_API_KEY=${SEARCH_API_KEY:-}
 
       # Siemens Developer API (if ENABLE_SIEMENS_API=true)
-      - SIEMENS_CLIENT_ID=${SIEMENS_CLIENT_ID:-}
-      - SIEMENS_CLIENT_SECRET=${SIEMENS_CLIENT_SECRET:-}
+      - SIEMENS_API_KEY=${SIEMENS_API_KEY:-}
 
       # Python REPL configuration (if enabled)
       - PYTHON_REPL_TIMEOUT=10
