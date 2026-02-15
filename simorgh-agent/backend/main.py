@@ -57,6 +57,7 @@ from routes.auth import router as auth_router
 from routes.auth_v2 import router as auth_v2_router
 from routes.documents_rag import router as documents_rag_router
 from routes.project_session import include_project_session_routes
+from routes.project_agent_routes import include_project_agent_routes
 from routes.tpms_webhook import router as tpms_webhook_router
 from routes.quota import router as quota_router
 from routes.admin import router as admin_router
@@ -119,6 +120,9 @@ include_chatbot_routes(app)
 
 # Include project session routes (per-project database isolation)
 include_project_session_routes(app)
+
+# Include project agent routes (COT, tasks, shell, email gateway)
+include_project_agent_routes(app)
 
 # CORS
 app.add_middleware(
@@ -334,6 +338,36 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ Chatbot Core initialization failed (non-fatal): {e}")
         chatbot_core = get_chatbot_core()
+
+    # Initialize Project Manager Agent (COT, Shell, Email Gateway)
+    try:
+        from services.project_agent import get_project_agent
+        from services.project_memory_service import get_project_memory_service
+        from services.cot_engine import get_cot_engine
+        from services.email_gateway import get_email_gateway
+        from database.postgres_connection import get_db
+
+        project_agent = get_project_agent()
+        pg_db = get_db()
+
+        project_agent.initialize(
+            llm_service=llm_service,
+            redis=redis_service,
+            postgres=pg_db,
+            qdrant=qdrant,
+            neo4j=neo4j_service,
+        )
+
+        # Initialize email gateway
+        email_gateway = get_email_gateway()
+        email_gateway.set_services(
+            memory=get_project_memory_service(),
+            agent=project_agent,
+        )
+
+        logger.info("✅ Project Manager Agent initialized (COT + Shell + Email Gateway)")
+    except Exception as e:
+        logger.warning(f"⚠️ Project Manager Agent initialization failed (non-fatal): {e}")
 
     # Initialize Background Sync Service for real-time TPMS sync
     try:
