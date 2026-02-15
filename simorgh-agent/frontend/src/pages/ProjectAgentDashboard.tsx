@@ -16,7 +16,7 @@ import {
 import { useProjectAgent } from '../hooks/useProjectAgent';
 import CreateAgentProjectModal from '../components/CreateAgentProjectModal';
 import TaskPanel from '../components/TaskPanel';
-import MarkdownRenderer from '../components/MarkdownRenderer';
+import { MarkdownRenderer } from '../components/MarkdownRenderer';
 
 interface Props {
   userId: string;
