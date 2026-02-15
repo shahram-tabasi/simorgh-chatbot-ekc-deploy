@@ -153,7 +153,9 @@ jobs:
             echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} >> .env && \
             echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
             echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env && \
-            echo HF_TOKEN=${{ secrets.HF_TOKEN }} >> .env\""
+            echo HF_TOKEN=${{ secrets.HF_TOKEN }} >> .env && \
+            echo ENABLE_SIEMENS_API=${{ secrets.ENABLE_SIEMENS_API }} >> .env && \
+            echo SIEMENS_API_KEY=${{ secrets.SIEMENS_API_KEY }} >> .env\""
 
       - name: Verify .env file on ${{ matrix.server.name }}
         run: |

@@ -134,12 +134,14 @@ async def lifespan(app: FastAPI):
         enable_search = os.getenv("ENABLE_SEARCH_TOOL", "true").lower() == "true"
         enable_python = os.getenv("ENABLE_PYTHON_REPL", "false").lower() == "true"
         enable_wikipedia = os.getenv("ENABLE_WIKIPEDIA_TOOL", "true").lower() == "true"
+        enable_siemens = os.getenv("ENABLE_SIEMENS_API", "false").lower() == "true"
 
         langchain_agent = create_agent_with_tools(
             model_manager=model_manager,
             enable_search=enable_search,
             enable_python_repl=enable_python,
             enable_wikipedia=enable_wikipedia,
+            enable_siemens_api=enable_siemens,
             verbose=os.getenv("AGENT_VERBOSE", "false").lower() == "true"
         )
 
@@ -448,10 +450,17 @@ def _should_use_tools(messages: list) -> bool:
         # Standards and technical info
         "standard", "iec", "ieee", "nema", "ansi", "iso",
         "protection code", "relay code", "device number",
+        # Siemens products and automation
+        "siemens", "simatic", "sinamic", "sinamics", "sirius",
+        "siprotec", "sitrans", "scalance", "logo!",
+        "mlfb", "order number", "part number",
+        "plc", "s7-1200", "s7-1500", "s7-300", "s7-400",
+        "product lifecycle", "successor", "substitute",
+        "tia portal", "step 7", "wincc",
         # Calculation
         "calculate", "compute", "math",
         # Current information
-        "current", "latest", "recent", "today", "2024", "2025",
+        "current", "latest", "recent", "today", "2024", "2025", "2026",
         # Explicit requests
         "what is", "who is", "when was", "where is", "how does",
         "define", "explain", "describe",

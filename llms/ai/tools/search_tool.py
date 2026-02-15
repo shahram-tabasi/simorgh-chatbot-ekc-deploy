@@ -15,6 +15,7 @@ except ImportError:
     from langchain_core.tools import Tool
 
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
+from .connectivity import check_internet_available, get_offline_warning
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,11 @@ class SearchToolWrapper:
 
         if query != original_query:
             logger.info(f"🧹 [WEB SEARCH TOOL] Cleaned query: '{original_query[:100]}...' -> '{query}'")
+
+        # Check internet connectivity first
+        if not check_internet_available():
+            logger.warning("⚠️ [WEB SEARCH TOOL] No internet - falling back to offline mode")
+            return get_offline_warning()
 
         try:
             logger.info(f"🔍 [WEB SEARCH TOOL] Starting search for: '{query}'")
