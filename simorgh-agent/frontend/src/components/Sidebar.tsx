@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { PanelLeftIcon, PanelRightIcon, SparklesIcon, PlusIcon, SearchIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { PanelLeftIcon, PanelRightIcon, SparklesIcon, PlusIcon, SearchIcon, BrainCircuitIcon } from 'lucide-react';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ export function Sidebar({
   onNewProject,
   onNewGeneralChat,
 }: SidebarProps) {
+  const navigate = useNavigate();
   const [isMobile, setIsMobile] = React.useState(false);
 
   // Detect mobile screen size
@@ -113,6 +115,19 @@ export function Sidebar({
                 </button>
               </div>
 
+              {/* Agent Dashboard link - right sidebar only */}
+              {side === 'right' && (
+                <div className="px-3 mb-2">
+                  <button
+                    onClick={() => navigate('/agent')}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 hover:border-emerald-500/40 transition-all text-left group"
+                  >
+                    <BrainCircuitIcon className="w-4 h-4 text-emerald-400 group-hover:text-emerald-300" />
+                    <span className="text-sm font-medium text-emerald-300 group-hover:text-emerald-200">Agent Projects</span>
+                  </button>
+                </div>
+              )}
+
               {/* محتوای sidebar */}
               <div className="h-full">{children}</div>
             </motion.div>
@@ -172,6 +187,15 @@ export function Sidebar({
               )}
             </>
           )}
+
+          {/* Agent Dashboard */}
+          <button
+            onClick={() => navigate('/agent')}
+            className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg group"
+            title="Agent Projects"
+          >
+            <BrainCircuitIcon className="w-5 h-5 text-emerald-400 group-hover:text-emerald-300" />
+          </button>
 
           {/* Search Icon */}
           <button

@@ -40,6 +40,9 @@ jobs:
           - name: doc-processor
             context: ./simorgh-agent/doc-processor
             dockerfile: ./simorgh-agent/doc-processor/Dockerfile
+          - name: shell-service
+            context: ./simorgh-agent/shell-service
+            dockerfile: ./simorgh-agent/shell-service/Dockerfile
 
     steps:
       - name: Checkout code

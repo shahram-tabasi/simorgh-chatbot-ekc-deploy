@@ -16,6 +16,7 @@ import NotificationToast, { ToastNotification } from './components/NotificationT
 import SpecReview from './pages/SpecReview';
 import AdminPanel from './pages/AdminPanel';
 import UpgradePage from './pages/UpgradePage';
+import ProjectAgentDashboard from './pages/ProjectAgentDashboard';
 
 // Auth components (modern + auto-routing)
 import {
@@ -455,6 +456,14 @@ function MainChat() {
   );
 }
 
+// Agent Dashboard wrapper - extracts userId from auth context
+function AgentDashboardWrapper() {
+  const { user } = useAuth();
+  const userId = user ? (isLegacyUser(user) ? user.EMPUSERNAME : isModernUser(user) ? user.id : '') : '';
+  if (!userId) return null;
+  return <ProjectAgentDashboard userId={userId} />;
+}
+
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -524,6 +533,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <UpgradePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/agent"
+          element={
+            <ProtectedRoute>
+              <AgentDashboardWrapper />
             </ProtectedRoute>
           }
         />
