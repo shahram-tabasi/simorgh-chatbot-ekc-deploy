@@ -386,8 +386,21 @@ class ProjectManagerAgent:
     ) -> Dict[str, Any]:
         """Execute a single task using the appropriate tool."""
         tool = task.get("tool_used", "llm")
-        tool_input = task.get("tool_input") or {}
+        raw_input = task.get("tool_input")
         task_type = task.get("task_type", "action")
+
+        # Normalize tool_input: LLM may return a string instead of dict
+        if isinstance(raw_input, str) and raw_input:
+            if tool == "memory_query":
+                tool_input = {"query": raw_input}
+            elif tool in ("shell", "git") or task_type == "shell_command":
+                tool_input = {"command": raw_input}
+            else:
+                tool_input = {"prompt": raw_input}
+        elif isinstance(raw_input, dict):
+            tool_input = raw_input
+        else:
+            tool_input = {}
 
         # Inject previous results into context
         if prev_results:
