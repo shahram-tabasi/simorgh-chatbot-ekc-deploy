@@ -1,0 +1,35 @@
+# =============================================================================
+# Docker Compose - Shell Service (192.168.1.69)
+# =============================================================================
+# Sandboxed command execution and git operations for Project Agent.
+# Deployed on 192.168.1.69, accessed by central server (192.168.1.68).
+#
+# This runs separately from the main docker-compose.yml on 1.68.
+# The backend on 1.68 connects via: http://192.168.1.69:8010
+# =============================================================================
+
+services:
+  shell-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-shell-service:${IMAGE_TAG:-latest}
+    container_name: shell-service
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WORKSPACE_ROOT=/workspace
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+      - MAX_OUTPUT_SIZE=100000
+      - DEFAULT_TIMEOUT=30
+    volumes:
+      - shell_workspace:/workspace
+    ports:
+      - "8010:8010"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8010/health || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  shell_workspace:
+    driver: local

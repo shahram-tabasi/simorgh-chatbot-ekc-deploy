@@ -194,6 +194,9 @@ jobs:
           NOWPAYMENTS_IPN_SECRET=${{ secrets.NOWPAYMENTS_IPN_SECRET }}
           NOWPAYMENTS_SANDBOX=${{ secrets.NOWPAYMENTS_SANDBOX }}
 
+          # Shell Service (Project Agent on 1.69)
+          SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
+
           # Frontend URL (used in email verification/reset links)
           FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
 
@@ -395,10 +398,62 @@ jobs:
           echo "=== Redis Logs ==="
           docker logs redis --tail=50 2>/dev/null || echo "redis not found"
 
+  deploy-shell-server:
+    name: Deploy Shell Service to 1.69
+    runs-on: [self-hosted, linux, simorgh-server]
+    needs: [build-simorgh-agent, deploy-simorgh-server]
+
+    steps:
+      - name: Lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Copy compose file to 1.69
+        run: |
+          ssh 192.168.1.69 'mkdir -p ~/shell-service-deployment'
+          scp ${{ github.workspace }}/simorgh-agent/docker-compose-shell.yml \
+            192.168.1.69:~/shell-service-deployment/docker-compose.yml
+
+      - name: Create .env on 1.69
+        run: |
+          ssh 192.168.1.69 "cat > ~/shell-service-deployment/.env << 'ENVEOF'
+          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
+          IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
+          SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
+          ENVEOF"
+
+      - name: Deploy shell-service on 1.69
+        run: |
+          echo "=== Deploying Shell Service to 192.168.1.69 ==="
+
+          # Login to GHCR on 1.69
+          ssh 192.168.1.69 "echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+
+          # Stop, pull, start
+          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose down || true"
+          ssh 192.168.1.69 "docker image prune -f || true"
+          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose pull"
+          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose up -d"
+
+          # Wait for healthy
+          for i in $(seq 1 20); do
+            if ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps shell-service" | grep -q "healthy"; then
+              echo "Shell service is healthy on 1.69"
+              break
+            fi
+            echo "Waiting for shell-service... ($i/20)"
+            sleep 5
+          done
+
+          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps"
+          echo "=== Shell Service deployment to 1.69 complete ==="
+
   health-check:
     name: Simorgh Agent Health Check
     runs-on: [self-hosted, linux, simorgh-server]
-    needs: [deploy-simorgh-server]
+    needs: [deploy-simorgh-server, deploy-shell-server]
 
     steps:
       - name: Wait for application startup
@@ -457,6 +512,14 @@ jobs:
           echo "📊 API Docs: http://192.168.1.68/api/docs"
           echo "🔍 Neo4j Browser: http://192.168.1.68:7474"
           echo ""
+          echo "=== Shell Service (1.69) Health Check ==="
+          if curl -sf http://192.168.1.69:8010/health > /dev/null 2>&1; then
+            echo "✅ Shell service on 1.69 is healthy"
+          else
+            echo "⚠️ Shell service on 1.69 not responding (may still be starting)"
+          fi
+
+          echo ""
           echo "========================================"
           echo "Architecture:"
           echo "  ✅ Neo4j 5.15 (Knowledge Graph)"
@@ -468,6 +531,7 @@ jobs:
           echo "  ✅ STT Service (Faster-Whisper)"
           echo "  ✅ TTS Service (Edge-TTS)"
           echo "  ✅ Doc Processor"
+          echo "  ✅ Shell Service (192.168.1.69)"
           echo ""
           echo "========================================"
           echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
