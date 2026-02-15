@@ -19,6 +19,8 @@ try:
 except ImportError:
     from langchain_core.tools import Tool
 
+from .connectivity import check_internet_available, get_offline_warning
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,6 +152,11 @@ class WikipediaToolWrapper:
         query = self._clean_query(query)
         if query != original_query:
             logger.info(f"🧹 [WIKIPEDIA TOOL] Cleaned query: '{original_query[:100]}...' -> '{query}'")
+
+        # Check internet connectivity first
+        if not check_internet_available():
+            logger.warning("⚠️ [WIKIPEDIA TOOL] No internet - falling back to offline mode")
+            return get_offline_warning()
 
         try:
             logger.info(f"🔍 [WIKIPEDIA TOOL] Starting search for: '{query}'")

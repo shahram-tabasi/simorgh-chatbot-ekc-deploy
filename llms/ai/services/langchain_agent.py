@@ -495,9 +495,17 @@ class LangChainAgent:
             def parse_llm_output(x): return x
             def sanitize_for_user(x): return x
 
+        # Import connectivity check for offline fallback
+        try:
+            from tools.connectivity import check_internet_available, get_offline_warning
+            HAS_CONNECTIVITY = True
+        except ImportError:
+            HAS_CONNECTIVITY = False
+
         start_time = time.time()
         tool_calls = []
         tool_results = []  # Store full results for summary
+        offline_detected = False  # Track if tools returned offline warning
         max_iterations = 5
 
         # Build simple prompt for tool use
@@ -565,6 +573,10 @@ Question: {input_text}"""
                         logger.info(f"🔧 Custom loop: Executing {tool.name} with query: '{query[:100]}'")
                         try:
                             tool_result = tool.run(query)
+                            # Detect offline warning from tool
+                            if tool_result and "[OFFLINE]" in tool_result:
+                                offline_detected = True
+                                logger.warning(f"⚠️ Tool {tool.name} returned offline warning - falling back to LLM knowledge")
                             tool_calls.append({
                                 "tool": tool.name,
                                 "input": query,
@@ -580,6 +592,29 @@ Question: {input_text}"""
                             logger.error(f"❌ Tool {tool.name} failed: {e}")
                             tool_result = f"Error: {str(e)}"
                         break
+
+                # If offline detected, skip tools and fall back to direct LLM generation
+                if offline_detected:
+                    logger.info("🔄 Offline mode: Falling back to direct LLM generation")
+                    fallback_messages = [{"role": "user", "content": input_text}]
+                    fallback_output, fallback_tokens = await self.model_manager.generate(
+                        fallback_messages, max_tokens=1024
+                    )
+                    clean_fallback = sanitize_for_user(fallback_output) if fallback_output else ""
+                    elapsed = time.time() - start_time
+                    offline_prefix = (
+                        "**Note:** Internet is currently unavailable. "
+                        "This response is based on the AI model's training "
+                        "knowledge and may not reflect the most current information.\n\n"
+                    )
+                    return {
+                        "output": offline_prefix + clean_fallback,
+                        "tokens_used": fallback_tokens,
+                        "tool_calls": tool_calls,
+                        "used_tools": False,
+                        "execution_time": elapsed,
+                        "offline_fallback": True
+                    }
 
                 if tool_result:
                     # Add tool result to messages and continue
@@ -808,6 +843,7 @@ def create_agent_with_tools(
     enable_search: bool = True,
     enable_python_repl: bool = False,
     enable_wikipedia: bool = True,
+    enable_siemens_api: bool = False,
     verbose: bool = False
 ) -> LangChainAgent:
     """
@@ -818,6 +854,7 @@ def create_agent_with_tools(
         enable_search: Whether to enable search tool
         enable_python_repl: Whether to enable Python REPL
         enable_wikipedia: Whether to enable Wikipedia search tool
+        enable_siemens_api: Whether to enable Siemens Product Information Hub tool
         verbose: Whether to log agent steps
 
     Returns:
@@ -835,6 +872,7 @@ def create_agent_with_tools(
         from tools.search_tool import create_search_tool_from_env
         from tools.python_repl import create_python_repl_from_env
         from tools.wikipedia_tool import create_wikipedia_tool_from_env, create_electrical_wiki_tool
+        from tools.siemens_api_tool import create_siemens_api_tool_from_env
     except ImportError as e:
         logger.warning(f"⚠️  Tool modules not found: {e}")
         return LangChainAgent(
@@ -881,6 +919,16 @@ def create_agent_with_tools(
                 logger.info("✅ Python REPL tool enabled")
         except Exception as e:
             logger.warning(f"⚠️  Failed to initialize Python REPL tool: {e}")
+
+    # Add Siemens Product Information Hub tool
+    if enable_siemens_api:
+        try:
+            siemens_tool = create_siemens_api_tool_from_env()
+            if siemens_tool:
+                tools.append(siemens_tool)
+                logger.info("✅ Siemens Product Information Hub tool enabled")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize Siemens API tool: {e}")
 
     return LangChainAgent(
         model_manager=model_manager,

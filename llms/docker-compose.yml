@@ -39,11 +39,16 @@ services:
       # LangChain tool configuration
       - ENABLE_SEARCH_TOOL=true
       - ENABLE_PYTHON_REPL=false  # Disabled by default for security
+      - ENABLE_SIEMENS_API=${ENABLE_SIEMENS_API:-false}
       - AGENT_VERBOSE=false
 
       # Optional: Self-hosted search API
       - SEARCH_API_URL=${SEARCH_API_URL:-}
       - SEARCH_API_KEY=${SEARCH_API_KEY:-}
+
+      # Siemens Developer API (if ENABLE_SIEMENS_API=true)
+      - SIEMENS_CLIENT_ID=${SIEMENS_CLIENT_ID:-}
+      - SIEMENS_CLIENT_SECRET=${SIEMENS_CLIENT_SECRET:-}
 
       # Python REPL configuration (if enabled)
       - PYTHON_REPL_TIMEOUT=10
