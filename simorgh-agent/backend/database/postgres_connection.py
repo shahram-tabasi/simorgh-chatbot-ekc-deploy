@@ -251,6 +251,28 @@ async def init_database() -> None:
     except Exception as e:
         logger.error(f"Error verifying user tiers schema: {e}")
 
+    # Migration 003: Project agent system tables
+    try:
+        async with db.get_async_connection() as conn:
+            projects_exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'projects')"
+            )
+            if not projects_exists:
+                logger.warning("Projects table not found - running migration 003...")
+                migration_path = os.path.join(migrations_dir, "003_project_agent_system.sql")
+                if os.path.exists(migration_path):
+                    success = await db.run_migration(migration_path)
+                    if success:
+                        logger.info("Project agent system migration 003 completed successfully")
+                    else:
+                        logger.error("Failed to run project agent system migration 003")
+                else:
+                    logger.error(f"Migration file not found: {migration_path}")
+            else:
+                logger.info("Project agent system schema verified")
+    except Exception as e:
+        logger.error(f"Error verifying project agent system schema: {e}")
+
 
 async def close_database() -> None:
     """Close all database connections."""

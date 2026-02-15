@@ -420,59 +420,131 @@ jobs:
       - name: Lowercase repository owner
         run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      - name: Setup SSH key
+      - name: Sanitize branch name for Docker tag
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+
+      - name: Setup SSH key for central server
         run: |
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
 
-      - name: Copy shell-service compose to jump host
+      - name: Test SSH to central server
         run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 "echo 'Connected to central server'"
+
+      - name: Setup SSH from central to 1.69
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh-keyscan -H 192.168.1.69 >> ~/.ssh/known_hosts 2>/dev/null || true"
+
+      - name: Test SSH to 1.69 via central
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh -o StrictHostKeyChecking=no ubuntu@192.168.1.69 'echo Connected to shell-server 1.69'"
+
+      - name: Create deployment directory on 1.69
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'mkdir -p ~/shell-service-deployment'"
+
+      - name: Copy compose file to 1.69 via central
+        run: |
+          echo "Copying docker-compose-shell.yml to central server..."
           scp -P 2324 -i ~/.ssh/deploy_key \
             simorgh-agent/docker-compose-shell.yml \
-            ${{ secrets.SSH_USER }}@95.38.203.173:~/docker-compose-shell.yml
+            ${{ secrets.SSH_USER }}@95.38.203.173:/tmp/docker-compose-shell.yml
 
-      - name: Deploy shell-service via jump host (1.68 → 1.69)
+          echo "Copying from central to 1.69..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "scp -o StrictHostKeyChecking=no /tmp/docker-compose-shell.yml ubuntu@192.168.1.69:~/shell-service-deployment/docker-compose.yml"
+
+          echo "Cleaning up central server..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "rm -f /tmp/docker-compose-shell.yml" || true
+
+          echo "Verifying file on 1.69..."
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'ls -lh ~/shell-service-deployment/docker-compose.yml'"
+
+      - name: Create .env file on 1.69
         run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << ENDSSH
-          echo "=== Deploying Shell Service to 192.168.1.69 ==="
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && \
+            echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} > .env && \
+            echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
+            echo SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }} >> .env\"'"
 
-          # Prepare deployment directory on 1.69
-          ssh 192.168.1.69 'mkdir -p ~/shell-service-deployment'
+      - name: Verify .env file
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'bash -c \"echo === Environment File === && cat ~/shell-service-deployment/.env\"'"
 
-          # Copy docker-compose file to 1.69
-          scp ~/docker-compose-shell.yml 192.168.1.69:~/shell-service-deployment/docker-compose.yml
+      - name: Login to GHCR on 1.69
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 \"echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin\""
 
-          # Create .env on 1.69 with substituted values
-          ssh 192.168.1.69 "cat > ~/shell-service-deployment/.env << 'ENVEOF'
-          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
-          IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
-          SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
-          ENVEOF"
+      - name: Stop running containers
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && docker compose down || true\"'"
 
-          # Login to GHCR on 1.69
-          ssh 192.168.1.69 "echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+      - name: Clean up old images
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'docker image prune -f || true'"
 
-          # Deploy on 1.69
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose down || true"
-          ssh 192.168.1.69 "docker image prune -f || true"
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose pull"
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose up -d"
+      - name: Pull latest images (with retry)
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'bash -c \"
+              cd ~/shell-service-deployment
+              MAX_RETRIES=4
+              RETRY_DELAY=10
+              for attempt in \\\$(seq 1 \\\$MAX_RETRIES); do
+                echo Pull attempt \\\$attempt/\\\$MAX_RETRIES...
+                if docker compose pull; then
+                  echo Pull successful
+                  break
+                else
+                  if [ \\\$attempt -eq \\\$MAX_RETRIES ]; then
+                    echo All pull attempts failed
+                    exit 1
+                  fi
+                  echo Pull failed, retrying in \\\${RETRY_DELAY}s...
+                  sleep \\\$RETRY_DELAY
+                  RETRY_DELAY=\\\$((RETRY_DELAY * 2))
+                fi
+              done
+            \"'"
 
-          # Wait for healthy
-          for i in \$(seq 1 20); do
-            if ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps shell-service" | grep -q "healthy"; then
-              echo "✅ Shell service is healthy on 1.69"
-              break
-            fi
-            echo "⏳ Waiting for shell-service... (\$i/20)"
-            sleep 5
-          done
+      - name: Start services
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && docker compose up -d\"'"
 
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps"
-          echo "=== Shell Service deployment to 1.69 complete ==="
-          ENDSSH
+      - name: Wait for shell-service to be healthy
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && timeout 120 bash -c \\\"until docker compose ps | grep -q healthy; do sleep 5; echo Waiting for shell-service...; done\\\" || echo Warning: Shell service may not be healthy yet\"'"
+
+      - name: Show service status
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && echo === Docker Compose Status === && docker compose ps\"'"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
+            "ssh ubuntu@192.168.1.69 'cd ~/shell-service-deployment && \
+            echo \"=== Docker Compose Status ===\" && docker compose ps -a && \
+            echo \"=== Shell Service Logs ===\" && docker logs shell-service --tail=100 2>/dev/null || echo \"shell-service not found\" && \
+            echo \"=== .env File ===\" && cat .env 2>/dev/null || echo \".env not found\" && \
+            echo \"=== docker-compose.yml ===\" && ls -la 2>/dev/null'"
 
   health-check:
     name: Simorgh Agent Health Check
