@@ -439,30 +439,30 @@ jobs:
           echo "=== Deploying Shell Service to 192.168.1.69 ==="
 
           # Prepare deployment directory on 1.69
-          ssh 192.168.1.69 'mkdir -p ~/shell-service-deployment'
+          ssh -n 192.168.1.69 'mkdir -p ~/shell-service-deployment'
 
           # Copy docker-compose file to 1.69
           scp ~/docker-compose-shell.yml 192.168.1.69:~/shell-service-deployment/docker-compose.yml
 
           # Create .env on 1.69 with substituted values
-          ssh 192.168.1.69 "cat > ~/shell-service-deployment/.env << 'ENVEOF'
+          ssh -n 192.168.1.69 "cat > ~/shell-service-deployment/.env << 'ENVEOF'
           GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
           IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
           SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
           ENVEOF"
 
           # Login to GHCR on 1.69
-          ssh 192.168.1.69 "echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+          ssh -n 192.168.1.69 "echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
 
           # Deploy on 1.69
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose down || true"
-          ssh 192.168.1.69 "docker image prune -f || true"
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose pull"
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose up -d"
+          ssh -n 192.168.1.69 "cd ~/shell-service-deployment && docker compose down || true"
+          ssh -n 192.168.1.69 "docker image prune -f || true"
+          ssh -n 192.168.1.69 "cd ~/shell-service-deployment && docker compose pull"
+          ssh -n 192.168.1.69 "cd ~/shell-service-deployment && docker compose up -d"
 
           # Wait for healthy
           for i in \$(seq 1 20); do
-            if ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps shell-service" | grep -q "healthy"; then
+            if ssh -n 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps shell-service" | grep -q "healthy"; then
               echo "✅ Shell service is healthy on 1.69"
               break
             fi
@@ -470,7 +470,7 @@ jobs:
             sleep 5
           done
 
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps"
+          ssh -n 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps"
           echo "=== Shell Service deployment to 1.69 complete ==="
           ENDSSH
 
