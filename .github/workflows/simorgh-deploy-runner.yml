@@ -404,51 +404,97 @@ jobs:
     needs: [build-simorgh-agent, deploy-simorgh-server]
 
     steps:
-      - name: Lowercase repository owner
-        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Sanitize branch name for Docker tag
+        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+
+      - name: Test SSH to 1.69
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@192.168.1.69 'echo Connected to shell-server 1.69'
+
+      - name: Create deployment directory on 1.69
+        run: |
+          ssh ubuntu@192.168.1.69 'mkdir -p ~/shell-service-deployment'
+
       - name: Copy compose file to 1.69
         run: |
-          ssh 192.168.1.69 'mkdir -p ~/shell-service-deployment'
           scp ${{ github.workspace }}/simorgh-agent/docker-compose-shell.yml \
-            192.168.1.69:~/shell-service-deployment/docker-compose.yml
+            ubuntu@192.168.1.69:~/shell-service-deployment/docker-compose.yml
 
-      - name: Create .env on 1.69
+          echo "Verifying file on 1.69..."
+          ssh ubuntu@192.168.1.69 'ls -lh ~/shell-service-deployment/docker-compose.yml'
+
+      - name: Create .env file on 1.69
         run: |
-          ssh 192.168.1.69 "cat > ~/shell-service-deployment/.env << 'ENVEOF'
-          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
-          IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
-          SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
-          ENVEOF"
+          ssh ubuntu@192.168.1.69 "bash -c \"cd ~/shell-service-deployment && \
+            echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} > .env && \
+            echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
+            echo SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }} >> .env\""
 
-      - name: Deploy shell-service on 1.69
+      - name: Verify .env file
         run: |
-          echo "=== Deploying Shell Service to 192.168.1.69 ==="
+          ssh ubuntu@192.168.1.69 "bash -c \"echo === Environment File === && cat ~/shell-service-deployment/.env\""
 
-          # Login to GHCR on 1.69
-          ssh 192.168.1.69 "echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+      - name: Login to GHCR on 1.69
+        run: |
+          ssh ubuntu@192.168.1.69 "echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
 
-          # Stop, pull, start
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose down || true"
-          ssh 192.168.1.69 "docker image prune -f || true"
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose pull"
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose up -d"
+      - name: Stop running containers
+        run: |
+          ssh ubuntu@192.168.1.69 'bash -c "cd ~/shell-service-deployment && docker compose down || true"'
 
-          # Wait for healthy
-          for i in $(seq 1 20); do
-            if ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps shell-service" | grep -q "healthy"; then
-              echo "Shell service is healthy on 1.69"
-              break
-            fi
-            echo "Waiting for shell-service... ($i/20)"
-            sleep 5
-          done
+      - name: Clean up old images
+        run: |
+          ssh ubuntu@192.168.1.69 'docker image prune -f || true'
 
-          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps"
-          echo "=== Shell Service deployment to 1.69 complete ==="
+      - name: Pull latest images (with retry)
+        run: |
+          ssh ubuntu@192.168.1.69 'bash -c "
+            cd ~/shell-service-deployment
+            MAX_RETRIES=4
+            RETRY_DELAY=10
+            for attempt in $(seq 1 $MAX_RETRIES); do
+              echo Pull attempt $attempt/$MAX_RETRIES...
+              if docker compose pull; then
+                echo Pull successful
+                break
+              else
+                if [ $attempt -eq $MAX_RETRIES ]; then
+                  echo All pull attempts failed
+                  exit 1
+                fi
+                echo Pull failed, retrying in ${RETRY_DELAY}s...
+                sleep $RETRY_DELAY
+                RETRY_DELAY=$((RETRY_DELAY * 2))
+              fi
+            done
+          "'
+
+      - name: Start services
+        run: |
+          ssh ubuntu@192.168.1.69 'bash -c "cd ~/shell-service-deployment && docker compose up -d"'
+
+      - name: Wait for shell-service to be healthy
+        run: |
+          ssh ubuntu@192.168.1.69 'bash -c "cd ~/shell-service-deployment && timeout 120 bash -c \"until docker compose ps | grep -q healthy; do sleep 5; echo Waiting for shell-service...; done\" || echo Warning: Shell service may not be healthy yet"'
+
+      - name: Show service status
+        run: |
+          ssh ubuntu@192.168.1.69 'bash -c "cd ~/shell-service-deployment && echo === Docker Compose Status === && docker compose ps"'
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          ssh ubuntu@192.168.1.69 'cd ~/shell-service-deployment && \
+            echo "=== Docker Compose Status ===" && docker compose ps -a && \
+            echo "=== Shell Service Logs ===" && docker logs shell-service --tail=100 2>/dev/null || echo "shell-service not found" && \
+            echo "=== .env File ===" && cat .env 2>/dev/null || echo ".env not found" && \
+            echo "=== docker-compose.yml ===" && ls -la 2>/dev/null'
 
   health-check:
     name: Simorgh Agent Health Check
