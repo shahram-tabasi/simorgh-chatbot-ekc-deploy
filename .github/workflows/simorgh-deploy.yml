@@ -212,6 +212,9 @@ jobs:
           NOWPAYMENTS_IPN_SECRET=${{ secrets.NOWPAYMENTS_IPN_SECRET }}
           NOWPAYMENTS_SANDBOX=${{ secrets.NOWPAYMENTS_SANDBOX }}
 
+          # Shell Service (Project Agent on 1.69)
+          SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
+
           # Frontend URL (used in email verification/reset links)
           FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
 
@@ -405,10 +408,76 @@ jobs:
 
           ENDSSH
 
+  deploy-shell-server:
+    name: Deploy Shell Service to 1.69
+    runs-on: ubuntu-latest
+    needs: [build-simorgh-agent, deploy-central-server]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Lowercase repository owner
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
+
+      - name: Copy shell-service compose to jump host
+        run: |
+          scp -P 2324 -i ~/.ssh/deploy_key \
+            simorgh-agent/docker-compose-shell.yml \
+            ${{ secrets.SSH_USER }}@95.38.203.173:~/docker-compose-shell.yml
+
+      - name: Deploy shell-service via jump host (1.68 → 1.69)
+        run: |
+          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << ENDSSH
+          echo "=== Deploying Shell Service to 192.168.1.69 ==="
+
+          # Prepare deployment directory on 1.69
+          ssh 192.168.1.69 'mkdir -p ~/shell-service-deployment'
+
+          # Copy docker-compose file to 1.69
+          scp ~/docker-compose-shell.yml 192.168.1.69:~/shell-service-deployment/docker-compose.yml
+
+          # Create .env on 1.69 with substituted values
+          ssh 192.168.1.69 "cat > ~/shell-service-deployment/.env << 'ENVEOF'
+          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
+          IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
+          SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
+          ENVEOF"
+
+          # Login to GHCR on 1.69
+          ssh 192.168.1.69 "echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+
+          # Deploy on 1.69
+          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose down || true"
+          ssh 192.168.1.69 "docker image prune -f || true"
+          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose pull"
+          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose up -d"
+
+          # Wait for healthy
+          for i in \$(seq 1 20); do
+            if ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps shell-service" | grep -q "healthy"; then
+              echo "✅ Shell service is healthy on 1.69"
+              break
+            fi
+            echo "⏳ Waiting for shell-service... (\$i/20)"
+            sleep 5
+          done
+
+          ssh 192.168.1.69 "cd ~/shell-service-deployment && docker compose ps"
+          echo "=== Shell Service deployment to 1.69 complete ==="
+          ENDSSH
+
   health-check:
     name: Simorgh Agent Health Check
     runs-on: ubuntu-latest
-    needs: [deploy-central-server]
+    needs: [deploy-central-server, deploy-shell-server]
 
     steps:
       - name: Setup SSH key
@@ -469,6 +538,14 @@ jobs:
           echo "📊 API Docs: http://192.168.1.68/api/docs"
           echo "🔍 Neo4j Browser: http://192.168.1.68:7474"
           echo ""
+          echo "=== Shell Service (1.69) Health Check ==="
+          if curl -sf http://192.168.1.69:8010/health > /dev/null 2>&1; then
+            echo "✅ Shell service on 1.69 is healthy"
+          else
+            echo "⚠️ Shell service on 1.69 not responding (may still be starting)"
+          fi
+
+          echo ""
           echo "========================================"
           echo "Architecture:"
           echo "  ✅ Neo4j 5.15 (Knowledge Graph)"
@@ -479,6 +556,7 @@ jobs:
           echo "  ✅ React Frontend"
           echo "  ✅ STT Service (Faster-Whisper)"
           echo "  ✅ TTS Service (Edge-TTS)"
+          echo "  ✅ Shell Service (192.168.1.69)"
           echo ""
           echo "========================================"
           echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"

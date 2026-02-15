@@ -18,7 +18,7 @@ from models.project_models import (
 
 logger = logging.getLogger(__name__)
 
-SHELL_SERVICE_URL = os.getenv("SHELL_SERVICE_URL", "http://shell-service:8010")
+SHELL_SERVICE_URL = os.getenv("SHELL_SERVICE_URL", "http://192.168.1.69:8010")
 SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
 SHELL_SERVICE_TIMEOUT = int(os.getenv("SHELL_SERVICE_TIMEOUT", "60"))
 

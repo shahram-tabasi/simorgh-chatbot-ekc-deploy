@@ -105,8 +105,8 @@ services:
       - NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY}
       - NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET}
       - NOWPAYMENTS_SANDBOX=${NOWPAYMENTS_SANDBOX:-false}
-      # Shell Service (Project Agent)
-      - SHELL_SERVICE_URL=http://shell-service:8010
+      # Shell Service (Project Agent) - runs on 192.168.1.69
+      - SHELL_SERVICE_URL=http://192.168.1.69:8010
       - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
       - SHELL_SERVICE_TIMEOUT=60
       # Project Email Gateway
@@ -500,31 +500,10 @@ services:
   #   restart: unless-stopped
 
   # ===========================================================================
-  # SHELL-SERVICE - Sandboxed Command Execution with Git (Project Agent)
-  # Deployed on 192.168.1.69, accessible by central server (1.68)
+  # SHELL-SERVICE - Deployed separately on 192.168.1.69
+  # See docker-compose-shell.yml for the shell-service definition.
+  # Backend connects via: http://192.168.1.69:8010
   # ===========================================================================
-  shell-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-shell-service:${IMAGE_TAG:-latest}
-    container_name: shell-service
-    environment:
-      - PYTHONUNBUFFERED=1
-      - WORKSPACE_ROOT=/workspace
-      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
-      - MAX_OUTPUT_SIZE=100000
-      - DEFAULT_TIMEOUT=30
-    volumes:
-      - shell_workspace:/workspace
-    expose:
-      - "8010"
-    networks:
-      - app_net
-    healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8010/health || exit 1" ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
 
 # =============================================================================
 # NETWORKS
@@ -566,6 +545,4 @@ volumes:
   huggingface_cache:
     driver: local
   sentence_transformers_cache:
-    driver: local
-  shell_workspace:
     driver: local
