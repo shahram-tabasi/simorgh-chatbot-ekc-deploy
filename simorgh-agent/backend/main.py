@@ -2938,82 +2938,192 @@ async def send_chat_message_stream(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
         )
 
-    # Build context using unified service
-    stream_context_result = None
-    context_metadata = {}
-
-    if message.use_graph_context and unified_context_service:
-        try:
-            logger.info(f"🔍 [Stream] Building unified context for {'project ' + project_number if project_number else 'general'} chat")
-
-            stream_context_result = await unified_context_service.build_context(
-                user_id=message.user_id,
-                query=message.content,
-                chat_id=message.chat_id,
-                project_number=project_number,
-                chat_type=chat_type
-            )
-
-            if stream_context_result.sources_used:
-                context_metadata = {
-                    "has_graph_context": True,
-                    "sources": stream_context_result.sources_used,
-                    "tokens": stream_context_result.total_tokens_estimated
-                }
-                logger.info(
-                    f"✅ [Stream] Context built: {len(stream_context_result.sources_used)} sources, "
-                    f"~{stream_context_result.total_tokens_estimated} tokens"
-                )
-
-        except Exception as e:
-            logger.warning(f"⚠️ [Stream] Unified context building failed: {e}")
-            context_metadata = {"fallback": True}
-
-    # Build system prompt
-    system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
-You help users with electrical panel specifications, power distribution, protection devices, and system design.
-Provide accurate, technical responses based on IEC and IEEE standards."""
-
-    # Always inject user identity into system prompt (independent of context service)
-    try:
-        user_profile = redis.get_user_profile(message.user_id) if redis else None
-        if user_profile:
-            user_display = user_profile.get('display_name') or user_profile.get('first_name') or message.user_id
-            system_prompt += f"\n\nYou are talking to {user_display} (username: {message.user_id})."
-        else:
-            # Fallback: prettify username
-            user_display = message.user_id.replace(".", " ").replace("_", " ").title()
-            system_prompt += f"\n\nYou are talking to {user_display} (username: {message.user_id})."
-    except Exception as e:
-        logger.debug(f"Could not inject user identity: {e}")
-
-    # Add unified context if available
-    if stream_context_result and stream_context_result.context_text:
-        system_prompt += f"\n\n{'=' * 50}\n# PROJECT CONTEXT\n{'=' * 50}\n"
-        system_prompt += stream_context_result.context_text
-        system_prompt += """\n\n🎯 CRITICAL: Use the above project data to answer. Be specific and cite actual values."""
-
-    # Build LLM messages
-    llm_messages = [{"role": "system", "content": system_prompt}]
-
-    # Add chat history from context result
-    if stream_context_result and stream_context_result.chat_history:
-        for msg in stream_context_result.chat_history[-5:]:  # Last 5 for streaming (lighter)
-            role = msg.get("role", "user")
-            content = msg.get("content", msg.get("text", ""))[:300]  # Shorter truncation for streaming
-            if role in ["user", "assistant"] and content:
-                llm_messages.append({"role": role, "content": content})
-
-    # Add current message
-    llm_messages.append({"role": "user", "content": message.content})
+    # Context building is now inside the generator for real-time step events
 
     async def event_stream():
         try:
+            import re
+            import time as _time
+
+            llm_mode = message.llm_mode or None
+            is_project = project_number is not None and chat_type == "project"
+
+            # =====================================================================
+            # PHASE 1: Emit Agent Plan (Claude Code-style task list)
+            # =====================================================================
+            plan_tasks = [
+                {"id": "context", "title": "Gathering project context", "status": "pending"},
+                {"id": "analyze", "title": "Analyzing and planning response", "status": "pending"},
+                {"id": "generate", "title": "Generating response", "status": "pending"},
+            ]
+            yield f"data: {json.dumps({'agent_plan': {'tasks': plan_tasks}})}\n\n"
+
+            # =====================================================================
+            # PHASE 2: Context Gathering (with real-time sub-step events)
+            # =====================================================================
+            yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'status': 'active', 'title': 'Gathering project context'}})}\n\n"
+
+            stream_context_result = None
+            context_metadata = {}
+
+            if message.use_graph_context and unified_context_service:
+                try:
+                    logger.info(f"🔍 [Stream] Building unified context for {'project ' + project_number if project_number else 'general'} chat")
+
+                    # Emit sub-step: project data
+                    if is_project:
+                        yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'project_data', 'status': 'active', 'title': 'Fetching project data from server', 'tool': 'server'}})}\n\n"
+
+                    # Emit sub-step: semantic search
+                    yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'qdrant', 'status': 'active', 'title': 'Searching documents (semantic)', 'tool': 'qdrant'}})}\n\n"
+
+                    # Emit sub-step: graph traversal
+                    if is_project:
+                        yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'graph', 'status': 'active', 'title': 'Traversing knowledge graph', 'tool': 'neo4j'}})}\n\n"
+
+                    # Emit sub-step: chat history
+                    yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'history', 'status': 'active', 'title': 'Loading chat history', 'tool': 'redis'}})}\n\n"
+
+                    # Actually build context
+                    ctx_start = _time.time()
+                    stream_context_result = await unified_context_service.build_context(
+                        user_id=message.user_id,
+                        query=message.content,
+                        chat_id=message.chat_id,
+                        project_number=project_number,
+                        chat_type=chat_type
+                    )
+                    ctx_ms = int((_time.time() - ctx_start) * 1000)
+
+                    if stream_context_result.sources_used:
+                        context_metadata = {
+                            "has_graph_context": True,
+                            "sources": stream_context_result.sources_used,
+                            "tokens": stream_context_result.total_tokens_estimated
+                        }
+                        logger.info(
+                            f"✅ [Stream] Context built: {len(stream_context_result.sources_used)} sources, "
+                            f"~{stream_context_result.total_tokens_estimated} tokens in {ctx_ms}ms"
+                        )
+
+                    # Emit completed sub-steps with real data
+                    sources = stream_context_result.sources_used if stream_context_result else []
+
+                    if is_project:
+                        tpms_detail = ""
+                        if stream_context_result and stream_context_result.tpms_data:
+                            panel_count = stream_context_result.tpms_data.get("panel_count", 0)
+                            tpms_detail = f"{panel_count} panels found"
+                        elif "tpms_project" in sources:
+                            tpms_detail = "Project data loaded"
+                        else:
+                            tpms_detail = "No project data"
+                        yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'project_data', 'status': 'completed', 'title': 'Fetching project data from server', 'detail': tpms_detail, 'tool': 'server'}})}\n\n"
+
+                    # Qdrant results
+                    qdrant_detail = ""
+                    if stream_context_result and stream_context_result.vector_results:
+                        qdrant_detail = f"{len(stream_context_result.vector_results)} document sections found"
+                    elif "vector_sections" in sources:
+                        qdrant_detail = "Document sections loaded"
+                    else:
+                        qdrant_detail = "No document matches"
+                    yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'qdrant', 'status': 'completed', 'title': 'Searching documents (semantic)', 'detail': qdrant_detail, 'tool': 'qdrant'}})}\n\n"
+
+                    # Graph results
+                    if is_project:
+                        graph_detail = ""
+                        if stream_context_result and stream_context_result.graph_subgraph:
+                            node_count = stream_context_result.graph_subgraph.get("node_count", 0)
+                            graph_detail = f"{node_count} nodes traversed"
+                        elif "graph_subgraph" in sources or "graph_specs" in sources:
+                            graph_detail = "Graph context loaded"
+                        else:
+                            graph_detail = "No graph data"
+                        yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'graph', 'status': 'completed', 'title': 'Traversing knowledge graph', 'detail': graph_detail, 'tool': 'neo4j'}})}\n\n"
+
+                    # Chat history
+                    history_detail = ""
+                    if stream_context_result and stream_context_result.chat_history:
+                        history_detail = f"{len(stream_context_result.chat_history)} messages loaded"
+                    elif "chat_history" in sources:
+                        history_detail = "History loaded"
+                    else:
+                        history_detail = "No prior history"
+                    yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'history', 'status': 'completed', 'title': 'Loading chat history', 'detail': history_detail, 'tool': 'redis'}})}\n\n"
+
+                    # User memory
+                    if stream_context_result and stream_context_result.user_memory:
+                        mem_detail = f"{len(stream_context_result.user_memory)} relevant memories"
+                        yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'memory', 'status': 'completed', 'title': 'Retrieving user memory', 'detail': mem_detail, 'tool': 'qdrant'}})}\n\n"
+
+                except Exception as e:
+                    logger.warning(f"⚠️ [Stream] Unified context building failed: {e}")
+                    context_metadata = {"fallback": True}
+                    yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'error', 'status': 'failed', 'title': 'Context gathering error', 'detail': str(e)[:100]}})}\n\n"
+            else:
+                # No context service - emit minimal steps
+                yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'subtask_id': 'history', 'status': 'completed', 'title': 'Loading chat history', 'detail': 'Direct mode', 'tool': 'redis'}})}\n\n"
+
+            yield f"data: {json.dumps({'agent_step': {'task_id': 'context', 'status': 'completed', 'title': 'Gathering project context'}})}\n\n"
+
+            # =====================================================================
+            # PHASE 3: Analyze & Build Prompt (with step event)
+            # =====================================================================
+            yield f"data: {json.dumps({'agent_step': {'task_id': 'analyze', 'status': 'active', 'title': 'Analyzing context and planning response'}})}\n\n"
+
+            # Build system prompt
+            system_prompt = """You are an expert industrial electrical engineer assistant specializing in Siemens LV/MV systems.
+You help users with electrical panel specifications, power distribution, protection devices, and system design.
+Provide accurate, technical responses based on IEC and IEEE standards."""
+
+            # Always inject user identity
+            try:
+                user_profile = redis.get_user_profile(message.user_id) if redis else None
+                if user_profile:
+                    user_display = user_profile.get('display_name') or user_profile.get('first_name') or message.user_id
+                    system_prompt += f"\n\nYou are talking to {user_display} (username: {message.user_id})."
+                else:
+                    user_display = message.user_id.replace(".", " ").replace("_", " ").title()
+                    system_prompt += f"\n\nYou are talking to {user_display} (username: {message.user_id})."
+            except Exception as e:
+                logger.debug(f"Could not inject user identity: {e}")
+
+            # Add unified context if available
+            if stream_context_result and stream_context_result.context_text:
+                system_prompt += f"\n\n{'=' * 50}\n# PROJECT CONTEXT\n{'=' * 50}\n"
+                system_prompt += stream_context_result.context_text
+                system_prompt += """\n\n🎯 CRITICAL: Use the above project data to answer. Be specific and cite actual values."""
+
+            # Build LLM messages
+            llm_messages = [{"role": "system", "content": system_prompt}]
+
+            # Add chat history from context result
+            if stream_context_result and stream_context_result.chat_history:
+                for msg in stream_context_result.chat_history[-5:]:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", msg.get("text", ""))[:300]
+                    if role in ["user", "assistant"] and content:
+                        llm_messages.append({"role": role, "content": content})
+
+            # Add current message
+            llm_messages.append({"role": "user", "content": message.content})
+
+            # Emit analysis details
+            sources_summary = ", ".join(context_metadata.get("sources", [])) if context_metadata.get("sources") else "direct"
+            yield f"data: {json.dumps({'agent_step': {'task_id': 'analyze', 'subtask_id': 'prompt', 'status': 'completed', 'title': 'Building prompt with context', 'detail': f'Sources: {sources_summary}', 'tool': 'llm'}})}\n\n"
+            yield f"data: {json.dumps({'agent_step': {'task_id': 'analyze', 'status': 'completed', 'title': 'Analyzing context and planning response'}})}\n\n"
+
+            # =====================================================================
+            # PHASE 4: Generate Response (streaming with step events)
+            # =====================================================================
+            yield f"data: {json.dumps({'agent_step': {'task_id': 'generate', 'status': 'active', 'title': 'Generating response'}})}\n\n"
+
             context_used = context_metadata.get("has_graph_context", False) or \
                           context_metadata.get("recent_message_count", 0) > 0 or \
                           context_metadata.get("semantic_memory_count", 0) > 0
 
-            # Send metadata first
+            # Send metadata
             metadata_msg = {
                 'context_used': context_used,
                 'streaming': True,
@@ -3027,45 +3137,34 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
 
             # Stream response chunks with thinking section filtering
             full_response = ""
-            llm_mode = message.llm_mode or None
 
-            # State for filtering thinking sections during streaming
-            import re
             thinking_depth = 0
             think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
             think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
-            # Pattern to strip entire <think>...</think> blocks within a single chunk
             think_block_pattern = re.compile(r'<think(?:ing)?>.*?</think(?:ing)?>', re.IGNORECASE | re.DOTALL)
 
-            # Use async streaming for non-blocking concurrent requests
             async for chunk in llm.async_generate_stream(
                 messages=llm_messages,
                 mode=llm_mode,
                 temperature=0.7,
                 user_id=message.user_id
             ):
-                # Always accumulate for storage
                 full_response += chunk
 
-                # First, strip any complete <think>...</think> blocks within this chunk
                 clean_chunk = think_block_pattern.sub('', chunk)
 
-                # Track thinking depth on the ORIGINAL chunk (before stripping)
                 open_matches = think_open_pattern.findall(chunk)
                 close_matches = think_close_pattern.findall(chunk)
                 prev_depth = thinking_depth
                 thinking_depth += len(open_matches) - len(close_matches)
                 thinking_depth = max(0, thinking_depth)
 
-                # Determine what to send to client
                 if thinking_depth == 0 and prev_depth == 0:
-                    # Not in thinking section - send cleaned chunk
                     clean_chunk = think_open_pattern.sub('', clean_chunk)
                     clean_chunk = think_close_pattern.sub('', clean_chunk)
                     if clean_chunk.strip():
                         yield f"data: {json.dumps({'chunk': clean_chunk})}\n\n"
                 elif thinking_depth == 0 and prev_depth > 0:
-                    # Just exited thinking section - only send text AFTER the close tag
                     close_match = think_close_pattern.search(chunk)
                     if close_match:
                         after_think = chunk[close_match.end():]
@@ -3073,7 +3172,9 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                         after_think = think_close_pattern.sub('', after_think)
                         if after_think.strip():
                             yield f"data: {json.dumps({'chunk': after_think})}\n\n"
-                # else: inside thinking section, don't send anything
+
+            # Mark generation as completed
+            yield f"data: {json.dumps({'agent_step': {'task_id': 'generate', 'status': 'completed', 'title': 'Generating response'}})}\n\n"
 
             # Parse full response
             clean_response = full_response
@@ -3083,10 +3184,9 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                 except Exception as e:
                     logger.warning(f"Output parser failed: {e}")
 
-            # Store messages using unified memory service (runs async in background)
+            # Store messages
             created_at = datetime.now().isoformat()
 
-            # Store in Redis immediately (sync)
             user_msg = {
                 "message_id": str(uuid.uuid4()),
                 "chat_id": message.chat_id,
