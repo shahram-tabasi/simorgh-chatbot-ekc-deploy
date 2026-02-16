@@ -219,35 +219,148 @@ export function useProjectAgent(userId?: string) {
       progress_percent: 0,
     });
 
+    const token = localStorage.getItem('simorgh_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     try {
-      const res = await axios.post(
-        `${API_BASE}/v2/agent/projects/${projectId}/message`,
-        { content, channel: 'chat', chat_id: chatId },
-        { headers: getHeaders(), timeout: 120000 },
+      // Use SSE streaming endpoint
+      const response = await fetch(
+        `${API_BASE}/v2/agent/projects/${projectId}/message/stream`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ content, channel: 'chat', chat_id: chatId }),
+        },
       );
 
-      const result: AgentResponse = res.data;
+      if (response.status === 401) {
+        handleAuthError({ response: { status: 401 } });
+        return null;
+      }
 
-      // Update local state
-      setCotProgress({
-        chain_id: result.chain_id,
-        total_tasks: result.tasks_created,
-        completed_tasks: result.tasks.filter(t => t.status === 'completed').length,
-        status: 'completed',
-        progress_percent: 100,
-      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP ${response.status}`);
+      }
 
-      // Refresh messages and tasks
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finalResult: AgentResponse | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        let eventName = '';
+        let eventData = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventName = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            eventData = line.slice(6);
+          } else if (line === '' && eventName && eventData) {
+            // Process the event
+            try {
+              const parsed = JSON.parse(eventData);
+
+              switch (eventName) {
+                case 'cot_analyzing':
+                  setCotProgress(prev => ({
+                    ...(prev || { chain_id: '', total_tasks: 0, completed_tasks: 0, progress_percent: 0 }),
+                    status: 'planning',
+                  }));
+                  break;
+
+                case 'cot_complete':
+                  setCotProgress(prev => ({
+                    ...(prev || { chain_id: '', completed_tasks: 0, progress_percent: 0 }),
+                    chain_id: parsed.chain_id || '',
+                    total_tasks: parsed.total_steps || 0,
+                    status: 'executing',
+                    progress_percent: 10,
+                  }));
+                  break;
+
+                case 'tasks_created':
+                  setCotProgress(prev => ({
+                    ...(prev || { chain_id: '', completed_tasks: 0, status: 'executing' as const }),
+                    total_tasks: parsed.count || 0,
+                    progress_percent: 15,
+                  }));
+                  // Refresh tasks to show them in the UI
+                  fetchTasks(projectId);
+                  break;
+
+                case 'task_executing':
+                  setCotProgress(prev => ({
+                    ...(prev || { chain_id: '', total_tasks: 0, completed_tasks: 0 }),
+                    status: 'executing',
+                    progress_percent: parsed.progress_percent || 20,
+                  }));
+                  break;
+
+                case 'task_completed':
+                  setCotProgress(prev => ({
+                    ...(prev || { chain_id: '', total_tasks: 0 }),
+                    completed_tasks: parsed.step || 0,
+                    status: 'executing',
+                    progress_percent: parsed.progress_percent || 50,
+                  }));
+                  // Refresh tasks to update status
+                  fetchTasks(projectId);
+                  break;
+
+                case 'task_failed':
+                  fetchTasks(projectId);
+                  break;
+
+                case 'complete':
+                  finalResult = parsed;
+                  setCotProgress({
+                    chain_id: parsed.chain_id || '',
+                    total_tasks: parsed.tasks_created || 0,
+                    completed_tasks: parsed.tasks?.filter((t: any) => t.status === 'completed').length || 0,
+                    status: 'completed',
+                    progress_percent: 100,
+                  });
+                  break;
+
+                case 'error':
+                  setError(parsed.error || 'Agent error');
+                  break;
+              }
+            } catch {
+              // Skip malformed events
+            }
+            eventName = '';
+            eventData = '';
+          }
+        }
+      }
+
+      // Refresh messages and tasks after completion
       await fetchMessages(projectId);
       await fetchTasks(projectId);
 
       // Clear progress after a delay
       setTimeout(() => setCotProgress(null), 3000);
 
-      return result;
+      return finalResult;
     } catch (err: any) {
-      if (handleAuthError(err)) return null;
-      const detail = err.response?.data?.detail || 'Failed to send message';
+      if (err?.response?.status === 401) {
+        handleAuthError(err);
+        return null;
+      }
+      const detail = err.message || 'Failed to send message';
       setError(detail);
       setCotProgress(null);
       console.error('Send message failed:', err);
@@ -255,7 +368,7 @@ export function useProjectAgent(userId?: string) {
     } finally {
       setIsSending(false);
     }
-  }, [getHeaders]);
+  }, [getHeaders, handleAuthError, fetchMessages, fetchTasks]);
 
   // --- Tasks ---
 

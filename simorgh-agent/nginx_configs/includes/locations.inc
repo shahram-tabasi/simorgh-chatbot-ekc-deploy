@@ -109,6 +109,9 @@ location /api/ {
     proxy_set_header Connection "";
 
     proxy_buffering off;
+    proxy_cache off;
+
+    add_header X-Accel-Buffering "no" always;
 
     proxy_connect_timeout 300s;
     proxy_send_timeout 600s;

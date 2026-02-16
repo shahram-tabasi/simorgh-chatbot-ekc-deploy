@@ -139,6 +139,54 @@ class DocProcessorClient:
         }
         return mime_types.get(suffix, 'application/octet-stream')
 
+    async def process_bytes(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        user_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Process document bytes to markdown via doc-processor service.
+        Used when file is already in memory (e.g., from upload).
+
+        Args:
+            file_bytes: Raw file bytes
+            filename: Original filename
+            user_id: User ID for tracking
+
+        Returns:
+            Dict with success, content (markdown), doc_type, error
+        """
+        try:
+            mime_type = self._get_mime_type(Path(filename))
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                files = {'file': (filename, file_bytes, mime_type)}
+                data = {'user_id': user_id}
+
+                logger.info(f"Sending bytes to doc-processor: {filename} ({len(file_bytes)} bytes)")
+                response = await client.post(
+                    f"{self.base_url}/upload",
+                    files=files,
+                    data=data
+                )
+
+                if response.status_code != 200:
+                    error_detail = response.json().get('detail', 'Unknown error')
+                    raise Exception(f"Doc-processor error: {error_detail}")
+
+                result = response.json()
+                logger.info(f"Document processed: {filename} ({result.get('doc_type')})")
+                return result
+
+        except httpx.TimeoutException:
+            error_msg = f"Timeout processing document: {filename}"
+            logger.error(f"{error_msg}")
+            return {"success": False, "error": error_msg}
+        except Exception as e:
+            error_msg = f"Error processing document: {str(e)}"
+            logger.error(f"{error_msg}")
+            return {"success": False, "error": error_msg}
+
     async def get_stats(self) -> Dict[str, Any]:
         """Get processing statistics from doc-processor service"""
         try:

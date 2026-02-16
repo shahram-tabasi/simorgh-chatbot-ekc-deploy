@@ -651,11 +651,11 @@ class ProjectManagerAgent:
                     pass
 
             return {
-                "output": f"Indexed {stored}/{len(chunks)} chunks in semantic search for {filename}",
+                "output": f"Indexed {stored}/{len(chunk_dicts)} chunks in semantic search for {filename}",
                 "metadata": {
                     "document_id": document_id,
                     "chunks_stored": stored,
-                    "total_chunks": len(chunks),
+                    "total_chunks": len(chunk_dicts),
                 },
             }
         except Exception as e:
