@@ -88,11 +88,25 @@ export interface MessageMetadata {
   llm_mode?: 'online' | 'offline'; // LLM mode used
   cached_response?: boolean; // Whether response was cached
   error?: boolean; // Error flag
+  streaming?: boolean; // Whether response is still streaming
+  memory_enhanced?: boolean; // Whether memory context was used
   tokens?: {
     prompt: number;
     completion: number;
     total: number;
   };
+  // Processing activity tracking
+  processingSteps?: ProcessingStep[];
+}
+
+export interface ProcessingStep {
+  id: string;
+  label: string;
+  type: 'reading' | 'searching' | 'indexing' | 'generating' | 'tool' | 'editing' | 'analyzing';
+  status: 'pending' | 'active' | 'completed' | 'failed';
+  detail?: string;
+  startedAt?: number;
+  completedAt?: number;
 }
 
 export interface MessageSource {

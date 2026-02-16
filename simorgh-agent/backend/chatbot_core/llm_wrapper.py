@@ -345,6 +345,13 @@ class EnhancedLLMWrapper:
             if doc_context:
                 system_prompt += f"\n\n## Available Documents\n{doc_context}"
 
+        # Add semantic search results (actual document content chunks from Qdrant)
+        semantic_results = context.metadata.get("semantic_results", [])
+        if semantic_results:
+            semantic_context = self._format_semantic_results(semantic_results)
+            if semantic_context:
+                system_prompt += f"\n\n## Relevant Document Content\n{semantic_context}"
+
         # For project chats, add project documents
         if isinstance(context, ProjectSessionContext):
             if context.project_documents:
@@ -403,7 +410,7 @@ class EnhancedLLMWrapper:
         return messages
 
     def _format_documents(self, context: ChatContext) -> str:
-        """Format document context"""
+        """Format document context with summaries"""
         if not context.documents:
             return ""
 
@@ -412,11 +419,11 @@ class EnhancedLLMWrapper:
             if isinstance(doc, DocumentContext):
                 part = f"- **{doc.filename}** ({doc.category.value})"
                 if doc.content_summary:
-                    part += f": {doc.content_summary[:200]}..."
+                    part += f"\n  Summary: {doc.content_summary[:500]}"
             else:
                 part = f"- **{doc.get('filename', 'Unknown')}**"
                 if doc.get("content_summary"):
-                    part += f": {doc['content_summary'][:200]}..."
+                    part += f"\n  Summary: {doc['content_summary'][:500]}"
             parts.append(part)
 
         return "\n".join(parts)
@@ -441,6 +448,54 @@ class EnhancedLLMWrapper:
             parts.append(part)
 
         return "\n".join(parts)
+
+    def _format_semantic_results(self, semantic_results: list) -> str:
+        """Format semantic search results (actual document chunks from Qdrant)"""
+        if not semantic_results:
+            return ""
+
+        parts = []
+        for i, result in enumerate(semantic_results[:8]):  # Limit to 8 chunks
+            text = ""
+            section_title = ""
+            doc_filename = ""
+            score = 0.0
+
+            if isinstance(result, dict):
+                text = result.get("text", "")
+                section_title = result.get("section_title", "")
+                doc_filename = result.get("metadata", {}).get("filename", "")
+                score = result.get("score", 0.0)
+            else:
+                continue
+
+            if not text or not text.strip():
+                continue
+
+            # Build chunk header
+            header_parts = []
+            if doc_filename:
+                header_parts.append(f"**Source: {doc_filename}**")
+            if section_title:
+                header_parts.append(f"Section: {section_title}")
+
+            header = " | ".join(header_parts) if header_parts else f"**Chunk {i + 1}**"
+
+            # Truncate very long chunks to avoid token overflow
+            chunk_text = text.strip()
+            if len(chunk_text) > 2000:
+                chunk_text = chunk_text[:2000] + "..."
+
+            parts.append(f"{header}\n{chunk_text}")
+
+        if not parts:
+            return ""
+
+        return (
+            "The following are relevant excerpts from uploaded documents. "
+            "Use this content to answer the user's questions:\n\n"
+            + "\n\n---\n\n".join(parts)
+        )
 
     def _format_search_results(self, context: ChatContext) -> str:
         """Format external search results"""
