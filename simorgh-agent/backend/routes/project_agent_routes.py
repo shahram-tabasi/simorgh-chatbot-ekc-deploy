@@ -35,6 +35,7 @@ from services.project_agent import get_project_agent, ProjectManagerAgent
 from services.project_memory_service import get_project_memory_service, ProjectMemoryService
 from services.shell_service import get_shell_service, ShellServiceClient
 from services.email_gateway import get_email_gateway, InboundEmail
+from services.doc_processor_client import DocProcessorClient
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,7 @@ async def send_message(
 ):
     """
     Send a message to the project agent.
-    Triggers COT analysis → task creation → execution → response.
+    Triggers COT analysis -> task creation -> execution -> response.
     """
     memory = get_project_memory_service()
     agent = get_project_agent()
@@ -325,6 +326,105 @@ async def send_message(
     except Exception as e:
         logger.error(f"Agent message failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
+
+
+@router.post("/projects/{project_id}/message/stream")
+async def send_message_stream(
+    project_id: str,
+    data: ProjectMessageCreate,
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Send a message to the project agent with SSE streaming.
+    Returns Server-Sent Events with progress updates and final response.
+    """
+    memory = get_project_memory_service()
+    agent = get_project_agent()
+
+    # Verify ownership
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    async def event_generator():
+        progress_queue = asyncio.Queue()
+
+        async def progress_callback(event_data):
+            await progress_queue.put(event_data)
+
+        # Register callback for streaming progress
+        agent.register_progress_callback(project_id, progress_callback)
+
+        # Start agent processing in background
+        result_holder = {"result": None, "error": None}
+
+        async def run_agent():
+            try:
+                result_holder["result"] = await agent.handle_input(
+                    project_id=project_id,
+                    user_input=data.content,
+                    channel=data.channel,
+                    chat_id=data.chat_id,
+                    user_id=current_user,
+                    document_id=str(data.document_id) if data.document_id else None,
+                    document_filename=data.document_filename,
+                    email_from=data.email_from,
+                    email_subject=data.email_subject,
+                    auto_execute=True,
+                )
+            except Exception as e:
+                result_holder["error"] = str(e)
+            finally:
+                # Signal completion
+                await progress_queue.put({"event": "_done", "data": {}})
+
+        agent_task = asyncio.create_task(run_agent())
+
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(progress_queue.get(), timeout=120)
+                except asyncio.TimeoutError:
+                    yield f"event: ping\ndata: {{}}\n\n"
+                    continue
+
+                event_name = event.get("event", "progress")
+                event_data = event.get("data", {})
+
+                if event_name == "_done":
+                    # Send final result
+                    if result_holder["result"]:
+                        result = result_holder["result"]
+                        final_data = json.dumps({
+                            "response": result["response"],
+                            "chain_id": result["chain_id"],
+                            "reasoning": result["reasoning"],
+                            "tasks_created": result["tasks_created"],
+                            "tasks": result["tasks"],
+                            "commit": result.get("commit"),
+                        })
+                        yield f"event: complete\ndata: {final_data}\n\n"
+                    elif result_holder["error"]:
+                        yield f"event: error\ndata: {json.dumps({'error': result_holder['error']})}\n\n"
+                    break
+                else:
+                    yield f"event: {event_name}\ndata: {json.dumps(event_data, default=str)}\n\n"
+        finally:
+            agent.unregister_progress_callback(project_id)
+            if not agent_task.done():
+                await agent_task
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/projects/{project_id}/messages")
@@ -666,28 +766,75 @@ async def upload_document(
         uploaded_by=current_user,
     )
 
-    # Read file content and strip null bytes (PostgreSQL rejects \x00)
+    # Read raw file bytes
     raw_content = await file.read()
-    content_text = raw_content.decode("utf-8", errors="replace").replace('\x00', '')
+    doc_id_str = str(doc_record["id"])
+
+    # Determine if the file is binary (PDF, docx, etc.) or plain text
+    BINARY_TYPES = {
+        'application/pdf', 'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel', 'application/octet-stream',
+        'image/jpeg', 'image/png', 'image/bmp', 'image/tiff',
+    }
+    is_binary = (file.content_type or '').lower() in BINARY_TYPES or (
+        file.filename and file.filename.lower().endswith(('.pdf', '.docx', '.doc', '.xlsx', '.xls'))
+    )
+
+    # For binary files, use doc-processor to convert to markdown
+    # For text files, decode directly
+    markdown_content = ""
+    content_text = ""
+
+    if is_binary:
+        try:
+            doc_client = DocProcessorClient()
+            proc_result = await doc_client.process_bytes(
+                file_bytes=raw_content,
+                filename=file.filename,
+                user_id=current_user,
+            )
+            if proc_result.get("success") and proc_result.get("content"):
+                markdown_content = proc_result["content"]
+                content_text = markdown_content
+                logger.info(f"Doc-processor converted {file.filename} to markdown ({len(markdown_content)} chars)")
+            else:
+                logger.warning(f"Doc-processor failed for {file.filename}: {proc_result.get('error')}")
+                content_text = f"[Binary file: {file.filename} - {file.content_type}]"
+        except Exception as e:
+            logger.warning(f"Doc-processor unavailable for {file.filename}: {e}")
+            content_text = f"[Binary file: {file.filename} - {file.content_type}]"
+    else:
+        content_text = raw_content.decode("utf-8", errors="replace").replace('\x00', '')
+        markdown_content = content_text
 
     # Save document content to shell-service workspace for version control
-    doc_id_str = str(doc_record["id"])
     shell = get_shell_service()
     try:
         # Create documents directory first
         await shell.exec_command(project_id=project_id, command="mkdir -p documents", timeout=10)
-        # Write text content using file_write API
+        # Write text/markdown content using file_write API
+        write_content = markdown_content or content_text
         await shell.file_write(
             project_id=project_id,
             path=f"documents/{file.filename}",
-            content=content_text[:50000],  # Limit size for text transport
+            content=write_content[:50000],  # Limit size for text transport
         )
+        # Also save as .md if we have markdown from doc-processor
+        if markdown_content and is_binary:
+            md_filename = file.filename.rsplit('.', 1)[0] + '.md'
+            await shell.file_write(
+                project_id=project_id,
+                path=f"documents/{md_filename}",
+                content=markdown_content[:50000],
+            )
         logger.info(f"Saved document to shell workspace: {file.filename}")
     except Exception as e:
         logger.warning(f"Failed to save document to shell workspace: {e}")
 
     # Trigger agent with document context - COT will generate processing tasks
-    # (store markdown, chunk to Qdrant, semantic search setup, git commit)
+    # Use markdown content preview (not raw binary!)
     try:
         content_preview = content_text[:3000]
         result = await agent.handle_input(
@@ -696,13 +843,14 @@ async def upload_document(
                 f"Document uploaded: {file.filename} "
                 f"(type: {file.content_type}, size: {file.size or len(raw_content)} bytes)\n\n"
                 f"Document ID: {doc_id_str}\n"
-                f"The raw file has been saved to workspace at: documents/{file.filename}\n\n"
+                f"The file has been saved to workspace at: documents/{file.filename}\n"
+                f"{'Markdown version saved at: documents/' + file.filename.rsplit('.', 1)[0] + '.md' if markdown_content and is_binary else ''}\n\n"
                 f"Please process this document:\n"
-                f"1. Convert/extract text content to markdown format\n"
+                f"1. The document has already been converted to markdown\n"
                 f"2. Save the markdown version to workspace for version control\n"
                 f"3. Index the content in semantic search (Qdrant) for future queries\n"
                 f"4. Commit the document files to git\n\n"
-                f"Content preview:\n{content_preview}"
+                f"Markdown content:\n{content_preview}"
             ),
             channel=MessageChannel.DOCUMENT,
             user_id=current_user,
