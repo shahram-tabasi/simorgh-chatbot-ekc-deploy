@@ -748,7 +748,6 @@ async def upload_document(
 ):
     """Upload a document to a project."""
     memory = get_project_memory_service()
-    agent = get_project_agent()
 
     project = await memory.get_project(project_id)
     if not project:
@@ -833,48 +832,134 @@ async def upload_document(
     except Exception as e:
         logger.warning(f"Failed to save document to shell workspace: {e}")
 
-    # Trigger agent with document context - COT will generate processing tasks
-    # Use markdown content preview (not raw binary!)
-    try:
-        content_preview = content_text[:3000]
-        result = await agent.handle_input(
-            project_id=project_id,
-            user_input=(
-                f"Document uploaded: {file.filename} "
-                f"(type: {file.content_type}, size: {file.size or len(raw_content)} bytes)\n\n"
-                f"Document ID: {doc_id_str}\n"
-                f"The file has been saved to workspace at: documents/{file.filename}\n"
-                f"{'Markdown version saved at: documents/' + file.filename.rsplit('.', 1)[0] + '.md' if markdown_content and is_binary else ''}\n\n"
-                f"Please process this document:\n"
-                f"1. The document has already been converted to markdown\n"
-                f"2. Save the markdown version to workspace for version control\n"
-                f"3. Index the content in semantic search (Qdrant) for future queries\n"
-                f"4. Commit the document files to git\n\n"
-                f"Markdown content:\n{content_preview}"
-            ),
-            channel=MessageChannel.DOCUMENT,
-            user_id=current_user,
-            document_id=doc_id_str,
-            document_filename=file.filename,
-        )
+    # -----------------------------------------------------------------
+    # Direct document processing (no COT/agent - reliable and fast)
+    # -----------------------------------------------------------------
+    processing_results = {
+        "convert_markdown": "skipped",
+        "save_workspace": "skipped",
+        "semantic_index": "skipped",
+        "git_commit": "skipped",
+    }
 
-        return {
-            "document_id": doc_id_str,
-            "filename": file.filename,
-            "status": "processing",
-            "agent_response": result.get("response", "")[:500],
-            "tasks_created": result.get("tasks_created", 0),
-            "chain_id": result.get("chain_id"),
-        }
+    # Step 1: Markdown conversion already done above
+    processing_results["convert_markdown"] = "completed" if markdown_content else "no_content"
+
+    # Step 2: Workspace save already done above
+    processing_results["save_workspace"] = "completed"
+
+    # Step 3: Index content in Qdrant for semantic search
+    indexable_content = markdown_content or content_text
+    chunks_stored = 0
+    if indexable_content and len(indexable_content) > 10:
+        try:
+            qdrant = memory.qdrant
+            if qdrant:
+                # Chunk content into segments (~500 chars each with overlap)
+                chunk_dicts = []
+                chunk_size = 500
+                overlap = 50
+                text = indexable_content.strip()
+                i = 0
+                chunk_idx = 0
+                while i < len(text):
+                    end = min(i + chunk_size, len(text))
+                    chunk_text = text[i:end]
+                    if chunk_text.strip():
+                        chunk_dicts.append({
+                            "text": chunk_text.strip(),
+                            "section_title": file.filename,
+                            "chunk_index": chunk_idx,
+                            "metadata": {"filename": file.filename, "document_id": doc_id_str},
+                        })
+                        chunk_idx += 1
+                    i += chunk_size - overlap
+
+                if chunk_dicts:
+                    success = qdrant.add_document_chunks(
+                        user_id="project",
+                        document_id=doc_id_str,
+                        chunks=chunk_dicts,
+                        project_oenum=project_id,
+                    )
+                    chunks_stored = len(chunk_dicts) if success else 0
+                    processing_results["semantic_index"] = f"completed ({chunks_stored} chunks)"
+                    logger.info(f"Indexed {chunks_stored} chunks for {file.filename}")
+                else:
+                    processing_results["semantic_index"] = "no_chunks"
+            else:
+                processing_results["semantic_index"] = "qdrant_unavailable"
+        except Exception as e:
+            logger.warning(f"Semantic indexing failed for {file.filename}: {e}")
+            processing_results["semantic_index"] = f"error: {str(e)[:100]}"
+
+    # Step 4: Git commit (init if needed)
+    try:
+        try:
+            commit_result = await shell.git_commit(
+                project_id, f"Add document: {file.filename}"
+            )
+        except Exception as init_err:
+            if "not initialized" in str(init_err).lower():
+                await shell.git_init(project_id)
+                commit_result = await shell.git_commit(
+                    project_id, f"Add document: {file.filename}"
+                )
+            else:
+                raise
+        if commit_result.get("status") == "committed":
+            processing_results["git_commit"] = "completed"
+        else:
+            processing_results["git_commit"] = commit_result.get("status", "unknown")
     except Exception as e:
-        logger.error(f"Document processing failed: {e}", exc_info=True)
-        return {
-            "document_id": doc_id_str,
-            "filename": file.filename,
-            "status": "uploaded",
-            "agent_response": "Document saved but agent processing failed",
-            "error": str(e),
-        }
+        logger.warning(f"Git commit failed for {file.filename}: {e}")
+        processing_results["git_commit"] = f"error: {str(e)[:100]}"
+
+    # Store a document message in project history (no agent/COT trigger)
+    content_summary = indexable_content[:500] if indexable_content else file.filename
+    await memory.store_message(
+        project_id=project_id,
+        role="user",
+        content=f"Document uploaded: {file.filename}",
+        channel="document",
+        document_id=doc_id_str,
+        document_filename=file.filename,
+    )
+    await memory.store_message(
+        project_id=project_id,
+        role="assistant",
+        content=(
+            f"Document **{file.filename}** has been processed:\n\n"
+            f"- Converted to markdown ({len(markdown_content)} chars)\n"
+            f"- Saved to workspace\n"
+            f"- Indexed {chunks_stored} chunks for semantic search\n"
+            f"- Git: {processing_results['git_commit']}\n\n"
+            f"You can now ask questions about this document."
+        ),
+        channel="document",
+        document_id=doc_id_str,
+        document_filename=file.filename,
+    )
+
+    # Update document record
+    try:
+        await memory.update_document(
+            doc_id_str,
+            processing_status="completed",
+            chunk_count=chunks_stored,
+            content_summary=content_summary,
+        )
+    except Exception:
+        pass
+
+    return {
+        "document_id": doc_id_str,
+        "filename": file.filename,
+        "status": "completed",
+        "markdown_length": len(markdown_content),
+        "chunks_indexed": chunks_stored,
+        "processing": processing_results,
+    }
 
 
 # =============================================================================
