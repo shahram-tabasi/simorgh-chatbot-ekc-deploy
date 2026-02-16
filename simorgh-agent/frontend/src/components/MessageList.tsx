@@ -18,6 +18,11 @@ import {
 } from 'lucide-react';
 import { Message } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import {
+  ProcessingActivity,
+  generateProcessingSteps,
+  progressSteps,
+} from './ProcessingActivity';
 
 interface MessageListProps {
   messages: Message[];
@@ -74,6 +79,51 @@ function formatTimestamp(timestamp: Date | string): string {
   const hours = date.getHours().toString().padStart(2, '0');
   const minutes = date.getMinutes().toString().padStart(2, '0');
   return `${day}/${month}/${year} ${hours}:${minutes}`;
+}
+
+/**
+ * TypingActivityIndicator - replaces the basic bouncing dots with
+ * a collapsible processing activity panel showing what the AI is doing.
+ */
+function TypingActivityIndicator({ messages }: { messages: Message[] }) {
+  // Determine if the last user message had files
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+  const hasFiles = !!(lastUserMsg?.files && lastUserMsg.files.length > 0);
+  const hasDocCategory = lastUserMsg?.files?.some((f) => f.category === 'document');
+
+  // Generate steps once, then progress them over time
+  const stepsRef = React.useRef(generateProcessingSteps(hasFiles, hasDocCategory));
+  const startTimeRef = React.useRef(Date.now());
+  const [currentSteps, setCurrentSteps] = React.useState(stepsRef.current);
+
+  React.useEffect(() => {
+    stepsRef.current = generateProcessingSteps(hasFiles, hasDocCategory);
+    startTimeRef.current = Date.now();
+    setCurrentSteps(stepsRef.current);
+
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - startTimeRef.current;
+      setCurrentSteps(progressSteps(stepsRef.current, elapsed, false, false));
+    }, 600);
+
+    return () => clearInterval(interval);
+  }, [hasFiles, hasDocCategory]);
+
+  const activeStep = currentSteps.find((s) => s.status === 'active');
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+    >
+      <ProcessingActivity
+        steps={currentSteps}
+        title={activeStep?.label || 'Processing...'}
+        isComplete={false}
+      />
+    </motion.div>
+  );
 }
 
 export function MessageList({
@@ -639,23 +689,7 @@ export function MessageList({
       })}
 
       {isTyping && (
-        <motion.div
-          initial={{ opacity: 1, y: 0 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0 }}
-          className="flex gap-4"
-        >
-          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
-            <SparklesIcon className="w-4 h-4 text-white" />
-          </div>
-          <div className="bg-white/5 border border-white/10 rounded-2xl px-4 py-3">
-            <div className="flex gap-1">
-              <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-              <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-              <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-          </div>
-        </motion.div>
+        <TypingActivityIndicator messages={messages} />
       )}
 
       <div ref={messagesEndRef} />

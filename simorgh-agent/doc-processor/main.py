@@ -132,11 +132,14 @@ class UniversalDocumentProcessor:
         return re.sub(r'\s+', ' ', text).strip()
 
     async def process_pdf(self, file_path: Path) -> str:
-        """Process PDF using pdfplumber for text and tables"""
+        """Process PDF using pdfplumber for text and tables, with OCR fallback for scanned pages"""
         parts = []
+        pages_needing_ocr = []
+
         with pdfplumber.open(file_path) as pdf:
             for num, page in enumerate(pdf.pages, 1):
                 parts.append(f"## Page {num}\n\n")
+                page_has_content = False
 
                 # Extract tables
                 tables = page.extract_tables()
@@ -152,21 +155,78 @@ class UniversalDocumentProcessor:
                                     row.append("")
                                 parts.append("| " + " | ".join(row) + " |\n")
                             parts.append("\n")
+                            page_has_content = True
 
                 # Extract text
                 text = page.extract_text()
-                if text:
+                if text and text.strip():
                     lines = [self.fix_text(l.strip()) for l in text.split('\n') if l.strip()]
                     if lines:
                         parts.append("\n\n".join(lines) + "\n\n")
+                        page_has_content = True
+
+                # Track pages with no extractable content (likely scanned)
+                if not page_has_content:
+                    pages_needing_ocr.append(num)
+                    parts.append("*[Scanned page - OCR processing below]*\n\n")
 
                 parts.append("---\n\n")
+
+        # OCR fallback for scanned pages
+        if pages_needing_ocr:
+            print(f"  OCR fallback needed for {len(pages_needing_ocr)} scanned pages")
+            try:
+                images = convert_from_path(str(file_path), dpi=200)
+                reader = self.get_ocr_reader()
+
+                for page_num in pages_needing_ocr:
+                    if page_num <= len(images):
+                        img = images[page_num - 1]
+                        img_array = np.array(img)
+
+                        # Enhance for OCR
+                        if len(img_array.shape) == 3:
+                            gray = np.dot(img_array[..., :3], [0.2989, 0.5870, 0.1140]).astype(np.uint8)
+                        else:
+                            gray = img_array
+                        pil_gray = Image.fromarray(gray)
+                        enhancer = ImageEnhance.Contrast(pil_gray)
+                        enhanced = enhancer.enhance(1.8)
+                        img_final = np.array(enhanced)
+
+                        results = reader.readtext(img_final, paragraph=True, detail=1)
+                        results = sorted(results, key=lambda x: (x[0][0][1], x[0][0][0]))
+                        texts = [self.fix_text(r[1]) for r in results if len(r) >= 3 and r[2] > 0.4]
+
+                        if texts:
+                            # Replace the placeholder for this page
+                            placeholder = "*[Scanned page - OCR processing below]*"
+                            ocr_content = "\n\n".join(texts)
+                            parts_str = ''.join(parts)
+                            # Replace only the first occurrence of the placeholder
+                            parts_str = parts_str.replace(placeholder, ocr_content, 1)
+                            parts = [parts_str]
+                        else:
+                            print(f"  Page {page_num}: No text detected via OCR")
+            except Exception as e:
+                print(f"  OCR fallback failed: {e}")
+
         return ''.join(parts)
 
     async def process_image(self, file_path: Path) -> str:
-        """Process image using EasyOCR"""
+        """Process image using EasyOCR with enhanced preprocessing"""
         reader = self.get_ocr_reader()
         image = Image.open(file_path)
+
+        # Upscale small images for better OCR
+        min_dim = min(image.size)
+        if min_dim < 1000:
+            scale = max(2, 1500 // min_dim)
+            image = image.resize(
+                (image.size[0] * scale, image.size[1] * scale),
+                Image.LANCZOS
+            )
+
         img_array = np.array(image)
 
         # Convert to grayscale and enhance contrast
@@ -175,15 +235,24 @@ class UniversalDocumentProcessor:
         else:
             gray = img_array
         pil_gray = Image.fromarray(gray)
+
+        # Adaptive contrast enhancement
         enhancer = ImageEnhance.Contrast(pil_gray)
-        enhanced = enhancer.enhance(2.0)
+        enhanced = enhancer.enhance(1.8)
+
+        # Sharpen for cleaner text edges
+        from PIL import ImageFilter
+        enhanced = enhanced.filter(ImageFilter.SHARPEN)
+
         img_final = np.array(enhanced)
 
-        results = reader.readtext(img_final, paragraph=False, detail=1)
+        # Use paragraph mode for better text grouping
+        results = reader.readtext(img_final, paragraph=True, detail=1)
         # Sort top-to-bottom, left-to-right
         results = sorted(results, key=lambda x: (x[0][0][1], x[0][0][0]))
 
-        texts = [self.fix_text(r[1]) for r in results if len(r) >= 3 and r[2] > 0.2]
+        # Increased confidence threshold from 0.2 to 0.4 for better quality
+        texts = [self.fix_text(r[1]) for r in results if len(r) >= 3 and r[2] > 0.4]
         return '\n\n'.join(texts) if texts else "*No text detected*"
 
     async def process_word(self, file_path: Path) -> str:
