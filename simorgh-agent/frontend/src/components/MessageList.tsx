@@ -23,6 +23,7 @@ import {
   generateProcessingSteps,
   progressSteps,
 } from './ProcessingActivity';
+import { AgentTaskStream } from './AgentTaskStream';
 
 interface MessageListProps {
   messages: Message[];
@@ -506,8 +507,19 @@ export function MessageList({
                     ))}
                   </div>
                 )}
+                {/* Agent Task Stream (Claude Code-style task display) */}
+                {message.role === 'assistant' && message.metadata?.agentPlan && (
+                  <AgentTaskStream
+                    plan={message.metadata.agentPlan}
+                    isComplete={!message.metadata?.streaming}
+                  />
+                )}
                 {message.role === 'assistant' ? (
-                  <MarkdownRenderer content={message.content} dir={textDir} />
+                  message.content ? (
+                    <MarkdownRenderer content={message.content} dir={textDir} />
+                  ) : message.metadata?.streaming ? (
+                    <span className="text-gray-500 text-sm italic">Working...</span>
+                  ) : null
                 ) : (
                   // Mobile: ensure user messages wrap and don't overflow
                   <p className="text-sm leading-relaxed whitespace-pre-wrap break-words" dir={textDir}>

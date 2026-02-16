@@ -1,7 +1,7 @@
 // src/hooks/useChat.ts
 // Updated to use v2 API endpoints with chatbot_core integration
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Message, UploadedFile } from '../types';
+import { Message, UploadedFile, AgentPlan, AgentTaskGroup, AgentSubtask } from '../types';
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -155,9 +155,86 @@ export function useChat(
     const aiMessageId = (Date.now() + 1).toString();
     let messageAdded = false;
 
+    // Agent plan state for Claude Code-style task display
+    let currentAgentPlan: AgentPlan | null = null;
+
+    // Helper: update agent plan in the message metadata
+    const updateAgentPlan = (plan: AgentPlan) => {
+      currentAgentPlan = plan;
+      setMessages(prev => prev.map(msg =>
+        msg.id === aiMessageId
+          ? { ...msg, metadata: { ...msg.metadata, agentPlan: { ...plan } } }
+          : msg
+      ));
+    };
+
+    // Helper: process agent_plan event → create task groups
+    const handleAgentPlan = (data: any) => {
+      const tasks: AgentTaskGroup[] = (data.agent_plan?.tasks || []).map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        status: t.status || 'pending',
+        subtasks: [],
+      }));
+      const plan: AgentPlan = { tasks };
+      currentAgentPlan = plan;
+
+      // Create the AI message immediately with the plan (before any text)
+      if (!messageAdded) {
+        messageAdded = true;
+        setIsTyping(false);
+        const aiMessage: Message = {
+          id: aiMessageId,
+          content: '',
+          role: 'assistant',
+          timestamp: new Date(),
+          metadata: { streaming: true, agentPlan: plan },
+        };
+        setMessages(prev => [...prev, aiMessage]);
+      } else {
+        updateAgentPlan(plan);
+      }
+    };
+
+    // Helper: process agent_step event → update task group or subtask status
+    const handleAgentStep = (data: any) => {
+      const step = data.agent_step;
+      if (!step || !currentAgentPlan) return;
+
+      const taskId = step.task_id;
+      const subtaskId = step.subtask_id;
+      const plan = currentAgentPlan;
+
+      // Find the task group
+      const taskGroup = plan.tasks.find(t => t.id === taskId);
+      if (!taskGroup) return;
+
+      if (subtaskId) {
+        // Update or add a subtask
+        const existing = taskGroup.subtasks.find(s => s.id === subtaskId);
+        if (existing) {
+          existing.status = step.status;
+          if (step.detail) existing.detail = step.detail;
+          if (step.title) existing.title = step.title;
+        } else {
+          taskGroup.subtasks.push({
+            id: subtaskId,
+            title: step.title || subtaskId,
+            status: step.status,
+            detail: step.detail,
+            tool: step.tool,
+          });
+        }
+      } else {
+        // Update the task group status itself
+        taskGroup.status = step.status;
+        if (step.title) taskGroup.title = step.title;
+      }
+
+      updateAgentPlan(plan);
+    };
+
     try {
-      // Use v1 streaming endpoint for now (v2 streaming format TBD)
-      // The v1 endpoint still benefits from chatbot_core when using session lookup
       const response = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: {
@@ -213,8 +290,26 @@ export function useChat(
                   timestamp: new Date(),
                   metadata: { error: true }
                 };
-                setMessages(prev => [...prev, errorMessage]);
+                if (!messageAdded) {
+                  setMessages(prev => [...prev, errorMessage]);
+                } else {
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === aiMessageId ? errorMessage : msg
+                  ));
+                }
                 return;
+              }
+
+              // Handle agent_plan event (Claude Code-style task list)
+              if (data.agent_plan) {
+                handleAgentPlan(data);
+                continue;
+              }
+
+              // Handle agent_step event (task/subtask status update)
+              if (data.agent_step) {
+                handleAgentStep(data);
+                continue;
               }
 
               // Handle metadata (including new memory stats)
@@ -240,7 +335,7 @@ export function useChat(
                     content: accumulatedContent,
                     role: 'assistant',
                     timestamp: new Date(),
-                    metadata: { streaming: true }
+                    metadata: { streaming: true, agentPlan: currentAgentPlan || undefined }
                   };
                   setMessages(prev => [...prev, aiMessage]);
                 } else {
@@ -265,7 +360,8 @@ export function useChat(
                           llm_mode: finalLlmMode,
                           context_used: contextUsed,
                           memory_enhanced: data.memory_enhanced || false,
-                          streaming: false
+                          streaming: false,
+                          agentPlan: currentAgentPlan || undefined,
                         }
                       }
                     : msg
@@ -289,13 +385,18 @@ export function useChat(
           content: accumulatedContent,
           role: 'assistant',
           timestamp: new Date(),
-          metadata: { llm_mode: finalLlmMode, context_used: contextUsed, streaming: false }
+          metadata: {
+            llm_mode: finalLlmMode,
+            context_used: contextUsed,
+            streaming: false,
+            agentPlan: currentAgentPlan || undefined,
+          }
         };
         setMessages(prev => [...prev, aiMessage]);
       } else if (messageAdded) {
         setMessages(prev => prev.map(msg =>
           msg.id === aiMessageId
-            ? { ...msg, metadata: { ...msg.metadata, streaming: false } }
+            ? { ...msg, metadata: { ...msg.metadata, streaming: false, agentPlan: currentAgentPlan || undefined } }
             : msg
         ));
       }

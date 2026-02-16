@@ -97,6 +97,8 @@ export interface MessageMetadata {
   };
   // Processing activity tracking
   processingSteps?: ProcessingStep[];
+  // Agent task stream (Claude Code-style)
+  agentPlan?: AgentPlan;
 }
 
 export interface ProcessingStep {
@@ -107,6 +109,35 @@ export interface ProcessingStep {
   detail?: string;
   startedAt?: number;
   completedAt?: number;
+}
+
+// ============================================
+// Agent Task Stream Types (Claude Code-style)
+// ============================================
+
+export interface AgentPlanTask {
+  id: string;
+  title: string;
+  status: 'pending' | 'active' | 'completed' | 'failed';
+}
+
+export interface AgentSubtask {
+  id: string;
+  title: string;
+  status: 'pending' | 'active' | 'completed' | 'failed';
+  detail?: string;
+  tool?: string;
+}
+
+export interface AgentTaskGroup {
+  id: string;
+  title: string;
+  status: 'pending' | 'active' | 'completed' | 'failed';
+  subtasks: AgentSubtask[];
+}
+
+export interface AgentPlan {
+  tasks: AgentTaskGroup[];
 }
 
 export interface MessageSource {
