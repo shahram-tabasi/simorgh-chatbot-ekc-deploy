@@ -202,6 +202,34 @@ export function useProjectAgent(userId?: string) {
     }
   }, [getHeaders, handleAuthError, activeProjectId]);
 
+  // --- Tasks ---
+
+  const fetchTasks = useCallback(async (projectId: string) => {
+    try {
+      const res = await axios.get(
+        `${API_BASE}/v2/agent/projects/${projectId}/tasks`,
+        { headers: getHeaders() },
+      );
+      setTasks(res.data.tasks || []);
+    } catch (err) {
+      console.error('Failed to fetch tasks:', err);
+    }
+  }, [getHeaders]);
+
+  // --- Messages ---
+
+  const fetchMessages = useCallback(async (projectId: string) => {
+    try {
+      const res = await axios.get(
+        `${API_BASE}/v2/agent/projects/${projectId}/messages?limit=100`,
+        { headers: getHeaders() },
+      );
+      setMessages(res.data.messages || []);
+    } catch (err) {
+      console.error('Failed to fetch messages:', err);
+    }
+  }, [getHeaders]);
+
   // --- Messages (COT-driven) ---
 
   const sendMessage = useCallback(async (
@@ -370,20 +398,6 @@ export function useProjectAgent(userId?: string) {
     }
   }, [getHeaders, handleAuthError, fetchMessages, fetchTasks]);
 
-  // --- Tasks ---
-
-  const fetchTasks = useCallback(async (projectId: string) => {
-    try {
-      const res = await axios.get(
-        `${API_BASE}/v2/agent/projects/${projectId}/tasks`,
-        { headers: getHeaders() },
-      );
-      setTasks(res.data.tasks || []);
-    } catch (err) {
-      console.error('Failed to fetch tasks:', err);
-    }
-  }, [getHeaders]);
-
   const updateTask = useCallback(async (
     projectId: string,
     taskId: string,
@@ -400,20 +414,6 @@ export function useProjectAgent(userId?: string) {
       console.error('Failed to update task:', err);
     }
   }, [getHeaders, fetchTasks]);
-
-  // --- Messages ---
-
-  const fetchMessages = useCallback(async (projectId: string) => {
-    try {
-      const res = await axios.get(
-        `${API_BASE}/v2/agent/projects/${projectId}/messages?limit=100`,
-        { headers: getHeaders() },
-      );
-      setMessages(res.data.messages || []);
-    } catch (err) {
-      console.error('Failed to fetch messages:', err);
-    }
-  }, [getHeaders]);
 
   // --- Documents ---
 
