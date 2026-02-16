@@ -321,6 +321,9 @@ class ProjectMemoryService:
                             channel: str = "chat", chat_id: str = None,
                             task_id: str = None, **kwargs) -> Dict:
         """Store a project message."""
+        # Strip null bytes that cause PostgreSQL CharacterNotInRepertoireError
+        if content:
+            content = content.replace('\x00', '')
         msg_id = str(uuid.uuid4())
         query = """
             INSERT INTO project_messages (
@@ -359,7 +362,7 @@ class ProjectMemoryService:
         query = f"""
             SELECT * FROM project_messages
             WHERE {where}
-            ORDER BY created_at DESC
+            ORDER BY created_at ASC
             LIMIT ${idx}
         """
         params.append(limit)
@@ -504,15 +507,22 @@ class ProjectMemoryService:
     # =========================================================================
 
     async def init_project_graph(self, project_id: str, name: str,
-                                 owner_id: str) -> Dict:
-        """Initialize project node in Neo4j."""
+                                 owner_id: str, tpms_oenum: str = None) -> Dict:
+        """Initialize project node in Neo4j.
+
+        For modern users (no tpms_oenum): creates only the Project node.
+        For legacy users (with tpms_oenum): creates full EKC template hierarchy.
+        """
         if not self.neo4j:
             return {"status": "neo4j_unavailable"}
         try:
+            # Modern projects skip the 57-node EKC template graph
+            skip_full_init = not bool(tpms_oenum)
             result = self.neo4j.create_project(
                 project_number=project_id,
                 project_name=name,
                 owner_id=owner_id,
+                skip_graph_init=skip_full_init,
             )
             return result
         except Exception as e:

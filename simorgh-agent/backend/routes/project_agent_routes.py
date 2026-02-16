@@ -97,9 +97,11 @@ async def create_project(
 
         project_id = str(project["id"])
 
-        # Initialize all systems (Neo4j graph, git workspace, agent state)
+        # Initialize all systems (Neo4j graph, Qdrant, git workspace, agent state)
+        # Pass tpms_oenum so modern users get minimal graph (no EKC template)
         init_result = await agent.initialize_project(
-            project_id, data.name, current_user
+            project_id, data.name, current_user,
+            tpms_oenum=data.tpms_oenum if is_legacy else None,
         )
         logger.info(f"Project initialized: {project_id}, results: {init_result}")
 
@@ -664,33 +666,65 @@ async def upload_document(
         uploaded_by=current_user,
     )
 
-    # Read file content
-    content = await file.read()
-    content_text = content.decode("utf-8", errors="replace")
+    # Read file content and strip null bytes (PostgreSQL rejects \x00)
+    raw_content = await file.read()
+    content_text = raw_content.decode("utf-8", errors="replace").replace('\x00', '')
 
-    # Trigger agent with document
+    # Save document content to shell-service workspace for version control
+    doc_id_str = str(doc_record["id"])
+    shell = get_shell_service()
     try:
+        # Create documents directory first
+        await shell.exec_command(project_id=project_id, command="mkdir -p documents", timeout=10)
+        # Write text content using file_write API
+        await shell.file_write(
+            project_id=project_id,
+            path=f"documents/{file.filename}",
+            content=content_text[:50000],  # Limit size for text transport
+        )
+        logger.info(f"Saved document to shell workspace: {file.filename}")
+    except Exception as e:
+        logger.warning(f"Failed to save document to shell workspace: {e}")
+
+    # Trigger agent with document context - COT will generate processing tasks
+    # (store markdown, chunk to Qdrant, semantic search setup, git commit)
+    try:
+        content_preview = content_text[:3000]
         result = await agent.handle_input(
             project_id=project_id,
-            user_input=f"Document uploaded: {file.filename}\n\nContent:\n{content_text[:5000]}",
+            user_input=(
+                f"Document uploaded: {file.filename} "
+                f"(type: {file.content_type}, size: {file.size or len(raw_content)} bytes)\n\n"
+                f"Document ID: {doc_id_str}\n"
+                f"The raw file has been saved to workspace at: documents/{file.filename}\n\n"
+                f"Please process this document:\n"
+                f"1. Convert/extract text content to markdown format\n"
+                f"2. Save the markdown version to workspace for version control\n"
+                f"3. Index the content in semantic search (Qdrant) for future queries\n"
+                f"4. Commit the document files to git\n\n"
+                f"Content preview:\n{content_preview}"
+            ),
             channel=MessageChannel.DOCUMENT,
             user_id=current_user,
-            document_id=str(doc_record["id"]),
+            document_id=doc_id_str,
             document_filename=file.filename,
         )
 
         return {
-            "document_id": str(doc_record["id"]),
+            "document_id": doc_id_str,
             "filename": file.filename,
+            "status": "processing",
             "agent_response": result.get("response", "")[:500],
             "tasks_created": result.get("tasks_created", 0),
+            "chain_id": result.get("chain_id"),
         }
     except Exception as e:
         logger.error(f"Document processing failed: {e}", exc_info=True)
         return {
-            "document_id": str(doc_record["id"]),
+            "document_id": doc_id_str,
             "filename": file.filename,
-            "agent_response": "Document stored but processing failed",
+            "status": "uploaded",
+            "agent_response": "Document saved but agent processing failed",
             "error": str(e),
         }
 

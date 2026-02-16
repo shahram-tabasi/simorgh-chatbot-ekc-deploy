@@ -98,6 +98,19 @@ export function useProjectAgent(userId?: string) {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }, []);
 
+  // Handle 401 errors globally - clear auth state to prevent cascade
+  const handleAuthError = useCallback((err: any) => {
+    if (err?.response?.status === 401) {
+      setError('Session expired. Please log in again.');
+      setProjects([]);
+      setActiveProjectId(null);
+      setTasks([]);
+      setMessages([]);
+      return true;
+    }
+    return false;
+  }, []);
+
   // Load projects on mount
   useEffect(() => {
     if (!userId) {
@@ -115,6 +128,10 @@ export function useProjectAgent(userId?: string) {
       setMessages([]);
       return;
     }
+    // Clear stale data immediately before fetching new project data
+    setTasks([]);
+    setMessages([]);
+    setError(null);
     fetchTasks(activeProjectId);
     fetchMessages(activeProjectId);
   }, [activeProjectId]);
@@ -129,12 +146,14 @@ export function useProjectAgent(userId?: string) {
       });
       setProjects(res.data.projects || []);
     } catch (err: any) {
-      console.error('Failed to fetch agent projects:', err);
-      setError(err.response?.data?.detail || 'Failed to load projects');
+      if (!handleAuthError(err)) {
+        console.error('Failed to fetch agent projects:', err);
+        setError(err.response?.data?.detail || 'Failed to load projects');
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [getHeaders]);
+  }, [getHeaders, handleAuthError]);
 
   const createProject = useCallback(async (
     name: string,
@@ -155,6 +174,7 @@ export function useProjectAgent(userId?: string) {
       setActiveProjectId(project.id);
       return project;
     } catch (err: any) {
+      if (handleAuthError(err)) return null;
       const detail = err.response?.data?.detail || 'Failed to create project';
       setError(detail);
       console.error('Create project failed:', err);
@@ -175,10 +195,12 @@ export function useProjectAgent(userId?: string) {
       }
       return true;
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to delete project');
+      if (!handleAuthError(err)) {
+        setError(err.response?.data?.detail || 'Failed to delete project');
+      }
       return false;
     }
-  }, [getHeaders, activeProjectId]);
+  }, [getHeaders, handleAuthError, activeProjectId]);
 
   // --- Messages (COT-driven) ---
 
@@ -224,6 +246,7 @@ export function useProjectAgent(userId?: string) {
 
       return result;
     } catch (err: any) {
+      if (handleAuthError(err)) return null;
       const detail = err.response?.data?.detail || 'Failed to send message';
       setError(detail);
       setCotProgress(null);

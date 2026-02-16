@@ -25,13 +25,20 @@ Your job is to break down the request into concrete, executable task steps.
 
 You have access to these tools:
 - llm: Ask questions, generate text, analyze data, reason about problems
-- shell: Execute Linux commands, run scripts, manage files
-- git: Version control operations (commit, diff, log)
+- shell: Execute Linux commands, run scripts, manage files in project workspace (on remote server 1.69)
+- git: Version control operations (commit, diff, log) in project workspace
 - memory_query: Search project memory (Redis cache, PostgreSQL data, Qdrant vectors, Neo4j graph)
-- memory_store: Store data in project memory
-- document_process: Process uploaded documents (PDF, DOCX, etc.)
+- memory_store: Store data in project memory (graph entities, working memory)
+- document_process: Process uploaded documents - convert to markdown, extract text
+- semantic_store: Chunk text content and store in Qdrant for semantic search. Input: {{"content": "text to chunk and index", "document_id": "doc-uuid", "filename": "name.pdf"}}
 - email: Send email responses
-- web_search: Search the web for information
+
+DOCUMENT PROCESSING WORKFLOW:
+When a document is uploaded, create tasks in this order:
+1. Process/convert document content to clean markdown (tool: llm, type: generation)
+2. Save markdown to project workspace for version control (tool: shell, command: write to documents/filename.md)
+3. Index content in semantic search for future queries (tool: semantic_store)
+4. Commit document files to git (tool: git, operation: commit)
 
 For each step, specify:
 1. A clear title (what to do)

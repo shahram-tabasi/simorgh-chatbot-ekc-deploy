@@ -418,6 +418,8 @@ class ProjectManagerAgent:
             return await self._execute_memory_store(project_id, task, tool_input)
         elif tool == "document_process":
             return await self._execute_document_task(project_id, task, tool_input)
+        elif tool == "semantic_store":
+            return await self._execute_semantic_store_task(project_id, task, tool_input)
         elif tool == "email":
             return await self._execute_email_task(project_id, task, tool_input)
         elif tool == "git":
@@ -546,11 +548,119 @@ class ProjectManagerAgent:
 
     async def _execute_document_task(self, project_id: str, task: Dict,
                                      tool_input: Dict) -> Dict:
-        """Process a document."""
+        """Process a document - extract/convert content to markdown."""
+        content = tool_input.get("content", "")
+        filename = tool_input.get("filename", "document")
+        document_id = tool_input.get("document_id")
+
+        # Use LLM to convert content to clean markdown
+        if self.llm_service and content:
+            prompt = (
+                f"Convert the following document content to clean, well-structured markdown. "
+                f"Preserve all important information, headings, lists, and tables.\n\n"
+                f"Document: {filename}\n\nContent:\n{content[:4000]}"
+            )
+            messages = [
+                {"role": "system", "content": "You are a document processing assistant. Convert document content to clean markdown."},
+                {"role": "user", "content": prompt},
+            ]
+            try:
+                if hasattr(self.llm_service, 'async_generate'):
+                    result = await self.llm_service.async_generate(
+                        messages=messages, user_id=f"agent_{project_id}")
+                    markdown = result.get('response', '') if isinstance(result, dict) else str(result)
+                else:
+                    result = self.llm_service.generate(messages=messages)
+                    markdown = result.get('response', '') if isinstance(result, dict) else str(result)
+
+                return {
+                    "output": markdown,
+                    "metadata": {"document_id": document_id, "filename": filename, "format": "markdown"},
+                }
+            except Exception as e:
+                return {"output": f"Document processing error: {e}", "metadata": {"error": True}}
+
         return {
-            "output": "Document processing delegated to document pipeline",
-            "metadata": {"document_id": tool_input.get("document_id")},
+            "output": content[:2000] if content else "No content to process",
+            "metadata": {"document_id": document_id},
         }
+
+    async def _execute_semantic_store_task(self, project_id: str, task: Dict,
+                                           tool_input: Dict) -> Dict:
+        """Chunk text content and store in Qdrant for semantic search."""
+        content = tool_input.get("content", "")
+        document_id = tool_input.get("document_id")
+        filename = tool_input.get("filename", "document")
+
+        # Get content from previous task results if not provided directly
+        prev = tool_input.get("_previous_results", {})
+        if not content and prev:
+            # Look for content from previous document_process or LLM task
+            for step_result in prev.values():
+                if step_result and len(step_result) > 100:
+                    content = step_result
+                    break
+
+        if not content:
+            return {"output": "No content to index", "metadata": {"error": True}}
+
+        if not self.memory.qdrant:
+            return {"output": "Qdrant service not available", "metadata": {"error": True}}
+
+        try:
+            # Chunk content into segments (~500 chars each)
+            chunk_dicts = []
+            chunk_size = 500
+            overlap = 50
+            text = content.strip()
+            i = 0
+            chunk_idx = 0
+            while i < len(text):
+                end = min(i + chunk_size, len(text))
+                chunk_text = text[i:end]
+                if chunk_text.strip():
+                    chunk_dicts.append({
+                        "text": chunk_text.strip(),
+                        "section_title": filename,
+                        "chunk_index": chunk_idx,
+                        "metadata": {"filename": filename},
+                    })
+                    chunk_idx += 1
+                i += chunk_size - overlap
+
+            # Store all chunks in Qdrant using add_document_chunks
+            doc_uuid = document_id or str(uuid.uuid4())
+            success = self.memory.qdrant.add_document_chunks(
+                user_id="project",
+                document_id=doc_uuid,
+                chunks=chunk_dicts,
+                project_oenum=project_id,
+            )
+            stored = len(chunk_dicts) if success else 0
+
+            # Update document record if document_id provided
+            if document_id:
+                try:
+                    await self.memory.update_document(
+                        document_id,
+                        processing_status="completed",
+                        chunk_count=stored,
+                        content_summary=content[:500],
+                    )
+                except Exception:
+                    pass
+
+            return {
+                "output": f"Indexed {stored}/{len(chunks)} chunks in semantic search for {filename}",
+                "metadata": {
+                    "document_id": document_id,
+                    "chunks_stored": stored,
+                    "total_chunks": len(chunks),
+                },
+            }
+        except Exception as e:
+            logger.error(f"Semantic store failed: {e}")
+            return {"output": f"Semantic indexing error: {e}", "metadata": {"error": True}}
 
     async def _execute_email_task(self, project_id: str, task: Dict,
                                   tool_input: Dict) -> Dict:
@@ -624,16 +734,26 @@ class ProjectManagerAgent:
     # =========================================================================
 
     async def initialize_project(self, project_id: str, name: str,
-                                 owner_id: str) -> Dict:
+                                 owner_id: str, tpms_oenum: str = None) -> Dict:
         """Initialize all systems for a new project."""
         results = {}
 
-        # 1. Init Neo4j graph
+        # 1. Init Neo4j graph (full EKC template only for legacy/TPMS projects)
         results["neo4j"] = await self.memory.init_project_graph(
-            project_id, name, owner_id
+            project_id, name, owner_id, tpms_oenum=tpms_oenum
         )
 
-        # 2. Init git workspace
+        # 2. Init Qdrant collection for project semantic search
+        try:
+            if self.memory.qdrant:
+                self.memory.qdrant.ensure_collection_exists(
+                    user_id="project", project_oenum=project_id
+                )
+                results["qdrant"] = {"status": "initialized"}
+        except Exception as e:
+            results["qdrant"] = {"status": "error", "error": str(e)}
+
+        # 3. Init git workspace
         try:
             if self.shell:
                 git_result = await self.shell.git_init(project_id)
@@ -646,7 +766,7 @@ class ProjectManagerAgent:
         except Exception as e:
             results["git"] = {"status": "error", "error": str(e)}
 
-        # 3. Set initial agent state
+        # 4. Set initial agent state
         await self.memory.set_agent_state(project_id, {
             "status": "idle",
             "project_name": name,
