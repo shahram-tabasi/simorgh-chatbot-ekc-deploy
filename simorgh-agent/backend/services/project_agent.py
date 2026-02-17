@@ -218,7 +218,8 @@ class ProjectManagerAgent:
 
         if auto_execute and tasks_created:
             execution_results, final_response = await self._execute_task_chain(
-                project_id, str(analysis.chain_id), tasks_created
+                project_id, str(analysis.chain_id), tasks_created,
+                project_context=project_context,
             )
         elif not auto_execute:
             final_response = (
@@ -275,11 +276,23 @@ class ProjectManagerAgent:
         project_id: str,
         chain_id: str,
         tasks: List[Dict],
+        project_context: Dict[str, Any] = None,
     ) -> tuple:
         """Execute a chain of COT tasks sequentially."""
         results = []
         accumulated_context = {}  # Results from previous tasks for chaining
         final_response = ""
+
+        # Pre-seed context with semantic search results from project_context
+        if project_context and project_context.get("semantic_results"):
+            semantic_text = "\n\n".join(
+                r.get("content", "")[:2000] for r in project_context["semantic_results"][:5]
+            )
+            if semantic_text.strip():
+                accumulated_context["_semantic_context"] = {
+                    "output": semantic_text,
+                    "metadata": {"source": "qdrant_semantic_search"},
+                }
 
         for i, task in enumerate(tasks):
             task_id = str(task["id"])
@@ -402,10 +415,10 @@ class ProjectManagerAgent:
         else:
             tool_input = {}
 
-        # Inject previous results into context
+        # Inject previous results into context (3000 char limit per result)
         if prev_results:
             tool_input["_previous_results"] = {
-                k: v.get("output", "")[:500] for k, v in prev_results.items()
+                k: v.get("output", "")[:3000] for k, v in prev_results.items()
             }
 
         if tool == "llm" or task_type in ("generation", "analysis", "review"):
@@ -437,15 +450,26 @@ class ProjectManagerAgent:
         # Build prompt with context
         prompt = tool_input.get("prompt", task.get("description", task["title"]))
 
-        # Add previous results as context
+        # Build context from previous results and semantic search
         prev = tool_input.get("_previous_results", {})
+        context_parts = []
+
+        # Include semantic search context (from Qdrant) if available
+        semantic_ctx = prev.pop("_semantic_context", None)
+        if semantic_ctx:
+            context_parts.append(f"Document content from semantic search:\n{semantic_ctx}")
+
+        # Include other previous step results
         if prev:
-            context_parts = [f"Step {k} result: {v}" for k, v in prev.items()]
-            context = "\n".join(context_parts)
-            prompt = f"Context from previous steps:\n{context}\n\nCurrent task: {prompt}"
+            for k, v in prev.items():
+                context_parts.append(f"Step {k} result: {v}")
+
+        if context_parts:
+            context = "\n\n".join(context_parts)
+            prompt = f"Context:\n{context}\n\nTask: {prompt}"
 
         messages = [
-            {"role": "system", "content": "You are a project assistant. Answer concisely and accurately based on the available context."},
+            {"role": "system", "content": "You are a project assistant. Answer concisely and accurately based on the available context. Use the document content provided to give specific, detailed answers."},
             {"role": "user", "content": prompt},
         ]
 
@@ -507,8 +531,8 @@ class ProjectManagerAgent:
             semantic = await self.memory.semantic_search(project_id, query)
             if semantic:
                 results["semantic"] = [
-                    {"content": r.get("content", "")[:300], "score": r.get("score", 0)}
-                    for r in semantic[:3]
+                    {"content": r.get("content", "")[:1500], "score": r.get("score", 0)}
+                    for r in semantic[:5]
                 ]
 
         if tool_input.get("search_graph", True):
