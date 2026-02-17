@@ -286,7 +286,8 @@ class ProjectManagerAgent:
         # Pre-seed context with semantic search results from project_context
         if project_context and project_context.get("semantic_results"):
             semantic_text = "\n\n".join(
-                r.get("content", "")[:2000] for r in project_context["semantic_results"][:5]
+                (r.get("text") or r.get("content") or "")[:2000]
+                for r in project_context["semantic_results"][:5]
             )
             if semantic_text.strip():
                 accumulated_context["_semantic_context"] = {
@@ -531,7 +532,7 @@ class ProjectManagerAgent:
             semantic = await self.memory.semantic_search(project_id, query)
             if semantic:
                 results["semantic"] = [
-                    {"content": r.get("content", "")[:1500], "score": r.get("score", 0)}
+                    {"content": (r.get("text") or r.get("content") or "")[:1500], "score": r.get("score", 0)}
                     for r in semantic[:5]
                 ]
 
