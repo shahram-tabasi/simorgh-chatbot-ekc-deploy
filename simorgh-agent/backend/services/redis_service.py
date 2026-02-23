@@ -1,7 +1,7 @@
 """
 Redis Caching Service
 =====================
-Multi-database Redis caching for sessions, chat history, LLM responses, auth, and project data.
+Multi-database Redis caching for sessions, chat history, LLM responses, auth, project data, and agent state.
 
 Database Layout:
 - DB 0: User sessions & profiles
@@ -9,6 +9,7 @@ Database Layout:
 - DB 2: LLM response caching
 - DB 3: Project authorization caching (1 hour TTL)
 - DB 4: Project TPMS data caching (Neo4j context cache for faster LLM responses)
+- DB 5: Agent state & task cache (COT results, task status, microservice results)
 
 Author: Simorgh Industrial Assistant
 """
@@ -46,6 +47,7 @@ class RedisService:
         self.cache_client = self._create_client(db=2)    # LLM response caching
         self.auth_client = self._create_client(db=3)     # Authorization caching
         self.project_client = self._create_client(db=4)  # Project TPMS data caching
+        self.agent_client = self._create_client(db=5)    # Agent state & task cache
 
         logger.info(f"✅ Redis service initialized: {self.base_url}")
 
@@ -72,7 +74,8 @@ class RedisService:
                 "chat_db": self.chat_client,
                 "cache_db": self.cache_client,
                 "auth_db": self.auth_client,
-                "project_db": self.project_client
+                "project_db": self.project_client,
+                "agent_db": self.agent_client,
             }
 
             db_status = {}
@@ -1098,7 +1101,8 @@ class RedisService:
             "chat": self.chat_client,
             "cache": self.cache_client,
             "auth": self.auth_client,
-            "project": self.project_client
+            "project": self.project_client,
+            "agent": self.agent_client,
         }
         return clients.get(db_name, self.cache_client)
 
@@ -1106,6 +1110,178 @@ class RedisService:
         """Get current timestamp"""
         from datetime import datetime
         return datetime.now().isoformat()
+
+    # =========================================================================
+    # AGENT STATE & TASK CACHE (DB 5)
+    # =========================================================================
+    #
+    # Key structure:
+    #   agent:state:{project_id}           → Agent state JSON (status, last_activity)
+    #   agent:cot:{chain_id}               → COT analysis result (TTL: 2h)
+    #   agent:task:{project_id}:{task_id}  → Task execution result cache (TTL: 1h)
+    #   agent:context:{project_id}         → Accumulated context between tasks (TTL: 30m)
+    #   agent:microservice:{project_id}:{tool}:{request_hash} → Microservice result cache (TTL: 15m)
+    #
+
+    def set_agent_state(
+        self,
+        project_id: str,
+        state: Dict[str, Any],
+    ) -> bool:
+        """Store agent state for a project."""
+        try:
+            key = f"agent:state:{project_id}"
+            self.agent_client.set(key, json.dumps(state, default=str))
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to set agent state: {e}")
+            return False
+
+    def get_agent_state(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Get agent state for a project."""
+        try:
+            key = f"agent:state:{project_id}"
+            value = self.agent_client.get(key)
+            return json.loads(value) if value else None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get agent state: {e}")
+            return None
+
+    def cache_cot_analysis(
+        self,
+        chain_id: str,
+        analysis: Dict[str, Any],
+        ttl: int = 7200,  # 2 hours
+    ) -> bool:
+        """Cache a COT analysis result."""
+        try:
+            key = f"agent:cot:{chain_id}"
+            self.agent_client.setex(key, ttl, json.dumps(analysis, default=str))
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to cache COT analysis: {e}")
+            return False
+
+    def get_cached_cot_analysis(self, chain_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a cached COT analysis."""
+        try:
+            key = f"agent:cot:{chain_id}"
+            value = self.agent_client.get(key)
+            return json.loads(value) if value else None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get cached COT analysis: {e}")
+            return None
+
+    def cache_task_result(
+        self,
+        project_id: str,
+        task_id: str,
+        result: Dict[str, Any],
+        ttl: int = 3600,  # 1 hour
+    ) -> bool:
+        """Cache a task execution result."""
+        try:
+            key = f"agent:task:{project_id}:{task_id}"
+            self.agent_client.setex(key, ttl, json.dumps(result, default=str))
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to cache task result: {e}")
+            return False
+
+    def get_cached_task_result(
+        self,
+        project_id: str,
+        task_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve a cached task result."""
+        try:
+            key = f"agent:task:{project_id}:{task_id}"
+            value = self.agent_client.get(key)
+            return json.loads(value) if value else None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get cached task result: {e}")
+            return None
+
+    def set_agent_context(
+        self,
+        project_id: str,
+        context: Dict[str, Any],
+        ttl: int = 1800,  # 30 minutes
+    ) -> bool:
+        """Store accumulated agent context between task executions."""
+        try:
+            key = f"agent:context:{project_id}"
+            self.agent_client.setex(key, ttl, json.dumps(context, default=str))
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to set agent context: {e}")
+            return False
+
+    def get_agent_context(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve accumulated agent context."""
+        try:
+            key = f"agent:context:{project_id}"
+            value = self.agent_client.get(key)
+            return json.loads(value) if value else None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get agent context: {e}")
+            return None
+
+    def cache_microservice_result(
+        self,
+        project_id: str,
+        tool: str,
+        request_hash: str,
+        result: Dict[str, Any],
+        ttl: int = 900,  # 15 minutes
+    ) -> bool:
+        """Cache a microservice call result to avoid duplicate requests."""
+        try:
+            key = f"agent:microservice:{project_id}:{tool}:{request_hash}"
+            self.agent_client.setex(key, ttl, json.dumps(result, default=str))
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to cache microservice result: {e}")
+            return False
+
+    def get_cached_microservice_result(
+        self,
+        project_id: str,
+        tool: str,
+        request_hash: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve a cached microservice result."""
+        try:
+            key = f"agent:microservice:{project_id}:{tool}:{request_hash}"
+            value = self.agent_client.get(key)
+            return json.loads(value) if value else None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get cached microservice result: {e}")
+            return None
+
+    def clear_agent_project_cache(self, project_id: str) -> bool:
+        """Clear all agent cache data for a project."""
+        try:
+            patterns = [
+                f"agent:state:{project_id}",
+                f"agent:task:{project_id}:*",
+                f"agent:context:{project_id}",
+                f"agent:microservice:{project_id}:*",
+            ]
+            deleted = 0
+            for pattern in patterns:
+                if "*" in pattern:
+                    for key in self.agent_client.scan_iter(match=pattern):
+                        self.agent_client.delete(key)
+                        deleted += 1
+                else:
+                    if self.agent_client.delete(pattern):
+                        deleted += 1
+            logger.info(f"Agent cache cleared for project {project_id}: {deleted} keys")
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to clear agent cache: {e}")
+            return False
 
     # =========================================================================
     # ENHANCED CHAT SESSION MANAGEMENT (DB 1)
@@ -1260,6 +1436,7 @@ class RedisService:
             self.cache_client.close()
             self.auth_client.close()
             self.project_client.close()
+            self.agent_client.close()
             logger.info("Redis connections closed")
         except Exception as e:
             logger.error(f"Error closing Redis connections: {e}")

@@ -111,6 +111,16 @@ services:
       - SHELL_SERVICE_TIMEOUT=60
       # Project Email Gateway
       - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
+      # Agent Microservice URLs
+      - SEARCH_SERVICE_URL=http://search-service:8020
+      - TPMS_FETCHER_URL=http://tpms-fetcher:8021
+      - PROJECT_INIT_URL=http://project-init:8022
+      - PROJECT_ANALYSIS_URL=http://project-analysis:8023
+      - COMMAND_GEN_URL=http://command-gen:8024
+      - FILE_EXPORT_URL=http://file-export:8025
+      - EPLAN_BRIDGE_URL=http://eplan-bridge:8026
+      # Redis Agent DB
+      - REDIS_AGENT_DB=5
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
@@ -500,6 +510,166 @@ services:
   #   restart: unless-stopped
 
   # ===========================================================================
+  # SEARCH-SERVICE - Web Search via DuckDuckGo
+  # ===========================================================================
+  search-service:
+    build: ./search-service
+    container_name: search-service
+    expose:
+      - "8020"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MAX_RESULTS=${SEARCH_MAX_RESULTS:-10}
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8020/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # TPMS-FETCHER - TPMS Project Data Fetcher
+  # ===========================================================================
+  tpms-fetcher:
+    build: ./tpms-fetcher-service
+    container_name: tpms-fetcher
+    expose:
+      - "8021"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8021/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # PROJECT-INIT - Project Initialization Orchestrator
+  # ===========================================================================
+  project-init:
+    build: ./project-init-service
+    container_name: project-init
+    expose:
+      - "8022"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TPMS_FETCHER_URL=http://tpms-fetcher:8021
+      - SHELL_SERVICE_URL=http://192.168.1.69:8010
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+    depends_on:
+      tpms-fetcher:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8022/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # PROJECT-ANALYSIS - Project Workspace Analyzer
+  # ===========================================================================
+  project-analysis:
+    build: ./project-analysis-service
+    container_name: project-analysis
+    expose:
+      - "8023"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SHELL_SERVICE_URL=http://192.168.1.69:8010
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8023/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # COMMAND-GEN - Safe Shell Command Generator
+  # ===========================================================================
+  command-gen:
+    build: ./command-gen-service
+    container_name: command-gen
+    expose:
+      - "8024"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8024/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # FILE-EXPORT - Excel/Word/PDF Export Generator
+  # ===========================================================================
+  file-export:
+    build: ./file-export-service
+    container_name: file-export
+    expose:
+      - "8025"
+    volumes:
+      - file_exports:/app/exports
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - EXPORT_DIR=/app/exports
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8025/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # EPLAN-BRIDGE - EPLAN TCP-to-REST Bridge
+  # ===========================================================================
+  eplan-bridge:
+    build: ./eplan-bridge-service
+    container_name: eplan-bridge
+    expose:
+      - "8026"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - EPLAN_HOST=${EPLAN_HOST:-127.0.0.1}
+      - EPLAN_DEFAULT_PORT=${EPLAN_DEFAULT_PORT:-12000}
+      - TCP_TIMEOUT=${EPLAN_TCP_TIMEOUT:-120}
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8026/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
   # SHELL-SERVICE - Deployed separately on 192.168.1.69
   # See docker-compose-shell.yml for the shell-service definition.
   # Backend connects via: http://192.168.1.69:8010
@@ -545,4 +715,6 @@ volumes:
   huggingface_cache:
     driver: local
   sentence_transformers_cache:
+    driver: local
+  file_exports:
     driver: local
