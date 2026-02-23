@@ -358,6 +358,9 @@ async def startup_event():
             neo4j=neo4j_service,
         )
 
+        # Connect to MCP microservices (dynamic tool discovery)
+        await project_agent.connect_mcp()
+
         # Initialize email gateway
         email_gateway = get_email_gateway()
         email_gateway.set_services(
@@ -390,6 +393,14 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on shutdown"""
     logger.info("🛑 Shutting down...")
+
+    # Shutdown MCP connections
+    try:
+        from services.mcp_manager import shutdown_mcp_manager
+        await shutdown_mcp_manager()
+        logger.info("✅ MCP Manager shutdown complete")
+    except Exception as e:
+        logger.warning(f"⚠️ MCP Manager shutdown error: {e}")
 
     # Shutdown Background Sync first
     try:
