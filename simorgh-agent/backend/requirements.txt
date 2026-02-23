@@ -83,7 +83,7 @@ openai>=1.3.0
 anthropic>=0.7.0
 
 # MCP (Model Context Protocol) - Client for connecting to MCP microservices
-mcp>=1.6.0  # >=1.6.0 required for streamable HTTP transport
+mcp>=1.8.0  # >=1.8.0 required for mcp.client.streamable_http module
 
 # -------------------------------------------------
 #  Graph RAG Specific Dependencies

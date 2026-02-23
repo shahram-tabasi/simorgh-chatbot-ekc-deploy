@@ -28,7 +28,11 @@ from typing import Optional, Dict, List, Any
 from contextlib import AsyncExitStack
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:
+    # mcp>=1.9.4 renamed streamablehttp_client → streamable_http_client
+    from mcp.client.streamable_http import streamable_http_client as streamablehttp_client
 from mcp.types import TextContent, ImageContent, EmbeddedResource
 
 logger = logging.getLogger(__name__)
