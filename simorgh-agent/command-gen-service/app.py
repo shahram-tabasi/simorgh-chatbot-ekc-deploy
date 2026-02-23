@@ -8,6 +8,7 @@ Endpoints:
   POST /generate       - Generate commands from task description
   POST /validate       - Validate a command for safety
   GET  /health         - Health check
+  /mcp                 - MCP Streamable HTTP endpoint
 """
 
 import logging
@@ -17,6 +18,7 @@ from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from mcp.server.fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -280,6 +282,55 @@ async def validate_command(req: ValidateRequest):
     is_safe, reason = _is_safe(req.command)
     return ValidateResponse(command=req.command, safe=is_safe, reason=reason)
 
+
+# =============================================================================
+# MCP Server - Exposes command generation tools via Model Context Protocol
+# =============================================================================
+mcp = FastMCP("command-gen", instructions="Generate safe shell commands from task descriptions")
+
+
+@mcp.tool()
+def command_generate(task_description: str, project_id: str,
+                     task_type: str = "search", context: str = None) -> str:
+    """Generate safe shell commands from a task description. task_type: search, file_ops, analysis, git."""
+    import json as _json
+    generators = {
+        "search": _generate_search_commands,
+        "file_ops": _generate_file_ops_commands,
+        "analysis": _generate_analysis_commands,
+        "git": _generate_git_commands,
+    }
+    gen_func = generators.get(task_type, _generate_search_commands)
+    commands = gen_func(task_description, project_id)
+
+    warnings = []
+    safe_commands = []
+    for cmd in commands:
+        is_safe, reason = _is_safe(cmd.command)
+        cmd.safe = is_safe
+        if is_safe:
+            safe_commands.append(cmd)
+        else:
+            warnings.append(f"Blocked: {cmd.command} ({reason})")
+
+    result = {
+        "commands": [{"command": c.command, "description": c.description,
+                       "safe": c.safe, "timeout": c.timeout} for c in safe_commands],
+        "task_description": task_description,
+        "warnings": warnings,
+    }
+    return _json.dumps(result)
+
+
+@mcp.tool()
+def command_validate(command: str) -> str:
+    """Validate if a shell command is safe to execute. Returns JSON with safe (bool) and reason."""
+    import json as _json
+    is_safe, reason = _is_safe(command)
+    return _json.dumps({"command": command, "safe": is_safe, "reason": reason})
+
+
+app.mount("/mcp", mcp.streamable_http_app())
 
 if __name__ == "__main__":
     import uvicorn

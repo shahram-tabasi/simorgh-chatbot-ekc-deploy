@@ -12,6 +12,7 @@ Endpoints:
   POST /init         - Initialize a project
   GET  /status/{id}  - Get init status
   GET  /health       - Health check
+  /mcp               - MCP Streamable HTTP endpoint
 """
 
 import logging
@@ -23,6 +24,7 @@ from typing import Optional, Dict, Any
 import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
+from mcp.server.fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -198,6 +200,31 @@ async def get_status(init_id: str):
         raise HTTPException(status_code=404, detail="Init ID not found")
     return _init_status[init_id]
 
+
+# =============================================================================
+# MCP Server - Exposes project init tool via Model Context Protocol
+# =============================================================================
+mcp = FastMCP("project-init", instructions="Initialize project workspace with git, TPMS data, and directory structure")
+
+
+@mcp.tool()
+async def project_init(project_id: str, project_name: str, owner_id: str,
+                       oenum: str = None) -> str:
+    """Initialize a new project workspace. Creates git repo, directory structure, fetches TPMS data if oenum provided."""
+    import json as _json
+    init_id = str(uuid.uuid4())
+    _init_status[init_id] = {
+        "init_id": init_id, "project_id": project_id,
+        "status": "running", "started_at": datetime.utcnow().isoformat(), "steps": [],
+    }
+    req = InitRequest(project_id=project_id, project_name=project_name,
+                      owner_id=owner_id, oenum=oenum)
+    await _run_init(init_id, req)
+    status = _init_status[init_id]
+    return _json.dumps(status, default=str)
+
+
+app.mount("/mcp", mcp.streamable_http_app())
 
 if __name__ == "__main__":
     import uvicorn

@@ -9,6 +9,7 @@ Endpoints:
   GET  /project/{oenum}        - Get cached project data
   GET  /project/{oenum}/text   - Get project data as agent-readable text
   GET  /health                 - Health check
+  /mcp                         - MCP Streamable HTTP endpoint
 """
 
 import json
@@ -21,6 +22,7 @@ import pymysql
 import pymysql.cursors
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from mcp.server.fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -284,6 +286,68 @@ async def get_project_text(oenum: str):
         raise HTTPException(status_code=404, detail="Project not found")
     return {"oenum": oenum, "text": _project_to_text(data)}
 
+
+# =============================================================================
+# MCP Server - Exposes TPMS tools via Model Context Protocol
+# =============================================================================
+mcp = FastMCP("tpms-fetcher", instructions="Fetch project data from TPMS MySQL")
+
+
+@mcp.tool()
+def tpms_fetch(oenum: str) -> str:
+    """Fetch complete project data from TPMS by OENUM. Returns JSON with project, panels, feeders."""
+    try:
+        conn = get_mysql_connection()
+        project = _fetch_project_main(conn, oenum)
+        if not project:
+            conn.close()
+            return json.dumps({"error": f"Project {oenum} not found in TPMS"})
+
+        id_pm = project["id_project_main"]
+        panels = _fetch_panels(conn, id_pm)
+        feeders = _fetch_feeders(conn, id_pm)
+        eq_count = _fetch_equipment_count(conn, id_pm)
+        conn.close()
+
+        now = datetime.utcnow().isoformat()
+        data = {
+            "oenum": oenum, "project": project, "panels": panels,
+            "feeders": feeders, "equipment_count": eq_count,
+            "fetched_at": now, "status": "ok",
+        }
+        _project_cache[oenum] = data
+        return json.dumps(data, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def tpms_get_text(oenum: str) -> str:
+    """Get project data as agent-readable plain text by OENUM. Fetches from TPMS if not cached."""
+    try:
+        if oenum not in _project_cache:
+            # Fetch first
+            conn = get_mysql_connection()
+            project = _fetch_project_main(conn, oenum)
+            if not project:
+                conn.close()
+                return f"Project {oenum} not found in TPMS"
+            id_pm = project["id_project_main"]
+            panels = _fetch_panels(conn, id_pm)
+            feeders = _fetch_feeders(conn, id_pm)
+            eq_count = _fetch_equipment_count(conn, id_pm)
+            conn.close()
+            _project_cache[oenum] = {
+                "oenum": oenum, "project": project, "panels": panels,
+                "feeders": feeders, "equipment_count": eq_count,
+                "fetched_at": datetime.utcnow().isoformat(),
+            }
+        return _project_to_text(_project_cache[oenum])
+    except Exception as e:
+        return f"TPMS fetch error: {e}"
+
+
+app.mount("/mcp", mcp.streamable_http_app())
 
 if __name__ == "__main__":
     import uvicorn

@@ -111,7 +111,7 @@ services:
       - SHELL_SERVICE_TIMEOUT=60
       # Project Email Gateway
       - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
-      # Agent Microservice URLs
+      # Agent Microservice URLs (REST - fallback)
       - SEARCH_SERVICE_URL=http://search-service:8020
       - TPMS_FETCHER_URL=http://tpms-fetcher:8021
       - PROJECT_INIT_URL=http://project-init:8022
@@ -119,6 +119,14 @@ services:
       - COMMAND_GEN_URL=http://command-gen:8024
       - FILE_EXPORT_URL=http://file-export:8025
       - EPLAN_BRIDGE_URL=http://eplan-bridge:8026
+      # Agent Microservice MCP URLs (primary)
+      - SEARCH_MCP_URL=http://search-service:8020/mcp
+      - TPMS_FETCHER_MCP_URL=http://tpms-fetcher:8021/mcp
+      - PROJECT_INIT_MCP_URL=http://project-init:8022/mcp
+      - PROJECT_ANALYSIS_MCP_URL=http://project-analysis:8023/mcp
+      - COMMAND_GEN_MCP_URL=http://command-gen:8024/mcp
+      - FILE_EXPORT_MCP_URL=http://file-export:8025/mcp
+      - EPLAN_BRIDGE_MCP_URL=http://eplan-bridge:8026/mcp
       # Redis Agent DB
       - REDIS_AGENT_DB=5
     volumes:

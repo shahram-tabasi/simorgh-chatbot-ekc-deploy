@@ -10,6 +10,7 @@ Endpoints:
   POST /export/pdf      - Generate PDF report
   GET  /download/{id}   - Download generated file
   GET  /health          - Health check
+  /mcp                  - MCP Streamable HTTP endpoint
 """
 
 import io
@@ -23,6 +24,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from mcp.server.fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -315,6 +317,146 @@ async def download_file(export_id: str):
         media_type="application/octet-stream",
     )
 
+
+# =============================================================================
+# MCP Server - Exposes file export tools via Model Context Protocol
+# =============================================================================
+mcp = FastMCP("file-export", instructions="Generate Excel, Word, and PDF files from structured data")
+
+
+@mcp.tool()
+def export_excel(project_id: str, title: str, tables: str,
+                 filename: str = "export.xlsx") -> str:
+    """Generate an Excel file. tables: JSON string of [{headers: [...], rows: [[...]], sheet_name: "..."}]."""
+    import json as _json
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill
+
+        table_list = _json.loads(tables) if isinstance(tables, str) else tables
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+
+        for table in table_list:
+            ws = wb.create_sheet(title=table.get("sheet_name", "Sheet1")[:31])
+            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF", size=11)
+            for col, header in enumerate(table.get("headers", []), 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center")
+            for row_idx, row_data in enumerate(table.get("rows", []), 2):
+                for col_idx, value in enumerate(row_data, 1):
+                    ws.cell(row=row_idx, column=col_idx, value=value)
+            for col in ws.columns:
+                max_len = max((len(str(cell.value or "")) for cell in col), default=10)
+                ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
+
+        export_id = str(uuid.uuid4())
+        filepath = EXPORT_DIR / f"{export_id}_{filename}"
+        wb.save(str(filepath))
+        size = filepath.stat().st_size
+        _exports[export_id] = {"path": str(filepath), "filename": filename, "format": "xlsx", "size": size}
+        return _json.dumps({"export_id": export_id, "filename": filename, "format": "xlsx",
+                            "size": size, "download_url": f"/download/{export_id}"})
+    except Exception as e:
+        return _json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def export_word(project_id: str, title: str, sections: str,
+                tables: str = "[]", filename: str = "report.docx") -> str:
+    """Generate a Word document. sections: JSON string of [{heading, content, level}]. tables: optional JSON."""
+    import json as _json
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        section_list = _json.loads(sections) if isinstance(sections, str) else sections
+        table_list = _json.loads(tables) if isinstance(tables, str) else tables
+
+        doc = Document()
+        title_para = doc.add_heading(title, level=0)
+        title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        doc.add_paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
+        doc.add_paragraph(f"Project: {project_id}")
+
+        for section in section_list:
+            doc.add_heading(section.get("heading", "Section"), level=min(section.get("level", 1), 4))
+            for para_text in section.get("content", "").split("\n"):
+                if para_text.strip():
+                    doc.add_paragraph(para_text.strip())
+
+        for table_data in table_list:
+            headers = table_data.get("headers", [])
+            rows = table_data.get("rows", [])
+            doc.add_heading(table_data.get("sheet_name", "Table"), level=2)
+            table = doc.add_table(rows=1 + len(rows), cols=len(headers), style="Table Grid")
+            for i, h in enumerate(headers):
+                table.rows[0].cells[i].text = h
+            for ri, row in enumerate(rows):
+                for ci, val in enumerate(row):
+                    if ci < len(headers):
+                        table.rows[ri + 1].cells[ci].text = str(val)
+
+        export_id = str(uuid.uuid4())
+        filepath = EXPORT_DIR / f"{export_id}_{filename}"
+        doc.save(str(filepath))
+        size = filepath.stat().st_size
+        _exports[export_id] = {"path": str(filepath), "filename": filename, "format": "docx", "size": size}
+        return _json.dumps({"export_id": export_id, "filename": filename, "format": "docx",
+                            "size": size, "download_url": f"/download/{export_id}"})
+    except Exception as e:
+        return _json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def export_pdf(project_id: str, title: str, content: str,
+               filename: str = "report.pdf") -> str:
+    """Generate a PDF from text/markdown content."""
+    import json as _json
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.units import inch
+
+        export_id = str(uuid.uuid4())
+        filepath = EXPORT_DIR / f"{export_id}_{filename}"
+        doc = SimpleDocTemplate(str(filepath), pagesize=A4)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle("CustomTitle", parent=styles["Title"], fontSize=18, spaceAfter=20)
+        body_style = ParagraphStyle("CustomBody", parent=styles["Normal"], fontSize=10, leading=14)
+
+        story = [Paragraph(title, title_style),
+                 Paragraph(f"Project: {project_id} | Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", styles["Italic"]),
+                 Spacer(1, 0.3 * inch)]
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line:
+                story.append(Spacer(1, 0.1 * inch))
+            elif line.startswith("# "):
+                story.append(Paragraph(line[2:], styles["Heading1"]))
+            elif line.startswith("## "):
+                story.append(Paragraph(line[3:], styles["Heading2"]))
+            elif line.startswith("- "):
+                story.append(Paragraph(f"&bull; {line[2:]}", body_style))
+            else:
+                safe_line = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                story.append(Paragraph(safe_line, body_style))
+        doc.build(story)
+
+        size = filepath.stat().st_size
+        _exports[export_id] = {"path": str(filepath), "filename": filename, "format": "pdf", "size": size}
+        return _json.dumps({"export_id": export_id, "filename": filename, "format": "pdf",
+                            "size": size, "download_url": f"/download/{export_id}"})
+    except Exception as e:
+        return _json.dumps({"error": str(e)})
+
+
+app.mount("/mcp", mcp.streamable_http_app())
 
 if __name__ == "__main__":
     import uvicorn

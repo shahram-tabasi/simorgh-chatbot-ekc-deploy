@@ -9,6 +9,7 @@ Endpoints:
   POST /analyze          - Analyze a project workspace
   GET  /report/{id}      - Get analysis report
   GET  /health           - Health check
+  /mcp                   - MCP Streamable HTTP endpoint
 """
 
 import logging
@@ -20,6 +21,7 @@ from typing import Optional, Dict, Any, List
 import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
+from mcp.server.fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -211,6 +213,31 @@ async def get_report(report_id: str):
         raise HTTPException(status_code=404, detail="Report not found")
     return _reports[report_id]
 
+
+# =============================================================================
+# MCP Server - Exposes project analysis tool via Model Context Protocol
+# =============================================================================
+mcp = FastMCP("project-analysis", instructions="Analyze project workspace structure and contents")
+
+
+@mcp.tool()
+async def project_analyze(project_id: str, depth: str = "medium") -> str:
+    """Analyze a project workspace. Returns file tree, key files, git history, and summary. Depth: quick, medium, thorough."""
+    import json as _json
+    report_id = str(uuid.uuid4())
+    _reports[report_id] = {
+        "report_id": report_id, "project_id": project_id,
+        "status": "running", "started_at": datetime.utcnow().isoformat(),
+    }
+    req = AnalyzeRequest(project_id=project_id, depth=depth)
+    await _run_analysis(report_id, req)
+    report = _reports[report_id]
+    if report.get("status") == "completed":
+        return report.get("summary", _json.dumps(report, default=str))
+    return _json.dumps(report, default=str)
+
+
+app.mount("/mcp", mcp.streamable_http_app())
 
 if __name__ == "__main__":
     import uvicorn
