@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 COT_SYSTEM_PROMPT = """You are a Project Manager Agent analyzing a user request for a project.
 Your job is to break down the request into concrete, executable task steps.
 
-You have access to these tools:
+You have access to these core tools:
 - llm: Ask questions, generate text, analyze data, reason about problems
 - shell: Execute Linux commands, run scripts, manage files in project workspace (on remote server 1.69)
 - git: Version control operations (commit, diff, log) in project workspace
@@ -32,13 +32,8 @@ You have access to these tools:
 - document_process: Process uploaded documents - convert to markdown, extract text
 - semantic_store: Chunk text content and store in Qdrant for semantic search. Input: {{"content": "text to chunk and index", "document_id": "doc-uuid", "filename": "name.pdf"}}
 - email: Send email responses
-- web_search: Search the internet using DuckDuckGo. Input: {{"query": "search query", "max_results": 5}}
-- tpms_fetch: Fetch project data from TPMS database by OENUM. Input: {{"oenum": "12345"}}
-- project_init: Initialize a new project workspace (git, dirs, TPMS data). Input: {{"project_name": "name", "oenum": "optional"}}
-- project_analyze: Analyze project workspace structure and contents. Input: {{"depth": "medium"}}
-- command_gen: Generate safe shell commands from task description. Input: {{"task_description": "what to do", "task_type": "search|file_ops|analysis|git"}}
-- file_export: Generate Excel/Word/PDF files. Input: {{"format": "excel|word|pdf", "title": "Report Title", "data": {{...}}}}
-- eplan_draw: Trigger EPLAN drawing generation via TCP bridge. Input: {{"project_name": "name", "eplan_data": [...]}}
+
+{mcp_tools}
 
 DOCUMENT PROCESSING WORKFLOW:
 When a document is uploaded, create tasks in this order:
@@ -103,14 +98,35 @@ Respond with ONLY valid JSON in this exact format:
 }}"""
 
 
+# Fallback tool list when MCP is not connected
+_FALLBACK_MCP_TOOLS = """You also have access to these microservice tools:
+- web_search: Search the internet using DuckDuckGo. Input: {{"query": "search query", "max_results": 5}}
+- web_search_news: Search recent news. Input: {{"query": "search query", "max_results": 5}}
+- tpms_fetch: Fetch project data from TPMS database by OENUM. Input: {{"oenum": "12345"}}
+- tpms_get_text: Get project data as readable text by OENUM. Input: {{"oenum": "12345"}}
+- project_init: Initialize a new project workspace (git, dirs, TPMS data). Input: {{"project_name": "name", "oenum": "optional"}}
+- project_analyze: Analyze project workspace structure and contents. Input: {{"depth": "medium"}}
+- command_generate: Generate safe shell commands from task description. Input: {{"task_description": "what to do", "task_type": "search|file_ops|analysis|git"}}
+- command_validate: Validate if a shell command is safe. Input: {{"command": "the command"}}
+- export_excel: Generate Excel file. Input: {{"project_id": "id", "title": "Title", "tables": "[...]"}}
+- export_word: Generate Word document. Input: {{"project_id": "id", "title": "Title", "sections": "[...]"}}
+- export_pdf: Generate PDF report. Input: {{"project_id": "id", "title": "Title", "content": "text"}}
+- eplan_draw: Trigger EPLAN drawing generation. Input: {{"project_name": "name", "eplan_data": "[...]"}}
+- eplan_resolve_port: Find available EPLAN server port. Input: {{"username": "agent"}}"""
+
+
 class COTEngine:
     """Chain of Thoughts engine for analyzing requests and generating task plans."""
 
     def __init__(self, llm_service=None):
         self.llm_service = llm_service
+        self.mcp_manager = None
 
     def set_llm_service(self, llm_service):
         self.llm_service = llm_service
+
+    def set_mcp_manager(self, mcp_manager):
+        self.mcp_manager = mcp_manager
 
     async def analyze(
         self,
@@ -169,8 +185,17 @@ class COTEngine:
 
         context_str = "\n".join(context_parts)
 
+        # Build dynamic tool list from MCP or use fallback
+        if self.mcp_manager and self.mcp_manager.is_connected:
+            mcp_tool_lines = self.mcp_manager.get_tools_for_cot()
+            mcp_tools = f"You also have access to these microservice tools (via MCP):\n{mcp_tool_lines}"
+        else:
+            mcp_tools = _FALLBACK_MCP_TOOLS
+
         # Build messages for LLM
-        system_prompt = COT_SYSTEM_PROMPT.format(max_tasks=request.max_tasks)
+        system_prompt = COT_SYSTEM_PROMPT.format(
+            max_tasks=request.max_tasks, mcp_tools=mcp_tools
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Project Context:\n{context_str}\n\nUser Request:\n{request.user_input}"}

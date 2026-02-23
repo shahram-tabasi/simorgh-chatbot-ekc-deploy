@@ -27,6 +27,7 @@ from models.project_models import (
 from services.cot_engine import COTEngine, get_cot_engine
 from services.project_memory_service import ProjectMemoryService, get_project_memory_service
 from services.shell_service import ShellServiceClient, get_shell_service
+from services.mcp_manager import MCPManager, get_mcp_manager
 from services.microservice_clients import (
     get_search_client, get_tpms_fetcher_client, get_project_init_client,
     get_project_analysis_client, get_command_gen_client,
@@ -46,6 +47,7 @@ class ProjectManagerAgent:
         self.cot_engine: Optional[COTEngine] = None
         self.memory: Optional[ProjectMemoryService] = None
         self.shell: Optional[ShellServiceClient] = None
+        self.mcp_manager: Optional[MCPManager] = None
         self.llm_service = None
         self.email_service = None
         # Callbacks for streaming progress to frontend
@@ -56,10 +58,14 @@ class ProjectManagerAgent:
         """Initialize all agent dependencies."""
         self.llm_service = llm_service
 
-        # COT Engine
+        # MCP Manager (connects to microservice MCP servers)
+        self.mcp_manager = get_mcp_manager()
+
+        # COT Engine (with MCP for dynamic tool discovery)
         self.cot_engine = get_cot_engine()
         if llm_service:
             self.cot_engine.set_llm_service(llm_service)
+        self.cot_engine.set_mcp_manager(self.mcp_manager)
 
         # Memory
         self.memory = get_project_memory_service()
@@ -73,6 +79,12 @@ class ProjectManagerAgent:
         self.email_service = email_service
 
         logger.info("Project Manager Agent initialized")
+
+    async def connect_mcp(self):
+        """Connect to all MCP servers (call after event loop is running)."""
+        if self.mcp_manager:
+            await self.mcp_manager.connect_all()
+            logger.info(f"MCP: {self.mcp_manager.get_server_status()}")
 
     def register_progress_callback(self, project_id: str, callback: Callable):
         """Register a callback for streaming progress updates."""
@@ -427,6 +439,14 @@ class ProjectManagerAgent:
                 k: v.get("output", "")[:3000] for k, v in prev_results.items()
             }
 
+        # Try MCP first for microservice tools (dynamic routing)
+        if self.mcp_manager and self.mcp_manager.is_connected and self.mcp_manager.has_tool(tool):
+            try:
+                return await self.mcp_manager.call_tool(tool, tool_input)
+            except Exception as e:
+                logger.warning(f"MCP call failed for {tool}, falling back to HTTP: {e}")
+
+        # Direct execution for core tools + HTTP fallback for microservice tools
         if tool == "llm" or task_type in ("generation", "analysis", "review"):
             return await self._execute_llm_task(project_id, task, tool_input)
         elif tool == "shell" or task_type == "shell_command":

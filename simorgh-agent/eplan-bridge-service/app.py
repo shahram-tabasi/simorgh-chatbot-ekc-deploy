@@ -13,6 +13,7 @@ Endpoints:
   GET  /job/{job_id}      - Check job status
   POST /port/resolve      - Get available EPLAN port
   GET  /health            - Health check
+  /mcp                    - MCP Streamable HTTP endpoint
 """
 
 import asyncio
@@ -26,6 +27,7 @@ from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from mcp.server.fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -205,6 +207,54 @@ async def resolve_port(req: PortResolveRequest):
         detail="No EPLAN server available on ports 12000-12100",
     )
 
+
+# =============================================================================
+# MCP Server - Exposes EPLAN tools via Model Context Protocol
+# =============================================================================
+mcp = FastMCP("eplan-bridge", instructions="EPLAN TCP-to-REST bridge for drawing generation")
+
+
+@mcp.tool()
+async def eplan_draw(project_name: str, eplan_data: str,
+                     port: int = 12000, username: str = "agent") -> str:
+    """Send EplanData to EPLAN server to generate drawings. eplan_data: JSON string of EplanData list."""
+    try:
+        data_list = json.loads(eplan_data) if isinstance(eplan_data, str) else eplan_data
+        job_id = str(uuid.uuid4())
+        _jobs[job_id] = {
+            "job_id": job_id, "project_name": project_name,
+            "status": "sending", "started_at": datetime.utcnow().isoformat(), "port": port,
+        }
+        result = await _send_to_eplan(EPLAN_HOST, port, data_list)
+        if result["status"] == "ok":
+            _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["response"] = result["response"]
+            return json.dumps({"job_id": job_id, "status": "completed",
+                               "message": f"Drawing generated. Output: {result['response'].get('Content', 'N/A')}"})
+        else:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = result.get("error", "Unknown")
+            return json.dumps({"job_id": job_id, "status": "failed", "error": result.get("error", "EPLAN server error")})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+async def eplan_resolve_port(username: str = "agent") -> str:
+    """Find an available EPLAN server port by scanning 12000-12100."""
+    for port in range(12000, 12101):
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(EPLAN_HOST, port), timeout=1)
+            writer.close()
+            await writer.wait_closed()
+            return json.dumps({"port": port, "status": "available", "host": EPLAN_HOST})
+        except Exception:
+            continue
+    return json.dumps({"error": "No EPLAN server available on ports 12000-12100"})
+
+
+app.mount("/mcp", mcp.streamable_http_app())
 
 if __name__ == "__main__":
     import uvicorn
