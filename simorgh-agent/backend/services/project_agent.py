@@ -27,6 +27,11 @@ from models.project_models import (
 from services.cot_engine import COTEngine, get_cot_engine
 from services.project_memory_service import ProjectMemoryService, get_project_memory_service
 from services.shell_service import ShellServiceClient, get_shell_service
+from services.microservice_clients import (
+    get_search_client, get_tpms_fetcher_client, get_project_init_client,
+    get_project_analysis_client, get_command_gen_client,
+    get_file_export_client, get_eplan_bridge_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -438,6 +443,20 @@ class ProjectManagerAgent:
             return await self._execute_email_task(project_id, task, tool_input)
         elif tool == "git":
             return await self._execute_git_task(project_id, task, tool_input)
+        elif tool == "web_search":
+            return await self._execute_web_search_task(project_id, task, tool_input)
+        elif tool == "tpms_fetch":
+            return await self._execute_tpms_fetch_task(project_id, task, tool_input)
+        elif tool == "project_init":
+            return await self._execute_project_init_task(project_id, task, tool_input)
+        elif tool == "project_analyze":
+            return await self._execute_project_analyze_task(project_id, task, tool_input)
+        elif tool == "command_gen":
+            return await self._execute_command_gen_task(project_id, task, tool_input)
+        elif tool == "file_export":
+            return await self._execute_file_export_task(project_id, task, tool_input)
+        elif tool == "eplan_draw":
+            return await self._execute_eplan_draw_task(project_id, task, tool_input)
         else:
             # Default: use LLM
             return await self._execute_llm_task(project_id, task, tool_input)
@@ -732,6 +751,185 @@ class ProjectManagerAgent:
                 return {"output": f"Unknown git operation: {operation}", "metadata": {}}
         except Exception as e:
             return {"output": f"Git error: {str(e)}", "metadata": {"error": True}}
+
+    # =========================================================================
+    # MICROSERVICE TOOL EXECUTORS
+    # =========================================================================
+
+    async def _execute_web_search_task(self, project_id: str, task: Dict,
+                                       tool_input: Dict) -> Dict:
+        """Execute a web search via the search microservice."""
+        client = get_search_client()
+        query = tool_input.get("query", task.get("description", ""))
+        max_results = tool_input.get("max_results", 5)
+        try:
+            result = await client.search(
+                query=query,
+                max_results=max_results,
+                region=tool_input.get("region", "wt-wt"),
+                time_range=tool_input.get("time_range"),
+            )
+            results_text = "\n\n".join(
+                f"**{r.get('title', '')}**\n{r.get('snippet', '')}\nURL: {r.get('url', '')}"
+                for r in result.get("results", [])
+            )
+            return {
+                "output": results_text or "No results found.",
+                "metadata": {"query": query, "count": len(result.get("results", []))},
+            }
+        except Exception as e:
+            logger.error(f"Web search failed: {e}")
+            return {"output": f"Search error: {e}", "metadata": {"error": True}}
+
+    async def _execute_tpms_fetch_task(self, project_id: str, task: Dict,
+                                       tool_input: Dict) -> Dict:
+        """Fetch project data from TPMS via the fetcher microservice."""
+        client = get_tpms_fetcher_client()
+        oenum = tool_input.get("oenum", "")
+        if not oenum:
+            return {"output": "No OENUM provided for TPMS fetch", "metadata": {"error": True}}
+        try:
+            result = await client.fetch_project(oenum)
+            text = await client.get_project_text(oenum)
+            return {
+                "output": text or json.dumps(result, indent=2, default=str),
+                "metadata": {"oenum": oenum, "status": result.get("status", "fetched")},
+            }
+        except Exception as e:
+            logger.error(f"TPMS fetch failed: {e}")
+            return {"output": f"TPMS fetch error: {e}", "metadata": {"error": True}}
+
+    async def _execute_project_init_task(self, project_id: str, task: Dict,
+                                         tool_input: Dict) -> Dict:
+        """Initialize a project workspace via the init microservice."""
+        client = get_project_init_client()
+        try:
+            result = await client.init_project(
+                project_id=project_id,
+                project_name=tool_input.get("project_name", "Untitled"),
+                owner_id=tool_input.get("owner_id", "agent"),
+                oenum=tool_input.get("oenum"),
+            )
+            return {
+                "output": f"Project initialized: {result.get('status', 'done')}",
+                "metadata": result,
+            }
+        except Exception as e:
+            logger.error(f"Project init failed: {e}")
+            return {"output": f"Project init error: {e}", "metadata": {"error": True}}
+
+    async def _execute_project_analyze_task(self, project_id: str, task: Dict,
+                                            tool_input: Dict) -> Dict:
+        """Analyze project workspace via the analysis microservice."""
+        client = get_project_analysis_client()
+        depth = tool_input.get("depth", "medium")
+        try:
+            result = await client.analyze(project_id=project_id, depth=depth)
+            report = result.get("report", result)
+            output = json.dumps(report, indent=2, default=str) if isinstance(report, dict) else str(report)
+            return {
+                "output": output,
+                "metadata": {"depth": depth, "report_id": result.get("report_id")},
+            }
+        except Exception as e:
+            logger.error(f"Project analysis failed: {e}")
+            return {"output": f"Analysis error: {e}", "metadata": {"error": True}}
+
+    async def _execute_command_gen_task(self, project_id: str, task: Dict,
+                                        tool_input: Dict) -> Dict:
+        """Generate safe shell commands via the command-gen microservice."""
+        client = get_command_gen_client()
+        description = tool_input.get("task_description", task.get("description", ""))
+        task_type = tool_input.get("task_type", "search")
+        try:
+            result = await client.generate(
+                task_description=description,
+                project_id=project_id,
+                task_type=task_type,
+                context=tool_input.get("context"),
+            )
+            commands = result.get("commands", [])
+            output = "\n".join(commands) if isinstance(commands, list) else str(commands)
+            return {
+                "output": output,
+                "metadata": {"task_type": task_type, "command_count": len(commands) if isinstance(commands, list) else 1},
+            }
+        except Exception as e:
+            logger.error(f"Command generation failed: {e}")
+            return {"output": f"Command gen error: {e}", "metadata": {"error": True}}
+
+    async def _execute_file_export_task(self, project_id: str, task: Dict,
+                                        tool_input: Dict) -> Dict:
+        """Generate export files via the file-export microservice."""
+        client = get_file_export_client()
+        fmt = tool_input.get("format", "excel")
+        title = tool_input.get("title", "Export")
+        try:
+            if fmt == "excel":
+                result = await client.export_excel(
+                    project_id=project_id,
+                    title=title,
+                    tables=tool_input.get("tables", tool_input.get("data", {}).get("tables", [])),
+                    filename=tool_input.get("filename", "export.xlsx"),
+                )
+            elif fmt == "word":
+                result = await client.export_word(
+                    project_id=project_id,
+                    title=title,
+                    sections=tool_input.get("sections", tool_input.get("data", {}).get("sections", [])),
+                    tables=tool_input.get("tables", []),
+                    filename=tool_input.get("filename", "report.docx"),
+                )
+            elif fmt == "pdf":
+                prev = tool_input.get("_previous_results", {})
+                content = tool_input.get("content", "")
+                if not content and prev:
+                    for v in prev.values():
+                        if v and len(str(v)) > 50:
+                            content = str(v)
+                            break
+                result = await client.export_pdf(
+                    project_id=project_id,
+                    title=title,
+                    content=content,
+                    filename=tool_input.get("filename", "report.pdf"),
+                )
+            else:
+                return {"output": f"Unknown export format: {fmt}", "metadata": {"error": True}}
+
+            download_id = result.get("download_id", result.get("id", ""))
+            return {
+                "output": f"File exported ({fmt}): {result.get('filename', title)} [download_id: {download_id}]",
+                "metadata": result,
+            }
+        except Exception as e:
+            logger.error(f"File export failed: {e}")
+            return {"output": f"Export error: {e}", "metadata": {"error": True}}
+
+    async def _execute_eplan_draw_task(self, project_id: str, task: Dict,
+                                       tool_input: Dict) -> Dict:
+        """Trigger EPLAN drawing generation via the bridge microservice."""
+        client = get_eplan_bridge_client()
+        project_name = tool_input.get("project_name", "")
+        eplan_data = tool_input.get("eplan_data", [])
+        if not project_name or not eplan_data:
+            return {"output": "Missing project_name or eplan_data for drawing", "metadata": {"error": True}}
+        try:
+            port_info = await client.resolve_port(tool_input.get("username", "agent"))
+            port = port_info.get("port", 12000)
+            result = await client.draw(
+                project_name=project_name,
+                eplan_data=eplan_data,
+                port=port,
+                username=tool_input.get("username", "agent"),
+            )
+            return {
+                "output": f"EPLAN drawing job submitted: {result.get('job_id', 'N/A')} - status: {result.get('status', 'submitted')}",
+                "metadata": result,
+            }
+        except Exception as e:
+            logger.error(f"EPLAN draw failed: {e}")
+            return {"output": f"EPLAN draw error: {e}", "metadata": {"error": True}}
 
     async def _auto_commit(self, project_id: str, message: str) -> Optional[Dict]:
         """Auto-commit changes after shell operations."""

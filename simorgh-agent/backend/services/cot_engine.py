@@ -32,6 +32,13 @@ You have access to these tools:
 - document_process: Process uploaded documents - convert to markdown, extract text
 - semantic_store: Chunk text content and store in Qdrant for semantic search. Input: {{"content": "text to chunk and index", "document_id": "doc-uuid", "filename": "name.pdf"}}
 - email: Send email responses
+- web_search: Search the internet using DuckDuckGo. Input: {{"query": "search query", "max_results": 5}}
+- tpms_fetch: Fetch project data from TPMS database by OENUM. Input: {{"oenum": "12345"}}
+- project_init: Initialize a new project workspace (git, dirs, TPMS data). Input: {{"project_name": "name", "oenum": "optional"}}
+- project_analyze: Analyze project workspace structure and contents. Input: {{"depth": "medium"}}
+- command_gen: Generate safe shell commands from task description. Input: {{"task_description": "what to do", "task_type": "search|file_ops|analysis|git"}}
+- file_export: Generate Excel/Word/PDF files. Input: {{"format": "excel|word|pdf", "title": "Report Title", "data": {{...}}}}
+- eplan_draw: Trigger EPLAN drawing generation via TCP bridge. Input: {{"project_name": "name", "eplan_data": [...]}}
 
 DOCUMENT PROCESSING WORKFLOW:
 When a document is uploaded, create tasks in this order:
@@ -39,6 +46,24 @@ When a document is uploaded, create tasks in this order:
 2. Save markdown to project workspace for version control (tool: shell, command: write to documents/filename.md)
 3. Index content in semantic search for future queries (tool: semantic_store)
 4. Commit document files to git (tool: git, operation: commit)
+
+PROJECT ANALYSIS WORKFLOW:
+When a new project is created or user asks to understand the project:
+1. Fetch TPMS data if OENUM is available (tool: tpms_fetch)
+2. Run project workspace analysis (tool: project_analyze)
+3. Summarize findings (tool: llm)
+
+RESEARCH WORKFLOW:
+When user asks about external topics or needs internet information:
+1. Search the web (tool: web_search)
+2. Analyze search results (tool: llm)
+3. Store useful findings in memory (tool: memory_store)
+
+EXPORT WORKFLOW:
+When user requests a report, spreadsheet, or document:
+1. Gather data from memory/analysis (tool: memory_query)
+2. Generate export file (tool: file_export)
+3. Commit to git (tool: git)
 
 For each step, specify:
 1. A clear title (what to do)
@@ -55,6 +80,7 @@ IMPORTANT RULES:
 - Always start with a query/analysis step to gather context
 - End with a summary/response step
 - Keep the plan practical and executable
+- After shell/file operations, always commit to git
 - Maximum {max_tasks} steps
 
 Respond with ONLY valid JSON in this exact format:
