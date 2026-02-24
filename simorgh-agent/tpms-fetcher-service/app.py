@@ -221,27 +221,22 @@ def _project_to_text(data: Dict) -> str:
 
 @app.get("/health")
 async def health():
-    """Health check - always returns 200 if service is running.
-    MySQL connectivity is reported but does not block startup.
-    This prevents docker healthcheck timeout when MySQL (TPMS) is unreachable
-    (e.g., internet disconnected for local/offline operation)."""
-    result = {"status": "healthy", "service": "tpms-fetcher"}
+    """Health check - lightweight, never blocks on external connections.
+    Docker healthcheck must pass quickly regardless of MySQL availability.
+    Use /health/mysql for detailed MySQL connectivity status."""
+    return {"status": "healthy", "service": "tpms-fetcher"}
+
+
+@app.get("/health/mysql")
+async def health_mysql():
+    """Detailed MySQL connectivity check (not used by docker healthcheck)."""
     try:
-        # Use short timeout (3s) for health check to avoid blocking docker healthcheck
-        conn = pymysql.connect(
-            host=MYSQL_HOST, port=MYSQL_PORT,
-            user=MYSQL_USER, password=MYSQL_PASSWORD,
-            database=MYSQL_DATABASE, charset="utf8mb4",
-            connect_timeout=3,
-            cursorclass=pymysql.cursors.DictCursor,
-        )
+        conn = get_mysql_connection()
         conn.ping()
         conn.close()
-        result["mysql"] = "connected"
-    except Exception:
-        result["mysql"] = "unavailable"
-        result["mysql_note"] = "TPMS data fetch will fail until MySQL is reachable"
-    return result
+        return {"status": "healthy", "mysql": "connected"}
+    except Exception as e:
+        return {"status": "degraded", "mysql": "unavailable", "error": str(e)}
 
 
 @app.post("/fetch/{oenum}", response_model=FetchResponse)
