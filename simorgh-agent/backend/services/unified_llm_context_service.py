@@ -148,7 +148,7 @@ class UnifiedLLMContextService:
     @property
     def cocoindex(self):
         """Lazy-load CoCoIndex adapter"""
-        if self._cocoindex is None:
+        if self._cocoindex is None and self.neo4j_driver:
             try:
                 from cocoindex_flows.cocoindex_adapter import CoCoIndexAdapter
                 self._cocoindex = CoCoIndexAdapter(driver=self.neo4j_driver)
@@ -159,7 +159,7 @@ class UnifiedLLMContextService:
     @property
     def graph_rag(self):
         """Lazy-load GraphRAG service"""
-        if self._graph_rag is None:
+        if self._graph_rag is None and self.neo4j_driver:
             try:
                 from services.graph_rag_service import GraphRAGService
                 self._graph_rag = GraphRAGService(self.neo4j_driver)

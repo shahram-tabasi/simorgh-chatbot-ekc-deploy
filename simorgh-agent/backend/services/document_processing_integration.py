@@ -252,54 +252,58 @@ def process_enhanced_spec_extraction(
         )
 
         # Use CocoIndex SpecificationFlow for proper ITEM 1-13 extraction
-        try:
-            # Initialize CocoIndex adapter with the existing Neo4j driver
-            cocoindex_adapter = CoCoIndexAdapter(driver=neo4j_driver)
+        entities_extracted = {}
+        if neo4j_driver:
+            try:
+                # Initialize CocoIndex adapter with the existing Neo4j driver
+                cocoindex_adapter = CoCoIndexAdapter(driver=neo4j_driver)
 
-            # Create SpecificationFlow with LLM service
-            spec_flow = SpecificationFlow(
-                cocoindex_adapter=cocoindex_adapter,
-                llm_service=llm_service,
-                qdrant_service=qdrant
-            )
+                # Create SpecificationFlow with LLM service
+                spec_flow = SpecificationFlow(
+                    cocoindex_adapter=cocoindex_adapter,
+                    llm_service=llm_service,
+                    qdrant_service=qdrant
+                )
 
-            # Process document with SpecificationFlow (extracts all 13 ITEM categories)
-            flow_result = spec_flow.process_document(
-                project_number=project_number,
-                document_id=document_id,
-                content=markdown_content,
-                filename=filename,
-                metadata={"filename": filename, "doc_type": "Spec"},
-                llm_mode=llm_mode
-            )
+                # Process document with SpecificationFlow (extracts all 13 ITEM categories)
+                flow_result = spec_flow.process_document(
+                    project_number=project_number,
+                    document_id=document_id,
+                    content=markdown_content,
+                    filename=filename,
+                    metadata={"filename": filename, "doc_type": "Spec"},
+                    llm_mode=llm_mode
+                )
 
-            if flow_result.get("success"):
-                entities_extracted = {
-                    "entities_count": flow_result.get("entities_extracted", 0),
-                    "relationships_count": flow_result.get("relationships_extracted", 0),
-                    "document_type": flow_result.get("document_type", "Specification")
-                }
-                logger.info(f"✅ [Task {task_id}] SpecificationFlow completed: {entities_extracted}")
-            else:
-                logger.warning(f"⚠️ [Task {task_id}] SpecificationFlow failed: {flow_result.get('error', 'Unknown error')}")
-                entities_extracted = {"error": flow_result.get("error", "Flow failed")}
+                if flow_result.get("success"):
+                    entities_extracted = {
+                        "entities_count": flow_result.get("entities_extracted", 0),
+                        "relationships_count": flow_result.get("relationships_extracted", 0),
+                        "document_type": flow_result.get("document_type", "Specification")
+                    }
+                    logger.info(f"✅ [Task {task_id}] SpecificationFlow completed: {entities_extracted}")
+                else:
+                    logger.warning(f"⚠️ [Task {task_id}] SpecificationFlow failed: {flow_result.get('error', 'Unknown error')}")
+                    entities_extracted = {"error": flow_result.get("error", "Flow failed")}
 
-        except Exception as e:
-            logger.error(f"❌ [Task {task_id}] SpecificationFlow error: {e}", exc_info=True)
-            # Fallback to GraphBuilder if SpecificationFlow fails
-            logger.info(f"🔄 [Task {task_id}] Falling back to GraphBuilder...")
-            graph_builder = GraphBuilder(
-                llm_service=llm_service,
-                neo4j_driver=neo4j_driver
-            )
-            graph_result = graph_builder.build_graph_for_document(
-                project_number=project_number,
-                document_id=document_id,
-                document_content=markdown_content,
-                filename=filename,
-                llm_mode=llm_mode
-            )
-            entities_extracted = graph_result.get("entities_extracted", {})
+            except Exception as e:
+                logger.error(f"❌ [Task {task_id}] SpecificationFlow error: {e}", exc_info=True)
+                # Fallback to GraphBuilder if SpecificationFlow fails
+                logger.info(f"🔄 [Task {task_id}] Falling back to GraphBuilder...")
+                graph_builder = GraphBuilder(
+                    llm_service=llm_service,
+                    neo4j_driver=neo4j_driver
+                )
+                graph_result = graph_builder.build_graph_for_document(
+                    project_number=project_number,
+                    document_id=document_id,
+                    document_content=markdown_content,
+                    filename=filename,
+                    llm_mode=llm_mode
+                )
+                entities_extracted = graph_result.get("entities_extracted", {})
+        else:
+            logger.info(f"[Task {task_id}] Neo4j not available, skipping graph-based spec extraction")
 
         # Update progress
         redis_service.set(
@@ -429,6 +433,9 @@ def initialize_project_guides(
         Initialization statistics
     """
     try:
+        if not neo4j_driver:
+            return {"success": False, "error": "Neo4j not available"}
+
         logger.info(f"📚 Initializing extraction guides for project {project_number}")
 
         graph_init = ProjectGraphInitializer(neo4j_driver)

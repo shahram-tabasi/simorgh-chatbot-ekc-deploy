@@ -707,13 +707,16 @@ async def create_project(
                 # Step 1: Initialize graph structure (categories, document types, etc.)
                 update_progress(1, "Creating project graph structure...", 10)
                 try:
-                    from services.project_graph_init import ProjectGraphInitializer
-                    graph_init = ProjectGraphInitializer(neo4j.driver)
-                    init_result = graph_init.initialize_project_structure(
-                        project_oenum=project.project_number,
-                        project_name=project.project_name
-                    )
-                    logger.info(f"✅ Graph structure initialized: {init_result}")
+                    if neo4j and neo4j.driver:
+                        from services.project_graph_init import ProjectGraphInitializer
+                        graph_init = ProjectGraphInitializer(neo4j.driver)
+                        init_result = graph_init.initialize_project_structure(
+                            project_oenum=project.project_number,
+                            project_name=project.project_name
+                        )
+                        logger.info(f"✅ Graph structure initialized: {init_result}")
+                    else:
+                        logger.info("Neo4j not available, skipping graph structure initialization")
                 except Exception as e:
                     logger.warning(f"Graph init warning: {e}")
 
@@ -807,6 +810,9 @@ async def initialize_project_structure(
     that were created before this functionality was added.
     """
     try:
+        if not neo4j or not neo4j.driver:
+            raise HTTPException(status_code=503, detail="Neo4j service not available")
+
         # Verify project exists
         project = neo4j.get_project(project_number)
         if not project:
@@ -1452,73 +1458,77 @@ async def delete_all_project_chats(
             logger.info(f"ℹ️ No chats found in Redis for project {project_number}")
 
         # STEP 2: Delete from Neo4j (entire project subgraph)
+        deleted_neo4j_nodes = 0
         logger.info(f"🗑️ Step 2: Deleting Neo4j project subgraph for project {project_number}, owner: {current_user}")
 
-        with neo4j.driver.session() as session:
-            # Verify project ownership before deletion (SECURITY CHECK)
-            verify_query = """
-            MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
-            RETURN p.project_number as project_number, p.project_name as project_name
-            """
+        if neo4j and neo4j.driver:
+            with neo4j.driver.session() as session:
+                # Verify project ownership before deletion (SECURITY CHECK)
+                verify_query = """
+                MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
+                RETURN p.project_number as project_number, p.project_name as project_name
+                """
 
-            verify_result = session.run(verify_query,
-                project_number=project_number,
-                owner_id=current_user
-            )
-
-            project_record = verify_result.single()
-
-            if not project_record:
-                # Project doesn't exist or user doesn't own it
-                logger.warning(
-                    f"⚠️ Project {project_number} not found in Neo4j or not owned by user {current_user}. "
-                    f"Only Redis chats were deleted."
+                verify_result = session.run(verify_query,
+                    project_number=project_number,
+                    owner_id=current_user
                 )
 
-                return {
-                    "status": "success",
-                    "project_number": project_number,
-                    "deleted_chat_count": deleted_chat_count,
-                    "total_chat_count": len(project_chat_ids),
-                    "failed_chat_count": len(failed_chats),
-                    "deleted_neo4j_nodes": 0,
-                    "neo4j_deleted": False,
-                    "message": f"Deleted {deleted_chat_count} chat(s). Project not found in Neo4j or not owned by user."
-                }
+                project_record = verify_result.single()
 
-            project_name = project_record["project_name"]
-            logger.info(f"✅ Verified ownership of project: {project_name}")
+                if not project_record:
+                    # Project doesn't exist or user doesn't own it
+                    logger.warning(
+                        f"⚠️ Project {project_number} not found in Neo4j or not owned by user {current_user}. "
+                        f"Only Redis chats were deleted."
+                    )
 
-            # Delete entire project subgraph (all nodes and relationships)
-            delete_query = """
-            MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
+                    return {
+                        "status": "success",
+                        "project_number": project_number,
+                        "deleted_chat_count": deleted_chat_count,
+                        "total_chat_count": len(project_chat_ids),
+                        "failed_chat_count": len(failed_chats),
+                        "deleted_neo4j_nodes": 0,
+                        "neo4j_deleted": False,
+                        "message": f"Deleted {deleted_chat_count} chat(s). Project not found in Neo4j or not owned by user."
+                    }
 
-            // Match all connected nodes recursively
-            OPTIONAL MATCH (p)-[*0..10]-(connected)
+                project_name = project_record["project_name"]
+                logger.info(f"✅ Verified ownership of project: {project_name}")
 
-            // Count nodes before deletion
-            WITH p, collect(DISTINCT connected) as nodes
+                # Delete entire project subgraph (all nodes and relationships)
+                delete_query = """
+                MATCH (p:Project {project_number: $project_number, owner_id: $owner_id})
 
-            // Delete everything (DETACH DELETE removes relationships automatically)
-            WITH p, nodes, size(nodes) as node_count
-            FOREACH (n in nodes | DETACH DELETE n)
-            DETACH DELETE p
+                // Match all connected nodes recursively
+                OPTIONAL MATCH (p)-[*0..10]-(connected)
 
-            RETURN node_count
-            """
+                // Count nodes before deletion
+                WITH p, collect(DISTINCT connected) as nodes
 
-            delete_result = session.run(delete_query,
-                project_number=project_number,
-                owner_id=current_user
-            )
+                // Delete everything (DETACH DELETE removes relationships automatically)
+                WITH p, nodes, size(nodes) as node_count
+                FOREACH (n in nodes | DETACH DELETE n)
+                DETACH DELETE p
 
-            delete_record = delete_result.single()
-            deleted_neo4j_nodes = delete_record["node_count"] if delete_record else 0
+                RETURN node_count
+                """
 
-            logger.info(
-                f"✅ Deleted project '{project_name}' from Neo4j: "
-                f"{deleted_neo4j_nodes} nodes removed"
-            )
+                delete_result = session.run(delete_query,
+                    project_number=project_number,
+                    owner_id=current_user
+                )
+
+                delete_record = delete_result.single()
+                deleted_neo4j_nodes = delete_record["node_count"] if delete_record else 0
+
+                logger.info(
+                    f"✅ Deleted project '{project_name}' from Neo4j: "
+                    f"{deleted_neo4j_nodes} nodes removed"
+                )
+        else:
+            logger.info("Neo4j not available, skipping graph deletion")
 
         # STEP 3: Delete per-project databases (PostgreSQL, Qdrant, Neo4j subgraph)
         logger.info(f"🗑️ Step 3: Deleting per-project databases for project {project_number}")
@@ -2064,8 +2074,9 @@ async def send_chat_message(
             from services.specification_agent import SpecificationAgent
             from cocoindex_flows import CoCoIndexAdapter
 
-            # Create CoCoIndex adapter from Neo4j driver
-            cocoindex_adapter = CoCoIndexAdapter(driver=neo4j.driver)
+            # Create CoCoIndex adapter from Neo4j driver (Neo4j is optional)
+            neo4j_driver = neo4j.driver if neo4j else None
+            cocoindex_adapter = CoCoIndexAdapter(driver=neo4j_driver) if neo4j_driver else None
 
             agent = SpecificationAgent(
                 redis_service=redis,
@@ -2142,8 +2153,9 @@ async def send_chat_message(
         from services.specification_agent import SpecificationAgent
         from cocoindex_flows import CoCoIndexAdapter
 
-        # Create CoCoIndex adapter from Neo4j driver
-        cocoindex_adapter = CoCoIndexAdapter(driver=neo4j.driver)
+        # Create CoCoIndex adapter from Neo4j driver (Neo4j is optional)
+        neo4j_driver = neo4j.driver if neo4j else None
+        cocoindex_adapter = CoCoIndexAdapter(driver=neo4j_driver) if neo4j_driver else None
 
         agent = SpecificationAgent(
             redis_service=redis,
@@ -2195,21 +2207,26 @@ async def send_chat_message(
                             content=markdown_content
                         )
 
-                        graph_init = ProjectGraphInitializer(neo4j.driver)
-                        doc_result = graph_init.add_document_to_structure(
-                            project_oenum=project_number,
-                            category=category,
-                            doc_type=doc_type,
-                            document_id=doc_id,
-                            document_metadata={
-                                'filename': _file.filename,
-                                'doc_type': doc_type,
-                                'category': category,
-                                'confidence': confidence,
-                                'uploaded_by': _user_id,
-                                'chat_id': _chat_id
-                            }
-                        )
+                        # Add to project graph if Neo4j is available
+                        doc_result = None
+                        if neo4j and neo4j.driver:
+                            graph_init = ProjectGraphInitializer(neo4j.driver)
+                            doc_result = graph_init.add_document_to_structure(
+                                project_oenum=project_number,
+                                category=category,
+                                doc_type=doc_type,
+                                document_id=doc_id,
+                                document_metadata={
+                                    'filename': _file.filename,
+                                    'doc_type': doc_type,
+                                    'category': category,
+                                    'confidence': confidence,
+                                    'uploaded_by': _user_id,
+                                    'chat_id': _chat_id
+                                }
+                            )
+                        else:
+                            logger.info("Neo4j not available, skipping graph document structure")
 
                         # Use returned document_id (may be existing if duplicate)
                         actual_doc_id = doc_result.get('document_id', doc_id) if doc_result else doc_id
@@ -2330,23 +2347,27 @@ async def send_chat_message(
 
                         logger.info(f"📋 Document classified: {category}/{doc_type} ({confidence:.2f})")
 
-                        # Add to project graph (with duplicate detection)
-                        graph_init = ProjectGraphInitializer(neo4j.driver)
+                        # Add to project graph (with duplicate detection) if Neo4j is available
                         new_doc_id = str(uuid.uuid4())
-                        doc_result = graph_init.add_document_to_structure(
-                            project_oenum=project_number,
-                            category=category,
-                            doc_type=doc_type,
-                            document_id=new_doc_id,
-                            document_metadata={
-                                'filename': _file.filename,
-                                'doc_type': doc_type,
-                                'category': category,
-                                'confidence': confidence,
-                                'uploaded_by': _user_id,
-                                'chat_id': _chat_id
-                            }
-                        )
+                        doc_result = None
+                        if neo4j and neo4j.driver:
+                            graph_init = ProjectGraphInitializer(neo4j.driver)
+                            doc_result = graph_init.add_document_to_structure(
+                                project_oenum=project_number,
+                                category=category,
+                                doc_type=doc_type,
+                                document_id=new_doc_id,
+                                document_metadata={
+                                    'filename': _file.filename,
+                                    'doc_type': doc_type,
+                                    'category': category,
+                                    'confidence': confidence,
+                                    'uploaded_by': _user_id,
+                                    'chat_id': _chat_id
+                                }
+                            )
+                        else:
+                            logger.info("Neo4j not available, skipping graph document structure")
 
                         # Use returned document_id (may be existing if duplicate)
                         doc_id = doc_result.get('document_id', new_doc_id) if doc_result else new_doc_id
@@ -2435,7 +2456,7 @@ async def send_chat_message(
                                 filename=_file.filename,
                                 llm_mode=_llm_mode or "online",
                                 llm_service=llm,
-                                neo4j_driver=neo4j.driver,
+                                neo4j_driver=neo4j.driver if neo4j else None,
                                 redis_service=redis
                             )
 
@@ -3432,6 +3453,9 @@ async def get_spec_structure(
     Returns the complete spec structure with all categories and fields
     """
     try:
+        if not neo4j or not neo4j.driver:
+            raise HTTPException(status_code=503, detail="Neo4j service not available")
+
         from services.project_graph_init import ProjectGraphInitializer
 
         graph_init = ProjectGraphInitializer(neo4j.driver)
@@ -3476,6 +3500,9 @@ async def update_spec_structure(
     Allows users to review and correct extracted specifications
     """
     try:
+        if not neo4j or not neo4j.driver:
+            raise HTTPException(status_code=503, detail="Neo4j service not available")
+
         from services.project_graph_init import ProjectGraphInitializer
 
         graph_init = ProjectGraphInitializer(neo4j.driver)
@@ -3543,6 +3570,9 @@ async def get_project_specs_summary(
     Useful for debugging extraction issues.
     """
     try:
+        if not neo4j or not neo4j.driver:
+            raise HTTPException(status_code=503, detail="Neo4j service not available")
+
         from services.graph_rag_service import GraphRAGService
 
         graph_rag = GraphRAGService(neo4j.driver)

@@ -143,7 +143,7 @@ def _register_health_checks(core: ChatbotCore):
 
     # Neo4j health check
     def check_neo4j():
-        if core._neo4j_service:
+        if core._neo4j_service and getattr(core._neo4j_service, 'driver', None):
             try:
                 core._neo4j_service.driver.verify_connectivity()
                 return {"status": "healthy", "type": "neo4j"}
