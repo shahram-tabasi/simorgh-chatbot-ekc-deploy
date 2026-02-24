@@ -16,6 +16,7 @@ Workflow:
 import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
@@ -83,7 +84,10 @@ class ProjectManagerAgent:
     async def connect_mcp(self):
         """Connect to all MCP servers (call after event loop is running)."""
         if self.mcp_manager:
-            await self.mcp_manager.connect_all()
+            try:
+                await self.mcp_manager.connect_all()
+            except (Exception, asyncio.CancelledError) as e:
+                logger.warning(f"MCP connect_all failed (non-fatal): {e}")
             logger.info(f"MCP: {self.mcp_manager.get_server_status()}")
 
     def register_progress_callback(self, project_id: str, callback: Callable):
@@ -477,6 +481,10 @@ class ProjectManagerAgent:
             return await self._execute_file_export_task(project_id, task, tool_input)
         elif tool == "eplan_draw":
             return await self._execute_eplan_draw_task(project_id, task, tool_input)
+        elif tool == "sld_analyze":
+            return await self._execute_sld_analyze_task(project_id, task, tool_input)
+        elif tool == "techserver_sync":
+            return await self._execute_techserver_sync_task(project_id, task, tool_input)
         else:
             # Default: use LLM
             return await self._execute_llm_task(project_id, task, tool_input)
@@ -951,6 +959,56 @@ class ProjectManagerAgent:
             logger.error(f"EPLAN draw failed: {e}")
             return {"output": f"EPLAN draw error: {e}", "metadata": {"error": True}}
 
+    async def _execute_sld_analyze_task(self, project_id: str, task: Dict,
+                                        tool_input: Dict) -> Dict:
+        """Analyze a Single Line Diagram using GPT-4o vision."""
+        document_id = tool_input.get("document_id")
+        filename = tool_input.get("filename", "sld.png")
+
+        if not document_id:
+            return {"output": "No document_id provided for SLD analysis", "metadata": {"error": True}}
+
+        # Read the document from shell workspace
+        try:
+            if self.shell:
+                file_data = await self.shell.file_read(project_id, f"documents/{filename}")
+                if not file_data:
+                    return {"output": f"Document {filename} not found in workspace", "metadata": {"error": True}}
+
+                # Determine MIME type
+                ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+                mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                            "pdf": "application/pdf", "bmp": "image/bmp", "tiff": "image/tiff"}
+                mime_type = mime_map.get(ext, "image/png")
+
+                result = await self.analyze_sld(
+                    project_id=project_id,
+                    image_bytes=file_data.encode("latin-1") if isinstance(file_data, str) else file_data,
+                    mime_type=mime_type,
+                    filename=filename,
+                )
+
+                if result.get("success"):
+                    output = json.dumps(result, indent=2, default=str)
+                    return {"output": output, "metadata": {"analysis_id": result.get("analysis_id")}}
+                else:
+                    return {"output": f"SLD analysis failed: {result.get('error')}", "metadata": {"error": True}}
+        except Exception as e:
+            return {"output": f"SLD analysis error: {e}", "metadata": {"error": True}}
+
+        return {"output": "SLD analysis not available", "metadata": {"error": True}}
+
+    async def _execute_techserver_sync_task(self, project_id: str, task: Dict,
+                                             tool_input: Dict) -> Dict:
+        """Sync files from techserver for a project."""
+        oenum = tool_input.get("oenum", "")
+        if not oenum:
+            return {"output": "No OENUM provided for techserver sync", "metadata": {"error": True}}
+
+        result = await self._copy_from_techserver(project_id, oenum)
+        output = json.dumps(result, indent=2, default=str)
+        return {"output": output, "metadata": result}
+
     async def _auto_commit(self, project_id: str, message: str) -> Optional[Dict]:
         """Auto-commit changes after shell operations."""
         if not self.shell:
@@ -977,14 +1035,42 @@ class ProjectManagerAgent:
     # =========================================================================
 
     async def initialize_project(self, project_id: str, name: str,
-                                 owner_id: str, tpms_oenum: str = None) -> Dict:
-        """Initialize all systems for a new project."""
+                                 owner_id: str, tpms_oenum: str = None,
+                                 is_legacy: bool = False) -> Dict:
+        """
+        Initialize all systems for a new project.
+
+        For legacy users (organize members):
+          - Fetches TPMS data and stores in tpms_data/ directory
+          - Connects to \\\\techserver, copies project files to documents/
+          - Initializes git for version tracking
+
+        For modern users:
+          - Creates minimal workspace with documents/ directory
+          - No TPMS integration
+        """
         results = {}
 
-        # 1. Init Neo4j graph (full EKC template only for legacy/TPMS projects)
-        results["neo4j"] = await self.memory.init_project_graph(
-            project_id, name, owner_id, tpms_oenum=tpms_oenum
-        )
+        # 1. Init git workspace + project directory structure
+        try:
+            if self.shell:
+                git_result = await self.shell.git_init(project_id)
+                results["git"] = git_result
+
+                # Create project directory structure
+                await self.shell.exec_command(
+                    project_id=project_id,
+                    command="mkdir -p tpms_data documents documents/metadata",
+                    timeout=10,
+                )
+                results["directories"] = "created"
+
+                await self.memory.update_project(
+                    project_id, git_repo_initialized=True,
+                    git_repo_path=f"/workspace/{project_id}"
+                )
+        except Exception as e:
+            results["git"] = {"status": "error", "error": str(e)}
 
         # 2. Init Qdrant collection for project semantic search
         try:
@@ -996,30 +1082,292 @@ class ProjectManagerAgent:
         except Exception as e:
             results["qdrant"] = {"status": "error", "error": str(e)}
 
-        # 3. Init git workspace
+        # 3. For legacy users: fetch TPMS data and store in project workspace
+        if tpms_oenum and is_legacy:
+            tpms_result = await self._fetch_and_store_tpms(project_id, tpms_oenum)
+            results["tpms"] = tpms_result
+
+            # 4. For legacy users: copy files from techserver
+            techserver_result = await self._copy_from_techserver(project_id, tpms_oenum)
+            results["techserver"] = techserver_result
+
+        # 5. Commit initial project structure to git
         try:
             if self.shell:
-                git_result = await self.shell.git_init(project_id)
-                results["git"] = git_result
-                # Update project record
-                await self.memory.update_project(
-                    project_id, git_repo_initialized=True,
-                    git_repo_path=f"/workspace/{project_id}"
+                # Write a project manifest
+                manifest = json.dumps({
+                    "project_id": project_id,
+                    "name": name,
+                    "owner_id": owner_id,
+                    "tpms_oenum": tpms_oenum,
+                    "is_legacy": is_legacy,
+                    "created_at": datetime.utcnow().isoformat(),
+                }, indent=2)
+                await self.shell.file_write(
+                    project_id=project_id,
+                    path="project.json",
+                    content=manifest,
                 )
+                await self.shell.git_commit(project_id, "Initialize project structure")
         except Exception as e:
-            results["git"] = {"status": "error", "error": str(e)}
+            logger.warning(f"Initial git commit failed: {e}")
 
-        # 4. Set initial agent state
+        # 6. Set initial agent state
         await self.memory.set_agent_state(project_id, {
             "status": "idle",
             "project_name": name,
             "initialized_at": datetime.utcnow().isoformat(),
             "pending_tasks": 0,
+            "is_legacy": is_legacy,
+            "tpms_oenum": tpms_oenum,
         })
 
         results["agent_state"] = "initialized"
         logger.info(f"Project {project_id} ({name}) initialized: {results}")
         return results
+
+    async def _fetch_and_store_tpms(self, project_id: str, oenum: str) -> Dict:
+        """Fetch TPMS data via MCP and store in project's tpms_data/ directory."""
+        try:
+            tpms_data = ""
+            tpms_text = ""
+
+            # Try MCP first for structured data
+            if (self.mcp_manager and self.mcp_manager.is_connected
+                    and self.mcp_manager.has_tool("tpms_fetch")):
+                result = await self.mcp_manager.call_tool("tpms_fetch", {"oenum": oenum})
+                tpms_data = result.get("output", "")
+            else:
+                client = get_tpms_fetcher_client()
+                fetch_result = await client.fetch_project(oenum)
+                tpms_data = json.dumps(fetch_result, indent=2, default=str)
+
+            # Get readable text summary
+            if (self.mcp_manager and self.mcp_manager.is_connected
+                    and self.mcp_manager.has_tool("tpms_get_text")):
+                text_result = await self.mcp_manager.call_tool("tpms_get_text", {"oenum": oenum})
+                tpms_text = text_result.get("output", "")
+            else:
+                client = get_tpms_fetcher_client()
+                tpms_text = await client.get_project_text(oenum)
+
+            # Store in project workspace
+            if self.shell and tpms_data:
+                await self.shell.file_write(
+                    project_id=project_id,
+                    path="tpms_data/project_data.json",
+                    content=tpms_data[:50000],
+                )
+            if self.shell and tpms_text:
+                await self.shell.file_write(
+                    project_id=project_id,
+                    path="tpms_data/project_summary.txt",
+                    content=tpms_text[:50000],
+                )
+
+            # Also index TPMS text in Qdrant for semantic search
+            if tpms_text and self.memory.qdrant:
+                try:
+                    chunks = []
+                    text = tpms_text.strip()
+                    i, idx = 0, 0
+                    while i < len(text):
+                        end = min(i + 500, len(text))
+                        chunk = text[i:end].strip()
+                        if chunk:
+                            chunks.append({
+                                "text": chunk,
+                                "section_title": f"TPMS Data - {oenum}",
+                                "chunk_index": idx,
+                                "metadata": {"source": "tpms", "oenum": oenum},
+                            })
+                            idx += 1
+                        i += 450
+                    if chunks:
+                        self.memory.qdrant.add_document_chunks(
+                            user_id="project",
+                            document_id=f"tpms-{oenum}",
+                            chunks=chunks,
+                            project_oenum=project_id,
+                        )
+                except Exception as e:
+                    logger.warning(f"TPMS indexing in Qdrant failed: {e}")
+
+            return {"status": "fetched", "oenum": oenum, "data_length": len(tpms_data)}
+
+        except Exception as e:
+            logger.error(f"TPMS fetch failed for {oenum}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def _copy_from_techserver(self, project_id: str, oenum: str) -> Dict:
+        """
+        Connect to \\\\techserver and copy project files to workspace.
+        Like Claude Code connecting to a repo via MCP - for legacy users only.
+
+        The techserver is a Windows SMB share mounted at /mnt/techserver.
+        Project directories contain the OENUM-derived project number (e.g., OE12065).
+        """
+        if not self.shell:
+            return {"status": "skip", "reason": "shell_unavailable"}
+
+        # Derive possible project number patterns from OENUM
+        # e.g., "04A12065" -> search for "OE12065", "12065", "04A12065"
+        search_patterns = [oenum]
+        digits = ''.join(c for c in oenum if c.isdigit())
+        if digits:
+            search_patterns.append(f"OE{digits}")
+            search_patterns.append(digits)
+
+        techserver_mount = os.getenv("TECHSERVER_MOUNT", "/mnt/techserver")
+
+        try:
+            # Check if techserver is mounted
+            check = await self.shell.exec_command(
+                project_id=project_id,
+                command=f"ls {techserver_mount} 2>/dev/null && echo 'MOUNTED' || echo 'NOT_MOUNTED'",
+                timeout=10,
+            )
+            if "NOT_MOUNTED" in check.stdout:
+                return {"status": "skip", "reason": "techserver_not_mounted"}
+
+            # Search for project directory
+            for pattern in search_patterns:
+                find_cmd = (
+                    f"find {techserver_mount} -maxdepth 3 -type d "
+                    f"-iname '*{pattern}*' 2>/dev/null | head -1"
+                )
+                find_result = await self.shell.exec_command(
+                    project_id=project_id, command=find_cmd, timeout=30,
+                )
+                source_dir = find_result.stdout.strip()
+                if source_dir:
+                    break
+            else:
+                return {"status": "not_found", "patterns": search_patterns}
+
+            # Copy files from techserver to project documents/
+            copy_cmd = (
+                f"cp -r {source_dir}/* documents/ 2>/dev/null; "
+                f"find documents/ -type f | wc -l"
+            )
+            copy_result = await self.shell.exec_command(
+                project_id=project_id, command=copy_cmd, timeout=120,
+            )
+            file_count = copy_result.stdout.strip()
+
+            # Create metadata for copied files
+            meta_cmd = (
+                f"find documents/ -type f -exec stat --format='%n|%s|%Y' {{}} \\; 2>/dev/null"
+            )
+            meta_result = await self.shell.exec_command(
+                project_id=project_id, command=meta_cmd, timeout=30,
+            )
+            files_meta = []
+            for line in meta_result.stdout.strip().split("\n"):
+                if "|" in line:
+                    parts = line.split("|")
+                    if len(parts) >= 3:
+                        files_meta.append({
+                            "path": parts[0],
+                            "size_bytes": int(parts[1]) if parts[1].isdigit() else 0,
+                            "modified_ts": parts[2],
+                        })
+
+            # Store metadata
+            if files_meta:
+                meta_json = json.dumps(files_meta, indent=2)
+                await self.shell.file_write(
+                    project_id=project_id,
+                    path="documents/metadata/file_manifest.json",
+                    content=meta_json,
+                )
+
+            return {
+                "status": "copied",
+                "source": source_dir,
+                "file_count": file_count,
+                "files": len(files_meta),
+            }
+
+        except Exception as e:
+            logger.error(f"Techserver copy failed for {oenum}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def analyze_sld(
+        self, project_id: str, image_bytes: bytes,
+        mime_type: str = "image/png", filename: str = "sld.png",
+        additional_context: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Analyze a Single Line Diagram image/PDF using GPT-4o vision.
+        Stores results in project workspace and indexes in Qdrant.
+        """
+        from services.sld_processor import get_sld_processor
+        processor = get_sld_processor()
+
+        # Determine if PDF or image
+        if mime_type == "application/pdf" or filename.lower().endswith(".pdf"):
+            result = await processor.analyze_multi_page_pdf(
+                pdf_bytes=image_bytes,
+                additional_context=additional_context,
+            )
+        else:
+            result = await processor.analyze_image(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                additional_context=additional_context,
+            )
+
+        if result.get("success"):
+            # Store analysis in project workspace
+            try:
+                if self.shell:
+                    analysis_json = json.dumps(result, indent=2, default=str)
+                    safe_name = filename.rsplit(".", 1)[0] if "." in filename else filename
+                    await self.shell.file_write(
+                        project_id=project_id,
+                        path=f"documents/{safe_name}_sld_analysis.json",
+                        content=analysis_json,
+                    )
+
+                    # Store metadata
+                    meta = {
+                        "filename": filename,
+                        "type": "sld_analysis",
+                        "analyzed_at": datetime.utcnow().isoformat(),
+                        "model": result.get("model", "gpt-4o"),
+                        "confidence": result.get("confidence", 0),
+                    }
+                    await self.shell.file_write(
+                        project_id=project_id,
+                        path=f"documents/metadata/{safe_name}_meta.json",
+                        content=json.dumps(meta, indent=2),
+                    )
+
+                    await self.shell.git_commit(
+                        project_id, f"Add SLD analysis: {filename}"
+                    )
+
+                # Index in Qdrant for semantic search
+                if self.memory.qdrant:
+                    analysis_text = json.dumps(result, indent=2, default=str)
+                    chunks = [{
+                        "text": analysis_text[:2000],
+                        "section_title": f"SLD Analysis: {filename}",
+                        "chunk_index": 0,
+                        "metadata": {"source": "sld_analysis", "filename": filename},
+                    }]
+                    self.memory.qdrant.add_document_chunks(
+                        user_id="project",
+                        document_id=f"sld-{uuid.uuid4()}",
+                        chunks=chunks,
+                        project_oenum=project_id,
+                    )
+
+            except Exception as e:
+                logger.warning(f"Failed to store SLD analysis: {e}")
+
+        return result
 
     async def get_status(self, project_id: str) -> AgentState:
         """Get current agent status for a project."""
