@@ -105,9 +105,11 @@ class MessagePersistenceService:
         Args:
             database_url: PostgreSQL connection URL
         """
+        # Default to postgres_auth (the primary PostgreSQL instance)
+        # cocoindex_db was removed — no longer available
         self.database_url = database_url or os.getenv(
             "MESSAGE_DATABASE_URL",
-            os.getenv("COCOINDEX_DATABASE_URL", "postgresql://cocoindex:cocoindex_2024@cocoindex_db:5432/cocoindex")
+            os.getenv("POSTGRES_AUTH_URL", "postgresql://simorgh:simorgh_secure_2024@postgres_auth:5432/simorgh_auth")
         )
 
         self._pool = None
