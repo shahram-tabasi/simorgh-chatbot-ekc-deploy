@@ -99,10 +99,10 @@ class ChatbotCore:
         # Initialize registry
         self.registry = get_extension_registry()
 
-        # Initialize CocoIndex dataflow manager
+        # Initialize CocoIndex dataflow manager (Neo4j optional)
         self.dataflow = get_dataflow_manager(
             qdrant_service=qdrant_service,
-            neo4j_service=neo4j_service,
+            neo4j_service=None,  # Neo4j no longer required
             llm_service=llm_service,
         )
 
@@ -124,11 +124,11 @@ class ChatbotCore:
         # Initialize tools manager
         self.tools = get_tools_manager()
 
-        # Initialize document ingestion
+        # Initialize document ingestion (Neo4j optional)
         self.ingestion = get_ingestion_pipeline(
             cocoindex_manager=self.dataflow,
             qdrant_service=qdrant_service,
-            neo4j_service=neo4j_service,
+            neo4j_service=None,  # Neo4j no longer required
             llm_service=llm_service,
             doc_processor_client=doc_processor_client,
         )

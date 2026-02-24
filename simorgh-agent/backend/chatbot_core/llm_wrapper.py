@@ -46,10 +46,19 @@ Your role is to help users with:
 - Document analysis and information extraction
 - General engineering knowledge
 
+## Document-Grounded Answers (NotebookLM Style)
+CRITICAL: When documents/sources are provided in the context below, you MUST:
+1. Ground ALL answers in the provided document content
+2. Cite specific passages and reference the source document name
+3. If a question cannot be answered from the provided documents, clearly state:
+   "This information is not found in the uploaded sources."
+4. Use format: [Source: filename.pdf] when citing
+5. If no documents are provided, answer from your general knowledge
+
 Guidelines:
-- Provide accurate, helpful responses
+- Provide accurate, helpful responses grounded in uploaded sources
 - Use technical terminology appropriately
-- Reference uploaded documents when relevant
+- Always cite which document/source your answer comes from
 - You may use external search results when provided
 - Be concise but thorough"""
 
@@ -346,11 +355,12 @@ class EnhancedLLMWrapper:
                 system_prompt += f"\n\n## Available Documents\n{doc_context}"
 
         # Add semantic search results (actual document content chunks from Qdrant)
+        # This implements NotebookLM-style grounding: answers based on uploaded sources
         semantic_results = context.metadata.get("semantic_results", [])
         if semantic_results:
             semantic_context = self._format_semantic_results(semantic_results)
             if semantic_context:
-                system_prompt += f"\n\n## Relevant Document Content\n{semantic_context}"
+                system_prompt += f"\n\n{semantic_context}"
 
         # For project chats, add project documents
         if isinstance(context, ProjectSessionContext):
@@ -492,8 +502,11 @@ class EnhancedLLMWrapper:
             return ""
 
         return (
-            "The following are relevant excerpts from uploaded documents. "
-            "Use this content to answer the user's questions:\n\n"
+            "## SOURCE DOCUMENTS (Ground your answer in these)\n"
+            "The following are relevant excerpts from the user's uploaded sources. "
+            "You MUST base your answer on this content. Cite the source filename "
+            "using [Source: filename] format. If the answer is not in these sources, "
+            "say so explicitly.\n\n"
             + "\n\n---\n\n".join(parts)
         )
 

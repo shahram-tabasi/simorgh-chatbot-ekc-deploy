@@ -65,10 +65,18 @@ async def create_project(
     current_user: str = Depends(get_current_user),
 ):
     """
-    Create a new project.
+    Unified project creation endpoint.
 
-    Modern users: provide a name (no TPMS link).
-    Legacy users: can optionally provide tpms_oenum.
+    Legacy users (organize members):
+      - Must provide tpms_oenum for TPMS authentication
+      - TPMS data is fetched and stored in project workspace
+      - Files are copied from \\\\techserver
+      - Can choose online or offline LLM
+
+    Modern users:
+      - Just provide a project name
+      - No TPMS integration
+      - Uses online AI only
     """
     memory = get_project_memory_service()
     agent = get_project_agent()
@@ -82,6 +90,18 @@ async def create_project(
             detail="Modern users cannot link TPMS projects. Create a project by name."
         )
 
+    # Legacy users must provide TPMS OENUM
+    if is_legacy and not data.tpms_oenum:
+        raise HTTPException(
+            status_code=400,
+            detail="Legacy users must provide a TPMS OENUM to create a project."
+        )
+
+    # Enforce LLM mode: modern users always use online AI
+    agent_model = data.agent_model or "gpt-4o"
+    if not is_legacy:
+        agent_model = "gpt-4o"  # Modern users: online only
+
     try:
         # Create in PostgreSQL
         project = await memory.create_project(
@@ -89,8 +109,8 @@ async def create_project(
             name=data.name,
             description=data.description,
             tpms_oenum=data.tpms_oenum if is_legacy else None,
-            agent_model=data.agent_model or "gpt-4o",
-            metadata=data.metadata,
+            agent_model=agent_model,
+            metadata={**(data.metadata or {}), "is_legacy": is_legacy},
         )
 
         if not project:
@@ -98,11 +118,11 @@ async def create_project(
 
         project_id = str(project["id"])
 
-        # Initialize all systems (Neo4j graph, Qdrant, git workspace, agent state)
-        # Pass tpms_oenum so modern users get minimal graph (no EKC template)
+        # Initialize project: git, directories, TPMS fetch (legacy), techserver copy (legacy)
         init_result = await agent.initialize_project(
             project_id, data.name, current_user,
             tpms_oenum=data.tpms_oenum if is_legacy else None,
+            is_legacy=is_legacy,
         )
         logger.info(f"Project initialized: {project_id}, results: {init_result}")
 
@@ -960,6 +980,123 @@ async def upload_document(
         "chunks_indexed": chunks_stored,
         "processing": processing_results,
     }
+
+
+# =============================================================================
+# SLD (SINGLE LINE DIAGRAM) ANALYSIS
+# =============================================================================
+
+@router.post("/projects/{project_id}/sld/analyze")
+async def analyze_sld(
+    project_id: str,
+    file: UploadFile = File(...),
+    context: str = Form(""),
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Analyze a Single Line Diagram (SLD) image or PDF using GPT-4o vision.
+
+    Returns structured JSON with equipment identification:
+    - Circuit breakers, feeders, transformers, busbars
+    - Ratings, specifications, protection schemes
+    - Engineering analysis and observations
+    """
+    memory = get_project_memory_service()
+    agent = get_project_agent()
+
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Read file bytes
+    image_bytes = await file.read()
+    mime_type = file.content_type or "image/png"
+
+    try:
+        result = await agent.analyze_sld(
+            project_id=project_id,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            filename=file.filename,
+            additional_context=context,
+        )
+
+        # Store as a message in project history
+        if result.get("success"):
+            await memory.store_message(
+                project_id=project_id,
+                role="assistant",
+                content=(
+                    f"SLD Analysis for **{file.filename}** completed.\n\n"
+                    f"Found: {len(result.get('circuit_breakers', []))} CBs, "
+                    f"{len(result.get('feeders', []))} feeders, "
+                    f"{len(result.get('transformers', []))} transformers.\n\n"
+                    f"Confidence: {result.get('confidence', 'N/A')}"
+                ),
+                channel="document",
+            )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"SLD analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"SLD analysis failed: {str(e)}")
+
+
+# =============================================================================
+# LLM MODE MANAGEMENT
+# =============================================================================
+
+@router.get("/projects/{project_id}/llm/mode")
+async def get_llm_mode(
+    project_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Get the LLM mode for a project. Modern users always get 'online'."""
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    is_legacy = _is_legacy_user(current_user)
+    if not is_legacy:
+        return {"mode": "online", "locked": True, "reason": "Modern users use online AI only"}
+
+    return {
+        "mode": project.get("agent_model", "gpt-4o"),
+        "locked": False,
+        "options": ["gpt-4o", "local"],
+    }
+
+
+@router.patch("/projects/{project_id}/llm/mode")
+async def set_llm_mode(
+    project_id: str,
+    mode: str = Form(...),
+    current_user: str = Depends(get_current_user),
+):
+    """Set the LLM mode for a project. Only legacy users can switch."""
+    is_legacy = _is_legacy_user(current_user)
+    if not is_legacy:
+        raise HTTPException(
+            status_code=403,
+            detail="Modern users cannot change LLM mode. Online AI is always used."
+        )
+
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if mode not in ("gpt-4o", "local"):
+        raise HTTPException(status_code=400, detail="Mode must be 'gpt-4o' or 'local'")
+
+    await memory.update_project(project_id, agent_model=mode)
+    return {"status": "updated", "mode": mode}
 
 
 # =============================================================================

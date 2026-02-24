@@ -295,19 +295,31 @@ export function useProjects(userId?: string) {
     await poll();
   }, []);
 
-  const createProject = async (oenum: string, name: string, firstPageTitle: string): Promise<boolean> => {
+  /**
+   * Unified project creation via the agent API.
+   * Legacy users: provide tpms_oenum for TPMS-authenticated project.
+   * Modern users: provide name only.
+   */
+  const createProject = async (
+    name: string,
+    options?: { tpmsOenum?: string; description?: string; firstPageTitle?: string }
+  ): Promise<boolean> => {
     if (!userId) {
       console.error('Cannot create project: userId missing');
       return false;
     }
 
+    const tpmsOenum = options?.tpmsOenum;
+    const description = options?.description;
+    const firstPageTitle = options?.firstPageTitle || 'New Page';
+
     setIsCreatingProject(true);
     setSyncProgress({
-      oenum,
+      oenum: tpmsOenum || name,
       status: 'in_progress',
       current_step: 0,
-      total_steps: 7,
-      step_name: 'Starting project creation...',
+      total_steps: 5,
+      step_name: 'Creating project...',
       progress_percent: 0
     });
 
@@ -319,35 +331,30 @@ export function useProjects(userId?: string) {
         return false;
       }
 
-      // Create project in Neo4j via backend (returns immediately, sync runs in background)
-      console.log('📤 Creating TPMS project:', oenum, name);
-      const projectResponse = await axios.post(`${API_BASE}/projects`, {
-        project_number: oenum,
-        project_name: name,
-        client: '',
-        contract_number: '',
-        contract_date: '',
-        description: ''
+      // Create project via unified agent API
+      console.log('📤 Creating project:', name, tpmsOenum ? `(TPMS: ${tpmsOenum})` : '(modern)');
+      const projectResponse = await axios.post(`${API_BASE}/v2/agent/projects`, {
+        name,
+        description: description || '',
+        tpms_oenum: tpmsOenum || null,
       }, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        timeout: 30000 // 30 second timeout for initial request
+        headers: { 'Authorization': `Bearer ${token}` },
+        timeout: 60000 // 60s for TPMS fetch + techserver copy
       });
 
-      console.log('✅ Project node created:', projectResponse.data);
+      const project = projectResponse.data;
+      const projectId = project.id;
+      console.log('✅ Project created:', projectId);
 
       // Create first page/chat for the project
       const chatResponse = await axios.post(`${API_BASE}/chats`, {
         chat_name: firstPageTitle,
         user_id: userId,
         chat_type: 'project',
-        project_number: oenum,
+        project_number: tpmsOenum || projectId,
         page_name: firstPageTitle
       }, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
       const chatId = chatResponse.data.chat.chat_id;
@@ -359,11 +366,11 @@ export function useProjects(userId?: string) {
         messages: [],
         createdAt: new Date(),
         updatedAt: new Date(),
-        projectId: oenum
+        projectId: tpmsOenum || projectId
       };
 
       const newProject: Project = {
-        id: oenum,  // Use OENUM as project ID
+        id: tpmsOenum || projectId,
         name,
         chats: [newChat],
         createdAt: new Date(),
@@ -371,27 +378,19 @@ export function useProjects(userId?: string) {
       };
 
       setProjects(prev => [newProject, ...prev]);
-      setActiveProjectId(oenum);
+      setActiveProjectId(tpmsOenum || projectId);
       setActiveChatId(chatId);
 
       console.log('✅ Project and first page created successfully');
-
-      // Show initial success - user can start chatting while sync continues
-      showInfo('Project Created!', 'You can start chatting now. Data sync is running in background.');
-
-      // Start polling for sync progress in background
-      if (projectResponse.data.sync_in_progress) {
-        pollSyncProgress(oenum);
-      } else {
-        setSyncProgress(null);
-      }
+      showInfo('Project Created!', 'You can start chatting now.');
+      setSyncProgress(null);
 
       return true;
     } catch (error: any) {
       console.error('❌ Failed to create project:', error);
       setSyncProgress(null);
-      if (error.response?.status === 400 && error.response?.data?.detail?.includes('already exists')) {
-        showError('Project Exists', error.response.data.detail);
+      if (error.response?.status === 400) {
+        showError('Cannot Create', error.response.data.detail);
       } else {
         showError('Create Failed', error.response?.data?.detail || 'Failed to create project. Please try again.');
       }

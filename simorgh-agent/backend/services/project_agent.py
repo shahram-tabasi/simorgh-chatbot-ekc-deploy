@@ -55,7 +55,7 @@ class ProjectManagerAgent:
         self._progress_callbacks: Dict[str, Callable] = {}
 
     def initialize(self, llm_service=None, email_service=None,
-                   redis=None, postgres=None, qdrant=None, neo4j=None):
+                   redis=None, postgres=None, qdrant=None):
         """Initialize all agent dependencies."""
         self.llm_service = llm_service
 
@@ -68,10 +68,10 @@ class ProjectManagerAgent:
             self.cot_engine.set_llm_service(llm_service)
         self.cot_engine.set_mcp_manager(self.mcp_manager)
 
-        # Memory
+        # Memory (Neo4j no longer required - using MCP + Qdrant + git)
         self.memory = get_project_memory_service()
         self.memory.set_services(redis=redis, postgres=postgres,
-                                 qdrant=qdrant, neo4j=neo4j)
+                                 qdrant=qdrant, neo4j=None)
 
         # Shell
         self.shell = get_shell_service()
