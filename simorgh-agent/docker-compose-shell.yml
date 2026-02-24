@@ -20,6 +20,7 @@ services:
       - DEFAULT_TIMEOUT=30
     volumes:
       - shell_workspace:/workspace
+      - //techserver:/mnt/techserver:ro
     ports:
       - "8010:8010"
     healthcheck:

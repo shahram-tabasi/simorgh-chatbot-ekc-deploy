@@ -1,13 +1,14 @@
 """
 Simorgh Industrial Electrical Assistant - Backend API
 ======================================================
-FastAPI backend with Neo4j, Redis, hybrid LLM, and SQL Server auth.
+FastAPI backend with Redis, Qdrant, hybrid LLM, MCP microservices, and git-based project management.
 
 Architecture:
-- Neo4j: Knowledge graph with project isolation
 - Redis: Multi-DB caching (sessions, chat, LLM, auth)
-- SQL Server: External user authorization
-- Qdrant: Vector search
+- Qdrant: Vector search and document grounding
+- PostgreSQL: Auth, user tiers, project metadata
+- MCP: Dynamic tool discovery across microservices
+- Git: Project version control (via shell-service)
 - LLM: Hybrid OpenAI/Local support
 
 Author: Simorgh Industrial Assistant
@@ -236,9 +237,14 @@ async def startup_event():
     redis_service = get_redis_service()
     logger.info("✅ Redis service initialized")
 
-    # Initialize Neo4j
-    neo4j_service = get_neo4j_service()
-    logger.info("✅ Neo4j service initialized")
+    # Neo4j is no longer required - MCP + git + Qdrant replace it
+    # Legacy endpoints that use Neo4j will get it lazily if available
+    neo4j_service = None
+    try:
+        neo4j_service = get_neo4j_service()
+        logger.info("✅ Neo4j service available (legacy endpoints)")
+    except Exception as e:
+        logger.info(f"ℹ️ Neo4j not available (expected - using MCP+git+Qdrant): {e}")
 
     # Initialize SQL Auth (legacy)
     sql_auth_service = get_sql_auth_service()
@@ -289,7 +295,7 @@ async def startup_event():
             redis_service=redis_service,
             qdrant_service=qdrant,
             llm_service=llm_service,
-            neo4j_service=neo4j_service
+            neo4j_service=None  # No longer required - using MCP+Qdrant
         )
         logger.info("✅ Unified Memory service initialized")
     except Exception as e:
@@ -317,7 +323,7 @@ async def startup_event():
         )
         unified_context_service = get_unified_context_service(
             redis_service=redis_service,
-            neo4j_driver=neo4j_service.driver if neo4j_service else None,
+            neo4j_driver=None,  # Neo4j no longer required for context
             qdrant_service=qdrant,
             config=context_config
         )
@@ -331,7 +337,7 @@ async def startup_event():
         chatbot_core = await initialize_chatbot_on_startup(
             redis_service=redis_service,
             qdrant_service=qdrant,
-            neo4j_service=neo4j_service,
+            neo4j_service=None,  # Neo4j no longer required
             llm_service=llm_service,
         )
         logger.info("✅ Chatbot Core initialized (General/Project sessions enabled)")
@@ -355,7 +361,6 @@ async def startup_event():
             redis=redis_service,
             postgres=pg_db,
             qdrant=qdrant,
-            neo4j=neo4j_service,
         )
 
         # Connect to MCP microservices (dynamic tool discovery)
@@ -375,11 +380,11 @@ async def startup_event():
     # Initialize Background Sync Service for real-time TPMS sync
     try:
         background_sync_service = get_background_sync_service(
-            neo4j_service=neo4j_service,
+            neo4j_service=None,
             redis_service=redis_service
         )
         await start_background_sync(
-            neo4j_service=neo4j_service,
+            neo4j_service=None,
             redis_service=redis_service
         )
         logger.info("✅ Background TPMS sync service started")
@@ -437,10 +442,8 @@ async def shutdown_event():
 # DEPENDENCY INJECTION
 # =============================================================================
 
-def get_neo4j() -> Neo4jService:
-    """Get Neo4j service instance"""
-    if neo4j_service is None:
-        raise HTTPException(status_code=503, detail="Neo4j service not available")
+def get_neo4j() -> Optional[Neo4jService]:
+    """Get Neo4j service instance (optional - may return None)."""
     return neo4j_service
 
 

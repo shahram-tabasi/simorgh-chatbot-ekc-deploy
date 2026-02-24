@@ -8,6 +8,7 @@ import { ChatArea } from './components/ChatArea';
 import SettingsPanel from './components/SettingsPanel';
 import MobileHeader from './components/MobileHeader';
 import CreateProjectModal from './components/CreateProjectModal';
+import CreateAgentProjectModal from './components/CreateAgentProjectModal';
 import CreateChatModal from './components/CreateChatModal';
 import CreateProjectChatModal from './components/CreateProjectChatModal';
 import Login from './components/Login';
@@ -16,7 +17,7 @@ import NotificationToast, { ToastNotification } from './components/NotificationT
 import SpecReview from './pages/SpecReview';
 import AdminPanel from './pages/AdminPanel';
 import UpgradePage from './pages/UpgradePage';
-import ProjectAgentDashboard from './pages/ProjectAgentDashboard';
+// ProjectAgentDashboard removed - all agent functionality is now in the main chat display
 
 // Auth components (modern + auto-routing)
 import {
@@ -395,15 +396,26 @@ function MainChat() {
           onExternalClose={() => setSettingsPanelOpen(false)}
         />
 
-        {/* مودال ساخت پروژه */}
-        <CreateProjectModal
-          isOpen={showCreateModal}
-          onClose={() => setShowCreateModal(false)}
-          onCreate={(oenum, projectName, firstPageTitle) => {
-            createProject(oenum, projectName, firstPageTitle);
-            setShowCreateModal(false);
-          }}
-        />
+        {/* مودال ساخت پروژه - Smart: legacy users get TPMS modal, modern users get name-only modal */}
+        {user && isLegacyUser(user) ? (
+          <CreateProjectModal
+            isOpen={showCreateModal}
+            onClose={() => setShowCreateModal(false)}
+            onCreate={(oenum, projectName, firstPageTitle) => {
+              createProject(projectName, { tpmsOenum: oenum, firstPageTitle });
+              setShowCreateModal(false);
+            }}
+          />
+        ) : (
+          <CreateAgentProjectModal
+            isOpen={showCreateModal}
+            onClose={() => setShowCreateModal(false)}
+            onCreate={async (name, description) => {
+              await createProject(name, { description });
+              setShowCreateModal(false);
+            }}
+          />
+        )}
 
         {/* مودال ساخت چت جدید (Not used - general chats are created immediately) */}
         {/* <CreateChatModal
@@ -454,14 +466,6 @@ function MainChat() {
       </div>
     </LanguageProvider>
   );
-}
-
-// Agent Dashboard wrapper - extracts userId from auth context
-function AgentDashboardWrapper() {
-  const { user } = useAuth();
-  const userId = user ? (isLegacyUser(user) ? user.EMPUSERNAME : isModernUser(user) ? user.id : '') : '';
-  if (!userId) return null;
-  return <ProjectAgentDashboard userId={userId} />;
 }
 
 // Protected route wrapper
@@ -533,14 +537,6 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <UpgradePage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/agent"
-          element={
-            <ProtectedRoute>
-              <AgentDashboardWrapper />
             </ProtectedRoute>
           }
         />

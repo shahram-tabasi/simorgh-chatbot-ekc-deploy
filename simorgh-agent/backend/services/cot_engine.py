@@ -112,7 +112,9 @@ _FALLBACK_MCP_TOOLS = """You also have access to these microservice tools:
 - export_word: Generate Word document. Input: {{"project_id": "id", "title": "Title", "sections": "[...]"}}
 - export_pdf: Generate PDF report. Input: {{"project_id": "id", "title": "Title", "content": "text"}}
 - eplan_draw: Trigger EPLAN drawing generation. Input: {{"project_name": "name", "eplan_data": "[...]"}}
-- eplan_resolve_port: Find available EPLAN server port. Input: {{"username": "agent"}}"""
+- eplan_resolve_port: Find available EPLAN server port. Input: {{"username": "agent"}}
+- sld_analyze: Analyze a Single Line Diagram (SLD) image/PDF using GPT-4o vision. Returns structured JSON with CBs, feeders, transformers, ratings. Input: {{"document_id": "doc-uuid", "filename": "sld.pdf"}}
+- techserver_sync: Sync project files from techserver (\\\\techserver) to workspace. For legacy users only. Input: {{"oenum": "12345"}}"""
 
 
 class COTEngine:
