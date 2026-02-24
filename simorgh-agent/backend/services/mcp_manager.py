@@ -70,6 +70,7 @@ class MCPManager:
         self.tools: Dict[str, str] = {}  # tool_name -> server_name
         self.tool_schemas: Dict[str, Any] = {}  # tool_name -> Tool schema
         self._exit_stack = AsyncExitStack()
+        self._server_stacks: Dict[str, AsyncExitStack] = {}
         self._connected = False
 
     def register_server(self, name: str, url: str, description: str = ""):
@@ -81,10 +82,13 @@ class MCPManager:
         connected = 0
         for name, config in self.servers.items():
             try:
-                await self._connect_server(name, config)
+                await asyncio.wait_for(
+                    self._connect_server(name, config),
+                    timeout=15.0,
+                )
                 connected += 1
                 logger.info(f"MCP connected: {name} ({config.url})")
-            except Exception as e:
+            except (Exception, asyncio.CancelledError) as e:
                 logger.warning(f"MCP server {name} unavailable: {e}")
 
         self._connected = connected > 0
@@ -95,26 +99,37 @@ class MCPManager:
 
     async def _connect_server(self, name: str, config: MCPServerConfig):
         """Connect to a single MCP server via Streamable HTTP."""
-        # streamablehttp_client returns (read_stream, write_stream, get_session_id)
-        streams = await self._exit_stack.enter_async_context(
-            streamablehttp_client(config.url)
-        )
-        # Unpack: streams is (read_stream, write_stream, get_session_id_fn)
-        read_stream, write_stream = streams[0], streams[1]
+        # Use a per-server exit stack so failures don't leave broken
+        # context managers on the shared stack (prevents cascading errors).
+        server_stack = AsyncExitStack()
+        try:
+            streams = await server_stack.enter_async_context(
+                streamablehttp_client(config.url)
+            )
+            # Unpack: streams is (read_stream, write_stream, get_session_id_fn)
+            read_stream, write_stream = streams[0], streams[1]
 
-        session = await self._exit_stack.enter_async_context(
-            ClientSession(read_stream, write_stream)
-        )
-        await session.initialize()
+            session = await server_stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
+            await session.initialize()
 
-        self.sessions[name] = session
+            self.sessions[name] = session
+            self._server_stacks[name] = server_stack
 
-        # Discover tools from this server
-        tools_result = await session.list_tools()
-        for tool in tools_result.tools:
-            self.tools[tool.name] = name
-            self.tool_schemas[tool.name] = tool
-            logger.debug(f"  Tool discovered: {tool.name} (from {name})")
+            # Discover tools from this server
+            tools_result = await session.list_tools()
+            for tool in tools_result.tools:
+                self.tools[tool.name] = name
+                self.tool_schemas[tool.name] = tool
+                logger.debug(f"  Tool discovered: {tool.name} (from {name})")
+        except BaseException:
+            # Clean up the per-server stack on failure
+            try:
+                await server_stack.aclose()
+            except Exception:
+                pass
+            raise
 
     def get_all_tools(self) -> List[Dict[str, Any]]:
         """Get all available tools across all MCP servers."""
@@ -203,10 +218,16 @@ class MCPManager:
 
     async def disconnect_all(self):
         """Disconnect from all MCP servers."""
+        for name, stack in list(self._server_stacks.items()):
+            try:
+                await stack.aclose()
+            except Exception as e:
+                logger.warning(f"Error disconnecting MCP server {name}: {e}")
+        self._server_stacks.clear()
         try:
             await self._exit_stack.aclose()
         except Exception as e:
-            logger.warning(f"Error during MCP disconnect: {e}")
+            logger.warning(f"Error during MCP exit stack cleanup: {e}")
         self.sessions.clear()
         self.tools.clear()
         self.tool_schemas.clear()
@@ -218,6 +239,14 @@ class MCPManager:
         config = self.servers.get(name)
         if not config:
             raise ValueError(f"Unknown MCP server: {name}")
+
+        # Close old per-server stack
+        old_stack = self._server_stacks.pop(name, None)
+        if old_stack:
+            try:
+                await old_stack.aclose()
+            except Exception:
+                pass
 
         # Remove old tool registrations for this server
         old_tools = [t for t, s in self.tools.items() if s == name]
