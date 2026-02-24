@@ -506,7 +506,7 @@ def get_chatbot() -> ChatbotCore:
 
 @app.get("/health")
 async def health_check(
-    neo4j: Neo4jService = Depends(get_neo4j),
+    neo4j: Optional[Neo4jService] = Depends(get_neo4j),
     redis: RedisService = Depends(get_redis),
     sql_auth: SQLAuthService = Depends(get_sql_auth),
     llm: LLMService = Depends(get_llm)
@@ -518,7 +518,7 @@ async def health_check(
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "services": {
-            "neo4j": neo4j.health_check(),
+            "neo4j": neo4j.health_check() if neo4j else {"status": "disabled", "message": "Neo4j removed - using MCP+Qdrant"},
             "redis": redis.health_check(),
             "sql_auth": sql_auth.health_check(),
             "llm": llm.health_check()
@@ -526,11 +526,11 @@ async def health_check(
     }
 
     # Determine overall status
-    # Critical services: Neo4j, Redis
-    # Optional services: SQL Auth (can be disabled), LLM (can be degraded/unhealthy)
+    # Critical services: Redis (Neo4j is no longer critical)
+    # Optional services: Neo4j, SQL Auth, LLM
     critical_services_healthy = all(
         health["services"][svc].get("status") in ["healthy", "disabled"]
-        for svc in ["neo4j", "redis"]
+        for svc in ["redis"]
     )
 
     all_services_healthy = all(
