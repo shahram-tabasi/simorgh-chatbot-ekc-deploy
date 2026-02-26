@@ -34,6 +34,7 @@ from services.microservice_clients import (
     get_project_analysis_client, get_command_gen_client,
     get_file_export_client, get_eplan_bridge_client,
 )
+from services.ekc_knowledge_service import EKCKnowledgeService, get_ekc_knowledge_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class ProjectManagerAgent:
         self.mcp_manager: Optional[MCPManager] = None
         self.llm_service = None
         self.email_service = None
+        self.ekc_knowledge: Optional[EKCKnowledgeService] = None
         # Callbacks for streaming progress to frontend
         self._progress_callbacks: Dict[str, Callable] = {}
 
@@ -78,6 +80,13 @@ class ProjectManagerAgent:
 
         # Email
         self.email_service = email_service
+
+        # EKC Knowledge Base (shared volume for general technical info)
+        self.ekc_knowledge = get_ekc_knowledge_service()
+        if self.ekc_knowledge.is_available():
+            logger.info("EKC Knowledge Base loaded: %d documents", self.ekc_knowledge.get_document_count())
+        else:
+            logger.warning("EKC Knowledge Base not available (volume not mounted)")
 
         logger.info("Project Manager Agent initialized")
 
@@ -172,6 +181,12 @@ class ProjectManagerAgent:
         project_context = await self.memory.build_agent_context(
             project_id, query=user_input
         )
+
+        # 2b. Inject EKC general technical knowledge into context
+        if self.ekc_knowledge and self.ekc_knowledge.is_available():
+            ekc_context = self.ekc_knowledge.get_knowledge_context_for_agent()
+            if ekc_context:
+                project_context["ekc_knowledge"] = ekc_context
 
         # 3. Trigger COT analysis
         await self._notify_progress(project_id, "cot_analyzing", {
@@ -501,6 +516,17 @@ class ProjectManagerAgent:
         # Build context from previous results and semantic search
         prev = tool_input.get("_previous_results", {})
         context_parts = []
+
+        # Include EKC general technical knowledge
+        if self.ekc_knowledge and self.ekc_knowledge.is_available():
+            ekc_results = self.ekc_knowledge.search_fulltext(
+                tool_input.get("prompt", task.get("description", task["title"]))
+            )
+            if ekc_results:
+                ekc_summaries = "\n".join(
+                    f"- {d['title']}: {d['summary']}" for d in ekc_results[:5]
+                )
+                context_parts.append(f"EKC Knowledge Base (relevant documents):\n{ekc_summaries}")
 
         # Include semantic search context (from Qdrant) if available
         semantic_ctx = prev.pop("_semantic_context", None)
@@ -1061,6 +1087,14 @@ class ProjectManagerAgent:
                 await self.shell.exec_command(
                     project_id=project_id,
                     command="mkdir -p tpms_data documents documents/metadata",
+                    timeout=10,
+                )
+
+                # Link ekc-knowledge shared volume into project workspace
+                ekc_knowledge_path = os.environ.get("EKC_KNOWLEDGE_PATH", "/ekc-knowledge")
+                await self.shell.exec_command(
+                    project_id=project_id,
+                    command=f"ln -sfn {ekc_knowledge_path} ekc-knowledge",
                     timeout=10,
                 )
                 results["directories"] = "created"
