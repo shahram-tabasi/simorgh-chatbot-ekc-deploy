@@ -18,9 +18,11 @@ services:
       - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
       - MAX_OUTPUT_SIZE=100000
       - DEFAULT_TIMEOUT=30
+      - EKC_KNOWLEDGE_PATH=/ekc-knowledge
     volumes:
       - shell_workspace:/workspace
       - //techserver:/mnt/techserver:ro
+      - ekc_knowledge:/ekc-knowledge:ro
     ports:
       - "8010:8010"
     healthcheck:
@@ -34,3 +36,9 @@ services:
 volumes:
   shell_workspace:
     driver: local
+  ekc_knowledge:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${EKC_KNOWLEDGE_HOST_PATH:-/home/ubuntu/ekc-knowledge}
