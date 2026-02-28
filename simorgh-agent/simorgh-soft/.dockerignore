@@ -1,0 +1,6 @@
+simorgh-frontend/node_modules
+simorgh-backend/node_modules
+simorgh-frontend/dist
+.git
+*.log
+.env
