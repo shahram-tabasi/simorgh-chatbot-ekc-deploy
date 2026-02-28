@@ -33,6 +33,7 @@ from services.microservice_clients import (
     get_search_client, get_tpms_fetcher_client, get_project_init_client,
     get_project_analysis_client, get_command_gen_client,
     get_file_export_client, get_eplan_bridge_client,
+    get_mail_gateway_client,
 )
 from services.ekc_knowledge_service import EKCKnowledgeService, get_ekc_knowledge_service
 
@@ -181,6 +182,9 @@ class ProjectManagerAgent:
         project_context = await self.memory.build_agent_context(
             project_id, query=user_input
         )
+
+        # 2a. Check Redis for project structure analysis — re-run if missing (data loss recovery)
+        await self._ensure_project_analysis(project_id, project_context)
 
         # 2b. Inject EKC general technical knowledge into context
         if self.ekc_knowledge and self.ekc_knowledge.is_available():
@@ -1098,6 +1102,100 @@ class ProjectManagerAgent:
             return None
 
     # =========================================================================
+    # REDIS DATA LOSS RECOVERY
+    # =========================================================================
+
+    async def _ensure_project_analysis(
+        self, project_id: str, project_context: Dict[str, Any],
+    ) -> None:
+        """
+        Check if the project structure analysis exists in Redis.
+        If Redis data was lost (e.g., restart, eviction), re-run the analysis
+        so COT always has access to project structure insights.
+
+        Only applies to legacy projects that had techserver files copied.
+        """
+        try:
+            # Get agent state to check if this is a legacy project
+            agent_state = await self.memory.get_agent_state(project_id)
+            if not agent_state:
+                return
+
+            is_legacy = agent_state.get("is_legacy", False)
+            if not is_legacy:
+                return
+
+            # Check if project_structure cache exists in Redis
+            cache_key = f"project_structure:{project_id}"
+            cached = await self.memory.get_working_memory(project_id, cache_key)
+
+            if cached:
+                # Data exists, inject into project context for COT
+                try:
+                    project_context["project_structure"] = json.loads(cached)
+                except (json.JSONDecodeError, TypeError):
+                    project_context["project_structure"] = cached
+                return
+
+            # Redis data is missing — check if structure_analysis.json exists on disk
+            logger.warning(
+                f"Redis project_structure cache missing for {project_id}, "
+                f"attempting recovery..."
+            )
+
+            project_name = agent_state.get("project_name", "")
+            oenum = agent_state.get("tpms_oenum", "")
+
+            # Try to recover from saved file on 1.69 first
+            recovered = False
+            if self.shell:
+                try:
+                    file_result = await self.shell.file_read(
+                        project_id, "documents/metadata/structure_analysis.json"
+                    )
+                    file_content = file_result.get("content", "") if isinstance(file_result, dict) else str(file_result)
+                    if file_content and len(file_content) > 10:
+                        # Restore to Redis
+                        await self.memory.store_working_memory(
+                            project_id, cache_key, file_content,
+                        )
+                        try:
+                            project_context["project_structure"] = json.loads(file_content)
+                        except (json.JSONDecodeError, TypeError):
+                            project_context["project_structure"] = file_content
+                        recovered = True
+                        logger.info(
+                            f"Recovered project_structure from disk for {project_id}"
+                        )
+                except Exception:
+                    pass
+
+            # If disk recovery failed, re-run the full analysis
+            if not recovered and project_name and oenum:
+                await self._notify_progress(project_id, "recovering_analysis", {
+                    "status": "Redis data lost, re-analyzing project structure..."
+                })
+                analysis_result = await self._analyze_project_structure(
+                    project_id, project_name, oenum,
+                )
+                if analysis_result.get("status") == "analyzed":
+                    project_context["project_structure"] = analysis_result
+                    logger.info(
+                        f"Re-ran project structure analysis for {project_id} "
+                        f"after Redis data loss"
+                    )
+
+            # Also recover TPMS mapping if missing
+            tpms_key = f"tpms_mapping:{project_id}"
+            tpms_cached = await self.memory.get_working_memory(project_id, tpms_key)
+            if not tpms_cached and oenum:
+                logger.warning(f"Redis tpms_mapping missing for {project_id}, re-verifying...")
+                await self._verify_tpms_project(project_id, oenum)
+
+        except Exception as e:
+            logger.error(f"Project analysis recovery failed for {project_id}: {e}")
+
+    # =========================================================================
     # PROJECT LIFECYCLE
     # =========================================================================
 
@@ -1176,7 +1274,28 @@ class ProjectManagerAgent:
                 )
                 results["structure_analysis"] = analysis_result
 
-        # 5. Commit initial project structure to git
+        # 5. Create project email address (for legacy projects)
+        project_email = None
+        if is_legacy:
+            try:
+                mail_client = get_mail_gateway_client()
+                email_result = await mail_client.create_project_email(
+                    project_id=project_id,
+                    project_name=name,
+                    oenum=tpms_oenum,
+                    owner_id=owner_id,
+                )
+                project_email = email_result.get("email_address")
+                results["project_email"] = {
+                    "status": "created",
+                    "email": project_email,
+                }
+                logger.info(f"Project email created: {project_email}")
+            except Exception as e:
+                logger.warning(f"Failed to create project email: {e}")
+                results["project_email"] = {"status": "error", "error": str(e)}
+
+        # 6. Commit initial project structure to git
         try:
             if self.shell:
                 # Write a project manifest
@@ -1186,6 +1305,7 @@ class ProjectManagerAgent:
                     "owner_id": owner_id,
                     "tpms_oenum": tpms_oenum,
                     "is_legacy": is_legacy,
+                    "project_email": project_email,
                     "created_at": datetime.utcnow().isoformat(),
                 }, indent=2)
                 await self.shell.file_write(
@@ -1197,15 +1317,18 @@ class ProjectManagerAgent:
         except Exception as e:
             logger.warning(f"Initial git commit failed: {e}")
 
-        # 6. Set initial agent state
-        await self.memory.set_agent_state(project_id, {
+        # 7. Set initial agent state
+        agent_state_data = {
             "status": "idle",
             "project_name": name,
             "initialized_at": datetime.utcnow().isoformat(),
             "pending_tasks": 0,
             "is_legacy": is_legacy,
             "tpms_oenum": tpms_oenum,
-        })
+        }
+        if project_email:
+            agent_state_data["project_email"] = project_email
+        await self.memory.set_agent_state(project_id, agent_state_data)
 
         results["agent_state"] = "initialized"
         logger.info(f"Project {project_id} ({name}) initialized: {results}")

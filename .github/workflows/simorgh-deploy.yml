@@ -215,6 +215,10 @@ jobs:
           # Shell Service (Project Agent on 1.69)
           SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
 
+          # Mail Gateway (Project Email)
+          PROJECT_EMAIL_DOMAIN=simorghai.electrokavir.com
+          MAIL_GATEWAY_TOKEN=${{ secrets.MAIL_GATEWAY_TOKEN }}
+
           # Frontend URL (used in email verification/reset links)
           FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
 

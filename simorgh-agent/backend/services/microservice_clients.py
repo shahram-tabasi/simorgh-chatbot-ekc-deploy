@@ -21,6 +21,7 @@ PROJECT_ANALYSIS_URL = os.getenv("PROJECT_ANALYSIS_URL", "http://project-analysi
 COMMAND_GEN_URL = os.getenv("COMMAND_GEN_URL", "http://command-gen:8024")
 FILE_EXPORT_URL = os.getenv("FILE_EXPORT_URL", "http://file-export:8025")
 EPLAN_BRIDGE_URL = os.getenv("EPLAN_BRIDGE_URL", "http://eplan-bridge:8026")
+MAIL_GATEWAY_URL = os.getenv("MAIL_GATEWAY_URL", "http://mail-gateway:8027")
 
 DEFAULT_TIMEOUT = 60
 
@@ -230,6 +231,60 @@ class EplanBridgeClient:
             return resp.json()
 
 
+class MailGatewayClient:
+    """Client for the mail-gateway microservice."""
+
+    def __init__(self, base_url: str = None):
+        self.base_url = (base_url or MAIL_GATEWAY_URL).rstrip("/")
+        self.token = os.getenv("MAIL_GATEWAY_TOKEN", "")
+
+    def _headers(self) -> Dict:
+        headers = {}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
+
+    async def create_project_email(
+        self, project_id: str, project_name: str,
+        oenum: str = None, owner_id: str = None,
+    ) -> Dict:
+        """Create a project-specific email address."""
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.post(
+                f"{self.base_url}/project-email/create",
+                json={
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "oenum": oenum,
+                    "owner_id": owner_id,
+                },
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_project_email(self, project_id: str) -> Dict:
+        """Get the email address for a project."""
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.get(
+                f"{self.base_url}/project-email/{project_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_inbox(self, project_id: str, limit: int = 50) -> Dict:
+        """Get received emails for a project."""
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.get(
+                f"{self.base_url}/project-email/{project_id}/inbox",
+                params={"limit": limit},
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+
 # Singletons
 _search_client: Optional[SearchServiceClient] = None
 _tpms_client: Optional[TPMSFetcherClient] = None
@@ -238,6 +293,7 @@ _analysis_client: Optional[ProjectAnalysisClient] = None
 _cmd_client: Optional[CommandGenClient] = None
 _export_client: Optional[FileExportClient] = None
 _eplan_client: Optional[EplanBridgeClient] = None
+_mail_gateway_client: Optional[MailGatewayClient] = None
 
 
 def get_search_client() -> SearchServiceClient:
@@ -287,3 +343,10 @@ def get_eplan_bridge_client() -> EplanBridgeClient:
     if _eplan_client is None:
         _eplan_client = EplanBridgeClient()
     return _eplan_client
+
+
+def get_mail_gateway_client() -> MailGatewayClient:
+    global _mail_gateway_client
+    if _mail_gateway_client is None:
+        _mail_gateway_client = MailGatewayClient()
+    return _mail_gateway_client

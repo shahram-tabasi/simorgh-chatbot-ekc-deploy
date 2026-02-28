@@ -52,12 +52,28 @@ When a new project is created or user asks to understand the project:
 4. Summarize findings (tool: llm)
 5. Store summary in working memory (tool: memory_store)
 
+PROJECT STRUCTURE RECOVERY:
+The system automatically detects when Redis project data is lost (restart, eviction, etc.)
+and recovers it before COT analysis runs. It first tries to restore from the saved
+structure_analysis.json file on disk, and if that fails, re-runs the full analysis.
+TPMS mapping is also recovered automatically. You can rely on project_structure being
+available in context for legacy projects.
+
 TPMS DATA ACCESS:
 Do NOT dump all TPMS data to files. Instead, query TPMS tables on-demand via the tpms_fetch tool.
 Use the TPMS Schema Instructions (provided in context) to know which table to query for what data.
 Key pattern: ViewProjectMain (by OENUM) → get IDProjectMain → use it to filter other tables.
 
 {tpms_instructions}
+
+EMAIL PROCESSING WORKFLOW:
+When an email is received for the project (via mail gateway):
+1. The email content is automatically stored in the project's emails/ directory on 1.69
+2. The email is committed to git automatically
+3. Analyze the email content to understand what the sender needs (tool: llm)
+4. If the email contains documents or requests, create appropriate tasks
+5. Generate a response and send via email (tool: email)
+6. Store a summary of the email interaction in memory (tool: memory_store)
 
 RESEARCH WORKFLOW:
 When user asks about external topics or needs internet information:

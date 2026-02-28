@@ -110,8 +110,10 @@ services:
       - SHELL_SERVICE_URL=http://192.168.1.69:8010
       - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
       - SHELL_SERVICE_TIMEOUT=60
-      # Project Email Gateway
+      # Project Email Gateway (mail-gateway service)
       - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
+      - MAIL_GATEWAY_URL=http://mail-gateway:8027
+      - MAIL_GATEWAY_TOKEN=${MAIL_GATEWAY_TOKEN:-}
       # Agent Microservice URLs (REST - fallback)
       - SEARCH_SERVICE_URL=http://search-service:8020
       - TPMS_FETCHER_URL=http://tpms-fetcher:8021
@@ -600,6 +602,38 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
+  # MAIL-GATEWAY - Project Email Gateway (SMTP + REST)
+  # ===========================================================================
+  mail-gateway:
+    build: ./mail-gateway-service
+    container_name: mail-gateway
+    expose:
+      - "8027"
+    ports:
+      - "2525:2525"    # SMTP receiver (incoming project emails)
+    volumes:
+      - mail_storage:/app/mail-storage
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BACKEND_URL=http://backend:8890
+      - BACKEND_WEBHOOK_PATH=/api/v2/agent/email-webhook
+      - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
+      - SMTP_LISTEN_PORT=2525
+      - MAIL_GATEWAY_TOKEN=${MAIL_GATEWAY_TOKEN:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8027/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
   # SHELL-SERVICE - Deployed separately on 192.168.1.69
   # See docker-compose-shell.yml for the shell-service definition.
   # Backend connects via: http://192.168.1.69:8010
@@ -639,6 +673,8 @@ volumes:
   sentence_transformers_cache:
     driver: local
   file_exports:
+    driver: local
+  mail_storage:
     driver: local
   ekc_knowledge:
     driver: local
