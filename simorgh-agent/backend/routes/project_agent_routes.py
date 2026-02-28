@@ -989,11 +989,13 @@ async def upload_document(
                     i += chunk_size - overlap
 
                 if chunk_dicts:
+                    # Use OENUM for collection name to match search queries
+                    oenum = project.get("tpms_oenum") or project_id
                     success = qdrant.add_document_chunks(
-                        user_id="project",
+                        user_id="system",
                         document_id=doc_id_str,
                         chunks=chunk_dicts,
-                        project_oenum=project_id,
+                        project_oenum=oenum,
                     )
                     chunks_stored = len(chunk_dicts) if success else 0
                     processing_results["semantic_index"] = f"completed ({chunks_stored} chunks)"

@@ -765,12 +765,15 @@ class ProjectManagerAgent:
                 i += chunk_size - overlap
 
             # Store all chunks in Qdrant using add_document_chunks
+            # Use OENUM for collection name to match search queries
+            agent_state = await self.memory.get_agent_state(project_id)
+            oenum = (agent_state or {}).get("tpms_oenum") or project_id
             doc_uuid = document_id or str(uuid.uuid4())
             success = self.memory.qdrant.add_document_chunks(
-                user_id="project",
+                user_id="system",
                 document_id=doc_uuid,
                 chunks=chunk_dicts,
-                project_oenum=project_id,
+                project_oenum=oenum,
             )
             stored = len(chunk_dicts) if success else 0
 
@@ -1248,8 +1251,10 @@ class ProjectManagerAgent:
         # 2. Init Qdrant collection for project semantic search
         try:
             if self.memory.qdrant:
+                # Use OENUM (not UUID) so collection name matches search queries
+                qdrant_oenum = tpms_oenum or project_id
                 self.memory.qdrant.ensure_collection_exists(
-                    user_id="project", project_oenum=project_id
+                    user_id="system", project_oenum=qdrant_oenum
                 )
                 results["qdrant"] = {"status": "initialized"}
         except Exception as e:
@@ -1403,10 +1408,10 @@ class ProjectManagerAgent:
                         i += 450
                     if chunks:
                         self.memory.qdrant.add_document_chunks(
-                            user_id="project",
+                            user_id="system",
                             document_id=f"tpms-{oenum}",
                             chunks=chunks,
-                            project_oenum=project_id,
+                            project_oenum=oenum,
                         )
                 except Exception as e:
                     logger.warning(f"TPMS indexing in Qdrant failed: {e}")
@@ -1837,11 +1842,14 @@ class ProjectManagerAgent:
                         "chunk_index": 0,
                         "metadata": {"source": "sld_analysis", "filename": filename},
                     }]
+                    # Use OENUM for collection name to match search queries
+                    agent_state = await self.memory.get_agent_state(project_id)
+                    sld_oenum = (agent_state or {}).get("tpms_oenum") or project_id
                     self.memory.qdrant.add_document_chunks(
-                        user_id="project",
+                        user_id="system",
                         document_id=f"sld-{uuid.uuid4()}",
                         chunks=chunks,
-                        project_oenum=project_id,
+                        project_oenum=sld_oenum,
                     )
 
             except Exception as e:
