@@ -396,11 +396,12 @@ def semantic_search_in_project(
         qdrant = get_qdrant_service()
 
         results = qdrant.semantic_search(
-            project_number=project_number,
+            user_id="system",
             query=query,
             limit=limit,
             document_id=document_id,
-            score_threshold=0.3
+            score_threshold=0.3,
+            project_oenum=project_number
         )
 
         return {

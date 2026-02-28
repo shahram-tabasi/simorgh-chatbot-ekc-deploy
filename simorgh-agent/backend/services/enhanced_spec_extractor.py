@@ -140,11 +140,12 @@ class EnhancedSpecExtractor:
 
         # Search in Qdrant for relevant chunks
         relevant_chunks = self.qdrant_service.semantic_search(
-            project_number=project_number,
+            user_id="system",
             query=search_query,
             limit=search_limit,
             document_id=document_id,
-            score_threshold=0.3  # Lower threshold to catch more possibilities
+            score_threshold=0.3,  # Lower threshold to catch more possibilities
+            project_oenum=project_number
         )
 
         if not relevant_chunks:

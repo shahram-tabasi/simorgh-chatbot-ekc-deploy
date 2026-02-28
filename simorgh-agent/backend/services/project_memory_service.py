@@ -492,7 +492,7 @@ class ProjectMemoryService:
             return []
         try:
             results = self.qdrant.semantic_search(
-                user_id="project",
+                user_id="system",
                 query=query,
                 limit=limit,
                 project_oenum=project_id,

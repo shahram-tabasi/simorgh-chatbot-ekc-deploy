@@ -151,11 +151,12 @@ class GuideExecutor:
 
             # STEP 1: Semantic search using guide instruction
             search_results = self.qdrant_service.search_section_summaries(
-                project_number=project_number,
+                user_id="system",
                 query=instruction,
                 limit=3,
                 document_id=document_id,
-                score_threshold=0.3
+                score_threshold=0.3,
+                project_oenum=project_number
             )
 
             if not search_results:
