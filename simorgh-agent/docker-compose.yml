@@ -639,7 +639,7 @@ services:
   # ===========================================================================
   simorgh-soft:
     build:
-      context: ../../simorgh-soft
+      context: ./simorgh-soft
       dockerfile: Dockerfile
     container_name: simorgh-soft
     expose:
