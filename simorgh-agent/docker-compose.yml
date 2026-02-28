@@ -634,6 +634,41 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
+  # SIMORGH-SOFT - Electrical Design Software (React + Express + MongoDB)
+  # Accessible at: https://simorghai.electrokavir.com/simorgh-draft/
+  # ===========================================================================
+  simorgh-soft:
+    build:
+      context: ../../simorgh-soft
+      dockerfile: Dockerfile
+    container_name: simorgh-soft
+    expose:
+      - "80"
+    networks:
+      - app_net
+    environment:
+      - PORT=3001
+      - MONGODB_URI=${SIMORGH_SOFT_MONGODB_URI:-mongodb://192.168.1.68:27017}
+      - DATABASE_NAME=${SIMORGH_SOFT_DATABASE_NAME:-simorgh_db}
+      - SQL_USER=${SIMORGH_SOFT_SQL_USER:-userfanni}
+      - SQL_PASSWORD=${SIMORGH_SOFT_SQL_PASSWORD:-12345678}
+      - SQL_SERVER=${SIMORGH_SOFT_SQL_SERVER:-192.168.1.39}
+      - SQL_DATABASE=${SIMORGH_SOFT_SQL_DATABASE:-Eplan_n2}
+      - SQL_PORT=${SIMORGH_SOFT_SQL_PORT:-1433}
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:80/ || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ===========================================================================
   # SHELL-SERVICE - Deployed separately on 192.168.1.69
   # See docker-compose-shell.yml for the shell-service definition.
   # Backend connects via: http://192.168.1.69:8010
