@@ -637,6 +637,23 @@ services:
   # SIMORGH-SOFT - Electrical Design Software (React + Express + MongoDB)
   # Accessible at: https://simorghai.electrokavir.com/simorgh-draft/
   # ===========================================================================
+  simorgh-soft-mongo:
+    image: mongo:7
+    container_name: simorgh-soft-mongo
+    expose:
+      - "27017"
+    networks:
+      - app_net
+    volumes:
+      - simorgh_soft_mongo_data:/data/db
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
   simorgh-soft:
     build:
       context: ./simorgh-soft
@@ -648,7 +665,7 @@ services:
       - app_net
     environment:
       - PORT=3001
-      - MONGODB_URI=${SIMORGH_SOFT_MONGODB_URI:-mongodb://192.168.1.68:27017}
+      - MONGODB_URI=mongodb://simorgh-soft-mongo:27017
       - DATABASE_NAME=${SIMORGH_SOFT_DATABASE_NAME:-simorgh_db}
       - SQL_USER=${SIMORGH_SOFT_SQL_USER:-userfanni}
       - SQL_PASSWORD=${SIMORGH_SOFT_SQL_PASSWORD:-12345678}
@@ -660,6 +677,9 @@ services:
       - MYSQL_USER=${MYSQL_USER}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+    depends_on:
+      simorgh-soft-mongo:
+        condition: service_healthy
     healthcheck:
       test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:80/ || exit 1" ]
       interval: 30s
@@ -710,6 +730,8 @@ volumes:
   file_exports:
     driver: local
   mail_storage:
+    driver: local
+  simorgh_soft_mongo_data:
     driver: local
   ekc_knowledge:
     driver: local
