@@ -16,6 +16,7 @@ from models.project_models import (
     COTAnalysis, COTStep, COTRequest, TaskType,
     TaskCreate, TaskTrigger, TaskStatus
 )
+from knowledge.tpms_schema_instructions import get_tpms_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +37,27 @@ You have access to these core tools:
 {mcp_tools}
 
 DOCUMENT PROCESSING WORKFLOW:
-When a document is uploaded, create tasks in this order:
-1. Process/convert document content to clean markdown (tool: llm, type: generation)
-2. Save markdown to project workspace for version control (tool: shell, command: write to documents/filename.md)
-3. Index content in semantic search for future queries (tool: semantic_store)
-4. Commit document files to git (tool: git, operation: commit)
+When a document is uploaded (via chatbot or email), create tasks in this order:
+1. Save the document to project workspace: documents/<filename> (tool: shell)
+2. Process/convert document content to clean markdown (tool: llm, type: generation)
+3. Save markdown to project workspace: documents/<filename>.md (tool: shell)
+4. Index content in semantic search for future queries (tool: semantic_store)
+5. Commit document files to git with descriptive message (tool: git, operation: commit, message: "Add uploaded document: <filename>")
 
 PROJECT ANALYSIS WORKFLOW:
 When a new project is created or user asks to understand the project:
-1. Fetch TPMS data if OENUM is available (tool: tpms_fetch)
-2. Run project workspace analysis (tool: project_analyze)
-3. Summarize findings (tool: llm)
+1. Query TPMS for project overview using tpms_fetch (tool: tpms_fetch, oenum)
+2. Query TPMS for scopes/panels (tool: tpms_fetch, table: ViewScope)
+3. Run project workspace analysis with shell commands (tool: shell, command: tree, find, etc.)
+4. Summarize findings (tool: llm)
+5. Store summary in working memory (tool: memory_store)
+
+TPMS DATA ACCESS:
+Do NOT dump all TPMS data to files. Instead, query TPMS tables on-demand via the tpms_fetch tool.
+Use the TPMS Schema Instructions (provided in context) to know which table to query for what data.
+Key pattern: ViewProjectMain (by OENUM) → get IDProjectMain → use it to filter other tables.
+
+{tpms_instructions}
 
 RESEARCH WORKFLOW:
 When user asks about external topics or needs internet information:
@@ -75,7 +86,10 @@ IMPORTANT RULES:
 - Always start with a query/analysis step to gather context
 - End with a summary/response step
 - Keep the plan practical and executable
-- After shell/file operations, always commit to git
+- ALWAYS commit to git after ANY file modification with a descriptive message (e.g., "Add uploaded doc: X", "Update panel specs", "Import techserver files")
+- Use git diff/log tools to inspect previous work before making changes
+- All uploaded documents (chatbot or email) must be stored in the project's documents/ directory on 1.69
+- For TPMS data, query tables on-demand via tpms_fetch — do NOT store raw TPMS dumps
 - Maximum {max_tasks} steps
 
 Respond with ONLY valid JSON in this exact format:
@@ -114,7 +128,7 @@ _FALLBACK_MCP_TOOLS = """You also have access to these microservice tools:
 - eplan_draw: Trigger EPLAN drawing generation. Input: {{"project_name": "name", "eplan_data": "[...]"}}
 - eplan_resolve_port: Find available EPLAN server port. Input: {{"username": "agent"}}
 - sld_analyze: Analyze a Single Line Diagram (SLD) image/PDF using GPT-4o vision. Returns structured JSON with CBs, feeders, transformers, ratings. Input: {{"document_id": "doc-uuid", "filename": "sld.pdf"}}
-- techserver_sync: Sync project files from techserver (\\\\techserver) to workspace. For legacy users only. Input: {{"oenum": "12345"}}"""
+- techserver_sync: Copy project files from techserver (192.168.1.3) via SMB to workspace. For legacy users only. Input: {{"oenum": "12345"}}"""
 
 
 class COTEngine:
@@ -194,9 +208,17 @@ class COTEngine:
         else:
             mcp_tools = _FALLBACK_MCP_TOOLS
 
+        # Inject EKC knowledge context if available
+        ekc_knowledge_str = project_context.get("ekc_knowledge", "")
+        if ekc_knowledge_str:
+            context_parts.append(f"\nEKC Knowledge Base:\n{ekc_knowledge_str[:3000]}")
+
         # Build messages for LLM
+        tpms_instructions = get_tpms_instructions()
         system_prompt = COT_SYSTEM_PROMPT.format(
-            max_tasks=request.max_tasks, mcp_tools=mcp_tools
+            max_tasks=request.max_tasks,
+            mcp_tools=mcp_tools,
+            tpms_instructions=tpms_instructions,
         )
         messages = [
             {"role": "system", "content": system_prompt},

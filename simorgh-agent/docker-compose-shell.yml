@@ -19,9 +19,12 @@ services:
       - MAX_OUTPUT_SIZE=100000
       - DEFAULT_TIMEOUT=30
       - EKC_KNOWLEDGE_PATH=/ekc-knowledge
+      # Techserver SMB credentials (for smbclient/smbget access to 192.168.1.3)
+      - TECHSERVER_IP=${TECHSERVER_IP:-192.168.1.3}
+      - TECHSERVER_USER=${TECHSERVER_USER:-EKC\tech}
+      - TECHSERVER_PASSWORD=${TECHSERVER_PASSWORD:-}
     volumes:
       - shell_workspace:/workspace
-      - //techserver:/mnt/techserver:ro
       - ekc_knowledge:/ekc-knowledge:ro
     ports:
       - "8010:8010"

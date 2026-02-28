@@ -646,12 +646,28 @@ class ProjectManagerAgent:
 
     async def _execute_document_task(self, project_id: str, task: Dict,
                                      tool_input: Dict) -> Dict:
-        """Process a document - extract/convert content to markdown."""
+        """
+        Process a document - save to project workspace on 1.69, convert to
+        markdown, and commit to git.
+        """
         content = tool_input.get("content", "")
         filename = tool_input.get("filename", "document")
         document_id = tool_input.get("document_id")
 
-        # Use LLM to convert content to clean markdown
+        # 1. Save original document content to project workspace on 1.69
+        if self.shell and content:
+            try:
+                safe_filename = filename.replace("/", "_").replace("\\", "_")
+                await self.shell.file_write(
+                    project_id=project_id,
+                    path=f"documents/{safe_filename}",
+                    content=content[:100000],
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save document to workspace: {e}")
+
+        # 2. Use LLM to convert content to clean markdown
+        markdown = ""
         if self.llm_service and content:
             prompt = (
                 f"Convert the following document content to clean, well-structured markdown. "
@@ -670,17 +686,35 @@ class ProjectManagerAgent:
                 else:
                     result = self.llm_service.generate(messages=messages)
                     markdown = result.get('response', '') if isinstance(result, dict) else str(result)
-
-                return {
-                    "output": markdown,
-                    "metadata": {"document_id": document_id, "filename": filename, "format": "markdown"},
-                }
             except Exception as e:
-                return {"output": f"Document processing error: {e}", "metadata": {"error": True}}
+                logger.warning(f"Document markdown conversion failed: {e}")
 
+        # 3. Save markdown version to workspace
+        if self.shell and markdown:
+            try:
+                safe_filename = filename.replace("/", "_").replace("\\", "_")
+                md_filename = safe_filename.rsplit(".", 1)[0] + ".md" if "." in safe_filename else safe_filename + ".md"
+                await self.shell.file_write(
+                    project_id=project_id,
+                    path=f"documents/{md_filename}",
+                    content=markdown,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save markdown to workspace: {e}")
+
+        # 4. Commit the uploaded document to git
+        if self.shell:
+            try:
+                await self.shell.git_commit(
+                    project_id, f"Add uploaded document: {filename}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to commit document: {e}")
+
+        output = markdown if markdown else (content[:2000] if content else "No content to process")
         return {
-            "output": content[:2000] if content else "No content to process",
-            "metadata": {"document_id": document_id},
+            "output": output,
+            "metadata": {"document_id": document_id, "filename": filename, "format": "markdown" if markdown else "raw"},
         }
 
     async def _execute_semantic_store_task(self, project_id: str, task: Dict,
@@ -1026,12 +1060,19 @@ class ProjectManagerAgent:
 
     async def _execute_techserver_sync_task(self, project_id: str, task: Dict,
                                              tool_input: Dict) -> Dict:
-        """Sync files from techserver for a project."""
+        """Sync files from techserver (192.168.1.3) via SMB for a project."""
         oenum = tool_input.get("oenum", "")
         if not oenum:
             return {"output": "No OENUM provided for techserver sync", "metadata": {"error": True}}
 
-        result = await self._copy_from_techserver(project_id, oenum)
+        project_name = tool_input.get("project_name", "")
+        result = await self._copy_from_techserver(project_id, oenum, project_name=project_name)
+
+        # Run structure analysis after copy if successful
+        if result.get("status") == "copied":
+            analysis = await self._analyze_project_structure(project_id, project_name, oenum)
+            result["structure_analysis"] = analysis
+
         output = json.dumps(result, indent=2, default=str)
         return {"output": output, "metadata": result}
 
@@ -1116,14 +1157,24 @@ class ProjectManagerAgent:
         except Exception as e:
             results["qdrant"] = {"status": "error", "error": str(e)}
 
-        # 3. For legacy users: fetch TPMS data and store in project workspace
+        # 3. For legacy users: verify TPMS project, copy files from techserver
         if tpms_oenum and is_legacy:
-            tpms_result = await self._fetch_and_store_tpms(project_id, tpms_oenum)
+            # Verify project in TPMS and cache mapping (on-demand queries later)
+            tpms_result = await self._verify_tpms_project(project_id, tpms_oenum)
             results["tpms"] = tpms_result
 
-            # 4. For legacy users: copy files from techserver
-            techserver_result = await self._copy_from_techserver(project_id, tpms_oenum)
+            # Copy project files from techserver via SMB
+            techserver_result = await self._copy_from_techserver(
+                project_id, tpms_oenum, project_name=name,
+            )
             results["techserver"] = techserver_result
+
+            # 4. Analyze project structure after techserver copy
+            if techserver_result.get("status") == "copied":
+                analysis_result = await self._analyze_project_structure(
+                    project_id, name, tpms_oenum,
+                )
+                results["structure_analysis"] = analysis_result
 
         # 5. Commit initial project structure to git
         try:
@@ -1160,23 +1211,36 @@ class ProjectManagerAgent:
         logger.info(f"Project {project_id} ({name}) initialized: {results}")
         return results
 
-    async def _fetch_and_store_tpms(self, project_id: str, oenum: str) -> Dict:
-        """Fetch TPMS data via MCP and store in project's tpms_data/ directory."""
-        try:
-            tpms_data = ""
-            tpms_text = ""
+    async def _verify_tpms_project(self, project_id: str, oenum: str) -> Dict:
+        """
+        Verify the project exists in TPMS and cache the IDProjectMain mapping.
+        Does NOT dump TPMS data to files — the COT engine queries TPMS on-demand
+        via the tpms_fetch tool using the TPMS Schema Instructions.
 
-            # Try MCP first for structured data
+        Only fetches: ViewProjectMain (for IDProjectMain) + a text summary for
+        Qdrant semantic indexing so the agent can answer general project questions.
+        """
+        try:
+            tpms_text = ""
+            id_project_main = None
+
+            # Fetch project overview to get IDProjectMain
             if (self.mcp_manager and self.mcp_manager.is_connected
                     and self.mcp_manager.has_tool("tpms_fetch")):
                 result = await self.mcp_manager.call_tool("tpms_fetch", {"oenum": oenum})
                 tpms_data = result.get("output", "")
+                if isinstance(tpms_data, str):
+                    try:
+                        parsed = json.loads(tpms_data)
+                        id_project_main = parsed.get("IDProjectMain")
+                    except json.JSONDecodeError:
+                        pass
             else:
                 client = get_tpms_fetcher_client()
                 fetch_result = await client.fetch_project(oenum)
-                tpms_data = json.dumps(fetch_result, indent=2, default=str)
+                id_project_main = fetch_result.get("IDProjectMain")
 
-            # Get readable text summary
+            # Get readable text summary for Qdrant indexing
             if (self.mcp_manager and self.mcp_manager.is_connected
                     and self.mcp_manager.has_tool("tpms_get_text")):
                 text_result = await self.mcp_manager.call_tool("tpms_get_text", {"oenum": oenum})
@@ -1185,21 +1249,18 @@ class ProjectManagerAgent:
                 client = get_tpms_fetcher_client()
                 tpms_text = await client.get_project_text(oenum)
 
-            # Store in project workspace
-            if self.shell and tpms_data:
-                await self.shell.file_write(
-                    project_id=project_id,
-                    path="tpms_data/project_data.json",
-                    content=tpms_data[:50000],
-                )
-            if self.shell and tpms_text:
-                await self.shell.file_write(
-                    project_id=project_id,
-                    path="tpms_data/project_summary.txt",
-                    content=tpms_text[:50000],
-                )
+            # Cache the OENUM → IDProjectMain mapping in Redis for COT use
+            tpms_mapping = {
+                "oenum": oenum,
+                "id_project_main": id_project_main,
+                "verified": True,
+            }
+            await self.memory.store_working_memory(
+                project_id, f"tpms_mapping:{project_id}",
+                json.dumps(tpms_mapping),
+            )
 
-            # Also index TPMS text in Qdrant for semantic search
+            # Index TPMS text summary in Qdrant for semantic search
             if tpms_text and self.memory.qdrant:
                 try:
                     chunks = []
@@ -1227,71 +1288,162 @@ class ProjectManagerAgent:
                 except Exception as e:
                     logger.warning(f"TPMS indexing in Qdrant failed: {e}")
 
-            return {"status": "fetched", "oenum": oenum, "data_length": len(tpms_data)}
+            return {
+                "status": "verified",
+                "oenum": oenum,
+                "id_project_main": id_project_main,
+            }
 
         except Exception as e:
-            logger.error(f"TPMS fetch failed for {oenum}: {e}")
+            logger.error(f"TPMS verification failed for {oenum}: {e}")
             return {"status": "error", "error": str(e)}
 
-    async def _copy_from_techserver(self, project_id: str, oenum: str) -> Dict:
+    async def _copy_from_techserver(self, project_id: str, oenum: str,
+                                    project_name: str = "") -> Dict:
         """
-        Connect to \\\\techserver and copy project files to workspace.
-        Like Claude Code connecting to a repo via MCP - for legacy users only.
+        Connect to techserver (192.168.1.3) via SMB and copy project files
+        to the project workspace on 1.69. Uses smbclient to list shares and
+        find the project directory, then smbget to recursively download files.
 
-        The techserver is a Windows SMB share mounted at /mnt/techserver.
-        Project directories contain the OENUM-derived project number (e.g., OE12065).
+        The project folder name on the techserver typically contains the project
+        name that the legacy user used when creating the project.
+
+        Credentials are read from TECHSERVER_USER / TECHSERVER_PASSWORD env vars.
         """
         if not self.shell:
             return {"status": "skip", "reason": "shell_unavailable"}
 
-        # Derive possible project number patterns from OENUM
-        # e.g., "04A12065" -> search for "OE12065", "12065", "04A12065"
+        techserver_ip = os.environ.get("TECHSERVER_IP", "192.168.1.3")
+        techserver_user = os.environ.get("TECHSERVER_USER", "EKC\\tech")
+        techserver_password = os.environ.get("TECHSERVER_PASSWORD", "")
+
+        if not techserver_password:
+            logger.warning("TECHSERVER_PASSWORD not set, cannot connect via SMB")
+            return {"status": "skip", "reason": "techserver_credentials_missing"}
+
+        # Build search patterns from OENUM and project name
         search_patterns = [oenum]
         digits = ''.join(c for c in oenum if c.isdigit())
         if digits:
             search_patterns.append(f"OE{digits}")
             search_patterns.append(digits)
-
-        techserver_mount = os.getenv("TECHSERVER_MOUNT", "/mnt/techserver")
+        if project_name:
+            search_patterns.append(project_name)
 
         try:
-            # Check if techserver is mounted
-            check = await self.shell.exec_command(
+            # 1. Ensure smbclient is available
+            await self.shell.exec_command(
                 project_id=project_id,
-                command=f"ls {techserver_mount} 2>/dev/null && echo 'MOUNTED' || echo 'NOT_MOUNTED'",
-                timeout=10,
+                command="which smbclient || apt-get update -qq && apt-get install -y -qq smbclient 2>/dev/null",
+                timeout=60,
             )
-            if "NOT_MOUNTED" in check.stdout:
-                return {"status": "skip", "reason": "techserver_not_mounted"}
 
-            # Search for project directory
-            for pattern in search_patterns:
-                find_cmd = (
-                    f"find {techserver_mount} -maxdepth 3 -type d "
-                    f"-iname '*{pattern}*' 2>/dev/null | head -1"
-                )
-                find_result = await self.shell.exec_command(
-                    project_id=project_id, command=find_cmd, timeout=30,
-                )
-                source_dir = find_result.stdout.strip()
-                if source_dir:
+            # 2. List available shares on techserver
+            list_cmd = (
+                f"smbclient -L //{techserver_ip} "
+                f"-U '{techserver_user}%{techserver_password}' "
+                f"--no-pass 2>/dev/null || "
+                f"smbclient -L //{techserver_ip} "
+                f"-U '{techserver_user}' '{techserver_password}' 2>/dev/null"
+            )
+            list_result = await self.shell.exec_command(
+                project_id=project_id, command=list_cmd, timeout=30,
+            )
+            shares_output = list_result.stdout
+
+            # 3. Search for project directory across shares
+            # Parse share names from smbclient output
+            share_names = []
+            for line in shares_output.split("\n"):
+                line = line.strip()
+                if "Disk" in line and not line.startswith("---"):
+                    # Extract share name (first column before "Disk")
+                    parts = line.split("Disk")
+                    if parts:
+                        share_name = parts[0].strip().rstrip()
+                        if share_name and not share_name.startswith("IPC"):
+                            share_names.append(share_name)
+
+            if not share_names:
+                return {"status": "error", "error": "No SMB shares found on techserver"}
+
+            found_share = None
+            found_path = None
+
+            for share in share_names:
+                # Search each share for a directory matching our patterns
+                for pattern in search_patterns:
+                    search_cmd = (
+                        f"smbclient '//{techserver_ip}/{share}' "
+                        f"-U '{techserver_user}%{techserver_password}' "
+                        f"-c 'recurse; ls *{pattern}*' 2>/dev/null | head -20"
+                    )
+                    search_result = await self.shell.exec_command(
+                        project_id=project_id, command=search_cmd, timeout=30,
+                    )
+                    output = search_result.stdout.strip()
+                    if output and "NT_STATUS" not in output and pattern.lower() in output.lower():
+                        found_share = share
+                        # Extract the matching directory name
+                        for out_line in output.split("\n"):
+                            out_line = out_line.strip()
+                            if pattern.lower() in out_line.lower() and "D" in out_line:
+                                # smbclient ls format: "dirname    D    0  ..."
+                                dir_name = out_line.split()[0] if out_line.split() else ""
+                                if dir_name:
+                                    found_path = dir_name
+                                    break
+                        if found_path:
+                            break
+                if found_path:
                     break
-            else:
-                return {"status": "not_found", "patterns": search_patterns}
 
-            # Copy files from techserver to project documents/
-            copy_cmd = (
-                f"cp -r {source_dir}/* documents/ 2>/dev/null; "
-                f"find documents/ -type f | wc -l"
-            )
-            copy_result = await self.shell.exec_command(
-                project_id=project_id, command=copy_cmd, timeout=120,
-            )
-            file_count = copy_result.stdout.strip()
+            if not found_share:
+                # Fallback: try the OENUM directly as share name
+                for pattern in search_patterns:
+                    test_cmd = (
+                        f"smbclient '//{techserver_ip}/{pattern}' "
+                        f"-U '{techserver_user}%{techserver_password}' "
+                        f"-c 'ls' 2>/dev/null"
+                    )
+                    test_result = await self.shell.exec_command(
+                        project_id=project_id, command=test_cmd, timeout=15,
+                    )
+                    if test_result.exit_code == 0 and "NT_STATUS" not in test_result.stdout:
+                        found_share = pattern
+                        found_path = ""
+                        break
 
-            # Create metadata for copied files
+            if not found_share:
+                return {
+                    "status": "not_found",
+                    "patterns": search_patterns,
+                    "shares_checked": share_names,
+                }
+
+            # 4. Download project files recursively using smbget
+            smb_source = f"smb://{techserver_ip}/{found_share}"
+            if found_path:
+                smb_source += f"/{found_path}"
+
+            download_cmd = (
+                f"cd documents && "
+                f"smbget --recursive '{smb_source}' "
+                f"-U '{techserver_user}%{techserver_password}' "
+                f"--dots 2>&1; "
+                f"echo '---DOWNLOAD_DONE---'; "
+                f"find . -type f | wc -l"
+            )
+            download_result = await self.shell.exec_command(
+                project_id=project_id, command=download_cmd, timeout=300,
+            )
+            output_lines = download_result.stdout.strip().split("---DOWNLOAD_DONE---")
+            file_count = output_lines[-1].strip() if len(output_lines) > 1 else "0"
+
+            # 5. Create file manifest metadata
             meta_cmd = (
-                f"find documents/ -type f -exec stat --format='%n|%s|%Y' {{}} \\; 2>/dev/null"
+                "find documents/ -type f "
+                "-exec stat --format='%n|%s|%Y' {} \\; 2>/dev/null"
             )
             meta_result = await self.shell.exec_command(
                 project_id=project_id, command=meta_cmd, timeout=30,
@@ -1307,7 +1459,6 @@ class ProjectManagerAgent:
                             "modified_ts": parts[2],
                         })
 
-            # Store metadata
             if files_meta:
                 meta_json = json.dumps(files_meta, indent=2)
                 await self.shell.file_write(
@@ -1316,15 +1467,187 @@ class ProjectManagerAgent:
                     content=meta_json,
                 )
 
+            # 6. Commit the copied techserver files
+            await self.shell.git_commit(
+                project_id, f"Import project files from techserver ({found_share})"
+            )
+
             return {
                 "status": "copied",
-                "source": source_dir,
+                "source": smb_source,
+                "share": found_share,
+                "path": found_path or "/",
                 "file_count": file_count,
                 "files": len(files_meta),
             }
 
         except Exception as e:
-            logger.error(f"Techserver copy failed for {oenum}: {e}")
+            logger.error(f"Techserver SMB copy failed for {oenum}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def _analyze_project_structure(
+        self, project_id: str, project_name: str, oenum: str,
+    ) -> Dict[str, Any]:
+        """
+        Deep analysis of project structure after files are copied from techserver.
+        Uses shell commands (tree, find, file, wc) to inspect the workspace,
+        then LLM to summarize the structure. Results are cached in Redis as
+        hot-tier data for the COT engine to use in subsequent chains.
+        """
+        if not self.shell:
+            return {"status": "skip", "reason": "shell_unavailable"}
+
+        try:
+            analysis_parts = {}
+
+            # 1. Tree view of the project (max depth 4)
+            tree_result = await self.shell.exec_command(
+                project_id=project_id,
+                command="tree -L 4 --dirsfirst -h 2>/dev/null || find . -maxdepth 4 -print | sort",
+                timeout=30,
+            )
+            analysis_parts["tree"] = tree_result.stdout[:5000]
+
+            # 2. File type summary
+            filetypes_result = await self.shell.exec_command(
+                project_id=project_id,
+                command=(
+                    "find documents/ -type f 2>/dev/null | "
+                    "sed 's/.*\\.//' | sort | uniq -c | sort -rn | head -20"
+                ),
+                timeout=15,
+            )
+            analysis_parts["file_types"] = filetypes_result.stdout
+
+            # 3. Largest files
+            largest_result = await self.shell.exec_command(
+                project_id=project_id,
+                command=(
+                    "find documents/ -type f -printf '%s %p\\n' 2>/dev/null | "
+                    "sort -rn | head -15"
+                ),
+                timeout=15,
+            )
+            analysis_parts["largest_files"] = largest_result.stdout
+
+            # 4. Directory sizes
+            dirsizes_result = await self.shell.exec_command(
+                project_id=project_id,
+                command="du -sh documents/*/ 2>/dev/null | sort -rh | head -15",
+                timeout=15,
+            )
+            analysis_parts["directory_sizes"] = dirsizes_result.stdout
+
+            # 5. Count totals
+            counts_result = await self.shell.exec_command(
+                project_id=project_id,
+                command=(
+                    "echo 'Total files:' && find documents/ -type f 2>/dev/null | wc -l && "
+                    "echo 'Total dirs:' && find documents/ -type d 2>/dev/null | wc -l && "
+                    "echo 'Total size:' && du -sh documents/ 2>/dev/null"
+                ),
+                timeout=15,
+            )
+            analysis_parts["totals"] = counts_result.stdout
+
+            # 6. Check for specific EKC file types (EPLAN, DWG, SLD, etc.)
+            ekc_files_result = await self.shell.exec_command(
+                project_id=project_id,
+                command=(
+                    "echo '=== EPLAN files ===' && "
+                    "find documents/ -iname '*.zw1' -o -iname '*.epl' -o -iname '*.elk' 2>/dev/null | head -10 && "
+                    "echo '=== CAD files ===' && "
+                    "find documents/ -iname '*.dwg' -o -iname '*.dxf' 2>/dev/null | head -10 && "
+                    "echo '=== PDF files ===' && "
+                    "find documents/ -iname '*.pdf' 2>/dev/null | head -10 && "
+                    "echo '=== Excel files ===' && "
+                    "find documents/ -iname '*.xlsx' -o -iname '*.xls' 2>/dev/null | head -10 && "
+                    "echo '=== Word files ===' && "
+                    "find documents/ -iname '*.docx' -o -iname '*.doc' 2>/dev/null | head -10"
+                ),
+                timeout=15,
+            )
+            analysis_parts["ekc_files"] = ekc_files_result.stdout
+
+            # 7. Use LLM to summarize the structure analysis
+            llm_summary = ""
+            if self.llm_service:
+                structure_text = "\n\n".join(
+                    f"### {k}\n{v}" for k, v in analysis_parts.items() if v.strip()
+                )
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an EKC (Electrokavir) project analyst. "
+                            "Analyze the project structure from a techserver copy and provide "
+                            "a structured summary for the project manager agent. "
+                            "Focus on: what type of project this is (MV switchgear, LV panel, etc.), "
+                            "what deliverables exist, what EPLAN/CAD/PDF drawings are present, "
+                            "and what the overall organization looks like."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Project: {project_name} (OENUM: {oenum})\n\n"
+                            f"File structure analysis:\n{structure_text}\n\n"
+                            "Provide a structured JSON summary with fields: "
+                            "project_type, deliverables, key_directories, "
+                            "eplan_files_count, cad_files_count, pdf_count, "
+                            "observations, and recommended_next_steps."
+                        ),
+                    },
+                ]
+                try:
+                    if hasattr(self.llm_service, "async_generate"):
+                        result = await self.llm_service.async_generate(
+                            messages=messages, user_id=f"agent_{project_id}",
+                        )
+                        llm_summary = result.get("response", "") if isinstance(result, dict) else str(result)
+                    else:
+                        result = self.llm_service.generate(messages=messages)
+                        llm_summary = result.get("response", "") if isinstance(result, dict) else str(result)
+                except Exception as e:
+                    logger.warning(f"LLM structure analysis failed: {e}")
+                    llm_summary = ""
+
+            # 8. Build final analysis result
+            analysis_result = {
+                "status": "analyzed",
+                "project_name": project_name,
+                "oenum": oenum,
+                "raw_analysis": analysis_parts,
+                "llm_summary": llm_summary,
+            }
+
+            # 9. Store analysis in Redis as hot-tier cache
+            try:
+                cache_key = f"project_structure:{project_id}"
+                await self.memory.store_working_memory(
+                    project_id, cache_key, json.dumps(analysis_result, default=str),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to cache structure analysis: {e}")
+
+            # 10. Write analysis to project workspace and commit
+            try:
+                await self.shell.file_write(
+                    project_id=project_id,
+                    path="documents/metadata/structure_analysis.json",
+                    content=json.dumps(analysis_result, indent=2, default=str),
+                )
+                await self.shell.git_commit(
+                    project_id, f"Add project structure analysis for {project_name}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write/commit structure analysis: {e}")
+
+            logger.info(f"Project structure analysis complete for {project_id}")
+            return analysis_result
+
+        except Exception as e:
+            logger.error(f"Project structure analysis failed for {oenum}: {e}")
             return {"status": "error", "error": str(e)}
 
     async def analyze_sld(

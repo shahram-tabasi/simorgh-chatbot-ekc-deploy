@@ -132,6 +132,10 @@ services:
       - REDIS_AGENT_DB=5
       # EKC Knowledge Base (shared volume for all projects)
       - EKC_KNOWLEDGE_PATH=/app/ekc-knowledge
+      # Techserver SMB credentials (for smbclient/smbget access to 192.168.1.3)
+      - TECHSERVER_IP=${TECHSERVER_IP:-192.168.1.3}
+      - TECHSERVER_USER=${TECHSERVER_USER:-EKC\tech}
+      - TECHSERVER_PASSWORD=${TECHSERVER_PASSWORD}
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
