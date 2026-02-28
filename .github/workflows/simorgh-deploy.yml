@@ -215,6 +215,10 @@ jobs:
           # Shell Service (Project Agent on 1.69)
           SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
 
+          # Mail Gateway (Project Email)
+          PROJECT_EMAIL_DOMAIN=simorghai.electrokavir.com
+          MAIL_GATEWAY_TOKEN=${{ secrets.MAIL_GATEWAY_TOKEN }}
+
           # Frontend URL (used in email verification/reset links)
           FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
 
@@ -487,7 +491,10 @@ jobs:
             echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} > .env && \
             echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
             echo SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }} >> .env && \
-            echo EKC_KNOWLEDGE_HOST_PATH=/home/ubuntu/ekc-knowledge >> .env\"'"
+            echo EKC_KNOWLEDGE_HOST_PATH=/home/ubuntu/ekc-knowledge >> .env && \
+            echo TECHSERVER_IP=${{ secrets.TECHSERVER_IP || '192.168.1.3' }} >> .env && \
+            echo TECHSERVER_USER=${{ secrets.TECHSERVER_USER || 'EKC\\\\tech' }} >> .env && \
+            echo TECHSERVER_PASSWORD=${{ secrets.TECHSERVER_PASSWORD }} >> .env\"'"
 
       - name: Verify .env file
         run: |

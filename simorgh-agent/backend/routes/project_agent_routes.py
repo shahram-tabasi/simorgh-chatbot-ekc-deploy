@@ -756,6 +756,99 @@ async def generate_project_email(
     return {"email": email_addr, "project_id": project_id}
 
 
+@router.post("/email-webhook")
+async def mail_gateway_webhook(data: dict):
+    """
+    Webhook endpoint called by the mail-gateway service when a new email
+    is received for a project. Stores the email in the project workspace
+    on 1.69, commits it, and triggers COT analysis of the incoming email.
+    """
+    project_id = data.get("project_id")
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id required")
+
+    email_from = data.get("from", "unknown")
+    subject = data.get("subject", "(no subject)")
+    body_preview = data.get("body_preview", "")
+    email_id = data.get("email_id", "unknown")
+    received_at = data.get("received_at", "")
+    has_attachments = data.get("has_attachments", False)
+    attachment_count = data.get("attachment_count", 0)
+
+    agent = get_project_agent()
+    shell = get_shell_service()
+
+    # 1. Store email content in project workspace on 1.69
+    try:
+        import json as _json
+        email_record = _json.dumps({
+            "id": email_id,
+            "from": email_from,
+            "subject": subject,
+            "body_preview": body_preview,
+            "received_at": received_at,
+            "has_attachments": has_attachments,
+            "attachment_count": attachment_count,
+        }, indent=2)
+        safe_subject = "".join(
+            c if c.isalnum() or c in (' ', '-', '_') else '_'
+            for c in subject[:50]
+        ).strip().replace(' ', '_')
+        email_filename = f"emails/{received_at[:10]}_{safe_subject}_{email_id[:8]}.json"
+
+        await shell.exec_command(
+            project_id=project_id,
+            command="mkdir -p emails",
+            timeout=10,
+        )
+        await shell.file_write(
+            project_id=project_id,
+            path=email_filename,
+            content=email_record,
+        )
+        # Commit the email to git
+        await shell.git_commit(
+            project_id,
+            f"Store incoming email: '{subject}' from {email_from}",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to store email in workspace: {e}")
+
+    # 2. Trigger COT analysis via agent's handle_input
+    try:
+        email_input = (
+            f"New email received for this project.\n"
+            f"From: {email_from}\n"
+            f"Subject: {subject}\n"
+            f"Received: {received_at}\n"
+            f"Attachments: {attachment_count}\n\n"
+            f"Content preview:\n{body_preview}"
+        )
+        result = await agent.handle_input(
+            project_id=project_id,
+            user_input=email_input,
+            channel=MessageChannel.EMAIL,
+            email_from=email_from,
+            email_subject=subject,
+            auto_execute=True,
+        )
+        return {
+            "status": "processed",
+            "project_id": project_id,
+            "email_id": email_id,
+            "cot_chain_id": result.get("chain_id"),
+            "tasks_created": result.get("tasks_created", 0),
+        }
+    except Exception as e:
+        logger.error(f"Email webhook COT trigger failed: {e}", exc_info=True)
+        return {
+            "status": "stored_only",
+            "project_id": project_id,
+            "email_id": email_id,
+            "error": str(e),
+        }
+
+
 # =============================================================================
 # DOCUMENT UPLOAD
 # =============================================================================
