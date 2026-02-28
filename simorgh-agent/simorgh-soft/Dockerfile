@@ -17,7 +17,7 @@ RUN npm run build
 FROM node:20-alpine AS backend-build
 WORKDIR /app
 COPY simorgh-backend/package*.json ./
-RUN npm ci --production
+RUN npm ci --omit=dev
 COPY simorgh-backend/ ./
 
 # Stage 3: Final runtime image with nginx + node
