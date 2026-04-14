@@ -1,0 +1,71 @@
+name: Pull Harbor Image and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      harbor_image:
+        description: 'Full Harbor image (e.g. harbor.example.com/project/app:latest)'
+        required: true
+        default: 'harbor.example.com/project/app:latest'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  pull-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Log in to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Pull image from Harbor
+        run: |
+          IMAGE="${{ github.event.inputs.harbor_image || secrets.HARBOR_DEFAULT_IMAGE }}"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker pull "$IMAGE"
+
+      - name: Save image as tar file
+        run: |
+          IMAGE_SLUG=$(echo "$IMAGE" | tr '/:.' '-')
+          docker save "$IMAGE" | gzip > "${IMAGE_SLUG}.tar.gz"
+          echo "TAR_FILE=${IMAGE_SLUG}.tar.gz" >> $GITHUB_ENV
+
+      - name: Get tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Harbor Image ${{ steps.tag.outputs.tag }}"
+          body: |
+            Docker image pulled from Harbor registry.
+
+            **Source image:** `${{ env.IMAGE }}`
+
+            **Load and use in Kubernetes:**
+            ```bash
+            # Load into local Docker
+            docker load < ${{ env.TAR_FILE }}
+
+            # Or import directly into containerd (for k8s nodes)
+            ctr images import ${{ env.TAR_FILE }}
+
+            # Or import into k3s
+            k3s ctr images import ${{ env.TAR_FILE }}
+            ```
+          files: ${{ env.TAR_FILE }}
