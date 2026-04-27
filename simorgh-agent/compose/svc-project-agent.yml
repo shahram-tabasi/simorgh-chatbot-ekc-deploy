@@ -1,0 +1,93 @@
+# =============================================================================
+# PROJECT-AGENT-SERVICE - Project init + task execution + COT engine
+# Port 8035. REST + MCP. Extracted from backend in Phase 7.
+# AI/COT clients use http://project-agent-service:8035/mcp.
+# REST routes mounted at /api/v2/agent/*.
+# =============================================================================
+services:
+  project-agent-service:
+    build: ../project-agent-service
+    image: simorgh-project-agent-service:local
+    container_name: project-agent-service
+    expose:
+      - "8035"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Redis
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_AGENT_DB=5
+      # Qdrant
+      - QDRANT_URL=http://qdrant:6333
+      # PostgreSQL
+      - POSTGRES_AUTH_HOST=${POSTGRES_AUTH_HOST:-postgres_auth}
+      - POSTGRES_AUTH_PORT=${POSTGRES_AUTH_PORT:-5432}
+      - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+      - POSTGRES_AUTH_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_AUTH_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      # LLM
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://nginx/api/llm}
+      - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
+      - LLM_GATEWAY_URL=http://llm-gateway:8030
+      # Shell service (192.168.1.69)
+      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+      - SHELL_SERVICE_TIMEOUT=60
+      # Mail gateway (project email)
+      - MAIL_GATEWAY_URL=http://mail-gateway:8027
+      - MAIL_GATEWAY_TOKEN=${MAIL_GATEWAY_TOKEN:-}
+      - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
+      # Other microservices reachable as MCP (the agent calls these)
+      - SEARCH_MCP_URL=http://search-service:8020/mcp
+      - TPMS_FETCHER_MCP_URL=http://tpms-fetcher:8021/mcp
+      - PROJECT_INIT_MCP_URL=http://project-init:8022/mcp
+      - PROJECT_ANALYSIS_MCP_URL=http://project-analysis:8023/mcp
+      - COMMAND_GEN_MCP_URL=http://command-gen:8024/mcp
+      - FILE_EXPORT_MCP_URL=http://file-export:8025/mcp
+      - EPLAN_BRIDGE_MCP_URL=http://eplan-bridge:8026/mcp
+      # MySQL TPMS (legacy)
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      # JWT
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      # CORS
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      # EKC knowledge
+      - EKC_KNOWLEDGE_PATH=/app/ekc-knowledge
+    volumes:
+      - ../uploads:/app/uploads
+      - ../logs:/app/logs
+      - ekc_knowledge:/app/ekc-knowledge:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres_auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8035/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  ekc_knowledge:
+    name: simorgh_ekc_knowledge
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${EKC_KNOWLEDGE_HOST_PATH:-/home/ubuntu/ekc-knowledge}
