@@ -1,0 +1,29 @@
+# =============================================================================
+# DOC-PROCESSOR - Universal document → Markdown converter (PDF/Excel/Word + OCR)
+# Port 8000. Used by: backend (DOC_PROCESSOR_URL).
+# =============================================================================
+services:
+  doc-processor:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-doc-processor:${IMAGE_TAG:-latest}
+    container_name: doc-processor
+    expose:
+      - "8000"
+    volumes:
+      - ../uploads/docs:/app/processed_docs
+      - ../uploads/temp:/app/temp
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

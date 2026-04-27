@@ -1,0 +1,35 @@
+# =============================================================================
+# FILE-EXPORT - Excel/Word/PDF export generator
+# Port 8025. AI/COT calls /mcp.
+# =============================================================================
+services:
+  file-export:
+    build: ../file-export-service
+    image: simorgh-file-export:local
+    container_name: file-export
+    expose:
+      - "8025"
+    volumes:
+      - file_exports:/app/exports
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - EXPORT_DIR=/app/exports
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  file_exports:
+    name: simorgh_file_exports
+    driver: local

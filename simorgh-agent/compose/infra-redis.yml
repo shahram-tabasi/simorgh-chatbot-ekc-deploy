@@ -1,0 +1,32 @@
+# =============================================================================
+# REDIS - Caching & Session Store
+# Used by: backend (cache, sessions, chat history, agent DB)
+# =============================================================================
+services:
+  redis:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-redis:7.2-alpine
+    container_name: redis
+    command: >
+      redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1 --save 300 10
+    volumes:
+      - redis_data:/data
+    expose:
+      - "6379"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  redis_data:
+    name: simorgh_redis_data
+    driver: local

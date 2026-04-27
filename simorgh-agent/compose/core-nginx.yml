@@ -1,0 +1,41 @@
+# =============================================================================
+# NGINX - Reverse proxy (HTTP only — TLS is terminated at host nginx)
+# Routes /api/* → backend, / → frontend, /simorgh-draft/* → simorgh-soft, etc.
+# Host nginx (on 192.168.1.68) proxies HTTPS traffic into port 85.
+# =============================================================================
+services:
+  nginx:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-nginx:alpine
+    container_name: nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    ports:
+      - "85:80"
+    environment:
+      - TZ=Asia/Tehran
+    volumes:
+      - ../nginx_configs/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../nginx_configs/includes/locations.inc:/etc/nginx/includes/locations.inc:ro
+      - ../static:/usr/share/nginx/html/old:ro
+      - nginx-cache:/data/nginx/cache
+      - nginx-logs:/var/log/nginx
+    networks:
+      - app_net
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  nginx-cache:
+    name: simorgh_nginx_cache
+    driver: local
+  nginx-logs:
+    name: simorgh_nginx_logs
+    driver: local

@@ -1,0 +1,29 @@
+# =============================================================================
+# PROJECT-ANALYSIS - Project workspace analyzer
+# Port 8023. Talks to shell-service on 192.168.1.69.
+# =============================================================================
+services:
+  project-analysis:
+    build: ../project-analysis-service
+    image: simorgh-project-analysis:local
+    container_name: project-analysis
+    expose:
+      - "8023"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8023/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

@@ -1,0 +1,28 @@
+# =============================================================================
+# QDRANT - Vector Database (semantic search, document RAG)
+# Used by: backend (qdrant_service.py)
+# =============================================================================
+services:
+  qdrant:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-qdrant:latest
+    container_name: qdrant
+    expose:
+      - "6333"
+      - "6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - app_net
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  qdrant_storage:
+    name: simorgh_qdrant_storage
+    driver: local

@@ -1,0 +1,36 @@
+# =============================================================================
+# TTS-SERVICE - Text-to-Speech using edge-tts (CPU)
+# Port 8002.
+# =============================================================================
+services:
+  tts-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-tts-service:${IMAGE_TAG:-latest}
+    container_name: tts-service
+    expose:
+      - "8002"
+    volumes:
+      - tts_cache:/app/cache
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TTS_VOICE=${TTS_VOICE:-en-US-AriaNeural}
+      - TTS_LANGUAGE=${TTS_LANGUAGE:-en}
+      - TTS_MAX_CACHE_MB=${TTS_MAX_CACHE_MB:-500}
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  tts_cache:
+    name: simorgh_tts_cache
+    driver: local

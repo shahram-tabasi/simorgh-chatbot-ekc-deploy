@@ -1,0 +1,156 @@
+# =============================================================================
+# BACKEND - FastAPI Main Application (port 8890)
+# Currently a monolith — Phases 2-10 will extract features into standalone services.
+# =============================================================================
+services:
+  backend:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-backend:${IMAGE_TAG:-latest}
+    container_name: backend
+    environment:
+      - PYTHONUNBUFFERED=1
+      # HuggingFace cache
+      - HF_HOME=/root/.cache/huggingface
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface/hub
+      - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+      - HF_HUB_OFFLINE=0
+      # Neo4j (optional)
+      - NEO4J_URI=${NEO4J_URI:-}
+      - NEO4J_USER=${NEO4J_USER:-}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-}
+      # Redis
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_CHAT_DB=1
+      - REDIS_CACHE_DB=2
+      - REDIS_AGENT_DB=5
+      # Qdrant
+      - QDRANT_URL=http://qdrant:6333
+      # SQL Server (legacy auth, external)
+      - SQL_SERVER_HOST=${SQL_SERVER_HOST}
+      - SQL_SERVER_PORT=${SQL_SERVER_PORT:-1433}
+      - SQL_SERVER_USER=${SQL_SERVER_USER}
+      - SQL_SERVER_PASSWORD=${SQL_SERVER_PASSWORD}
+      - SQL_SERVER_DATABASE=${SQL_SERVER_DATABASE}
+      # MySQL TPMS (legacy, external)
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      # JWT
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      # PostgreSQL Auth
+      - POSTGRES_AUTH_HOST=postgres_auth
+      - POSTGRES_AUTH_PORT=5432
+      - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+      - POSTGRES_AUTH_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_AUTH_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      # LLM
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://nginx/api/llm}
+      - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
+      # Doc processor
+      - DOC_PROCESSOR_URL=http://doc-processor:8000
+      # Google OAuth
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-https://simorghai.electrokavir.com/chatbot/auth/google/callback}
+      # Email
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-smtp}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@simorgh.ai}
+      - FROM_NAME=${FROM_NAME:-Simorgh AI}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - AUTO_VERIFY_EMAIL=${AUTO_VERIFY_EMAIL:-false}
+      # Frontend URL (verification/reset links)
+      - FRONTEND_URL=${FRONTEND_URL:-https://simorghai.electrokavir.com/chatbot}
+      # Cookies / Security
+      - SECURE_COOKIES=${SECURE_COOKIES:-true}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN}
+      # Tiers / Admin
+      - ADMIN_SETUP_SECRET=${ADMIN_SETUP_SECRET}
+      # NOWPayments
+      - NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY}
+      - NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET}
+      - NOWPAYMENTS_SANDBOX=${NOWPAYMENTS_SANDBOX:-false}
+      # Shell service (192.168.1.69)
+      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+      - SHELL_SERVICE_TIMEOUT=60
+      # Mail gateway
+      - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
+      - MAIL_GATEWAY_URL=http://mail-gateway:8027
+      - MAIL_GATEWAY_TOKEN=${MAIL_GATEWAY_TOKEN:-}
+      # Microservices REST URLs (fallback)
+      - SEARCH_SERVICE_URL=http://search-service:8020
+      - TPMS_FETCHER_URL=http://tpms-fetcher:8021
+      - PROJECT_INIT_URL=http://project-init:8022
+      - PROJECT_ANALYSIS_URL=http://project-analysis:8023
+      - COMMAND_GEN_URL=http://command-gen:8024
+      - FILE_EXPORT_URL=http://file-export:8025
+      - EPLAN_BRIDGE_URL=http://eplan-bridge:8026
+      # Microservices MCP URLs (primary for AI/COT)
+      - SEARCH_MCP_URL=http://search-service:8020/mcp
+      - TPMS_FETCHER_MCP_URL=http://tpms-fetcher:8021/mcp
+      - PROJECT_INIT_MCP_URL=http://project-init:8022/mcp
+      - PROJECT_ANALYSIS_MCP_URL=http://project-analysis:8023/mcp
+      - COMMAND_GEN_MCP_URL=http://command-gen:8024/mcp
+      - FILE_EXPORT_MCP_URL=http://file-export:8025/mcp
+      - EPLAN_BRIDGE_MCP_URL=http://eplan-bridge:8026/mcp
+      # EKC knowledge
+      - EKC_KNOWLEDGE_PATH=/app/ekc-knowledge
+      # Techserver SMB
+      - TECHSERVER_IP=${TECHSERVER_IP:-192.168.1.3}
+      - TECHSERVER_USER=${TECHSERVER_USER:-EKC\tech}
+      - TECHSERVER_PASSWORD=${TECHSERVER_PASSWORD}
+    volumes:
+      - ../uploads:/app/uploads
+      - ../logs:/app/logs
+      - ../backend/services:/app/services
+      - huggingface_cache:/root/.cache/huggingface
+      - sentence_transformers_cache:/root/.cache/torch/sentence_transformers
+      - ekc_knowledge:/app/ekc-knowledge:ro
+    expose:
+      - "8890"
+    networks:
+      - app_net
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      postgres_auth:
+        condition: service_healthy
+      doc-processor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8890/health | grep -q 'healthy' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  huggingface_cache:
+    name: simorgh_huggingface_cache
+    driver: local
+  sentence_transformers_cache:
+    name: simorgh_sentence_transformers_cache
+    driver: local
+  ekc_knowledge:
+    name: simorgh_ekc_knowledge
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${EKC_KNOWLEDGE_HOST_PATH:-/home/ubuntu/ekc-knowledge}

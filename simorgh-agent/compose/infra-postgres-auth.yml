@@ -1,0 +1,36 @@
+# =============================================================================
+# POSTGRES AUTH - Modern authentication, projects, tasks, messages
+# Migrations: backend/database/migrations/*.sql (auto-loaded on first start)
+# =============================================================================
+services:
+  postgres_auth:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-postgres:16-alpine
+    container_name: postgres_auth
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      - POSTGRES_DB=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+    volumes:
+      - postgres_auth_data:/var/lib/postgresql/data
+      - ../backend/database/migrations/001_create_auth_tables.sql:/docker-entrypoint-initdb.d/001_create_auth_tables.sql:ro
+      - ../backend/database/migrations/003_project_agent_system.sql:/docker-entrypoint-initdb.d/003_project_agent_system.sql:ro
+    expose:
+      - "5432"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_AUTH_USER:-simorgh} -d ${POSTGRES_AUTH_DATABASE:-simorgh_auth}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  postgres_auth_data:
+    name: simorgh_postgres_auth_data
+    driver: local

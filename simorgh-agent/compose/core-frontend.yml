@@ -1,0 +1,23 @@
+# =============================================================================
+# FRONTEND - React + Vite production build (port 80, served by nginx-alpine)
+# =============================================================================
+services:
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-frontend:${IMAGE_TAG:-latest}
+    container_name: frontend
+    expose:
+      - "80"
+    networks:
+      - app_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

@@ -1,0 +1,36 @@
+# =============================================================================
+# STT-SERVICE - Speech-to-Text using Faster-Whisper (CPU)
+# Port 8001.
+# =============================================================================
+services:
+  stt-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-stt-service:${IMAGE_TAG:-latest}
+    container_name: stt-service
+    expose:
+      - "8001"
+    volumes:
+      - stt_models:/app/models
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-base}
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  stt_models:
+    name: simorgh_stt_models
+    driver: local

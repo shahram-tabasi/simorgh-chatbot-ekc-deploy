@@ -1,0 +1,45 @@
+# =============================================================================
+# SIMORGH-SOFT - Electrical design software (React + Express + MongoDB)
+# Accessible via host nginx at /simorgh-draft/
+# Talks to external SQL Server (Eplan_n2) and MySQL TPMS for legacy data.
+# =============================================================================
+services:
+  simorgh-soft:
+    build:
+      context: ../simorgh-soft
+      dockerfile: Dockerfile
+    image: simorgh-soft:local
+    container_name: simorgh-soft
+    expose:
+      - "80"
+    networks:
+      - app_net
+    environment:
+      - PORT=3001
+      - MONGODB_URI=mongodb://simorgh-soft-mongo:27017
+      - DATABASE_NAME=${SIMORGH_SOFT_DATABASE_NAME:-simorgh_db}
+      - SQL_USER=${SIMORGH_SOFT_SQL_USER:-userfanni}
+      - SQL_PASSWORD=${SIMORGH_SOFT_SQL_PASSWORD:-12345678}
+      - SQL_SERVER=${SIMORGH_SOFT_SQL_SERVER:-192.168.1.39}
+      - SQL_DATABASE=${SIMORGH_SOFT_SQL_DATABASE:-Eplan_n2}
+      - SQL_PORT=${SIMORGH_SOFT_SQL_PORT:-1433}
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+    depends_on:
+      simorgh-soft-mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
