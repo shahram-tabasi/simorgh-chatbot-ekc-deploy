@@ -1,0 +1,44 @@
+# =============================================================================
+# PAYMENTS-SERVICE - NOWPayments (crypto) + IPN webhook
+# Port 8038. REST. Extracted from backend in Phase 9.
+# Routes mounted at /api/payments/*.
+# =============================================================================
+services:
+  payments-service:
+    build: ../payments-service
+    image: simorgh-payments-service:local
+    container_name: payments-service
+    expose:
+      - "8038"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - REDIS_URL=redis://redis:6379/0
+      - POSTGRES_AUTH_HOST=${POSTGRES_AUTH_HOST:-postgres_auth}
+      - POSTGRES_AUTH_PORT=${POSTGRES_AUTH_PORT:-5432}
+      - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+      - POSTGRES_AUTH_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_AUTH_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      - NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY}
+      - NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET}
+      - NOWPAYMENTS_SANDBOX=${NOWPAYMENTS_SANDBOX:-false}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - FRONTEND_URL=${FRONTEND_URL:-https://simorghai.electrokavir.com/chatbot}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+    depends_on:
+      postgres_auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8038/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

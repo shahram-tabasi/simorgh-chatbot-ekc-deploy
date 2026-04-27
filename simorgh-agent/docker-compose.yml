@@ -57,9 +57,10 @@ include:
   - compose/svc-chat.yml                  # Phase 6 — chat + sessions + context + memory
   - compose/svc-project-agent.yml         # Phase 7 — project init + tasks + COT (REST + MCP)
   - compose/svc-specification-agent.yml   # Phase 8 — electrical spec extraction (REST + MCP)
-
-  # ---- Future extractions from backend monolith (Phases 9–10) ---------------
-  # Uncomment as each phase lands:
+  - compose/svc-graph-rag.yml             # Phase 9 — Neo4j-based graph RAG
+  - compose/svc-payments.yml              # Phase 9 — NOWPayments + IPN
+  - compose/svc-admin.yml                 # Phase 9 — admin endpoints
+  - compose/svc-tier-quota.yml            # Phase 9 — user tiers + quota
   # - compose/svc-embeddings.yml          # Phase 3
   # - compose/svc-auth.yml                # Phase 4
   # - compose/svc-documents-rag.yml       # Phase 5

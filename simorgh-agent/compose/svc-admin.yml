@@ -1,0 +1,46 @@
+# =============================================================================
+# ADMIN-SERVICE - Admin endpoints (user management, stats)
+# Port 8039. REST. Extracted from backend in Phase 9.
+# Routes mounted at /api/admin/*.
+# =============================================================================
+services:
+  admin-service:
+    build: ../admin-service
+    image: simorgh-admin-service:local
+    container_name: admin-service
+    expose:
+      - "8039"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - REDIS_URL=redis://redis:6379/0
+      - POSTGRES_AUTH_HOST=${POSTGRES_AUTH_HOST:-postgres_auth}
+      - POSTGRES_AUTH_PORT=${POSTGRES_AUTH_PORT:-5432}
+      - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+      - POSTGRES_AUTH_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_AUTH_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - ADMIN_SETUP_SECRET=${ADMIN_SETUP_SECRET}
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+    depends_on:
+      postgres_auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8039/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
