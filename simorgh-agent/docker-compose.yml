@@ -52,8 +52,9 @@ include:
   # ---- Extracted from backend monolith --------------------------------------
   - compose/svc-llm-gateway.yml           # Phase 2 — OpenAI + local LLM router
   - compose/svc-embeddings.yml            # Phase 3 — sentence-transformers embeddings
+  - compose/svc-auth.yml                  # Phase 4 — auth_v2 + oauth + email + tpms
 
-  # ---- Future extractions from backend monolith (Phases 4–10) ---------------
+  # ---- Future extractions from backend monolith (Phases 5–10) ---------------
   # Uncomment as each phase lands:
   # - compose/svc-embeddings.yml          # Phase 3
   # - compose/svc-auth.yml                # Phase 4
