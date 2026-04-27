@@ -49,9 +49,11 @@ include:
   - compose/soft-mongo.yml
   - compose/soft-app.yml
 
-  # ---- Future extractions from backend monolith (Phases 2–10) ---------------
+  # ---- Extracted from backend monolith --------------------------------------
+  - compose/svc-llm-gateway.yml           # Phase 2 — OpenAI + local LLM router
+
+  # ---- Future extractions from backend monolith (Phases 3–10) ---------------
   # Uncomment as each phase lands:
-  # - compose/svc-llm-gateway.yml         # Phase 2
   # - compose/svc-embeddings.yml          # Phase 3
   # - compose/svc-auth.yml                # Phase 4
   # - compose/svc-documents-rag.yml       # Phase 5
