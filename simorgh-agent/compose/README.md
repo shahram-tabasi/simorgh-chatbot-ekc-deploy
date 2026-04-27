@@ -87,29 +87,46 @@ All files share:
 
 This keeps them stable across the master compose and any standalone runs.
 
-## Future structure (phases 2–10)
+## Extracted from backend monolith (Phases 2–9, all landed)
 
-The current `backend` is a monolith. Subsequent phases will extract these
-features into their own `compose/svc-*.yml` files; the master will just
-uncomment the matching `include:` line:
+Each runs as its own container. Comment a line in `../docker-compose.yml`
+to disable; nginx then falls through to the legacy `backend` upstream
+via the catch-all `/api/` block (so the app keeps working).
 
-```
-svc-llm-gateway.yml          phase 2  — OpenAI + local LLM (.61/.62) router
-svc-embeddings.yml           phase 3  — sentence-transformers
-svc-auth.yml                 phase 4  — auth_v2 + oauth + email
-svc-documents-rag.yml        phase 5  — upload + chunk + embed + Qdrant
-svc-chat.yml                 phase 6  — chat + context + memory + summarizer
-svc-project-agent.yml        phase 7  — MCP server (AI / COT)
-svc-specification-agent.yml  phase 8  — MCP server (electrical specs)
-svc-graph-rag.yml            phase 9  — Neo4j-based RAG
-svc-payments.yml             phase 9  — NOWPayments
-svc-admin.yml                phase 9  — admin endpoints
-svc-tier-quota.yml           phase 9  — tier + rate limit
-```
+| File | Service | Port | Protocol | Path |
+|---|---|---|---|---|
+| `svc-llm-gateway.yml` | `llm-gateway` | 8030 | REST | `/api/llm-gateway/*` |
+| `svc-embeddings.yml` | `embeddings-service` | 8031 | REST | `/api/embeddings/*` |
+| `svc-auth.yml` | `auth-service` | 8032 | REST | `/api/v2/auth/*` |
+| `svc-documents-rag.yml` | `documents-rag-service` | 8033 | REST | `/api/v2/documents/*` |
+| `svc-chat.yml` | `chat-service` | 8034 | REST | `/api/v2/chat/*`, `/api/v2/projects/*/sessions` |
+| `svc-project-agent.yml` | `project-agent-service` | 8035 | REST + MCP | `/api/v2/agent/*`, `/mcp` |
+| `svc-specification-agent.yml` | `specification-agent-service` | 8036 | REST + MCP | `/api/v2/specs/*`, `/mcp` |
+| `svc-graph-rag.yml` | `graph-rag-service` | 8037 | REST | `/api/v2/graph-rag/*` |
+| `svc-payments.yml` | `payments-service` | 8038 | REST | `/api/payments/*` |
+| `svc-admin.yml` | `admin-service` | 8039 | REST | `/api/admin/*` |
+| `svc-tier-quota.yml` | `tier-quota-service` | 8040 | REST | `/api/quota/*` |
 
-After phase 10, `core-backend.yml` is just a thin gateway/orchestrator.
+## How phase 10 routes traffic
+
+`nginx_configs/includes/locations.inc` puts the specific `/api/*` blocks
+**before** the catch-all `/api/` block. Longest-prefix-match wins, so
+external requests for migrated paths hit the standalone services
+directly — backend never sees them. Anything not migrated falls through
+to backend as before.
+
+To roll back a single service:
+1. Comment the matching `include:` line in `../docker-compose.yml`
+2. Comment the matching `location` block in `../nginx_configs/includes/locations.inc`
+3. `docker compose up -d --remove-orphans` and `docker exec nginx nginx -s reload`
+
+The backend monolith still contains all the original code; it just
+doesn't see the migrated requests anymore. Future cleanup: delete the
+duplicated `routes/` and `services/` files from `backend/` once each
+extracted service is verified in production.
 
 ## Legacy
 
 The old monolithic compose lives at `../docker-compose.legacy.yml` for
-reference and emergency rollback. It will be deleted when phase 10 lands.
+emergency rollback (`docker compose -f docker-compose.legacy.yml up -d`).
+Delete when the new layout has been stable in production for a release.
