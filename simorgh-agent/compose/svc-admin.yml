@@ -5,8 +5,9 @@
 # =============================================================================
 services:
   admin-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-admin-service:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-admin-service:${IMAGE_TAG:-latest}
     build: ../admin-service
+    pull_policy: build
     container_name: admin-service
     expose:
       - "8039"

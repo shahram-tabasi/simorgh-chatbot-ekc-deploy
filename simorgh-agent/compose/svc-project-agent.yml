@@ -6,8 +6,9 @@
 # =============================================================================
 services:
   project-agent-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-project-agent-service:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-project-agent-service:${IMAGE_TAG:-latest}
     build: ../project-agent-service
+    pull_policy: build
     container_name: project-agent-service
     expose:
       - "8035"

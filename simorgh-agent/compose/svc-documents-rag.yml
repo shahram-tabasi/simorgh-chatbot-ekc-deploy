@@ -5,8 +5,9 @@
 # =============================================================================
 services:
   documents-rag-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-documents-rag-service:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-documents-rag-service:${IMAGE_TAG:-latest}
     build: ../documents-rag-service
+    pull_policy: build
     container_name: documents-rag-service
     expose:
       - "8033"

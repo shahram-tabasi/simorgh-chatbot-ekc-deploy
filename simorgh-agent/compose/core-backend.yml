@@ -4,7 +4,9 @@
 # =============================================================================
 services:
   backend:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-backend:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-backend:${IMAGE_TAG:-latest}
+    build: ../backend
+    pull_policy: build
     container_name: backend
     environment:
       - PYTHONUNBUFFERED=1

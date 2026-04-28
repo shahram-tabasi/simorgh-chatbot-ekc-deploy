@@ -4,7 +4,9 @@
 # =============================================================================
 services:
   tts-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-tts-service:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-tts-service:${IMAGE_TAG:-latest}
+    build: ../tts-service
+    pull_policy: build
     container_name: tts-service
     expose:
       - "8002"

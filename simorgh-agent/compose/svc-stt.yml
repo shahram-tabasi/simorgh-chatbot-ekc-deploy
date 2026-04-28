@@ -4,7 +4,9 @@
 # =============================================================================
 services:
   stt-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-stt-service:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-stt-service:${IMAGE_TAG:-latest}
+    build: ../stt-service
+    pull_policy: build
     container_name: stt-service
     expose:
       - "8001"
