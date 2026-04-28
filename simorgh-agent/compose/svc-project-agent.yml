@@ -6,8 +6,8 @@
 # =============================================================================
 services:
   project-agent-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-project-agent-service:${IMAGE_TAG:-latest}
     build: ../project-agent-service
-    image: simorgh-project-agent-service:local
     container_name: project-agent-service
     expose:
       - "8035"

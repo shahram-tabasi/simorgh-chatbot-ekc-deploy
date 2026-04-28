@@ -25,6 +25,7 @@ jobs:
     strategy:
       matrix:
         service:
+          # Original services
           - name: backend
             context: ./simorgh-agent/backend
             dockerfile: ./simorgh-agent/backend/Dockerfile
@@ -43,6 +44,41 @@ jobs:
           - name: shell-service
             context: ./simorgh-agent/shell-service
             dockerfile: ./simorgh-agent/shell-service/Dockerfile
+
+          # Phases 2-9: extracted from backend monolith
+          - name: llm-gateway
+            context: ./simorgh-agent/llm-gateway
+            dockerfile: ./simorgh-agent/llm-gateway/Dockerfile
+          - name: embeddings-service
+            context: ./simorgh-agent/embeddings-service
+            dockerfile: ./simorgh-agent/embeddings-service/Dockerfile
+          - name: auth-service
+            context: ./simorgh-agent/auth-service
+            dockerfile: ./simorgh-agent/auth-service/Dockerfile
+          - name: documents-rag-service
+            context: ./simorgh-agent/documents-rag-service
+            dockerfile: ./simorgh-agent/documents-rag-service/Dockerfile
+          - name: chat-service
+            context: ./simorgh-agent/chat-service
+            dockerfile: ./simorgh-agent/chat-service/Dockerfile
+          - name: project-agent-service
+            context: ./simorgh-agent/project-agent-service
+            dockerfile: ./simorgh-agent/project-agent-service/Dockerfile
+          - name: specification-agent-service
+            context: ./simorgh-agent/specification-agent-service
+            dockerfile: ./simorgh-agent/specification-agent-service/Dockerfile
+          - name: graph-rag-service
+            context: ./simorgh-agent/graph-rag-service
+            dockerfile: ./simorgh-agent/graph-rag-service/Dockerfile
+          - name: payments-service
+            context: ./simorgh-agent/payments-service
+            dockerfile: ./simorgh-agent/payments-service/Dockerfile
+          - name: admin-service
+            context: ./simorgh-agent/admin-service
+            dockerfile: ./simorgh-agent/admin-service/Dockerfile
+          - name: tier-quota-service
+            context: ./simorgh-agent/tier-quota-service
+            dockerfile: ./simorgh-agent/tier-quota-service/Dockerfile
 
     steps:
       - name: Checkout code

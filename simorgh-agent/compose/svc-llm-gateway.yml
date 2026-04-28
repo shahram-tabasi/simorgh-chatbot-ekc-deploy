@@ -6,8 +6,8 @@
 # =============================================================================
 services:
   llm-gateway:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-llm-gateway:${IMAGE_TAG:-latest}
     build: ../llm-gateway
-    image: simorgh-llm-gateway:local
     container_name: llm-gateway
     expose:
       - "8030"

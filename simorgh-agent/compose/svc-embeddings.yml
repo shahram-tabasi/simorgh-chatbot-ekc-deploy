@@ -5,8 +5,8 @@
 # =============================================================================
 services:
   embeddings-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-embeddings-service:${IMAGE_TAG:-latest}
     build: ../embeddings-service
-    image: simorgh-embeddings-service:local
     container_name: embeddings-service
     expose:
       - "8031"

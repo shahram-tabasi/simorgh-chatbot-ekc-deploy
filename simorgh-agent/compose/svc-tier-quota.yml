@@ -5,8 +5,8 @@
 # =============================================================================
 services:
   tier-quota-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-tier-quota-service:${IMAGE_TAG:-latest}
     build: ../tier-quota-service
-    image: simorgh-tier-quota-service:local
     container_name: tier-quota-service
     expose:
       - "8040"

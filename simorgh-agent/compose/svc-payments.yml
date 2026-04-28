@@ -5,8 +5,8 @@
 # =============================================================================
 services:
   payments-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-payments-service:${IMAGE_TAG:-latest}
     build: ../payments-service
-    image: simorgh-payments-service:local
     container_name: payments-service
     expose:
       - "8038"

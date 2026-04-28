@@ -6,8 +6,8 @@
 # =============================================================================
 services:
   specification-agent-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/simorgh-specification-agent-service:${IMAGE_TAG:-latest}
     build: ../specification-agent-service
-    image: simorgh-specification-agent-service:local
     container_name: specification-agent-service
     expose:
       - "8036"
