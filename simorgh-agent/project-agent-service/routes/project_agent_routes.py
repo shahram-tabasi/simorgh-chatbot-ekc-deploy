@@ -30,12 +30,26 @@ from models.project_models import (
     GitCommitRequest, AgentState,
     ProjectStatus, TaskStatus, MessageChannel, TaskTrigger,
 )
-from services.auth_utils import get_current_user
+import os
+import httpx
+from services.auth_utils import get_current_user, require_role
 from services.project_agent import get_project_agent, ProjectManagerAgent
 from services.project_memory_service import get_project_memory_service, ProjectMemoryService
 from services.shell_service import get_shell_service, ShellServiceClient
 from services.email_gateway import get_email_gateway, InboundEmail
 from services.doc_processor_client import DocProcessorClient
+
+# Role gate for project creation. Configurable via env so adding more roles
+# (e.g. manager_technical) doesn't require a code change.
+PROJECT_CREATE_ALLOWED_ROLES = tuple(
+    r.strip() for r in os.getenv(
+        "PROJECT_CREATE_ALLOWED_ROLES",
+        "expert_technical",
+    ).split(",") if r.strip()
+)
+
+# Where to post outbound email replies (when channel=email).
+PROJECT_MAIL_URL = os.getenv("PROJECT_MAIL_URL", "http://project-mail-service:8045")
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +76,14 @@ def _is_legacy_user(user_id: str) -> bool:
 @router.post("/projects", response_model=ProjectResponse)
 async def create_project(
     data: ProjectCreate,
-    current_user: str = Depends(get_current_user),
+    auth_user: dict = Depends(require_role(*PROJECT_CREATE_ALLOWED_ROLES)),
 ):
     """
     Unified project creation endpoint.
+
+    Authorization: only users whose `role_category` JWT claim (or Redis
+    `user_profile:{id}` value) is in PROJECT_CREATE_ALLOWED_ROLES can
+    create projects. By default, that's `expert_technical` only.
 
     Legacy users (organize members):
       - Must provide tpms_oenum for TPMS authentication
@@ -78,6 +96,7 @@ async def create_project(
       - No TPMS integration
       - Uses online AI only
     """
+    current_user = auth_user.get("sub")
     memory = get_project_memory_service()
     agent = get_project_agent()
 
@@ -333,6 +352,33 @@ async def send_message(
             email_subject=data.email_subject,
             auto_execute=True,
         )
+
+        # If the trigger was an email, dispatch the agent's reply back to
+        # the sender via project-mail-service so the conversation continues
+        # on the same channel (resumable session, item 1 of the spec).
+        if (
+            data.channel == MessageChannel.EMAIL
+            and data.email_from
+            and result.get("response")
+        ):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as c:
+                    await c.post(
+                        f"{PROJECT_MAIL_URL}/send",
+                        json={
+                            "to":          data.email_from,
+                            "subject":     f"Re: {data.email_subject or 'Simorgh project update'}",
+                            "body":        result["response"],
+                            "project_id":  project_id,
+                            "chat_id":     data.chat_id,
+                            "in_reply_to": data.email_message_id if hasattr(data, "email_message_id") else None,
+                        },
+                    )
+            except Exception:
+                # Don't fail the agent turn if the outbound mail fails;
+                # the response is already persisted in chat history and
+                # the user can retrieve it via the chat channel.
+                logger.exception("project-mail-service /send failed; reply not delivered by email")
 
         return {
             "response": result["response"],

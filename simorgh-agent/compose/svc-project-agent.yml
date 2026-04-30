@@ -40,6 +40,12 @@ services:
       - MAIL_GATEWAY_URL=http://mail-gateway:8027
       - MAIL_GATEWAY_TOKEN=${MAIL_GATEWAY_TOKEN:-}
       - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
+      # Outbound email gateway for the canonical mailbox simorghai@electrokavir.com.
+      # Used when an agent turn was triggered by channel=email — the reply
+      # goes back to the original sender via this service.
+      - PROJECT_MAIL_URL=http://project-mail-service:8045
+      # Roles allowed to create projects (project-creation auth gate).
+      - PROJECT_CREATE_ALLOWED_ROLES=${PROJECT_CREATE_ALLOWED_ROLES:-expert_technical}
       # Other microservices reachable as MCP (the agent calls these)
       - SEARCH_MCP_URL=http://search-service:8020/mcp
       - TPMS_FETCHER_MCP_URL=http://tpms-fetcher:8021/mcp

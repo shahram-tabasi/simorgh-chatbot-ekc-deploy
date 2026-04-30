@@ -168,3 +168,68 @@ async def get_current_user(authorization: str = Header(None)) -> str:
         )
 
     return username
+
+
+async def get_current_user_payload(authorization: str = Header(None)) -> Dict[str, Any]:
+    """
+    FastAPI dependency that returns the FULL decoded JWT payload, not just the
+    username. Use this when you need claims such as `role_category`,
+    `department`, etc. (added by auth-service legacy-login enrichment).
+
+    Falls back to a Redis lookup of `user_profile:{user_id}` for any claim
+    that isn't on the JWT (compatibility while the enrichment rolls out).
+
+    Returns:
+        Dict with at least {"sub": user_id, ...claims...}.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    token = authorization.replace("Bearer ", "")
+    payload = decode_access_token(token)
+    if not payload or not payload.get("sub"):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Best-effort: enrich from Redis user_profile if claims are missing.
+    if "role_category" not in payload:
+        try:
+            from services.redis_service import get_redis_service
+            r = get_redis_service()
+            cached = r.get(f"user_profile:{payload['sub']}") if r else None
+            if cached:
+                # cached may be a dict already, or a JSON string
+                import json as _json
+                prof = cached if isinstance(cached, dict) else _json.loads(cached)
+                payload.setdefault("role_category", prof.get("role_category"))
+                payload.setdefault("department",    prof.get("department"))
+        except Exception:
+            pass
+
+    return payload
+
+
+def require_role(*allowed: str):
+    """
+    Dependency factory: only allow users whose role_category is in `allowed`.
+    Usage:
+        @router.post("/projects",
+                     dependencies=[Depends(require_role("expert_technical"))])
+
+    Or to also receive the payload:
+        async def create_project(
+            data: ProjectCreate,
+            user = Depends(require_role("expert_technical")),
+        ): ...
+    """
+    allowed_set = set(allowed)
+
+    async def _dep(payload: Dict[str, Any] = Depends(get_current_user_payload)) -> Dict[str, Any]:
+        role = payload.get("role_category")
+        if role not in allowed_set:
+            raise HTTPException(
+                status_code=403,
+                detail=f"role_category '{role}' is not permitted (need one of: {sorted(allowed_set)})",
+            )
+        return payload
+
+    return _dep
