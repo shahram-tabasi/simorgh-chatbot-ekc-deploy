@@ -46,6 +46,14 @@ services:
       - PROJECT_MAIL_URL=http://project-mail-service:8045
       # Roles allowed to create projects (project-creation auth gate).
       - PROJECT_CREATE_ALLOWED_ROLES=${PROJECT_CREATE_ALLOWED_ROLES:-expert_technical}
+      # External-source gateways used by the project-creation precheck dialog
+      # and by the per-source init steps inside POST /api/v2/agent/projects.
+      - TECHSERVER_URL=http://techserver-service:8043
+      - TPMS_FETCHER_URL=http://tpms-fetcher:8021
+      - TECH_KB_URL=http://tech-kb-service:8046
+      # Admin-managed restrictions file. Free-text constraints prepended to
+      # every COT system prompt as hard rules on the final response.
+      - RESTRICTIONS_PATH=/app/restrictions/system.txt
       # Other microservices reachable as MCP (the agent calls these)
       - SEARCH_MCP_URL=http://search-service:8020/mcp
       - TPMS_FETCHER_MCP_URL=http://tpms-fetcher:8021/mcp
@@ -70,6 +78,10 @@ services:
       - ../uploads:/app/uploads
       - ../logs:/app/logs
       - ekc_knowledge:/app/ekc-knowledge:ro
+      # Admin-managed restrictions file. Edit on the host at
+      # ${RESTRICTIONS_HOST_PATH:-/home/ubuntu/simorgh-restrictions} or
+      # via PUT /api/v2/agent/restrictions.
+      - restrictions:/app/restrictions
     depends_on:
       redis:
         condition: service_healthy
@@ -96,3 +108,10 @@ volumes:
       type: none
       o: bind
       device: ${EKC_KNOWLEDGE_HOST_PATH:-/home/ubuntu/ekc-knowledge}
+  restrictions:
+    name: simorgh_restrictions
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${RESTRICTIONS_HOST_PATH:-/home/ubuntu/simorgh-restrictions}

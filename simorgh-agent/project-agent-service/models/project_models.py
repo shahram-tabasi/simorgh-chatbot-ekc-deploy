@@ -93,6 +93,28 @@ class ProjectCreate(BaseModel):
     tpms_oenum: Optional[str] = Field(None, description="TPMS OENUM (legacy users only)")
     agent_model: Optional[str] = Field("gpt-4o", description="LLM model for agent")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    # Which external sources to wire in for this project.
+    # Valid values today: "techserver", "tpms", "tech_knowledge".
+    # Frontend collects these from the precheck dialog (only the ones
+    # whose probe came back green should be passed in).
+    sources: List[str] = Field(default_factory=list,
+                               description="External sources enabled for this project")
+
+
+class ProjectSourcesPrecheckRequest(BaseModel):
+    """Request to probe selected external sources before project creation."""
+    sources: List[str] = Field(..., description="Subset of: techserver, tpms, tech_knowledge")
+    tpms_oenum: Optional[str] = Field(None, description="Required when 'tpms' is in sources")
+
+
+class ProjectSourcePrecheckResult(BaseModel):
+    source: str           # e.g. "techserver"
+    ok: bool
+    detail: Optional[str] = None  # error message on failure
+
+
+class ProjectSourcesPrecheckResponse(BaseModel):
+    results: List[ProjectSourcePrecheckResult]
 
 
 class ProjectUpdate(BaseModel):

@@ -8,6 +8,7 @@ then produces executable task steps.
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
@@ -19,6 +20,39 @@ from models.project_models import (
 from knowledge.tpms_schema_instructions import get_tpms_instructions
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Admin-managed restrictions file. Read on demand and cached by mtime so the
+# hot path costs one stat() call when nothing changed.
+# ---------------------------------------------------------------------------
+_RESTRICTIONS_PATH = os.getenv("RESTRICTIONS_PATH", "/app/restrictions/system.txt")
+_restrictions_cache: Dict[str, Any] = {"mtime": None, "content": ""}
+
+
+def _read_restrictions() -> str:
+    """Return the current contents of RESTRICTIONS_PATH, or '' if missing."""
+    try:
+        st = os.stat(_RESTRICTIONS_PATH)
+    except FileNotFoundError:
+        _restrictions_cache["mtime"] = None
+        _restrictions_cache["content"] = ""
+        return ""
+    except Exception:
+        return _restrictions_cache.get("content", "") or ""
+
+    if _restrictions_cache["mtime"] == st.st_mtime:
+        return _restrictions_cache["content"]
+
+    try:
+        with open(_RESTRICTIONS_PATH, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+    except Exception:
+        content = ""
+
+    _restrictions_cache["mtime"] = st.st_mtime
+    _restrictions_cache["content"] = content
+    return content
 
 # System prompt for COT analysis
 COT_SYSTEM_PROMPT = """You are a Project Manager Agent analyzing a user request for a project.
@@ -236,6 +270,20 @@ class COTEngine:
             mcp_tools=mcp_tools,
             tpms_instructions=tpms_instructions,
         )
+
+        # Admin-managed restrictions file: free-text constraints that an
+        # admin / developer can drop into RESTRICTIONS_PATH and that the
+        # agent treats as hard rules on the final response. mtime-cached
+        # so the I/O is cheap on the hot path.
+        restrictions = _read_restrictions()
+        if restrictions:
+            system_prompt = (
+                "# HARD CONSTRAINTS (admin-managed restrictions — these "
+                "OVERRIDE everything else):\n"
+                f"{restrictions}\n\n# AGENT INSTRUCTIONS:\n"
+                f"{system_prompt}"
+            )
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Project Context:\n{context_str}\n\nUser Request:\n{request.user_input}"}

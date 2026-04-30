@@ -13,7 +13,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
@@ -29,9 +29,22 @@ from models.project_models import (
     ShellCommandRequest, ShellCommandResponse,
     GitCommitRequest, AgentState,
     ProjectStatus, TaskStatus, MessageChannel, TaskTrigger,
+    ProjectSourcesPrecheckRequest, ProjectSourcePrecheckResult,
+    ProjectSourcesPrecheckResponse,
 )
 import os
 import httpx
+
+# External-source gateway URLs (per EXTERNAL_GATEWAY_POLICY.md). The agent
+# never connects to the underlying systems directly — it goes through these.
+TECHSERVER_URL  = os.getenv("TECHSERVER_URL",      "http://techserver-service:8043")
+TPMS_FETCHER_URL = os.getenv("TPMS_FETCHER_URL",   "http://tpms-fetcher:8021")
+TECH_KB_URL     = os.getenv("TECH_KB_URL",         "http://tech-kb-service:8046")
+
+# Restrictions file (admin-managed). Read on every turn (mtime-cached
+# inside the agent) and prepended to the system prompt as hard
+# constraints on the final response.
+RESTRICTIONS_PATH = os.getenv("RESTRICTIONS_PATH", "/app/restrictions/system.txt")
 from services.auth_utils import get_current_user, require_role
 from services.project_agent import get_project_agent, ProjectManagerAgent
 from services.project_memory_service import get_project_memory_service, ProjectMemoryService
@@ -54,6 +67,113 @@ PROJECT_MAIL_URL = os.getenv("PROJECT_MAIL_URL", "http://project-mail-service:80
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/agent", tags=["Project Agent"])
+
+
+# ---------------------------------------------------------------------------
+# Source precheck — frontend dialog asks "is each source actually reachable
+# right now" before locking in the project's source list. Each branch hits
+# the relevant gateway's /health/deep (cheap probe) and reports back.
+# ---------------------------------------------------------------------------
+async def _probe_source(source: str, *, tpms_oenum: Optional[str]) -> ProjectSourcePrecheckResult:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            if source == "techserver":
+                r = await c.get(f"{TECHSERVER_URL}/health/deep")
+                ok = r.status_code == 200 and r.json().get("status") == "healthy"
+                return ProjectSourcePrecheckResult(
+                    source=source, ok=ok,
+                    detail=None if ok else r.text[:200],
+                )
+
+            if source == "tpms":
+                # Health probe is cheap; the actual oenum existence check is
+                # also worthwhile since a typo would make later import fail.
+                r = await c.get(f"{TPMS_FETCHER_URL}/health")
+                if r.status_code != 200:
+                    return ProjectSourcePrecheckResult(
+                        source=source, ok=False, detail=r.text[:200],
+                    )
+                if tpms_oenum:
+                    # Optional: ask tpms-fetcher whether the oenum exists.
+                    r2 = await c.get(f"{TPMS_FETCHER_URL}/projects/{tpms_oenum}/exists")
+                    if r2.status_code == 200 and r2.json().get("exists"):
+                        return ProjectSourcePrecheckResult(source=source, ok=True)
+                    if r2.status_code == 404 or r2.status_code == 200:
+                        return ProjectSourcePrecheckResult(
+                            source=source, ok=False,
+                            detail=f"OE-number {tpms_oenum} not found in TPMS",
+                        )
+                    # Endpoint not implemented yet — fall back to health-only.
+                return ProjectSourcePrecheckResult(source=source, ok=True)
+
+            if source == "tech_knowledge":
+                r = await c.get(f"{TECH_KB_URL}/health/deep")
+                ok = r.status_code == 200 and r.json().get("status") == "healthy"
+                return ProjectSourcePrecheckResult(
+                    source=source, ok=ok,
+                    detail=None if ok else r.text[:200],
+                )
+
+            return ProjectSourcePrecheckResult(
+                source=source, ok=False, detail="unknown source",
+            )
+    except httpx.HTTPError as e:
+        return ProjectSourcePrecheckResult(source=source, ok=False, detail=str(e)[:200])
+
+
+@router.post("/projects/precheck-sources", response_model=ProjectSourcesPrecheckResponse)
+async def precheck_sources(
+    req: ProjectSourcesPrecheckRequest,
+    auth_user: dict = Depends(require_role(*PROJECT_CREATE_ALLOWED_ROLES)),
+):
+    """
+    Probe the selected external sources before locking in project creation.
+
+    Frontend opens a dialog with three checkboxes (techserver, tpms,
+    tech_knowledge); whenever one is ticked, it POSTs the current set
+    here and renders a green check / red cross per source based on the
+    `ok` boolean in the response. The actual project creation then
+    POSTs only the green-checked sources in ProjectCreate.sources.
+    """
+    results = []
+    for source in req.sources:
+        results.append(await _probe_source(source, tpms_oenum=req.tpms_oenum))
+    return ProjectSourcesPrecheckResponse(results=results)
+
+
+# ---------------------------------------------------------------------------
+# Restrictions file — admin / dev free-text instructions that the agent
+# treats as hard constraints on every final response. Mounted as a
+# host-managed volume; same role gate as project creation for now.
+# ---------------------------------------------------------------------------
+@router.get("/restrictions")
+async def get_restrictions(
+    auth_user: dict = Depends(require_role(*PROJECT_CREATE_ALLOWED_ROLES)),
+) -> Dict[str, Any]:
+    try:
+        with open(RESTRICTIONS_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
+        return {"path": RESTRICTIONS_PATH, "content": content}
+    except FileNotFoundError:
+        return {"path": RESTRICTIONS_PATH, "content": ""}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/restrictions")
+async def put_restrictions(
+    body: Dict[str, str],
+    auth_user: dict = Depends(require_role(*PROJECT_CREATE_ALLOWED_ROLES)),
+) -> Dict[str, Any]:
+    """Replace the restrictions file. Body: {"content": "..."}."""
+    content = body.get("content", "")
+    try:
+        os.makedirs(os.path.dirname(RESTRICTIONS_PATH), exist_ok=True)
+        with open(RESTRICTIONS_PATH, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"ok": True, "bytes": len(content)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================
@@ -144,6 +264,52 @@ async def create_project(
             is_legacy=is_legacy,
         )
         logger.info(f"Project initialized: {project_id}, results: {init_result}")
+
+        # Source-driven setup. Each ticked source from the precheck dialog
+        # gets its dedicated import step. Failures are logged but don't kill
+        # the whole creation — the project lands with whichever sources
+        # succeeded; missing ones can be re-attempted later.
+        sources_status: Dict[str, Any] = {}
+        async with httpx.AsyncClient(timeout=300.0) as c:
+            if "techserver" in data.sources:
+                try:
+                    r = await c.post(
+                        f"{TECHSERVER_URL}/clone-to-shell",
+                        json={"project_id": project_id,
+                              "tpms_oenum": data.tpms_oenum,
+                              "shell_path": f"~/projects/{project_id}/techserver"},
+                    )
+                    sources_status["techserver"] = {"ok": r.status_code == 200,
+                                                   "detail": r.text[:200]}
+                except Exception as e:
+                    sources_status["techserver"] = {"ok": False, "detail": str(e)[:200]}
+
+            if "tpms" in data.sources and data.tpms_oenum:
+                try:
+                    r = await c.post(
+                        f"{TPMS_FETCHER_URL}/projects/{data.tpms_oenum}/import",
+                        json={"project_id": project_id},
+                    )
+                    sources_status["tpms"] = {"ok": r.status_code in (200, 202),
+                                              "detail": r.text[:200]}
+                except Exception as e:
+                    sources_status["tpms"] = {"ok": False, "detail": str(e)[:200]}
+
+            if "tech_knowledge" in data.sources:
+                # tech-kb-service is always-on at the global level; the
+                # per-project step is just verifying we can reach it now.
+                try:
+                    r = await c.get(f"{TECH_KB_URL}/health/deep")
+                    sources_status["tech_knowledge"] = {
+                        "ok": r.status_code == 200,
+                        "detail": r.text[:200],
+                    }
+                except Exception as e:
+                    sources_status["tech_knowledge"] = {"ok": False, "detail": str(e)[:200]}
+
+        if sources_status:
+            init_result["sources"] = sources_status
+            logger.info("Project %s sources: %s", project_id, sources_status)
 
         return ProjectResponse(
             id=project["id"],
