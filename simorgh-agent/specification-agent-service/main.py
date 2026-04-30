@@ -1,33 +1,95 @@
 """
 Specification Agent Service
 ===========================
-Standalone microservice for electrical specification extraction:
-- pull specs out of PDF/Excel/Word docs (delegated through doc-processor + LLM)
-- classify equipment (transformer, MCC, switchgear, etc.)
-- ground the answers in retrieved sections
+Standalone microservice for electrical-spec extraction + equipment
+classification of indexed project documents.
 
-REST + MCP. Per the agreed contract: AI/COT clients use the /mcp endpoint;
-other backend code can call /api/v2/specs/* over REST.
+Surfaces (per the agreed convention "AI/COT uses MCP, others use REST"):
+
+  REST  /api/v2/specs/extract   → run two-stage spec extraction
+        /api/v2/specs/classify  → classify a document by filename + content
+  MCP   /mcp tools:
+        extract_specifications, classify_document
+
+The chat-style SpecificationAgent (which uses Redis-backed multi-turn
+state and a CocoIndex graph adapter) is intentionally NOT exposed yet —
+the CocoIndex dependency isn't bundled and wiring it up cleanly is its
+own piece of work. See README "Roadmap".
 """
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP
 
-from services.specification_agent import SpecificationAgent
-from services.enhanced_spec_extractor import EnhancedSpecExtractor
-from services.spec_extractor import SpecExtractor
 from services.document_classifier import DocumentClassifier
+from services.enhanced_spec_extractor import EnhancedSpecExtractor
 from services.llm_service import get_llm_service
+from services.qdrant_service import QdrantService
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("specification-agent-service")
 
-app = FastAPI(title="Simorgh Specification Agent", version="1.0.0")
+
+# ---------------------------------------------------------------------------
+# Wired-up singletons (filled in on startup)
+# ---------------------------------------------------------------------------
+_classifier: Optional[DocumentClassifier] = None
+_spec_extractor: Optional[EnhancedSpecExtractor] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _classifier, _spec_extractor
+    logger.info("Initializing specification-agent-service dependencies...")
+
+    _classifier = DocumentClassifier()
+
+    # EnhancedSpecExtractor needs llm_service + qdrant_service + graph_initializer.
+    # graph_initializer wraps a Neo4j driver; if Neo4j isn't configured, we
+    # still construct the extractor with None and let it fail per-call rather
+    # than at import.
+    llm_service = get_llm_service()
+    try:
+        qdrant_service = QdrantService(llm_service=llm_service)
+    except Exception as e:
+        logger.warning("Qdrant not reachable; spec extraction disabled: %s", e)
+        qdrant_service = None
+
+    graph_initializer = None
+    neo4j_uri = os.getenv("NEO4J_URI", "")
+    if neo4j_uri:
+        try:
+            from neo4j import GraphDatabase
+            from services.project_graph_init import ProjectGraphInitializer
+            driver = GraphDatabase.driver(
+                neo4j_uri,
+                auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "")),
+            )
+            graph_initializer = ProjectGraphInitializer(driver=driver)
+        except Exception as e:
+            logger.warning("Neo4j unavailable; graph-aware extraction disabled: %s", e)
+
+    if qdrant_service is not None:
+        try:
+            _spec_extractor = EnhancedSpecExtractor(
+                llm_service=llm_service,
+                qdrant_service=qdrant_service,
+                graph_initializer=graph_initializer,
+            )
+        except Exception as e:
+            logger.warning("EnhancedSpecExtractor init failed: %s", e)
+
+    logger.info("specification-agent-service ready")
+    yield
+    logger.info("specification-agent-service shutting down")
+
+
+app = FastAPI(title="Simorgh Specification Agent", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,42 +100,63 @@ app.add_middleware(
 )
 
 
-class ExtractRequest(BaseModel):
-    text: str
-    equipment_hint: Optional[str] = None
-    mode: Optional[str] = None
-
-
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
 class ClassifyRequest(BaseModel):
-    text: str
+    filename: str
+    content: Optional[str] = None
 
 
+class ExtractRequest(BaseModel):
+    project_number: str
+    document_id: str
+    llm_mode: str = "online"
+    search_limit: int = 5
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
-    return {"status": "healthy", "service": "specification-agent-service"}
+    return {
+        "status": "healthy",
+        "service": "specification-agent-service",
+        "classifier_ready": _classifier is not None,
+        "extractor_ready": _spec_extractor is not None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# REST
+# ---------------------------------------------------------------------------
+@app.post("/api/v2/specs/classify")
+def classify_rest(req: ClassifyRequest) -> Dict[str, Any]:
+    if _classifier is None:
+        raise HTTPException(status_code=503, detail="classifier not initialised")
+    category, doc_type, confidence = _classifier.classify(
+        filename=req.filename, content=req.content
+    )
+    return {
+        "category": category.value if hasattr(category, "value") else str(category),
+        "doc_type": doc_type,
+        "confidence": confidence,
+    }
 
 
 @app.post("/api/v2/specs/extract")
-def specs_extract(req: ExtractRequest) -> Dict[str, Any]:
-    """REST: extract structured specifications from a block of text."""
-    try:
-        llm = get_llm_service()
-        extractor = EnhancedSpecExtractor(llm_service=llm)
-        return {"specs": extractor.extract(req.text, equipment_hint=req.equipment_hint)}
-    except Exception as e:
-        logger.exception("extract failed")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/v2/specs/classify")
-def specs_classify(req: ClassifyRequest) -> Dict[str, Any]:
-    """REST: classify equipment type from a text snippet."""
-    try:
-        classifier = DocumentClassifier()
-        return classifier.classify(req.text)
-    except Exception as e:
-        logger.exception("classify failed")
-        raise HTTPException(status_code=500, detail=str(e))
+def extract_rest(req: ExtractRequest) -> Dict[str, Any]:
+    if _spec_extractor is None:
+        raise HTTPException(status_code=503, detail="extractor not initialised (Qdrant down?)")
+    return {
+        "specs": _spec_extractor.extract_specifications_enhanced(
+            project_number=req.project_number,
+            document_id=req.document_id,
+            llm_mode=req.llm_mode,
+            search_limit=req.search_limit,
+        )
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -81,30 +164,54 @@ def specs_classify(req: ClassifyRequest) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
     "specification-agent-service",
-    instructions="Electrical specification extraction and equipment classification.",
+    instructions=(
+        "Electrical document classification and two-stage RAG-based "
+        "specification extraction over indexed project documents."
+    ),
 )
 
 
 @mcp.tool()
-async def extract_specifications(text: str, equipment_hint: Optional[str] = None) -> Dict[str, Any]:
-    """Extract structured electrical specifications from a text block."""
-    llm = get_llm_service()
-    extractor = EnhancedSpecExtractor(llm_service=llm)
-    return {"specs": extractor.extract(text, equipment_hint=equipment_hint)}
+async def classify_document(filename: str, content: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Classify a document into category × doc_type by filename, optionally
+    refined with the document's text content.
+
+    Returns: {category, doc_type, confidence}
+    """
+    if _classifier is None:
+        return {"error": "classifier not initialised"}
+    category, doc_type, confidence = _classifier.classify(filename=filename, content=content)
+    return {
+        "category": category.value if hasattr(category, "value") else str(category),
+        "doc_type": doc_type,
+        "confidence": confidence,
+    }
 
 
 @mcp.tool()
-async def classify_equipment(text: str) -> Dict[str, Any]:
-    """Classify the equipment type referenced in a text snippet."""
-    classifier = DocumentClassifier()
-    return classifier.classify(text)
+async def extract_specifications(
+    project_number: str,
+    document_id: str,
+    llm_mode: str = "online",
+    search_limit: int = 5,
+) -> Dict[str, Any]:
+    """
+    Two-stage RAG extraction of structured specifications from a document
+    that has ALREADY been indexed into Qdrant under (project_number, document_id).
 
-
-@mcp.tool()
-async def extract_specs_from_document(document_id: str, scope: Optional[str] = None) -> Dict[str, Any]:
-    """Run the full specification agent over an indexed document."""
-    agent = SpecificationAgent()
-    return await agent.run(document_id=document_id, scope=scope)
+    Returns: {category: {field: value, ...}, ...}
+    """
+    if _spec_extractor is None:
+        return {"error": "extractor not initialised"}
+    return {
+        "specs": _spec_extractor.extract_specifications_enhanced(
+            project_number=project_number,
+            document_id=document_id,
+            llm_mode=llm_mode,
+            search_limit=search_limit,
+        )
+    }
 
 
 app.mount("/mcp", mcp.streamable_http_app())
