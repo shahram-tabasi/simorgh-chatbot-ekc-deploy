@@ -3,16 +3,22 @@ Auth Service
 ============
 Standalone REST microservice for authentication.
 
-Mounts the auth_v2 router at /api/v2/auth, providing:
-- Email/password registration + login
-- Google OAuth 2.0
-- JWT access + refresh tokens
-- Email verification + password reset
-- Legacy TPMS / SQL Server fallback authentication
+The auth_v2 router has its own prefix `/auth/v2`, so we add an outer `/api`
+prefix here so the full external URL is `/api/auth/v2/*` — matching the
+URL pattern the React frontend already uses (`${API_BASE}/auth/v2/...`,
+where API_BASE is `/api`). nginx forwards `/api/auth/v2/...` here
+unchanged.
+
+Provides:
+  - email/password registration + login (PostgreSQL)
+  - Google OAuth 2.0
+  - JWT access + refresh tokens
+  - email verification + password reset
+  - legacy TPMS / SQL Server fallback authentication
 
 Backed by PostgreSQL (via database.postgres_connection) and the
-postgres_auth, oauth, email, and tpms_auth service modules extracted from
-the backend monolith in Phase 4.
+postgres_auth, oauth, email, tpms_auth service modules extracted from
+the backend monolith in phase 4.
 """
 import logging
 import os
@@ -35,7 +41,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_v2_router, prefix="/api/v2/auth", tags=["auth"])
+# auth_v2_router has its own prefix `/auth/v2`. We add `/api` so the
+# combined path is `/api/auth/v2/*` which is what the frontend already
+# hits and what backend's nginx already routes here.
+app.include_router(auth_v2_router, prefix="/api")
 
 
 @app.get("/health")
