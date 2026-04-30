@@ -347,12 +347,26 @@ async def upload_document(
     """
     Upload and process a document.
 
+    Uploads are PROJECT-ONLY (per chatbot main-functionality spec).
+    General chat sessions reject all uploads with 403.
+
     Documents are:
     - Chunked and embedded in Qdrant
     - Entities extracted to Neo4j (for project chats)
     - Metadata stored in Postgres
     """
     try:
+        # Guard: uploads are not allowed in general chat sessions.
+        ctx = await core.sessions.get_session(chat_id, request.user_id)
+        if ctx is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        if ctx.chat_type != ChatType.PROJECT:
+            raise HTTPException(
+                status_code=403,
+                detail="Uploads are not permitted in general chat sessions. "
+                       "Create a project chat to upload documents.",
+            )
+
         result = await core.upload_document(
             chat_id=chat_id,
             user_id=request.user_id,
