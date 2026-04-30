@@ -250,12 +250,141 @@ user — server is the source of truth, client just degrades gracefully.
 
 ---
 
-## Implementation order (next commits)
+## 6. Project-creation source dialog (precheck → green/red → create)
 
-1. **Now:** ✓ project-mail-service scaffold + compose + CI matrix (this commit).
-2. **Next:** auth-service legacy-login enrichment writes `role_category` to JWT and Redis (covered in `GENERAL_CHAT_DESIGN.md`).
-3. **Next:** project-agent-service — role gate on `POST /projects`; outbound dispatcher when `channel=email`; `PROJECT_MAIL_URL` env.
-4. **Next:** chat-service — reject uploads in general sessions; add `session_type` plumbing.
-5. **Concurrently with 3:** fill in IMAP poll loop in project-mail-service (`_imap_poll_loop` TODO).
+Before a project is finalised, the user is shown a dialog with three
+checkboxes — one per external source the project may pull from. Whenever
+a checkbox is toggled, the frontend calls
+`POST /api/v2/agent/projects/precheck-sources` with the current set; for
+each source it gets back `{ok, detail}` and renders a green check or red
+cross next to that row.
 
-Each is a focused per-service code change — happy to do them one at a time on your signal.
+The user can only click **Create project** once **at least one source** is
+green — and the request includes only the green-checked sources in
+`ProjectCreate.sources`.
+
+### Sources and what each one does on creation
+
+| Source key       | Owner gateway              | Probe (precheck)                  | Action on `POST /projects` (per-source init) |
+|------------------|----------------------------|-----------------------------------|----------------------------------------------|
+| `techserver`     | techserver-service:8043    | `GET /health/deep` (smbclient ls) | `POST techserver-service /clone-to-shell` — clones the project folder from `//192.168.1.3` into `~/projects/{project_id}/techserver` on the .69 shell-server |
+| `tpms`           | tpms-fetcher:8021          | `GET /health` + `/projects/{oenum}/exists` | `POST tpms-fetcher /projects/{oenum}/import` — imports project metadata / experts / technical info into the project's PostgreSQL slice |
+| `tech_knowledge` | tech-kb-service:8046       | `GET /health/deep` (git ls-remote)| confirm reachability; per-project search happens later via MCP `search_tech_knowledge` |
+
+### API contract for the dialog
+
+**Step 1 — live precheck:**
+
+```http
+POST /api/v2/agent/projects/precheck-sources
+Authorization: Bearer <jwt>     # role gate same as project creation
+Content-Type: application/json
+
+{
+  "sources":   ["techserver", "tpms", "tech_knowledge"],
+  "tpms_oenum": "OE12345"        # only required when "tpms" is in sources
+}
+```
+
+```json
+{
+  "results": [
+    {"source": "techserver",     "ok": true},
+    {"source": "tpms",           "ok": false, "detail": "OE-number OE12345 not found in TPMS"},
+    {"source": "tech_knowledge", "ok": true}
+  ]
+}
+```
+
+**Step 2 — actual creation (only after at least one source is green):**
+
+```http
+POST /api/v2/agent/projects
+Authorization: Bearer <jwt>
+Content-Type: application/json
+
+{
+  "name":        "Tabriz substation 11",
+  "tpms_oenum":  "OE12345",                          # if tpms was green-checked
+  "sources":     ["techserver", "tech_knowledge"],   # green-checked only
+  "agent_model": "gpt-4o"
+}
+```
+
+Response includes the per-source result of the init step:
+
+```json
+{
+  "id": "...",
+  "...standard ProjectResponse...",
+  "sources": {
+    "techserver":    {"ok": true},
+    "tech_knowledge":{"ok": true}
+  }
+}
+```
+
+### Frontend implementation plan
+
+Component: `<ProjectCreateDialog>` (new). Lives in `simorgh-agent/frontend/src/components/`.
+
+State:
+- `name`, `tpmsOenum`, `agentModel` — text inputs.
+- `selected: Set<"techserver"|"tpms"|"tech_knowledge">` — which boxes are ticked.
+- `precheck: Record<source, {ok: bool, detail?: string}>` — server response.
+
+Behaviour:
+- On any toggle of a checkbox, debounce 250 ms, then POST `/api/v2/agent/projects/precheck-sources` with the current `selected` set + `tpmsOenum` if applicable. Update `precheck`.
+- For each source row render:
+  - ☐ checkbox + label
+  - if `selected.has(source)` and `precheck[source]` exists → show ✅ green check or ❌ red cross with the detail message on hover.
+  - else show nothing (neutral).
+- Submit button disabled unless at least one source is `ok: true`.
+- On submit: POST `/api/v2/agent/projects` with `name`, `tpmsOenum`, `sources` filtered to green-checked only.
+
+This dialog replaces / wraps whatever the current "create project" flow looks like. Open as a modal from the projects list.
+
+---
+
+## 7. Restrictions file (admin / dev hard constraints)
+
+A free-text file editable by admins at `${RESTRICTIONS_HOST_PATH:-/home/ubuntu/simorgh-restrictions}/system.txt` on the host (mounted into project-agent-service at `/app/restrictions/system.txt`). Whatever the admin writes there is **prepended to every COT system prompt** as
+
+```
+# HARD CONSTRAINTS (admin-managed restrictions — these OVERRIDE everything else):
+<file content here>
+
+# AGENT INSTRUCTIONS:
+<existing COT_SYSTEM_PROMPT>
+```
+
+so the LLM treats them as higher priority than the per-task instructions.
+
+**Edit either way:**
+
+- `vim /home/ubuntu/simorgh-restrictions/system.txt` directly on the .68 host, or
+- `PUT /api/v2/agent/restrictions` with body `{content: "..."}`. Same role gate as project creation (default `expert_technical`; widen via `PROJECT_CREATE_ALLOWED_ROLES` if you want a separate admin role).
+- `GET /api/v2/agent/restrictions` returns the current text.
+
+Reads in the agent are **mtime-cached** — a `stat()` per turn, body re-read only when the file changed. So putting "Always answer in Persian" or "Never quote prices over 1B IRR" in the file takes effect on the next turn without a service restart.
+
+---
+
+## Implementation order (status as of this commit)
+
+1. ✅ project-mail-service scaffold + compose + CI matrix (commit 2a8ec82).
+2. ✅ auth-service legacy-login enrichment writes `role_category` to JWT and Redis (commit 508ccea).
+3. ✅ project-agent-service — role gate on `POST /projects`; outbound dispatcher when `channel=email`; `PROJECT_MAIL_URL` env (commit 5f21596).
+4. ✅ chat-service — reject uploads in general sessions (commit 4b083e2).
+5. ✅ project-mail-service — IMAP poll loop body (commit fa4d2f2).
+6. ✅ chat-service — Redis hot-cache namespace separation (commit d1c03de).
+7. ✅ frontend — hide upload button in general chats (commit 5b716e2).
+8. ✅ tech-kb-service scaffold + compose + CI matrix (commit b55f216).
+9. ✅ project-agent-service — `precheck-sources`, sources field, per-source init, restrictions file (this commit).
+
+**Open follow-ups (small, well-scoped):**
+- techserver-service: implement `POST /clone-to-shell` (delegate to shell-service on .69 over REST).
+- tpms-fetcher: implement `POST /projects/{oenum}/import` and `GET /projects/{oenum}/exists`.
+- frontend: build the `<ProjectCreateDialog>` per the contract above.
+
+Each can land as its own per-service commit when you're ready.
