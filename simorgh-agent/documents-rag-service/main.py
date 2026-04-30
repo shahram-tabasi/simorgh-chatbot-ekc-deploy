@@ -1,10 +1,14 @@
 """
 Documents RAG Service
 =====================
-Standalone REST microservice for document upload, chunking, embedding,
-indexing into Qdrant, and semantic search.
+Standalone microservice for document upload + RAG, plus several legacy
+endpoints that historically lived in the same FastAPI router as document
+upload (see README — the router was a grab-bag in the monolith).
 
-Mounts the documents_rag router at /api/v2/documents.
+The router has its own prefix `/api`, so we include it WITHOUT an extra
+prefix; combined paths look like `/api/documents/upload`,
+`/api/chat/general`, `/api/sessions/{id}`, etc. nginx forwards the
+matching paths to this service unchanged.
 
 Backed by:
 - Qdrant (vector store)
@@ -34,7 +38,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(documents_rag_router, prefix="/api/v2/documents", tags=["documents"])
+# Router has its own prefix "/api". Don't add another one.
+app.include_router(documents_rag_router)
 
 
 @app.get("/health")
