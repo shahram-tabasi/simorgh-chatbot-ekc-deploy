@@ -1,0 +1,51 @@
+# =============================================================================
+# TECH-KB-SERVICE - Sole gateway for the tech-knowledge git repository
+# Port 8046. REST + MCP. Per the no-direct-external-access policy, NO
+# other service may run git/find against the tech-knowledge corpus
+# directly.
+#
+# Mounts an SSH key (read-only) so it can pull from the corporate git
+# remote without a password prompt. Drop the key at the host path
+# pointed to by TECH_KB_SSH_KEY_PATH (default /home/ubuntu/.ssh/tech_kb_id).
+# =============================================================================
+services:
+  tech-kb-service:
+    build: ../tech-kb-service
+    container_name: tech-kb-service
+    expose:
+      - "8046"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TECH_KB_GIT_URL=${TECH_KB_GIT_URL:-}
+      - TECH_KB_GIT_BRANCH=${TECH_KB_GIT_BRANCH:-main}
+      - TECH_KB_LOCAL_PATH=/app/tech_kb
+      - TECH_KB_PULL_INTERVAL_SEC=${TECH_KB_PULL_INTERVAL_SEC:-600}
+      - GIT_TIMEOUT_SEC=${GIT_TIMEOUT_SEC:-60}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      # SSH config so git clone over ssh works without prompts.
+      - GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/tech_kb_id
+    volumes:
+      # Local working clone of the repo (named volume, persisted).
+      - tech_kb_repo:/app/tech_kb
+      # Read-only SSH key for the git remote.
+      - ${TECH_KB_SSH_KEY_PATH:-/home/ubuntu/.ssh/tech_kb_id}:/root/.ssh/tech_kb_id:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8046/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  tech_kb_repo:
+    name: simorgh_tech_kb_repo
+    driver: local

@@ -70,6 +70,7 @@ include:
   - compose/svc-techserver.yml            # SMB share @ 192.168.1.3 (port 8043)
   - compose/svc-eplan-sql.yml             # MSSQL Eplan_n2 @ 192.168.1.39 (port 8044)
   - compose/svc-project-mail.yml          # IMAP+SMTP for simorghai@... mailbox (port 8045)
+  - compose/svc-tech-kb.yml               # Tech-knowledge git repo gateway (port 8046)
   # - compose/svc-embeddings.yml          # Phase 3
   # - compose/svc-auth.yml                # Phase 4
   # - compose/svc-documents-rag.yml       # Phase 5
