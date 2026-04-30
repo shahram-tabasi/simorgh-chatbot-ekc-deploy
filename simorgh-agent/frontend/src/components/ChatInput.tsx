@@ -16,6 +16,11 @@ interface ChatInputProps {
   editMessage?: { content: string; files?: UploadedFile[] } | null;
   promptToInsert?: string | null;
   quotaExceeded?: boolean;
+  // Hide the file-upload affordance entirely when the chat does not
+  // permit uploads (general-session policy: uploads are project-only).
+  // Defaults to true so existing call sites that don't know the chat
+  // type degrade open rather than blocking everyone.
+  uploadsAllowed?: boolean;
 }
 
 export function ChatInput({
@@ -26,7 +31,8 @@ export function ChatInput({
   isGenerating = false,
   editMessage = null,
   promptToInsert = null,
-  quotaExceeded = false
+  quotaExceeded = false,
+  uploadsAllowed = true,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -314,23 +320,27 @@ export function ChatInput({
       )}
 
       <div className="flex gap-1.5 md:gap-2 items-center bg-black/40 backdrop-blur-xl rounded-2xl border border-white/10 p-1.5 md:p-2">
-        {/* File upload */}
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || isUploading}
-          className="p-2 md:p-2.5 rounded-xl hover:bg-white/10 transition-colors disabled:opacity-50 flex-shrink-0"
-          title="Attach files"
-        >
-          <PaperclipIcon className="w-5 h-5 text-gray-300" />
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,.doc,.docx,.txt,image/*,video/*,audio/*"
-          multiple
-          className="hidden"
-          onChange={handleFileSelect}
-        />
+        {/* File upload — hidden in general sessions (uploads are project-only). */}
+        {uploadsAllowed && (
+          <>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled || isUploading}
+              className="p-2 md:p-2.5 rounded-xl hover:bg-white/10 transition-colors disabled:opacity-50 flex-shrink-0"
+              title="Attach files"
+            >
+              <PaperclipIcon className="w-5 h-5 text-gray-300" />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.txt,image/*,video/*,audio/*"
+              multiple
+              className="hidden"
+              onChange={handleFileSelect}
+            />
+          </>
+        )}
 
         {/* Voice recording with STT - visible on all screens (matches Claude/ChatGPT mobile) */}
         <button

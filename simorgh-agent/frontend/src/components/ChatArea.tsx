@@ -103,6 +103,7 @@ export function ChatArea({
                 promptToInsert={promptToInsert}
                 centered={true}
                 quotaExceeded={quotaExceeded}
+                uploadsAllowed={isProjectChat}
               />
             </div>
           </div>
@@ -139,6 +140,7 @@ export function ChatArea({
                 promptToInsert={promptToInsert}
                 centered={false}
                 quotaExceeded={quotaExceeded}
+                uploadsAllowed={isProjectChat}
               />
             </div>
           </div>
