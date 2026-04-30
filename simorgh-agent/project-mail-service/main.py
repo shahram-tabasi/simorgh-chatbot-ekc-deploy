@@ -202,48 +202,158 @@ async def _resolve_session(headers: Dict[str, str], subject: str) -> Optional[Di
     return None
 
 
+def _extract_body(msg: email.message.Message) -> str:
+    """
+    Pull the human-readable body out of an email.message.Message.
+    Walks multipart, prefers text/plain, falls back to a stripped text/html.
+    """
+    if msg.is_multipart():
+        # Prefer text/plain
+        for part in msg.walk():
+            ct = part.get_content_type()
+            disp = (part.get("Content-Disposition") or "").lower()
+            if "attachment" in disp:
+                continue
+            if ct == "text/plain":
+                payload = part.get_payload(decode=True) or b""
+                charset = part.get_content_charset() or "utf-8"
+                try:
+                    return payload.decode(charset, errors="replace")
+                except Exception:
+                    return payload.decode("utf-8", errors="replace")
+        # Fallback: text/html stripped of tags
+        for part in msg.walk():
+            if part.get_content_type() == "text/html":
+                payload = part.get_payload(decode=True) or b""
+                charset = part.get_content_charset() or "utf-8"
+                import re as _re
+                html = payload.decode(charset, errors="replace")
+                return _re.sub(r"<[^>]+>", "", html).strip()
+        return ""
+    # Single-part
+    payload = msg.get_payload(decode=True) or b""
+    charset = msg.get_content_charset() or "utf-8"
+    try:
+        return payload.decode(charset, errors="replace")
+    except Exception:
+        return payload.decode("utf-8", errors="replace")
+
+
+async def _process_one_message(raw_bytes: bytes) -> bool:
+    """
+    Parse one RFC822 message, resolve its session, route to project-agent.
+    Returns True if the message was successfully delivered (so the caller
+    should mark it \\Seen). False on unrouteable / transient failure.
+    """
+    try:
+        msg = email.message_from_bytes(raw_bytes)
+    except Exception:
+        logger.exception("failed to parse RFC822")
+        return False
+
+    headers = {k: v for k, v in msg.items()}
+    subject = msg.get("Subject", "") or ""
+    frm     = msg.get("From", "") or ""
+    body    = _extract_body(msg)
+
+    session = await _resolve_session(headers, subject)
+    if not session:
+        logger.warning("UNROUTED inbound mail subject=%r from=%r", subject[:80], frm[:80])
+        # Still mark Seen so we don't re-process forever; alternative is to
+        # move it to an unrouted folder. TODO: surface as an admin queue.
+        return True
+
+    try:
+        await _route_to_agent(
+            session["project_id"],
+            chat_id=session["chat_id"] or None,
+            email_from=frm, subject=subject, body=body,
+        )
+        logger.info("routed mail to project_id=%s chat_id=%s",
+                    session["project_id"], session["chat_id"] or "-")
+        return True
+    except Exception:
+        logger.exception("project-agent POST failed; will retry on next poll")
+        return False  # leave UNSEEN so we retry
+
+
 async def _imap_poll_loop():
     """
-    Poll IMAP_FOLDER every IMAP_POLL_SEC; for each new message, parse, resolve
-    session, forward to project-agent-service. Mark seen so we don't re-deliver.
+    Poll IMAP_FOLDER every IMAP_POLL_SEC. For each UNSEEN message:
+      - parse, resolve session, POST to project-agent-service
+      - on success, set \\Seen so we don't re-deliver
 
-    TODO(project-mail): implement using aioimaplib or imaplib in a thread.
-    The current stub just sleeps so the rest of the service still boots.
+    Uses aioimaplib. If IMAP creds are not configured, idles forever.
     """
     if not IMAP_HOST or not IMAP_PASSWORD:
         logger.warning("IMAP not configured (set IMAP_HOST + IMAP_PASSWORD); poller idle")
         while True:
             await asyncio.sleep(3600)
 
+    import aioimaplib
+
     while True:
+        cli = None
         try:
-            # TODO(project-mail): connect, SEARCH UNSEEN, FETCH, parse, route.
-            #   Pseudocode:
-            #     async with aioimaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as cli:
-            #         await cli.login(IMAP_USER, IMAP_PASSWORD)
-            #         await cli.select(IMAP_FOLDER)
-            #         _, data = await cli.search('UNSEEN')
-            #         for uid in data[0].split():
-            #             _, msg_data = await cli.fetch(uid, '(RFC822)')
-            #             msg = email.message_from_bytes(msg_data[1])
-            #             headers = {k: v for k, v in msg.items()}
-            #             subject = msg.get("Subject", "")
-            #             frm     = msg.get("From", "")
-            #             body    = _extract_text(msg)
-            #             session = await _resolve_session(headers, subject)
-            #             if session:
-            #                 await _route_to_agent(session["project_id"],
-            #                                       chat_id=session["chat_id"] or None,
-            #                                       email_from=frm, subject=subject, body=body)
-            #             else:
-            #                 logger.warning("UNROUTED: %s", subject)
-            #             await cli.store(uid, '+FLAGS', '\\Seen')
-            await asyncio.sleep(IMAP_POLL_SEC)
+            if IMAP_USE_TLS:
+                cli = aioimaplib.IMAP4_SSL(host=IMAP_HOST, port=IMAP_PORT, timeout=30)
+            else:
+                cli = aioimaplib.IMAP4(host=IMAP_HOST, port=IMAP_PORT, timeout=30)
+            await cli.wait_hello_from_server()
+
+            ok, _ = await cli.login(IMAP_USER, IMAP_PASSWORD)
+            if ok != "OK":
+                logger.error("IMAP login failed")
+                await asyncio.sleep(IMAP_POLL_SEC)
+                continue
+
+            await cli.select(IMAP_FOLDER)
+
+            # Search UNSEEN
+            search_result = await cli.search("UNSEEN")
+            if search_result.result != "OK":
+                logger.warning("IMAP SEARCH UNSEEN returned %s", search_result.result)
+                await asyncio.sleep(IMAP_POLL_SEC)
+                continue
+
+            # search_result.lines[0] is bytes like b"1 2 3 4"
+            raw_uids = (search_result.lines[0] if search_result.lines else b"").split()
+            if not raw_uids:
+                logger.debug("no new mail")
+            for uid_bytes in raw_uids:
+                uid = uid_bytes.decode()
+                fetch_result = await cli.fetch(uid, "(RFC822)")
+                if fetch_result.result != "OK":
+                    logger.warning("FETCH %s returned %s", uid, fetch_result.result)
+                    continue
+                # The raw message bytes live in fetch_result.lines[1] for the
+                # canonical "* N FETCH (RFC822 {size}\r\n<body>)\r\n" response.
+                if len(fetch_result.lines) < 2:
+                    continue
+                raw_bytes = fetch_result.lines[1]
+                if not isinstance(raw_bytes, (bytes, bytearray)):
+                    raw_bytes = str(raw_bytes).encode("utf-8", errors="replace")
+
+                ok = await _process_one_message(bytes(raw_bytes))
+                if ok:
+                    await cli.store(uid, "+FLAGS", "(\\Seen)")
+
+            try:
+                await cli.logout()
+            except Exception:
+                pass
+
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("IMAP poll error")
-            await asyncio.sleep(IMAP_POLL_SEC)
+            try:
+                if cli is not None:
+                    await cli.logout()
+            except Exception:
+                pass
+
+        await asyncio.sleep(IMAP_POLL_SEC)
 
 
 # ---------------------------------------------------------------------------
