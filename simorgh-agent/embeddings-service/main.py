@@ -26,6 +26,7 @@ logger = logging.getLogger("embeddings-service")
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
 NORMALIZE = os.getenv("EMBEDDING_NORMALIZE", "true").lower() == "true"
+MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "256"))
 
 logger.info("Loading embedding model: %s on %s", MODEL_NAME, DEVICE)
 model = SentenceTransformer(MODEL_NAME, device=DEVICE)
@@ -65,5 +66,10 @@ def embeddings(req: TextRequest):
 def embeddings_batch(req: BatchRequest):
     if not req.texts:
         raise HTTPException(status_code=400, detail="texts is required")
+    if len(req.texts) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"batch too large: {len(req.texts)} > MAX_BATCH_SIZE={MAX_BATCH_SIZE}",
+        )
     vecs = model.encode(req.texts, normalize_embeddings=NORMALIZE).tolist()
     return {"embeddings": vecs, "count": len(vecs), "dim": len(vecs[0]) if vecs else 0}
