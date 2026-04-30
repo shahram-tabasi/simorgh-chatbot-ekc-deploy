@@ -1,37 +1,53 @@
 """
 LLM Gateway Service
 ===================
-Standalone REST microservice wrapping the unified LLM service.
+Standalone REST microservice wrapping the unified LLM logic (OpenAI + the
+load-balanced local LLM endpoint that fronts 192.168.1.61 / 192.168.1.62).
 
-Routes:
-- POST /generate           → sync generation
-- POST /generate/stream    → SSE streaming
-- POST /generate/async     → async non-blocking generation (per-user tracking)
-- POST /embeddings         → embedding vector
-- GET  /health             → service health (OpenAI + local LLM endpoints)
-- GET  /stats              → usage statistics
+Endpoints
+---------
+GET  /health           liveness — does NOT call upstream (cheap)
+GET  /health/deep      readiness — pings OpenAI + local LLM
+GET  /stats            usage statistics
+POST /generate         sync completion
+POST /generate/stream  SSE streaming (chunks are JSON-encoded; clients parse)
+POST /generate/async   non-blocking generation with per-user tracking
+POST /embeddings       single text → embedding vector
 
-Backed by `llm_service.LLMService` (extracted from backend monolith in Phase 2).
-Talks to OpenAI and the load-balanced local LLM endpoint (nginx → 192.168.1.61/.62).
+The bulk of the implementation lives in `llm_service.py` (the
+LLMService class extracted from backend in phase 2) plus
+`llm_async_client.py` and `output_parser.py`. This module is a thin
+FastAPI shell.
 """
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from llm_service import LLMService, LLMError, LLMOfflineError, LLMOnlineError, LLMTimeoutError
+from llm_service import (
+    LLMError,
+    LLMOfflineError,
+    LLMOnlineError,
+    LLMService,
+    LLMTimeoutError,
+)
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("llm-gateway")
 
 app = FastAPI(title="Simorgh LLM Gateway", version="1.0.0")
 
+# Lazy / lightweight construction; doesn't probe upstreams.
 llm = LLMService()
 
 
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
 class Message(BaseModel):
     role: str
     content: str
@@ -39,11 +55,11 @@ class Message(BaseModel):
 
 class GenerateRequest(BaseModel):
     messages: List[Message]
-    mode: Optional[str] = None
+    mode: Optional[str] = None       # "online" | "offline" | "auto"
     temperature: float = 0.7
     max_tokens: Optional[int] = None
     use_cache: bool = False
-    inject_knowledge: bool = False
+    inject_knowledge: bool = False   # NOTE: no-op in this service (see README)
 
 
 class AsyncGenerateRequest(GenerateRequest):
@@ -56,8 +72,18 @@ class EmbeddingRequest(BaseModel):
     model: Optional[str] = None
 
 
+# ---------------------------------------------------------------------------
+# Health & stats
+# ---------------------------------------------------------------------------
 @app.get("/health")
 def health() -> Dict[str, Any]:
+    """Liveness — process is up. Does NOT call OpenAI / local LLM."""
+    return {"status": "healthy", "service": "llm-gateway"}
+
+
+@app.get("/health/deep")
+def health_deep() -> Dict[str, Any]:
+    """Readiness — actually probes OpenAI + the local LLM endpoint."""
     return llm.health_check()
 
 
@@ -66,6 +92,9 @@ def stats() -> Dict[str, Any]:
     return llm.get_stats()
 
 
+# ---------------------------------------------------------------------------
+# Generation
+# ---------------------------------------------------------------------------
 @app.post("/generate")
 def generate(req: GenerateRequest) -> Dict[str, Any]:
     try:
@@ -87,6 +116,17 @@ def generate(req: GenerateRequest) -> Dict[str, Any]:
 
 @app.post("/generate/stream")
 def generate_stream(req: GenerateRequest):
+    """
+    Server-Sent Events. Each event payload is a JSON object so chunks
+    containing newlines or special characters survive transit:
+
+        data: {"chunk": "Hello"}\\n\\n
+        data: {"chunk": " world"}\\n\\n
+        data: {"done": true}\\n\\n
+        data: {"error": "..."}\\n\\n   (on failure)
+
+    Clients should parse each `data: ` line as JSON.
+    """
     def event_stream():
         try:
             for chunk in llm.generate_stream(
@@ -95,11 +135,11 @@ def generate_stream(req: GenerateRequest):
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
             ):
-                yield f"data: {chunk}\n\n"
-            yield "data: [DONE]\n\n"
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
             logger.exception("stream failed")
-            yield f"data: [ERROR] {e}\n\n"
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
