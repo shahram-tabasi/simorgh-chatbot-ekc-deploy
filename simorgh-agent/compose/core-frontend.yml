@@ -3,9 +3,7 @@
 # =============================================================================
 services:
   frontend:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-frontend:${IMAGE_TAG:-latest}
     build: ../frontend
-    pull_policy: build
     container_name: frontend
     expose:
       - "80"

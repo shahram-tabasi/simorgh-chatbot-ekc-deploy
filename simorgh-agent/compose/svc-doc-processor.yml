@@ -4,9 +4,7 @@
 # =============================================================================
 services:
   doc-processor:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-doc-processor:${IMAGE_TAG:-latest}
     build: ../doc-processor
-    pull_policy: build
     container_name: doc-processor
     expose:
       - "8000"

@@ -5,9 +5,7 @@
 # =============================================================================
 services:
   embeddings-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-embeddings-service:${IMAGE_TAG:-latest}
     build: ../embeddings-service
-    pull_policy: build
     container_name: embeddings-service
     expose:
       - "8031"

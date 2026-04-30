@@ -5,9 +5,7 @@
 # =============================================================================
 services:
   graph-rag-service:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/simorgh-graph-rag-service:${IMAGE_TAG:-latest}
     build: ../graph-rag-service
-    pull_policy: build
     container_name: graph-rag-service
     expose:
       - "8037"
