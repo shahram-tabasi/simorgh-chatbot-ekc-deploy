@@ -116,15 +116,22 @@ location /api/auth/ {
 }
 
 # ====================================================================
-# Phase 10 — extracted microservice routing
-# Specific /api/* paths route to their standalone services first.
-# Anything not matched falls through to the legacy /api/ catch-all
-# (backend monolith) below. To disable a route, comment its location
-# block here AND comment the matching include: in docker-compose.yml.
+# Phase C — extracted microservice routing (paths corrected after audit)
+#
+# These specific /api/* paths route to their standalone services first.
+# nginx longest-prefix-match wins, so if a path matches one of these
+# blocks it goes to the matching service. Anything else falls through
+# to the legacy /api/ catch-all (backend monolith) below.
+#
+# To disable a service:
+#   1) comment the matching location block here
+#   2) comment the matching include: in docker-compose.yml
+#   3) docker compose up -d --remove-orphans && docker exec nginx nginx -s reload
 # ====================================================================
 
 # Auth (auth-service:8032)
-location /api/v2/auth/ {
+# Router prefix is /auth/v2; main.py adds /api → external /api/auth/v2/*
+location /api/auth/v2/ {
     limit_req zone=api_limit burst=30 nodelay;
     proxy_pass http://auth_service;
     proxy_set_header Host $host;
@@ -139,7 +146,12 @@ location /api/v2/auth/ {
 }
 
 # Documents RAG (documents-rag-service:8033)
-location /api/v2/documents/ {
+# Router prefix /api with internal routes /documents/*, /sessions/*, etc.
+# Routing /api/documents/ here keeps document upload + retrieval clean;
+# the other grab-bag paths inside that router (/api/chat/general,
+# /api/sessions/...) stay on backend's catch-all for now — the router
+# is misnamed and needs splitting (see documents-rag-service/README).
+location /api/documents/ {
     limit_req zone=upload_limit burst=10 nodelay;
     proxy_pass http://documents_rag_service;
     proxy_set_header Host $host;
@@ -156,7 +168,8 @@ location /api/v2/documents/ {
     proxy_send_timeout 600s;
 }
 
-# Chat (chat-service:8034)
+# Chat — modern chat surface (chat-service:8034)
+# Router has its own /api/v2/chat prefix.
 location /api/v2/chat/ {
     limit_req zone=api_limit burst=30 nodelay;
     proxy_pass http://chat_service;
@@ -173,8 +186,10 @@ location /api/v2/chat/ {
     proxy_read_timeout 600s;
 }
 
-# Project sessions (chat-service:8034)
-location ~ ^/api/v2/projects/[^/]+/sessions {
+# Project workspace (chat-service:8034)
+# Router has prefix /api/v2/project (singular). Phase 10 used the
+# regex /api/v2/projects/.+/sessions which was wrong on both fronts.
+location /api/v2/project/ {
     limit_req zone=api_limit burst=30 nodelay;
     proxy_pass http://chat_service;
     proxy_set_header Host $host;
@@ -228,7 +243,8 @@ location /api/v2/graph-rag/ {
 }
 
 # Payments (payments-service:8038)
-location /api/payments/ {
+# Router prefix /api/v2/payments — phase 10 had it as /api/payments.
+location /api/v2/payments/ {
     limit_req zone=api_limit burst=30 nodelay;
     proxy_pass http://payments_service;
     proxy_set_header Host $host;
@@ -241,7 +257,8 @@ location /api/payments/ {
 }
 
 # Admin (admin-service:8039)
-location /api/admin/ {
+# Router prefix /api/v2/admin — phase 10 had it as /api/admin.
+location /api/v2/admin/ {
     limit_req zone=api_limit burst=30 nodelay;
     proxy_pass http://admin_service;
     proxy_set_header Host $host;
@@ -254,7 +271,8 @@ location /api/admin/ {
 }
 
 # Tier / quota (tier-quota-service:8040)
-location /api/quota/ {
+# Router prefix /api/v2/quota — phase 10 had it as /api/quota.
+location /api/v2/quota/ {
     limit_req zone=api_limit burst=30 nodelay;
     proxy_pass http://tier_quota_service;
     proxy_set_header Host $host;

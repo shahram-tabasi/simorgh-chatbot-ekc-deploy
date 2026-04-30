@@ -1,17 +1,34 @@
 """
-Simorgh Industrial Electrical Assistant - Backend API
-======================================================
-FastAPI backend with Redis, Qdrant, hybrid LLM, MCP microservices, and git-based project management.
+Simorgh Industrial Electrical Assistant - Backend (slimmed)
+============================================================
+After phase C of the monolith decomposition, this backend is the
+**legacy fallback** for paths that haven't been routed to extracted
+microservices yet. The following routers have been REMOVED from this
+backend and now live in their own containers:
 
-Architecture:
-- Redis: Multi-DB caching (sessions, chat, LLM, auth)
-- Qdrant: Vector search and document grounding
-- PostgreSQL: Auth, user tiers, project metadata
-- MCP: Dynamic tool discovery across microservices
-- Git: Project version control (via shell-service)
-- LLM: Hybrid OpenAI/Local support
+  - auth_v2       → simorgh-agent/auth-service (port 8032)
+  - documents_rag → simorgh-agent/documents-rag-service (8033)
+  - chatbot_v2    → simorgh-agent/chat-service (8034)
+  - project_session   → simorgh-agent/chat-service (8034)
+  - project_agent_routes → simorgh-agent/project-agent-service (8035)
+  - admin         → simorgh-agent/admin-service (8039)
+  - quota         → simorgh-agent/tier-quota-service (8040)
+  - payments      → simorgh-agent/payments-service (8038)
 
-Author: Simorgh Industrial Assistant
+Container nginx (`nginx_configs/includes/locations.inc`) routes the
+matching `/api/*` paths to those services directly. Backend still serves:
+
+  - /auth/*                     legacy auth (auth.py — kept)
+  - /api/v2/tpms/*              TPMS webhooks (tpms_webhook.py — kept)
+  - /api/documents/intelligence (document_intelligence.py — kept)
+  - inline routes in this file  (many — see @app.* below)
+  - the catch-all /api/* fallback for anything else nginx forwards here
+
+KNOWN remaining cleanup (not done in phase C — needs runtime testing):
+  - Many `services/*.py` modules are now duplicated in extracted services
+    and dead in backend. Prune after validating runtime.
+  - Many inline `@app.get/post` handlers in this file likely overlap with
+    extracted routers. Audit + delete in a future pass.
 """
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Query, BackgroundTasks, Request, Body
@@ -53,18 +70,14 @@ from services.unified_memory_service import (
 )
 from models.ontology import *
 
-# Import authentication routes and utilities
+# Routes still owned by backend (legacy + non-extracted)
 from routes.auth import router as auth_router
-from routes.auth_v2 import router as auth_v2_router
-from routes.documents_rag import router as documents_rag_router
-from routes.project_session import include_project_session_routes
-from routes.project_agent_routes import include_project_agent_routes
 from routes.tpms_webhook import router as tpms_webhook_router
-from routes.quota import router as quota_router
-from routes.admin import router as admin_router
-from routes.payments import router as payments_router
 from routes.document_intelligence import router as document_intelligence_router
 from services.auth_utils import get_current_user
+# NOTE: auth_v2, documents_rag, chatbot_v2, project_session,
+# project_agent_routes, quota, admin, payments — extracted in phase C.
+# Their HTTP paths now resolve to their own containers via nginx.
 
 # Import security middleware
 from middleware.security import (
@@ -74,10 +87,11 @@ from middleware.security import (
 )
 
 # Import chatbot_core for enhanced session management
+# include_chatbot_routes is intentionally NOT imported — it would try to
+# pull in routes.chatbot_v2 which was extracted to chat-service in phase C.
 from chatbot_core.startup import (
     initialize_chatbot_on_startup,
     shutdown_chatbot,
-    include_chatbot_routes,
 )
 from chatbot_core.integration import get_chatbot_core, ChatbotCore
 
@@ -107,23 +121,20 @@ app = FastAPI(
     description="Neo4j-based electrical engineering chatbot with hybrid LLM support"
 )
 
-# Include routers
-app.include_router(auth_router)
-app.include_router(auth_v2_router)  # Modern auth endpoints (v2)
-app.include_router(documents_rag_router)
-app.include_router(tpms_webhook_router)  # TPMS real-time sync webhooks
-app.include_router(quota_router)  # User quota/tier endpoints
-app.include_router(admin_router)  # Admin panel endpoints
-app.include_router(payments_router)  # Crypto payment endpoints
+# Include routers — only those still owned by backend after phase C.
+app.include_router(auth_router)             # legacy /auth/*
+app.include_router(tpms_webhook_router)     # /api/v2/tpms/*
+app.include_router(document_intelligence_router)  # /api/documents/intelligence/*
 
-# Include enhanced chatbot v2 routes
-include_chatbot_routes(app)
-
-# Include project session routes (per-project database isolation)
-include_project_session_routes(app)
-
-# Include project agent routes (COT, tasks, shell, email gateway)
-include_project_agent_routes(app)
+# Removed in phase C (routed to dedicated containers via nginx):
+#   - auth_v2_router          → auth-service:8032
+#   - documents_rag_router    → documents-rag-service:8033
+#   - chatbot v2 routes       → chat-service:8034
+#   - project_session routes  → chat-service:8034
+#   - project_agent routes    → project-agent-service:8035
+#   - admin_router            → admin-service:8039
+#   - quota_router            → tier-quota-service:8040
+#   - payments_router         → payments-service:8038
 
 # CORS
 app.add_middleware(
