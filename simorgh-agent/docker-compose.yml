@@ -61,6 +61,10 @@ include:
   - compose/svc-payments.yml              # Phase 9 — NOWPayments + IPN
   - compose/svc-admin.yml                 # Phase 9 — admin endpoints
   - compose/svc-tier-quota.yml            # Phase 9 — user tiers + quota
+
+  # ---- General-chat features (legacy login + organization knowledge) --------
+  - compose/svc-hr-kb.yml                 # HR knowledge base (port 8041)
+  - compose/svc-org-data.yml              # HR/org MySQL data via MCP (port 8042)
   # - compose/svc-embeddings.yml          # Phase 3
   # - compose/svc-auth.yml                # Phase 4
   # - compose/svc-documents-rag.yml       # Phase 5

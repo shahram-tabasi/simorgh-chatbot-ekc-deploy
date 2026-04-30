@@ -80,6 +80,14 @@ jobs:
             context: ./simorgh-agent/tier-quota-service
             dockerfile: ./simorgh-agent/tier-quota-service/Dockerfile
 
+          # General-chat feature services
+          - name: hr-kb-service
+            context: ./simorgh-agent/hr-kb-service
+            dockerfile: ./simorgh-agent/hr-kb-service/Dockerfile
+          - name: org-data-service
+            context: ./simorgh-agent/org-data-service
+            dockerfile: ./simorgh-agent/org-data-service/Dockerfile
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
