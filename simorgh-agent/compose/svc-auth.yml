@@ -48,6 +48,9 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
       # CORS
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      # Redis profile cache (legacy login enrichment)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - USER_PROFILE_TTL_SEC=${USER_PROFILE_TTL_SEC:-86400}
     depends_on:
       postgres_auth:
         condition: service_healthy

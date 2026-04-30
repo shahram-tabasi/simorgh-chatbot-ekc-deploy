@@ -48,6 +48,7 @@ from services.oauth_service import get_oauth_service, OAuthService
 from services.email_service import get_email_service, EmailService
 from services.tpms_auth_service import get_tpms_auth_service, TPMSAuthService
 from services.auth_utils import create_access_token, get_current_username_from_token
+from services.profile_cache import build_profile, write_profile_to_redis
 from services.redis_service import get_redis_service, RedisService
 
 logger = logging.getLogger(__name__)
@@ -766,23 +767,47 @@ async def legacy_login(
 ):
     """
     Legacy login endpoint for TPMS username/password authentication.
-    Use this for existing users who haven't migrated to the new system.
+
+    On success we ALSO:
+      * build a normalized user profile (role_category, department, …),
+      * write it to Redis at `user_profile:{user_id}` (TTL 24h) so other
+        services can read role/dept without re-querying TPMS,
+      * embed `role_category` and `department` as JWT claims so JWT-only
+        consumers (e.g. project-agent-service's role gate) don't need a
+        Redis round-trip on every request.
+
+    See PROJECT_CHAT_DESIGN.md + GENERAL_CHAT_DESIGN.md.
     """
     user = tpms_auth.authenticate_user(request.username, request.password)
 
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    # Create JWT token using legacy format
-    access_token = create_access_token(data={"sub": user["EMPUSERNAME"]})
+    # Build the cacheable profile and write it to Redis.
+    profile = build_profile(user)
+    write_profile_to_redis(profile)
 
-    logger.info(f"Legacy login: {user['EMPUSERNAME']}")
+    # JWT carries the canonical bucket so downstream services can gate
+    # on it without a Redis hit. The `sub` keeps the legacy username
+    # shape for backward compatibility.
+    access_token = create_access_token(data={
+        "sub":           user["EMPUSERNAME"],
+        "user_id":       profile["user_id"],
+        "role_category": profile["role_category"],
+        "department":    profile.get("department"),
+    })
+
+    logger.info(
+        "Legacy login: %s (role_category=%s, department=%s)",
+        user["EMPUSERNAME"], profile["role_category"], profile.get("department"),
+    )
 
     return {
         "access_token": access_token,
-        "token_type": "bearer",
-        "user": user,
-        "auth_method": "legacy_tpms"
+        "token_type":   "bearer",
+        "user":         user,
+        "profile":      profile,
+        "auth_method":  "legacy_tpms",
     }
 
 
