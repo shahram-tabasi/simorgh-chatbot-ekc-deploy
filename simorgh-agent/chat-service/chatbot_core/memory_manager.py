@@ -877,22 +877,36 @@ class MemoryManager:
     # =========================================================================
 
     def _get_from_redis_list(self, key: str, limit: int) -> Optional[List[Dict]]:
-        """Get list data from Redis"""
+        """
+        Read history list at the FULL namespaced key.
+
+        Previously this re-extracted a chat_id from the key and called
+        redis.get_chat_history(chat_id, ...) which uses the flat
+        ``chat:history:{chat_id}`` key — collapsing the general/project
+        namespacing and risking history leak across session types. Now uses
+        the namespace-safe get_history_from_key directly.
+        """
         if not self.redis:
             return None
 
+        # Preferred path: namespace-safe lookup at the literal key.
         try:
-            data = self.redis.get_chat_history(key.split(":")[-2], limit=limit)
-            return data if data else None
+            if hasattr(self.redis, "get_history_from_key"):
+                data = self.redis.get_history_from_key(key, limit=limit)
+                if data:
+                    return data
         except Exception:
-            # Try generic get for non-standard keys
-            try:
-                data = self.redis.get(key, db="chat")
-                if isinstance(data, list):
-                    return data[-limit:] if limit > 0 else data
-                return None
-            except Exception:
-                return None
+            pass
+
+        # Fallback: generic get for non-list keys (cached snapshots etc.).
+        try:
+            data = self.redis.get(key, db="chat")
+            if isinstance(data, list):
+                return data[-limit:] if limit > 0 else data
+        except Exception:
+            pass
+
+        return None
 
     def _set_redis_list(self, key: str, data: List[Dict], ttl: int):
         """Set list data in Redis"""
@@ -911,14 +925,27 @@ class MemoryManager:
         max_items: int = 100,
         ttl: int = None
     ):
-        """Append item to Redis list with size limit"""
+        """
+        Append item to the Redis list at the FULL namespaced key.
+
+        Previously this routed through redis.cache_chat_message(chat_id, ...)
+        which uses the flat ``chat:history:{chat_id}`` key, collapsing
+        general vs project namespacing. Now uses the namespace-safe
+        append_history_to_key directly so general:.../history and
+        project:project_id:.../history can never overlap.
+        """
         if not self.redis:
             return
 
         try:
-            # Use the native chat message caching
-            chat_id = key.split(":")[-2] if "chat_id" in key else key
-            self.redis.cache_chat_message(chat_id, item, max_messages=max_items)
+            if hasattr(self.redis, "append_history_to_key"):
+                self.redis.append_history_to_key(
+                    key, item, max_messages=max_items, ttl=ttl
+                )
+            else:
+                # Backward-compatible fallback for older redis_service.
+                chat_id = key.split(":")[-2] if "chat_id" in key else key
+                self.redis.cache_chat_message(chat_id, item, max_messages=max_items)
         except Exception as e:
             logger.warning(f"Redis append error: {e}")
 

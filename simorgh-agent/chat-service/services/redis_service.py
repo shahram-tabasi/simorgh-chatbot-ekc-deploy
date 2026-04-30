@@ -379,6 +379,55 @@ class RedisService:
     # CHAT HISTORY MANAGEMENT (DB 1)
     # =========================================================================
 
+    def append_history_to_key(
+        self,
+        key: str,
+        message: Dict[str, Any],
+        max_messages: int = 100,
+        ttl: Optional[int] = None,
+    ) -> bool:
+        """
+        Append `message` to the Redis list at the FULL namespaced `key`,
+        e.g. ``general:chat_id:{chat_id}:history`` or
+        ``project:project_id:{project_id}:chat_id:{chat_id}:history``.
+
+        Prefer this over ``cache_chat_message(chat_id, ...)`` — the latter
+        uses a flat key ``chat:history:{chat_id}`` which has no general/
+        project distinction and can leak histories across session types if
+        a chat_id is reused.
+        """
+        try:
+            self.chat_client.rpush(key, json.dumps(message))
+            self.chat_client.ltrim(key, -max_messages, -1)
+            if ttl:
+                self.chat_client.expire(key, ttl)
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to append history to {key}: {e}")
+            return False
+
+    def get_history_from_key(
+        self,
+        key: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """
+        Read history list at the FULL namespaced ``key``. Counterpart to
+        ``append_history_to_key``; both bypass the legacy flat-key path.
+        """
+        try:
+            if limit <= 0:
+                raw = self.chat_client.lrange(key, 0, -1)
+            else:
+                raw = self.chat_client.lrange(key, offset, offset + limit - 1)
+            messages = [json.loads(m) for m in raw]
+            messages.sort(key=lambda m: m.get("timestamp", ""))
+            return messages
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get history from {key}: {e}")
+            return []
+
     def cache_chat_message(
         self,
         chat_id: str,
