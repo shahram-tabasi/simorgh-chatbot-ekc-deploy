@@ -27,7 +27,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
+# router carries its own prefix /api/v2/admin
+app.include_router(admin_router)
 
 
 @app.get("/health")

@@ -26,7 +26,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(quota_router, prefix="/api/quota", tags=["quota"])
+# router carries its own prefix /api/v2/quota
+app.include_router(quota_router)
 
 
 @app.get("/health")

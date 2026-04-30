@@ -26,7 +26,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(payments_router, prefix="/api/payments", tags=["payments"])
+# router carries its own prefix /api/v2/payments
+app.include_router(payments_router)
 
 
 @app.get("/health")
