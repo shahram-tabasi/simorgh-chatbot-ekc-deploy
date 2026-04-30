@@ -87,6 +87,12 @@ jobs:
           - name: org-data-service
             context: ./simorgh-agent/org-data-service
             dockerfile: ./simorgh-agent/org-data-service/Dockerfile
+          - name: techserver-service
+            context: ./simorgh-agent/techserver-service
+            dockerfile: ./simorgh-agent/techserver-service/Dockerfile
+          - name: eplan-sql-service
+            context: ./simorgh-agent/eplan-sql-service
+            dockerfile: ./simorgh-agent/eplan-sql-service/Dockerfile
 
     steps:
       - name: Checkout code
