@@ -93,6 +93,9 @@ jobs:
           - name: eplan-sql-service
             context: ./simorgh-agent/eplan-sql-service
             dockerfile: ./simorgh-agent/eplan-sql-service/Dockerfile
+          - name: project-mail-service
+            context: ./simorgh-agent/project-mail-service
+            dockerfile: ./simorgh-agent/project-mail-service/Dockerfile
 
     steps:
       - name: Checkout code
