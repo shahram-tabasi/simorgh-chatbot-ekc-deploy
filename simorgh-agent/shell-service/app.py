@@ -11,12 +11,14 @@ import asyncio
 import logging
 import os
 import shutil
+import tarfile
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, UploadFile, File, Form
 from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO)
@@ -118,6 +120,34 @@ def get_project_dir(project_id: str) -> Path:
     if not safe_id:
         raise HTTPException(status_code=400, detail="Invalid project_id")
     return WORKSPACE_ROOT / safe_id
+
+
+# Project workspace standard layout — every project on this machine has
+# these subdirs created at init time. Some are populated only when their
+# corresponding source was selected during project-creation precheck.
+PROJECT_SUBDIRS = (
+    "techserver",       # clone of \\techserver\<oenum> (source-gated)
+    "tpms",             # JSON dump of TPMS tables for this oenum (source-gated)
+    "tech-knowledge",   # snapshot of tech-knowledge git main HEAD (source-gated)
+    "uploads",          # user-uploaded files
+    "instructions",     # per-project instructions + restrictions
+    "emails",           # archived inbound + outbound .eml files
+    "logs",             # agent / cot / task execution logs
+    "notes",            # deviations, conflict resolutions
+)
+
+# Where soft-archived projects go on DELETE.
+ARCHIVE_ROOT = Path(os.getenv("ARCHIVE_ROOT", str(WORKSPACE_ROOT.parent / "projects-archived")))
+
+
+def _safe_subdir(project_dir: Path, subdir: str) -> Path:
+    """Resolve a subdir path inside the project, blocking path traversal."""
+    if not subdir or subdir.startswith("/") or ".." in subdir.split("/"):
+        raise HTTPException(status_code=400, detail=f"Invalid subdir: {subdir!r}")
+    target = (project_dir / subdir).resolve()
+    if not str(target).startswith(str(project_dir.resolve())):
+        raise HTTPException(status_code=400, detail="path traversal blocked")
+    return target
 
 
 def validate_command(command: str) -> None:
@@ -241,6 +271,189 @@ async def git_init(req: GitInitRequest, _=Depends(verify_token)):
     await run_command('git commit -m "Initial project setup"', project_dir)
 
     return {"status": "initialized", "path": str(project_dir)}
+
+
+# ---------------------------------------------------------------------------
+# WORKSPACE LIFECYCLE — init / upload / archive
+# Used by project-agent-service during project creation + deletion.
+# ---------------------------------------------------------------------------
+class WorkspaceInitRequest(BaseModel):
+    project_id: str
+    project_name: Optional[str] = None
+    sources: List[str] = []  # informational only — used to seed README
+
+
+@app.post("/workspace/init")
+async def workspace_init(req: WorkspaceInitRequest, _=Depends(verify_token)):
+    """
+    Create the canonical project layout under ~/projects/<project_id>/:
+      techserver/  tpms/  tech-knowledge/  uploads/  instructions/
+      emails/      logs/  notes/
+
+    Idempotent — re-running on an existing workspace is a no-op for
+    already-present dirs. Initialises git if not present and makes a
+    first commit covering the empty subdirs (each gets a .gitkeep).
+    """
+    project_dir = get_project_dir(req.project_id)
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    created = []
+    for sub in PROJECT_SUBDIRS:
+        d = project_dir / sub
+        if not d.exists():
+            d.mkdir(parents=True)
+            (d / ".gitkeep").write_text("")
+            created.append(sub)
+
+    # README so users SCPing in see what each dir is for.
+    readme = project_dir / "README.md"
+    if not readme.exists():
+        readme.write_text(
+            f"# {req.project_name or req.project_id}\n\n"
+            "Project workspace. Standard layout:\n\n"
+            "* `techserver/`       — clone of \\\\techserver\\<oenum> (if source enabled)\n"
+            "* `tpms/`             — JSON dump of TPMS tables (if source enabled)\n"
+            "* `tech-knowledge/`   — snapshot of tech-knowledge `main` HEAD\n"
+            "* `uploads/`          — user uploads via chat or email\n"
+            "* `instructions/`     — per-project instructions + restrictions\n"
+            "* `emails/`           — archived inbound + outbound emails\n"
+            "* `logs/`             — agent / cot / task execution logs\n"
+            "* `notes/`            — deviations, conflict resolutions\n\n"
+            f"Sources enabled at creation: {', '.join(req.sources) or '(none)'}\n"
+        )
+
+    # Init git if needed.
+    if not (project_dir / ".git").exists():
+        await run_command("git init", project_dir)
+        (project_dir / ".gitignore").write_text(
+            "__pycache__/\n*.pyc\n.env\n.DS_Store\nnode_modules/\n"
+        )
+        # Configure a local identity so commits work even if no global
+        # git config is set in the container.
+        await run_command('git config user.email "agent@simorgh.local"', project_dir)
+        await run_command('git config user.name  "Simorgh Project Agent"', project_dir)
+        await run_command("git add -A", project_dir)
+        await run_command(
+            'git commit -m "chore: init project workspace"', project_dir,
+        )
+
+    return {
+        "status": "ok",
+        "path": str(project_dir),
+        "subdirs_created": created,
+        "subdirs_present": list(PROJECT_SUBDIRS),
+    }
+
+
+class WorkspaceWriteRequest(BaseModel):
+    project_id: str
+    path: str           # path inside the project, e.g. "tpms/projects.json"
+    content: str        # text content (utf-8)
+    commit_message: Optional[str] = None  # if set, git-commit after write
+
+
+@app.post("/workspace/write")
+async def workspace_write(req: WorkspaceWriteRequest, _=Depends(verify_token)):
+    """
+    Write a single text file inside the project workspace. For binary or
+    large content use /workspace/upload-tarball instead.
+    """
+    project_dir = get_project_dir(req.project_id)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project workspace not found")
+    target = _safe_subdir(project_dir, req.path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(req.content, encoding="utf-8")
+
+    if req.commit_message and (project_dir / ".git").exists():
+        # Quote the message safely.
+        safe_msg = req.commit_message.replace('"', "'")
+        await run_command(f"git add {req.path}", project_dir)
+        await run_command(f'git commit -m "{safe_msg}"', project_dir)
+
+    return {"status": "ok", "path": str(target), "bytes": len(req.content)}
+
+
+@app.post("/workspace/upload-tarball")
+async def workspace_upload_tarball(
+    project_id: str = Form(...),
+    subdir: str = Form(...),
+    commit_message: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+    _=Depends(verify_token),
+):
+    """
+    Receive a tar/tar.gz archive and untar it into <project>/<subdir>/.
+    Used by the techserver-service /clone-to-shell flow and by the
+    tech-kb-service snapshot import.
+
+    The subdir is wiped first (clean install). Outside the tarball, the
+    rest of the workspace is left alone.
+    """
+    project_dir = get_project_dir(project_id)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project workspace not found")
+
+    target = _safe_subdir(project_dir, subdir)
+
+    # Save tarball to a temp file so tarfile can stream from disk.
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp:
+        try:
+            while True:
+                chunk = await file.read(1 << 20)  # 1 MiB
+                if not chunk:
+                    break
+                tmp.write(chunk)
+            tmp_path = Path(tmp.name)
+        except Exception:
+            tmp.close()
+            os.unlink(tmp.name)
+            raise
+
+    # Wipe the existing subdir so this is a clean install.
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+
+    try:
+        with tarfile.open(tmp_path, "r:*") as tf:
+            # Defensive extraction: refuse absolute paths or .. in members.
+            for m in tf.getmembers():
+                if m.name.startswith("/") or ".." in m.name.split("/"):
+                    raise HTTPException(status_code=400,
+                                        detail=f"unsafe tarball entry: {m.name!r}")
+            tf.extractall(target)
+    finally:
+        os.unlink(tmp_path)
+
+    if commit_message and (project_dir / ".git").exists():
+        await run_command(f"git add {subdir}", project_dir)
+        await run_command(f'git commit -m "{commit_message}"', project_dir)
+
+    return {"status": "ok", "path": str(target)}
+
+
+class WorkspaceArchiveRequest(BaseModel):
+    project_id: str
+
+
+@app.post("/workspace/archive")
+async def workspace_archive(req: WorkspaceArchiveRequest, _=Depends(verify_token)):
+    """
+    Soft-archive the project workspace by moving it to ARCHIVE_ROOT.
+    Called by project-agent-service on DELETE /projects/{id}.
+    Workspace can be restored manually by `mv` back if needed.
+    """
+    project_dir = get_project_dir(req.project_id)
+    if not project_dir.exists():
+        return {"status": "noop", "reason": "workspace did not exist"}
+
+    ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
+    safe_id = "".join(c for c in req.project_id if c.isalnum() or c in "-_")
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    dest = ARCHIVE_ROOT / f"{safe_id}.{timestamp}"
+    shutil.move(str(project_dir), str(dest))
+    return {"status": "archived", "from": str(project_dir), "to": str(dest)}
 
 
 @app.post("/git/commit")
