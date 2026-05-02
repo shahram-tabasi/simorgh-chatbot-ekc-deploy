@@ -54,3 +54,4 @@ aiohttp>=3.9.0
 
 # Misc
 tenacity>=8.2.3
+mcp>=1.8.0
