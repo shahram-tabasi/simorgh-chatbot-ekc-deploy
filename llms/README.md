@@ -1,59 +1,61 @@
-# Local LLM stack (vllm/vllm-openai)
+# Local LLM stack
 
-Two GPU servers, each running the **official `vllm/vllm-openai:latest`**
-image directly. No custom Python code in this directory anymore — the
-old `ai/` service has been removed. The GPU boxes expose a standard
-OpenAI-compatible HTTP API; everything else in the stack treats them
-like any OpenAI endpoint.
+Two GPU servers, two different runtimes — picked to match what each card
+can actually fit:
 
-| Server | Hardware | Compose file | Role | Default model | API |
+| Server | Hardware | Compose file | Runtime | Default model | API |
 |---|---|---|---|---|---|
-| **192.168.1.61** | NVIDIA A30 24 GB **× 2** | `docker-compose.llm.yml` | text-only LLM | `unsloth/gpt-oss-20b-16bit` (env `LLM_MODEL`) | OpenAI-compatible @ `:80` |
-| **192.168.1.62** | NVIDIA A30 24 GB | `docker-compose.vlm.yml` | vision + text VLM | `Qwen/Qwen2.5-VL-7B-Instruct-AWQ` (env `VLM_MODEL`) | OpenAI-compatible @ `:80` |
+| **192.168.1.61** | NVIDIA A30 24 GB | `docker-compose.llm.yml` | bespoke `ai/` (Unsloth + vLLM, FastAPI) | `unsloth/gpt-oss-20b-16bit` | OpenAI-compatible @ `:80` |
+| **192.168.1.62** | NVIDIA A30 24 GB | `docker-compose.vlm.yml` | `vllm/vllm-openai:latest` (upstream image) | `Qwen/Qwen2.5-VL-7B-Instruct-AWQ` | OpenAI-compatible @ `:80` |
 
-> **Memory math.**
-> * **.61 (LLM)** — `gpt-oss-20b` in BF16 needs ~40 GB of weights, which
->   does not fit on a single A30 24 GB. Default uses
->   `--tensor-parallel-size 2` to shard across two A30s (48 GB total).
->   If `.61` actually has 1 GPU, see the comment block at the top of
->   `docker-compose.llm.yml` — three documented fallbacks
->   (CPU offload, MXFP4 native, switch to Qwen2.5-14B-AWQ).
-> * **.62 (VLM)** — `Qwen2.5-VL-7B` in AWQ-INT4 is ~5 GB of weights,
->   leaving ~18 GB for KV cache + vision tower at 32K context.
->   Comfortable single-card fit.
+> **Why two different runtimes?**
+> * **.61 (LLM)** — `gpt-oss-20b` in BF16 needs ~40 GB of weights. The
+>   upstream `vllm/vllm-openai` image pins all weights in VRAM at startup,
+>   which OOMs on a 24 GB A30. Unsloth's `FastLanguageModel` instead
+>   streams layers from disk on demand, which is exactly how this box ran
+>   the model successfully before. The Python service in `ai/` wraps
+>   Unsloth + vLLM in a FastAPI front and exposes the standard OpenAI
+>   chat-completions API on top, so the upstream contract is identical to
+>   `.62` — clients can't tell them apart.
+> * **.62 (VLM)** — `Qwen2.5-VL-7B` in AWQ-INT4 is ~5 GB of weights, with
+>   ~18 GB free for KV cache + vision tower at 32K context. Comfortable
+>   single-card fit on the A30, no streaming needed → use the upstream
+>   `vllm/vllm-openai` image directly. Less code to maintain, gets
+>   security + perf fixes from upstream.
 
-Routing across the two is done by `simorgh-agent/llm-gateway` on **.68**
-— text-only requests → .61, anything with `image_url` content → .62.
-Clients never talk to the GPU boxes directly.
+Both boxes look identical to clients: OpenAI-compatible HTTP on `:80`,
+fronted by an nginx that IP-allowlists `.68` and configures SSE-friendly
+proxy buffering. Routing across them is done by
+`simorgh-agent/llm-gateway` on **.68** — text-only requests → .61,
+anything with `image_url` content → .62. Clients never talk to the GPU
+boxes directly.
 
 ---
 
 ## Deploy
 
-On **192.168.1.61** (text-only LLM):
+### On 192.168.1.61 (text LLM — Python service)
 
 ```bash
 cd llms
 mkdir -p /home/ubuntu/models
 cat > .env <<EOF
 HF_TOKEN=hf_...
-# gpt-oss-20b 16-bit, sharded across 2× A30 via tensor parallelism.
-LLM_MODEL=unsloth/gpt-oss-20b-16bit
-LLM_SERVED_NAME=gpt-oss-20b
-LLM_TP_SIZE=2
-LLM_DTYPE=bfloat16
-LLM_MAX_MODEL_LEN=8192
-LLM_MAX_NUM_SEQS=4
-GPU_MEM_UTIL=0.92
+# The initializer drops the 16-bit weights at this exact path on first run.
+LLM_MODEL_PATH=/models/unsloth-gpt-oss-20b-16bit
 MODEL_CACHE_PATH=/home/ubuntu/models
-VLLM_API_KEY=
 EOF
 
-docker compose -f docker-compose.llm.yml up -d
-docker compose -f docker-compose.llm.yml logs -f vllm
+docker compose -f docker-compose.llm.yml up -d --build
+docker compose -f docker-compose.llm.yml logs -f ai_service
 ```
 
-On **192.168.1.62** (VLM):
+First start runs `model_initializer` to download the 16-bit weights
+(~40 GB) into `${MODEL_CACHE_PATH}/unsloth-gpt-oss-20b-16bit/`, then
+brings `ai_service` up. The cold start takes ~15 min on a fresh box;
+subsequent restarts skip the download and come up in ~2.5 min.
+
+### On 192.168.1.62 (VLM — upstream vllm/vllm-openai)
 
 ```bash
 cd llms
@@ -77,110 +79,67 @@ docker compose -f docker-compose.vlm.yml up -d
 docker compose -f docker-compose.vlm.yml logs -f vllm
 ```
 
-First start downloads the model (large — 40+ GB for the 20B model)
-into `/home/ubuntu/models/huggingface/`. The healthcheck `start_period`
-is set to 10 min for the LLM and 8 min for the VLM to cover this.
-Subsequent restarts use the cache and come up in ~1 min.
+First start downloads the model (~5 GB) into
+`/home/ubuntu/models/huggingface/`. The healthcheck `start_period` is
+8 min for the VLM. Subsequent restarts use the cache.
 
 ---
 
-## Environment variables (per server)
+## Environment variables
 
-### Common to both
+### LLM-only (`docker-compose.llm.yml`, .61)
 
 | Var | Default | Notes |
 |---|---|---|
-| `HF_TOKEN` | — | Hugging Face token (gated models, rate limits) |
-| `MODEL_CACHE_PATH` | `/home/ubuntu/models` | Host path bind-mounted at `/models` in the container |
-| `GPU_MEM_UTIL` | `0.90` | vllm `--gpu-memory-utilization` |
-| `VLLM_API_KEY` | (empty) | If set, vllm requires `Authorization: Bearer <key>`. Mirror the same value to llm-gateway via `LOCAL_LLM_API_KEY` |
+| `HF_TOKEN` | — | Hugging Face token (required for first download) |
+| `MODEL_CACHE_PATH` | `/home/ubuntu/models` | Host path bind-mounted at `/models` |
+| `LLM_MODEL_PATH` | `/models/unsloth-gpt-oss-20b-16bit` | Where the initializer drops weights and `ai_service` reads them. Override only if you renamed the cache layout. |
+| `ENABLE_SEARCH_TOOL` | `false` | LangChain DDG search tool. The chat-service in simorgh-agent owns search now; keep off here. |
+| `ENABLE_PYTHON_REPL` | `false` | Off by default for safety. |
+| `ENABLE_SIEMENS_API` | `false` | Set to `true` + provide `SIEMENS_API_KEY` to expose Siemens product lookups via the agent. |
+| `AGENT_VERBOSE` | `false` | LangChain verbose logging. |
+
+The model itself is hardcoded to `unsloth/gpt-oss-20b-16bit` — this is
+the loader that's known to fit on a single A30. To swap models you'd
+change the initializer + `ai_service.py`; for routine reconfiguration
+just leave it.
+
+### VLM-only (`docker-compose.vlm.yml`, .62)
+
+| Var | Default | Notes |
+|---|---|---|
+| `HF_TOKEN` | — | Hugging Face token |
+| `MODEL_CACHE_PATH` | `/home/ubuntu/models` | Host path bind-mounted at `/models` |
+| `GPU_MEM_UTIL` | `0.92` | vllm `--gpu-memory-utilization` |
+| `VLLM_API_KEY` | (empty) | If set, vllm requires `Authorization: Bearer <key>`. Mirror the same value to llm-gateway via `LOCAL_LLM_API_KEY`. |
 | `VLLM_LOGGING_LEVEL` | `INFO` | `DEBUG` / `WARNING` / etc. |
-
-### LLM-only (`docker-compose.llm.yml`)
-
-| Var | Default | Notes |
-|---|---|---|
-| `LLM_MODEL` | `unsloth/gpt-oss-20b-16bit` | |
-| `LLM_SERVED_NAME` | `gpt-oss-20b` | Match this on llm-gateway via `LOCAL_LLM_MODEL_TEXT` |
-| `LLM_TP_SIZE` | `2` | Tensor-parallel shards. **Set 1 if `.61` has a single GPU** (you'll then need to use one of the fallback models — see compose comment block) |
-| `LLM_DTYPE` | `bfloat16` | |
-| `LLM_QUANTIZATION` | _(unset)_ | Set to `awq` / `bitsandbytes` / `mxfp4` only when the chosen model is quantized |
-| `LLM_CPU_OFFLOAD_GB` | _(unset)_ | If you must run on a single GPU + RAM offload, set to `20`. Slow. |
-| `LLM_MAX_MODEL_LEN` | `8192` | KV cache headroom is tight even with TP=2; don't bump above 8K without monitoring |
-| `LLM_MAX_NUM_SEQS` | `4` | Lower than the VLM (BF16 weights + KV at 20B leaves less per-request room) |
-
-### VLM-only (`docker-compose.vlm.yml`)
-
-| Var | Default |
-|---|---|
-| `VLM_MODEL` | `Qwen/Qwen2.5-VL-7B-Instruct-AWQ` |
-| `VLM_SERVED_NAME` | `qwen2.5-vl-7b` |
-| `VLM_QUANTIZATION` | `awq` |
-| `VLM_DTYPE` | `half` |
-| `VLM_MAX_MODEL_LEN` | `32768` |
-| `VLM_MAX_NUM_SEQS` | `8` |
-| `VLM_MAX_IMAGES_PER_PROMPT` | `5` |
-
-### If `.61` is single-card
-
-The default config assumes `.61` has 2× A30 because `gpt-oss-20b` 16-bit
-won't fit on one. Run `nvidia-smi -L` on `.61` to check. If you see only
-one GPU, pick one of these three and put it in `.env`:
-
-**(B) CPU offload** — keep gpt-oss-20b 16-bit but spill ~20 GB to RAM.
-Inference becomes ~5-10× slower. Needs 32+ GB system RAM.
-```env
-LLM_TP_SIZE=1
-LLM_CPU_OFFLOAD_GB=20
-LLM_MAX_NUM_SEQS=2
-```
-
-**(C) MXFP4 native** — recommended single-GPU fallback. MXFP4 *is* the
-trained gpt-oss format; the `-16bit` variant is unsloth's BF16 upcast
-for fine-tuning convenience. Inference quality is essentially identical,
-weights are ~12 GB → fits on 1 A30 with ~12 GB free for KV cache.
-```env
-LLM_MODEL=unsloth/gpt-oss-20b
-LLM_SERVED_NAME=gpt-oss-20b
-LLM_QUANTIZATION=mxfp4
-LLM_TP_SIZE=1
-LLM_DTYPE=bfloat16
-LLM_MAX_NUM_SEQS=4
-```
-
-**(D) Different model** — switch to Qwen2.5-14B-AWQ (same Qwen family
-as the VLM, ~8 GB on a single A30):
-```env
-LLM_MODEL=Qwen/Qwen2.5-14B-Instruct-AWQ
-LLM_SERVED_NAME=qwen2.5-14b
-LLM_QUANTIZATION=awq
-LLM_DTYPE=half
-LLM_TP_SIZE=1
-LLM_MAX_NUM_SEQS=8
-```
-Then update `LOCAL_LLM_MODEL_TEXT` on llm-gateway to match the new
-`LLM_SERVED_NAME`.
+| `VLM_MODEL` | `Qwen/Qwen2.5-VL-7B-Instruct-AWQ` | |
+| `VLM_SERVED_NAME` | `qwen2.5-vl-7b` | Match this on llm-gateway via `LOCAL_LLM_MODEL_VLM` |
+| `VLM_QUANTIZATION` | `awq` | |
+| `VLM_DTYPE` | `half` | |
+| `VLM_MAX_MODEL_LEN` | `32768` | |
+| `VLM_MAX_NUM_SEQS` | `8` | |
+| `VLM_MAX_IMAGES_PER_PROMPT` | `5` | |
 
 ---
 
 ## What you get on each box
 
 ```
-host port 80  ──►  nginx (this dir's nginx_configs/)  ──►  vllm:8000
+host port 80  ──►  nginx (this dir's nginx_configs/)  ──►  ai_service:9000  (.61)
+                                                       └►  vllm:8000        (.62)
                    IP-allowlists 192.168.1.68 + localhost
-                   forwards everything to vllm
+                   forwards everything upstream
 ```
 
-Nginx is mostly for the IP allowlist + a sane SSE configuration
-(no buffering, long timeouts). The actual API is what
-`vllm/vllm-openai` provides natively:
+The two boxes use different upstream blocks but expose the same surface:
 
 ```
 GET  /health
 GET  /v1/models
 POST /v1/chat/completions       # streaming via "stream": true
 POST /v1/completions
-POST /v1/embeddings             # only if --task=embedding (not the default here)
+POST /generate-stream           # legacy, .61 only — deprecated
 ```
 
 Smoke test from the central server:
@@ -218,29 +177,17 @@ curl -s http://192.168.1.62/v1/chat/completions \
    - has image  → `LOCAL_LLM_URL_VLM`  (default `http://192.168.1.62/v1`)
 4. Streams the OpenAI-compatible response back as-is.
 
-If `VLLM_API_KEY` is set on the GPU side, set `LOCAL_LLM_API_KEY` on the
-llm-gateway side to the same value.
+If `VLLM_API_KEY` is set on the VLM box, set `LOCAL_LLM_API_KEY` on the
+llm-gateway side to the same value. The .61 Python service does not
+require an API key by default.
 
 ---
 
 ## GPU monitor
 
-`gpu_monitor/` watches the `vllm` container's GPU memory + idle time
-and restarts it if it hangs. `TARGET_CONTAINER=vllm` (was `ai_service`
-before this refactor).
-
----
-
-## What was removed in this refactor
-
-- `ai/` — custom vLLM Python service. Superseded entirely by
-  `vllm/vllm-openai:latest` which has more features, gets security
-  fixes upstream, and uses the standard OpenAI API contract instead of
-  the bespoke `/generate-stream`.
-- `initializer/` — bespoke model downloader. vllm/vllm-openai pulls
-  from Hugging Face on first start (with `HF_TOKEN`), so the extra
-  container isn't needed. The bind-mounted `MODEL_CACHE_PATH` keeps
-  the cache across restarts.
+`gpu_monitor/` watches the GPU container's memory + idle time and
+restarts it if it hangs. `TARGET_CONTAINER` is `ai_service` on the LLM
+box and `vllm` on the VLM box.
 
 ---
 
@@ -248,28 +195,32 @@ before this refactor).
 
 | Path | Purpose |
 |---|---|
-| `docker-compose.yml` | Empty / pointer comment |
-| `docker-compose.llm.yml` | What runs on .61 |
-| `docker-compose.vlm.yml` | What runs on .62 |
-| `docker-compose.local.yml` | Dev-only legacy variant |
-| `docker-compose.no-wait.yml` | Dev-only legacy variant |
+| `docker-compose.llm.yml` | Runs on .61 — Python ai_service + initializer + nginx + gpu_monitor |
+| `docker-compose.vlm.yml` | Runs on .62 — vllm/vllm-openai + nginx + gpu_monitor |
+| `docker-compose.yml` | Pointer / placeholder |
+| `docker-compose.local.yml`, `docker-compose.no-wait.yml` | Dev-only legacy variants |
+| `ai/` | Python service used by .61 (Unsloth FastLanguageModel + vLLM 0.12 + FastAPI) |
+| `initializer/` | One-shot model downloader (used by .61) |
+| `gpu_monitor/` | Watches GPU memory + restarts the upstream container if it hangs |
 | `nginx_configs/nginx.conf` | Top-level nginx config (shared) |
-| `nginx_configs/conf.d/default.conf` | vhost in front of vllm |
-| `gpu_monitor/` | Watches GPU memory + restarts vllm if it hangs |
+| `nginx_configs/conf.d/llm.conf` | LLM vhost (.61) — proxies to `ai_service:9000` |
+| `nginx_configs/conf.d/default.conf` | VLM vhost (.62) — proxies to `vllm:8000` |
 | `check-models.sh`, `cleanup-incomplete-models.sh`, `deploy-llm-service.sh` | Existing helper scripts |
 | `scripts/` | Existing helpers |
 
 ---
 
-## Why `vllm/vllm-openai` directly
+## Why this split
 
-- **Standard OpenAI API.** Drop-in client; every existing OpenAI SDK
-  works without changes. llm-gateway uses the same `httpx` client for
-  both online (api.openai.com) and offline (.61/.62).
-- **Multimodal support.** VLM image input goes through unmodified — no
-  request adapter to write.
-- **Upstream security + perf updates.** Pulling
-  `vllm/vllm-openai:latest` is a `docker compose pull` away — no
-  service code to maintain.
-- **Built-in tooling we don't have to write.** Prefix caching, batched
-  scheduling, speculative decoding, GPU memory tuning, etc.
+- **`.61` keeps the Python service** because Unsloth's
+  `FastLanguageModel` is the only loader in the ecosystem that fits
+  `gpt-oss-20b-16bit` on a single 24 GB A30 (it streams layers from
+  disk on demand). The upstream `vllm/vllm-openai` image was tried in
+  an earlier iteration and OOMed; it can't fit BF16 20B on one card.
+- **`.62` uses the upstream image** because the AWQ-INT4 7B VLM fits
+  comfortably on one A30 — there's no reason to maintain bespoke
+  Python code for it. Multimodal `image_url` requests pass through
+  unmodified, security + perf fixes come from upstream.
+- **Both expose the same OpenAI-compatible surface**, so llm-gateway
+  uses one `httpx` client for online (api.openai.com) and offline
+  (.61/.62), with content-aware routing as the only branch.
