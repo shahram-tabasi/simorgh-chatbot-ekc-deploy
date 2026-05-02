@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from mcp.server.fastmcp import FastMCP
 
 from services.graph_rag import GraphRAG
 from services.graph_rag_service import GraphRAGService
@@ -177,3 +178,99 @@ def document_specifications(document_id: str) -> Dict[str, Any]:
     if _graph_rag_service is None:
         raise HTTPException(status_code=503, detail="Neo4j unavailable")
     return {"specs": _graph_rag_service.get_document_specifications(document_id=document_id)}
+
+
+# ---------------------------------------------------------------------------
+# MCP — exposes the graph-RAG surface to the project-agent COT engine.
+# Only useful when Neo4j is enabled (compose/infra-neo4j.yml uncommented);
+# tools return {error: "..."} otherwise so the agent gracefully skips them.
+# ---------------------------------------------------------------------------
+mcp = FastMCP(
+    "graph-rag-service",
+    instructions=(
+        "Neo4j-backed graph RAG: extract entities from a query, traverse "
+        "the project's knowledge graph for related items, and produce "
+        "LLM-formatted context strings. Use these tools when answering "
+        "questions about specific equipment / parts / relationships in a "
+        "project rather than free-text content."
+    ),
+)
+
+
+@mcp.tool()
+async def graph_query(
+    project_oenum: str,
+    user_query: str,
+    project_context: str = "",
+    max_hops: int = 2,
+    use_llm_formatting: bool = True,
+) -> Dict[str, Any]:
+    """
+    Full graph-RAG flow for a project: extract entities → BFS the
+    subgraph → return LLM-ready context (when use_llm_formatting=true)
+    plus raw subgraph data.
+    """
+    if _graph_rag is None:
+        return {"error": "Neo4j unavailable"}
+    return await _graph_rag.query(
+        project_oenum=project_oenum,
+        user_query=user_query,
+        project_context=project_context,
+        max_hops=max_hops,
+        use_llm_formatting=use_llm_formatting,
+    )
+
+
+@mcp.tool()
+async def graph_hybrid_search(
+    project_oenum: str,
+    user_query: str,
+    vector_results: Optional[List[Dict[str, Any]]] = None,
+    project_context: str = "",
+    max_hops: int = 2,
+) -> Dict[str, Any]:
+    """
+    graph_query + optional Qdrant vector results merged into one context
+    block. Pass `vector_results` from search_project_documents when you
+    want the agent to reason over both surfaces.
+    """
+    if _graph_rag is None:
+        return {"error": "Neo4j unavailable"}
+    return await _graph_rag.hybrid_search(
+        project_oenum=project_oenum,
+        user_query=user_query,
+        vector_results=vector_results,
+        project_context=project_context,
+        max_hops=max_hops,
+    )
+
+
+@mcp.tool()
+async def graph_extract_entities(
+    query: str, project_context: str = "",
+) -> Dict[str, Any]:
+    """LLM-driven entity extraction without graph traversal."""
+    if _graph_rag is None:
+        return {"error": "Neo4j unavailable"}
+    return await _graph_rag.extract_entities(
+        query=query, project_context=project_context,
+    )
+
+
+@mcp.tool()
+async def graph_project_summary(project_oenum: str) -> Dict[str, Any]:
+    """Aggregated summary of a project's graph."""
+    if _graph_rag_service is None:
+        return {"error": "Neo4j unavailable"}
+    return _graph_rag_service.get_project_summary(project_oenum=project_oenum)
+
+
+@mcp.tool()
+async def graph_document_specifications(document_id: str) -> Dict[str, Any]:
+    """All specs attached to a single document in the graph."""
+    if _graph_rag_service is None:
+        return {"error": "Neo4j unavailable"}
+    return {"specs": _graph_rag_service.get_document_specifications(document_id=document_id)}
+
+
+app.mount("/mcp", mcp.streamable_http_app())
