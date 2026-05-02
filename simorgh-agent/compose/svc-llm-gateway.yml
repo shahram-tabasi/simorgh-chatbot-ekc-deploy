@@ -49,6 +49,14 @@ services:
 
       # Hard-cap upstream timeout (gen can run minutes for 20B).
       - LLM_GATEWAY_TIMEOUT_SEC=${LLM_GATEWAY_TIMEOUT_SEC:-1800}
+
+      # Live settings — admin-service hot-reloads these every 30 s, falling
+      # back to the env values above when unreachable. SETTINGS_INTERNAL_TOKEN
+      # must match the one configured on admin-service.
+      - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin-service:8039}
+      - LIVE_SETTINGS_SCOPE=llm-gateway
+      - SETTINGS_INTERNAL_TOKEN=${SETTINGS_INTERNAL_TOKEN:-}
+      - LIVE_SETTINGS_REFRESH_SEC=${LIVE_SETTINGS_REFRESH_SEC:-30}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8030/health || exit 1"]
       interval: 30s

@@ -49,27 +49,40 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import live_settings
+
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("llm-gateway")
 
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration — every value is resolved through live_settings (DB →
+# admin-service) with the env var as the fallback default. Cached 30 s.
 # ---------------------------------------------------------------------------
-OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_BASE_URL     = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-OPENAI_MODEL        = os.getenv("OPENAI_MODEL", "gpt-4o")
-OPENAI_EMBED_MODEL  = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
+def _cfg(key: str, default: str = "") -> str:
+    v = live_settings.get_sync(key, default)
+    return (v or "").strip()
 
-# Two distinct local backends. Both are vllm/vllm-openai instances.
-LOCAL_LLM_URL_TEXT  = os.getenv("LOCAL_LLM_URL_TEXT", "http://192.168.1.61/v1").rstrip("/")
-LOCAL_LLM_URL_VLM   = os.getenv("LOCAL_LLM_URL_VLM",  "http://192.168.1.62/v1").rstrip("/")
-LOCAL_LLM_MODEL_TEXT = os.getenv("LOCAL_LLM_MODEL_TEXT", "gpt-oss-20b")
-LOCAL_LLM_MODEL_VLM  = os.getenv("LOCAL_LLM_MODEL_VLM",  "qwen2.5-vl-7b")
-LOCAL_LLM_API_KEY   = os.getenv("LOCAL_LLM_API_KEY", "").strip()  # vllm --api-key
 
-DEFAULT_LLM_MODE    = os.getenv("DEFAULT_LLM_MODE", "online").lower()  # online | offline | auto
-TIMEOUT_SEC         = float(os.getenv("LLM_GATEWAY_TIMEOUT_SEC", "1800"))
+def _cfg_url(key: str, default: str) -> str:
+    return _cfg(key, default).rstrip("/")
+
+
+def _openai_api_key()      -> str: return _cfg("OPENAI_API_KEY")
+def _openai_base_url()     -> str: return _cfg_url("OPENAI_BASE_URL", "https://api.openai.com/v1")
+def _openai_model()        -> str: return _cfg("OPENAI_MODEL", "gpt-4o")
+def _openai_embed_model()  -> str: return _cfg("OPENAI_EMBED_MODEL", "text-embedding-3-large")
+def _local_llm_url_text()  -> str: return _cfg_url("LOCAL_LLM_URL_TEXT", "http://192.168.1.61/v1")
+def _local_llm_url_vlm()   -> str: return _cfg_url("LOCAL_LLM_URL_VLM",  "http://192.168.1.62/v1")
+def _local_llm_model_text()-> str: return _cfg("LOCAL_LLM_MODEL_TEXT", "gpt-oss-20b")
+def _local_llm_model_vlm() -> str: return _cfg("LOCAL_LLM_MODEL_VLM",  "qwen2.5-vl-7b")
+def _local_llm_api_key()   -> str: return _cfg("LOCAL_LLM_API_KEY")
+def _default_llm_mode()    -> str: return _cfg("DEFAULT_LLM_MODE", "online").lower()
+
+
+def _timeout_sec() -> float:
+    try: return float(_cfg("LLM_GATEWAY_TIMEOUT_SEC", "1800"))
+    except ValueError: return 1800.0
 
 
 # ---------------------------------------------------------------------------
@@ -146,21 +159,21 @@ def _resolve_backend(
     backend resolution within mode=offline:
         has image content → VLM (.62), else LLM (.61)
     """
-    effective_mode = (mode or DEFAULT_LLM_MODE).lower()
+    effective_mode = (mode or _default_llm_mode()).lower()
     if effective_mode not in {"online", "offline", "auto"}:
         raise HTTPException(status_code=400, detail=f"unknown mode: {mode!r}")
 
     if effective_mode == "online":
-        if not OPENAI_API_KEY:
+        key = _openai_api_key()
+        if not key:
             raise HTTPException(status_code=503, detail="OPENAI_API_KEY not set")
-        return ("online", OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_API_KEY)
+        return ("online", _openai_base_url(), _openai_model(), key)
 
     # offline OR auto-with-online-failure: pick local backend
+    local_key = _local_llm_api_key() or None
     if _has_image(messages):
-        return ("offline_vlm", LOCAL_LLM_URL_VLM, LOCAL_LLM_MODEL_VLM,
-                LOCAL_LLM_API_KEY or None)
-    return ("offline_text", LOCAL_LLM_URL_TEXT, LOCAL_LLM_MODEL_TEXT,
-            LOCAL_LLM_API_KEY or None)
+        return ("offline_vlm", _local_llm_url_vlm(), _local_llm_model_vlm(), local_key)
+    return ("offline_text", _local_llm_url_text(), _local_llm_model_text(), local_key)
 
 
 def _build_payload(
@@ -201,24 +214,33 @@ def health() -> Dict[str, Any]:
     return {
         "status":  "healthy",
         "service": "llm-gateway",
-        "default_mode": DEFAULT_LLM_MODE,
-        "local_text_url": LOCAL_LLM_URL_TEXT,
-        "local_vlm_url":  LOCAL_LLM_URL_VLM,
+        "default_mode": _default_llm_mode(),
+        "local_text_url": _local_llm_url_text(),
+        "local_vlm_url":  _local_llm_url_vlm(),
     }
+
+
+@app.on_event("startup")
+async def _start_live_settings() -> None:
+    asyncio.create_task(live_settings.start_refresher())
 
 
 @app.get("/health/deep")
 async def health_deep() -> Dict[str, Any]:
     """Probe each configured backend's /health (or /v1/models for OpenAI)."""
     out: Dict[str, Any] = {"checks": {}}
+    openai_key = _openai_api_key()
+    openai_base = _openai_base_url()
+    text_url = _local_llm_url_text()
+    vlm_url = _local_llm_url_vlm()
 
     async with httpx.AsyncClient(timeout=10.0) as c:
         # OpenAI
-        if OPENAI_API_KEY:
+        if openai_key:
             try:
                 r = await c.get(
-                    f"{OPENAI_BASE_URL}/models",
-                    headers=_auth_headers(OPENAI_API_KEY),
+                    f"{openai_base}/models",
+                    headers=_auth_headers(openai_key),
                 )
                 out["checks"]["online"] = {"ok": r.status_code == 200,
                                            "status": r.status_code}
@@ -229,23 +251,23 @@ async def health_deep() -> Dict[str, Any]:
 
         # Local LLM
         try:
-            r = await c.get(f"{LOCAL_LLM_URL_TEXT.rsplit('/v1',1)[0]}/health")
+            r = await c.get(f"{text_url.rsplit('/v1',1)[0]}/health")
             out["checks"]["offline_text"] = {"ok": r.status_code == 200,
                                               "status": r.status_code,
-                                              "url": LOCAL_LLM_URL_TEXT}
+                                              "url": text_url}
         except Exception as e:
             out["checks"]["offline_text"] = {"ok": False, "error": str(e)[:200],
-                                              "url": LOCAL_LLM_URL_TEXT}
+                                              "url": text_url}
 
         # Local VLM
         try:
-            r = await c.get(f"{LOCAL_LLM_URL_VLM.rsplit('/v1',1)[0]}/health")
+            r = await c.get(f"{vlm_url.rsplit('/v1',1)[0]}/health")
             out["checks"]["offline_vlm"] = {"ok": r.status_code == 200,
                                              "status": r.status_code,
-                                             "url": LOCAL_LLM_URL_VLM}
+                                             "url": vlm_url}
         except Exception as e:
             out["checks"]["offline_vlm"] = {"ok": False, "error": str(e)[:200],
-                                             "url": LOCAL_LLM_URL_VLM}
+                                             "url": vlm_url}
 
     out["status"] = "healthy" if any(c.get("ok") for c in out["checks"].values()) else "unhealthy"
     return out
@@ -268,7 +290,7 @@ async def _do_chat_completion(
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
     """One non-streaming POST /v1/chat/completions to a chosen backend."""
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC) as c:
+    async with httpx.AsyncClient(timeout=_timeout_sec()) as c:
         r = await c.post(
             f"{base_url}/chat/completions",
             json=payload, headers=_auth_headers(api_key),
@@ -292,7 +314,7 @@ async def _do_chat_completion(
 async def generate(req: GenerateRequest) -> Dict[str, Any]:
     _stats["total"] += 1
     msgs = [m.model_dump() for m in req.messages]
-    mode_resolve = (req.mode or DEFAULT_LLM_MODE).lower()
+    mode_resolve = (req.mode or _default_llm_mode()).lower()
     primary_kind, primary_url, primary_model, primary_key = _resolve_backend(req.mode, msgs)
     payload = _build_payload(
         msgs, model=req.model or primary_model,
@@ -347,7 +369,7 @@ async def _stream_chat_completion(
     payload: Dict[str, Any],
 ) -> AsyncIterator[str]:
     """Yield content chunks (str) parsed from an OpenAI streaming response."""
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC) as c:
+    async with httpx.AsyncClient(timeout=_timeout_sec()) as c:
         async with c.stream(
             "POST",
             f"{base_url}/chat/completions",
@@ -450,17 +472,18 @@ async def embeddings(req: EmbeddingRequest) -> Dict[str, Any]:
     vllm-openai by default doesn't serve embeddings; flip with
     --task=embedding on a separate model if you ever need offline).
     """
-    if not OPENAI_API_KEY:
+    key = _openai_api_key()
+    if not key:
         raise HTTPException(status_code=503,
                             detail="OPENAI_API_KEY not set; offline embeddings "
                                    "not configured. Use embeddings-service:8031 "
                                    "(sentence-transformers) instead.")
-    model = req.model or OPENAI_EMBED_MODEL
+    model = req.model or _openai_embed_model()
     async with httpx.AsyncClient(timeout=60.0) as c:
         r = await c.post(
-            f"{OPENAI_BASE_URL}/embeddings",
+            f"{_openai_base_url()}/embeddings",
             json={"model": model, "input": req.text},
-            headers=_auth_headers(OPENAI_API_KEY),
+            headers=_auth_headers(key),
         )
     if r.status_code != 200:
         raise HTTPException(status_code=502,

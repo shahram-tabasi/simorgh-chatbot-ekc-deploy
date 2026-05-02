@@ -15,7 +15,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 
-from routes.auth_v2 import get_current_user
+from routes._auth import get_current_user, require_admin
 from services.user_tier_service import get_tier_service
 from services.postgres_auth_service import get_postgres_auth_service
 from models.tier_models import (
@@ -28,17 +28,6 @@ from models.tier_models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/admin", tags=["Admin"])
-
-
-# =============================================================================
-# Admin Guard Dependency
-# =============================================================================
-
-async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
-    """Require the current user to be an admin."""
-    if current_user.get("user_role") != "admin" and not current_user.get("is_superuser"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return current_user
 
 
 # =============================================================================
