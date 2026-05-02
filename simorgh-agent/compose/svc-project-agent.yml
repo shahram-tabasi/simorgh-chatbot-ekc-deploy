@@ -51,6 +51,10 @@ services:
       - TECHSERVER_URL=http://techserver-service:8043
       - TPMS_FETCHER_URL=http://tpms-fetcher:8021
       - TECH_KB_URL=http://tech-kb-service:8046
+      # shell-service on .69 for the workspace lifecycle
+      # (/workspace/init on create, /workspace/archive on delete).
+      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
       # Admin-managed restrictions file. Free-text constraints prepended to
       # every COT system prompt as hard rules on the final response.
       - RESTRICTIONS_PATH=/app/restrictions/system.txt

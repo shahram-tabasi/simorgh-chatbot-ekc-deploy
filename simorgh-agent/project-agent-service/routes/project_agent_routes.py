@@ -40,6 +40,11 @@ import httpx
 TECHSERVER_URL  = os.getenv("TECHSERVER_URL",      "http://techserver-service:8043")
 TPMS_FETCHER_URL = os.getenv("TPMS_FETCHER_URL",   "http://tpms-fetcher:8021")
 TECH_KB_URL     = os.getenv("TECH_KB_URL",         "http://tech-kb-service:8046")
+# shell-service runs on .69 (separate physical machine). Used for the
+# project workspace lifecycle: /workspace/init on create, and
+# /workspace/archive on delete (soft-archive — moves to projects-archived/).
+SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
+SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
 
 # Restrictions file (admin-managed). Read on every turn (mtime-cached
 # inside the agent) and prepended to the system prompt as hard
@@ -257,59 +262,113 @@ async def create_project(
 
         project_id = str(project["id"])
 
-        # Initialize project: git, directories, TPMS fetch (legacy), techserver copy (legacy)
-        init_result = await agent.initialize_project(
-            project_id, data.name, current_user,
-            tpms_oenum=data.tpms_oenum if is_legacy else None,
-            is_legacy=is_legacy,
-        )
-        logger.info(f"Project initialized: {project_id}, results: {init_result}")
+        # Step 1 — create the canonical 8-subdir workspace on .69 via
+        # shell-service. This is now the source of truth for project layout
+        # (techserver/, tpms/, tech-knowledge/, uploads/, instructions/,
+        #  emails/, logs/, notes/) and replaces the ad-hoc mkdir steps that
+        # used to live inside agent.initialize_project.
+        init_result: Dict[str, Any] = {"workspace": None, "sources": {}}
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as c:
+                headers = (
+                    {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
+                    if SHELL_SERVICE_TOKEN else {}
+                )
+                r = await c.post(
+                    f"{SHELL_SERVICE_URL}/workspace/init",
+                    headers=headers,
+                    json={
+                        "project_id":   project_id,
+                        "project_name": data.name,
+                        "sources":      data.sources,
+                    },
+                )
+                if r.status_code != 200:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"shell-service /workspace/init failed: "
+                               f"{r.status_code} {r.text[:300]}",
+                    )
+                init_result["workspace"] = r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502,
+                                detail=f"shell-service unreachable: {e}")
 
-        # Source-driven setup. Each ticked source from the precheck dialog
-        # gets its dedicated import step. Failures are logged but don't kill
-        # the whole creation — the project lands with whichever sources
-        # succeeded; missing ones can be re-attempted later.
+        # Step 2 — legacy agent-side init (TPMS sync to PostgreSQL slice,
+        # techserver project linking in `projects` table, etc.). The
+        # filesystem mkdir part of this is now redundant with /workspace/init
+        # but the DB-side bookkeeping it does is still needed.
+        try:
+            agent_init = await agent.initialize_project(
+                project_id, data.name, current_user,
+                tpms_oenum=data.tpms_oenum if is_legacy else None,
+                is_legacy=is_legacy,
+            )
+            init_result["agent"] = agent_init
+            logger.info(f"agent.initialize_project: {project_id}, results: {agent_init}")
+        except Exception as e:
+            logger.exception("agent.initialize_project failed (continuing): %s", e)
+            init_result["agent"] = {"ok": False, "error": str(e)[:300]}
+
+        # Step 3 — per-source population. Each populator pushes its result
+        # straight to shell-service /workspace/upload-tarball so the data
+        # lands in the right subdir. Failures are non-fatal — recorded per
+        # source; retry endpoints can re-run any one of these later.
         sources_status: Dict[str, Any] = {}
-        async with httpx.AsyncClient(timeout=300.0) as c:
+        async with httpx.AsyncClient(timeout=600.0) as c:
             if "techserver" in data.sources:
-                try:
-                    r = await c.post(
-                        f"{TECHSERVER_URL}/clone-to-shell",
-                        json={"project_id": project_id,
-                              "tpms_oenum": data.tpms_oenum,
-                              "shell_path": f"~/projects/{project_id}/techserver"},
-                    )
-                    sources_status["techserver"] = {"ok": r.status_code == 200,
-                                                   "detail": r.text[:200]}
-                except Exception as e:
-                    sources_status["techserver"] = {"ok": False, "detail": str(e)[:200]}
+                if not data.tpms_oenum:
+                    sources_status["techserver"] = {
+                        "ok": False, "detail": "techserver source needs tpms_oenum",
+                    }
+                else:
+                    try:
+                        r = await c.post(
+                            f"{TECHSERVER_URL}/clone-to-shell",
+                            json={"project_id": project_id,
+                                  "oenum":      data.tpms_oenum,
+                                  "subdir":     "techserver"},
+                        )
+                        sources_status["techserver"] = {
+                            "ok": r.status_code == 200,
+                            "detail": (r.json() if r.status_code == 200 else r.text[:300]),
+                        }
+                    except Exception as e:
+                        sources_status["techserver"] = {"ok": False, "detail": str(e)[:200]}
 
-            if "tpms" in data.sources and data.tpms_oenum:
-                try:
-                    r = await c.post(
-                        f"{TPMS_FETCHER_URL}/projects/{data.tpms_oenum}/import",
-                        json={"project_id": project_id},
-                    )
-                    sources_status["tpms"] = {"ok": r.status_code in (200, 202),
-                                              "detail": r.text[:200]}
-                except Exception as e:
-                    sources_status["tpms"] = {"ok": False, "detail": str(e)[:200]}
+            if "tpms" in data.sources:
+                if not data.tpms_oenum:
+                    sources_status["tpms"] = {
+                        "ok": False, "detail": "tpms source needs tpms_oenum",
+                    }
+                else:
+                    try:
+                        r = await c.post(
+                            f"{TPMS_FETCHER_URL}/projects/{data.tpms_oenum}/import",
+                            json={"project_id": project_id, "subdir": "tpms"},
+                        )
+                        sources_status["tpms"] = {
+                            "ok": r.status_code in (200, 202),
+                            "detail": (r.json() if r.status_code in (200, 202) else r.text[:300]),
+                        }
+                    except Exception as e:
+                        sources_status["tpms"] = {"ok": False, "detail": str(e)[:200]}
 
             if "tech_knowledge" in data.sources:
-                # tech-kb-service is always-on at the global level; the
-                # per-project step is just verifying we can reach it now.
                 try:
-                    r = await c.get(f"{TECH_KB_URL}/health/deep")
+                    r = await c.post(
+                        f"{TECH_KB_URL}/snapshot-to-shell",
+                        json={"project_id": project_id, "subdir": "tech-knowledge"},
+                    )
                     sources_status["tech_knowledge"] = {
                         "ok": r.status_code == 200,
-                        "detail": r.text[:200],
+                        "detail": (r.json() if r.status_code == 200 else r.text[:300]),
                     }
                 except Exception as e:
                     sources_status["tech_knowledge"] = {"ok": False, "detail": str(e)[:200]}
 
-        if sources_status:
-            init_result["sources"] = sources_status
-            logger.info("Project %s sources: %s", project_id, sources_status)
+        init_result["sources"] = sources_status
+        logger.info("Project %s sources: %s", project_id, sources_status)
 
         return ProjectResponse(
             id=project["id"],
@@ -467,16 +526,29 @@ async def delete_project(
     if project["owner_id"] != current_user:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Clean up all layers
+    # Clean up all layers (PostgreSQL slice, Qdrant, Redis, etc.)
     results = await memory.cleanup_project(project_id)
 
-    # Also clean up shell workspace
+    # Soft-archive the on-disk workspace on .69 instead of hard-deleting.
+    # POST /workspace/archive moves ~/projects/<id>/ to
+    # ~/projects-archived/<id>.<UTC-timestamp>/, recoverable with `mv`.
     try:
-        shell = get_shell_service()
-        await shell.delete_workspace(project_id)
-        results["shell"] = "cleaned"
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            headers = (
+                {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
+                if SHELL_SERVICE_TOKEN else {}
+            )
+            r = await c.post(
+                f"{SHELL_SERVICE_URL}/workspace/archive",
+                headers=headers,
+                json={"project_id": project_id},
+            )
+            results["shell"] = (
+                r.json() if r.status_code == 200
+                else {"ok": False, "status": r.status_code, "body": r.text[:300]}
+            )
     except Exception as e:
-        results["shell"] = f"error: {e}"
+        results["shell"] = {"ok": False, "error": str(e)[:200]}
 
     return {"status": "deleted", "project_id": project_id, "details": results}
 
