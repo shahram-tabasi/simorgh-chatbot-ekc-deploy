@@ -290,6 +290,7 @@ def get_mcp_manager() -> MCPManager:
         # Register servers from environment variables
         # Each microservice exposes MCP at /mcp endpoint
         servers = {
+            # Original microservices (always present)
             "search": os.getenv(
                 "SEARCH_MCP_URL", "http://search-service:8020/mcp"
             ),
@@ -311,10 +312,43 @@ def get_mcp_manager() -> MCPManager:
             "eplan_bridge": os.getenv(
                 "EPLAN_BRIDGE_MCP_URL", "http://eplan-bridge:8026/mcp"
             ),
+
+            # Extracted services that also expose MCP (added during the
+            # monolith decomposition). Keep blank to disable any single
+            # one; connect_mcp() tolerates a missing/unreachable server.
+            "specification_agent": os.getenv(
+                "SPECIFICATION_AGENT_MCP_URL",
+                "http://specification-agent-service:8036/mcp",
+            ),
+            "hr_kb": os.getenv(
+                "HR_KB_MCP_URL", "http://hr-kb-service:8041/mcp"
+            ),
+            "org_data": os.getenv(
+                "ORG_DATA_MCP_URL", "http://org-data-service:8042/mcp"
+            ),
+            "techserver": os.getenv(
+                "TECHSERVER_MCP_URL", "http://techserver-service:8043/mcp"
+            ),
+            "eplan_sql": os.getenv(
+                "EPLAN_SQL_MCP_URL", "http://eplan-sql-service:8044/mcp"
+            ),
+            "tech_kb": os.getenv(
+                "TECH_KB_MCP_URL", "http://tech-kb-service:8046/mcp"
+            ),
+            # documents-rag and graph-rag MCP endpoints land in commits 2 + 3
+            # of this batch — adding the env names now so the upgrade is
+            # purely deploy-config when those services restart.
+            "documents_rag": os.getenv(
+                "DOCUMENTS_RAG_MCP_URL", "http://documents-rag-service:8033/mcp"
+            ),
+            "graph_rag": os.getenv(
+                "GRAPH_RAG_MCP_URL", "http://graph-rag-service:8037/mcp"
+            ),
         }
 
         for name, url in servers.items():
-            _mcp_manager.register_server(name, url)
+            if url:
+                _mcp_manager.register_server(name, url)
 
     return _mcp_manager
 

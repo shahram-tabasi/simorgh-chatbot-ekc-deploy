@@ -66,6 +66,16 @@ services:
       - COMMAND_GEN_MCP_URL=http://command-gen:8024/mcp
       - FILE_EXPORT_MCP_URL=http://file-export:8025/mcp
       - EPLAN_BRIDGE_MCP_URL=http://eplan-bridge:8026/mcp
+      # MCP discovery for the extracted services. Set any value to "" to
+      # disable that specific tool surface for the COT engine.
+      - SPECIFICATION_AGENT_MCP_URL=http://specification-agent-service:8036/mcp
+      - HR_KB_MCP_URL=http://hr-kb-service:8041/mcp
+      - ORG_DATA_MCP_URL=http://org-data-service:8042/mcp
+      - TECHSERVER_MCP_URL=http://techserver-service:8043/mcp
+      - EPLAN_SQL_MCP_URL=http://eplan-sql-service:8044/mcp
+      - TECH_KB_MCP_URL=http://tech-kb-service:8046/mcp
+      - DOCUMENTS_RAG_MCP_URL=http://documents-rag-service:8033/mcp
+      - GRAPH_RAG_MCP_URL=http://graph-rag-service:8037/mcp
       # MySQL TPMS (legacy)
       - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
       - MYSQL_PORT=${MYSQL_PORT:-3306}
