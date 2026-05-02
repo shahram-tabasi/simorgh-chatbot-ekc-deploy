@@ -217,6 +217,83 @@ def manual_pull() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Snapshot-and-push: capture `main` HEAD as a tarball and POST it to
+# shell-service so it lands in <project>/tech-knowledge/. Called by
+# project-agent-service during per-source init when "tech_knowledge" was
+# selected in the precheck dialog.
+# ---------------------------------------------------------------------------
+import tempfile
+
+import httpx as _httpx
+
+SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
+SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
+
+
+class SnapshotToShellRequest(BaseModel):
+    project_id: str
+    subdir: str = "tech-knowledge"
+
+
+@app.post("/snapshot-to-shell")
+def snapshot_to_shell(req: SnapshotToShellRequest) -> Dict[str, Any]:
+    """
+    Tar `main` HEAD of the local clone (which is always `git pull`-fresh)
+    and POST the tarball to shell-service /workspace/upload-tarball so it
+    lands at ~/projects/<project_id>/<subdir>/ on .69.
+    """
+    if not (TECH_KB_LOCAL_PATH / ".git").exists():
+        err = ensure_clone()
+        if err:
+            raise HTTPException(status_code=503, detail=err)
+
+    # Make sure we have the latest main before snapshotting.
+    pull_res = git_pull()
+    if not pull_res.get("ok"):
+        raise HTTPException(status_code=502, detail=pull_res.get("error", "pull failed"))
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp:
+        tmp_path = tmp.name
+
+    try:
+        # `git archive main` → tarball stream into our tempfile.
+        p = _run(
+            ["git", "archive", "--format=tar", "-o", tmp_path, "main"],
+            cwd=TECH_KB_LOCAL_PATH,
+            timeout=GIT_TIMEOUT_SEC,
+        )
+        if p.returncode != 0:
+            raise HTTPException(status_code=500, detail=p.stderr.strip()[:300])
+
+        # Stream-upload to shell-service.
+        headers = {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"} if SHELL_SERVICE_TOKEN else {}
+        with open(tmp_path, "rb") as fh:
+            files = {"file": ("tech-knowledge.tar", fh, "application/x-tar")}
+            data = {
+                "project_id": req.project_id,
+                "subdir": req.subdir,
+                "commit_message": f"feat: snapshot tech-knowledge main HEAD",
+            }
+            try:
+                r = _httpx.post(
+                    f"{SHELL_SERVICE_URL}/workspace/upload-tarball",
+                    headers=headers, files=files, data=data, timeout=300.0,
+                )
+            except _httpx.HTTPError as e:
+                raise HTTPException(status_code=502, detail=f"shell-service unreachable: {e}")
+
+        if r.status_code != 200:
+            raise HTTPException(status_code=502,
+                                detail=f"shell-service returned {r.status_code}: {r.text[:300]}")
+        return {"ok": True, "shell_response": r.json()}
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # MCP — AI / COT tools
 # ---------------------------------------------------------------------------
 mcp = FastMCP(

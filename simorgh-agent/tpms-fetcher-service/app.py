@@ -297,6 +297,124 @@ async def get_project_text(oenum: str):
 
 
 # =============================================================================
+# Project-creation precheck + bulk import to shell-service.
+# Called by project-agent-service when "tpms" is selected in the
+# precheck dialog and again during per-source init in POST /projects.
+# =============================================================================
+import json as _json
+import tarfile as _tarfile
+import tempfile as _tempfile
+
+import httpx as _httpx
+
+SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
+SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
+
+
+@app.get("/projects/{oenum}/exists")
+def project_exists(oenum: str):
+    """Cheap precheck endpoint: does this OE-number resolve in TPMS?"""
+    try:
+        conn = get_mysql_connection()
+        try:
+            row = _fetch_project_main(conn, oenum)
+            return {"exists": bool(row), "oenum": oenum}
+        finally:
+            conn.close()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ProjectImportRequest(BaseModel):
+    project_id: str
+    subdir: str = "tpms"
+
+
+@app.post("/projects/{oenum}/import")
+def project_import(oenum: str, req: ProjectImportRequest):
+    """
+    Fetch all TPMS tables for the OE-number, dump each as JSON, tar them
+    up, and POST the tarball to shell-service so the files land at
+    ~/projects/<project_id>/<subdir>/ on .69.
+
+    This is the per-source init step for "tpms" in the project-creation
+    dialog. The project's PostgreSQL slice (via project_memory_service)
+    is populated separately by project-agent-service — this endpoint is
+    purely about getting the source data onto the shell box.
+    """
+    try:
+        conn = get_mysql_connection()
+        project = _fetch_project_main(conn, oenum)
+        if not project:
+            conn.close()
+            raise HTTPException(status_code=404, detail=f"OE-number {oenum} not found")
+        id_pm   = project["id_project_main"]
+        panels  = _fetch_panels(conn, id_pm)
+        feeders = _fetch_feeders(conn, id_pm)
+        eq_ct   = _fetch_equipment_count(conn, id_pm)
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TPMS fetch failed: {e}")
+
+    # Dump tables as JSON, tar them up, POST to shell-service.
+    files = {
+        "project_main.json":      project,
+        "panels.json":            panels,
+        "feeders.json":           feeders,
+        "equipment_count.json":  {"count": eq_ct},
+        "_summary.txt":           _project_to_text({"oenum": oenum, "project": project,
+                                                    "panels": panels, "feeders": feeders,
+                                                    "equipment_count": eq_ct}),
+    }
+
+    with _tempfile.TemporaryDirectory() as workdir:
+        for name, payload in files.items():
+            path = os.path.join(workdir, name)
+            if isinstance(payload, str):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(payload)
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    _json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+
+        with _tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp:
+            tar_path = tmp.name
+        try:
+            with _tarfile.open(tar_path, "w") as tf:
+                for entry in os.listdir(workdir):
+                    tf.add(os.path.join(workdir, entry), arcname=entry)
+
+            headers = {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"} if SHELL_SERVICE_TOKEN else {}
+            with open(tar_path, "rb") as fh:
+                form_files = {"file": (f"tpms-{oenum}.tar", fh, "application/x-tar")}
+                data = {
+                    "project_id":     req.project_id,
+                    "subdir":         req.subdir,
+                    "commit_message": f"feat: import TPMS data for OE {oenum}",
+                }
+                try:
+                    r = _httpx.post(
+                        f"{SHELL_SERVICE_URL}/workspace/upload-tarball",
+                        headers=headers, files=form_files, data=data, timeout=300.0,
+                    )
+                except _httpx.HTTPError as e:
+                    raise HTTPException(status_code=502,
+                                        detail=f"shell-service unreachable: {e}")
+            if r.status_code != 200:
+                raise HTTPException(status_code=502,
+                                    detail=f"shell-service returned {r.status_code}: {r.text[:300]}")
+            return {"ok": True, "oenum": oenum, "tables": list(files.keys()),
+                    "shell_response": r.json()}
+        finally:
+            try:
+                os.unlink(tar_path)
+            except FileNotFoundError:
+                pass
+
+
+# =============================================================================
 # MCP Server - Exposes TPMS tools via Model Context Protocol
 # =============================================================================
 mcp = FastMCP("tpms-fetcher", instructions="Fetch project data from TPMS MySQL")

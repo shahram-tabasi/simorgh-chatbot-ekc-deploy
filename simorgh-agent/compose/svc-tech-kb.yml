@@ -24,6 +24,9 @@ services:
       - TECH_KB_LOCAL_PATH=/app/tech_kb
       - TECH_KB_PULL_INTERVAL_SEC=${TECH_KB_PULL_INTERVAL_SEC:-600}
       - GIT_TIMEOUT_SEC=${GIT_TIMEOUT_SEC:-60}
+      # Shell service on .69 for /snapshot-to-shell.
+      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
       # SSH config so git clone over ssh works without prompts.
       - GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/tech_kb_id

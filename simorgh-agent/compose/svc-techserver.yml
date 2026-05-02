@@ -19,6 +19,9 @@ services:
       - TECHSERVER_PASSWORD=${TECHSERVER_PASSWORD}
       - TECHSERVER_SHARE=${TECHSERVER_SHARE:-tech}
       - SMB_TIMEOUT_SEC=${SMB_TIMEOUT_SEC:-30}
+      # Shell service on .69 for /clone-to-shell.
+      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8043/health || exit 1"]

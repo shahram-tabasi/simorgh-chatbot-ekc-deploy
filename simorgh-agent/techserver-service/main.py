@@ -135,6 +135,102 @@ async def put_file(path: str = Query(...), file: UploadFile = File(...)) -> Dict
 
 
 # ---------------------------------------------------------------------------
+# Clone-to-shell: smbclient-mget the project folder for an oenum, tar it,
+# POST the tarball to shell-service so it lands at
+# ~/projects/<project_id>/techserver/ on .69. Called by
+# project-agent-service per-source init.
+# ---------------------------------------------------------------------------
+import tarfile
+import tempfile
+
+import httpx as _httpx
+
+SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
+SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
+
+
+class CloneToShellRequest(BaseModel):
+    project_id: str
+    oenum: str
+    subdir: str = "techserver"
+
+
+@app.post("/clone-to-shell")
+def clone_to_shell(req: CloneToShellRequest) -> Dict[str, Any]:
+    """
+    Recursively download //techserver/<share>/<oenum>/ via smbclient,
+    tar the result, and POST the tarball to shell-service's
+    /workspace/upload-tarball so it lands at
+    ~/projects/<project_id>/<subdir>/ on .69.
+    """
+    if not TECHSERVER_PASSWORD:
+        raise HTTPException(status_code=503, detail="TECHSERVER_PASSWORD not set")
+
+    # 1. Stage the SMB content into a local temp dir.
+    with tempfile.TemporaryDirectory() as workdir:
+        # smbclient `cd <oenum>; recurse; prompt; mget *` into workdir.
+        # `prompt` turns off the per-file confirmation; `recurse` walks subdirs.
+        cmd = (
+            f'cd "{req.oenum}"; lcd "{workdir}"; recurse ON; prompt OFF; mget *'
+        )
+        p = subprocess.run(
+            [
+                "smbclient",
+                f"//{TECHSERVER_IP}/{TECHSERVER_SHARE}",
+                "-U", TECHSERVER_USER,
+                "--password", TECHSERVER_PASSWORD,
+                "-c", cmd,
+            ],
+            capture_output=True, text=True, timeout=600,
+        )
+        if p.returncode != 0:
+            raise HTTPException(
+                status_code=502,
+                detail=f"smbclient failed: {p.stderr.strip()[:400]}",
+            )
+
+        # 2. Tar the local copy.
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp:
+            tar_path = tmp.name
+        try:
+            with tarfile.open(tar_path, "w") as tf:
+                # arcname='' so members are relative to the staged dir.
+                for entry in os.listdir(workdir):
+                    tf.add(os.path.join(workdir, entry), arcname=entry)
+
+            # 3. POST to shell-service.
+            headers = {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"} if SHELL_SERVICE_TOKEN else {}
+            with open(tar_path, "rb") as fh:
+                files = {"file": (f"techserver-{req.oenum}.tar", fh, "application/x-tar")}
+                data = {
+                    "project_id":     req.project_id,
+                    "subdir":         req.subdir,
+                    "commit_message": f"feat: import techserver//{req.oenum}",
+                }
+                try:
+                    r = _httpx.post(
+                        f"{SHELL_SERVICE_URL}/workspace/upload-tarball",
+                        headers=headers, files=files, data=data, timeout=600.0,
+                    )
+                except _httpx.HTTPError as e:
+                    raise HTTPException(
+                        status_code=502, detail=f"shell-service unreachable: {e}",
+                    )
+
+            if r.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"shell-service returned {r.status_code}: {r.text[:300]}",
+                )
+            return {"ok": True, "oenum": req.oenum, "shell_response": r.json()}
+        finally:
+            try:
+                os.unlink(tar_path)
+            except FileNotFoundError:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # MCP — AI-facing tools
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
