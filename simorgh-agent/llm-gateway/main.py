@@ -64,7 +64,7 @@ OPENAI_EMBED_MODEL  = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
 # Two distinct local backends. Both are vllm/vllm-openai instances.
 LOCAL_LLM_URL_TEXT  = os.getenv("LOCAL_LLM_URL_TEXT", "http://192.168.1.61/v1").rstrip("/")
 LOCAL_LLM_URL_VLM   = os.getenv("LOCAL_LLM_URL_VLM",  "http://192.168.1.62/v1").rstrip("/")
-LOCAL_LLM_MODEL_TEXT = os.getenv("LOCAL_LLM_MODEL_TEXT", "qwen2.5-14b")
+LOCAL_LLM_MODEL_TEXT = os.getenv("LOCAL_LLM_MODEL_TEXT", "gpt-oss-20b")
 LOCAL_LLM_MODEL_VLM  = os.getenv("LOCAL_LLM_MODEL_VLM",  "qwen2.5-vl-7b")
 LOCAL_LLM_API_KEY   = os.getenv("LOCAL_LLM_API_KEY", "").strip()  # vllm --api-key
 

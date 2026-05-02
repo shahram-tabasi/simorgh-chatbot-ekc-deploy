@@ -1,5 +1,5 @@
 # =============================================================================
-# LLM SERVER — 192.168.1.61 (NVIDIA A30 24 GB)
+# LLM SERVER — 192.168.1.61 (NVIDIA A30 24 GB × 2)
 # =============================================================================
 # Runs `vllm/vllm-openai:latest` directly. Exposes a standard
 # OpenAI-compatible API on port 80 (nginx) → vllm container :8000.
@@ -10,31 +10,41 @@
 #   GET  /v1/models
 #   GET  /health
 #
-# A30 sizing — why this default:
-#   * A30 has 24 GB of HBM2.
-#   * BF16 7B uses ~14 GB → tight; BF16 14B uses ~28 GB → won't fit;
-#     BF16 20B uses ~40 GB → not even close.
-#   * AWQ-INT4 14B uses ~8 GB → comfortable, leaves ~14 GB for KV cache
-#     + concurrent users at 8K context.
-#   * AWQ is vllm-native (`--quantization awq`), faster than bnb,
-#     supports prefix caching.
+# =============================================================================
+# Why tensor-parallelism (TP=2) and not single-GPU
+# =============================================================================
+# Default model: unsloth/gpt-oss-20b-16bit
+#   Weights:    ~40 GB (BF16)
+#   Single A30: 24 GB → won't fit
+#   2× A30:     48 GB → fits with --tensor-parallel-size 2
 #
-# Default model: Qwen/Qwen2.5-14B-Instruct-AWQ — same family as the VLM
-# on .62 for consistent behavior, strong Persian support, top-tier
-# instruction following at A30-sized footprint.
+# Run `nvidia-smi -L` on .61 to confirm GPU count. If `.61` is single-card,
+# you have THREE choices:
 #
-# Alternatives you can flip via env:
-#   * gpt-oss-20b on A30 — only viable as bitsandbytes 4-bit. Set:
-#         LLM_MODEL=unsloth/gpt-oss-20b-bnb-4bit
-#         LLM_QUANTIZATION=bitsandbytes
+#   (B) Single A30 + CPU offload — set:
+#         LLM_TP_SIZE=1
+#         LLM_CPU_OFFLOAD_GB=20
+#       Inference becomes ~5-10× slower because weights stream from
+#       RAM. Usable but not for production load.
+#
+#   (C) MXFP4-native form (recommended single-GPU path) — set:
+#         LLM_MODEL=unsloth/gpt-oss-20b
+#         LLM_QUANTIZATION=mxfp4
+#         LLM_TP_SIZE=1
+#       MXFP4 IS the trained gpt-oss format; the `-16bit` variant is
+#       unsloth's upcast for fine-tuning. Inference quality is
+#       essentially identical, weights are ~12 GB → fits on 1 A30
+#       with 12 GB free for KV cache.
+#
+#   (D) Different model entirely — back to Qwen2.5-14B-AWQ:
+#         LLM_MODEL=Qwen/Qwen2.5-14B-Instruct-AWQ
+#         LLM_QUANTIZATION=awq
 #         LLM_DTYPE=half
-#         LLM_LOAD_FORMAT=bitsandbytes
-#     Slower than AWQ and breaks prefix caching — not recommended.
-#   * Smaller, faster: Qwen/Qwen2.5-7B-Instruct (BF16, ~14 GB, fits).
-#   * Larger: Qwen/Qwen2.5-32B-Instruct-AWQ (~18 GB, tight headroom).
+#         LLM_TP_SIZE=1
+#       (See git log of this file for the full Qwen-based config.)
 #
-# Deploy on 192.168.1.61:
-#   docker compose -f docker-compose.llm.yml up -d
+# Default below assumes 2× A30 (Path A). Will fail to start on a
+# single-card host with a clear error — flip env per above and re-up.
 # =============================================================================
 
 services:
@@ -42,25 +52,35 @@ services:
     image: vllm/vllm-openai:latest
     container_name: vllm
     command: >
-      --model ${LLM_MODEL:-Qwen/Qwen2.5-14B-Instruct-AWQ}
-      --served-model-name ${LLM_SERVED_NAME:-qwen2.5-14b}
+      --model ${LLM_MODEL:-unsloth/gpt-oss-20b-16bit}
+      --served-model-name ${LLM_SERVED_NAME:-gpt-oss-20b}
       --host 0.0.0.0
       --port 8000
-      --quantization ${LLM_QUANTIZATION:-awq}
-      --dtype ${LLM_DTYPE:-half}
+      --tensor-parallel-size ${LLM_TP_SIZE:-2}
+      --dtype ${LLM_DTYPE:-bfloat16}
       --max-model-len ${LLM_MAX_MODEL_LEN:-8192}
-      --max-num-seqs ${LLM_MAX_NUM_SEQS:-8}
+      --max-num-seqs ${LLM_MAX_NUM_SEQS:-4}
       --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92}
       --enable-prefix-caching
       --api-key ${VLLM_API_KEY:-}
+      ${LLM_QUANTIZATION:+--quantization ${LLM_QUANTIZATION}}
+      ${LLM_CPU_OFFLOAD_GB:+--cpu-offload-gb ${LLM_CPU_OFFLOAD_GB}}
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - HF_HOME=/models/huggingface
       - VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-INFO}
+      # NCCL settings for tensor-parallel — keeps sharded comm on the
+      # PCIe bus reliable.
+      - NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+      - NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-0}
+      - NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
     volumes:
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
     expose:
       - "8000"
+    # ipc=host is REQUIRED for multi-GPU tensor parallelism (vllm uses
+    # /dev/shm to pass tensors between worker processes). Without it
+    # the workers crash with "Bus error" on first request.
     ipc: host
     deploy:
       resources:
@@ -74,9 +94,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      # 14B AWQ initial load on A30: ~3 minutes typical, give 10 to cover
-      # cold-start downloads from HF on first run.
-      start_period: 600s
+      # 2× A30 loading 40 GB BF16 weights + warming TP communicators:
+      # typically ~8-12 min on the first cold cache load (HF download
+      # + PCIe shard distribution). 15 min covers it.
+      start_period: 900s
     networks:
       - ai_net
     restart: unless-stopped

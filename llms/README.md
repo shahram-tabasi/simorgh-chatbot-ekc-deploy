@@ -8,17 +8,19 @@ like any OpenAI endpoint.
 
 | Server | Hardware | Compose file | Role | Default model | API |
 |---|---|---|---|---|---|
-| **192.168.1.61** | NVIDIA A30 24 GB | `docker-compose.llm.yml` | text-only LLM | `Qwen/Qwen2.5-14B-Instruct-AWQ` (env `LLM_MODEL`) | OpenAI-compatible @ `:80` |
+| **192.168.1.61** | NVIDIA A30 24 GB **× 2** | `docker-compose.llm.yml` | text-only LLM | `unsloth/gpt-oss-20b-16bit` (env `LLM_MODEL`) | OpenAI-compatible @ `:80` |
 | **192.168.1.62** | NVIDIA A30 24 GB | `docker-compose.vlm.yml` | vision + text VLM | `Qwen/Qwen2.5-VL-7B-Instruct-AWQ` (env `VLM_MODEL`) | OpenAI-compatible @ `:80` |
 
-> **Why these defaults instead of larger BF16 models.** The A30 has only
-> 24 GB of HBM2 — `gpt-oss-20b` in BF16 needs 40 GB just for weights,
-> Qwen2-VL-7B BF16 + 32K context lands at ~22-24 GB (OOM under any
-> concurrency). Both defaults use AWQ-INT4 (vllm-native, prefix-cache-
-> friendly): the LLM is ~8 GB / leaves ~14 GB for KV cache; the VLM is
-> ~5 GB / leaves ~18 GB. Both are the same family (Qwen2.5) for
-> consistent behavior + Persian quality. Override via env if you want
-> a different model — see comments in each compose file.
+> **Memory math.**
+> * **.61 (LLM)** — `gpt-oss-20b` in BF16 needs ~40 GB of weights, which
+>   does not fit on a single A30 24 GB. Default uses
+>   `--tensor-parallel-size 2` to shard across two A30s (48 GB total).
+>   If `.61` actually has 1 GPU, see the comment block at the top of
+>   `docker-compose.llm.yml` — three documented fallbacks
+>   (CPU offload, MXFP4 native, switch to Qwen2.5-14B-AWQ).
+> * **.62 (VLM)** — `Qwen2.5-VL-7B` in AWQ-INT4 is ~5 GB of weights,
+>   leaving ~18 GB for KV cache + vision tower at 32K context.
+>   Comfortable single-card fit.
 
 Routing across the two is done by `simorgh-agent/llm-gateway` on **.68**
 — text-only requests → .61, anything with `image_url` content → .62.
@@ -35,13 +37,13 @@ cd llms
 mkdir -p /home/ubuntu/models
 cat > .env <<EOF
 HF_TOKEN=hf_...
-# Default — Qwen2.5-14B AWQ on A30 24GB. ~8GB weights, ~14GB free for KV.
-LLM_MODEL=Qwen/Qwen2.5-14B-Instruct-AWQ
-LLM_SERVED_NAME=qwen2.5-14b
-LLM_QUANTIZATION=awq
-LLM_DTYPE=half
+# gpt-oss-20b 16-bit, sharded across 2× A30 via tensor parallelism.
+LLM_MODEL=unsloth/gpt-oss-20b-16bit
+LLM_SERVED_NAME=gpt-oss-20b
+LLM_TP_SIZE=2
+LLM_DTYPE=bfloat16
 LLM_MAX_MODEL_LEN=8192
-LLM_MAX_NUM_SEQS=8
+LLM_MAX_NUM_SEQS=4
 GPU_MEM_UTIL=0.92
 MODEL_CACHE_PATH=/home/ubuntu/models
 VLLM_API_KEY=
@@ -96,14 +98,16 @@ Subsequent restarts use the cache and come up in ~1 min.
 
 ### LLM-only (`docker-compose.llm.yml`)
 
-| Var | Default |
-|---|---|
-| `LLM_MODEL` | `Qwen/Qwen2.5-14B-Instruct-AWQ` |
-| `LLM_SERVED_NAME` | `qwen2.5-14b` |
-| `LLM_QUANTIZATION` | `awq` |
-| `LLM_DTYPE` | `half` (AWQ requires fp16, not bf16) |
-| `LLM_MAX_MODEL_LEN` | `8192` |
-| `LLM_MAX_NUM_SEQS` | `8` |
+| Var | Default | Notes |
+|---|---|---|
+| `LLM_MODEL` | `unsloth/gpt-oss-20b-16bit` | |
+| `LLM_SERVED_NAME` | `gpt-oss-20b` | Match this on llm-gateway via `LOCAL_LLM_MODEL_TEXT` |
+| `LLM_TP_SIZE` | `2` | Tensor-parallel shards. **Set 1 if `.61` has a single GPU** (you'll then need to use one of the fallback models — see compose comment block) |
+| `LLM_DTYPE` | `bfloat16` | |
+| `LLM_QUANTIZATION` | _(unset)_ | Set to `awq` / `bitsandbytes` / `mxfp4` only when the chosen model is quantized |
+| `LLM_CPU_OFFLOAD_GB` | _(unset)_ | If you must run on a single GPU + RAM offload, set to `20`. Slow. |
+| `LLM_MAX_MODEL_LEN` | `8192` | KV cache headroom is tight even with TP=2; don't bump above 8K without monitoring |
+| `LLM_MAX_NUM_SEQS` | `4` | Lower than the VLM (BF16 weights + KV at 20B leaves less per-request room) |
 
 ### VLM-only (`docker-compose.vlm.yml`)
 
@@ -117,22 +121,45 @@ Subsequent restarts use the cache and come up in ~1 min.
 | `VLM_MAX_NUM_SEQS` | `8` |
 | `VLM_MAX_IMAGES_PER_PROMPT` | `5` |
 
-### Picking a different model
+### If `.61` is single-card
 
-Both compose files have block-comment alternatives at the top with the
-exact env-var combos to flip. If you really want `gpt-oss-20b` on .61,
-set:
+The default config assumes `.61` has 2× A30 because `gpt-oss-20b` 16-bit
+won't fit on one. Run `nvidia-smi -L` on `.61` to check. If you see only
+one GPU, pick one of these three and put it in `.env`:
 
+**(B) CPU offload** — keep gpt-oss-20b 16-bit but spill ~20 GB to RAM.
+Inference becomes ~5-10× slower. Needs 32+ GB system RAM.
 ```env
-LLM_MODEL=unsloth/gpt-oss-20b-bnb-4bit
-LLM_QUANTIZATION=bitsandbytes
-LLM_DTYPE=half
-LLM_MAX_MODEL_LEN=8192
-LLM_MAX_NUM_SEQS=4   # bnb is slower; reduce concurrency
+LLM_TP_SIZE=1
+LLM_CPU_OFFLOAD_GB=20
+LLM_MAX_NUM_SEQS=2
 ```
-Trade-off: ~1.5–2× slower than the AWQ default, no prefix caching, and
-in our internal evals not noticeably better than Qwen2.5-14B-AWQ for
-electrical / Persian work.
+
+**(C) MXFP4 native** — recommended single-GPU fallback. MXFP4 *is* the
+trained gpt-oss format; the `-16bit` variant is unsloth's BF16 upcast
+for fine-tuning convenience. Inference quality is essentially identical,
+weights are ~12 GB → fits on 1 A30 with ~12 GB free for KV cache.
+```env
+LLM_MODEL=unsloth/gpt-oss-20b
+LLM_SERVED_NAME=gpt-oss-20b
+LLM_QUANTIZATION=mxfp4
+LLM_TP_SIZE=1
+LLM_DTYPE=bfloat16
+LLM_MAX_NUM_SEQS=4
+```
+
+**(D) Different model** — switch to Qwen2.5-14B-AWQ (same Qwen family
+as the VLM, ~8 GB on a single A30):
+```env
+LLM_MODEL=Qwen/Qwen2.5-14B-Instruct-AWQ
+LLM_SERVED_NAME=qwen2.5-14b
+LLM_QUANTIZATION=awq
+LLM_DTYPE=half
+LLM_TP_SIZE=1
+LLM_MAX_NUM_SEQS=8
+```
+Then update `LOCAL_LLM_MODEL_TEXT` on llm-gateway to match the new
+`LLM_SERVED_NAME`.
 
 ---
 
@@ -163,7 +190,7 @@ curl -s http://192.168.1.61/v1/models | jq
 
 curl -s http://192.168.1.61/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen2.5-14b","messages":[{"role":"user","content":"hi"}],"max_tokens":20}'
+  -d '{"model":"gpt-oss-20b","messages":[{"role":"user","content":"hi"}],"max_tokens":20}'
 
 curl -s http://192.168.1.62/v1/chat/completions \
   -H 'Content-Type: application/json' \
