@@ -1,8 +1,16 @@
 # =============================================================================
-# LLM-GATEWAY - Hybrid OpenAI + local LLM (.61/.62) router
-# Port 8030. REST. Extracted from backend/services/llm_service.py in Phase 2.
-# Local LLM endpoint is the load-balanced nginx (LOCAL_LLM_URL) which fronts
-# the GPU servers on 192.168.1.61 and 192.168.1.62 (see llms/docker-compose.yml).
+# LLM-GATEWAY - Hybrid OpenAI + local-LLM/VLM router
+# Port 8030. REST.
+#
+# Routes between three OpenAI-compatible backends:
+#   online       → api.openai.com           (OPENAI_API_KEY)
+#   offline-text → 192.168.1.61/v1          (gpt-oss-20b   via vllm-openai)
+#   offline-vlm  → 192.168.1.62/v1          (qwen2-vl-7b   via vllm-openai)
+#
+# offline-text vs offline-vlm is auto-selected per request: any message
+# with a content part of type "image_url" → VLM, else LLM.
+#
+# See `llms/README.md` for the GPU-side stack (vllm/vllm-openai).
 # =============================================================================
 services:
   llm-gateway:
@@ -14,11 +22,31 @@ services:
       - app_net
     environment:
       - PYTHONUNBUFFERED=1
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
-      - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://nginx/api/llm}
-      - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Online mode: OpenAI
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
+
+      # Offline mode: text-only LLM on 192.168.1.61
+      - LOCAL_LLM_URL_TEXT=${LOCAL_LLM_URL_TEXT:-http://192.168.1.61/v1}
+      - LOCAL_LLM_MODEL_TEXT=${LOCAL_LLM_MODEL_TEXT:-gpt-oss-20b}
+
+      # Offline mode: VLM on 192.168.1.62
+      - LOCAL_LLM_URL_VLM=${LOCAL_LLM_URL_VLM:-http://192.168.1.62/v1}
+      - LOCAL_LLM_MODEL_VLM=${LOCAL_LLM_MODEL_VLM:-qwen2-vl-7b}
+
+      # Optional: if vllm was started with --api-key, mirror it here
+      # (same value on both GPU boxes assumed).
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+
+      # online | offline | auto
+      - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
+
+      # Hard-cap upstream timeout (gen can run minutes for 20B).
+      - LLM_GATEWAY_TIMEOUT_SEC=${LLM_GATEWAY_TIMEOUT_SEC:-1800}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8030/health || exit 1"]
       interval: 30s
