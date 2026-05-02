@@ -44,6 +44,11 @@ services:
       - PROJECT_AGENT_URL=http://project-agent-service:8035
       - PROJECT_AGENT_PATH=/api/v2/agent/projects/{project_id}/message
 
+      # shell-service on .69 — used to archive every routed inbound .eml
+      # and every outbound .eml under <project>/emails/<msg-id>.eml.
+      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
+      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+
       # Postgres (thread index)
       - POSTGRES_AUTH_HOST=${POSTGRES_AUTH_HOST:-postgres_auth}
       - POSTGRES_AUTH_PORT=${POSTGRES_AUTH_PORT:-5432}

@@ -155,6 +155,60 @@ def _smtp_send(msg: MIMEMultipart, to: str) -> None:
 # ---------------------------------------------------------------------------
 # Inbound — IMAP poller, parses + routes
 # ---------------------------------------------------------------------------
+SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
+SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
+
+
+def _safe_msg_id_filename(message_id: str, fallback: str = "unknown") -> str:
+    """Turn a Message-ID into a safe filesystem name (basename only, no dirs)."""
+    cleaned = (message_id or "").strip("<> \t\r\n")
+    out = "".join(c if c.isalnum() or c in "-._@" else "_" for c in cleaned)
+    return (out or fallback)[:120]
+
+
+async def _archive_eml(
+    *,
+    project_id: str,
+    raw_bytes: bytes,
+    message_id: Optional[str],
+    direction: str,            # "inbound" or "outbound"
+    summary: str,              # short string used in the commit message
+) -> None:
+    """
+    POST the raw .eml to shell-service so it lands at
+        ~/projects/<project_id>/emails/<msg_id>.eml
+    with a traceable git commit. Best-effort — failures are logged
+    but don't disrupt the email pipeline (the ack to IMAP / the SMTP
+    send is what really matters).
+    """
+    filename = f"{_safe_msg_id_filename(message_id)}.eml"
+    headers = (
+        {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
+        if SHELL_SERVICE_TOKEN else {}
+    )
+    files = {"file": (filename, raw_bytes, "message/rfc822")}
+    data = {
+        "project_id":     project_id,
+        "subdir":         "emails",
+        "filename":       filename,
+        "dedupe":         "false",  # Message-ID is already unique
+        "commit_message": f"email({direction}): {filename} — {summary[:120]}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.post(
+                f"{SHELL_SERVICE_URL}/workspace/upload-file",
+                headers=headers, files=files, data=data,
+            )
+            if r.status_code != 200:
+                logger.warning(
+                    "email archive non-200: %s %s",
+                    r.status_code, r.text[:160],
+                )
+    except Exception:
+        logger.exception("email archive failed (non-fatal)")
+
+
 async def _route_to_agent(project_id: str, *, chat_id: Optional[str],
                           email_from: str, subject: str, body: str) -> None:
     url = PROJECT_AGENT_URL.rstrip("/") + PROJECT_AGENT_PATH.format(project_id=project_id)
@@ -241,7 +295,9 @@ def _extract_body(msg: email.message.Message) -> str:
 
 async def _process_one_message(raw_bytes: bytes) -> bool:
     """
-    Parse one RFC822 message, resolve its session, route to project-agent.
+    Parse one RFC822 message, resolve its session, route to project-agent,
+    and archive the raw .eml in the project's workspace under emails/.
+
     Returns True if the message was successfully delivered (so the caller
     should mark it \\Seen). False on unrouteable / transient failure.
     """
@@ -254,6 +310,7 @@ async def _process_one_message(raw_bytes: bytes) -> bool:
     headers = {k: v for k, v in msg.items()}
     subject = msg.get("Subject", "") or ""
     frm     = msg.get("From", "") or ""
+    msg_id  = msg.get("Message-ID", "") or ""
     body    = _extract_body(msg)
 
     session = await _resolve_session(headers, subject)
@@ -271,6 +328,19 @@ async def _process_one_message(raw_bytes: bytes) -> bool:
         )
         logger.info("routed mail to project_id=%s chat_id=%s",
                     session["project_id"], session["chat_id"] or "-")
+
+        # Archive the raw .eml in <project>/emails/<msg-id>.eml so it's
+        # part of the project's git history alongside uploads + COT
+        # changes. Non-fatal — the route above is what counts for the
+        # IMAP \Seen ack.
+        await _archive_eml(
+            project_id=session["project_id"],
+            raw_bytes=raw_bytes,
+            message_id=msg_id,
+            direction="inbound",
+            summary=f"from {frm} | {subject}",
+        )
+
         return True
     except Exception:
         logger.exception("project-agent POST failed; will retry on next poll")
@@ -449,6 +519,17 @@ async def send(req: SendRequest) -> SendResponse:
                 )
         except Exception:
             logger.exception("could not record sent email")
+
+    # Archive the outbound .eml in the project's workspace alongside
+    # inbound mail so the full conversation thread is reconstructable
+    # from disk + git log alone.
+    await _archive_eml(
+        project_id=req.project_id,
+        raw_bytes=msg.as_bytes(),
+        message_id=msg_id,
+        direction="outbound",
+        summary=f"to {req.to} | {req.subject}",
+    )
 
     logger.info("sent email msg_id=%s to=%s project=%s", msg_id, req.to, req.project_id)
     return SendResponse(message_id=msg_id, sent_to=req.to)
