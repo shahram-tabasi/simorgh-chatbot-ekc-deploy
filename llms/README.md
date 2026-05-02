@@ -6,10 +6,19 @@ old `ai/` service has been removed. The GPU boxes expose a standard
 OpenAI-compatible HTTP API; everything else in the stack treats them
 like any OpenAI endpoint.
 
-| Server | Compose file | Role | Default model | API |
-|---|---|---|---|---|
-| **192.168.1.61** | `docker-compose.llm.yml` | text-only LLM | `unsloth/gpt-oss-20b-16bit` (env `LLM_MODEL`) | OpenAI-compatible @ `:80` |
-| **192.168.1.62** | `docker-compose.vlm.yml` | vision + text VLM | `Qwen/Qwen2-VL-7B-Instruct` (env `VLM_MODEL`) | OpenAI-compatible @ `:80` |
+| Server | Hardware | Compose file | Role | Default model | API |
+|---|---|---|---|---|---|
+| **192.168.1.61** | NVIDIA A30 24 GB | `docker-compose.llm.yml` | text-only LLM | `Qwen/Qwen2.5-14B-Instruct-AWQ` (env `LLM_MODEL`) | OpenAI-compatible @ `:80` |
+| **192.168.1.62** | NVIDIA A30 24 GB | `docker-compose.vlm.yml` | vision + text VLM | `Qwen/Qwen2.5-VL-7B-Instruct-AWQ` (env `VLM_MODEL`) | OpenAI-compatible @ `:80` |
+
+> **Why these defaults instead of larger BF16 models.** The A30 has only
+> 24 GB of HBM2 — `gpt-oss-20b` in BF16 needs 40 GB just for weights,
+> Qwen2-VL-7B BF16 + 32K context lands at ~22-24 GB (OOM under any
+> concurrency). Both defaults use AWQ-INT4 (vllm-native, prefix-cache-
+> friendly): the LLM is ~8 GB / leaves ~14 GB for KV cache; the VLM is
+> ~5 GB / leaves ~18 GB. Both are the same family (Qwen2.5) for
+> consistent behavior + Persian quality. Override via env if you want
+> a different model — see comments in each compose file.
 
 Routing across the two is done by `simorgh-agent/llm-gateway` on **.68**
 — text-only requests → .61, anything with `image_url` content → .62.
@@ -26,11 +35,14 @@ cd llms
 mkdir -p /home/ubuntu/models
 cat > .env <<EOF
 HF_TOKEN=hf_...
-LLM_MODEL=unsloth/gpt-oss-20b-16bit
-LLM_SERVED_NAME=gpt-oss-20b
-LLM_DTYPE=bfloat16
+# Default — Qwen2.5-14B AWQ on A30 24GB. ~8GB weights, ~14GB free for KV.
+LLM_MODEL=Qwen/Qwen2.5-14B-Instruct-AWQ
+LLM_SERVED_NAME=qwen2.5-14b
+LLM_QUANTIZATION=awq
+LLM_DTYPE=half
 LLM_MAX_MODEL_LEN=8192
-GPU_MEM_UTIL=0.90
+LLM_MAX_NUM_SEQS=8
+GPU_MEM_UTIL=0.92
 MODEL_CACHE_PATH=/home/ubuntu/models
 VLLM_API_KEY=
 EOF
@@ -46,13 +58,15 @@ cd llms
 mkdir -p /home/ubuntu/models
 cat > .env <<EOF
 HF_TOKEN=hf_...
-VLM_MODEL=Qwen/Qwen2-VL-7B-Instruct
-VLM_SERVED_NAME=qwen2-vl-7b
-VLM_DTYPE=bfloat16
+# Default — Qwen2.5-VL-7B AWQ on A30 24GB. ~5GB weights, ~18GB free for KV.
+VLM_MODEL=Qwen/Qwen2.5-VL-7B-Instruct-AWQ
+VLM_SERVED_NAME=qwen2.5-vl-7b
+VLM_QUANTIZATION=awq
+VLM_DTYPE=half
 VLM_MAX_MODEL_LEN=32768
-VLM_MAX_NUM_SEQS=5
+VLM_MAX_NUM_SEQS=8
 VLM_MAX_IMAGES_PER_PROMPT=5
-GPU_MEM_UTIL=0.90
+GPU_MEM_UTIL=0.92
 MODEL_CACHE_PATH=/home/ubuntu/models
 VLLM_API_KEY=
 EOF
@@ -84,21 +98,41 @@ Subsequent restarts use the cache and come up in ~1 min.
 
 | Var | Default |
 |---|---|
-| `LLM_MODEL` | `unsloth/gpt-oss-20b-16bit` |
-| `LLM_SERVED_NAME` | `gpt-oss-20b` |
-| `LLM_DTYPE` | `bfloat16` |
+| `LLM_MODEL` | `Qwen/Qwen2.5-14B-Instruct-AWQ` |
+| `LLM_SERVED_NAME` | `qwen2.5-14b` |
+| `LLM_QUANTIZATION` | `awq` |
+| `LLM_DTYPE` | `half` (AWQ requires fp16, not bf16) |
 | `LLM_MAX_MODEL_LEN` | `8192` |
+| `LLM_MAX_NUM_SEQS` | `8` |
 
 ### VLM-only (`docker-compose.vlm.yml`)
 
 | Var | Default |
 |---|---|
-| `VLM_MODEL` | `Qwen/Qwen2-VL-7B-Instruct` |
-| `VLM_SERVED_NAME` | `qwen2-vl-7b` |
-| `VLM_DTYPE` | `bfloat16` |
+| `VLM_MODEL` | `Qwen/Qwen2.5-VL-7B-Instruct-AWQ` |
+| `VLM_SERVED_NAME` | `qwen2.5-vl-7b` |
+| `VLM_QUANTIZATION` | `awq` |
+| `VLM_DTYPE` | `half` |
 | `VLM_MAX_MODEL_LEN` | `32768` |
-| `VLM_MAX_NUM_SEQS` | `5` |
+| `VLM_MAX_NUM_SEQS` | `8` |
 | `VLM_MAX_IMAGES_PER_PROMPT` | `5` |
+
+### Picking a different model
+
+Both compose files have block-comment alternatives at the top with the
+exact env-var combos to flip. If you really want `gpt-oss-20b` on .61,
+set:
+
+```env
+LLM_MODEL=unsloth/gpt-oss-20b-bnb-4bit
+LLM_QUANTIZATION=bitsandbytes
+LLM_DTYPE=half
+LLM_MAX_MODEL_LEN=8192
+LLM_MAX_NUM_SEQS=4   # bnb is slower; reduce concurrency
+```
+Trade-off: ~1.5–2× slower than the AWQ default, no prefix caching, and
+in our internal evals not noticeably better than Qwen2.5-14B-AWQ for
+electrical / Persian work.
 
 ---
 
@@ -129,12 +163,12 @@ curl -s http://192.168.1.61/v1/models | jq
 
 curl -s http://192.168.1.61/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"gpt-oss-20b","messages":[{"role":"user","content":"hi"}],"max_tokens":20}'
+  -d '{"model":"qwen2.5-14b","messages":[{"role":"user","content":"hi"}],"max_tokens":20}'
 
 curl -s http://192.168.1.62/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model":"qwen2-vl-7b",
+    "model":"qwen2.5-vl-7b",
     "messages":[{"role":"user","content":[
       {"type":"text","text":"What is in this image?"},
       {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,/9j/4AAQ..."}}

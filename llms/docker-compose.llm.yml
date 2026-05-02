@@ -1,5 +1,5 @@
 # =============================================================================
-# LLM SERVER — 192.168.1.61
+# LLM SERVER — 192.168.1.61 (NVIDIA A30 24 GB)
 # =============================================================================
 # Runs `vllm/vllm-openai:latest` directly. Exposes a standard
 # OpenAI-compatible API on port 80 (nginx) → vllm container :8000.
@@ -7,32 +7,50 @@
 # Endpoints (all OpenAI-compatible):
 #   POST /v1/chat/completions
 #   POST /v1/completions
-#   POST /v1/embeddings        (only if --task=embedding is set)
 #   GET  /v1/models
 #   GET  /health
 #
+# A30 sizing — why this default:
+#   * A30 has 24 GB of HBM2.
+#   * BF16 7B uses ~14 GB → tight; BF16 14B uses ~28 GB → won't fit;
+#     BF16 20B uses ~40 GB → not even close.
+#   * AWQ-INT4 14B uses ~8 GB → comfortable, leaves ~14 GB for KV cache
+#     + concurrent users at 8K context.
+#   * AWQ is vllm-native (`--quantization awq`), faster than bnb,
+#     supports prefix caching.
+#
+# Default model: Qwen/Qwen2.5-14B-Instruct-AWQ — same family as the VLM
+# on .62 for consistent behavior, strong Persian support, top-tier
+# instruction following at A30-sized footprint.
+#
+# Alternatives you can flip via env:
+#   * gpt-oss-20b on A30 — only viable as bitsandbytes 4-bit. Set:
+#         LLM_MODEL=unsloth/gpt-oss-20b-bnb-4bit
+#         LLM_QUANTIZATION=bitsandbytes
+#         LLM_DTYPE=half
+#         LLM_LOAD_FORMAT=bitsandbytes
+#     Slower than AWQ and breaks prefix caching — not recommended.
+#   * Smaller, faster: Qwen/Qwen2.5-7B-Instruct (BF16, ~14 GB, fits).
+#   * Larger: Qwen/Qwen2.5-32B-Instruct-AWQ (~18 GB, tight headroom).
+#
 # Deploy on 192.168.1.61:
 #   docker compose -f docker-compose.llm.yml up -d
-#
-# First start downloads the model from Hugging Face into MODEL_CACHE_PATH;
-# subsequent starts use the cache. Healthcheck start_period is 10 min to
-# accommodate the initial weight load for a 20B model.
 # =============================================================================
 
 services:
   vllm:
     image: vllm/vllm-openai:latest
     container_name: vllm
-    # OpenAI-compatible server entrypoint is the image default; we just
-    # pass model + serving args.
     command: >
-      --model ${LLM_MODEL:-unsloth/gpt-oss-20b-16bit}
-      --served-model-name ${LLM_SERVED_NAME:-gpt-oss-20b}
+      --model ${LLM_MODEL:-Qwen/Qwen2.5-14B-Instruct-AWQ}
+      --served-model-name ${LLM_SERVED_NAME:-qwen2.5-14b}
       --host 0.0.0.0
       --port 8000
-      --dtype ${LLM_DTYPE:-bfloat16}
+      --quantization ${LLM_QUANTIZATION:-awq}
+      --dtype ${LLM_DTYPE:-half}
       --max-model-len ${LLM_MAX_MODEL_LEN:-8192}
-      --gpu-memory-utilization ${GPU_MEM_UTIL:-0.90}
+      --max-num-seqs ${LLM_MAX_NUM_SEQS:-8}
+      --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92}
       --enable-prefix-caching
       --api-key ${VLLM_API_KEY:-}
     environment:
@@ -40,13 +58,9 @@ services:
       - HF_HOME=/models/huggingface
       - VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-INFO}
     volumes:
-      # One directory holds the HF download cache + any pre-downloaded
-      # local model paths. Mounted read-write so vllm can populate the
-      # cache on first start.
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
     expose:
       - "8000"
-    # vllm needs --ipc=host for multi-GPU + shared memory for tokenizer workers.
     ipc: host
     deploy:
       resources:
@@ -60,7 +74,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 600s   # 10 min for initial 20B weight load
+      # 14B AWQ initial load on A30: ~3 minutes typical, give 10 to cover
+      # cold-start downloads from HF on first run.
+      start_period: 600s
     networks:
       - ai_net
     restart: unless-stopped

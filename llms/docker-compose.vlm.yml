@@ -1,20 +1,33 @@
 # =============================================================================
-# VLM SERVER — 192.168.1.62
+# VLM SERVER — 192.168.1.62 (NVIDIA A30 24 GB)
 # =============================================================================
-# Runs `vllm/vllm-openai:latest` with a vision-language model
-# (Qwen2-VL-7B-Instruct by default). Same OpenAI-compatible API as the
-# LLM server, but accepts multimodal `messages` with `image_url` content
-# parts:
+# Runs `vllm/vllm-openai:latest` with a vision-language model. Same
+# OpenAI-compatible API as the LLM server, but accepts multimodal
+# `messages` with `image_url` content parts:
 #
 #   {
-#     "model": "qwen2-vl-7b",
-#     "messages": [
-#       {"role": "user", "content": [
-#         {"type": "text",      "text": "What's wrong with this drawing?"},
-#         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
-#       ]}
-#     ]
+#     "model": "qwen2.5-vl-7b",
+#     "messages": [{"role": "user", "content": [
+#       {"type": "text",      "text": "What's wrong with this drawing?"},
+#       {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+#     ]}]
 #   }
+#
+# A30 sizing — why this default:
+#   * Qwen2.5-VL-7B in BF16 = ~14 GB weights + ~2 GB vision tower +
+#     6–7 GB KV cache @ 32K = ~22–24 GB → at the OOM edge.
+#   * AWQ-INT4 7B = ~5 GB weights → leaves ~18 GB for KV / vision /
+#     concurrency. Much more comfortable.
+#   * Qwen2.5-VL is the successor to Qwen2-VL with measurably better
+#     OCR + document understanding. Same API, same Persian support.
+#
+# Default: Qwen/Qwen2.5-VL-7B-Instruct-AWQ.
+#
+# Alternatives you can flip via env:
+#   * BF16 native: Qwen/Qwen2.5-VL-7B-Instruct, with VLM_MAX_MODEL_LEN=16384
+#     and VLM_QUANTIZATION="" — full precision, half the context.
+#   * OCR-focused: openbmb/MiniCPM-V-2_6 (~16 GB BF16 fits, weaker
+#     general reasoning but best-in-class for engineering drawings).
 #
 # Deploy on 192.168.1.62:
 #   docker compose -f docker-compose.vlm.yml up -d
@@ -24,20 +37,18 @@ services:
   vllm:
     image: vllm/vllm-openai:latest
     container_name: vllm
-    # Qwen2-VL needs --trust-remote-code (custom modelling files) and
-    # --limit-mm-per-prompt to cap how many images / videos the client
-    # can attach in one request.
     command: >
-      --model ${VLM_MODEL:-Qwen/Qwen2-VL-7B-Instruct}
-      --served-model-name ${VLM_SERVED_NAME:-qwen2-vl-7b}
+      --model ${VLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct-AWQ}
+      --served-model-name ${VLM_SERVED_NAME:-qwen2.5-vl-7b}
       --host 0.0.0.0
       --port 8000
       --trust-remote-code
-      --dtype ${VLM_DTYPE:-bfloat16}
+      --quantization ${VLM_QUANTIZATION:-awq}
+      --dtype ${VLM_DTYPE:-half}
       --max-model-len ${VLM_MAX_MODEL_LEN:-32768}
-      --max-num-seqs ${VLM_MAX_NUM_SEQS:-5}
+      --max-num-seqs ${VLM_MAX_NUM_SEQS:-8}
       --limit-mm-per-prompt image=${VLM_MAX_IMAGES_PER_PROMPT:-5}
-      --gpu-memory-utilization ${GPU_MEM_UTIL:-0.90}
+      --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92}
       --enable-prefix-caching
       --api-key ${VLLM_API_KEY:-}
     environment:
@@ -61,7 +72,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 480s   # ~8 min for 7B VLM weights + vision tower
+      # 7B AWQ + vision tower: ~2-3 min typical; 8 min covers the
+      # first-run HF download.
+      start_period: 480s
     networks:
       - ai_net
     restart: unless-stopped

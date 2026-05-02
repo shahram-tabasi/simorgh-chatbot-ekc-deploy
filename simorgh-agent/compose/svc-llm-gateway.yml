@@ -30,13 +30,13 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
 
-      # Offline mode: text-only LLM on 192.168.1.61
+      # Offline mode: text-only LLM on 192.168.1.61 (A30 24GB)
       - LOCAL_LLM_URL_TEXT=${LOCAL_LLM_URL_TEXT:-http://192.168.1.61/v1}
-      - LOCAL_LLM_MODEL_TEXT=${LOCAL_LLM_MODEL_TEXT:-gpt-oss-20b}
+      - LOCAL_LLM_MODEL_TEXT=${LOCAL_LLM_MODEL_TEXT:-qwen2.5-14b}
 
-      # Offline mode: VLM on 192.168.1.62
+      # Offline mode: VLM on 192.168.1.62 (A30 24GB)
       - LOCAL_LLM_URL_VLM=${LOCAL_LLM_URL_VLM:-http://192.168.1.62/v1}
-      - LOCAL_LLM_MODEL_VLM=${LOCAL_LLM_MODEL_VLM:-qwen2-vl-7b}
+      - LOCAL_LLM_MODEL_VLM=${LOCAL_LLM_MODEL_VLM:-qwen2.5-vl-7b}
 
       # Optional: if vllm was started with --api-key, mirror it here
       # (same value on both GPU boxes assumed).
