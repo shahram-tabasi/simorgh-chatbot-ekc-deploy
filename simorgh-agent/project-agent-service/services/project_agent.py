@@ -279,16 +279,13 @@ class ProjectManagerAgent:
             chat_id=chat_id,
         )
 
-        # 7. Try to commit changes if shell tasks were executed
-        commit_result = None
-        has_shell_tasks = any(
-            t.get("tool_used") == "shell" or t.get("task_type") == "shell_command"
-            for t in tasks_created
+        # 7. End-of-chain rollup commit — captures any leftover changes that
+        # weren't committed per-task (rare; shouldn't normally fire). The
+        # per-task commits inside _execute_task_chain do the heavy lifting.
+        commit_result = await self._auto_commit(
+            project_id,
+            f"cot(chain|rollup): {user_input[:80]}",
         )
-        if has_shell_tasks:
-            commit_result = await self._auto_commit(
-                project_id, f"Agent: {user_input[:80]}"
-            )
 
         await self._notify_progress(project_id, "complete", {
             "response_preview": final_response[:200],
@@ -377,6 +374,36 @@ class ProjectManagerAgent:
                     "status": "completed",
                     "output": result.get("output", "")[:500],
                 })
+
+                # Per-task auto-commit. We commit after every task that may
+                # have modified the workspace, with a meaningful, traceable
+                # message — `git log` becomes the audit trail of what the
+                # agent did and why. Tools that don't touch the workspace
+                # (memory_query, generation, analysis) skip the commit.
+                tool = task.get("tool_used", "llm")
+                task_type = task.get("task_type", "action")
+                touches_workspace = (
+                    tool in {
+                        "shell", "git", "file_export", "eplan_bridge",
+                        "command_gen", "project_init", "project_analysis",
+                        "techserver", "tech_kb", "documents_rag",
+                    }
+                    or task_type in {"shell_command", "git_commit", "document"}
+                )
+                if touches_workspace:
+                    summary = (
+                        result.get("summary")
+                        or (result.get("output") or "")[:120].replace("\n", " ").strip()
+                    )
+                    msg = f"cot({task_id[:8]}|{tool}): {task['title']}"
+                    if summary:
+                        msg = f"{msg}\n\n{summary}"
+                    try:
+                        await self._auto_commit(project_id, msg)
+                    except Exception:
+                        # Commit failures are non-fatal — the data is still
+                        # on disk. Logged inside _auto_commit.
+                        pass
 
                 await self._notify_progress(project_id, "task_completed", {
                     "task_id": task_id,
