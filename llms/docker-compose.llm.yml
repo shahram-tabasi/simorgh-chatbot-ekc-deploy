@@ -1,0 +1,115 @@
+# =============================================================================
+# LLM SERVER — 192.168.1.61
+# =============================================================================
+# Runs `vllm/vllm-openai:latest` directly. Exposes a standard
+# OpenAI-compatible API on port 80 (nginx) → vllm container :8000.
+#
+# Endpoints (all OpenAI-compatible):
+#   POST /v1/chat/completions
+#   POST /v1/completions
+#   POST /v1/embeddings        (only if --task=embedding is set)
+#   GET  /v1/models
+#   GET  /health
+#
+# Deploy on 192.168.1.61:
+#   docker compose -f docker-compose.llm.yml up -d
+#
+# First start downloads the model from Hugging Face into MODEL_CACHE_PATH;
+# subsequent starts use the cache. Healthcheck start_period is 10 min to
+# accommodate the initial weight load for a 20B model.
+# =============================================================================
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm
+    # OpenAI-compatible server entrypoint is the image default; we just
+    # pass model + serving args.
+    command: >
+      --model ${LLM_MODEL:-unsloth/gpt-oss-20b-16bit}
+      --served-model-name ${LLM_SERVED_NAME:-gpt-oss-20b}
+      --host 0.0.0.0
+      --port 8000
+      --dtype ${LLM_DTYPE:-bfloat16}
+      --max-model-len ${LLM_MAX_MODEL_LEN:-8192}
+      --gpu-memory-utilization ${GPU_MEM_UTIL:-0.90}
+      --enable-prefix-caching
+      --api-key ${VLLM_API_KEY:-}
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/models/huggingface
+      - VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-INFO}
+    volumes:
+      # One directory holds the HF download cache + any pre-downloaded
+      # local model paths. Mounted read-write so vllm can populate the
+      # cache on first start.
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
+    expose:
+      - "8000"
+    # vllm needs --ipc=host for multi-GPU + shared memory for tokenizer workers.
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s   # 10 min for initial 20B weight load
+    networks:
+      - ai_net
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: vllm_nginx
+    depends_on:
+      vllm:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    environment:
+      - TZ=Asia/Tehran
+    volumes:
+      - ./nginx_configs/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx_configs/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - ai_net
+    restart: unless-stopped
+
+  gpu_monitor:
+    build: ./gpu_monitor
+    image: simorgh-llm-gpu-monitor:local
+    container_name: gpu_monitor
+    environment:
+      - TARGET_CONTAINER=vllm
+      - BACKEND_URL=http://vllm:8000
+      - GPU_MEMORY_THRESHOLD=95
+      - GPU_IDLE_THRESHOLD=5
+      - IDLE_DURATION=300
+      - CHECK_INTERVAL=10
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [utility]
+    depends_on:
+      vllm:
+        condition: service_healthy
+    networks:
+      - ai_net
+    restart: unless-stopped
+
+networks:
+  ai_net:
+    driver: bridge
