@@ -8,6 +8,7 @@ Deployed on 192.168.1.69, accessed by central server (1.68).
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import shutil
@@ -372,6 +373,79 @@ async def workspace_write(req: WorkspaceWriteRequest, _=Depends(verify_token)):
         await run_command(f'git commit -m "{safe_msg}"', project_dir)
 
     return {"status": "ok", "path": str(target), "bytes": len(req.content)}
+
+
+@app.post("/workspace/upload-file")
+async def workspace_upload_file(
+    project_id: str = Form(...),
+    subdir: str = Form("uploads"),
+    filename: str = Form(...),
+    dedupe: bool = Form(False),
+    commit_message: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+    _=Depends(verify_token),
+):
+    """
+    Write a single file into the project workspace.
+
+    When dedupe=True (e.g. user uploads): the file lands at
+        <subdir>/<sha256[:12]>/<filename>
+    Re-uploading the same content → same path → idempotent. Different
+    content with the same filename → different prefix → no overwrite.
+
+    When dedupe=False (e.g. emails archived by message-id): the file
+    lands at <subdir>/<filename> directly. Caller is responsible for
+    making the filename unique in that case.
+
+    On success and if commit_message is set, the workspace is git-add'd
+    + committed so the change is traceable in `git log`.
+    """
+    project_dir = get_project_dir(project_id)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project workspace not found")
+
+    # Cap at 200 MiB to avoid runaway uploads.
+    MAX_BYTES = 200 * 1024 * 1024
+    chunks: List[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1 << 20)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_BYTES:
+            raise HTTPException(status_code=413, detail="file too large (>200 MiB)")
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
+    sha = hashlib.sha256(content).hexdigest()
+    rel_path = (
+        f"{subdir}/{sha[:12]}/{filename}" if dedupe
+        else f"{subdir}/{filename}"
+    )
+    target = _safe_subdir(project_dir, rel_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Idempotent: if dedupe=True and file is already there with same content, skip.
+    if target.exists() and dedupe:
+        existing_sha = hashlib.sha256(target.read_bytes()).hexdigest()
+        if existing_sha == sha:
+            return {
+                "status": "noop",
+                "path": str(target),
+                "sha256": sha,
+                "bytes": total,
+                "reason": "identical content already present",
+            }
+
+    target.write_bytes(content)
+
+    if commit_message and (project_dir / ".git").exists():
+        safe_msg = commit_message.replace('"', "'")
+        await run_command(f"git add {subdir}", project_dir)
+        await run_command(f'git commit -m "{safe_msg}"', project_dir)
+
+    return {"status": "ok", "path": str(target), "sha256": sha, "bytes": total}
 
 
 @app.post("/workspace/upload-tarball")

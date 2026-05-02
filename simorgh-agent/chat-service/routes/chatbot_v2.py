@@ -15,11 +15,19 @@ Author: Simorgh Industrial Assistant
 """
 
 import logging
+import os
 from typing import Optional, List
 from uuid import UUID
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+# Shell-service on .69 — used to push uploaded files into the
+# project workspace at ~/projects/<id>/uploads/<sha[:12]>/<filename>.
+SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
+SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
 
 from chatbot_core.models import (
     ChatType,
@@ -374,6 +382,59 @@ async def upload_document(
             filename=request.filename,
             category=request.category,
         )
+
+        # Also push the upload into the project workspace on .69 with
+        # sha256-prefixed pathing so re-uploads don't overwrite. Failures
+        # are logged but don't fail the request — Qdrant ingest above is
+        # what the user actually needs for chat retrieval.
+        try:
+            project_id = None
+            if hasattr(ctx, "project") and ctx.project:
+                project_id = ctx.project.project_number
+            if project_id:
+                content_bytes = (
+                    request.content.encode("utf-8")
+                    if isinstance(request.content, str)
+                    else bytes(request.content)
+                )
+                async with httpx.AsyncClient(timeout=120.0) as c:
+                    headers = (
+                        {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
+                        if SHELL_SERVICE_TOKEN else {}
+                    )
+                    files = {
+                        "file": (
+                            request.filename, content_bytes,
+                            "application/octet-stream",
+                        ),
+                    }
+                    data = {
+                        "project_id": project_id,
+                        "subdir": "uploads",
+                        "filename": request.filename,
+                        "dedupe": "true",
+                        "commit_message": (
+                            f"upload(user): {request.filename} "
+                            f"(chat={chat_id}, user={request.user_id})"
+                        ),
+                    }
+                    r = await c.post(
+                        f"{SHELL_SERVICE_URL}/workspace/upload-file",
+                        headers=headers, files=files, data=data,
+                    )
+                    if r.status_code == 200:
+                        body = r.json()
+                        # Surface workspace-side info as warnings (non-fatal info).
+                        result.setdefault("warnings", []).append(
+                            f"workspace_upload: {body.get('status')} "
+                            f"sha={body.get('sha256','?')[:12]} path={body.get('path','?')}"
+                        )
+                    else:
+                        result.setdefault("warnings", []).append(
+                            f"workspace_upload_failed: {r.status_code} {r.text[:120]}"
+                        )
+        except Exception as e:
+            logger.warning("workspace upload push failed (non-fatal): %s", e)
 
         return UploadDocumentResponse(
             success=result.get("success", False),
