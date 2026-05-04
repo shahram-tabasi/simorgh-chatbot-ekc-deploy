@@ -32,29 +32,24 @@ services:
       - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://nginx/api/llm}
       - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
       - LLM_GATEWAY_URL=http://llm-gateway:8030
-      # Shell service (192.168.1.69)
-      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
-      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
-      - SHELL_SERVICE_TIMEOUT=60
-      # Mail gateway (project email)
-      - MAIL_GATEWAY_URL=http://mail-gateway:8027
-      - MAIL_GATEWAY_TOKEN=${MAIL_GATEWAY_TOKEN:-}
+      # 2026-05 enterprise migration: code exec → runtime-broker (ephemeral
+      # docker), project files → gitlab-mcp, mail → mail-bridge.
+      - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}
+      - BROKER_TOKEN=${BROKER_TOKEN:-}
+      - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      - GITLAB_PROJECTS_GROUP=${GITLAB_PROJECTS_GROUP:-simorgh-projects}
+      - GITLAB_TECH_KB_REPO=${GITLAB_TECH_KB_REPO:-simorgh-knowledge/technical-knowledge}
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
+      # Mail bridge to Mailcow (replaces mail-gateway + project-mail).
+      - MAIL_BRIDGE_URL=http://mail-bridge:8051
       - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
-      # Outbound email gateway for the canonical mailbox simorghai@electrokavir.com.
-      # Used when an agent turn was triggered by channel=email — the reply
-      # goes back to the original sender via this service.
-      - PROJECT_MAIL_URL=http://project-mail-service:8045
+      # On-demand TPMS context for CoT (replaces shell-copy of tpms_project_data.md).
+      - TPMS_CONTEXT_URL=${TPMS_CONTEXT_URL:-http://tpms-context-agent:8050}
+      - TPMS_FETCHER_URL=http://tpms-fetcher:8021
+      # Hybrid (BM25 + kNN) search over ES — feeds high-quality LLM context.
+      - CONTEXT_SEARCH_URL=${CONTEXT_SEARCH_URL:-http://context-search:8049}
       # Roles allowed to create projects (project-creation auth gate).
       - PROJECT_CREATE_ALLOWED_ROLES=${PROJECT_CREATE_ALLOWED_ROLES:-expert_technical}
-      # External-source gateways used by the project-creation precheck dialog
-      # and by the per-source init steps inside POST /api/v2/agent/projects.
-      - TECHSERVER_URL=http://techserver-service:8043
-      - TPMS_FETCHER_URL=http://tpms-fetcher:8021
-      - TECH_KB_URL=http://tech-kb-service:8046
-      # shell-service on .69 for the workspace lifecycle
-      # (/workspace/init on create, /workspace/archive on delete).
-      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
-      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
       # Admin-managed restrictions file. Free-text constraints prepended to
       # every COT system prompt as hard rules on the final response.
       - RESTRICTIONS_PATH=/app/restrictions/system.txt

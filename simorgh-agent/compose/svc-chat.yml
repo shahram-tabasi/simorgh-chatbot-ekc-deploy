@@ -41,8 +41,12 @@ services:
       # External services
       - DOC_PROCESSOR_URL=http://doc-processor:8000
       - DOCUMENTS_RAG_URL=http://documents-rag-service:8033
-      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
-      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+      # 2026-05: code exec via runtime-broker, files via gitlab-mcp.
+      - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}
+      - BROKER_TOKEN=${BROKER_TOKEN:-}
+      - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
+      - CONTEXT_SEARCH_URL=${CONTEXT_SEARCH_URL:-http://context-search:8049}
       # Microservice MCP URLs (chat may invoke tools)
       - SEARCH_MCP_URL=http://search-service:8020/mcp
       - TPMS_FETCHER_MCP_URL=http://tpms-fetcher:8021/mcp

@@ -41,9 +41,23 @@ jobs:
           - name: doc-processor
             context: ./simorgh-agent/doc-processor
             dockerfile: ./simorgh-agent/doc-processor/Dockerfile
-          - name: shell-service
-            context: ./simorgh-agent/shell-service
-            dockerfile: ./simorgh-agent/shell-service/Dockerfile
+
+          # 2026-05 enterprise migration: new services
+          - name: gitlab-mcp-service
+            context: ./simorgh-agent
+            dockerfile: ./simorgh-agent/gitlab-mcp-service/Dockerfile
+          - name: runtime-broker
+            context: ./simorgh-agent
+            dockerfile: ./simorgh-agent/runtime-broker/Dockerfile
+          - name: context-search-service
+            context: ./simorgh-agent
+            dockerfile: ./simorgh-agent/context-search-service/Dockerfile
+          - name: tpms-context-agent
+            context: ./simorgh-agent
+            dockerfile: ./simorgh-agent/tpms-context-agent/Dockerfile
+          - name: mail-bridge
+            context: ./simorgh-agent
+            dockerfile: ./simorgh-agent/mail-bridge/Dockerfile
 
           # Phases 2-9: extracted from backend monolith
           - name: llm-gateway
@@ -87,18 +101,9 @@ jobs:
           - name: org-data-service
             context: ./simorgh-agent/org-data-service
             dockerfile: ./simorgh-agent/org-data-service/Dockerfile
-          - name: techserver-service
-            context: ./simorgh-agent/techserver-service
-            dockerfile: ./simorgh-agent/techserver-service/Dockerfile
           - name: eplan-sql-service
             context: ./simorgh-agent/eplan-sql-service
             dockerfile: ./simorgh-agent/eplan-sql-service/Dockerfile
-          - name: project-mail-service
-            context: ./simorgh-agent/project-mail-service
-            dockerfile: ./simorgh-agent/project-mail-service/Dockerfile
-          - name: tech-kb-service
-            context: ./simorgh-agent/tech-kb-service
-            dockerfile: ./simorgh-agent/tech-kb-service/Dockerfile
 
     steps:
       - name: Checkout code

@@ -7,13 +7,15 @@ Every service has its own file. The master `../docker-compose.yml` just
 
 | Server | Role | Compose file |
 |---|---|---|
-| **192.168.1.68** | Main CPU — backend, frontend, datastores, microservices, host nginx (SSL) | `simorgh-agent/docker-compose.yml` (this) |
-| **192.168.1.69** | Shell agent + git runtime | `simorgh-agent/docker-compose-shell.yml` |
+| **192.168.1.68** | Single-host deployment — backend, frontend, datastores, microservices, GitLab CE, ELK, Mailcow (sibling), host nginx (SSL) | `simorgh-agent/docker-compose.yml` (this) |
 | **192.168.1.61** | Local LLM endpoint #1 (GPU) | `llms/docker-compose.yml` |
 | **192.168.1.62** | Local LLM endpoint #2 (GPU) | `llms/docker-compose.yml` |
 
-SSL terminates at the **host nginx on .68**. The container nginx serves plain
-HTTP on port 85. Do not enable certbot containers.
+SSL terminates at the **host nginx on .68**. The container nginx serves
+plain HTTP on port 85.
+
+The 2026-05 enterprise migration (`MIGRATION_2026_05.md`) consolidated
+everything onto .68. The `.69` shell host is gone.
 
 ## Files
 
@@ -23,6 +25,9 @@ HTTP on port 85. Do not enable certbot containers.
 | `infra-redis.yml` | `redis` | ✅ | cache + sessions + chat history + agent DB |
 | `infra-qdrant.yml` | `qdrant` | ✅ | vector DB (RAG) |
 | `infra-postgres-auth.yml` | `postgres_auth` | ✅ | auth + projects + tasks + messages |
+| `infra-gitlab.yml` | `gitlab` | ✅ | GitLab CE — source of truth for project repos + technical-knowledge |
+| `infra-elastic.yml` | `elasticsearch`, `logstash`, `kibana`, `filebeat` | ✅ | logs + hybrid search + admin/observability UI |
+| `infra-mailcow.yml` | `mailcow-probe` | ❌ | Mailcow runs as sibling stack — see file header for bring-up |
 | `infra-neo4j.yml` | `neo4j` | ❌ | knowledge graph (legacy GraphRAG) |
 | `infra-cocoindex-db.yml` | `cocoindex_db` | ❌ | pgvector DB for CocoIndex |
 | `infra-cocoindex.yml` | `cocoindex` | ❌ | CocoIndex pipeline (needs cocoindex-db) |
@@ -50,7 +55,18 @@ All on the `simorgh_app_net` network. AI / chain-of-thought talks to them via
 | `svc-command-gen.yml` | `command-gen` | 8024 | MCP + REST |
 | `svc-file-export.yml` | `file-export` | 8025 | MCP + REST |
 | `svc-eplan-bridge.yml` | `eplan-bridge` | 8026 | MCP + REST |
-| `svc-mail-gateway.yml` | `mail-gateway` | 8027 + SMTP 2525 | REST |
+| `svc-eplan-sql.yml` | `eplan-sql` | 8044 | MCP + REST |
+| `svc-hr-kb.yml` | `hr-kb` | 8041 | MCP + REST |
+| `svc-org-data.yml` | `org-data` | 8042 | MCP + REST |
+
+### Enterprise migration services (2026-05)
+| File | Service | Port | Replaces |
+|---|---|---|---|
+| `svc-gitlab-mcp.yml` | `gitlab-mcp` | 8047 | `tech-kb-service`, `techserver-service` (SMB) |
+| `svc-runtime-broker.yml` | `runtime-broker` | 8048 | `shell-service` (.69) |
+| `svc-context-search.yml` | `context-search` | 8049 | (new) hybrid BM25+kNN over ES |
+| `svc-tpms-context-agent.yml` | `tpms-context-agent` | 8050 | shell-copy of TPMS markdown |
+| `svc-mail-bridge.yml` | `mail-bridge` | 8051 | `mail-gateway-service`, `project-mail-service` |
 
 ### simorgh-soft
 | File | Service | Notes |
@@ -85,27 +101,25 @@ All files share:
 * network `simorgh_app_net` (Docker name)
 * volumes named `simorgh_<purpose>` (e.g. `simorgh_redis_data`, `simorgh_qdrant_storage`)
 
-This keeps them stable across the master compose and any standalone runs.
-
 ## Extracted from backend monolith (Phases 2–9, all landed)
 
 Each runs as its own container. Comment a line in `../docker-compose.yml`
 to disable; nginx then falls through to the legacy `backend` upstream
 via the catch-all `/api/` block (so the app keeps working).
 
-| File | Service | Port | Protocol | Path |
-|---|---|---|---|---|
-| `svc-llm-gateway.yml` | `llm-gateway` | 8030 | REST | `/api/llm-gateway/*` |
-| `svc-embeddings.yml` | `embeddings-service` | 8031 | REST | `/api/embeddings/*` |
-| `svc-auth.yml` | `auth-service` | 8032 | REST | `/api/v2/auth/*` |
-| `svc-documents-rag.yml` | `documents-rag-service` | 8033 | REST | `/api/v2/documents/*` |
-| `svc-chat.yml` | `chat-service` | 8034 | REST | `/api/v2/chat/*`, `/api/v2/projects/*/sessions` |
-| `svc-project-agent.yml` | `project-agent-service` | 8035 | REST + MCP | `/api/v2/agent/*`, `/mcp` |
-| `svc-specification-agent.yml` | `specification-agent-service` | 8036 | REST + MCP | `/api/v2/specs/*`, `/mcp` |
-| `svc-graph-rag.yml` | `graph-rag-service` | 8037 | REST | `/api/v2/graph-rag/*` |
-| `svc-payments.yml` | `payments-service` | 8038 | REST | `/api/payments/*` |
-| `svc-admin.yml` | `admin-service` | 8039 | REST | `/api/admin/*` |
-| `svc-tier-quota.yml` | `tier-quota-service` | 8040 | REST | `/api/quota/*` |
+| File | Service | Port | Path |
+|---|---|---|---|
+| `svc-llm-gateway.yml` | `llm-gateway` | 8030 | `/api/llm-gateway/*` |
+| `svc-embeddings.yml` | `embeddings-service` | 8031 | `/api/embeddings/*` |
+| `svc-auth.yml` | `auth-service` | 8032 | `/api/v2/auth/*` |
+| `svc-documents-rag.yml` | `documents-rag-service` | 8033 | `/api/v2/documents/*` |
+| `svc-chat.yml` | `chat-service` | 8034 | `/api/v2/chat/*`, `/api/v2/projects/*/sessions` |
+| `svc-project-agent.yml` | `project-agent-service` | 8035 | `/api/v2/agent/*`, `/mcp` |
+| `svc-specification-agent.yml` | `specification-agent-service` | 8036 | `/api/v2/specs/*`, `/mcp` |
+| `svc-graph-rag.yml` | `graph-rag-service` | 8037 | `/api/v2/graph-rag/*` |
+| `svc-payments.yml` | `payments-service` | 8038 | `/api/payments/*` |
+| `svc-admin.yml` | `admin-service` | 8039 | `/api/admin/*` |
+| `svc-tier-quota.yml` | `tier-quota-service` | 8040 | `/api/quota/*` |
 
 ## How phase 10 routes traffic
 
@@ -119,14 +133,3 @@ To roll back a single service:
 1. Comment the matching `include:` line in `../docker-compose.yml`
 2. Comment the matching `location` block in `../nginx_configs/includes/locations.inc`
 3. `docker compose up -d --remove-orphans` and `docker exec nginx nginx -s reload`
-
-The backend monolith still contains all the original code; it just
-doesn't see the migrated requests anymore. Future cleanup: delete the
-duplicated `routes/` and `services/` files from `backend/` once each
-extracted service is verified in production.
-
-## Legacy
-
-The old monolithic compose lives at `../docker-compose.legacy.yml` for
-emergency rollback (`docker compose -f docker-compose.legacy.yml up -d`).
-Delete when the new layout has been stable in production for a release.

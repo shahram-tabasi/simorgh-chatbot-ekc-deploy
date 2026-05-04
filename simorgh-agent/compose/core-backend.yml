@@ -77,14 +77,17 @@ services:
       - NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY}
       - NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET}
       - NOWPAYMENTS_SANDBOX=${NOWPAYMENTS_SANDBOX:-false}
-      # Shell service (192.168.1.69)
-      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
-      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
-      - SHELL_SERVICE_TIMEOUT=60
-      # Mail gateway
+      # 2026-05 enterprise migration:
+      #   shell-service @ 192.168.1.69  → runtime-broker (ephemeral docker)
+      #   techserver-service / tech-kb  → gitlab-mcp
+      #   mail-gateway / project-mail   → mail-bridge (Mailcow)
+      - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}
+      - BROKER_TOKEN=${BROKER_TOKEN:-}
+      - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      - GITLAB_PROJECTS_GROUP=${GITLAB_PROJECTS_GROUP:-simorgh-projects}
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
+      - MAIL_BRIDGE_URL=http://mail-bridge:8051
       - PROJECT_EMAIL_DOMAIN=${PROJECT_EMAIL_DOMAIN:-simorghai.electrokavir.com}
-      - MAIL_GATEWAY_URL=http://mail-gateway:8027
-      - MAIL_GATEWAY_TOKEN=${MAIL_GATEWAY_TOKEN:-}
       # Microservices REST URLs (fallback)
       - SEARCH_SERVICE_URL=http://search-service:8020
       - TPMS_FETCHER_URL=http://tpms-fetcher:8021

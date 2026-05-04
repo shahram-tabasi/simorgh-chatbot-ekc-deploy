@@ -120,7 +120,9 @@ boots — it just degrades the COT engine's available toolset.
    ──────────────────▶│ project- │──│  eplan-bridge    │
                       │  agent-  │  └──────────────────┘
                       │  service │
-                      │   :8035  │   HTTP   shell-service @ 192.168.1.69:8010
+                      │   :8035  │   HTTP   runtime-broker:8048 (ephemeral docker exec)
+                      │          │ ───────▶
+                      │          │   HTTP   gitlab-mcp:8047 (project files, technical-knowledge)
                       │          │ ───────▶
                       │          │   Redis  redis:6379 (state, task cache, working memory)
                       │          │ ───────▶
@@ -149,8 +151,11 @@ boots — it just degrades the COT engine's available toolset.
 | `POSTGRES_AUTH_*` | `projects`, `project_tasks`, `project_messages`, `project_instructions` tables |
 | `OPENAI_API_KEY`, `OPENAI_MODEL`, `LOCAL_LLM_URL`, `DEFAULT_LLM_MODE` | LLM mode for COT planning |
 | `LLM_GATEWAY_URL` | Replaces local LLM after phase C |
-| `SHELL_SERVICE_URL`, `SHELL_SERVICE_TOKEN` | Sandbox commands on .69 |
-| `MAIL_GATEWAY_URL`, `MAIL_GATEWAY_TOKEN` | Outgoing project emails |
+| `RUNTIME_BROKER_URL`, `BROKER_TOKEN` | Ephemeral docker sandbox for code exec |
+| `GITLAB_MCP_URL`, `GITLAB_PROJECTS_GROUP`, `AGENT_TOKEN` | Project files + technical-knowledge via GitLab |
+| `TPMS_CONTEXT_URL` | On-demand TPMS context for CoT |
+| `CONTEXT_SEARCH_URL` | Hybrid (BM25 + kNN) search backing the LLM context block |
+| `MAIL_BRIDGE_URL` | Mailcow bridge for in/out project email |
 | `PROJECT_EMAIL_DOMAIN` | e.g. `simorghai.electrokavir.com` |
 | `*_MCP_URL` | Per-microservice MCP endpoints to discover tools from |
 | `MYSQL_*` | TPMS lookup for legacy projects |
@@ -211,8 +216,9 @@ Smoke:
 curl http://localhost:8035/health
 ```
 
-For real-world testing you also need shell-service running on .69 (or set
-`SHELL_SERVICE_URL=` to disable shell tasks).
+For real-world testing you also need `runtime-broker` and `gitlab-mcp`
+reachable on `simorgh_app_net`. The legacy `shell-service` on .69 is gone
+as of the 2026-05 enterprise migration.
 
 ---
 

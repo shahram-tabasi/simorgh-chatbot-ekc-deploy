@@ -91,7 +91,8 @@ Copies the same env vars as backend (most heavyweight):
 | `DEFAULT_LLM_MODE` | `online` | |
 | `LLM_GATEWAY_URL` | `http://llm-gateway:8030` | Used after phase C |
 | `DOCUMENTS_RAG_URL` | `http://documents-rag-service:8033` | RAG retrieval after phase C |
-| `SHELL_SERVICE_URL` | `http://192.168.1.69:8010` | For commands the agent runs |
+| `RUNTIME_BROKER_URL` | `http://runtime-broker:8048` | Ephemeral docker sandbox for code exec |
+| `GITLAB_MCP_URL` | `http://gitlab-mcp:8047` | Project files + technical-knowledge |
 | `*_MCP_URL` | one per microservice | AI/COT tool registry |
 | `JWT_SECRET_KEY` | placeholder | Local JWT verification |
 
