@@ -1,47 +1,56 @@
 """
-Project Init Workflow Service
-===============================
-Orchestrates the full initialization of a new project:
-1. Fetch TPMS data via tpms-fetcher-service
-2. Convert to text file
-3. Store in project workspace via shell-service
-4. Init git repo
-5. Return initialization report
+Project Init Workflow Service (rewritten)
+=========================================
+NEW FLOW (post-shell-service decommission):
 
-Endpoints:
-  POST /init         - Initialize a project
-  GET  /status/{id}  - Get init status
-  GET  /health       - Health check
-  /mcp               - MCP Streamable HTTP endpoint
+1. Resolve GitLab project for this oenum (or create a fresh one for an
+   oenum-less project). The techserver-importer is responsible for the
+   one-time bulk seed; per-init we only ensure the project EXISTS.
+2. Warm the TPMS context cache via tpms-context-agent so the first CoT
+   turn is fast.
+3. Index project metadata into context-search so hybrid search works
+   immediately.
+4. Return an init_id whose status() reports per-step outcome.
+
+What we no longer do:
+  • Create per-project workspace on shell-service (.69)
+  • SCP / smbclient anything to the shell host
+  • Write tpms_project_data.md to a filesystem
+  • Clone tech-knowledge — gitlab-mcp serves it on demand
 """
+from __future__ import annotations
 
 import logging
 import os
 import uuid
-from datetime import datetime
-from typing import Optional, Dict, Any
+from datetime import datetime, timezone
+from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from simorgh_logging import configure, get_logger, request_id_middleware
 
-app = FastAPI(title="Project Init Workflow Service", version="1.0.0")
+configure(service="project-init")
+log = get_logger(__name__)
 
-TPMS_FETCHER_URL = os.getenv("TPMS_FETCHER_URL", "http://tpms-fetcher:8021")
-SHELL_SERVICE_URL = os.getenv("SHELL_SERVICE_URL", "http://192.168.1.69:8010")
-SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
+GITLAB_MCP_URL        = os.getenv("GITLAB_MCP_URL",        "http://gitlab-mcp:8047")
+TPMS_CONTEXT_URL      = os.getenv("TPMS_CONTEXT_URL",      "http://tpms-context-agent:8050")
+CONTEXT_SEARCH_URL    = os.getenv("CONTEXT_SEARCH_URL",    "http://context-search:8049")
+PROJECTS_GROUP        = os.getenv("GITLAB_PROJECTS_GROUP", "simorgh-projects")
+AGENT_TOKEN           = os.getenv("AGENT_TOKEN", "")
 
-# Track initialization status
-_init_status: Dict[str, Dict] = {}
+app = FastAPI(title="project-init", version="0.2.0")
+app.middleware("http")(request_id_middleware)
+
+_init_status: dict[str, dict[str, Any]] = {}
 
 
 class InitRequest(BaseModel):
-    project_id: str = Field(..., description="Unique project ID (UUID)")
-    oenum: Optional[str] = Field(None, description="TPMS OENUM (for legacy projects)")
+    project_id: str = Field(..., description="Internal project UUID")
+    oenum: str | None = Field(None, description="TPMS OENUM (legacy projects)")
     project_name: str = Field(..., min_length=1)
     owner_id: str = Field(...)
 
@@ -51,181 +60,163 @@ class InitResponse(BaseModel):
     project_id: str
     status: str
     message: str
-    steps_completed: list = []
 
 
-def _shell_headers():
-    h = {}
-    if SHELL_SERVICE_TOKEN:
-        h["Authorization"] = f"Bearer {SHELL_SERVICE_TOKEN}"
-    return h
+def _agent_headers() -> dict[str, str]:
+    return {"x-agent-auth": AGENT_TOKEN} if AGENT_TOKEN else {}
 
 
-async def _run_init(init_id: str, req: InitRequest):
-    """Background task: full project initialization."""
-    status = _init_status[init_id]
-    status["status"] = "running"
-    steps = []
+async def _ensure_gitlab_project(client: httpx.AsyncClient, oenum: str | None,
+                                 project_name: str) -> dict[str, Any]:
+    """If oenum provided, expect <PROJECTS_GROUP>/<oenum> to exist (seeded by
+    importer). If absent, create a fresh empty project under PROJECTS_GROUP
+    named after the project."""
+    target_path = f"{PROJECTS_GROUP}/{(oenum or project_name).lower().replace(' ', '-')}"
+
+    # Check existence first.
+    r = await client.get(f"{GITLAB_MCP_URL}/projects",
+                         params={"group": PROJECTS_GROUP, "search": oenum or project_name})
+    r.raise_for_status()
+    for p in r.json():
+        if p["path"].lower() == target_path.lower():
+            return p
+
+    # Create.
+    r = await client.post(f"{GITLAB_MCP_URL}/projects",
+                          json={"name": oenum or project_name,
+                                "namespace": PROJECTS_GROUP,
+                                "description": f"Simorgh project ({project_name})"},
+                          headers=_agent_headers())
+    r.raise_for_status()
+    return r.json()
+
+
+async def _warm_tpms_cache(client: httpx.AsyncClient, oenum: str) -> dict[str, Any]:
+    r = await client.post(f"{TPMS_CONTEXT_URL}/context",
+                          json={"oenum": oenum, "refresh": True})
+    r.raise_for_status()
+    return r.json()
+
+
+async def _index_project_metadata(client: httpx.AsyncClient, req: InitRequest,
+                                  gl_project: dict[str, Any]) -> None:
+    body = (
+        f"# {req.project_name}\n\n"
+        f"Project ID: {req.project_id}\n"
+        f"Owner: {req.owner_id}\n"
+        f"GitLab: {gl_project.get('web_url', '')}\n"
+        f"OENUM: {req.oenum or '(none)'}\n"
+        f"Created: {datetime.now(timezone.utc).isoformat()}\n"
+    )
+    r = await client.post(f"{CONTEXT_SEARCH_URL}/index/content", json={
+        "source": "project",
+        "project_id": req.project_id,
+        "oenum": req.oenum,
+        "repo": gl_project.get("path"),
+        "path": "README.md",
+        "title": req.project_name,
+        "body": body,
+        "tags": ["project-metadata"],
+        "id": f"project-meta:{req.project_id}",
+    })
+    r.raise_for_status()
+
+
+async def _run_init(init_id: str, req: InitRequest) -> None:
+    s = _init_status[init_id]
+    s["status"] = "running"
+    steps: list[dict[str, Any]] = []
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            # Step 1: Init git workspace
-            status["current_step"] = "git_init"
-            resp = await client.post(
-                f"{SHELL_SERVICE_URL}/git/init",
-                json={"project_id": req.project_id},
-                headers=_shell_headers(),
-            )
-            resp.raise_for_status()
-            steps.append({"step": "git_init", "status": "ok", "result": resp.json()})
+        async with httpx.AsyncClient(timeout=120) as client:
+            s["current_step"] = "ensure_gitlab_project"
+            gl_project = await _ensure_gitlab_project(client, req.oenum, req.project_name)
+            steps.append({"step": "ensure_gitlab_project", "status": "ok",
+                          "result": gl_project})
 
-            # Step 2: Create project README
-            readme = f"# {req.project_name}\n\nProject ID: {req.project_id}\n"
-            readme += f"Owner: {req.owner_id}\n"
-            readme += f"Initialized: {datetime.utcnow().isoformat()}\n"
             if req.oenum:
-                readme += f"TPMS OENUM: {req.oenum}\n"
-
-            status["current_step"] = "create_readme"
-            resp = await client.post(
-                f"{SHELL_SERVICE_URL}/file/write",
-                json={"project_id": req.project_id, "path": "README.md", "content": readme},
-                headers=_shell_headers(),
-            )
-            resp.raise_for_status()
-            steps.append({"step": "create_readme", "status": "ok"})
-
-            # Step 3: Create directory structure
-            status["current_step"] = "create_dirs"
-            for dirname in ["documents", "exports", "analysis", "drawings"]:
-                resp = await client.post(
-                    f"{SHELL_SERVICE_URL}/file/write",
-                    json={
-                        "project_id": req.project_id,
-                        "path": f"{dirname}/.gitkeep",
-                        "content": "",
-                    },
-                    headers=_shell_headers(),
-                )
-            steps.append({"step": "create_dirs", "status": "ok"})
-
-            # Step 4: Fetch TPMS data (if oenum provided)
-            tpms_text = None
-            if req.oenum:
-                status["current_step"] = "fetch_tpms"
+                s["current_step"] = "warm_tpms_cache"
                 try:
-                    resp = await client.post(f"{TPMS_FETCHER_URL}/fetch/{req.oenum}")
-                    resp.raise_for_status()
-                    steps.append({"step": "fetch_tpms", "status": "ok"})
+                    cache = await _warm_tpms_cache(client, req.oenum)
+                    steps.append({"step": "warm_tpms_cache", "status": "ok",
+                                  "chars": len(cache.get("rendered", ""))})
+                except httpx.HTTPError as e:
+                    steps.append({"step": "warm_tpms_cache", "status": "error",
+                                  "error": str(e)})
 
-                    # Get text version
-                    resp = await client.get(f"{TPMS_FETCHER_URL}/project/{req.oenum}/text")
-                    resp.raise_for_status()
-                    tpms_text = resp.json().get("text", "")
-                    steps.append({"step": "tpms_text", "status": "ok", "chars": len(tpms_text)})
-                except Exception as e:
-                    steps.append({"step": "fetch_tpms", "status": "error", "error": str(e)})
+            s["current_step"] = "index_project_metadata"
+            try:
+                await _index_project_metadata(client, req, gl_project)
+                steps.append({"step": "index_project_metadata", "status": "ok"})
+            except httpx.HTTPError as e:
+                steps.append({"step": "index_project_metadata", "status": "error",
+                              "error": str(e)})
 
-            # Step 5: Save TPMS data as project context file
-            if tpms_text:
-                status["current_step"] = "save_tpms_context"
-                resp = await client.post(
-                    f"{SHELL_SERVICE_URL}/file/write",
-                    json={
-                        "project_id": req.project_id,
-                        "path": "documents/tpms_project_data.md",
-                        "content": tpms_text,
-                    },
-                    headers=_shell_headers(),
-                )
-                resp.raise_for_status()
-                steps.append({"step": "save_tpms_context", "status": "ok"})
-
-            # Step 6: Initial commit
-            status["current_step"] = "initial_commit"
-            resp = await client.post(
-                f"{SHELL_SERVICE_URL}/git/commit",
-                json={
-                    "project_id": req.project_id,
-                    "message": f"Project initialized: {req.project_name}",
-                },
-                headers=_shell_headers(),
-            )
-            resp.raise_for_status()
-            steps.append({"step": "initial_commit", "status": "ok", "result": resp.json()})
-
-        status["status"] = "completed"
-        status["steps"] = steps
-        status["completed_at"] = datetime.utcnow().isoformat()
-        logger.info(f"Project init completed: {req.project_id}")
+        s["status"] = "completed"
+        s["steps"] = steps
+        s["completed_at"] = datetime.now(timezone.utc).isoformat()
+        log.info("init_done", project_id=req.project_id, oenum=req.oenum)
 
     except Exception as e:
-        logger.error(f"Project init failed: {e}", exc_info=True)
-        status["status"] = "failed"
-        status["error"] = str(e)
-        status["steps"] = steps
+        log.exception("init_failed", project_id=req.project_id, error=str(e))
+        s["status"] = "failed"
+        s["error"] = str(e)
+        s["steps"] = steps
 
 
 @app.get("/health")
-async def health():
-    return {"status": "healthy", "service": "project-init"}
+def health():
+    return {"status": "healthy", "service": "project-init", "version": "0.2.0"}
 
 
 @app.post("/init", response_model=InitResponse)
 async def init_project(req: InitRequest, background_tasks: BackgroundTasks):
-    """Initialize a new project workspace with all systems."""
     init_id = str(uuid.uuid4())
     _init_status[init_id] = {
         "init_id": init_id,
         "project_id": req.project_id,
         "status": "pending",
-        "started_at": datetime.utcnow().isoformat(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
         "steps": [],
     }
-
     background_tasks.add_task(_run_init, init_id, req)
-
-    return InitResponse(
-        init_id=init_id,
-        project_id=req.project_id,
-        status="started",
-        message="Project initialization started in background",
-    )
+    return InitResponse(init_id=init_id, project_id=req.project_id,
+                        status="started", message="initialization queued")
 
 
 @app.get("/status/{init_id}")
-async def get_status(init_id: str):
-    """Get initialization status."""
+def get_status(init_id: str):
     if init_id not in _init_status:
-        raise HTTPException(status_code=404, detail="Init ID not found")
+        raise HTTPException(status_code=404, detail="init_id not found")
     return _init_status[init_id]
 
 
-# =============================================================================
-# MCP Server - Exposes project init tool via Model Context Protocol
-# =============================================================================
-mcp = FastMCP("project-init", instructions="Initialize project workspace with git, TPMS data, and directory structure")
+# ---------------------------------------------------------------------------
+# MCP
+# ---------------------------------------------------------------------------
+mcp = FastMCP(
+    "project-init",
+    instructions=(
+        "Initialise a project: ensure its GitLab repo exists, warm the "
+        "TPMS context cache, and register the project in the search index."
+    ),
+)
 
 
 @mcp.tool()
 async def project_init(project_id: str, project_name: str, owner_id: str,
-                       oenum: str = None) -> str:
-    """Initialize a new project workspace. Creates git repo, directory structure, fetches TPMS data if oenum provided."""
-    import json as _json
+                       oenum: str | None = None) -> dict:
+    """Initialise a new project. Synchronous (waits for completion)."""
     init_id = str(uuid.uuid4())
     _init_status[init_id] = {
         "init_id": init_id, "project_id": project_id,
-        "status": "running", "started_at": datetime.utcnow().isoformat(), "steps": [],
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(), "steps": [],
     }
     req = InitRequest(project_id=project_id, project_name=project_name,
                       owner_id=owner_id, oenum=oenum)
     await _run_init(init_id, req)
-    status = _init_status[init_id]
-    return _json.dumps(status, default=str)
+    return _init_status[init_id]
 
 
 app.mount("/mcp", mcp.streamable_http_app())
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8022)

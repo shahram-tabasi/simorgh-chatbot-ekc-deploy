@@ -1,10 +1,13 @@
 # =============================================================================
-# PROJECT-INIT - Project initialization orchestrator
-# Port 8022. Talks to tpms-fetcher (REST) and shell-service (REST, on .69).
+# PROJECT-INIT - Project initialization orchestrator (rewritten).
+# Port 8022. Talks to gitlab-mcp, tpms-context-agent, context-search.
+# Shell-service is GONE — there is no .69 host involved any more.
 # =============================================================================
 services:
   project-init:
-    build: ../project-init-service
+    build:
+      context: ..
+      dockerfile: project-init-service/Dockerfile
     image: simorgh-project-init:local
     container_name: project-init
     expose:
@@ -13,11 +16,19 @@ services:
       - app_net
     environment:
       - PYTHONUNBUFFERED=1
-      - TPMS_FETCHER_URL=http://tpms-fetcher:8021
-      - SHELL_SERVICE_URL=${SHELL_SERVICE_URL:-http://192.168.1.69:8010}
-      - SHELL_SERVICE_TOKEN=${SHELL_SERVICE_TOKEN:-}
+      - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      - TPMS_CONTEXT_URL=${TPMS_CONTEXT_URL:-http://tpms-context-agent:8050}
+      - CONTEXT_SEARCH_URL=${CONTEXT_SEARCH_URL:-http://context-search:8049}
+      - GITLAB_PROJECTS_GROUP=${GITLAB_PROJECTS_GROUP:-simorgh-projects}
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
+      - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
+      - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
     depends_on:
-      tpms-fetcher:
+      gitlab-mcp:
+        condition: service_healthy
+      tpms-context-agent:
+        condition: service_healthy
+      context-search:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8022/health || exit 1"]

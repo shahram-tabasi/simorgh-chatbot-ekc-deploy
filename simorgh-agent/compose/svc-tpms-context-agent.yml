@@ -1,0 +1,41 @@
+# =============================================================================
+# TPMS-CONTEXT-AGENT - On-demand TPMS context for CoT.
+# Replaces the old "copy tpms_project_data.md into shell workspace" step.
+# Pulls fresh TPMS rows via tpms-fetcher, renders to markdown, returns
+# directly to the LLM via MCP tool. No filesystem write.
+# =============================================================================
+services:
+  tpms-context-agent:
+    build:
+      context: ..
+      dockerfile: tpms-context-agent/Dockerfile
+    image: simorgh-tpms-context-agent:local
+    container_name: tpms-context-agent
+    expose:
+      - "8050"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TPMS_FETCHER_URL=${TPMS_FETCHER_URL:-http://tpms-fetcher:8021}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/4}
+      - CONTEXT_TTL_SEC=${TPMS_CONTEXT_TTL_SEC:-300}
+      - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
+      - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+    depends_on:
+      tpms-fetcher:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8050/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

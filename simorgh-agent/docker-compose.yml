@@ -1,19 +1,19 @@
 # =============================================================================
 # Simorgh Industrial Electrical Assistant — MASTER docker-compose.yml
-# Server: 192.168.1.68 (main CPU server)
+# Server: 192.168.1.68 (single-host deployment)
 #
 # This is a thin "menu" file. Every service lives in its own file under
-# compose/*.yml so you can ENABLE/DISABLE features by commenting a single line.
+# compose/*.yml so you can ENABLE/DISABLE features by commenting a single
+# line.
 #
-# Companion compose files (different machines):
-#   • docker-compose-shell.yml   → 192.168.1.69  (shell-service / git agent)
+# Companion compose files:
 #   • ../llms/docker-compose.yml → 192.168.1.61 + 192.168.1.62 (local LLM)
 #
 # Notes:
 #   • Requires Docker Compose v2.20+ for `include:` support.
 #   • TLS terminates at the host nginx; container nginx serves plain HTTP on :85.
-#   • Each compose/*.yml is self-contained — you can also bring up a single file
-#     with: docker compose -f compose/<name>.yml up -d
+#   • Each compose/*.yml is self-contained — you can also bring up a single
+#     file with: docker compose -f compose/<name>.yml up -d
 # =============================================================================
 
 include:
@@ -21,6 +21,13 @@ include:
   - compose/infra-redis.yml
   - compose/infra-qdrant.yml
   - compose/infra-postgres-auth.yml
+
+  # ---- New enterprise infra (GitLab + ELK + Mailcow) ------------------------
+  - compose/infra-gitlab.yml
+  - compose/infra-elastic.yml
+  # Mailcow runs as its own sibling stack — see compose/infra-mailcow.yml for
+  # bring-up. Uncomment to add the network-attached probe container.
+  # - compose/infra-mailcow.yml
 
   # ---- Infrastructure (optional — uncomment to enable) ----------------------
   # - compose/infra-neo4j.yml         # Knowledge graph (legacy GraphRAG)
@@ -43,7 +50,13 @@ include:
   - compose/svc-command-gen.yml
   - compose/svc-file-export.yml
   - compose/svc-eplan-bridge.yml
-  - compose/svc-mail-gateway.yml
+
+  # ---- New services (enterprise migration) ----------------------------------
+  - compose/svc-gitlab-mcp.yml         # GitLab REST + MCP (replaces tech-kb + techserver)
+  - compose/svc-runtime-broker.yml     # Ephemeral docker exec (replaces shell-service)
+  - compose/svc-context-search.yml     # Hybrid (BM25 + kNN) search over ES
+  - compose/svc-tpms-context-agent.yml # On-demand TPMS context for CoT
+  - compose/svc-mail-bridge.yml        # Mailcow IMAP/SMTP bridge (replaces mail-gateway + project-mail)
 
   # ---- simorgh-soft (electrical design app) ---------------------------------
   - compose/soft-mongo.yml
@@ -67,17 +80,12 @@ include:
   - compose/svc-org-data.yml              # HR/org MySQL data via MCP (port 8042)
 
   # ---- External-resource gateways (sole entry points to external systems) ---
-  - compose/svc-techserver.yml            # SMB share @ 192.168.1.3 (port 8043)
   - compose/svc-eplan-sql.yml             # MSSQL Eplan_n2 @ 192.168.1.39 (port 8044)
-  - compose/svc-project-mail.yml          # IMAP+SMTP for simorghai@... mailbox (port 8045)
-  - compose/svc-tech-kb.yml               # Tech-knowledge git repo gateway (port 8046)
-  # - compose/svc-embeddings.yml          # Phase 3
-  # - compose/svc-auth.yml                # Phase 4
-  # - compose/svc-documents-rag.yml       # Phase 5
-  # - compose/svc-chat.yml                # Phase 6
-  # - compose/svc-project-agent.yml       # Phase 7 (MCP)
-  # - compose/svc-specification-agent.yml # Phase 8 (MCP)
-  # - compose/svc-graph-rag.yml           # Phase 9
-  # - compose/svc-payments.yml            # Phase 9
-  # - compose/svc-admin.yml               # Phase 9
-  # - compose/svc-tier-quota.yml          # Phase 9
+
+# REMOVED in 2026-05 enterprise migration:
+#   - svc-techserver.yml      → replaced by GitLab projects + tools/techserver-importer
+#   - svc-tech-kb.yml         → replaced by gitlab-mcp searching the technical-knowledge repo
+#   - svc-mail-gateway.yml    → replaced by Mailcow + svc-mail-bridge
+#   - svc-project-mail.yml    → replaced by Mailcow + svc-mail-bridge
+#   - docker-compose-shell.yml → shell-service deleted; runtime-broker takes over
+#   - docker-compose.legacy.yml → legacy monolith path retired

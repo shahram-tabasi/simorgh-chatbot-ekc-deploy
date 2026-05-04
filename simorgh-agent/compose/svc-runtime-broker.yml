@@ -1,0 +1,57 @@
+# =============================================================================
+# RUNTIME-BROKER - Ephemeral docker-run sandbox for python / bash / node.
+# Replaces shell-service. The broker spawns a fresh container per task using
+# stock images (python:3.12-slim, node:20-alpine, ubuntu:22.04), enforces
+# cgroup mem/CPU/pids/seccomp, and tears it down on completion.
+#
+# Needs access to /var/run/docker.sock to spawn sibling containers.
+# =============================================================================
+services:
+  runtime-broker:
+    build:
+      context: ..
+      dockerfile: runtime-broker/Dockerfile
+    image: simorgh-runtime-broker:local
+    container_name: runtime-broker
+    expose:
+      - "8048"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BROKER_TOKEN=${BROKER_TOKEN:?set BROKER_TOKEN in .env}
+      - BROKER_NETWORK=${BROKER_NETWORK:-none}    # none|bridge|simorgh_app_net
+      - BROKER_PYTHON_IMAGE=${BROKER_PYTHON_IMAGE:-python:3.12-slim}
+      - BROKER_NODE_IMAGE=${BROKER_NODE_IMAGE:-node:20-alpine}
+      - BROKER_SHELL_IMAGE=${BROKER_SHELL_IMAGE:-ubuntu:22.04}
+      - BROKER_DEFAULT_TIMEOUT=${BROKER_DEFAULT_TIMEOUT:-30}
+      - BROKER_MAX_TIMEOUT=${BROKER_MAX_TIMEOUT:-300}
+      - BROKER_MEM_LIMIT=${BROKER_MEM_LIMIT:-512m}
+      - BROKER_CPU_QUOTA=${BROKER_CPU_QUOTA:-50000}   # 0.5 CPU / 100ms
+      - BROKER_PIDS_LIMIT=${BROKER_PIDS_LIMIT:-128}
+      - BROKER_TMPFS_SIZE=${BROKER_TMPFS_SIZE:-128m}
+      - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
+      - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+    volumes:
+      # Spawning sibling containers via the host docker daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Workspace cache shared with broker only — never auto-mounted into
+      # task containers; broker decides on a per-request basis.
+      - runtime_workspace:/workspace
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8048/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  runtime_workspace:
+    name: simorgh_runtime_workspace
+    driver: local

@@ -1,0 +1,115 @@
+# =============================================================================
+# ELK STACK - Elasticsearch + Logstash + Kibana + Filebeat
+#
+# Roles:
+#   • elasticsearch  — log + content + audit indices, hybrid (BM25 + kNN) search
+#                      that backs the context-search-service
+#   • logstash       — pipeline: json over tcp/5044 + filebeat → enrich → ES
+#   • kibana         — admin / observability UI (replaces the custom admin SPA
+#                      for ops dashboards; admin-service still owns user CRUD)
+#   • filebeat       — ships docker container stdout/stderr to logstash
+#
+# Single-node ES with security disabled for first cut. Tighten before prod
+# (see ELASTIC_PASSWORD / xpack.security.enabled).
+# =============================================================================
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.15.3}
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=${ELASTIC_SECURITY_ENABLED:-false}
+      - ES_JAVA_OPTS=-Xms${ELASTIC_HEAP:-1g} -Xmx${ELASTIC_HEAP:-1g}
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile:  { soft: 65536, hard: 65536 }
+    volumes:
+      - elastic_data:/usr/share/elasticsearch/data
+    expose:
+      - "9200"
+      - "9300"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+    restart: unless-stopped
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${ELASTIC_VERSION:-8.15.3}
+    container_name: logstash
+    environment:
+      - LS_JAVA_OPTS=-Xms${LOGSTASH_HEAP:-512m} -Xmx${LOGSTASH_HEAP:-512m}
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTIC_USER=elastic
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+    volumes:
+      - ../elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ../elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+    expose:
+      - "5044"     # beats input
+      - "5045"     # tcp json input (services ship structured logs here)
+    networks:
+      - app_net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.15.3}
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_PUBLICBASEURL=${KIBANA_PUBLIC_URL:-http://kibana.simorgh.local}
+      # Auth deferred to upstream nginx + SSO; disable Kibana's own login.
+      - XPACK_SECURITY_ENABLED=${ELASTIC_SECURITY_ENABLED:-false}
+    expose:
+      - "5601"
+    networks:
+      - app_net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:${ELASTIC_VERSION:-8.15.3}
+    container_name: filebeat
+    user: root
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    volumes:
+      - ../elk/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - filebeat_data:/usr/share/filebeat/data
+    networks:
+      - app_net
+    depends_on:
+      logstash:
+        condition: service_started
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  elastic_data:
+    name: simorgh_elastic_data
+    driver: local
+  filebeat_data:
+    name: simorgh_filebeat_data
+    driver: local

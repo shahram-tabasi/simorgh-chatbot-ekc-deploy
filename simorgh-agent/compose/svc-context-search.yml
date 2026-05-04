@@ -1,0 +1,41 @@
+# =============================================================================
+# CONTEXT-SEARCH - Hybrid (BM25 + kNN) search across logs, project docs,
+# GitLab blobs, TPMS rows, and prior CoT transcripts. Provides the
+# "high-quality context" block used by the LLM prompt assembler.
+# =============================================================================
+services:
+  context-search:
+    build:
+      context: ..
+      dockerfile: context-search-service/Dockerfile
+    image: simorgh-context-search:local
+    container_name: context-search
+    expose:
+      - "8049"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - ELASTIC_USER=${ELASTIC_USER:-elastic}
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - EMBEDDINGS_URL=${EMBEDDINGS_URL:-http://embeddings:8037}
+      - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
+      - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8049/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

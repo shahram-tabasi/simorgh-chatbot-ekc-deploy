@@ -1,0 +1,47 @@
+# =============================================================================
+# MAIL-BRIDGE - Thin gateway between Mailcow and the simorgh stack.
+# Replaces mail-gateway-service (custom aiosmtpd) and project-mail-service
+# (scaffold IMAP poller). Uses IMAP IDLE on the simorghai@... mailbox to
+# stream new messages → backend webhook, and exposes a REST send endpoint
+# that submits via Mailcow's SMTP submission port (587).
+# =============================================================================
+services:
+  mail-bridge:
+    build:
+      context: ..
+      dockerfile: mail-bridge/Dockerfile
+    image: simorgh-mail-bridge:local
+    container_name: mail-bridge
+    expose:
+      - "8051"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Mailcow endpoints (resolved on simorgh_app_net once the operator
+      # joins the mailcow containers — see compose/infra-mailcow.yml).
+      - IMAP_HOST=${IMAP_HOST:-dovecot-mailcow}
+      - IMAP_PORT=${IMAP_PORT:-143}
+      - IMAP_USE_STARTTLS=${IMAP_USE_STARTTLS:-true}
+      - SMTP_HOST=${SMTP_HOST:-postfix-mailcow}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USE_STARTTLS=${SMTP_USE_STARTTLS:-true}
+      - MAILBOX_USER=${MAILBOX_USER:-simorghai@electrokavir.com}
+      - MAILBOX_PASSWORD=${MAILBOX_PASSWORD:?set MAILBOX_PASSWORD in .env}
+      - MAILBOX_FOLDER=${MAILBOX_FOLDER:-INBOX}
+      - WEBHOOK_URL=${MAIL_WEBHOOK_URL:-http://backend:8890/api/v2/agent/email-webhook}
+      - WEBHOOK_TOKEN=${MAIL_WEBHOOK_TOKEN:-}
+      - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
+      - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8051/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
