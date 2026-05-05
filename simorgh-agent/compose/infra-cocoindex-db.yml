@@ -4,7 +4,7 @@
 # =============================================================================
 services:
   cocoindex_db:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-pgvector:pg17
+    image: pgvector/pgvector:pg17
     container_name: cocoindex_db
     restart: unless-stopped
     environment:

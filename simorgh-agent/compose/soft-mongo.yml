@@ -3,7 +3,7 @@
 # =============================================================================
 services:
   simorgh-soft-mongo:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-mongo:7
+    image: mongo:7
     container_name: simorgh-soft-mongo
     expose:
       - "27017"

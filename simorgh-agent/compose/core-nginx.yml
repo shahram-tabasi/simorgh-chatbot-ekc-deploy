@@ -5,7 +5,7 @@
 # =============================================================================
 services:
   nginx:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-nginx:alpine
+    image: nginx:alpine
     container_name: nginx
     depends_on:
       backend:

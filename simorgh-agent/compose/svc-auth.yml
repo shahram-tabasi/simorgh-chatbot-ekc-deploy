@@ -35,7 +35,7 @@ services:
       - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
       - FROM_EMAIL=${FROM_EMAIL:-noreply@simorgh.ai}
       - FROM_NAME=${FROM_NAME:-Simorgh AI}
-      - RESEND_API_KEY=${RESEND_API_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
       - AUTO_VERIFY_EMAIL=${AUTO_VERIFY_EMAIL:-false}
       - FRONTEND_URL=${FRONTEND_URL:-https://simorghai.electrokavir.com/chatbot}
       - SECURE_COOKIES=${SECURE_COOKIES:-true}

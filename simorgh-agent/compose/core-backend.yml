@@ -25,11 +25,11 @@ services:
       # Qdrant
       - QDRANT_URL=http://qdrant:6333
       # SQL Server (legacy auth, external)
-      - SQL_SERVER_HOST=${SQL_SERVER_HOST}
+      - SQL_SERVER_HOST=${SQL_SERVER_HOST:-}
       - SQL_SERVER_PORT=${SQL_SERVER_PORT:-1433}
-      - SQL_SERVER_USER=${SQL_SERVER_USER}
-      - SQL_SERVER_PASSWORD=${SQL_SERVER_PASSWORD}
-      - SQL_SERVER_DATABASE=${SQL_SERVER_DATABASE}
+      - SQL_SERVER_USER=${SQL_SERVER_USER:-}
+      - SQL_SERVER_PASSWORD=${SQL_SERVER_PASSWORD:-}
+      - SQL_SERVER_DATABASE=${SQL_SERVER_DATABASE:-}
       # MySQL TPMS (legacy, external)
       - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
       - MYSQL_PORT=${MYSQL_PORT:-3306}
@@ -64,7 +64,7 @@ services:
       - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
       - FROM_EMAIL=${FROM_EMAIL:-noreply@simorgh.ai}
       - FROM_NAME=${FROM_NAME:-Simorgh AI}
-      - RESEND_API_KEY=${RESEND_API_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
       - AUTO_VERIFY_EMAIL=${AUTO_VERIFY_EMAIL:-false}
       # Frontend URL (verification/reset links)
       - FRONTEND_URL=${FRONTEND_URL:-https://simorghai.electrokavir.com/chatbot}
@@ -72,10 +72,10 @@ services:
       - SECURE_COOKIES=${SECURE_COOKIES:-true}
       - COOKIE_DOMAIN=${COOKIE_DOMAIN}
       # Tiers / Admin
-      - ADMIN_SETUP_SECRET=${ADMIN_SETUP_SECRET}
+      - ADMIN_SETUP_SECRET=${ADMIN_SETUP_SECRET:-}
       # NOWPayments
-      - NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY}
-      - NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET}
+      - NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY:-}
+      - NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET:-}
       - NOWPAYMENTS_SANDBOX=${NOWPAYMENTS_SANDBOX:-false}
       # 2026-05 enterprise migration:
       #   shell-service @ 192.168.1.69  → runtime-broker (ephemeral docker)
@@ -109,7 +109,7 @@ services:
       # Techserver SMB
       - TECHSERVER_IP=${TECHSERVER_IP:-192.168.1.3}
       - TECHSERVER_USER=${TECHSERVER_USER:-EKC\tech}
-      - TECHSERVER_PASSWORD=${TECHSERVER_PASSWORD}
+      - TECHSERVER_PASSWORD=${TECHSERVER_PASSWORD:-}
     volumes:
       - ../uploads:/app/uploads
       - ../logs:/app/logs

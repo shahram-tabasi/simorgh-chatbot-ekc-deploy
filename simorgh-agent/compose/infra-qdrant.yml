@@ -4,7 +4,7 @@
 # =============================================================================
 services:
   qdrant:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-qdrant:latest
+    image: qdrant/qdrant:v1.12.1
     container_name: qdrant
     expose:
       - "6333"

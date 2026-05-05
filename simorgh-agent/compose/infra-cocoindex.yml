@@ -5,7 +5,7 @@
 # =============================================================================
 services:
   cocoindex:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-python:3.11-bookworm
+    image: python:3.11-bookworm
     container_name: cocoindex
     restart: unless-stopped
     depends_on:

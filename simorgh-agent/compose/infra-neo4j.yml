@@ -4,7 +4,7 @@
 # =============================================================================
 services:
   neo4j:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/mirror-neo4j:5.15.0-community
+    image: neo4j:5.15.0-community
     container_name: neo4j
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-simorgh_secure_2024}
