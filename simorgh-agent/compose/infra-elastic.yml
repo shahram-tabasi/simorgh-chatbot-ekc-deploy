@@ -1,16 +1,12 @@
 # =============================================================================
 # ELK STACK - Elasticsearch + Logstash + Kibana + Filebeat
 #
-# Roles:
-#   • elasticsearch  — log + content + audit indices, hybrid (BM25 + kNN) search
-#                      that backs the context-search-service
-#   • logstash       — pipeline: json over tcp/5044 + filebeat → enrich → ES
-#   • kibana         — admin / observability UI (replaces the custom admin SPA
-#                      for ops dashboards; admin-service still owns user CRUD)
-#   • filebeat       — ships docker container stdout/stderr to logstash
+# Sized for office-scale observability + hybrid search. Defaults assume
+# ~8 GB available to the ELK tier. Override via .env for bigger hosts.
 #
-# Single-node ES with security disabled for first cut. Tighten before prod
-# (see ELASTIC_PASSWORD / xpack.security.enabled).
+# Web UIs (host-exposed):
+#   • Kibana:        http://<host>:${KIBANA_HTTP_PORT:-5601}/
+#   • Elasticsearch: http://<host>:${ELASTIC_HTTP_PORT:-9200}/    (admin/debug)
 # =============================================================================
 services:
   elasticsearch:
@@ -20,15 +16,27 @@ services:
       - discovery.type=single-node
       - bootstrap.memory_lock=true
       - xpack.security.enabled=${ELASTIC_SECURITY_ENABLED:-false}
-      - ES_JAVA_OPTS=-Xms${ELASTIC_HEAP:-1g} -Xmx${ELASTIC_HEAP:-1g}
+      - ES_JAVA_OPTS=-Xms${ELASTIC_HEAP:-4g} -Xmx${ELASTIC_HEAP:-4g}
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+      # Larger circuit breakers + thread pools for office workload.
+      - indices.memory.index_buffer_size=${ELASTIC_INDEX_BUFFER:-15%}
+      - search.max_buckets=${ELASTIC_MAX_BUCKETS:-65536}
+      - thread_pool.write.queue_size=${ELASTIC_WRITE_QUEUE:-1000}
+      - thread_pool.search.queue_size=${ELASTIC_SEARCH_QUEUE:-2000}
     ulimits:
       memlock: { soft: -1, hard: -1 }
       nofile:  { soft: 65536, hard: 65536 }
+    deploy:
+      resources:
+        limits:
+          memory: ${ELASTIC_MEM_LIMIT:-6g}
+        reservations:
+          memory: ${ELASTIC_MEM_RESERVATION:-4g}
     volumes:
       - elastic_data:/usr/share/elasticsearch/data
+    ports:
+      - "${ELASTIC_HTTP_PORT:-9200}:9200"
     expose:
-      - "9200"
       - "9300"
     networks:
       - app_net
@@ -44,16 +52,24 @@ services:
     image: docker.elastic.co/logstash/logstash:${ELASTIC_VERSION:-8.15.3}
     container_name: logstash
     environment:
-      - LS_JAVA_OPTS=-Xms${LOGSTASH_HEAP:-512m} -Xmx${LOGSTASH_HEAP:-512m}
+      - LS_JAVA_OPTS=-Xms${LOGSTASH_HEAP:-1g} -Xmx${LOGSTASH_HEAP:-1g}
+      - PIPELINE_WORKERS=${LOGSTASH_PIPELINE_WORKERS:-4}
+      - PIPELINE_BATCH_SIZE=${LOGSTASH_PIPELINE_BATCH:-500}
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
       - ELASTIC_USER=elastic
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+    deploy:
+      resources:
+        limits:
+          memory: ${LOGSTASH_MEM_LIMIT:-1500m}
+        reservations:
+          memory: ${LOGSTASH_MEM_RESERVATION:-1g}
     volumes:
       - ../elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
       - ../elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
     expose:
       - "5044"     # beats input
-      - "5045"     # tcp json input (services ship structured logs here)
+      - "5045"     # tcp json input
     networks:
       - app_net
     depends_on:
@@ -67,10 +83,16 @@ services:
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
       - SERVER_PUBLICBASEURL=${KIBANA_PUBLIC_URL:-http://kibana.simorgh.local}
-      # Auth deferred to upstream nginx + SSO; disable Kibana's own login.
       - XPACK_SECURITY_ENABLED=${ELASTIC_SECURITY_ENABLED:-false}
-    expose:
-      - "5601"
+      - NODE_OPTIONS=--max-old-space-size=${KIBANA_NODE_HEAP_MB:-1500}
+    deploy:
+      resources:
+        limits:
+          memory: ${KIBANA_MEM_LIMIT:-2g}
+        reservations:
+          memory: ${KIBANA_MEM_RESERVATION:-1g}
+    ports:
+      - "${KIBANA_HTTP_PORT:-5601}:5601"
     networks:
       - app_net
     depends_on:
@@ -89,6 +111,10 @@ services:
     container_name: filebeat
     user: root
     command: ["filebeat", "-e", "--strict.perms=false"]
+    deploy:
+      resources:
+        limits:
+          memory: ${FILEBEAT_MEM_LIMIT:-300m}
     volumes:
       - ../elk/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro

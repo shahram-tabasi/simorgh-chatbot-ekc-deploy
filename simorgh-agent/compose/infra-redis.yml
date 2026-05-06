@@ -1,17 +1,50 @@
 # =============================================================================
 # REDIS - Caching & Session Store
-# Used by: backend (cache, sessions, chat history, agent DB)
+# Used by: backend, chat-service, project-agent, tpms-context-agent, …
+#
+# Tuned for office-scale (~200 users). 2 GB cache + AOF persistence is
+# comfortable. Override REDIS_* in .env to change.
 # =============================================================================
 services:
   redis:
     image: redis:7.2-alpine
     container_name: redis
-    command: >
-      redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1 --save 300 10
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+      - "--maxmemory"
+      - "${REDIS_MAXMEMORY:-2gb}"
+      - "--maxmemory-policy"
+      - "${REDIS_MAXMEMORY_POLICY:-allkeys-lru}"
+      - "--save"
+      - "60 1"
+      - "--save"
+      - "300 10"
+      - "--tcp-keepalive"
+      - "300"
+      - "--tcp-backlog"
+      - "511"
+      - "--timeout"
+      - "0"
+      - "--io-threads"
+      - "${REDIS_IO_THREADS:-4}"
+    sysctls:
+      net.core.somaxconn: 1024
     volumes:
       - redis_data:/data
-    expose:
-      - "6379"
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEM_LIMIT:-2500m}
+        reservations:
+          memory: ${REDIS_MEM_RESERVATION:-1g}
+    ports:
+      # Optional LAN access for redis-cli / RedisInsight. Comment out if
+      # you want it strictly internal.
+      - "${REDIS_HTTP_PORT:-6380}:6379"
     networks:
       - app_net
     healthcheck:

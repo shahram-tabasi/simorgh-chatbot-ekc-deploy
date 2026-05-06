@@ -1,20 +1,42 @@
 # =============================================================================
 # QDRANT - Vector Database (semantic search, document RAG)
-# Used by: backend (qdrant_service.py)
+# Used by: documents-rag, context-search, embeddings indexing.
+#
+# Tuned for ~200 users with active RAG. Override QDRANT_* in .env.
+# Web UI dashboard:  http://<host>:${QDRANT_HTTP_PORT:-6333}/dashboard
 # =============================================================================
 services:
   qdrant:
     image: qdrant/qdrant:v1.12.1
     container_name: qdrant
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=${QDRANT_MAX_REQUEST_MB:-64}
+      - QDRANT__SERVICE__MAX_WORKERS=${QDRANT_MAX_WORKERS:-0}   # 0 = auto (1 per CPU)
+      - QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=${QDRANT_MAX_SEARCH_THREADS:-0}
+      - QDRANT__STORAGE__OPTIMIZERS__INDEXING_THRESHOLD=${QDRANT_INDEX_THRESHOLD:-20000}
+      - QDRANT__LOG_LEVEL=${QDRANT_LOG_LEVEL:-INFO}
+    deploy:
+      resources:
+        limits:
+          memory: ${QDRANT_MEM_LIMIT:-3g}
+        reservations:
+          memory: ${QDRANT_MEM_RESERVATION:-1g}
+    ports:
+      # REST + dashboard
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
     expose:
-      - "6333"
-      - "6334"
+      - "6334"          # gRPC, internal only
     volumes:
       - qdrant_storage:/qdrant/storage
     networks:
       - app_net
-    environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6333/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
 networks:

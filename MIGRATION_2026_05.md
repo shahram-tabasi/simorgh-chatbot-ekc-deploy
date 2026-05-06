@@ -147,3 +147,59 @@ spread across `.env`. A follow-up should add a single
 `simorgh.config.yaml` with sections for `runtime`, `mail`, `search`, and
 `gitlab`, parsed at service startup. The compose env-var pattern remains
 the source of truth for now.
+
+## Capacity targets (office-scale)
+
+Defaults are sized for ~50–200 concurrent users on a single .68 host with
+~32 GB RAM and ~8 vCPU. All knobs are env-tunable in `.env`:
+
+| Component | Heap / cache | RAM limit | Notes |
+| --- | --- | --- | --- |
+| GitLab CE (puma + sidekiq + bundled pg/redis) | 4 puma workers, 25 sidekiq, pg shared_buffers=1G | 12 GB | `GITLAB_PUMA_WORKERS`, `GITLAB_SIDEKIQ_CONCURRENCY`, `GITLAB_PG_*`, `GITLAB_MEM_LIMIT` |
+| Elasticsearch | 4 GB heap | 6 GB | `ELASTIC_HEAP`, `ELASTIC_MEM_LIMIT` |
+| Logstash | 1 GB heap, 4 pipeline workers | 1.5 GB | `LOGSTASH_HEAP`, `LOGSTASH_PIPELINE_WORKERS` |
+| Kibana | 1.5 GB node heap | 2 GB | `KIBANA_NODE_HEAP_MB`, `KIBANA_MEM_LIMIT` |
+| Postgres (auth) | shared_buffers=1G, max_connections=300 | 3 GB | `POSTGRES_AUTH_*` |
+| Redis | maxmemory=2GB, 4 IO threads | 2.5 GB | `REDIS_MAXMEMORY`, `REDIS_IO_THREADS` |
+| Qdrant | auto workers | 3 GB | `QDRANT_MEM_LIMIT` |
+| runtime-broker | 4 uvicorn workers, 32 concurrent tasks | 1 GB + 1 GB / task | `BROKER_WORKERS`, `BROKER_MAX_CONCURRENT`, `BROKER_MEM_LIMIT` |
+| gitlab-mcp | 4 uvicorn workers | 512 MB | `GITLAB_MCP_WORKERS` |
+| context-search | 4 uvicorn workers | 1 GB | `CONTEXT_SEARCH_WORKERS` |
+
+**Total static footprint (everything from the table above):** ~32 GB.
+Scale `*_MEM_LIMIT` and `*_HEAP` down on smaller hosts.
+
+## Web UIs (host-exposed ports)
+
+| Component | URL | Default port | env var |
+| --- | --- | --- | --- |
+| **GitLab CE** | http://`<host>`:8929/ | 8929 | `GITLAB_HTTP_PORT` |
+| GitLab SSH (git push/pull) | ssh://git@`<host>`:2222 | 2222 | `GITLAB_SSH_PORT` |
+| **Kibana** (admin / observability) | http://`<host>`:5601/ | 5601 | `KIBANA_HTTP_PORT` |
+| Elasticsearch (admin / debug) | http://`<host>`:9200/ | 9200 | `ELASTIC_HTTP_PORT` |
+| Qdrant dashboard | http://`<host>`:6333/dashboard | 6333 | `QDRANT_HTTP_PORT` |
+| Postgres (psql / pgAdmin) | tcp://`<host>`:5433 | 5433 | `POSTGRES_AUTH_HTTP_PORT` |
+| Redis (redis-cli / RedisInsight) | tcp://`<host>`:6380 | 6380 | `REDIS_HTTP_PORT` |
+| gitlab-mcp REST | http://`<host>`:8047/ | 8047 | `GITLAB_MCP_HTTP_PORT` |
+| context-search REST | http://`<host>`:8049/ | 8049 | `CONTEXT_SEARCH_HTTP_PORT` |
+
+> The simorgh frontend / backend / admin UI are still served via the host
+> nginx as before (no change). The ports above are for **operations** —
+> generating the GitLab API token, viewing logs in Kibana, debugging
+> indices in ES, etc.
+
+## How to get a GitLab API token (the one missing from .env)
+
+1. Open `http://<host>:8929/` (or `http://gitlab.simorgh.local:8929/` if
+   you've added that name to DNS / hosts).
+2. Sign in: username `root`, password = `${GITLAB_ROOT_PASSWORD}`.
+3. Top-right avatar → **Edit profile** → **Access Tokens**.
+4. Name: `simorgh-agent`, scopes: `api`, expires: empty (or far future).
+5. Copy the `glpat-…` value.
+6. Put it in `.env`:
+   ```
+   GITLAB_API_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+   ```
+7. Create the two groups via the UI (`+` → **New group**):
+   `simorgh-projects`, `simorgh-knowledge`.
+8. `docker compose up -d gitlab-mcp` (or `up -d` for the rest).

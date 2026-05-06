@@ -1,6 +1,9 @@
 # =============================================================================
 # POSTGRES AUTH - Modern authentication, projects, tasks, messages
 # Migrations: backend/database/migrations/*.sql (auto-loaded on first start)
+#
+# Tuned for office-scale workload (~200 concurrent users). Override the
+# POSTGRES_AUTH_* knobs in .env to scale up/down.
 # =============================================================================
 services:
   postgres_auth:
@@ -11,14 +14,49 @@ services:
       - POSTGRES_USER=${POSTGRES_AUTH_USER:-simorgh}
       - POSTGRES_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
       - POSTGRES_DB=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=${POSTGRES_AUTH_MAX_CONNECTIONS:-300}"
+      - "-c"
+      - "shared_buffers=${POSTGRES_AUTH_SHARED_BUFFERS:-1GB}"
+      - "-c"
+      - "effective_cache_size=${POSTGRES_AUTH_EFFECTIVE_CACHE:-3GB}"
+      - "-c"
+      - "work_mem=${POSTGRES_AUTH_WORK_MEM:-16MB}"
+      - "-c"
+      - "maintenance_work_mem=${POSTGRES_AUTH_MAINT_WORK_MEM:-256MB}"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "random_page_cost=1.1"            # SSD assumed
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "max_worker_processes=${POSTGRES_AUTH_MAX_WORKERS:-8}"
+      - "-c"
+      - "max_parallel_workers=${POSTGRES_AUTH_MAX_PARALLEL:-8}"
+      - "-c"
+      - "max_parallel_workers_per_gather=4"
     volumes:
       - postgres_auth_data:/var/lib/postgresql/data
       - ../backend/database/migrations/001_create_auth_tables.sql:/docker-entrypoint-initdb.d/001_create_auth_tables.sql:ro
       - ../backend/database/migrations/003_project_agent_system.sql:/docker-entrypoint-initdb.d/003_project_agent_system.sql:ro
-    expose:
-      - "5432"
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_AUTH_MEM_LIMIT:-3g}
+        reservations:
+          memory: ${POSTGRES_AUTH_MEM_RESERVATION:-1g}
+    ports:
+      # Optional host exposure for psql / pgAdmin from the LAN. Comment out
+      # if you want it strictly internal.
+      - "${POSTGRES_AUTH_HTTP_PORT:-5433}:5432"
     networks:
       - app_net
+    shm_size: "${POSTGRES_AUTH_SHM_SIZE:-256m}"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_AUTH_USER:-simorgh} -d ${POSTGRES_AUTH_DATABASE:-simorgh_auth}"]
       interval: 5s

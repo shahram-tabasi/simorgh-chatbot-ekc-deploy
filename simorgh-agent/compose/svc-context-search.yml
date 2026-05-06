@@ -10,8 +10,10 @@ services:
       dockerfile: context-search-service/Dockerfile
     image: simorgh-context-search:local
     container_name: context-search
-    expose:
-      - "8049"
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8049",
+              "--workers", "${CONTEXT_SEARCH_WORKERS:-4}"]
+    ports:
+      - "${CONTEXT_SEARCH_HTTP_PORT:-8049}:8049"
     networks:
       - app_net
     environment:
@@ -24,6 +26,10 @@ services:
       - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+    deploy:
+      resources:
+        limits:
+          memory: ${CONTEXT_SEARCH_MEM_LIMIT:-1g}
     depends_on:
       elasticsearch:
         condition: service_healthy
