@@ -13,11 +13,20 @@ services:
     hostname: ${GITLAB_HOSTNAME:-gitlab.simorgh.local}
     restart: unless-stopped
     environment:
-      # Use the public URL the operator configured. external_url MUST include
-      # the same port the host binds to, otherwise generated links (clone,
-      # MR, OAuth callback) point to the wrong endpoint.
+      # external_url tells GitLab how to compose links (clone URLs, MR
+      # references, OAuth callbacks). It MUST match what users type in the
+      # browser — including the host port — or links break.
+      #
+      # nginx['listen_port'] = 80 forces the in-container nginx to listen
+      # on 80 regardless of what's in external_url, so the docker port
+      # mapping host:${GITLAB_HTTP_PORT} → container:80 actually works.
+      # Without this line, omnibus binds nginx to the URL's port (8929)
+      # inside the container, which is NOT what the compose mapping
+      # targets, and every host request gets a TCP RST.
       GITLAB_OMNIBUS_CONFIG: |
         external_url '${GITLAB_EXTERNAL_URL:-http://gitlab.simorgh.local:8929}'
+        nginx['listen_port']                     = 80
+        nginx['listen_https']                    = false
         gitlab_rails['initial_root_password']    = ENV['GITLAB_ROOT_PASSWORD']
         gitlab_rails['gitlab_shell_ssh_port']    = ${GITLAB_SSH_PORT:-2222}
         gitlab_rails['time_zone']                = '${TZ:-UTC}'
