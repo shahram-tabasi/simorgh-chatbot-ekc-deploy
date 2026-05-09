@@ -1,0 +1,296 @@
+name: Pull base images for air-gapped install
+
+# For air-gapped deployments (e.g. .68 with no public internet, only Squid +
+# Nexus). This workflow pulls every base image used by the simorgh stack,
+# `docker save`s each into a gzipped tarball, and uploads them as
+# downloadable artifacts.
+#
+# After the run finishes:
+#   1. On a workstation with GitHub access, open the run → Artifacts → download
+#      each *.tar.gz.
+#   2. Transfer the files to the .68 host (scp / USB / however).
+#   3. On .68, load them into the local Docker daemon:
+#        docker load < base-images-small.tar.gz
+#        docker load < base-images-pytorch.tar.gz
+#        docker load < base-images-gitlab.tar.gz
+#        docker load < base-images-elastic.tar.gz
+#   4. Verify:  docker images | grep -E 'python|node|pytorch|gitlab|elastic'
+#   5. Now `docker compose build` works without pulling — base images are
+#      already on the daemon.
+#
+# Trigger: manual via workflow_dispatch (Actions tab → Run workflow).
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_pytorch:
+        description: "Include the 3.3 GB pytorch CUDA image?"
+        type: boolean
+        default: true
+      include_gitlab:
+        description: "Include the 3.5 GB gitlab-ce image?"
+        type: boolean
+        default: true
+      include_elastic:
+        description: "Include the ELK stack images?"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # =============================================================================
+  # Small Dockerfile base images + light infra (under ~2 GB combined)
+  # =============================================================================
+  small-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Free up runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Pull small base images
+        run: |
+          set -euo pipefail
+          IMAGES=(
+            python:3.11-slim
+            python:3.11-slim-bookworm
+            python:3.12-slim
+            node:20-alpine
+            node:20-alpine3.19
+            nginx:alpine3.18
+            redis:7.2-alpine
+            postgres:16-alpine
+            qdrant/qdrant:v1.12.1
+            alpine:3.20
+            ubuntu:22.04
+            docker.elastic.co/beats/filebeat:8.15.3
+          )
+          for img in "${IMAGES[@]}"; do
+            echo "==> pulling $img"
+            for attempt in 1 2 3; do
+              docker pull "$img" && break
+              echo "   retry $attempt for $img in 10s..."
+              sleep 10
+            done
+          done
+          docker images
+
+      - name: Save and compress
+        run: |
+          set -euo pipefail
+          docker save \
+            python:3.11-slim \
+            python:3.11-slim-bookworm \
+            python:3.12-slim \
+            node:20-alpine \
+            node:20-alpine3.19 \
+            nginx:alpine3.18 \
+            redis:7.2-alpine \
+            postgres:16-alpine \
+            qdrant/qdrant:v1.12.1 \
+            alpine:3.20 \
+            ubuntu:22.04 \
+            docker.elastic.co/beats/filebeat:8.15.3 \
+          | gzip -1 > base-images-small.tar.gz
+          ls -lh base-images-small.tar.gz
+          sha256sum base-images-small.tar.gz | tee base-images-small.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-images-small
+          path: |
+            base-images-small.tar.gz
+            base-images-small.tar.gz.sha256
+          retention-days: 7
+          compression-level: 0   # already gzipped; don't double-compress
+
+  # =============================================================================
+  # PyTorch CUDA base image (~3.3 GB compressed → ~7 GB tar)
+  # Isolated job because of size + optional via input flag.
+  # =============================================================================
+  pytorch-image:
+    if: ${{ inputs.include_pytorch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Free up runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Pull pytorch image
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            docker pull pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime && break
+            echo "retry $attempt in 30s..."
+            sleep 30
+          done
+          docker images pytorch/pytorch
+
+      - name: Save and compress
+        run: |
+          set -euo pipefail
+          docker save pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime \
+            | gzip -1 > base-images-pytorch.tar.gz
+          ls -lh base-images-pytorch.tar.gz
+          sha256sum base-images-pytorch.tar.gz | tee base-images-pytorch.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-images-pytorch
+          path: |
+            base-images-pytorch.tar.gz
+            base-images-pytorch.tar.gz.sha256
+          retention-days: 7
+          compression-level: 0
+
+  # =============================================================================
+  # GitLab CE (~3.5 GB compressed)
+  # =============================================================================
+  gitlab-image:
+    if: ${{ inputs.include_gitlab }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Free up runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Pull gitlab image
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            docker pull gitlab/gitlab-ce:17.5.1-ce.0 && break
+            echo "retry $attempt in 30s..."
+            sleep 30
+          done
+          docker images gitlab/gitlab-ce
+
+      - name: Save and compress
+        run: |
+          set -euo pipefail
+          docker save gitlab/gitlab-ce:17.5.1-ce.0 \
+            | gzip -1 > base-images-gitlab.tar.gz
+          ls -lh base-images-gitlab.tar.gz
+          sha256sum base-images-gitlab.tar.gz | tee base-images-gitlab.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-images-gitlab
+          path: |
+            base-images-gitlab.tar.gz
+            base-images-gitlab.tar.gz.sha256
+          retention-days: 7
+          compression-level: 0
+
+  # =============================================================================
+  # ELK stack + mongo (combined ~4 GB compressed → ~9 GB tar)
+  # =============================================================================
+  elastic-and-mongo-images:
+    if: ${{ inputs.include_elastic }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Free up runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Pull ELK + mongo images
+        run: |
+          set -euo pipefail
+          IMAGES=(
+            docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+            docker.elastic.co/logstash/logstash:8.15.3
+            docker.elastic.co/kibana/kibana:8.15.3
+            mongo:7
+          )
+          for img in "${IMAGES[@]}"; do
+            echo "==> pulling $img"
+            for attempt in 1 2 3; do
+              docker pull "$img" && break
+              echo "   retry $attempt for $img in 30s..."
+              sleep 30
+            done
+          done
+          docker images
+
+      - name: Save and compress
+        run: |
+          set -euo pipefail
+          docker save \
+            docker.elastic.co/elasticsearch/elasticsearch:8.15.3 \
+            docker.elastic.co/logstash/logstash:8.15.3 \
+            docker.elastic.co/kibana/kibana:8.15.3 \
+            mongo:7 \
+          | gzip -1 > base-images-elastic.tar.gz
+          ls -lh base-images-elastic.tar.gz
+          sha256sum base-images-elastic.tar.gz | tee base-images-elastic.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-images-elastic
+          path: |
+            base-images-elastic.tar.gz
+            base-images-elastic.tar.gz.sha256
+          retention-days: 7
+          compression-level: 0
+
+  # =============================================================================
+  # Summary job — prints final per-artifact sizes for the workflow log.
+  # =============================================================================
+  summary:
+    runs-on: ubuntu-latest
+    needs: [small-images, pytorch-image, gitlab-image, elastic-and-mongo-images]
+    if: always()
+    steps:
+      - name: Print download instructions
+        run: |
+          cat <<'EOF'
+          ============================================================
+          Air-gapped install instructions for .68
+          ============================================================
+          1. Open this workflow run in the Actions tab.
+          2. Scroll to "Artifacts" at the bottom.
+          3. Download:
+                base-images-small.tar.gz       (~2 GB)
+                base-images-pytorch.tar.gz     (~3 GB) — optional
+                base-images-gitlab.tar.gz      (~3 GB) — optional
+                base-images-elastic.tar.gz     (~4 GB) — optional
+          4. Transfer to .68 (scp, USB, whatever):
+                scp *.tar.gz  ubuntu@192.168.1.68:/tmp/
+          5. On .68, load into the local docker daemon:
+                cd /tmp
+                for f in base-images-*.tar.gz; do
+                  echo "loading $f"
+                  docker load < "$f"
+                done
+          6. Verify:
+                docker images | grep -E \\
+                  'python|node|pytorch|gitlab|elastic|kibana|logstash|filebeat|qdrant|mongo|nginx|redis|postgres|alpine|ubuntu'
+          7. Now `docker compose build` will use the local cache —
+             no Squid / Nexus pulls of big base images needed.
+          ============================================================
+          EOF
