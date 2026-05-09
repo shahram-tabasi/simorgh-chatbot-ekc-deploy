@@ -1,0 +1,183 @@
+name: Pull PyTorch image only
+
+# Focused workflow: pulls ONLY pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime,
+# splits the resulting tarball into <2 GB chunks (so each fits comfortably
+# under GitHub Actions' 2 GB per-artifact upload sweet spot), and uploads
+# each chunk as a separate artifact.
+#
+# Use this if you just need the pytorch base image and don't want to run
+# the full pull-base-images workflow.
+#
+# After it finishes:
+#   1. Download every artifact (pytorch-part-NN) from the Actions run.
+#   2. scp them to .68:
+#        scp pytorch-part-*.tar.gz.* ubuntu@192.168.1.68:/tmp/
+#   3. Reassemble + load:
+#        cat /tmp/pytorch-part-*.tar.gz.* > /tmp/pytorch.tar.gz
+#        sha256sum -c /tmp/pytorch.sha256
+#        docker load < /tmp/pytorch.tar.gz
+#   4. Verify:
+#        docker images pytorch/pytorch
+#
+# Trigger: manual via workflow_dispatch (Actions tab → Run workflow).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "PyTorch image tag"
+        type: string
+        default: "2.5.0-cuda12.4-cudnn9-runtime"
+      chunk_size_mb:
+        description: "Chunk size in MB (each artifact)"
+        type: string
+        default: "1900"
+
+permissions:
+  contents: read
+
+jobs:
+  pull-pytorch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Free up runner disk
+        run: |
+          set -eu
+          # Removes ~30 GB of preinstalled SDKs / toolchains we don't need.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h /
+
+      - name: Pull pytorch/pytorch:${{ inputs.tag }}
+        run: |
+          set -eu
+          IMG="pytorch/pytorch:${{ inputs.tag }}"
+          for attempt in 1 2 3 4 5; do
+            echo "==> attempt $attempt: docker pull $IMG"
+            docker pull "$IMG" && break
+            echo "    failed; sleeping 30s"
+            sleep 30
+          done
+          docker images pytorch/pytorch
+          df -h /
+
+      - name: Save image as gzipped tar
+        run: |
+          set -eu
+          IMG="pytorch/pytorch:${{ inputs.tag }}"
+          docker save "$IMG" | gzip -1 > pytorch.tar.gz
+          ls -lh pytorch.tar.gz
+          sha256sum pytorch.tar.gz | tee pytorch.sha256
+
+      - name: Split into chunks
+        id: split
+        run: |
+          set -eu
+          # `split` understands MB suffix; `1900M` ≈ 1.86 GiB which is
+          # comfortably under the 2 GiB GitHub artifact-per-file practical
+          # ceiling on free runners.
+          CHUNK="${{ inputs.chunk_size_mb }}M"
+          split -b "$CHUNK" -d -a 2 pytorch.tar.gz pytorch-part-
+          ls -lh pytorch-part-*
+          # Sanity: cat-back hash must match the original.
+          cat pytorch-part-* | sha256sum
+
+          # Generate per-chunk sha256 for download integrity.
+          for f in pytorch-part-*; do
+            sha256sum "$f" >> pytorch.parts.sha256
+          done
+          cat pytorch.parts.sha256
+
+          # Expose the list so subsequent jobs / steps know how many parts.
+          echo "parts=$(ls pytorch-part-* | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Print reassembly instructions
+        run: |
+          cat <<'EOF'
+          ===========================================================
+          To use these artifacts on the air-gapped host (.68):
+
+            1. Download every artifact named "pytorch-part-NN" plus
+               "pytorch-checksums" from this Actions run.
+            2. Each artifact is a zip containing one chunk file. After
+               extracting, you should have files:
+                   pytorch-part-00
+                   pytorch-part-01
+                   ...
+                   pytorch.sha256
+                   pytorch.parts.sha256
+            3. Verify per-chunk integrity:
+                   sha256sum -c pytorch.parts.sha256
+            4. Reassemble:
+                   cat pytorch-part-* > pytorch.tar.gz
+            5. Verify whole-file integrity:
+                   sha256sum -c pytorch.sha256
+            6. Load into Docker:
+                   docker load < pytorch.tar.gz
+            7. Check:
+                   docker images pytorch/pytorch
+          ===========================================================
+          EOF
+
+      # Upload each chunk as its own artifact. Looping with a matrix isn't
+      # ergonomic for an unknown number of chunks, so we use a single
+      # bash-driven matrix. Maximum reasonable chunks for pytorch ~7 GB is
+      # 4-5 at 1900M each.
+      - name: Upload chunk 00
+        if: ${{ hashFiles('pytorch-part-00') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytorch-part-00
+          path: pytorch-part-00
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload chunk 01
+        if: ${{ hashFiles('pytorch-part-01') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytorch-part-01
+          path: pytorch-part-01
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload chunk 02
+        if: ${{ hashFiles('pytorch-part-02') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytorch-part-02
+          path: pytorch-part-02
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload chunk 03
+        if: ${{ hashFiles('pytorch-part-03') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytorch-part-03
+          path: pytorch-part-03
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload chunk 04
+        if: ${{ hashFiles('pytorch-part-04') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytorch-part-04
+          path: pytorch-part-04
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytorch-checksums
+          path: |
+            pytorch.sha256
+            pytorch.parts.sha256
+          retention-days: 7
