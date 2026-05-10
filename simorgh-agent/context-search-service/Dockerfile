@@ -6,10 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY context-search-service/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout 180 --retries 10 -r requirements.txt
 
 COPY shared/ /opt/shared/
-RUN pip install --no-cache-dir -e /opt/shared/
+RUN pip install --no-cache-dir --timeout 180 --retries 10 -e /opt/shared/
 
 COPY context-search-service/app.py .
 COPY context-search-service/index_setup.py .
