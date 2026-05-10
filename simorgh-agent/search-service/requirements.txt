@@ -1,4 +1,5 @@
-fastapi>=0.104.0
-uvicorn>=0.24.0
-duckduckgo-search>=4.0
-mcp[server]>=1.0.0
+fastapi==0.115.4
+uvicorn[standard]==0.32.0
+duckduckgo-search==6.3.5
+mcp==1.0.0
+pydantic==2.9.2
