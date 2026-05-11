@@ -18,8 +18,6 @@ What we no longer do:
   • Write tpms_project_data.md to a filesystem
   • Clone tech-knowledge — gitlab-mcp serves it on demand
 """
-from __future__ import annotations
-
 import logging
 import os
 import uuid

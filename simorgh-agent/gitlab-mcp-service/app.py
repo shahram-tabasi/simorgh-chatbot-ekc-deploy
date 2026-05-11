@@ -25,8 +25,6 @@ Tools exposed (both REST and MCP):
 The CoT-friendly tools (read-only) are exposed via MCP without auth wrapping;
 the write tools require an X-Agent-Auth header that matches AGENT_TOKEN.
 """
-from __future__ import annotations
-
 import base64
 import os
 from typing import Any

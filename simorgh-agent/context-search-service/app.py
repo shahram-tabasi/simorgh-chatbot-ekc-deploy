@@ -19,8 +19,6 @@ MCP:
   search_past_cot(query, project_id?, k?)
   search_logs(query, time_range?, k?)
 """
-from __future__ import annotations
-
 import os
 from datetime import datetime, timezone
 from typing import Any

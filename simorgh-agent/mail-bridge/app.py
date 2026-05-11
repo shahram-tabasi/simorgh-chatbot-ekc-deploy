@@ -16,8 +16,6 @@ REST:
   POST /send       — outbound mail via Mailcow SMTP
   GET  /health
 """
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import email

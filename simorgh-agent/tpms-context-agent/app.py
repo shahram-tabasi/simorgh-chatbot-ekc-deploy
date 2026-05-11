@@ -11,8 +11,6 @@ Tool:
 Cached in Redis for CONTEXT_TTL_SEC seconds to absorb burst traffic from
 multi-step CoT chains.
 """
-from __future__ import annotations
-
 import json
 import os
 from typing import Any

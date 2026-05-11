@@ -30,8 +30,6 @@ MCP tools:
   run_shell(script, inputs?, timeout?)
   run_node(script, inputs?, timeout?)
 """
-from __future__ import annotations
-
 import io
 import os
 import tarfile
