@@ -132,10 +132,14 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-async def get_project_context(oenum: str, sections: list[str] | None = None,
+async def get_project_context(oenum: str, sections: list = None,
                               refresh: bool = False) -> dict:
-    """Return rendered TPMS context for a project as markdown."""
-    resp = await get_context(ContextRequest(oenum=oenum, sections=sections, refresh=refresh))
+    """Return rendered TPMS context for a project as markdown.
+
+    sections: optional list of section names to filter (empty = all).
+    """
+    resp = await get_context(ContextRequest(
+        oenum=oenum, sections=sections or None, refresh=refresh))
     return resp.model_dump()
 
 

@@ -205,8 +205,11 @@ mcp = FastMCP(
 
 @mcp.tool()
 async def project_init(project_id: str, project_name: str, owner_id: str,
-                       oenum: str | None = None) -> dict:
-    """Initialise a new project. Synchronous (waits for completion)."""
+                       oenum: str = "") -> dict:
+    """Initialise a new project. Synchronous (waits for completion).
+
+    oenum: optional TPMS OENUM for legacy projects (empty string = none).
+    """
     init_id = str(uuid.uuid4())
     _init_status[init_id] = {
         "init_id": init_id, "project_id": project_id,
@@ -214,7 +217,7 @@ async def project_init(project_id: str, project_name: str, owner_id: str,
         "started_at": datetime.now(timezone.utc).isoformat(), "steps": [],
     }
     req = InitRequest(project_id=project_id, project_name=project_name,
-                      owner_id=owner_id, oenum=oenum)
+                      owner_id=owner_id, oenum=oenum or None)
     await _run_init(init_id, req)
     return _init_status[init_id]
 
