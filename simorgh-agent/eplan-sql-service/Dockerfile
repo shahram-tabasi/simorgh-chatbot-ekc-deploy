@@ -5,6 +5,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 # pymssql needs FreeTDS at build + runtime.
+RUN printf '%s\n' 'Acquire::Retries "20";' 'Acquire::http::Timeout "300";' 'Acquire::https::Timeout "300";' 'Acquire::http::No-Cache "true";' > /etc/apt/apt.conf.d/99retries
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         wget curl ca-certificates gcc g++ \
         freetds-dev freetds-bin \

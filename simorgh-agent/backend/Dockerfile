@@ -39,6 +39,17 @@ ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
 RUN rm -f /etc/apt/sources.list.d/cuda* /etc/apt/sources.list.d/nvidia* || true
 
 # -------------------------------------------------
+#  Defensive apt config for slow / flaky upstream proxies
+#  (Squid often disconnects mid-download on large .deb files).
+# -------------------------------------------------
+RUN printf '%s\n' \
+    'Acquire::Retries "20";' \
+    'Acquire::http::Timeout "300";' \
+    'Acquire::https::Timeout "300";' \
+    'Acquire::http::No-Cache "true";' \
+    > /etc/apt/apt.conf.d/99retries
+
+# -------------------------------------------------
 #  Install Python 3.11 (with BuildKit cache)
 # -------------------------------------------------
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

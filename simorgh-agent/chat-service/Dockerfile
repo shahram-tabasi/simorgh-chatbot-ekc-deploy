@@ -6,6 +6,8 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/root/.cache/huggingface \
     SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
 
+RUN printf '%s\n' 'Acquire::Retries "20";' 'Acquire::http::Timeout "300";' 'Acquire::https::Timeout "300";' 'Acquire::http::No-Cache "true";' > /etc/apt/apt.conf.d/99retries
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         wget curl ca-certificates build-essential libpq-dev \
     && rm -rf /var/lib/apt/lists/*
