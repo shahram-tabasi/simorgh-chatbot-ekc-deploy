@@ -1,6 +1,7 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/exports
 COPY requirements.txt .
 RUN pip install --no-cache-dir --timeout 180 --retries 10 -r requirements.txt
