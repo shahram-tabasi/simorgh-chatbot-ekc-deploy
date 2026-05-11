@@ -4,13 +4,21 @@
 # Sized for office-scale observability + hybrid search. Defaults assume
 # ~8 GB available to the ELK tier. Override via .env for bigger hosts.
 #
+# Image source:
+#   ELK images live on docker.elastic.co (NOT Docker Hub) so the
+#   `daemon.json registry-mirrors` setting does NOT cover them. Pull
+#   them through Nexus by setting ELASTIC_REGISTRY in .env to your
+#   Nexus elastic-proxy host (default: 192.168.1.64:5000, matching the
+#   user's existing setup). To bypass Nexus, set
+#   ELASTIC_REGISTRY=docker.elastic.co.
+#
 # Web UIs (host-exposed):
 #   • Kibana:        http://<host>:${KIBANA_HTTP_PORT:-5601}/
 #   • Elasticsearch: http://<host>:${ELASTIC_HTTP_PORT:-9200}/    (admin/debug)
 # =============================================================================
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.15.3}
+    image: ${ELASTIC_REGISTRY:-192.168.1.64:5000}/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.15.3}
     container_name: elasticsearch
     environment:
       - discovery.type=single-node
@@ -49,7 +57,7 @@ services:
     restart: unless-stopped
 
   logstash:
-    image: docker.elastic.co/logstash/logstash:${ELASTIC_VERSION:-8.15.3}
+    image: ${ELASTIC_REGISTRY:-192.168.1.64:5000}/logstash/logstash:${ELASTIC_VERSION:-8.15.3}
     container_name: logstash
     environment:
       - LS_JAVA_OPTS=-Xms${LOGSTASH_HEAP:-1g} -Xmx${LOGSTASH_HEAP:-1g}
@@ -78,7 +86,7 @@ services:
     restart: unless-stopped
 
   kibana:
-    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.15.3}
+    image: ${ELASTIC_REGISTRY:-192.168.1.64:5000}/kibana/kibana:${ELASTIC_VERSION:-8.15.3}
     container_name: kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
@@ -107,7 +115,7 @@ services:
     restart: unless-stopped
 
   filebeat:
-    image: docker.elastic.co/beats/filebeat:${ELASTIC_VERSION:-8.15.3}
+    image: ${ELASTIC_REGISTRY:-192.168.1.64:5000}/beats/filebeat:${ELASTIC_VERSION:-8.15.3}
     container_name: filebeat
     user: root
     command: ["filebeat", "-e", "--strict.perms=false"]
