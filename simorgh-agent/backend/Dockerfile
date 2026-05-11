@@ -92,7 +92,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # -------------------------------------------------
 #  Upgrade pip, setuptools, wheel
 # -------------------------------------------------
-RUN python3.11 -m pip install --upgrade pip setuptools wheel
+RUN python3.11 -m pip install --timeout 180 --retries 10 --upgrade pip setuptools wheel
 
 # -------------------------------------------------
 #  Make python3.11 the default
@@ -121,7 +121,7 @@ COPY requirements.txt .
 # -------------------------------------------------
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "=== Installing Python dependencies ===" && \
-    python3.11 -m pip install -r requirements.txt && \
+    python3.11 -m pip install --timeout 180 --retries 10 -r requirements.txt && \
     echo "=== Python dependencies installed ==="
 
 # -------------------------------------------------

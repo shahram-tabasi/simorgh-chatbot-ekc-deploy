@@ -33,7 +33,7 @@ COPY requirements.txt .
 
 # Use BuildKit cache mount for pip to speed up rebuilds
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --timeout 180 --retries 10 -r requirements.txt
 
 # Copy application code
 COPY main.py .

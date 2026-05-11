@@ -28,7 +28,7 @@ COPY requirements.txt .
 
 # Install Python dependencies (with BuildKit cache)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --timeout 180 --retries 10 -r requirements.txt
 
 # Copy application code
 COPY app.py .
