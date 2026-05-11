@@ -128,4 +128,5 @@ frontend/static/old/
 *.ntvs*
 *.njsproj
 *.sln
-*.sw?
+*.sw?simorgh-agent/.env
+**/.env
