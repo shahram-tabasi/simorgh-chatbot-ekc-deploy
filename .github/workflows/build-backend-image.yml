@@ -1,0 +1,230 @@
+name: Build backend image (air-gapped delivery)
+
+# Builds simorgh-agent/backend on a GitHub-hosted runner, saves it to a
+# gzipped tarball, splits into <2 GB chunks so each fits under GitHub's
+# artifact-per-file ceiling, and uploads as downloadable artifacts. The
+# operator then ferries the artifacts to the air-gapped .68 host and
+# `docker load`s them.
+#
+# Defaults to the `claude/review-codebase-p4gQf` branch — override via
+# the `ref` input.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch / tag / sha)"
+        type: string
+        default: "claude/review-codebase-p4gQf"
+      tag:
+        description: "Image tag to apply"
+        type: string
+        default: "local"
+      chunk_size_mb:
+        description: "Split-chunk size in MB"
+        type: string
+        default: "1900"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240          # backend pulls pytorch base + ~150 MB apt + GBs of pip
+    steps:
+      - name: Checkout ${{ inputs.ref }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Free up runner disk
+        run: |
+          set -eu
+          # Reclaim ~30 GB by removing pre-installed SDKs we don't need.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend (load into local docker)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./simorgh-agent/backend
+          file: ./simorgh-agent/backend/Dockerfile
+          push: false
+          load: true
+          tags: simorgh-backend:${{ inputs.tag }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Show image size + free space
+        run: |
+          docker images simorgh-backend
+          df -h /
+
+      - name: Save + gzip
+        run: |
+          set -eu
+          docker save "simorgh-backend:${{ inputs.tag }}" | gzip -1 > backend.tar.gz
+          ls -lh backend.tar.gz
+          sha256sum backend.tar.gz | tee backend.tar.gz.sha256
+
+      - name: Split into chunks
+        id: chunk
+        run: |
+          set -eu
+          CHUNK="${{ inputs.chunk_size_mb }}M"
+          SIZE=$(stat -c%s backend.tar.gz)
+          MAX_BYTES=$((${{ inputs.chunk_size_mb }} * 1024 * 1024))
+          if [ "$SIZE" -le "$MAX_BYTES" ]; then
+            echo "chunked=false" >> "$GITHUB_OUTPUT"
+            echo "Single file — $(( SIZE / 1024 / 1024 )) MiB, no split needed."
+          else
+            echo "chunked=true" >> "$GITHUB_OUTPUT"
+            echo "Splitting $(( SIZE / 1024 / 1024 )) MiB tarball into ${CHUNK} chunks..."
+            split -b "$CHUNK" -d -a 2 backend.tar.gz backend.tar.gz.part-
+            for f in backend.tar.gz.part-*; do
+              sha256sum "$f" >> backend.parts.sha256
+            done
+            ls -lh backend.tar.gz.part-*
+            rm -f backend.tar.gz   # keep only the split parts to save artifact space
+          fi
+
+      - name: Reassembly instructions (printed in workflow log)
+        run: |
+          cat <<'EOF'
+          ===========================================================
+          To install on the air-gapped host (.68):
+
+           1. Download every artifact named "backend-part-NN" plus
+              "backend-checksums" from this run.
+           2. scp them to .68:
+                scp backend-part-* backend.tar.gz.sha256 \
+                    backend.parts.sha256 ubuntu@192.168.1.68:/tmp/
+           3. On .68:
+                cd /tmp
+                # Verify chunk integrity
+                sha256sum -c backend.parts.sha256
+
+                # Reassemble
+                cat backend.tar.gz.part-* > backend.tar.gz
+
+                # Verify whole-file integrity
+                sha256sum -c backend.tar.gz.sha256
+
+                # Load into Docker
+                docker load < backend.tar.gz
+
+                # Confirm
+                docker images simorgh-backend
+           4. Use it directly (compose already names the image
+              simorgh-backend:local):
+                cd ~/simorgh-chatbot-ekc-deploy/simorgh-agent
+                docker compose up -d backend
+          ===========================================================
+          EOF
+
+      # ---------------- single-file upload (no split) ----------------
+      - name: Upload (single)
+        if: ${{ steps.chunk.outputs.chunked == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image
+          path: |
+            backend.tar.gz
+            backend.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      # ---------------- chunked upload — one artifact per part -------
+      - name: Upload chunk 00
+        if: ${{ steps.chunk.outputs.chunked == 'true' && hashFiles('backend.tar.gz.part-00') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-part-00
+          path: backend.tar.gz.part-00
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload chunk 01
+        if: ${{ steps.chunk.outputs.chunked == 'true' && hashFiles('backend.tar.gz.part-01') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-part-01
+          path: backend.tar.gz.part-01
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload chunk 02
+        if: ${{ steps.chunk.outputs.chunked == 'true' && hashFiles('backend.tar.gz.part-02') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-part-02
+          path: backend.tar.gz.part-02
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload chunk 03
+        if: ${{ steps.chunk.outputs.chunked == 'true' && hashFiles('backend.tar.gz.part-03') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-part-03
+          path: backend.tar.gz.part-03
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload chunk 04
+        if: ${{ steps.chunk.outputs.chunked == 'true' && hashFiles('backend.tar.gz.part-04') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-part-04
+          path: backend.tar.gz.part-04
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload chunk 05
+        if: ${{ steps.chunk.outputs.chunked == 'true' && hashFiles('backend.tar.gz.part-05') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-part-05
+          path: backend.tar.gz.part-05
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload chunk 06
+        if: ${{ steps.chunk.outputs.chunked == 'true' && hashFiles('backend.tar.gz.part-06') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-part-06
+          path: backend.tar.gz.part-06
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload chunk 07
+        if: ${{ steps.chunk.outputs.chunked == 'true' && hashFiles('backend.tar.gz.part-07') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-part-07
+          path: backend.tar.gz.part-07
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload checksums (chunked)
+        if: ${{ steps.chunk.outputs.chunked == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-checksums
+          path: |
+            backend.tar.gz.sha256
+            backend.parts.sha256
+          retention-days: 14
