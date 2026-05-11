@@ -30,7 +30,7 @@ import os
 from typing import Any
 
 import gitlab
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
@@ -138,7 +138,7 @@ def read_file(project: str, path: str, ref: str = DEFAULT_REF):
 
 
 @app.get("/search")
-def search(query: str = Field(..., min_length=1), project: str | None = None,
+def search(query: str = Query(..., min_length=1), project: str | None = None,
            group: str | None = None, scope: str = "blobs"):
     """Search via GitLab's search API. Scope: blobs|commits|issues|merge_requests."""
     gl = _client()
