@@ -4,7 +4,15 @@
 # =============================================================================
 services:
   backend:
-    build: ../backend
+    # Use the locally-loaded image (delivered as a docker save tarball by
+    # the build-backend-image GHA workflow) when present; only fall back
+    # to building when the image isn't found.
+    image: simorgh-backend:local
+    pull_policy: never
+    build:
+      context: ../backend
+      tags:
+        - simorgh-backend:local
     container_name: backend
     environment:
       - PYTHONUNBUFFERED=1
