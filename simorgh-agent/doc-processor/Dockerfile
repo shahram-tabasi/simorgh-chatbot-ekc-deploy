@@ -1,5 +1,14 @@
 # Pin to specific release for consistent caching
 FROM python:3.11-slim-bookworm
+# ---- Air-gapped registry proxies (override at build with --build-arg) ----
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG PIP_TRUSTED_HOST=
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    npm_config_registry=${NPM_REGISTRY}
+
 
 # Install system dependencies for document processing
 # Use BuildKit cache mount for apt to speed up rebuilds
