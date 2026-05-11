@@ -1,5 +1,5 @@
 # Pin to specific alpine version for consistent caching
-FROM node:20-alpine3.19 AS builder
+FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Use BuildKit cache mount for npm
@@ -8,8 +8,9 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY . .
 RUN npm run build   # This creates /app/dist
 
-# Serve with Nginx (pinned version)
-FROM nginx:alpine3.18
+# Serve with Nginx (latest alpine — matches the rest of the stack and is
+# already in the Nexus proxy cache).
+FROM nginx:alpine
 # Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
 # Copy custom nginx config with SPA try_files support
