@@ -34,6 +34,10 @@ name: Build & save Simorgh images for air-gapped install
 on:
   workflow_dispatch:
     inputs:
+      ref:
+        description: "Git ref to build (branch / tag / sha)"
+        type: string
+        default: "claude/review-codebase-p4gQf"
       services:
         description: "Comma-separated subset to build (blank = build everything)"
         type: string
@@ -54,7 +58,7 @@ jobs:
   build:
     name: build · ${{ matrix.service.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180          # backend + ML services pull torch + cuDNN through pip
 
     strategy:
       fail-fast: false
@@ -64,9 +68,9 @@ jobs:
           # ---- Original services -----------------------------------------
           - { name: backend,                      context: ./simorgh-agent,            dockerfile: ./simorgh-agent/backend/Dockerfile,                       big: true  }
           - { name: frontend,                     context: ./simorgh-agent/frontend,   dockerfile: ./simorgh-agent/frontend/Dockerfile,                      big: false }
-          - { name: stt-service,                  context: ./simorgh-agent/stt-service, dockerfile: ./simorgh-agent/stt-service/Dockerfile,                  big: false }
-          - { name: tts-service,                  context: ./simorgh-agent/tts-service, dockerfile: ./simorgh-agent/tts-service/Dockerfile,                  big: false }
-          - { name: doc-processor,                context: ./simorgh-agent/doc-processor, dockerfile: ./simorgh-agent/doc-processor/Dockerfile,              big: false }
+          - { name: stt-service,                  context: ./simorgh-agent/stt-service, dockerfile: ./simorgh-agent/stt-service/Dockerfile,                  big: true  }
+          - { name: tts-service,                  context: ./simorgh-agent/tts-service, dockerfile: ./simorgh-agent/tts-service/Dockerfile,                  big: true  }
+          - { name: doc-processor,                context: ./simorgh-agent/doc-processor, dockerfile: ./simorgh-agent/doc-processor/Dockerfile,              big: true  }
 
           # ---- 2026-05 enterprise migration (build with parent context for shared/) ----
           - { name: gitlab-mcp,                   context: ./simorgh-agent, dockerfile: ./simorgh-agent/gitlab-mcp-service/Dockerfile,                      big: false }
@@ -78,7 +82,7 @@ jobs:
 
           # ---- Phases 2-9: extracted from backend monolith ----------------
           - { name: llm-gateway,                  context: ./simorgh-agent/llm-gateway,                  dockerfile: ./simorgh-agent/llm-gateway/Dockerfile,                  big: false }
-          - { name: embeddings-service,           context: ./simorgh-agent/embeddings-service,           dockerfile: ./simorgh-agent/embeddings-service/Dockerfile,           big: false }
+          - { name: embeddings-service,           context: ./simorgh-agent/embeddings-service,           dockerfile: ./simorgh-agent/embeddings-service/Dockerfile,           big: true  }
           - { name: auth-service,                 context: ./simorgh-agent/auth-service,                 dockerfile: ./simorgh-agent/auth-service/Dockerfile,                 big: false }
           - { name: documents-rag-service,        context: ./simorgh-agent/documents-rag-service,        dockerfile: ./simorgh-agent/documents-rag-service/Dockerfile,        big: false }
           - { name: chat-service,                 context: ./simorgh-agent/chat-service,                 dockerfile: ./simorgh-agent/chat-service/Dockerfile,                 big: false }
@@ -106,8 +110,10 @@ jobs:
           - { name: simorgh-soft,                 context: ./simorgh-agent/simorgh-soft,                 dockerfile: ./simorgh-agent/simorgh-soft/Dockerfile,                 big: false }
 
     steps:
-      - name: Checkout code
+      - name: Checkout ${{ inputs.ref }}
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Skip if not in selected list
         id: filter
