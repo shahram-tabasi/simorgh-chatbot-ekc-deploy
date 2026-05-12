@@ -1,656 +1,279 @@
-name: Deploy Simorgh Industrial Assistant
+name: Build & save Simorgh images for air-gapped install
+
+# Builds every simorgh-agent custom image on GitHub-hosted runners,
+# `docker save`s each into a gzipped tarball, and uploads each as a
+# downloadable artifact. The operator then ferries the artifacts to .68
+# and `docker load`s them into the local Docker daemon.
+#
+# This replaces the old GHCR-push workflow (the .68 host can't reach
+# ghcr.io anyway).
+#
+# After a green run:
+#   1. On a workstation with GitHub access: open the run → Artifacts →
+#      download every "simorgh-<name>-image" artifact you need.
+#   2. scp them to .68 (or USB).
+#   3. On .68:
+#        for z in simorgh-*-image.zip; do unzip -j "$z" -d /tmp/simorgh-imgs/; done
+#        cd /tmp/simorgh-imgs
+#
+#        # backend was split into chunks — reassemble first
+#        if ls backend.tar.gz.part-* >/dev/null 2>&1; then
+#          cat backend.tar.gz.part-* > backend.tar.gz
+#          rm backend.tar.gz.part-*
+#        fi
+#
+#        # load every tarball
+#        for f in *.tar.gz; do
+#          echo "=== loading $f ==="
+#          docker load < "$f"
+#        done
+#
+#        # verify
+#        docker images | grep '^simorgh-'
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-    paths:
-      - 'simorgh-agent/**'
-      - '.github/workflows/simorgh-deploy.yml'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch / tag / sha)"
+        type: string
+        default: "claude/review-codebase-p4gQf"
+      services:
+        description: "Comma-separated subset to build (blank = build everything)"
+        type: string
+        default: ""
+      tag:
+        description: "Image tag to apply"
+        type: string
+        default: "local"
 
-env:
-  REGISTRY: ghcr.io
+permissions:
+  contents: read
 
 jobs:
-  build-simorgh-agent:
-    name: Build Simorgh Agent Images
+  # ---------------------------------------------------------------------------
+  # Build each service in its own job (parallel). Matrix is the full list;
+  # the bash step at the top filters out anything not in inputs.services.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build · ${{ matrix.service.name }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
+    timeout-minutes: 180          # backend + ML services pull torch + cuDNN through pip
 
     strategy:
+      fail-fast: false
+      max-parallel: 6
       matrix:
         service:
-          - name: backend
-            context: ./simorgh-agent/backend
-            dockerfile: ./simorgh-agent/backend/Dockerfile
-          - name: frontend
-            context: ./simorgh-agent/frontend
-            dockerfile: ./simorgh-agent/frontend/Dockerfile
-          - name: stt-service
-            context: ./simorgh-agent/stt-service
-            dockerfile: ./simorgh-agent/stt-service/Dockerfile
-          - name: tts-service
-            context: ./simorgh-agent/tts-service
-            dockerfile: ./simorgh-agent/tts-service/Dockerfile
-          - name: doc-processor
-            context: ./simorgh-agent/doc-processor
-            dockerfile: ./simorgh-agent/doc-processor/Dockerfile
-          - name: shell-service
-            context: ./simorgh-agent/shell-service
-            dockerfile: ./simorgh-agent/shell-service/Dockerfile
+          # ---- Original services -----------------------------------------
+          - { name: backend,                      context: ./simorgh-agent/backend,    dockerfile: ./simorgh-agent/backend/Dockerfile,                       big: true  }
+          - { name: frontend,                     context: ./simorgh-agent/frontend,   dockerfile: ./simorgh-agent/frontend/Dockerfile,                      big: false }
+          - { name: stt-service,                  context: ./simorgh-agent/stt-service, dockerfile: ./simorgh-agent/stt-service/Dockerfile,                  big: true  }
+          - { name: tts-service,                  context: ./simorgh-agent/tts-service, dockerfile: ./simorgh-agent/tts-service/Dockerfile,                  big: true  }
+          - { name: doc-processor,                context: ./simorgh-agent/doc-processor, dockerfile: ./simorgh-agent/doc-processor/Dockerfile,              big: true  }
+
+          # ---- 2026-05 enterprise migration (build with parent context for shared/) ----
+          - { name: gitlab-mcp,                   context: ./simorgh-agent, dockerfile: ./simorgh-agent/gitlab-mcp-service/Dockerfile,                      big: false }
+          - { name: runtime-broker,               context: ./simorgh-agent, dockerfile: ./simorgh-agent/runtime-broker/Dockerfile,                          big: false }
+          - { name: context-search,               context: ./simorgh-agent, dockerfile: ./simorgh-agent/context-search-service/Dockerfile,                  big: false }
+          - { name: tpms-context-agent,           context: ./simorgh-agent, dockerfile: ./simorgh-agent/tpms-context-agent/Dockerfile,                      big: false }
+          - { name: mail-bridge,                  context: ./simorgh-agent, dockerfile: ./simorgh-agent/mail-bridge/Dockerfile,                             big: false }
+          - { name: project-init,                 context: ./simorgh-agent, dockerfile: ./simorgh-agent/project-init-service/Dockerfile,                    big: false }
+
+          # ---- Phases 2-9: extracted from backend monolith ----------------
+          - { name: llm-gateway,                  context: ./simorgh-agent/llm-gateway,                  dockerfile: ./simorgh-agent/llm-gateway/Dockerfile,                  big: false }
+          - { name: embeddings-service,           context: ./simorgh-agent/embeddings-service,           dockerfile: ./simorgh-agent/embeddings-service/Dockerfile,           big: true  }
+          - { name: auth-service,                 context: ./simorgh-agent/auth-service,                 dockerfile: ./simorgh-agent/auth-service/Dockerfile,                 big: false }
+          - { name: documents-rag-service,        context: ./simorgh-agent/documents-rag-service,        dockerfile: ./simorgh-agent/documents-rag-service/Dockerfile,        big: false }
+          - { name: chat-service,                 context: ./simorgh-agent/chat-service,                 dockerfile: ./simorgh-agent/chat-service/Dockerfile,                 big: false }
+          - { name: project-agent-service,        context: ./simorgh-agent/project-agent-service,        dockerfile: ./simorgh-agent/project-agent-service/Dockerfile,        big: false }
+          - { name: specification-agent-service,  context: ./simorgh-agent/specification-agent-service,  dockerfile: ./simorgh-agent/specification-agent-service/Dockerfile,  big: false }
+          - { name: graph-rag-service,            context: ./simorgh-agent/graph-rag-service,            dockerfile: ./simorgh-agent/graph-rag-service/Dockerfile,            big: false }
+          - { name: payments-service,             context: ./simorgh-agent/payments-service,             dockerfile: ./simorgh-agent/payments-service/Dockerfile,             big: false }
+          - { name: admin-service,                context: ./simorgh-agent/admin-service,                dockerfile: ./simorgh-agent/admin-service/Dockerfile,                big: false }
+          - { name: tier-quota-service,           context: ./simorgh-agent/tier-quota-service,           dockerfile: ./simorgh-agent/tier-quota-service/Dockerfile,           big: false }
+
+          # ---- Microservices ---------------------------------------------
+          - { name: search-service,               context: ./simorgh-agent/search-service,               dockerfile: ./simorgh-agent/search-service/Dockerfile,               big: false }
+          - { name: tpms-fetcher,                 context: ./simorgh-agent/tpms-fetcher-service,         dockerfile: ./simorgh-agent/tpms-fetcher-service/Dockerfile,         big: false }
+          - { name: project-analysis,             context: ./simorgh-agent/project-analysis-service,     dockerfile: ./simorgh-agent/project-analysis-service/Dockerfile,     big: false }
+          - { name: command-gen,                  context: ./simorgh-agent/command-gen-service,          dockerfile: ./simorgh-agent/command-gen-service/Dockerfile,          big: false }
+          - { name: file-export,                  context: ./simorgh-agent/file-export-service,          dockerfile: ./simorgh-agent/file-export-service/Dockerfile,          big: false }
+          - { name: eplan-bridge,                 context: ./simorgh-agent/eplan-bridge-service,         dockerfile: ./simorgh-agent/eplan-bridge-service/Dockerfile,         big: false }
+
+          # ---- General-chat feature services -----------------------------
+          - { name: hr-kb-service,                context: ./simorgh-agent/hr-kb-service,                dockerfile: ./simorgh-agent/hr-kb-service/Dockerfile,                big: false }
+          - { name: org-data-service,             context: ./simorgh-agent/org-data-service,             dockerfile: ./simorgh-agent/org-data-service/Dockerfile,             big: false }
+          - { name: eplan-sql-service,            context: ./simorgh-agent/eplan-sql-service,            dockerfile: ./simorgh-agent/eplan-sql-service/Dockerfile,            big: false }
+
+          # ---- Standalone CAD app ---------------------------------------
+          - { name: simorgh-soft,                 context: ./simorgh-agent/simorgh-soft,                 dockerfile: ./simorgh-agent/simorgh-soft/Dockerfile,                 big: false }
 
     steps:
-      - name: Checkout code
+      - name: Checkout ${{ inputs.ref }}
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Skip if not in selected list
+        id: filter
+        run: |
+          set -eu
+          requested='${{ inputs.services }}'
+          if [ -z "$requested" ]; then
+            echo "selected=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # comma- or space-separated list
+          for s in $(echo "$requested" | tr ',' ' '); do
+            if [ "$s" = "${{ matrix.service.name }}" ]; then
+              echo "selected=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "selected=false" >> "$GITHUB_OUTPUT"
+
+      - name: Free up runner disk (heavy)
+        if: ${{ matrix.service.big && steps.filter.outputs.selected == 'true' }}
+        run: |
+          set -eu
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h /
+
+      - name: Free up runner disk (light)
+        if: ${{ !matrix.service.big && steps.filter.outputs.selected == 'true' }}
+        run: |
+          set -eu
+          sudo rm -rf /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
 
       - name: Set up Docker Buildx
+        if: ${{ steps.filter.outputs.selected == 'true' }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
-
-      - name: Lowercase repository owner
-        id: lowercase
-        run: |
-          OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          echo "OWNER_LC=$OWNER_LC" >> $GITHUB_ENV
-          echo "Repository owner: ${{ github.repository_owner }}"
-          echo "Lowercase owner: $OWNER_LC"
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/simorgh-${{ matrix.service.name }}
-          tags: |
-            type=ref,event=branch
-            type=sha,format=long,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.description=Simorgh Industrial Electrical Assistant - ${{ matrix.service.name }}
-    
-      - name: Build and push
+      - name: Build image (load to local docker)
+        if: ${{ steps.filter.outputs.selected == 'true' }}
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          push: false
+          load: true                             # makes image available to `docker save`
+          tags: simorgh-${{ matrix.service.name }}:${{ inputs.tag }}
           provenance: false
           sbom: false
-          # Use both GHA cache and registry cache for better hit rate
-          cache-from: |
-            type=gha,scope=${{ matrix.service.name }}
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/simorgh-${{ matrix.service.name }}:cache
-          cache-to: |
-            type=gha,mode=max,scope=${{ matrix.service.name }}
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/simorgh-${{ matrix.service.name }}:cache,mode=max
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to:   type=gha,scope=${{ matrix.service.name }},mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 
-  deploy-central-server:
-    name: Deploy to Central Server (1.68)
+      - name: Save & gzip image
+        if: ${{ steps.filter.outputs.selected == 'true' }}
+        run: |
+          set -eu
+          IMG="simorgh-${{ matrix.service.name }}:${{ inputs.tag }}"
+          OUT="${{ matrix.service.name }}.tar.gz"
+          docker save "$IMG" | gzip -1 > "$OUT"
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "${OUT}.sha256"
+
+      - name: Split into chunks if > 1.9 GB
+        if: ${{ steps.filter.outputs.selected == 'true' }}
+        id: chunk
+        run: |
+          set -eu
+          OUT="${{ matrix.service.name }}.tar.gz"
+          # GitHub artifact-per-file practical ceiling is ~2 GB. Anything
+          # above 1.9 GB gets split.
+          MAX_BYTES=$((1900 * 1024 * 1024))
+          SIZE=$(stat -c%s "$OUT")
+          if [ "$SIZE" -le "$MAX_BYTES" ]; then
+            echo "chunked=false" >> "$GITHUB_OUTPUT"
+            echo "Image is $(( SIZE / 1024 / 1024 )) MiB; uploading as a single file."
+          else
+            echo "chunked=true" >> "$GITHUB_OUTPUT"
+            echo "Image is $(( SIZE / 1024 / 1024 )) MiB; splitting into 1900M chunks."
+            split -b 1900M -d -a 2 "$OUT" "${OUT}.part-"
+            ls -lh "${OUT}.part-"*
+            rm -f "$OUT"        # remove the unsplit copy to save artifact space
+          fi
+
+      - name: Upload artifact (single file)
+        if: ${{ steps.filter.outputs.selected == 'true' && steps.chunk.outputs.chunked == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: simorgh-${{ matrix.service.name }}-image
+          path: |
+            ${{ matrix.service.name }}.tar.gz
+            ${{ matrix.service.name }}.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload artifact (chunked)
+        if: ${{ steps.filter.outputs.selected == 'true' && steps.chunk.outputs.chunked == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: simorgh-${{ matrix.service.name }}-image
+          path: |
+            ${{ matrix.service.name }}.tar.gz.part-*
+            ${{ matrix.service.name }}.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+  # ---------------------------------------------------------------------------
+  # Summary — prints final usage instructions in the workflow log.
+  # ---------------------------------------------------------------------------
+  summary:
     runs-on: ubuntu-latest
-    needs: [build-simorgh-agent]
-
+    needs: build
+    if: always()
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Lowercase repository owner
-        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-
-      - name: Setup SSH key
+      - name: Final instructions
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
+          cat <<'EOF'
+          ============================================================
+          Air-gapped install instructions for .68
+          ============================================================
+          1. Open this run's "Artifacts" section. You'll see one
+             artifact per built service: simorgh-<name>-image
+          2. Download every artifact you need. (Selecting "Download
+             all" gives you one combined zip.)
+          3. Transfer to .68:
+                scp simorgh-*-image.zip ubuntu@192.168.1.68:/tmp/
+          4. On .68:
+                mkdir -p /tmp/simorgh-imgs
+                cd /tmp
+                for z in simorgh-*-image.zip; do
+                  unzip -j -o "$z" -d /tmp/simorgh-imgs/
+                done
+                cd /tmp/simorgh-imgs
 
-      - name: Check disk space on server
-        run: |
-          echo "Checking disk space on central server..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            'df -h ~ && echo "Disk check complete"'
+                # backend (and any other oversized image) was split.
+                # Reassemble before loading.
+                for stem in $(ls *.tar.gz.part-00 2>/dev/null \
+                              | sed 's/\.tar\.gz\.part-00$//'); do
+                  echo "==> reassembling $stem"
+                  cat "$stem".tar.gz.part-* > "$stem".tar.gz
+                  rm "$stem".tar.gz.part-*
+                done
 
-      - name: Copy deployment files to server
-        run: |
-          echo "Copying deployment files..."
-          scp -P 2324 -i ~/.ssh/deploy_key -r simorgh-agent/* ${{ secrets.SSH_USER }}@95.38.203.173:~/simorgh-deployment/
-          echo "✓ Files copied successfully"
+                # verify integrity
+                sha256sum -c *.sha256
 
-      - name: Create .env file and deploy
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << 'ENDSSH'
-          cd ~/simorgh-deployment
+                # load each into the local docker daemon
+                for f in *.tar.gz; do
+                  echo "==> docker load $f"
+                  docker load < "$f"
+                done
 
-          # Login to GitHub Container Registry
-          echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-          # Create .env file
-          cat > .env << EOF
-          # GitHub Registry
-          GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }}
-          IMAGE_TAG=${{ github.ref_name }}-${{ github.sha }}
-
-          # Neo4j
-          NEO4J_URI=bolt://neo4j:7687
-          NEO4J_USER=neo4j
-          NEO4J_PASSWORD=${{ secrets.NEO4J_PASSWORD }}
-
-          # Redis
-          REDIS_URL=redis://redis:6379/0
-          REDIS_CHAT_DB=1
-          REDIS_CACHE_DB=2
-          REDIS_AUTH_DB=3
-
-          # Qdrant
-          QDRANT_URL=http://qdrant:6333
-
-          # CocoIndex
-          COCOINDEX_URL=http://cocoindex:8080
-          COCOINDEX_DB_PASSWORD=${{ secrets.COCOINDEX_DB_PASSWORD }}
-
-          # MySQL (External Authentication) - Supports both MYSQL_* and SQL_SERVER_*
-          MYSQL_HOST=${{ secrets.MYSQL_HOST }}
-          MYSQL_PORT=${{ secrets.MYSQL_PORT }}
-          MYSQL_USER=${{ secrets.MYSQL_USER }}
-          MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
-          MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}
-          SQL_SERVER_HOST=${{ secrets.MYSQL_HOST }}
-          SQL_SERVER_PORT=${{ secrets.MYSQL_PORT }}
-          SQL_SERVER_USER=${{ secrets.MYSQL_USER }}
-          SQL_SERVER_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
-          SQL_SERVER_DATABASE=${{ secrets.MYSQL_DATABASE }}
-
-          # JWT & Security
-          JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
-          JWT_ALGORITHM=HS256
-          ACCESS_TOKEN_EXPIRE_MINUTES=60
-          REFRESH_TOKEN_EXPIRE_DAYS=30
-          MAX_LOGIN_ATTEMPTS=5
-          LOCKOUT_DURATION_MINUTES=30
-
-          # Google OAuth 2.0
-          GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REDIRECT_URI=https://simorghai.electrokavir.com/chatbot/auth/google/callback
-          VITE_GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
-
-          # Email Service (Resend - HTTPS API, works when SMTP is blocked)
-          # Sign up at https://resend.com (free: 100 emails/day, 3000/month)
-          # Set RESEND_API_KEY in GitHub Secrets
-          # FROM_EMAIL must use a verified domain in Resend, or use onboarding@resend.dev for testing
-          EMAIL_PROVIDER=resend
-          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
-          FROM_EMAIL=${FROM_EMAIL:-onboarding@resend.dev}
-          FROM_NAME=Simorgh AI
-          # SMTP config (kept as fallback - set EMAIL_PROVIDER=smtp to use)
-          SMTP_HOST=smtp.gmail.com
-          SMTP_PORT=587
-          SMTP_USER=${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
-          SMTP_USE_TLS=true
-          AUTO_VERIFY_EMAIL=false
-
-          # User Tiers & Admin
-          ADMIN_SETUP_SECRET=${{ secrets.ADMIN_SETUP_SECRET }}
-
-          # NOWPayments (Crypto Payments)
-          NOWPAYMENTS_API_KEY=${{ secrets.NOWPAYMENTS_API_KEY }}
-          NOWPAYMENTS_IPN_SECRET=${{ secrets.NOWPAYMENTS_IPN_SECRET }}
-          NOWPAYMENTS_SANDBOX=${{ secrets.NOWPAYMENTS_SANDBOX }}
-
-          # Shell Service (Project Agent on 1.69)
-          SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }}
-
-          # Mail Gateway (Project Email)
-          PROJECT_EMAIL_DOMAIN=simorghai.electrokavir.com
-          MAIL_GATEWAY_TOKEN=${{ secrets.MAIL_GATEWAY_TOKEN }}
-
-          # Frontend URL (used in email verification/reset links)
-          FRONTEND_URL=https://simorghai.electrokavir.com/chatbot
-
-          # Cookie & Security Settings (HTTPS enabled)
-          SECURE_COOKIES=true
-          COOKIE_DOMAIN=.electrokavir.com
-
-          # LLM - OpenAI (Online Mode)
-          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL=gpt-4o
-          LLM_TEMPERATURE=0.7
-          LLM_MAX_TOKENS=2000
-
-          # LLM - Local Servers (Offline Mode)
-          LOCAL_LLM_URL_1=http://192.168.1.61/ai
-          LOCAL_LLM_URL_2=http://192.168.1.62/ai
-
-          # Default LLM Mode (auto tries online first, falls back to offline)
-          DEFAULT_LLM_MODE=auto
-
-          # Frontend
-          VITE_API_URL=/api
-          CHOKIDAR_USEPOLLING=true
-
-          # Timezone
-          TZ=Asia/Tehran
-
-          # Feature Flags
-          ENABLE_GRAPH_RAG=true
-          ENABLE_DOCUMENT_PROCESSING=true
-          ENABLE_SQL_AUTH=true
-          ENABLE_REDIS_CACHE=true
+                docker images | grep '^simorgh-'
+          5. Now run the stack — `docker compose up -d` will use the
+             local images (no build, no Squid pulls):
+                cd ~/simorgh-chatbot-ekc-deploy/simorgh-agent
+                docker compose up -d
+          ============================================================
           EOF
-
-          # Verify critical environment variables
-          echo "=== Verifying Environment Variables ==="
-
-          # Neo4j
-          if [ -z "${{ secrets.NEO4J_PASSWORD }}" ]; then
-            echo "WARNING: NEO4J_PASSWORD not set, using default"
-          else
-            echo "NEO4J_PASSWORD: [SET]"
-          fi
-
-          # CocoIndex
-          if [ -z "${{ secrets.COCOINDEX_DB_PASSWORD }}" ]; then
-            echo "WARNING: COCOINDEX_DB_PASSWORD not set, using default"
-          else
-            echo "COCOINDEX_DB_PASSWORD: [SET]"
-          fi
-
-          # JWT
-          if [ -z "${{ secrets.JWT_SECRET_KEY }}" ]; then
-            echo "WARNING: JWT_SECRET_KEY not set - authentication will not work!"
-          else
-            echo "JWT_SECRET_KEY: [SET]"
-          fi
-
-          # Google OAuth
-          if [ -z "${{ secrets.GOOGLE_CLIENT_ID }}" ]; then
-            echo "WARNING: GOOGLE_CLIENT_ID not set - Google login disabled"
-          else
-            echo "GOOGLE_CLIENT_ID: [SET]"
-            echo "GOOGLE_CLIENT_SECRET: [SET]"
-          fi
-
-          # Email / SMTP (fallback)
-          if [ -z "${{ secrets.SMTP_USER }}" ]; then
-            echo "INFO: SMTP_USER not set - SMTP fallback disabled"
-          else
-            echo "SMTP_USER: [SET]"
-            echo "SMTP_PASSWORD: [SET]"
-          fi
-
-          # Resend (primary email provider - HTTPS API)
-          if [ -z "${{ secrets.RESEND_API_KEY }}" ]; then
-            echo "WARNING: RESEND_API_KEY not set - email verification/reset will not work"
-          else
-            echo "RESEND_API_KEY: [SET]"
-          fi
-
-          # MySQL (optional - may be disabled)
-          if [ -z "${{ secrets.MYSQL_HOST }}" ]; then
-            echo "INFO: MySQL auth not configured (optional)"
-          else
-            echo "MYSQL_HOST: [SET]"
-            echo "MYSQL_USER: [SET]"
-            echo "MYSQL_PASSWORD: [SET]"
-            echo "MYSQL_DATABASE: [SET]"
-          fi
-
-          # OpenAI (optional - may use offline mode)
-          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
-            echo "INFO: OpenAI not configured, will use offline mode only"
-          else
-            echo "OPENAI_API_KEY: [SET]"
-          fi
-
-          echo "IMAGE_TAG: ${{ github.ref_name }}-${{ github.sha }}"
-
-          # Verify environment
-          echo "=== Environment File Created ==="
-          echo "File size: $(wc -l < .env) lines"
-          echo ""
-          echo "=== Expected Image Tag ==="
-          echo "${{ github.ref_name }}-${{ github.sha }}"
-
-          # Ensure ekc-knowledge directory exists for the bind-mount volume
-          echo ""
-          echo "=== Ensuring ekc-knowledge directory ==="
-          mkdir -p ~/ekc-knowledge
-          echo "EKC_KNOWLEDGE_HOST_PATH=$HOME/ekc-knowledge" >> .env
-
-          # Stop running containers
-          echo ""
-          echo "=== Stopping running containers ==="
-          docker compose down || true
-
-          # Clean up old images
-          echo ""
-          echo "=== Cleaning up old images ==="
-          docker image prune -f || true
-
-          # Pull latest images with retry logic (network can be unstable)
-          echo ""
-          echo "=== Pulling latest images (with retry) ==="
-          MAX_RETRIES=4
-          RETRY_DELAY=10
-          for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "Pull attempt $attempt/$MAX_RETRIES..."
-            if docker compose pull; then
-              echo "✅ Pull successful"
-              break
-            else
-              if [ $attempt -eq $MAX_RETRIES ]; then
-                echo "❌ All pull attempts failed"
-                exit 1
-              fi
-              echo "⏳ Pull failed, retrying in ${RETRY_DELAY}s..."
-              sleep $RETRY_DELAY
-              RETRY_DELAY=$((RETRY_DELAY * 2))
-            fi
-          done
-
-          # Start services
-          echo ""
-          echo "=== Starting services ==="
-          docker compose up -d
-
-          # Wait for services to be healthy
-          echo ""
-          echo "=== Waiting for services to become healthy ==="
-          for i in {1..60}; do
-            echo "Check $i/60..."
-
-            # Check Neo4j
-            if docker compose ps neo4j | grep -q "healthy"; then
-              echo "✅ Neo4j is healthy"
-            else
-              echo "⏳ Neo4j is starting..."
-            fi
-
-            # Check Redis
-            if docker compose ps redis | grep -q "healthy"; then
-              echo "✅ Redis is healthy"
-            else
-              echo "⏳ Redis is starting..."
-            fi
-
-            # Check Backend
-            if docker compose ps backend | grep -q "healthy"; then
-              echo "✅ Backend is healthy"
-              break
-            else
-              echo "⏳ Backend is starting..."
-            fi
-
-            sleep 5
-          done
-
-          # Show final status
-          echo ""
-          echo "=== Final Service Status ==="
-          docker compose ps
-
-          echo ""
-          echo "========================================"
-          echo "Simorgh Industrial Assistant Deployed!"
-          echo "========================================"
-          echo ""
-          echo "🌐 Central Server: http://192.168.1.68"
-          echo "📊 API Docs: http://192.168.1.68/api/docs"
-          echo "🔍 Neo4j Browser: http://192.168.1.68:7474"
-          echo ""
-          echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
-          echo "========================================"
-
-          ENDSSH
-
-  deploy-shell-server:
-    name: Deploy Shell Service to 1.69
-    runs-on: ubuntu-latest
-    needs: [build-simorgh-agent, deploy-central-server]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Lowercase repository owner
-        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-
-      - name: Sanitize branch name for Docker tag
-        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
-
-      - name: Setup SSH key for central server
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
-
-      - name: Test SSH to central server
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 "echo 'Connected to central server'"
-
-      - name: Setup SSH from central to 1.69
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh-keyscan -H 192.168.1.69 >> ~/.ssh/known_hosts 2>/dev/null || true"
-
-      - name: Test SSH to 1.69 via central
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh -o StrictHostKeyChecking=no ubuntu@192.168.1.69 'echo Connected to shell-server 1.69'"
-
-      - name: Create deployment directory on 1.69
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'mkdir -p ~/shell-service-deployment'"
-
-      - name: Copy compose file to 1.69 via central
-        run: |
-          echo "Copying docker-compose-shell.yml to central server..."
-          scp -P 2324 -i ~/.ssh/deploy_key \
-            simorgh-agent/docker-compose-shell.yml \
-            ${{ secrets.SSH_USER }}@95.38.203.173:/tmp/docker-compose-shell.yml
-
-          echo "Copying from central to 1.69..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "scp -o StrictHostKeyChecking=no /tmp/docker-compose-shell.yml ubuntu@192.168.1.69:~/shell-service-deployment/docker-compose.yml"
-
-          echo "Cleaning up central server..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "rm -f /tmp/docker-compose-shell.yml" || true
-
-          echo "Verifying file on 1.69..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'ls -lh ~/shell-service-deployment/docker-compose.yml'"
-
-      - name: Ensure ekc-knowledge directory on 1.69
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'mkdir -p ~/ekc-knowledge'"
-
-      - name: Create .env file on 1.69
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && \
-            echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} > .env && \
-            echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
-            echo SHELL_SERVICE_TOKEN=${{ secrets.SHELL_SERVICE_TOKEN }} >> .env && \
-            echo EKC_KNOWLEDGE_HOST_PATH=/home/ubuntu/ekc-knowledge >> .env && \
-            echo TECHSERVER_IP=${{ secrets.TECHSERVER_IP || '192.168.1.3' }} >> .env && \
-            echo TECHSERVER_USER=${{ secrets.TECHSERVER_USER || 'EKC\\\\tech' }} >> .env && \
-            echo TECHSERVER_PASSWORD=${{ secrets.TECHSERVER_PASSWORD }} >> .env\"'"
-
-      - name: Verify .env file
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'bash -c \"echo === Environment File === && cat ~/shell-service-deployment/.env\"'"
-
-      - name: Login to GHCR on 1.69
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 \"echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin\""
-
-      - name: Stop running containers
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && docker compose down || true\"'"
-
-      - name: Clean up old images
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'docker image prune -f || true'"
-
-      - name: Pull latest images (with retry)
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'bash -c \"
-              cd ~/shell-service-deployment
-              MAX_RETRIES=4
-              RETRY_DELAY=10
-              for attempt in \\\$(seq 1 \\\$MAX_RETRIES); do
-                echo Pull attempt \\\$attempt/\\\$MAX_RETRIES...
-                if docker compose pull; then
-                  echo Pull successful
-                  break
-                else
-                  if [ \\\$attempt -eq \\\$MAX_RETRIES ]; then
-                    echo All pull attempts failed
-                    exit 1
-                  fi
-                  echo Pull failed, retrying in \\\${RETRY_DELAY}s...
-                  sleep \\\$RETRY_DELAY
-                  RETRY_DELAY=\\\$((RETRY_DELAY * 2))
-                fi
-              done
-            \"'"
-
-      - name: Start services
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && docker compose up -d\"'"
-
-      - name: Wait for shell-service to be healthy
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && timeout 120 bash -c \\\"until docker compose ps | grep -q healthy; do sleep 5; echo Waiting for shell-service...; done\\\" || echo Warning: Shell service may not be healthy yet\"'"
-
-      - name: Show service status
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'bash -c \"cd ~/shell-service-deployment && echo === Docker Compose Status === && docker compose ps\"'"
-
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@192.168.1.69 'cd ~/shell-service-deployment && \
-            echo \"=== Docker Compose Status ===\" && docker compose ps -a && \
-            echo \"=== Shell Service Logs ===\" && docker logs shell-service --tail=100 2>/dev/null || echo \"shell-service not found\" && \
-            echo \"=== .env File ===\" && cat .env 2>/dev/null || echo \".env not found\" && \
-            echo \"=== docker-compose.yml ===\" && ls -la 2>/dev/null'"
-
-  health-check:
-    name: Simorgh Agent Health Check
-    runs-on: ubuntu-latest
-    needs: [deploy-central-server, deploy-shell-server]
-
-    steps:
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
-
-      - name: Run health checks
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << 'ENDSSH'
-          echo "Waiting 30 seconds for application to fully start..."
-          sleep 30
-
-          echo "Checking Central Server (1.68) health endpoint..."
-
-          # Try health check up to 10 times
-          for i in {1..10}; do
-            echo "Attempt \$i/10..."
-            if curl -f http://localhost/api/health; then
-              echo ""
-              echo "✅ Health check passed!"
-              break
-            else
-              echo "⏳ Service not ready yet..."
-              sleep 5
-            fi
-          done
-
-          echo ""
-          echo "=== Service Health Details ==="
-          curl -s http://localhost/api/health | jq '.' || echo "Could not parse health response"
-
-          echo ""
-          echo "=== Testing API Endpoints ==="
-          echo "Testing /api/status..."
-          curl -f http://localhost/api/status || echo "❌ Status endpoint failed"
-
-          echo ""
-          echo "Testing /api/projects..."
-          curl -f http://localhost/api/projects || echo "❌ Projects endpoint failed"
-
-          echo ""
-          echo "=== Frontend Status ==="
-          curl -f http://localhost/ > /dev/null && echo "✅ Frontend accessible" || echo "❌ Frontend not accessible"
-
-          echo ""
-          echo "=== Neo4j Browser ==="
-          curl -f http://localhost:7474 > /dev/null && echo "✅ Neo4j Browser accessible" || echo "❌ Neo4j Browser not accessible"
-
-          echo ""
-          echo "========================================"
-          echo "Simorgh Industrial Assistant Deployed!"
-          echo "========================================"
-          echo ""
-          echo "🌐 Central Server: http://192.168.1.68"
-          echo "📊 API Docs: http://192.168.1.68/api/docs"
-          echo "🔍 Neo4j Browser: http://192.168.1.68:7474"
-          echo ""
-          echo "=== Shell Service (1.69) Health Check ==="
-          if curl -sf http://192.168.1.69:8010/health > /dev/null 2>&1; then
-            echo "✅ Shell service on 1.69 is healthy"
-          else
-            echo "⚠️ Shell service on 1.69 not responding (may still be starting)"
-          fi
-
-          echo ""
-          echo "========================================"
-          echo "Architecture:"
-          echo "  ✅ Neo4j 5.15 (Knowledge Graph)"
-          echo "  ✅ Redis 7.2 (Multi-DB Caching)"
-          echo "  ✅ Qdrant (Vector Search)"
-          echo "  ✅ CocoIndex (Document Processing)"
-          echo "  ✅ FastAPI Backend"
-          echo "  ✅ React Frontend"
-          echo "  ✅ STT Service (Faster-Whisper)"
-          echo "  ✅ TTS Service (Edge-TTS)"
-          echo "  ✅ Shell Service (192.168.1.69)"
-          echo ""
-          echo "========================================"
-          echo "Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
-          echo "========================================"
-
-          ENDSSH
