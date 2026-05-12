@@ -66,7 +66,7 @@ jobs:
       matrix:
         service:
           # ---- Original services -----------------------------------------
-          - { name: backend,                      context: ./simorgh-agent,            dockerfile: ./simorgh-agent/backend/Dockerfile,                       big: true  }
+          - { name: backend,                      context: ./simorgh-agent/backend,    dockerfile: ./simorgh-agent/backend/Dockerfile,                       big: true  }
           - { name: frontend,                     context: ./simorgh-agent/frontend,   dockerfile: ./simorgh-agent/frontend/Dockerfile,                      big: false }
           - { name: stt-service,                  context: ./simorgh-agent/stt-service, dockerfile: ./simorgh-agent/stt-service/Dockerfile,                  big: true  }
           - { name: tts-service,                  context: ./simorgh-agent/tts-service, dockerfile: ./simorgh-agent/tts-service/Dockerfile,                  big: true  }
