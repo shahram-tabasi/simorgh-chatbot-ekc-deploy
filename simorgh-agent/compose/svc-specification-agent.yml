@@ -6,6 +6,7 @@
 # =============================================================================
 services:
   specification-agent-service:
+    image: simorgh-specification-agent-service:local
     build: ../specification-agent-service
     container_name: specification-agent-service
     expose:

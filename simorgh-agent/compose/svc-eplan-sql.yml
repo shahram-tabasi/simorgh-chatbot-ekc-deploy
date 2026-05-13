@@ -5,6 +5,7 @@
 # =============================================================================
 services:
   eplan-sql-service:
+    image: simorgh-eplan-sql-service:local
     build: ../eplan-sql-service
     container_name: eplan-sql-service
     expose:

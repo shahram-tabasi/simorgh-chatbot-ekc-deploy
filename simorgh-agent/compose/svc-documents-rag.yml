@@ -5,6 +5,7 @@
 # =============================================================================
 services:
   documents-rag-service:
+    image: simorgh-documents-rag-service:local
     build: ../documents-rag-service
     container_name: documents-rag-service
     expose:

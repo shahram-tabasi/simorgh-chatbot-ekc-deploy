@@ -8,6 +8,7 @@
 # =============================================================================
 services:
   hr-kb-service:
+    image: simorgh-hr-kb-service:local
     build: ../hr-kb-service
     container_name: hr-kb-service
     expose:

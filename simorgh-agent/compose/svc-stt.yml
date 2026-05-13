@@ -4,6 +4,7 @@
 # =============================================================================
 services:
   stt-service:
+    image: simorgh-stt-service:local
     build: ../stt-service
     container_name: stt-service
     expose:

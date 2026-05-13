@@ -5,6 +5,7 @@
 # =============================================================================
 services:
   embeddings-service:
+    image: simorgh-embeddings-service:local
     build: ../embeddings-service
     container_name: embeddings-service
     expose:

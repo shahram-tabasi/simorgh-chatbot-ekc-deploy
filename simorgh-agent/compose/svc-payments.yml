@@ -5,6 +5,7 @@
 # =============================================================================
 services:
   payments-service:
+    image: simorgh-payments-service:local
     build: ../payments-service
     container_name: payments-service
     expose:

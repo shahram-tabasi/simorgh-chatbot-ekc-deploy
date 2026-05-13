@@ -5,6 +5,7 @@
 # =============================================================================
 services:
   tier-quota-service:
+    image: simorgh-tier-quota-service:local
     build: ../tier-quota-service
     container_name: tier-quota-service
     expose:

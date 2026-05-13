@@ -6,6 +6,7 @@
 # =============================================================================
 services:
   project-agent-service:
+    image: simorgh-project-agent-service:local
     build: ../project-agent-service
     container_name: project-agent-service
     expose:

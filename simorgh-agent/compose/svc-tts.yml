@@ -4,6 +4,7 @@
 # =============================================================================
 services:
   tts-service:
+    image: simorgh-tts-service:local
     build: ../tts-service
     container_name: tts-service
     expose:

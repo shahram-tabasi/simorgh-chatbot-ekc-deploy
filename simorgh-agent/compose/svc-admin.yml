@@ -23,6 +23,7 @@
 # =============================================================================
 services:
   admin-service:
+    image: simorgh-admin-service:local
     build: ../admin-service
     container_name: admin-service
     expose:

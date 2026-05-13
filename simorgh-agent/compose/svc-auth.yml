@@ -5,6 +5,7 @@
 # =============================================================================
 services:
   auth-service:
+    image: simorgh-auth-service:local
     build: ../auth-service
     container_name: auth-service
     expose:

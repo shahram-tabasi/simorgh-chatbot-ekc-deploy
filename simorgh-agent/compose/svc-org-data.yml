@@ -8,6 +8,7 @@
 # =============================================================================
 services:
   org-data-service:
+    image: simorgh-org-data-service:local
     build: ../org-data-service
     container_name: org-data-service
     expose:
