@@ -1,0 +1,28 @@
+name: Build · hr-kb-service
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        type: string
+        default: "claude/review-codebase-p4gQf"
+      tag:
+        description: "Image tag"
+        type: string
+        default: "local"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-and-push.yml
+    with:
+      service:    "hr-kb-service"
+      context:    "./simorgh-agent/hr-kb-service"
+      dockerfile: "./simorgh-agent/hr-kb-service/Dockerfile"
+      big:        false
+      ref:        ${{ inputs.ref }}
+      tag:        ${{ inputs.tag }}

@@ -1,0 +1,28 @@
+name: Build · chat-service
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        type: string
+        default: "claude/review-codebase-p4gQf"
+      tag:
+        description: "Image tag"
+        type: string
+        default: "local"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-and-push.yml
+    with:
+      service:    "chat-service"
+      context:    "./simorgh-agent/chat-service"
+      dockerfile: "./simorgh-agent/chat-service/Dockerfile"
+      big:        false
+      ref:        ${{ inputs.ref }}
+      tag:        ${{ inputs.tag }}
