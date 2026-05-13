@@ -1,4 +1,7 @@
-name: Build · llm-gateway
+name: Build artifact · llm-gateway
+
+# Builds simorgh-llm-gateway on a GitHub-hosted runner and uploads the
+# resulting image as a downloadable artifact (no GHCR push).
 
 on:
   workflow_dispatch:
@@ -14,11 +17,10 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
-    uses: ./.github/workflows/_build-and-push.yml
+    uses: ./.github/workflows/_build-and-artifact.yml
     with:
       service:    "llm-gateway"
       context:    "./simorgh-agent/llm-gateway"

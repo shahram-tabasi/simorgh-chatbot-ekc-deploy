@@ -1,4 +1,7 @@
-name: Build · file-export
+name: Build artifact · file-export
+
+# Builds simorgh-file-export on a GitHub-hosted runner and uploads the
+# resulting image as a downloadable artifact (no GHCR push).
 
 on:
   workflow_dispatch:
@@ -14,11 +17,10 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
-    uses: ./.github/workflows/_build-and-push.yml
+    uses: ./.github/workflows/_build-and-artifact.yml
     with:
       service:    "file-export"
       context:    "./simorgh-agent/file-export-service"

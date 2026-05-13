@@ -1,0 +1,159 @@
+name: _build-and-artifact (reusable)
+
+# Reusable workflow: build ONE image and upload it as a downloadable
+# artifact (no GHCR push). The artifact is named
+# "simorgh-<service>-image" and contains either:
+#   - <service>.tar.gz                  (image <= 1.9 GiB)
+#   - <service>.tar.gz.part-00, ...     (image > 1.9 GiB, split)
+# plus a <service>.tar.gz.sha256 manifest.
+#
+# After the run, fetch the artifact, scp to .68, and on .68:
+#   for f in *.tar.gz.part-*; do : ; done   # if chunked:
+#   cat <svc>.tar.gz.part-* > <svc>.tar.gz
+#   docker load < <svc>.tar.gz
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: "Service short name (image: simorgh-<service>)"
+        type: string
+        required: true
+      context:
+        description: "Docker build context"
+        type: string
+        required: true
+      dockerfile:
+        description: "Dockerfile path"
+        type: string
+        required: true
+      big:
+        description: "Heavy image — free up extra runner disk"
+        type: boolean
+        default: false
+      ref:
+        description: "Git ref to build"
+        type: string
+        required: true
+      tag:
+        description: "Image tag"
+        type: string
+        default: "local"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout ${{ inputs.ref }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Free runner disk (heavy)
+        if: ${{ inputs.big }}
+        run: |
+          set -eu
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h /
+
+      - name: Free runner disk (light)
+        if: ${{ !inputs.big }}
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (load into local docker)
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: false
+          load: true
+          tags: simorgh-${{ inputs.service }}:${{ inputs.tag }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ inputs.service }}
+          cache-to:   type=gha,scope=${{ inputs.service }},mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Save + gzip
+        run: |
+          set -eu
+          IMG="simorgh-${{ inputs.service }}:${{ inputs.tag }}"
+          OUT="${{ inputs.service }}.tar.gz"
+          docker save "$IMG" | gzip -1 > "$OUT"
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "${OUT}.sha256"
+
+      - name: Split if > 1.9 GiB
+        id: chunk
+        run: |
+          set -eu
+          OUT="${{ inputs.service }}.tar.gz"
+          MAX_BYTES=$((1900 * 1024 * 1024))
+          SIZE=$(stat -c%s "$OUT")
+          if [ "$SIZE" -le "$MAX_BYTES" ]; then
+            echo "chunked=false" >> "$GITHUB_OUTPUT"
+            echo "Image is $(( SIZE / 1024 / 1024 )) MiB — single file."
+          else
+            echo "chunked=true" >> "$GITHUB_OUTPUT"
+            echo "Image is $(( SIZE / 1024 / 1024 )) MiB — splitting into 1900M chunks."
+            split -b 1900M -d -a 2 "$OUT" "${OUT}.part-"
+            for p in "${OUT}.part-"*; do sha256sum "$p" >> "${OUT}.parts.sha256"; done
+            ls -lh "${OUT}.part-"*
+            rm -f "$OUT"
+          fi
+
+      - name: Upload artifact (single file)
+        if: ${{ steps.chunk.outputs.chunked == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: simorgh-${{ inputs.service }}-image
+          path: |
+            ${{ inputs.service }}.tar.gz
+            ${{ inputs.service }}.tar.gz.sha256
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload artifact (chunked)
+        if: ${{ steps.chunk.outputs.chunked == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: simorgh-${{ inputs.service }}-image
+          path: |
+            ${{ inputs.service }}.tar.gz.part-*
+            ${{ inputs.service }}.tar.gz.sha256
+            ${{ inputs.service }}.tar.gz.parts.sha256
+          retention-days: 7
+          compression-level: 0
+
+      - name: Instructions
+        run: |
+          cat <<EOF
+          ============================================================
+          Artifact uploaded: simorgh-${{ inputs.service }}-image
+          ============================================================
+          Download → scp to .68 → on .68:
+            unzip -j simorgh-${{ inputs.service }}-image.zip -d /tmp/
+
+            # if chunked:
+            cat /tmp/${{ inputs.service }}.tar.gz.part-* > /tmp/${{ inputs.service }}.tar.gz
+            rm /tmp/${{ inputs.service }}.tar.gz.part-*
+
+            sha256sum -c /tmp/${{ inputs.service }}.tar.gz.sha256
+            docker load < /tmp/${{ inputs.service }}.tar.gz
+            docker images simorgh-${{ inputs.service }}
+          ============================================================
+          EOF
