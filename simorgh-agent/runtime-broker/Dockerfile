@@ -18,13 +18,10 @@ RUN printf '%s\n' 'Acquire::Retries "20";' 'Acquire::http::Timeout "300";' 'Acqu
 ARG APT_MIRROR=
 ARG APT_SECURITY_MIRROR=
 RUN if [ -n "$APT_MIRROR" ]; then \
-      printf 'deb %s trixie main
-deb %s trixie-updates main
-' \
+      printf 'deb %s trixie main\ndeb %s trixie-updates main\n' \
         "$APT_MIRROR" "$APT_MIRROR" > /etc/apt/sources.list; \
       if [ -n "$APT_SECURITY_MIRROR" ]; then \
-        printf 'deb %s trixie-security main
-' "$APT_SECURITY_MIRROR" \
+        printf 'deb %s trixie-security main\n' "$APT_SECURITY_MIRROR" \
           >> /etc/apt/sources.list; \
       fi; \
       rm -f /etc/apt/sources.list.d/debian.sources; \
