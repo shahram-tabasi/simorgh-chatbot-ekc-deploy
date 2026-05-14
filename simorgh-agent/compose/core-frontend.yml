@@ -16,7 +16,7 @@ services:
       # otherwise wget routes the localhost request through the proxy
       # and gets a 503 from there. Also GET (not HEAD) since some nginx
       # setups have try_files rules that 4xx on HEAD.
-      test: ["CMD-SHELL", "wget --no-proxy -qO /dev/null http://localhost:80/chatbot/index.html || exit 1"]
+      test: ["CMD-SHELL", "http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= wget -qO /dev/null http://localhost:80/chatbot/index.html || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
