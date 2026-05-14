@@ -139,14 +139,14 @@ services:
       doc-processor:
         condition: service_healthy
     healthcheck:
-      # Accept any 2xx from /health. The body may report 'degraded' when
-      # an external dep (MySQL TPMS, OpenAI) is unreachable, but the API
-      # itself is up — that should not block dependents.
-      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8890/health || exit 1"]
-      interval: 30s
-      timeout: 10s
+      # /health synchronously polls MySQL TPMS and OpenAI; each times
+      # out at ~10s when the dep is unreachable. Need a wider timeout
+      # so the probe sees the eventual 200 (body may say 'degraded').
+      test: ["CMD-SHELL", "wget -qO /dev/null --timeout=40 http://127.0.0.1:8890/health || exit 1"]
+      interval: 45s
+      timeout: 45s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     restart: unless-stopped
 
 networks:
