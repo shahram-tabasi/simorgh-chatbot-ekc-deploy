@@ -74,7 +74,9 @@ services:
           memory: ${LOGSTASH_MEM_RESERVATION:-1g}
     volumes:
       - ../elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
-      - ../elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      # Not :ro — the logstash entrypoint script rewrites this file at
+      # startup to inject env-driven settings (pipeline.workers, etc).
+      - ../elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
     expose:
       - "5044"     # beats input
       - "5045"     # tcp json input
