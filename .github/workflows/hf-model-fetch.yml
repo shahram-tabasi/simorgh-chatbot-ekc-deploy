@@ -1,0 +1,123 @@
+name: Download HuggingFace model
+
+# Downloads a HuggingFace model on a GitHub-hosted runner (fast internet)
+# and uploads it as a tarball artifact. On .68:
+#
+#   gh run download <RUN_ID> -n hf-model -R shahram-tabasi/simorgh-chatbot-ekc-deploy
+#   scp hf-model.tar.gz tech@192.168.1.68:/tmp/
+#   # then on .68:
+#   docker run --rm \
+#     -v simorgh_huggingface_cache:/dst \
+#     -v /tmp:/src alpine \
+#     tar xzf /src/hf-model.tar.gz -C /dst --strip-components=2
+#   docker compose restart embeddings-service
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "HF model repo (e.g. sentence-transformers/all-mpnet-base-v2)"
+        type: string
+        default: "sentence-transformers/all-mpnet-base-v2"
+      revision:
+        description: "Branch / tag / commit to pin (blank = main)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install --quiet "huggingface_hub[cli]==0.24.6"
+
+      - name: Download model into cache layout
+        env:
+          HF_HUB_ENABLE_HF_TRANSFER: "1"
+          MODEL: ${{ inputs.model }}
+          REVISION: ${{ inputs.revision }}
+        run: |
+          pip install --quiet hf_transfer
+          mkdir -p hf-cache
+          ARGS=( "$MODEL" --local-dir-use-symlinks False --cache-dir hf-cache )
+          if [ -n "$REVISION" ]; then ARGS+=( --revision "$REVISION" ); fi
+          # huggingface-cli download lays out the standard cache structure
+          # (models--<org>--<name>/snapshots/<sha>/...), which is exactly
+          # what /root/.cache/huggingface/hub expects.
+          huggingface-cli download "${ARGS[@]}"
+          du -sh hf-cache
+
+      - name: Compute archive name
+        id: name
+        run: |
+          # safe filename: replace / with __
+          fname=$(echo "${{ inputs.model }}" | tr '/' '__')
+          echo "fname=$fname" >> "$GITHUB_OUTPUT"
+
+      - name: Pack tarball
+        run: |
+          set -eu
+          # We want the archive to contain just the 'hub/' directory so that
+          # extracting into a volume mounted at /root/.cache/huggingface
+          # lands the files at /root/.cache/huggingface/hub/models--*/...
+          mkdir -p staging/huggingface
+          mv hf-cache staging/huggingface/hub
+          OUT="${{ steps.name.outputs.fname }}.tar.gz"
+          tar -C staging -czf "$OUT" huggingface
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-${{ steps.name.outputs.fname }}
+          path: |
+            ${{ steps.name.outputs.fname }}.tar.gz
+            ${{ steps.name.outputs.fname }}.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      - name: Install instructions
+        run: |
+          cat <<EOF
+          ============================================================
+          Artifact: hf-${{ steps.name.outputs.fname }}
+          ============================================================
+          On a workstation with internet:
+            gh run download \${RUN_ID} \\
+                -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
+                -n hf-${{ steps.name.outputs.fname }}
+
+          Transfer to .68:
+            scp ${{ steps.name.outputs.fname }}.tar.gz \\
+                tech@192.168.1.68:/tmp/
+
+          On .68 — extract directly into the docker named volume that
+          embeddings-service / chat-service / documents-rag-service mount:
+
+            sha256sum -c /tmp/${{ steps.name.outputs.fname }}.tar.gz.sha256
+
+            docker run --rm \\
+              -v simorgh_huggingface_cache:/dst \\
+              -v /tmp:/src \\
+              alpine tar xzf /src/${{ steps.name.outputs.fname }}.tar.gz \\
+                              -C /dst --strip-components=1
+
+            docker compose -f \\
+              ~/simorgh-chatbot-ekc-deploy/simorgh-agent/docker-compose.yml \\
+              restart embeddings-service
+
+          Verify on .68 that the model is now local:
+            docker exec embeddings-service \\
+              ls /root/.cache/huggingface/hub/
+          ============================================================
+          EOF
