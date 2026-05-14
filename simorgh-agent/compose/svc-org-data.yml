@@ -25,11 +25,13 @@ services:
       - ORG_MYSQL_DATABASE=${ORG_MYSQL_DATABASE:-${MYSQL_DATABASE:-TPMS}}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8042/health || exit 1"]
-      interval: 30s
-      timeout: 10s
+      # /health queries MySQL synchronously; widen window so a slow
+      # dep doesn't trip the probe.
+      test: ["CMD-SHELL", "wget -qO /dev/null --timeout=25 http://127.0.0.1:8042/health || exit 1"]
+      interval: 45s
+      timeout: 30s
       retries: 3
-      start_period: 15s
+      start_period: 30s
     restart: unless-stopped
 
 networks:

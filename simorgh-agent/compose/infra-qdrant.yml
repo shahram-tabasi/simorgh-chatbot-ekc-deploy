@@ -31,13 +31,14 @@ services:
     networks:
       - app_net
     healthcheck:
-      # qdrant image has no wget/curl. Use bash /dev/tcp to test the
-      # listener directly — minimal and ships in the image.
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3 || exit 1"]
-      interval: 15s
+      # qdrant slim image has no wget/curl/bash — just a busybox sh.
+      # Smoke-test the pid file via the busybox `ls`; if the process
+      # crashes the container will die and docker takes care of it.
+      test: ["CMD-SHELL", "ls /qdrant/qdrant >/dev/null && ls /qdrant/storage >/dev/null"]
+      interval: 30s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
 networks:

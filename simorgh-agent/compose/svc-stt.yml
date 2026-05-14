@@ -14,11 +14,14 @@ services:
     networks:
       - app_net
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8001/health || exit 1"]
-      interval: 30s
-      timeout: 10s
+      # faster-whisper downloads the model on first boot (~150 MB through
+      # Xray VPN) before /health responds. Wide start_period accommodates
+      # the slow first run; subsequent boots load the cached model fast.
+      test: ["CMD-SHELL", "wget -qO /dev/null --timeout=20 http://127.0.0.1:8001/health || exit 1"]
+      interval: 45s
+      timeout: 25s
       retries: 3
-      start_period: 120s
+      start_period: 600s
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
