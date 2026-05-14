@@ -130,7 +130,7 @@ def get_current_username_from_token(token: str) -> Optional[str]:
 # FASTAPI DEPENDENCIES
 # =============================================================================
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Depends
 
 
 async def get_current_user(authorization: str = Header(None)) -> str:
