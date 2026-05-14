@@ -84,10 +84,17 @@ services:
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
       # EKC knowledge
       - EKC_KNOWLEDGE_PATH=/app/ekc-knowledge
+      # HuggingFace cache (shared with embeddings-service / chat-service)
+      - HF_HOME=/root/.cache/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
     volumes:
       - ../uploads:/app/uploads
       - ../logs:/app/logs
       - ekc_knowledge:/app/ekc-knowledge:ro
+      - huggingface_cache:/root/.cache/huggingface
+      - sentence_transformers_cache:/root/.cache/torch/sentence_transformers
       # Admin-managed restrictions file. Edit on the host at
       # ${RESTRICTIONS_HOST_PATH:-/home/ubuntu/simorgh-restrictions} or
       # via PUT /api/v2/agent/restrictions.
@@ -125,3 +132,9 @@ volumes:
       type: none
       o: bind
       device: ${RESTRICTIONS_HOST_PATH:-/home/ubuntu/simorgh-restrictions}
+  huggingface_cache:
+    name: simorgh_huggingface_cache
+    external: true
+  sentence_transformers_cache:
+    name: simorgh_sentence_transformers_cache
+    external: true
