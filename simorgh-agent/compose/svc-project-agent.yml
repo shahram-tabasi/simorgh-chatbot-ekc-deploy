@@ -134,7 +134,7 @@ volumes:
       device: ${RESTRICTIONS_HOST_PATH:-/home/ubuntu/simorgh-restrictions}
   huggingface_cache:
     name: simorgh_huggingface_cache
-    external: true
+    driver: local
   sentence_transformers_cache:
     name: simorgh_sentence_transformers_cache
-    external: true
+    driver: local
