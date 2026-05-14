@@ -10,3 +10,4 @@ aiohttp>=3.9.0
 python-jose[cryptography]>=3.3.0
 PyJWT>=2.8.0
 tenacity>=8.2.3
+passlib[bcrypt]>=1.7.4
