@@ -31,7 +31,9 @@ services:
     networks:
       - app_net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6333/readyz"]
+      # qdrant image has no wget/curl. Use bash /dev/tcp to test the
+      # listener directly — minimal and ships in the image.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
