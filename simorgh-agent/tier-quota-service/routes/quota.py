@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Depends
 
-from routes.auth_v2 import get_current_user
+from services.auth_utils import get_current_user
 from services.user_tier_service import get_tier_service
 from models.tier_models import QuotaStatusResponse, TierQuotaInfo
 

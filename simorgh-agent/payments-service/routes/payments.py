@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request, Header
 from pydantic import BaseModel
 
-from routes.auth_v2 import get_current_user
+from services.auth_utils import get_current_user
 from services.payment_service import get_payment_service, TIER_PRICES
 
 logger = logging.getLogger(__name__)
