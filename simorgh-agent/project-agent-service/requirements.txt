@@ -29,3 +29,4 @@ numpy<2.0.0
 paramiko>=3.4.0
 tenacity>=8.2.3
 sentence-transformers>=3.0.0
+torch==2.5.0
