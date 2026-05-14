@@ -42,18 +42,20 @@ jobs:
 
       - name: Download model into cache layout
         env:
-          HF_HUB_ENABLE_HF_TRANSFER: "1"
+          # Explicitly disable hf_transfer / xet — its blob-only layout
+          # breaks offline loading because transformers can't find the
+          # snapshot files. Standard downloader = proper symlinks.
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+          HF_HUB_DISABLE_XET: "1"
           MODEL: ${{ inputs.model }}
           REVISION: ${{ inputs.revision }}
         run: |
-          pip install --quiet hf_transfer
           mkdir -p hf-cache
-          ARGS=( "$MODEL" --local-dir-use-symlinks False --cache-dir hf-cache )
+          ARGS=( "$MODEL" --cache-dir hf-cache )
           if [ -n "$REVISION" ]; then ARGS+=( --revision "$REVISION" ); fi
-          # huggingface-cli download lays out the standard cache structure
-          # (models--<org>--<name>/snapshots/<sha>/...), which is exactly
-          # what /root/.cache/huggingface/hub expects.
           huggingface-cli download "${ARGS[@]}"
+          echo "----- snapshot contents -----"
+          find hf-cache -maxdepth 5 -printf '%y %p\n' | head -40
           du -sh hf-cache
 
       - name: Compute archive name
