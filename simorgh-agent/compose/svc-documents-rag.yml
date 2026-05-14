@@ -45,6 +45,8 @@ services:
       # CORS
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
       # HF caches
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
       - HF_HOME=/root/.cache/huggingface
       - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
     volumes:

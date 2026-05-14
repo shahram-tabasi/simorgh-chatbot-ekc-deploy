@@ -25,6 +25,8 @@ services:
       - LLM_GATEWAY_URL=http://llm-gateway:8030
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
       - HF_HOME=/root/.cache/huggingface
       - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
     volumes:
