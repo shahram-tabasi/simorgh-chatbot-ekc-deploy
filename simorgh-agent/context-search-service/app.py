@@ -1,27 +1,32 @@
 """
 context-search-service
 ======================
-Hybrid (BM25 + kNN) search across the Elasticsearch indices the simorgh
-stack writes to. The agent calls this BEFORE generation to assemble a
-"high-quality context" block.
+Hybrid (BM25 + kNN) search and analytical aggregations across the
+Elasticsearch indices the simorgh stack writes to. The agent calls this
+BEFORE generation to assemble high-quality context, and DURING reasoning
+to ask analytical questions ("how many", "trend of", "p95 latency of").
 
 REST:
-  POST /search/content     — hybrid search across project docs, GitLab,
-                             TPMS, technical-knowledge, emails
-  POST /search/logs        — BM25 over simorgh-logs-*
-  POST /search/cot         — BM25 over simorgh-cot-* (prior agent traces)
-  POST /index/content      — index a single document (called by ingestors)
-  POST /index/content/bulk — bulk index
+  POST /search/content        — hybrid search across project docs, GitLab,
+                                TPMS, technical-knowledge, emails
+  POST /search/logs           — BM25 over simorgh-logs-*
+  POST /search/cot            — hybrid over simorgh-cot-* (prior agent traces)
+  POST /search/projects       — hybrid over simorgh-projects (structured project info)
+  POST /aggregate             — ES terms aggregation (group_by + metric)
+  POST /time_series           — ES date_histogram (interval + metric)
+  POST /index/content         — index a single document
+  POST /index/content/bulk    — bulk index
+  POST /index/cot             — index a completed CoT trace
+  POST /index/project_meta    — upsert a structured project record
   GET  /health
 
-MCP:
-  search_context(query, project_id?, k?)
-  search_past_cot(query, project_id?, k?)
-  search_logs(query, time_range?, k?)
+MCP tools (preferred surface for the COT agent):
+  search_context, search_past_cot, search_logs_mcp,
+  search_projects, aggregate_field, time_series_query, index_cot_trace
 """
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from elasticsearch import Elasticsearch, helpers
@@ -63,7 +68,7 @@ def es() -> Elasticsearch:
 
 
 # ---------------------------------------------------------------------------
-# Models
+# Models — search
 # ---------------------------------------------------------------------------
 class ContentDoc(BaseModel):
     source: str = Field(..., description="gitlab|tpms|project|tech-kb|email")
@@ -105,9 +110,112 @@ class SearchResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Models — CoT trace indexing
+# ---------------------------------------------------------------------------
+class CotStepRecord(BaseModel):
+    """One step in a chain-of-thought trace."""
+    step_number: int
+    step_type: Literal[
+        "plan", "search", "tool_call", "llm", "decision", "reflect", "answer"
+    ] = "tool_call"
+    title: str = ""
+    description: str = ""
+    tool: str | None = None
+    tool_input: dict | None = None
+    tool_output_summary: str | None = None
+    latency_ms: int | None = None
+
+
+class CotTrace(BaseModel):
+    """A completed (or in-progress) chain-of-thought reasoning trace.
+
+    Indexed into simorgh-cot-<YYYY.MM>. The question is embedded for
+    semantic recall via search_past_cot.
+    """
+    chain_id: str
+    session_id: str = ""
+    user_id: str = ""
+    project_id: str | None = None
+    oenum: str | None = None
+    question: str
+    reasoning: str = ""
+    final_answer: str | None = None
+    success: bool = True
+    steps: list[CotStepRecord] = []
+    total_latency_ms: int | None = None
+    tags: list[str] = []
+
+
+# ---------------------------------------------------------------------------
+# Models — structured project metadata
+# ---------------------------------------------------------------------------
+class ProjectMeta(BaseModel):
+    """Structured TPMS project record. Indexed into simorgh-projects with a
+    stable id (oenum) so updates upsert. Carries a denormalized text body
+    for BM25 + an embedding for semantic ranking."""
+    oenum: str = Field(..., description="Stable id — used as ES _id")
+    project_id: str | None = None
+    name: str = ""
+    status: str | None = None
+    customer: str | None = None
+    voltage_class: str | None = None
+    motor_type: str | None = None
+    year: int | None = None
+    panel_count: int | None = None
+    feeder_count: int | None = None
+    equipment_count: int | None = None
+    raw_text: str = ""
+    tags: list[str] = []
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Models — analytics
+# ---------------------------------------------------------------------------
+IndexAlias = Literal["content", "logs", "cot", "projects"]
+
+_INDEX_MAP: dict[str, str] = {
+    "content":  "simorgh-content",
+    "logs":     "simorgh-logs-*",
+    "cot":      "simorgh-cot-*",
+    "projects": "simorgh-projects",
+}
+
+
+class AggregateRequest(BaseModel):
+    """Group-by aggregation on one of the four indices.
+
+    metric=count       — bucket doc_count
+    metric=avg|sum|min|max — numeric stat on metric_field
+    metric=p50|p95|p99 — percentile of metric_field
+    """
+    index: IndexAlias
+    group_by: str = Field(..., description="Field, .keyword auto-appended if text")
+    metric: Literal["count", "avg", "sum", "min", "max", "p50", "p95", "p99"] = "count"
+    metric_field: str = ""
+    filter_query: str = ""
+    time_field: str = "@timestamp"
+    time_range: str = "now-30d"
+    top_n: int = Field(20, ge=1, le=500)
+
+
+class TimeSeriesRequest(BaseModel):
+    """Date-histogram time series. Optional group_by splits into multiple series."""
+    index: IndexAlias
+    interval: str = "1d"
+    metric: Literal["count", "avg", "sum", "p50", "p95"] = "count"
+    metric_field: str = ""
+    filter_query: str = ""
+    time_field: str = "@timestamp"
+    time_range: str = "now-90d"
+    group_by: str | None = None
+    top_n: int = Field(5, ge=1, le=20)
+
+
+# ---------------------------------------------------------------------------
 # FastAPI
 # ---------------------------------------------------------------------------
-app = FastAPI(title="context-search", version="0.1.0")
+app = FastAPI(title="context-search", version="0.2.0")
 app.middleware("http")(request_id_middleware)
 
 
@@ -220,22 +328,223 @@ def search_logs(req: SearchRequest):
 
 
 @app.post("/search/cot")
-def search_cot(req: SearchRequest):
-    body = {
+async def search_cot(req: SearchRequest):
+    """Hybrid (BM25 + kNN) over CoT traces. The question field was embedded
+    at index time so semantic recall ("have I solved this before?") works."""
+    bm25 = {
         "query": {
             "bool": {
-                "must": [{"query_string": {"query": req.query}}],
+                "must": [{"multi_match": {
+                    "query": req.query,
+                    "fields": ["question^2", "reasoning", "final_answer", "tags"],
+                }}],
                 "filter": _filter_clause(req),
             }
         },
         "size": req.k,
-        "sort": [{"@timestamp": "desc"}],
+        "sort": ["_score", {"@timestamp": "desc"}],
     }
+    body: dict[str, Any] = bm25
+    if req.use_knn:
+        vec = await _embed(req.query)
+        if vec is not None:
+            body["knn"] = {
+                "field": "embedding",
+                "query_vector": vec,
+                "k": req.k,
+                "num_candidates": max(req.k * 5, 50),
+                "filter": _filter_clause(req),
+            }
     r = es().search(index="simorgh-cot-*", body=body)
-    return {"hits": [h["_source"] | {"_id": h["_id"]} for h in r["hits"]["hits"]],
+    return {"hits": [h["_source"] | {"_id": h["_id"], "_score": h["_score"]}
+                     for h in r["hits"]["hits"]],
             "took_ms": r["took"]}
 
 
+@app.post("/search/projects", response_model=SearchResponse)
+async def search_projects(req: SearchRequest):
+    """Hybrid search over the structured project index. Useful when the
+    user asks about a project by partial name / customer / spec without
+    knowing the oenum."""
+    bm25 = {
+        "query": {
+            "bool": {
+                "must": [{"multi_match": {
+                    "query": req.query,
+                    "fields": ["name^3", "customer^2", "raw_text",
+                               "voltage_class", "motor_type", "tags"],
+                }}],
+                "filter": _filter_clause(req),
+            }
+        },
+        "size": req.k,
+        "highlight": {"fields": {"raw_text": {"fragment_size": 200,
+                                              "number_of_fragments": 1}}},
+    }
+    body: dict[str, Any] = bm25
+    if req.use_knn:
+        vec = await _embed(req.query)
+        if vec is not None:
+            body["knn"] = {
+                "field": "embedding",
+                "query_vector": vec,
+                "k": req.k,
+                "num_candidates": max(req.k * 5, 50),
+                "filter": _filter_clause(req),
+            }
+    r = es().search(index="simorgh-projects", body=body, ignore_unavailable=True)
+    hits = []
+    for h in r["hits"]["hits"]:
+        src = h.get("_source", {})
+        snippet = ""
+        if "highlight" in h and "raw_text" in h["highlight"]:
+            snippet = " … ".join(h["highlight"]["raw_text"])
+        hits.append(SearchHit(
+            id=h["_id"], score=h["_score"], source="project",
+            title=src.get("name"), path=src.get("oenum"),
+            snippet=snippet or (src.get("raw_text", "")[:200]),
+            metadata={k: v for k, v in src.items() if k not in {"name", "raw_text"}},
+        ))
+    return SearchResponse(hits=hits, took_ms=r["took"])
+
+
+# ---------------------------------------------------------------------------
+# Aggregations (analytical surface)
+# ---------------------------------------------------------------------------
+def _build_metric_agg(req: AggregateRequest | TimeSeriesRequest) -> dict | None:
+    if req.metric == "count":
+        return None
+    if not req.metric_field:
+        raise HTTPException(status_code=400,
+                            detail=f"metric={req.metric} requires metric_field")
+    if req.metric.startswith("p"):  # p50 / p95 / p99
+        pct = float(req.metric[1:])
+        return {"percentiles": {"field": req.metric_field, "percents": [pct]}}
+    return {req.metric: {"field": req.metric_field}}
+
+
+def _normalize_field(field: str) -> str:
+    """ES 'keyword' subfield is required for terms aggregation on text fields.
+    Be lenient: if the user passed a bare 'service', try 'service.keyword'."""
+    return field if field.endswith(".keyword") or "." in field else f"{field}.keyword"
+
+
+@app.post("/aggregate")
+def aggregate(req: AggregateRequest):
+    index = _INDEX_MAP[req.index]
+    metric_agg = _build_metric_agg(req)
+    # Try .keyword first; if it 400s, retry with the bare field name.
+    for field_candidate in (_normalize_field(req.group_by), req.group_by):
+        body: dict[str, Any] = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "must": [{"query_string": {"query": req.filter_query or "*"}}],
+                    "filter": [{"range": {req.time_field: {"gte": req.time_range}}}],
+                }
+            },
+            "aggs": {
+                "group": {
+                    "terms": {"field": field_candidate, "size": req.top_n}
+                }
+            },
+        }
+        if metric_agg:
+            body["aggs"]["group"]["aggs"] = {"m": metric_agg}
+        try:
+            r = es().search(index=index, body=body, ignore_unavailable=True)
+            break
+        except Exception as e:
+            if "Fielddata" in str(e) or "Text fields are not optimised" in str(e):
+                continue
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        raise HTTPException(status_code=400, detail=f"unaggregatable field {req.group_by}")
+
+    out = []
+    for b in r["aggregations"]["group"]["buckets"]:
+        val = b["doc_count"]
+        if metric_agg:
+            m = b["m"]
+            if req.metric.startswith("p"):
+                val = list(m["values"].values())[0]
+            else:
+                val = m["value"]
+        out.append({"key": b["key"], "value": val, "count": b["doc_count"]})
+    return {"index": index, "field": req.group_by, "metric": req.metric,
+            "time_range": req.time_range, "buckets": out, "took_ms": r["took"]}
+
+
+@app.post("/time_series")
+def time_series(req: TimeSeriesRequest):
+    index = _INDEX_MAP[req.index]
+    metric_agg = _build_metric_agg(req)
+    inner_aggs: dict[str, Any] = {}
+    if metric_agg:
+        inner_aggs["m"] = metric_agg
+    if req.group_by:
+        terms_block: dict[str, Any] = {
+            "terms": {"field": _normalize_field(req.group_by), "size": req.top_n}
+        }
+        if metric_agg:
+            terms_block["aggs"] = {"m": metric_agg}
+        inner_aggs["by"] = terms_block
+
+    body: dict[str, Any] = {
+        "size": 0,
+        "query": {
+            "bool": {
+                "must": [{"query_string": {"query": req.filter_query or "*"}}],
+                "filter": [{"range": {req.time_field: {"gte": req.time_range}}}],
+            }
+        },
+        "aggs": {
+            "ts": {
+                "date_histogram": {
+                    "field": req.time_field,
+                    "fixed_interval": req.interval if req.interval[-1] in "smhd"
+                    else None,
+                    "calendar_interval": req.interval if req.interval[-1] in "wMy"
+                    else None,
+                    "min_doc_count": 0,
+                },
+                "aggs": inner_aggs or {},
+            }
+        },
+    }
+    # Drop the None one
+    body["aggs"]["ts"]["date_histogram"] = {
+        k: v for k, v in body["aggs"]["ts"]["date_histogram"].items() if v is not None
+    }
+    try:
+        r = es().search(index=index, body=body, ignore_unavailable=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    series = []
+    for b in r["aggregations"]["ts"]["buckets"]:
+        point = {"t": b["key_as_string"], "count": b["doc_count"]}
+        if metric_agg and "m" in b:
+            m = b["m"]
+            point["value"] = (list(m["values"].values())[0]
+                              if req.metric.startswith("p") else m["value"])
+        if req.group_by and "by" in b:
+            point["by"] = []
+            for ib in b["by"]["buckets"]:
+                p = {"key": ib["key"], "count": ib["doc_count"]}
+                if metric_agg and "m" in ib:
+                    im = ib["m"]
+                    p["value"] = (list(im["values"].values())[0]
+                                  if req.metric.startswith("p") else im["value"])
+                point["by"].append(p)
+        series.append(point)
+    return {"index": index, "interval": req.interval, "metric": req.metric,
+            "series": series, "took_ms": r["took"]}
+
+
+# ---------------------------------------------------------------------------
+# Indexing endpoints
+# ---------------------------------------------------------------------------
 @app.post("/index/content")
 async def index_content(doc: ContentDoc):
     body = doc.model_dump(exclude_none=True)
@@ -266,38 +575,198 @@ async def index_content_bulk(docs: list[ContentDoc]):
     return {"indexed": ok, "errors": errors}
 
 
+@app.post("/index/cot")
+async def index_cot(trace: CotTrace):
+    """Ingest one completed CoT trace.
+
+    The question is embedded so search_past_cot can do semantic recall.
+    Indexed into simorgh-cot-YYYY.MM (one shard per calendar month is
+    plenty for office scale, gives nice retention windowing).
+    """
+    body = trace.model_dump()
+    body["@timestamp"] = datetime.now(timezone.utc).isoformat()
+    body["steps_count"] = len(trace.steps)
+    body["service"] = "cot"
+    # Embed question + reasoning prefix for richer semantic recall.
+    embed_input = f"{trace.question}\n\n{trace.reasoning[:1500]}"
+    v = await _embed(embed_input)
+    if v is not None:
+        body["embedding"] = v
+    idx = "simorgh-cot-" + datetime.now(timezone.utc).strftime("%Y.%m")
+    es().index(index=idx, document=body, id=trace.chain_id)
+    return {"indexed": True, "index": idx, "chain_id": trace.chain_id}
+
+
+@app.post("/index/project_meta")
+async def index_project_meta(p: ProjectMeta):
+    """Upsert one structured project record. Uses oenum as _id so repeat
+    calls update in-place rather than duplicating."""
+    body = p.model_dump(exclude_none=True)
+    body["@timestamp"] = datetime.now(timezone.utc).isoformat()
+    body["source"] = "tpms"
+    if p.raw_text:
+        v = await _embed(p.raw_text[:1500])
+        if v is not None:
+            body["embedding"] = v
+    es().index(index="simorgh-projects", document=body, id=p.oenum)
+    return {"indexed": True, "oenum": p.oenum}
+
+
 # ---------------------------------------------------------------------------
-# MCP
+# MCP — the surface the COT agent actually uses
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
     "context-search",
     instructions=(
-        "Hybrid (BM25 + vector) search across project docs, GitLab "
-        "blobs, TPMS rows, technical-knowledge, and prior agent traces. "
-        "Use BEFORE generating a response to assemble high-quality context."
+        "Hybrid (BM25 + kNN) search and analytical aggregations across "
+        "the simorgh knowledge base. Indices: 'content' (docs, GitLab "
+        "blobs, TPMS rows, tech-kb), 'projects' (structured project "
+        "metadata), 'cot' (prior reasoning traces), 'logs' (runtime "
+        "evidence). "
+        "USE BEFORE GENERATING: search_context for narrative facts, "
+        "search_projects for structured project info, search_past_cot "
+        "for 'have I solved this before?'. "
+        "USE DURING REASONING: aggregate_field for analytical counts/avg/p95, "
+        "time_series_query for trends. "
+        "Always prefer aggregate_field over retrieving all docs and counting."
     ),
 )
 
 
 @mcp.tool()
 async def search_context(query: str, project_id: str = "", oenum: str = "", k: int = 8) -> dict:
-    """Hybrid search across all indexed simorgh content. Returns up to k hits."""
+    """Hybrid (BM25 + kNN) search over project docs, GitLab blobs, TPMS rows,
+    technical-knowledge, and emails. Returns up to k hits with highlighted
+    snippets. Use BEFORE generation for narrative facts."""
     req = SearchRequest(query=query, project_id=project_id or None,
                         oenum=oenum or None, k=k)
-    resp = await search_content(req)
-    return resp.model_dump()
+    return (await search_content(req)).model_dump()
+
+
+@mcp.tool()
+async def search_projects_mcp(query: str, project_id: str = "", k: int = 10) -> dict:
+    """Hybrid search over STRUCTURED project metadata (name, customer,
+    voltage_class, motor_type, status, year, panel/feeder/equipment counts).
+    Use when the user references a project loosely ('the 6kV motor project
+    we did for ABC last year') and you need to resolve it to an oenum."""
+    req = SearchRequest(query=query, project_id=project_id or None, k=k)
+    return (await search_projects(req)).model_dump()
 
 
 @mcp.tool()
 async def search_past_cot(query: str, project_id: str = "", k: int = 5) -> dict:
-    """Search prior chain-of-thought traces. Useful for 'have I solved this before?'"""
-    return search_cot(SearchRequest(query=query, project_id=project_id or None, k=k))
+    """Search prior chain-of-thought traces (hybrid BM25 + kNN over the
+    'question' field). Use early in reasoning to ask 'have I solved a
+    similar problem before?'. Returned hits include the steps and final
+    answer of past sessions — copy what worked, learn from what failed."""
+    return await search_cot(SearchRequest(query=query, project_id=project_id or None, k=k))
 
 
 @mcp.tool()
 async def search_logs_mcp(query: str, k: int = 10) -> dict:
-    """Search service logs. Use sparingly — for debugging context only."""
+    """Search service logs (BM25 over simorgh-logs-*). Use for runtime
+    evidence: 'did embeddings-service report any errors when I called it?',
+    'what was the last MySQL timeout in auth-service?'. Sparing use — for
+    debugging context only."""
     return search_logs(SearchRequest(query=query, k=k))
+
+
+@mcp.tool()
+async def aggregate_field(
+    index: str,
+    group_by: str,
+    metric: str = "count",
+    metric_field: str = "",
+    filter_query: str = "",
+    time_range: str = "now-30d",
+    top_n: int = 20,
+) -> dict:
+    """Run an ES terms aggregation. Use for ANALYTICAL questions ('how many',
+    'distribution of', 'top N', 'average per group').
+
+    Examples:
+      How many projects per voltage_class:
+        aggregate_field(index='projects', group_by='voltage_class')
+
+      Avg LLM latency per service over last 7 days:
+        aggregate_field(index='logs', group_by='service',
+                        metric='avg', metric_field='latency_ms',
+                        time_range='now-7d')
+
+      Count of failed CoT traces per step_type:
+        aggregate_field(index='cot', group_by='steps.tool',
+                        filter_query='success:false')
+
+    index:        'content' | 'logs' | 'cot' | 'projects'
+    metric:       'count' (default) | 'avg' | 'sum' | 'min' | 'max'
+                  | 'p50' | 'p95' | 'p99'
+    metric_field: required for non-count metrics, the numeric field to compute on
+    filter_query: ES query_string syntax, e.g. 'level:ERROR AND service:backend'
+    time_range:   'now-7d' | 'now-1M' etc.
+
+    Returns {"buckets": [{"key": ..., "value": ..., "count": ...}, ...]}.
+    """
+    return aggregate(AggregateRequest(
+        index=index, group_by=group_by, metric=metric,
+        metric_field=metric_field, filter_query=filter_query,
+        time_range=time_range, top_n=top_n,
+    ))
+
+
+@mcp.tool()
+async def time_series_query(
+    index: str,
+    interval: str = "1d",
+    metric: str = "count",
+    metric_field: str = "",
+    filter_query: str = "",
+    time_range: str = "now-90d",
+    group_by: str | None = None,
+    top_n: int = 5,
+) -> dict:
+    """Get a date-bucketed time series. Use for TREND questions ('is X
+    increasing over time?', 'usage by week', 'p95 latency over the last
+    month').
+
+    Examples:
+      Daily ERROR count per service for last 30d:
+        time_series_query(index='logs', interval='1d',
+                          filter_query='level:ERROR', group_by='service',
+                          time_range='now-30d')
+
+      Weekly project count by voltage_class:
+        time_series_query(index='projects', interval='1w',
+                          group_by='voltage_class', time_range='now-1y')
+
+      Hourly p95 LLM latency:
+        time_series_query(index='logs', interval='1h',
+                          metric='p95', metric_field='latency_ms',
+                          filter_query='event:llm_call',
+                          time_range='now-1d')
+
+    interval: '1m','5m','1h','1d' (fixed) or '1w','1M','1y' (calendar)
+    """
+    return time_series(TimeSeriesRequest(
+        index=index, interval=interval, metric=metric,
+        metric_field=metric_field, filter_query=filter_query,
+        time_range=time_range, group_by=group_by, top_n=top_n,
+    ))
+
+
+@mcp.tool()
+async def index_cot_trace(trace_json: dict) -> dict:
+    """Persist a completed CoT trace so future runs can recall it.
+
+    Called by the agent itself at the END of reasoning. The trace_json
+    must match the CotTrace model:
+      {chain_id, session_id, user_id, project_id?, oenum?, question,
+       reasoning, final_answer?, success, steps: [{step_number,
+       step_type, title, description, tool?, ...}], total_latency_ms?,
+       tags?: [...]}.
+
+    Returns the assigned ES _id and index name. Idempotent on chain_id.
+    """
+    return await index_cot(CotTrace(**trace_json))
 
 
 app.mount("/mcp", mcp.streamable_http_app())

@@ -23,6 +23,47 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Ship completed CoT traces to context-search-service. Fire-and-forget; the
+# agent must continue to work when ELK is offline.
+# ---------------------------------------------------------------------------
+try:
+    from simorgh_clients import context_search as _csc
+except Exception:
+    _csc = None
+
+
+async def _ship_cot_trace(analysis: COTAnalysis, success: bool) -> None:
+    """Best-effort: index the trace so future runs can semantically recall it."""
+    if _csc is None:
+        return
+    try:
+        await _csc.index_cot_trace({
+            "chain_id":      str(analysis.chain_id),
+            "session_id":    "",
+            "user_id":       "",
+            "project_id":    str(analysis.project_id),
+            "question":      analysis.user_input,
+            "reasoning":     analysis.reasoning or "",
+            "final_answer":  None,
+            "success":       success,
+            "steps": [
+                {
+                    "step_number":   s.step_number,
+                    "step_type":     "tool_call" if s.tool_needed else "plan",
+                    "title":         s.title,
+                    "description":   s.description,
+                    "tool":          s.tool_needed,
+                    "tool_input":    s.tool_input,
+                }
+                for s in analysis.steps
+            ],
+            "tags": [],
+        })
+    except Exception:
+        logger.debug("ship_cot_trace_failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Admin-managed restrictions file. Read on demand and cached by mtime so the
 # hot path costs one stat() call when nothing changed.
 # ---------------------------------------------------------------------------
@@ -303,12 +344,15 @@ class COTEngine:
                 f"COT analysis complete: chain={chain_id}, "
                 f"steps={len(analysis.steps)}, project={request.project_id}"
             )
+            # Fire-and-forget: ship the trace to context-search so future
+            # CoT runs can recall it via search_past_cot.
+            await _ship_cot_trace(analysis, success=True)
             return analysis
 
         except Exception as e:
             logger.error(f"COT analysis failed: {e}", exc_info=True)
             # Return a minimal plan on failure
-            return COTAnalysis(
+            fallback = COTAnalysis(
                 chain_id=chain_id,
                 project_id=request.project_id,
                 user_input=request.user_input,
@@ -327,6 +371,8 @@ class COTEngine:
                 ],
                 total_steps=1,
             )
+            await _ship_cot_trace(fallback, success=False)
+            return fallback
 
     async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call the LLM service for COT analysis."""

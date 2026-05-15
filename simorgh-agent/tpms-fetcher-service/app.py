@@ -27,6 +27,44 @@ from mcp.server.fastmcp import FastMCP
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Optional fire-and-forget index of project metadata into context-search-service.
+# Importable even when shared/ isn't installed (e.g. in unit tests).
+# ---------------------------------------------------------------------------
+try:
+    from simorgh_clients import context_search as _csc
+except Exception:
+    _csc = None
+
+
+async def _ship_project_meta(oenum, project, panels, feeders, eq_count):
+    """Upsert structured project metadata into simorgh-projects ES index.
+    Best-effort — never blocks the fetch response."""
+    if _csc is None:
+        return
+    try:
+        await _csc.index_project_meta({
+            "oenum":             oenum,
+            "project_id":        str(project.get("id_project_main") or ""),
+            "name":              project.get("name") or project.get("project_name") or "",
+            "status":            project.get("status"),
+            "customer":          project.get("customer") or project.get("client"),
+            "voltage_class":     project.get("voltage_class"),
+            "motor_type":        project.get("motor_type"),
+            "year":              project.get("year"),
+            "panel_count":       len(panels or []),
+            "feeder_count":      len(feeders or []),
+            "equipment_count":   eq_count,
+            "raw_text":          _project_to_text({
+                "oenum": oenum, "project": project, "panels": panels,
+                "feeders": feeders, "equipment_count": eq_count,
+            }),
+            "tags":              [],
+        })
+    except Exception:
+        logger.debug("ship_project_meta_failed", exc_info=True)
+
+
 app = FastAPI(title="TPMS Data Fetcher Service", version="1.0.0")
 
 # MySQL TPMS connection
@@ -268,6 +306,12 @@ async def fetch_project(oenum: str):
         _project_cache[oenum] = data
 
         logger.info(f"Fetched TPMS data: {oenum} - {len(panels)} panels, {len(feeders)} feeders")
+
+        # Fire-and-forget: upsert into the simorgh-projects ES index so
+        # the COT agent can search structured project metadata + aggregate
+        # by status / voltage_class / customer / year etc.
+        await _ship_project_meta(oenum, project, panels, feeders, eq_count)
+
         return FetchResponse(**data)
 
     except HTTPException:
