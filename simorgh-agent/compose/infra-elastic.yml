@@ -92,7 +92,9 @@ services:
     container_name: kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - SERVER_PUBLICBASEURL=${KIBANA_PUBLIC_URL:-http://kibana.simorgh.local}
+      - SERVER_PUBLICBASEURL=${KIBANA_PUBLIC_URL:-https://simorghai.electrokavir.com/kibana}
+      - SERVER_BASEPATH=/kibana
+      - SERVER_REWRITEBASEPATH=true
       - XPACK_SECURITY_ENABLED=${ELASTIC_SECURITY_ENABLED:-false}
       - NODE_OPTIONS=--max-old-space-size=${KIBANA_NODE_HEAP_MB:-1500}
     deploy:

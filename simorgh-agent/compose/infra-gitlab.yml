@@ -24,9 +24,15 @@ services:
       # inside the container, which is NOT what the compose mapping
       # targets, and every host request gets a TCP RST.
       GITLAB_OMNIBUS_CONFIG: |
-        external_url '${GITLAB_EXTERNAL_URL:-http://gitlab.simorgh.local:8929}'
+        external_url '${GITLAB_EXTERNAL_URL:-https://simorghai.electrokavir.com/gitlab}'
         nginx['listen_port']                     = 80
         nginx['listen_https']                    = false
+        # Trust the host nginx in front of us — needed for OAuth callbacks
+        # and avatar URLs to come back as https://.../gitlab/...
+        nginx['real_ip_trusted_addresses']       = ['172.16.0.0/12', '192.168.0.0/16']
+        nginx['real_ip_header']                  = 'X-Forwarded-For'
+        gitlab_rails['gitlab_https']             = true
+        gitlab_rails['trusted_proxies']          = ['172.16.0.0/12', '192.168.0.0/16']
         gitlab_rails['initial_root_password']    = ENV['GITLAB_ROOT_PASSWORD']
         gitlab_rails['gitlab_shell_ssh_port']    = ${GITLAB_SSH_PORT:-2222}
         gitlab_rails['time_zone']                = '${TZ:-UTC}'
