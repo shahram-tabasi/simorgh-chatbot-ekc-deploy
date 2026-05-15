@@ -59,7 +59,7 @@ class EKCKnowledgeService:
     def index(self) -> Dict[str, Any]:
         if self._index is None:
             self._load_index()
-        return self._index
+        return self._index or {"total_documents": 0, "documents": [], "keyword_index": {}, "category_index": {}, "domain_index": {}}
 
     def reload(self):
         """Force reload the knowledge index."""

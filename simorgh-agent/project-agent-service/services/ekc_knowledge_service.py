@@ -59,7 +59,9 @@ class EKCKnowledgeService:
     def index(self) -> Dict[str, Any]:
         if self._index is None:
             self._load_index()
-        return self._index
+        # If the index file was missing or unreadable, _load_index returns
+        # an empty fallback but doesn't assign — defend against None here.
+        return self._index or {"total_documents": 0, "documents": [], "keyword_index": {}, "category_index": {}, "domain_index": {}}
 
     def reload(self):
         """Force reload the knowledge index."""
