@@ -1,67 +1,107 @@
-name: Build LLM Service Images
+name: Build LLM service images
+
+# Builds the three custom LLM images and pushes each to
+# ghcr.io/<owner>/llm-<service>:<tag>. Triggered automatically on
+# pushes that touch llms/, or manually via workflow_dispatch.
+#
+# After a green run, on the GPU box (.61 or .62):
+#   docker pull  ghcr.io/<owner>/llm-<name>:<tag>
+#   docker tag   ghcr.io/<owner>/llm-<name>:<tag>  simorgh-llm-<name>:local
+#   docker compose -f docker-compose.llm.yml up -d   # or .vlm.yml
+#
+# The compose files pin `image: simorgh-llm-<name>:local`, so the retag
+# is what makes the locally-pulled image satisfy the compose contract.
 
 on:
   push:
-    branches:
-      - main
-      - develop
+    branches: [main, develop]
     paths:
       - 'llms/**'
       - '.github/workflows/llm-deploy.yml'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        type: string
+        default: "claude/review-codebase-p4gQf"
+      tag:
+        description: "Image tag to apply"
+        type: string
+        default: "local"
+
+permissions:
+  contents: read
+  packages: write
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-llm-services:
-    name: Build LLM Service Images
+  build:
+    name: build · ${{ matrix.service.name }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 120
 
     strategy:
+      fail-fast: false
+      max-parallel: 3
       matrix:
         service:
-          # The actual model server is the upstream `vllm/vllm-openai:latest`
-          # image — pulled directly on each GPU box, NOT built here.
-          # Only the helper container (gpu_monitor) lives in this repo.
-          - name: gpu-monitor
-            context: ./llms/gpu_monitor
-            dockerfile: ./llms/gpu_monitor/Dockerfile
+          # ─── 192.168.1.61 — text LLM (Unsloth + vLLM + FastAPI) ───
+          - { name: ai-service,        context: ./llms/ai,          dockerfile: ./llms/ai/Dockerfile,          big: true  }
+          - { name: model-initializer, context: ./llms/initializer, dockerfile: ./llms/initializer/Dockerfile, big: false }
+          # ─── Both .61 and .62 — VRAM watchdog ─────────────────────
+          - { name: gpu-monitor,       context: ./llms/gpu_monitor, dockerfile: ./llms/gpu_monitor/Dockerfile, big: false }
 
     steps:
-      - name: Checkout code
+      - name: Checkout ${{ inputs.ref || github.ref }}
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
-      - name: Lowercase repository owner
-        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+      - name: Lowercase owner (GHCR requires lowercase)
+        id: owner
+        run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - name: Sanitize branch name for Docker tag
-        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
+      - name: Free runner disk (heavy)
+        if: ${{ matrix.service.big }}
+        run: |
+          set -eu
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h /
+
+      - name: Free runner disk (light)
+        if: ${{ !matrix.service.big }}
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}
+          images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/llm-${{ matrix.service.name }}
           tags: |
-            type=raw,value=${{ env.BRANCH_SAFE }}
-            type=raw,value=${{ env.BRANCH_SAFE }}-${{ github.sha }}
+            type=raw,value=${{ inputs.tag || 'local' }}
+            type=ref,event=branch
+            type=sha,format=short,enable=${{ github.event_name == 'push' }}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build & push
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.service.context }}
@@ -69,11 +109,29 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=gha,scope=${{ matrix.service.name }}
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}:cache
-          cache-to: |
-            type=gha,mode=max,scope=${{ matrix.service.name }}
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}:cache,mode=max
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=llm-${{ matrix.service.name }}
+          cache-to:   type=gha,scope=llm-${{ matrix.service.name }},mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+
+      - name: Print pull instructions
+        run: |
+          OWNER_LC="${{ steps.owner.outputs.lc }}"
+          TAG="${{ inputs.tag || 'local' }}"
+          cat <<EOF
+          ============================================================
+          Pushed: ghcr.io/\${OWNER_LC}/llm-${{ matrix.service.name }}:\${TAG}
+
+          ONE-TIME: flip the package PUBLIC so the GPU boxes can pull
+          anonymously (or use a read:packages PAT):
+            https://github.com/users/\${OWNER_LC}/packages/container/llm-${{ matrix.service.name }}/settings
+
+          On the GPU box:
+            docker pull ghcr.io/\${OWNER_LC}/llm-${{ matrix.service.name }}:\${TAG}
+            docker tag  ghcr.io/\${OWNER_LC}/llm-${{ matrix.service.name }}:\${TAG} \\
+                        simorgh-llm-${{ matrix.service.name }}:local
+            docker compose -f docker-compose.llm.yml up -d   # (or .vlm.yml)
+          ============================================================
+          EOF
