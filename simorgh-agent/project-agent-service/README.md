@@ -222,6 +222,147 @@ as of the 2026-05 enterprise migration.
 
 ---
 
+## How CoT integrates with the project data sources
+
+The CoT engine doesn't talk to GitLab, TPMS, or Elasticsearch directly.
+It calls **MCP tools** exposed by peer services, registered at startup
+by `services/mcp_manager.py`. Three data sources, three (or four)
+collaborating services:
+
+### GitLab — project repos AND technical-knowledge
+
+| Tool (MCP) | Lives in | Reads from | Use when |
+|---|---|---|---|
+| `gitlab_mcp.list_projects_mcp(group, search_term)` | gitlab-mcp:8047 | `simorgh-projects/` group on GitLab | Resolve a project name → repo path |
+| `gitlab_mcp.get_project_tree(project, ref, path)` | gitlab-mcp:8047 | The repo | Discover files in the project |
+| `gitlab_mcp.read_file_mcp(project, path, ref)` | gitlab-mcp:8047 | The repo | Pull one file's contents into reasoning |
+| `gitlab_mcp.search_blobs(query, project?, group?)` | gitlab-mcp:8047 | GitLab blob search | Find files matching keywords |
+| `gitlab_mcp.search_technical_knowledge(query)` | gitlab-mcp:8047 | `simorgh-knowledge/technical-knowledge` repo | Cross-cutting standards, wiring guides, regulations |
+
+Where the data lives:
+```
+GitLab CE @ :8929
+├── simorgh-projects/
+│   ├── OE-2024-0457/        ← per-project repo (PDFs, schematics, BOM, notes)
+│   ├── OE-2024-0458/
+│   └── ...
+└── simorgh-knowledge/
+    └── technical-knowledge/  ← shared standards, wiring rules, glossaries
+```
+
+Note: The CoT engine never writes to GitLab directly — only **reads**.
+File writes go via `runtime-broker` (ephemeral docker exec) for code
+generation, and through `gitlab-mcp.commit_file` for repo updates
+(REST, not MCP).
+
+### TPMS — structured project metadata + per-project records
+
+Two services collaborate:
+
+| Service | MCP tools | Returns | Use when |
+|---|---|---|---|
+| `tpms-fetcher` (:8021) | `fetch_project(oenum)`, `get_project_text(oenum)` | Raw JSON of TPMS rows (panels, feeders, equipment); or denormalized text dump | You need the underlying data, or a one-shot text snippet to drop into context |
+| `tpms-context-agent` (:8050) | `get_project_context(oenum, sections=[...])` | Markdown blocks rendering selected slices (panels / feeders / customer specs / scopes) | You want **only the sections needed** for the current question — keeps context window small |
+
+The TPMS DB stays read-only; both services query it but never write back.
+
+Auxiliary index: `tpms-fetcher` also upserts **structured project metadata**
+into `simorgh-projects` in Elasticsearch after every fetch (see
+`context-search` integration below). That gives the CoT engine a third
+shape — searchable + aggregable metadata — alongside the raw rows and
+the rendered context.
+
+### Elasticsearch (via context-search) — the analytics + recall surface
+
+The agent's most powerful peer for analytical reasoning:
+
+| Tool | Reads from | Use when |
+|---|---|---|
+| `context_search.search_context(q, project_id?, oenum?)` | `simorgh-content` (hybrid BM25+kNN over all indexed docs) | Narrative facts before generation |
+| `context_search.search_projects_mcp(q)` | `simorgh-projects` (structured TPMS index) | Resolve a loose user reference to an oenum |
+| `context_search.search_past_cot(q, project_id?)` | `simorgh-cot-YYYY.MM` | "Have I solved this before?" — procedural memory |
+| `context_search.search_logs_mcp(q)` | `simorgh-logs-*` | Runtime evidence (did service X fail?) |
+| `context_search.aggregate_field(index, group_by, metric, ...)` | All four indices | Counts, averages, p95s, distributions |
+| `context_search.time_series_query(...)` | All four indices | Trends |
+| `context_search.index_cot_trace(trace)` | `simorgh-cot-*` write | Persist the current reasoning (also done automatically at end of `analyze()`) |
+
+See `context-search-service/README.md` for the full surface and example
+patterns.
+
+### The canonical "answer everything I know about project X" CoT pattern
+
+```
+USER: "Customer wants to switch ABC plant's 6.6 kV section to 3.3 kV.
+       What's the blast radius?"
+
+Step 1 — Resolve the project from loose reference (structured search):
+  context_search.search_projects_mcp(query="ABC plant 6.6 kV")
+  → oenum = "OE-2024-0457"
+
+Step 2 — Procedural memory: have I tackled voltage-class changes before?
+  context_search.search_past_cot(query="mid-project voltage change motor")
+  → past trace shows the canonical checklist (cross-sections, breakers,
+     EPLAN, SLD, customer notification)
+
+Step 3 — Render TPMS context for the current project (only sections we need):
+  tpms_context_agent.get_project_context(
+    oenum="OE-2024-0457",
+    sections=["panels", "feeders", "customer_specs"]
+  )
+  → markdown blocks ready to drop into the prompt
+
+Step 4 — Read the per-project GitLab repo for engineering artefacts:
+  gitlab_mcp.get_project_tree(project="simorgh-projects/OE-2024-0457",
+                              path="schematics", recursive=true)
+  gitlab_mcp.read_file_mcp(project="simorgh-projects/OE-2024-0457",
+                            path="schematics/SLD-main.json")
+
+Step 5 — Cross-reference standards in technical-knowledge:
+  gitlab_mcp.search_technical_knowledge(query="6kV to 3.3kV conversion checklist")
+
+Step 6 — Quantify the change with an aggregation (TPMS data, structured):
+  context_search.aggregate_field(
+    index="projects", group_by="motor_type",
+    filter_query="oenum:OE-2024-0457"
+  )
+  → "2 induction, 1 synchronous" — concrete blast radius
+
+Step 7 — Reflect, synthesize a complete answer with citations.
+
+# At the end of analyze(), the engine auto-ships this whole reasoning
+# trace to context-search via /index/cot, so the NEXT time someone
+# asks a similar question Step 2 returns more relevant past traces.
+```
+
+### Picking the right tool at each step
+
+| If you need… | Use this tool | Why |
+|---|---|---|
+| "What project does the user mean?" | `context_search.search_projects_mcp` | Hybrid search over structured + name + customer + tags |
+| "Give me the project's spec data" | `tpms_context_agent.get_project_context` | Rendered for prompt, picks only the sections you ask |
+| "Read the engineering artefacts" | `gitlab_mcp.read_file_mcp` / `get_project_tree` | Repo content |
+| "Find similar past work" | `context_search.search_past_cot` | Procedural memory |
+| "Reference cross-cutting standards" | `gitlab_mcp.search_technical_knowledge` | Tech-kb repo |
+| "How many / average / p95 / top N" | `context_search.aggregate_field` | One ES round-trip instead of N retrievals |
+| "Trend over time" | `context_search.time_series_query` | Date histogram |
+| "Diagnose a service failure" | `context_search.search_logs_mcp` | Runtime evidence |
+
+### What gets registered at startup
+
+`services/mcp_manager.py` registers ~17 MCP peers on startup. The four
+that matter most for project data:
+
+- `gitlab_mcp` — `GITLAB_MCP_URL_MCP` (default `http://gitlab-mcp:8047/mcp`)
+- `tpms_fetcher` — `TPMS_FETCHER_MCP_URL`
+- `tpms_context_agent` — `TPMS_CONTEXT_MCP_URL`
+- `context_search` — `CONTEXT_SEARCH_MCP_URL`
+
+If any are unreachable the manager logs a warning and continues — those
+specific tools just won't appear in the LLM's tool list for that boot.
+The agent gracefully reasons with whatever subset is available.
+
+---
+
 ## Roadmap / known gaps
 
 * **Drop the bulk-copied `services/` modules that aren't agent-related** —

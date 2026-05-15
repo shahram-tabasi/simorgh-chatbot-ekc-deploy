@@ -327,13 +327,19 @@ def get_mcp_manager() -> MCPManager:
                 "ORG_DATA_MCP_URL", "http://org-data-service:8042/mcp"
             ),
             "techserver": os.getenv(
-                "TECHSERVER_MCP_URL", "http://techserver-service:8043/mcp"
+                # 2026-05: replaced by gitlab-mcp; keep var so deploys
+                # that still set TECHSERVER_MCP_URL don't error, but the
+                # default is empty (= not registered).
+                "TECHSERVER_MCP_URL", ""
             ),
             "eplan_sql": os.getenv(
                 "EPLAN_SQL_MCP_URL", "http://eplan-sql-service:8044/mcp"
             ),
             "tech_kb": os.getenv(
-                "TECH_KB_MCP_URL", "http://tech-kb-service:8046/mcp"
+                # 2026-05: tech-kb-service was deleted; the technical
+                # knowledge repo now lives in GitLab and is searchable
+                # via gitlab-mcp.search_technical_knowledge. Default empty.
+                "TECH_KB_MCP_URL", ""
             ),
             # documents-rag and graph-rag MCP endpoints land in commits 2 + 3
             # of this batch — adding the env names now so the upgrade is
@@ -343,6 +349,31 @@ def get_mcp_manager() -> MCPManager:
             ),
             "graph_rag": os.getenv(
                 "GRAPH_RAG_MCP_URL", "http://graph-rag-service:8037/mcp"
+            ),
+
+            # 2026-05 enterprise migration — these were missing from the
+            # MCP manager registration, so the CoT engine couldn't see
+            # GitLab project files, technical-knowledge, the
+            # context-search analytics, or rendered TPMS context.
+            "gitlab_mcp": os.getenv(
+                # GitLab projects + technical-knowledge — exposes
+                # list_projects_mcp, get_project_tree, read_file_mcp,
+                # search_blobs, search_technical_knowledge.
+                "GITLAB_MCP_URL_MCP", "http://gitlab-mcp:8047/mcp"
+            ),
+            "context_search": os.getenv(
+                # Hybrid (BM25+kNN) search across all indexed simorgh
+                # content + analytical aggregations + CoT trace recall.
+                # Exposes search_context, search_projects_mcp,
+                # search_past_cot, search_logs_mcp, aggregate_field,
+                # time_series_query, index_cot_trace.
+                "CONTEXT_SEARCH_MCP_URL", "http://context-search:8049/mcp"
+            ),
+            "tpms_context_agent": os.getenv(
+                # Renders requested slices of a project's TPMS data
+                # into Markdown blocks for direct inclusion in the
+                # prompt. Exposes get_project_context(oenum, sections).
+                "TPMS_CONTEXT_MCP_URL", "http://tpms-context-agent:8050/mcp"
             ),
         }
 

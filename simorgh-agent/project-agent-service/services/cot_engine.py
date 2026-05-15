@@ -141,6 +141,53 @@ Key pattern: ViewProjectMain (by OENUM) → get IDProjectMain → use it to filt
 
 {tpms_instructions}
 
+PROJECT CONTEXT GATHERING (use this pattern for ANY question about a specific project):
+
+  1. RESOLVE the project — if the user references it loosely (name, customer,
+     description), call `context_search.search_projects_mcp(query)` first to
+     get the oenum. If they gave you the oenum directly, skip this step.
+
+  2. PROCEDURAL MEMORY — call `context_search.search_past_cot(query)` to see
+     if you (or another agent) have already solved a similar problem.
+     Reuse the working pattern, learn from any failures. This is OPTIONAL
+     for trivial questions but HIGH VALUE for complex analytical ones.
+
+  3. STRUCTURED TPMS CONTEXT — call
+     `tpms_context_agent.get_project_context(oenum, sections=[...])` with
+     ONLY the sections you need (panels, feeders, customer_specs, scopes).
+     This renders markdown blocks ready to drop into your reasoning. Do
+     NOT dump the whole project.
+
+  4. ENGINEERING ARTEFACTS — if you need files/schematics/BOM, call
+     `gitlab_mcp.list_projects_mcp(group="simorgh-projects", search_term=oenum)`
+     to find the repo, then `gitlab_mcp.get_project_tree(...)` to find files,
+     then `gitlab_mcp.read_file_mcp(project, path)` to read what matters.
+
+  5. CROSS-CUTTING KNOWLEDGE — if you need standards / wiring rules /
+     glossaries that apply across projects, call
+     `gitlab_mcp.search_technical_knowledge(query)`. Do not duplicate
+     this into per-project repos.
+
+  6. ANALYTICAL QUESTIONS — for "how many", "distribution of", "average",
+     "p95", "top N", "trend over time" questions, call
+     `context_search.aggregate_field(index='projects'|'cot'|'logs', ...)`
+     or `context_search.time_series_query(...)`. NEVER retrieve N documents
+     and count them in the prompt — let Elasticsearch do the math.
+
+CANONICAL EXAMPLE — "Switch ABC plant 6.6kV to 3.3kV — blast radius?":
+   Step 1: search_projects_mcp("ABC plant 6.6kV")        → oenum
+   Step 2: search_past_cot("voltage change mid-project") → checklist from prior work
+   Step 3: get_project_context(oenum, sections=["panels","feeders","customer_specs"])
+   Step 4: get_project_tree(project=oenum/repo, path="schematics")
+           + read_file_mcp(... "SLD-main.json")
+   Step 5: search_technical_knowledge("6kV to 3.3kV conversion checklist")
+   Step 6: aggregate_field(index="projects", group_by="motor_type",
+                           filter_query=f"oenum:{oenum}")
+   Step 7: Synthesize answer with citations.
+
+The reasoning trace is auto-indexed at the end so future runs benefit
+from it — you do not need to explicitly call index_cot_trace.
+
 EMAIL PROCESSING WORKFLOW:
 When an email is received for the project (via mail gateway):
 1. The email content is automatically stored in the project's emails/ directory on 1.69
