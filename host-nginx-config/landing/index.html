@@ -478,6 +478,22 @@
       line-height: 1.55;
     }
 
+    /* Small pill used to flag AI-powered cards */
+    .ai-badge {
+      display: inline-block;
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      background: linear-gradient(135deg, #8b5cf6, #ec4899);
+      color: #fff !important;
+      -webkit-text-fill-color: #fff !important;
+      padding: 0.18rem 0.55rem;
+      border-radius: 999px;
+      margin-bottom: 0.45rem;
+      align-self: flex-start;
+      text-transform: uppercase;
+    }
+
     /* Launch Modal */
     .launch-modal {
       position: fixed;
@@ -1136,8 +1152,9 @@
           <img class="card-img" src="Contents/simorgh-soft.jpg" alt="Simorgh Design Suite">
         </div>
         <div class="card-content">
-          <h3>SIMORGH DESIGN SUITE (AI powered)</h3>
-          <p>Electrical equipment design and parts management software</p>
+          <span class="ai-badge">AI Powered</span>
+          <h3>SIMORGH DESIGN SUITE</h3>
+          <p>Electrical equipment design &amp; parts management</p>
         </div>
       </a>
 
