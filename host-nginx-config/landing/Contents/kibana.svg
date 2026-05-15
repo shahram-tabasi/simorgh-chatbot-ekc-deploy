@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 380">
+  <rect width="380" height="380" fill="#1e293b"/>
+  <g transform="translate(95 70) scale(0.38)">
+    <!-- Kibana mark — simplified flask / dashboard glyph in Elastic palette -->
+    <path fill="#f04e98" d="M250 80c-105 0-190 85-190 190 0 6 1 13 1 19 1 19 6 38 13 56h170V80h6z"/>
+    <path fill="#00a9e5" d="M250 80h-6v265h82l68-188C394 99 327 80 250 80z"/>
+    <path fill="#fec514" d="M82 364c34 50 91 86 162 86 38 0 73-10 104-27L122 248c-21 0-37 21-40 50 0 6-1 12-1 19s0 14 1 21z"/>
+  </g>
+  <text x="190" y="345" font-family="-apple-system, Segoe UI, sans-serif" font-size="42" font-weight="700" text-anchor="middle" fill="#00a9e5">Kibana</text>
+</svg>
