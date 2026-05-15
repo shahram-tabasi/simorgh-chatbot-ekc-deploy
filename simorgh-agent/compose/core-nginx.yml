@@ -1,6 +1,6 @@
 # =============================================================================
 # NGINX - Reverse proxy (HTTP only — TLS is terminated at host nginx)
-# Routes /api/* → backend, / → frontend, /simorgh-draft/* → simorgh-soft, etc.
+# Routes /api/* → backend, / → frontend, /simorgh-design-suite/* → simorgh-soft, etc.
 # Host nginx (on 192.168.1.68) proxies HTTPS traffic into port 85.
 # =============================================================================
 services:

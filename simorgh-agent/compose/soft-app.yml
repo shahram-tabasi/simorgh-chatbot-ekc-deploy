@@ -1,6 +1,6 @@
 # =============================================================================
 # SIMORGH-SOFT - Electrical design software (React + Express + MongoDB)
-# Accessible via host nginx at /simorgh-draft/
+# Accessible via host nginx at /simorgh-design-suite/
 # Talks to external SQL Server (Eplan_n2) and MySQL TPMS for legacy data.
 # =============================================================================
 services:

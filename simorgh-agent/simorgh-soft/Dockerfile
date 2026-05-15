@@ -18,15 +18,15 @@ WORKDIR /app
 COPY simorgh-frontend/package*.json ./
 RUN npm ci
 COPY simorgh-frontend/ ./
-# The app is served under /simorgh-draft/ behind two layers of nginx.
+# The app is served under /simorgh-design-suite/ behind two layers of nginx.
 # - VITE_BASE_PATH controls vite's `base` -- used by index.html asset URLs
 #   (and exposed to the SPA via import.meta.env.BASE_URL → React Router basename).
 # - VITE_API_URL is the prefix for fetch('${VITE_API_URL}/api/...') calls,
-#   so the built bundle issues requests to /simorgh-draft/api/* (which the
+#   so the built bundle issues requests to /simorgh-design-suite/api/* (which the
 #   docker nginx then strips and forwards to the simorgh-soft container's
 #   internal nginx, which proxies /api/ to the Express backend on :3001).
-ENV VITE_BASE_PATH=/simorgh-draft/
-ENV VITE_API_URL=/simorgh-draft
+ENV VITE_BASE_PATH=/simorgh-design-suite/
+ENV VITE_API_URL=/simorgh-design-suite
 RUN npm run build
 
 # Stage 2: Install backend dependencies

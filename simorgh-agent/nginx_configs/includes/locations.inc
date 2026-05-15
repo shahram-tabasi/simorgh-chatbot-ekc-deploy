@@ -5,10 +5,10 @@
 
 # ====================================================================
 # SIMORGH-SOFT - Electrical Design Software
-# Strips /simorgh-draft/ prefix and proxies to simorgh-soft container
+# Strips /simorgh-design-suite/ prefix and proxies to simorgh-soft container
 # ====================================================================
-location /simorgh-draft/ {
-    rewrite ^/simorgh-draft/(.*) /$1 break;
+location /simorgh-design-suite/ {
+    rewrite ^/simorgh-design-suite/(.*) /$1 break;
 
     proxy_pass http://simorgh_soft;
 
@@ -16,7 +16,7 @@ location /simorgh-draft/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Forwarded-Prefix /simorgh-draft;
+    proxy_set_header X-Forwarded-Prefix /simorgh-design-suite;
 
     proxy_http_version 1.1;
     proxy_set_header Connection "";
