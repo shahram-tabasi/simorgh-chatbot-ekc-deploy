@@ -200,25 +200,38 @@ Please answer the current question, keeping in mind the context from our previou
 
         return system_prompt, user_prompt
 
+    # 60-second cached OpenAI status so /health never blocks on a slow
+    # outbound call. Mirrors the backend fix.
+    _openai_health_cache: Dict[str, Any] = {"at": 0.0, "result": None}
+    _OPENAI_HEALTH_TTL = float(os.getenv("OPENAI_HEALTH_TTL", "60"))
+    _OPENAI_HEALTH_TIMEOUT = float(os.getenv("OPENAI_HEALTH_TIMEOUT", "2.0"))
+
     def _check_openai_health(self) -> Dict[str, Any]:
-        """Check OpenAI API availability"""
+        """Check OpenAI API availability — cached, short-timeout, non-blocking."""
+        import time
+
         if not self.openai_api_key:
             return {"status": "disabled", "message": "No API key"}
+        if self.openai_api_key.startswith("sk-your-"):
+            return {"status": "disabled", "message": "Placeholder API key"}
+
+        now = time.time()
+        cached = self._openai_health_cache
+        if cached["result"] is not None and (now - cached["at"]) < self._OPENAI_HEALTH_TTL:
+            return cached["result"]
 
         try:
-            # Try a minimal API call
-            response = openai.models.list()
-            return {
-                "status": "healthy",
-                "model": self.openai_model,
-                "available": True
-            }
+            client = openai.OpenAI(api_key=self.openai_api_key,
+                                   timeout=self._OPENAI_HEALTH_TIMEOUT,
+                                   max_retries=0)
+            client.models.list()
+            result = {"status": "healthy", "model": self.openai_model, "available": True}
         except Exception as e:
-            logger.error(f"OpenAI health check failed: {e}")
-            return {
-                "status": "unhealthy",
-                "error": str(e)
-            }
+            logger.debug(f"OpenAI health probe failed: {e}")
+            result = {"status": "unhealthy", "error": str(e)[:120]}
+
+        self._openai_health_cache = {"at": now, "result": result}
+        return result
 
     def _check_local_llm_health(self, url: str) -> Dict[str, Any]:
         """Check local LLM server health"""
