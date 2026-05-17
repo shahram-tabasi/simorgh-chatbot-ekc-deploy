@@ -3194,6 +3194,70 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
             think_block_pattern = re.compile(r'<think(?:ing)?>.*?</think(?:ing)?>', re.IGNORECASE | re.DOTALL)
 
+            # =====================================================================
+            # PHASE 3.5: CoT analysis + MCP tool execution for project chats.
+            #
+            # Before letting the LLM answer raw, ask the project_agent to plan
+            # the response and execute any tool calls (gitlab-mcp, context-
+            # search, tpms-context-agent, etc.). The tool outputs are injected
+            # as system evidence in `llm_messages` so the final response is
+            # grounded in real project data, not just the user's prompt +
+            # memory. For general chats this is skipped.
+            # =====================================================================
+            if chat_type == "project":
+                try:
+                    from services.project_agent import get_project_agent
+                    from models.project_models import COTRequest, MessageChannel
+
+                    pagent = get_project_agent()
+                    cot_req = COTRequest(
+                        project_id=project_id_for_memory or project_number,
+                        user_input=message.content,
+                        channel=MessageChannel.CHAT,
+                        chat_id=message.chat_id,
+                        auto_execute=False,
+                    )
+                    project_ctx = {
+                        "name": chat_metadata.get("project_name", project_number),
+                        "status": "active",
+                        "description": chat_metadata.get("description", ""),
+                        "oenum": project_number,
+                    }
+                    cot = await pagent.cot_engine.analyze(cot_req, project_ctx)
+
+                    # Emit per-step events to the UI so the operator sees the plan
+                    for st in cot.steps:
+                        yield f"data: {json.dumps({'agent_step': {'task_id': f'cot-{st.step_number}', 'status': 'active', 'title': st.title, 'detail': st.description[:120], 'tool': st.tool_needed}})}\n\n"
+
+                    # Best-effort: execute each step whose tool is reachable via MCP.
+                    tool_evidence: list[str] = []
+                    mcp = getattr(pagent, "mcp_manager", None)
+                    if mcp and mcp.is_connected:
+                        for st in cot.steps:
+                            if not st.tool_needed:
+                                continue
+                            try:
+                                result = await mcp.call_tool(st.tool_needed, st.tool_input or {})
+                                snippet = (str(result)[:1500] + "…") if result and len(str(result)) > 1500 else str(result)
+                                tool_evidence.append(f"### {st.tool_needed}\n{snippet}")
+                                yield f"data: {json.dumps({'agent_step': {'task_id': f'cot-{st.step_number}', 'status': 'completed', 'title': st.title, 'tool': st.tool_needed}})}\n\n"
+                            except Exception as te:
+                                logger.warning(f"CoT step {st.step_number} ({st.tool_needed}) failed: {te}")
+                                yield f"data: {json.dumps({'agent_step': {'task_id': f'cot-{st.step_number}', 'status': 'failed', 'title': st.title, 'tool': st.tool_needed, 'detail': str(te)[:120]}})}\n\n"
+
+                    # Inject tool outputs as system evidence right before the
+                    # current user message. The LLM now answers WITH the
+                    # tool evidence in front of it.
+                    if tool_evidence:
+                        llm_messages.insert(-1, {
+                            "role": "system",
+                            "content": "Evidence gathered by agent tools:\n\n" + "\n\n".join(tool_evidence),
+                        })
+                except Exception as cot_err:
+                    # Never block the chat on a CoT failure — log + degrade
+                    # to the plain LLM path with whatever context we built.
+                    logger.warning(f"CoT analysis failed (degrading to plain LLM): {cot_err}", exc_info=True)
+
             async for chunk in llm.async_generate_stream(
                 messages=llm_messages,
                 mode=llm_mode,
