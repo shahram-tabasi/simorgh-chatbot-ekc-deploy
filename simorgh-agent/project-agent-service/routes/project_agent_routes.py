@@ -262,37 +262,43 @@ async def create_project(
 
         project_id = str(project["id"])
 
-        # Step 1 — create the canonical 8-subdir workspace on .69 via
-        # shell-service. This is now the source of truth for project layout
-        # (techserver/, tpms/, tech-knowledge/, uploads/, instructions/,
-        #  emails/, logs/, notes/) and replaces the ad-hoc mkdir steps that
-        # used to live inside agent.initialize_project.
+        # Step 1 — legacy workspace init on .69 (shell-service). The
+        # 2026-05 enterprise migration replaced this with a GitLab repo
+        # (created via gitlab-mcp) + runtime-broker for ephemeral exec.
+        # Leaving the call in place behind a feature flag so a future
+        # re-enable of shell-service for hybrid setups still works; the
+        # default behaviour now is to skip it gracefully.
         init_result: Dict[str, Any] = {"workspace": None, "sources": {}}
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as c:
-                headers = (
-                    {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
-                    if SHELL_SERVICE_TOKEN else {}
-                )
-                r = await c.post(
-                    f"{SHELL_SERVICE_URL}/workspace/init",
-                    headers=headers,
-                    json={
-                        "project_id":   project_id,
-                        "project_name": data.name,
-                        "sources":      data.sources,
-                    },
-                )
-                if r.status_code != 200:
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"shell-service /workspace/init failed: "
-                               f"{r.status_code} {r.text[:300]}",
+        if os.getenv("SHELL_SERVICE_ENABLED", "false").lower() in ("1", "true", "yes"):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as c:
+                    headers = (
+                        {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
+                        if SHELL_SERVICE_TOKEN else {}
                     )
-                init_result["workspace"] = r.json()
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=502,
-                                detail=f"shell-service unreachable: {e}")
+                    r = await c.post(
+                        f"{SHELL_SERVICE_URL}/workspace/init",
+                        headers=headers,
+                        json={
+                            "project_id":   project_id,
+                            "project_name": data.name,
+                            "sources":      data.sources,
+                        },
+                    )
+                    if r.status_code != 200:
+                        logger.warning(
+                            "shell-service /workspace/init returned %s (continuing): %s",
+                            r.status_code, r.text[:200],
+                        )
+                    else:
+                        init_result["workspace"] = r.json()
+            except httpx.HTTPError as e:
+                logger.warning("shell-service unreachable (continuing): %s", e)
+        else:
+            logger.info(
+                "shell-service disabled (SHELL_SERVICE_ENABLED=false); "
+                "workspace is created in GitLab via gitlab-mcp instead.",
+            )
 
         # Step 2 — legacy agent-side init (TPMS sync to PostgreSQL slice,
         # techserver project linking in `projects` table, etc.). The
