@@ -128,10 +128,21 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
                 {propertiesToShow.map((propName, idx) => {
                   const propValue = properties[propName] as { parts: Array<{ partNumber: string; label: string; quantity: number; priority: number; fullData?: any }> } | undefined;
                   const parts = propValue?.parts || [];
+
+                  // Collect distinct manufacturers across all parts for this property,
+                  // joined with "/" when multiple brands are present.
+                  const manufacturers = Array.from(new Set(
+                    parts.map(p => p.fullData?.Manufacturer)
+                         .filter((m): m is string => Boolean(m && String(m).trim()))
+                  ));
+                  const manufacturerLabel = manufacturers.join(' / ');
+
                   if (parts.length === 0) {
                     return (
                       <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-4 py-2 border-b font-medium text-gray-700">{propName}</td>
+                        <td className="px-4 py-2 border-b font-medium text-gray-700">
+                          <div>{propName}</div>
+                        </td>
                         <td className="px-4 py-2 border-b text-gray-400 italic" colSpan={5}>No part assigned</td>
                       </tr>
                     );
@@ -140,7 +151,12 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
                     <tr key={`${idx}-${pIdx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                       {pIdx === 0 && (
                         <td className="px-4 py-2 border-b font-medium text-gray-700 align-top" rowSpan={parts.length}>
-                          {propName}
+                          <div>{propName}</div>
+                          {manufacturerLabel && (
+                            <div className="text-[10px] font-normal text-gray-500 mt-0.5">
+                              {manufacturerLabel}
+                            </div>
+                          )}
                         </td>
                       )}
                       <td className="px-4 py-2 border-b text-xs font-mono">{part.partNumber || '-'}</td>

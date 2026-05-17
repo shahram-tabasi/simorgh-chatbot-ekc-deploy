@@ -617,12 +617,19 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               const propertyValue = properties[property] || { parts: [] };
               const parts = propertyValue.parts || [];
 
+              // Distinct manufacturers under property name, joined with "/"
+              const manufacturers = Array.from(new Set(
+                parts.map(p => p.fullData?.Manufacturer)
+                     .filter((m: any): m is string => Boolean(m && String(m).trim()))
+              ));
+              const manufacturerLabel = manufacturers.join(' / ');
+
               return (
                 <React.Fragment key={index}>
                   {parts.length === 0 ? (
                     <tr className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                       <td className="px-4 py-3 text-sm border-b font-medium text-gray-700">
-                        {property}
+                        <div>{property}</div>
                       </td>
                       <td className="px-4 py-2 border-b" colSpan={6}>
                         <button
@@ -645,7 +652,12 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                             className="px-4 py-3 text-sm border-b font-medium text-gray-700 align-top"
                             rowSpan={parts.length + 1}
                           >
-                            {property}
+                            <div>{property}</div>
+                            {manufacturerLabel && (
+                              <div className="text-[10px] font-normal text-gray-500 mt-0.5">
+                                {manufacturerLabel}
+                              </div>
+                            )}
                           </td>
                         )}
                         {/* Part number + replace button */}
