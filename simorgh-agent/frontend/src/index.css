@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* Inter is loaded from the bundled @fontsource-variable/inter package in
+ * src/index.tsx. Removed the Google Fonts @import that was hanging on
+ * fonts.googleapis.com TLS for ~30s on first page load. */
 
 @tailwind base;
 @tailwind components;

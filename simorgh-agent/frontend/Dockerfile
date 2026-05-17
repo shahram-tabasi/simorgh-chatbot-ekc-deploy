@@ -11,9 +11,12 @@ ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-# Use BuildKit cache mount for npm
+# `npm ci` is strict — fails if package.json was edited without bumping
+# the lockfile. Fall back to `npm install` so a hand-edited package.json
+# (e.g. adding a new dep without a local repo) still builds and refreshes
+# the lockfile inside the image.
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci
+    npm ci || npm install
 COPY . .
 RUN npm run build   # This creates /app/dist
 
