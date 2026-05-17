@@ -121,7 +121,20 @@ services:
     volumes:
       - ../uploads:/app/uploads
       - ../logs:/app/logs
+      # Bind-mounts so backend Python code can be edited without rebuilding
+      # the 18 GB pytorch-based image. After editing any of these, restart
+      # the backend container instead of rebuild:
+      #   docker compose restart backend
+      - ../backend/main.py:/app/main.py
       - ../backend/services:/app/services
+      - ../backend/routes:/app/routes
+      - ../backend/database:/app/database
+      - ../backend/middleware:/app/middleware
+      - ../backend/chatbot_core:/app/chatbot_core
+      - ../backend/utils:/app/utils
+      - ../backend/cocoindex_flows:/app/cocoindex_flows
+      - ../backend/models:/app/models
+      - ../backend/knowledge:/app/knowledge
       - huggingface_cache:/root/.cache/huggingface
       - sentence_transformers_cache:/root/.cache/torch/sentence_transformers
       - ekc_knowledge:/app/ekc-knowledge:ro
