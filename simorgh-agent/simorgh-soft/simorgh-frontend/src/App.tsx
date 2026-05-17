@@ -7,6 +7,7 @@ import { OutputTypesTab } from './components/OutputTypes/OutputTypesTab';
 import { ProjectSelection } from './components/ProjectSelection/ProjectSelection';
 import { ProjectProvider, useProject } from './context/ProjectContext';
 import simorghLogo from './assets/simrgh.jpg';
+import { Chatbot } from './components/Chatbot/Chatbot';
 
 // هوک Auto-save
 const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
@@ -324,6 +325,9 @@ const MainApp: React.FC = () => {
           <span>Version 1.0.0 | Auto-save: Enabled</span>
         </div>
       </div>
+
+      {/* Global AI chatbot — floating launcher / side panel */}
+      <Chatbot />
     </div>
   );
 };

@@ -5,6 +5,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import sql from 'mssql';
 import mysql from 'mysql2/promise';
+import multer from 'multer';
 
 dotenv.config();
 
@@ -937,6 +938,92 @@ app.delete('/api/selected-part', async (req, res) => {
       success: false,
       error: err.message
     });
+  }
+});
+
+// ============================================
+// AI Chatbot Endpoints (local stub + online passthrough)
+// ============================================
+// Multer in memory so we can inspect uploaded files without persisting them.
+// 25 MB per file × 10 files cap — adjust as needed.
+const chatUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 10 },
+});
+
+// LOCAL endpoint — a minimal stub that simply acknowledges the prompt and
+// describes the uploaded files. Wire this up to a real local model server
+// (e.g. an Ollama/llama.cpp proxy) by replacing the body of the handler.
+app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
+  try {
+    const prompt = (req.body?.prompt || '').toString();
+    const files = (req.files || []).map(f => ({
+      name: f.originalname,
+      mimetype: f.mimetype,
+      size: f.size,
+    }));
+
+    // If a real local model URL is configured, forward to it.
+    const upstream = process.env.LOCAL_MODEL_URL;
+    if (upstream) {
+      try {
+        const upRes = await fetch(upstream, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, files }),
+        });
+        const text = await upRes.text();
+        return res.status(upRes.status).type(upRes.headers.get('content-type') || 'text/plain').send(text);
+      } catch (e) {
+        console.error('Local model upstream error:', e.message);
+        // fall through to stub reply
+      }
+    }
+
+    // Stub reply (no model attached yet).
+    const fileDesc = files.length
+      ? `\n\nAttached ${files.length} file(s):\n` + files.map(f => `  • ${f.name} (${f.mimetype || 'unknown'}, ${f.size} bytes)`).join('\n')
+      : '';
+    return res.json({
+      reply: `🛈 (LOCAL stub) Echoing your prompt back.\n\nPrompt: ${prompt || '(empty)'}${fileDesc}\n\nSet LOCAL_MODEL_URL in .env to forward to your local model.`,
+    });
+  } catch (err) {
+    console.error('Chat local error:', err);
+    res.status(500).json({ reply: '', error: err.message });
+  }
+});
+
+// ONLINE endpoint — passthrough to a configured online model (env var
+// ONLINE_MODEL_URL). If not configured, returns a clear message so the
+// user knows what to set.
+app.post('/api/chat-online', chatUpload.array('files', 10), async (req, res) => {
+  try {
+    const prompt = (req.body?.prompt || '').toString();
+    const files = (req.files || []).map(f => ({
+      name: f.originalname,
+      mimetype: f.mimetype,
+      size: f.size,
+    }));
+
+    const upstream = process.env.ONLINE_MODEL_URL;
+    if (!upstream) {
+      return res.json({
+        reply: '🌐 (ONLINE) endpoint is not configured. Set ONLINE_MODEL_URL in the backend .env to a real API URL and try again.',
+      });
+    }
+    const upRes = await fetch(upstream, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.ONLINE_MODEL_KEY ? { Authorization: `Bearer ${process.env.ONLINE_MODEL_KEY}` } : {}),
+      },
+      body: JSON.stringify({ prompt, files }),
+    });
+    const text = await upRes.text();
+    return res.status(upRes.status).type(upRes.headers.get('content-type') || 'text/plain').send(text);
+  } catch (err) {
+    console.error('Chat online error:', err);
+    res.status(500).json({ reply: '', error: err.message });
   }
 });
 
