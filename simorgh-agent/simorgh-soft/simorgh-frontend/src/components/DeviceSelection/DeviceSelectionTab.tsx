@@ -225,6 +225,25 @@ const LV_COLUMNS: DeviceColumnDef[] = [
 const getColumnsForType = (type: 'LV' | 'MV' | 'HV'): DeviceColumnDef[] =>
   type === 'LV' ? LV_COLUMNS : MV_COLUMNS;
 
+// Row/cell color palette (Tailwind-aligned soft tones). Empty string = clear color.
+const ROW_COLOR_PALETTE: { label: string; value: string }[] = [
+  { label: 'No color',  value: '' },
+  { label: 'Yellow',    value: '#fef3c7' },
+  { label: 'Amber',     value: '#fde68a' },
+  { label: 'Orange',    value: '#fed7aa' },
+  { label: 'Rose',      value: '#fecdd3' },
+  { label: 'Red',       value: '#fecaca' },
+  { label: 'Lime',      value: '#d9f99d' },
+  { label: 'Green',     value: '#bbf7d0' },
+  { label: 'Teal',      value: '#99f6e4' },
+  { label: 'Cyan',      value: '#a5f3fc' },
+  { label: 'Sky',       value: '#bae6fd' },
+  { label: 'Indigo',    value: '#c7d2fe' },
+  { label: 'Purple',    value: '#e9d5ff' },
+  { label: 'Pink',      value: '#fbcfe8' },
+  { label: 'Gray',      value: '#e5e7eb' },
+];
+
 // ===== DEVICE TABLE COMPONENT =====
 const DeviceTable: React.FC<DeviceTableProps> = ({
   selectedEquipment,
@@ -324,6 +343,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const handleCloseContextMenu = () => {
     setContextMenu(null);
     setMoveToRow('');
+    setColorTarget(null);
   };
 
   useEffect(() => {
@@ -794,6 +814,62 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               ))}
               <div className="border-t my-1" />
             </>
+          )}
+
+          {/* Row color palette */}
+          <div className="px-4 py-2 border-b bg-pink-50">
+            <p className="text-xs font-semibold text-pink-700 mb-1.5">Row Color</p>
+            <div className="flex flex-wrap gap-1.5">
+              {ROW_COLOR_PALETTE.map(c => (
+                <button
+                  key={c.value || 'none'}
+                  title={c.label}
+                  className="w-5 h-5 rounded border border-gray-300 flex items-center justify-center text-[10px]"
+                  style={{ backgroundColor: c.value || '#fff' }}
+                  onClick={() => {
+                    const targets = selectedRows.size > 0 ? selectedRows : new Set<string>();
+                    setRows(prev => prev.map(r =>
+                      targets.has(r.id) ? { ...r, rowColor: c.value || undefined } : r
+                    ));
+                    handleCloseContextMenu();
+                  }}
+                >
+                  {!c.value && '⊘'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Cell color palette (when a specific cell was shift+right-clicked) */}
+          {colorTarget && (
+            <div className="px-4 py-2 border-b bg-amber-50">
+              <p className="text-xs font-semibold text-amber-700 mb-1.5">
+                Highlight Cell: <span className="font-mono">{colorTarget.colKey}</span>
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {ROW_COLOR_PALETTE.map(c => (
+                  <button
+                    key={c.value || 'none'}
+                    title={c.label}
+                    className="w-5 h-5 rounded border border-gray-300 flex items-center justify-center text-[10px]"
+                    style={{ backgroundColor: c.value || '#fff' }}
+                    onClick={() => {
+                      const { rowId, colKey } = colorTarget;
+                      setRows(prev => prev.map(r => {
+                        if (r.id !== rowId) return r;
+                        const cellColors = { ...(r.cellColors || {}) };
+                        if (c.value) cellColors[colKey] = c.value; else delete cellColors[colKey];
+                        return { ...r, cellColors };
+                      }));
+                      setColorTarget(null);
+                      handleCloseContextMenu();
+                    }}
+                  >
+                    {!c.value && '⊘'}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100" onClick={() => handleMoveRows('up')}>
