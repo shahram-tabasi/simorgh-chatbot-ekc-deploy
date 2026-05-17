@@ -46,15 +46,22 @@ interface TemplatePropertiesModalProps {
 }
 
 const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ template, onClose, onEdit }) => {
+  // Layout must mirror TemplateProperties.tsx so the read-only view always
+  // matches what the user configured on the editor screen.
   const lvProperties = [
-    'CB ORDER', 'CONTACTOR. ORDER',
-    'OVER LOAD RELAY', 'EARTH FAULT', 'COREBALANCE CT',
-    'PROTECTION RELAY', 'CT RATING', 'AMMETER', 'AMMETER selector',
-    'PT RATING', 'VOLTMETER', 'VOLTMETER selector'
+    'CB ORDER', 'ACCESSORY', 'CONTACTOR. ORDER', 'OVER LOAD RELAY',
+    'EARTH FAULT', 'COREBALANCE CT', 'PROTECTION RELAY', 'CT RATING',
+    'AMMETER', 'AMMETER selector', 'PT RATING', 'VOLTMETER',
+    'VOLTMETER selector', 'MULTIMETER', 'TEST BLOCK', 'TRANSDUSER',
+    'ALARM ANUNCIATOR',
+    'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5', 'SPARE 6', 'SPARE 7',
   ];
   const mvProperties = [
-    'BREAKER TYPE', 'NOMINAL CURRENT', 'SHORT CIRCUIT CURRENT',
-    'PROTECTION RELAY', 'CT RATIO', 'VT RATIO'
+    'VCB OR VC/FUSE', 'ACCESSORY', 'VOLTAGE INDICATOR', 'COREBALANCE CT',
+    'PROTECTION RELAY', 'CT RATING', 'AMMETER', 'AMMETER selector',
+    'PT RATING', 'VOLTMETER', 'VOLTMETER selector', 'MULTIMETER',
+    'TEST BLOCK', 'TRANSDUSER', 'ALARM WINDDOW', 'SURGE ARRESTER',
+    'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5',
   ];
   const hvProperties = [
     'BREAKER TYPE', 'NOMINAL VOLTAGE', 'NOMINAL CURRENT',
@@ -69,6 +76,9 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
   }
 
   const properties = (template.properties as Record<string, { parts: Array<{ partNumber: string; label: string; quantity: number; priority: number }> }>) || {};
+  // Pull display names / locked rows from the same metadata used by the editor.
+  const displayNames: Record<string, string> = (template.properties as any)?.__displayNames || {};
+  const lockedRows: string[]                  = (template.properties as any)?.__locked || [];
 
   const getTypeColor = (type: 'LV' | 'MV' | 'HV') => {
     switch (type) {
@@ -136,12 +146,15 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
                          .filter((m): m is string => Boolean(m && String(m).trim()))
                   ));
                   const manufacturerLabel = manufacturers.join(' / ');
+                  const labelText = displayNames[propName] || propName;
+                  const isLocked  = lockedRows.includes(propName);
 
                   if (parts.length === 0) {
                     return (
                       <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-4 py-2 border-b font-medium text-gray-700">
-                          <div>{propName}</div>
+                          <div className={isLocked ? 'line-through text-gray-400' : ''}>{labelText}</div>
+                          {isLocked && <div className="text-[10px] text-amber-600">🔒 locked</div>}
                         </td>
                         <td className="px-4 py-2 border-b text-gray-400 italic" colSpan={5}>No part assigned</td>
                       </tr>
@@ -151,7 +164,8 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
                     <tr key={`${idx}-${pIdx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                       {pIdx === 0 && (
                         <td className="px-4 py-2 border-b font-medium text-gray-700 align-top" rowSpan={parts.length}>
-                          <div>{propName}</div>
+                          <div className={isLocked ? 'line-through text-gray-400' : ''}>{labelText}</div>
+                          {isLocked && <div className="text-[10px] text-amber-600">🔒 locked</div>}
                           {manufacturerLabel && (
                             <div className="text-[10px] font-normal text-gray-500 mt-0.5">
                               {manufacturerLabel}
