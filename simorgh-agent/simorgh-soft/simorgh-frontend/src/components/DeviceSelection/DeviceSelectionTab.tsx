@@ -182,6 +182,49 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
   );
 };
 
+// ===== COLUMN DEFINITIONS (per equipment type) =====
+type DeviceColumnKey =
+  | 'templateName' | 'wiringType' | 'ratingPower' | 'flc' | 'feederNo'
+  | 'busSection' | 'sfdHfd' | 'tag' | 'description' | 'moduleNo'
+  | 'size' | 'cableSize';
+
+interface DeviceColumnDef {
+  key: DeviceColumnKey;
+  header: string;
+  isTemplate?: boolean;
+  width?: string; // tailwind width class
+}
+
+const MV_COLUMNS: DeviceColumnDef[] = [
+  { key: 'templateName', header: 'Template', isTemplate: true },
+  { key: 'wiringType',   header: 'WIRING TYPE' },
+  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
+  { key: 'flc',          header: 'FLC (A)' },
+  { key: 'feederNo',     header: 'FEEDER NO.' },
+  { key: 'busSection',   header: 'BUS SECTION' },
+  { key: 'tag',          header: 'TAG' },
+  { key: 'description',  header: 'DESCRIPTION' },
+  { key: 'cableSize',    header: 'CABLE SIZE' },
+];
+
+const LV_COLUMNS: DeviceColumnDef[] = [
+  { key: 'templateName', header: 'Template', isTemplate: true },
+  { key: 'wiringType',   header: 'WIRING TYPE' },
+  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
+  { key: 'flc',          header: 'FLC (A)' },
+  { key: 'feederNo',     header: 'FEEDER NO.' },
+  { key: 'busSection',   header: 'BUS SECTION' },
+  { key: 'sfdHfd',       header: 'SFD/HFD' },
+  { key: 'tag',          header: 'TAG' },
+  { key: 'description',  header: 'DESCRIPTION' },
+  { key: 'moduleNo',     header: 'MODULE NO.' },
+  { key: 'size',         header: 'SIZE' },
+  { key: 'cableSize',    header: 'CABLE SIZE' },
+];
+
+const getColumnsForType = (type: 'LV' | 'MV' | 'HV'): DeviceColumnDef[] =>
+  type === 'LV' ? LV_COLUMNS : MV_COLUMNS;
+
 // ===== DEVICE TABLE COMPONENT =====
 const DeviceTable: React.FC<DeviceTableProps> = ({
   selectedEquipment,
@@ -196,7 +239,10 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const [rows, setRows] = useState<DeviceTableRow[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [lastSelectedIdx, setLastSelectedIdx] = useState<number>(-1);
-  const [filters, setFilters] = useState({ templateName: '', busSection: '', feederNo: '', wiringType: '', ratingPower: '', flc: '' });
+  // Per-column text filters, keyed by column key. Empty string = no filter.
+  const [filters, setFilters] = useState<Partial<Record<DeviceColumnKey, string>>>({});
+  // For cell colorize submenu: which cell is being targeted
+  const [colorTarget, setColorTarget] = useState<{ rowId: string; colKey: DeviceColumnKey } | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
@@ -246,14 +292,15 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     }
   };
 
-  // Returns rows filtered by column search inputs
+  // Returns rows filtered by column search inputs (any column in the active layout)
+  const activeColumns = getColumnsForType(selectedEquipment?.type ?? 'MV');
   const getFilteredRows = () => rows.filter(row =>
-    (!filters.templateName || row.templateName.toLowerCase().includes(filters.templateName.toLowerCase())) &&
-    (!filters.busSection  || row.busSection.toLowerCase().includes(filters.busSection.toLowerCase())) &&
-    (!filters.feederNo    || row.feederNo.toLowerCase().includes(filters.feederNo.toLowerCase())) &&
-    (!filters.wiringType  || row.wiringType.toLowerCase().includes(filters.wiringType.toLowerCase())) &&
-    (!filters.ratingPower || row.ratingPower.toLowerCase().includes(filters.ratingPower.toLowerCase())) &&
-    (!filters.flc         || row.flc.toLowerCase().includes(filters.flc.toLowerCase()))
+    activeColumns.every(col => {
+      const q = (filters[col.key] || '').toLowerCase().trim();
+      if (!q) return true;
+      const val = String((row as any)[col.key] ?? '').toLowerCase();
+      return val.includes(q);
+    })
   );
 
   const handleContextMenu = (e: React.MouseEvent, type: 'row' | 'cell', rowId?: string) => {
@@ -413,6 +460,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       wiringType: '',
       ratingPower: '',
       flc: '',
+      tag: '',
+      description: '',
+      cableSize: '',
+      sfdHfd: '',
+      moduleNo: '',
+      size: '',
       equipmentId: selectedEquipment.id
     };
     setRows([...rows, newRow]);
@@ -462,11 +515,25 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             return busSection || feederNo || wiringType || ratingPower || flc;
           })
           .map((row, index) => {
-            const busSection = (row['Bus Section'] || row['busSection'] || row['bus section'] || row['BUS SECTION'] || '').toString().trim();
-            const feederNo = (row['Feeder No'] || row['feederNo'] || row['feeder no'] || row['FEEDER NO'] || row['Feeder Number'] || '').toString().trim();
-            const wiringType = (row['Wiring Type'] || row['wiringType'] || row['wiring type'] || row['WIRING TYPE'] || '').toString().trim();
-            const ratingPower = (row['Rating Power'] || row['ratingPower'] || row['rating power'] || row['RATING POWER'] || row['Rating (kW)'] || '').toString().trim();
-            const flc = (row['FLC (A)'] || row['FLC'] || row['flc'] || row['Flc'] || row['FLC(A)'] || '').toString().trim();
+            const pick = (...keys: string[]) => {
+              for (const k of keys) {
+                if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') {
+                  return String(row[k]).trim();
+                }
+              }
+              return '';
+            };
+            const busSection  = pick('Bus Section', 'busSection', 'bus section', 'BUS SECTION');
+            const feederNo    = pick('Feeder No', 'feederNo', 'feeder no', 'FEEDER NO', 'FEEDER NO.', 'Feeder Number');
+            const wiringType  = pick('Wiring Type', 'wiringType', 'wiring type', 'WIRING TYPE');
+            const ratingPower = pick('Rating Power', 'ratingPower', 'rating power', 'RATING POWER', 'RATING POWER(KW OR KVA)', 'Rating (kW)');
+            const flc         = pick('FLC (A)', 'FLC', 'flc', 'Flc', 'FLC(A)');
+            const tag         = pick('TAG', 'Tag', 'tag');
+            const description = pick('DESCRIPTION', 'Description', 'description');
+            const cableSize   = pick('CABLE SIZE', 'Cable Size', 'cableSize', 'CABEL SIZE');
+            const sfdHfd      = pick('SFD/HFD', 'sfdHfd', 'SFD HFD');
+            const moduleNo    = pick('MODULE NO.', 'MODULE NO', 'Module No', 'moduleNo');
+            const size        = pick('SIZE', 'SAIZE', 'Size', 'size');
 
             return {
               id: `device-${Date.now()}-${index}`,
@@ -478,6 +545,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               wiringType,
               ratingPower,
               flc,
+              tag,
+              description,
+              cableSize,
+              sfdHfd,
+              moduleNo,
+              size,
               equipmentId: selectedEquipment!.id
             };
           });
@@ -584,33 +657,32 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       {Object.values(filters).some(f => f) && (
         <div className="mb-2 flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-1.5">
           <span>Filters active — showing {getFilteredRows().length} of {rows.length} rows</span>
-          <button className="ml-auto underline hover:no-underline" onClick={() => setFilters({ templateName: '', busSection: '', feederNo: '', wiringType: '', ratingPower: '', flc: '' })}>Clear all</button>
+          <button className="ml-auto underline hover:no-underline" onClick={() => setFilters({})}>Clear all</button>
         </div>
       )}
 
-      <div className="border border-gray-200 rounded overflow-hidden" onContextMenu={(e) => handleContextMenu(e, 'row')}>
+      <div className="border border-gray-200 rounded overflow-auto" onContextMenu={(e) => handleContextMenu(e, 'row')}>
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50">
               <th className="px-4 py-2 text-left font-medium text-gray-600 border-b w-12">#</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Template</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Bus Section</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Feeder No</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Wiring Type</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Rating Power</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">FLC (A)</th>
+              {activeColumns.map(col => (
+                <th key={col.key} className="px-4 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap">
+                  {col.header}
+                </th>
+              ))}
             </tr>
             {/* Per-column filter row */}
             <tr className="bg-white border-b border-gray-200">
               <td className="px-2 py-1 w-12" />
-              {(['templateName', 'busSection', 'feederNo', 'wiringType', 'ratingPower', 'flc'] as const).map(col => (
-                <td key={col} className="px-2 py-1">
+              {activeColumns.map(col => (
+                <td key={col.key} className="px-2 py-1">
                   <input
                     type="text"
                     placeholder="🔍"
                     className="w-full border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-blue-400 bg-gray-50"
-                    value={filters[col]}
-                    onChange={e => setFilters(prev => ({ ...prev, [col]: e.target.value }))}
+                    value={filters[col.key] || ''}
+                    onChange={e => setFilters(prev => ({ ...prev, [col.key]: e.target.value }))}
                     onClick={e => e.stopPropagation()}
                   />
                 </td>
@@ -622,62 +694,56 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               <tr
                 key={row.id}
                 className={`cursor-pointer ${selectedRows.has(row.id) ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
+                style={row.rowColor && !selectedRows.has(row.id) ? { backgroundColor: row.rowColor } : undefined}
                 onClick={(e) => handleRowClick(row.id, e)}
                 onContextMenu={(e) => handleContextMenu(e, 'row', row.id)}
               >
                 <td className="px-4 py-2 border-b text-center font-medium bg-gray-50">
                   {row.rowNumber}
                 </td>
-                <td
-                  className="px-4 py-2 border-b"
-                  onDragOver={handleDragOver}
-                  onDrop={e => handleDrop(e, row.id)}
-                  onContextMenu={(e) => handleContextMenu(e, 'cell', row.id)}
-                >
-                  <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
-                    {row.templateName || 'Drop here or right-click'}
-                  </div>
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.busSection}
-                    onChange={e => updateRowField(row.id, 'busSection', e.target.value)}
-                  />
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.feederNo}
-                    onChange={e => updateRowField(row.id, 'feederNo', e.target.value)}
-                  />
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.wiringType}
-                    onChange={e => updateRowField(row.id, 'wiringType', e.target.value)}
-                  />
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.ratingPower}
-                    onChange={e => updateRowField(row.id, 'ratingPower', e.target.value)}
-                  />
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.flc}
-                    onChange={e => updateRowField(row.id, 'flc', e.target.value)}
-                  />
-                </td>
+                {activeColumns.map(col => {
+                  const cellBg = row.cellColors?.[col.key];
+                  const cellStyle = cellBg ? { backgroundColor: cellBg } : undefined;
+                  if (col.isTemplate) {
+                    return (
+                      <td
+                        key={col.key}
+                        className="px-4 py-2 border-b"
+                        style={cellStyle}
+                        onDragOver={handleDragOver}
+                        onDrop={e => handleDrop(e, row.id)}
+                        onContextMenu={(e) => handleContextMenu(e, 'cell', row.id)}
+                      >
+                        <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
+                          {row.templateName || 'Drop here or right-click'}
+                        </div>
+                      </td>
+                    );
+                  }
+                  return (
+                    <td
+                      key={col.key}
+                      className="px-4 py-2 border-b"
+                      style={cellStyle}
+                      onContextMenu={(e) => {
+                        // shift+right-click on a cell sets the colorize target
+                        if (e.shiftKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setColorTarget({ rowId: row.id, colKey: col.key });
+                          setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'row' });
+                        }
+                      }}
+                    >
+                      <input
+                        type="text"
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-transparent"
+                        value={(row as any)[col.key] ?? ''}
+                        onChange={e => updateRowField(row.id, col.key as any, e.target.value)}
+                      />
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>

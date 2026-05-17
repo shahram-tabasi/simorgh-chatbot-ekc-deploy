@@ -201,6 +201,19 @@ export interface DeviceTableRow {
   flc: string;
   equipmentId: string;
   selectedParts?: SelectedPartEntry[];
+
+  // ── MV / LV specific extra columns (Device Selection) ──
+  tag?: string;          // MV + LV
+  description?: string;  // MV + LV
+  cableSize?: string;    // MV + LV
+  // LV-only
+  sfdHfd?: string;
+  moduleNo?: string;
+  size?: string;
+
+  // ── Visual customizations ──
+  rowColor?: string;                 // background color for the whole row (tailwind hex like '#fde68a')
+  cellColors?: Record<string, string>; // per-column background color overrides; key = column field name
 }
 
 export interface Equipment {
