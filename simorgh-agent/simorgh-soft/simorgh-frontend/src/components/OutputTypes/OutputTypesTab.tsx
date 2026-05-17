@@ -161,6 +161,51 @@ function exportExcel(data: ProjectData) {
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(eqRows), 'Equipment & Selections');
 
+  // ── Sheet 5: Template Components Breakdown (only used templates) ──────────
+  const usedTemplateIds = new Set<string>();
+  (data.equipments ?? []).forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedTemplateIds.add(d.templateId); }));
+  const usedTemplates = [
+    ...(data.templates?.LV ?? []),
+    ...(data.templates?.MV ?? []),
+    ...(data.templates?.HV ?? []),
+  ].filter(t => usedTemplateIds.has(t.id));
+
+  const tmplHeaders = ['Template', 'Type', 'Property', 'Part Number', 'Manufacturer', 'Rating', 'Label', 'Qty', 'Priority', 'Locked'];
+  const tmplRows: any[][] = [tmplHeaders];
+  for (const tmpl of usedTemplates) {
+    const props = (tmpl.properties ?? {}) as Record<string, any>;
+    const displayNames: Record<string, string> = props.__displayNames || {};
+    const lockedRows: string[]                  = props.__locked || [];
+    const entries = Object.entries(props).filter(
+      ([k, val]) => k !== '__displayNames' && k !== '__locked'
+        && val && Array.isArray((val as any).parts) && (val as any).parts.length > 0
+    );
+    if (entries.length === 0) {
+      tmplRows.push([tmpl.name, tmpl.type, '—', '—', '—', '—', '—', '—', '—', '—']);
+      continue;
+    }
+    for (const [propName, propVal] of entries) {
+      const label = displayNames[propName] || propName;
+      const locked = lockedRows.includes(propName) ? 'yes' : '';
+      const parts = (propVal as any).parts as any[];
+      parts.forEach((part, pi) => {
+        tmplRows.push([
+          pi === 0 ? tmpl.name : '',
+          pi === 0 ? tmpl.type : '',
+          pi === 0 ? label : '',
+          v(part.partNumber),
+          v(part.fullData?.Manufacturer),
+          v(part.fullData?.Designation3),
+          v(part.label),
+          part.quantity ?? 1,
+          part.priority ?? 1,
+          pi === 0 ? locked : '',
+        ]);
+      });
+    }
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tmplRows), 'Template Components');
+
   XLSX.writeFile(wb, `${data.projectName}_Report.xlsx`);
 }
 
@@ -268,6 +313,57 @@ function exportPDF(data: ProjectData) {
   ${techRows.length>0 ? secHd('02','Technical Settings','#277548')+techTable : ''}
   ${secHd('03','Device Library','#277548')}${devTable}
   ${secHd('04','Equipment & Device Selections','#b45309')}${eqTable}
+  ${(() => {
+    const usedIds = new Set<string>();
+    eqs.forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedIds.add(d.templateId); }));
+    const used = [
+      ...(data.templates?.LV ?? []),
+      ...(data.templates?.MV ?? []),
+      ...(data.templates?.HV ?? []),
+    ].filter(t => usedIds.has(t.id));
+    if (used.length === 0) return '';
+    let html = '<h3 style="margin:18px 0 6px;font-size:13px;color:#b45309;font-weight:700">Template Components Breakdown</h3>';
+    for (const tmpl of used) {
+      const props = (tmpl.properties ?? {}) as Record<string, any>;
+      const displayNames: Record<string, string> = props.__displayNames || {};
+      const lockedRows: string[]                  = props.__locked || [];
+      const entries = Object.entries(props).filter(
+        ([k, val]) => k !== '__displayNames' && k !== '__locked'
+          && val && Array.isArray((val as any).parts) && (val as any).parts.length > 0
+      );
+      html += `<div style="margin:6px 0 12px;border:1px solid #fed7aa;border-radius:4px">
+        <div style="background:#fff7ed;padding:4px 10px;font-size:11px;font-weight:700;color:#9a3412">
+          ${tmpl.name} <span style="font-weight:500;color:#b45309">[${tmpl.type}]</span>
+        </div>`;
+      if (entries.length === 0) {
+        html += `<div style="padding:6px 10px;font-size:10px;color:#9ca3af;font-style:italic">No parts assigned.</div>`;
+      } else {
+        html += `<table style="width:100%;border-collapse:collapse;font-size:10px">
+          <thead><tr>${['Property','Part Number','Manufacturer','Rating','Label','Qty','Priority']
+            .map(h => `<th style="background:#fef3c7;padding:4px 8px;text-align:left;color:#92400e">${h}</th>`).join('')}</tr></thead><tbody>`;
+        for (const [propName, propVal] of entries) {
+          const label = displayNames[propName] || propName;
+          const locked = lockedRows.includes(propName);
+          const parts = (propVal as any).parts as any[];
+          parts.forEach((part, pi) => {
+            html += `<tr>${
+              pi === 0
+                ? `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6;font-weight:600${locked ? ';text-decoration:line-through;color:#9ca3af' : ''}" rowspan="${parts.length}">${label}${locked ? ' 🔒' : ''}</td>`
+                : ''
+            }<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6;font-family:monospace">${v(part.partNumber)}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6">${v(part.fullData?.Manufacturer)}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6">${v(part.fullData?.Designation3)}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6">${v(part.label)}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6;text-align:center">${part.quantity ?? 1}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6;text-align:center">${part.priority ?? 1}</td></tr>`;
+          });
+        }
+        html += '</tbody></table>';
+      }
+      html += '</div>';
+    }
+    return html;
+  })()}
   <div style="margin-top:30px;border-top:1px solid #e5e7eb;padding-top:10px;font-size:10px;color:#9ca3af;display:flex;justify-content:space-between">
     <span>Simorgh Design Software</span><span>Generated: ${new Date().toLocaleString()}</span>
   </div>
@@ -701,6 +797,112 @@ export const OutputTypesTab: React.FC = () => {
             </div>
           )
         }
+
+        {/* ── Template Components Breakdown ───────────────────────────────────
+            For each template used by the equipment above, list its component
+            parts (property → part number / rating / label / qty / priority)
+            grouped per template. Locked properties are visually struck. */}
+        {(() => {
+          // Gather the set of templates actually referenced by these equipment.
+          const usedTemplateIds = new Set<string>();
+          eqs.forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedTemplateIds.add(d.templateId); }));
+          const allTemplates = [
+            ...(projectData.templates?.LV ?? []),
+            ...(projectData.templates?.MV ?? []),
+            ...(projectData.templates?.HV ?? []),
+          ].filter(t => usedTemplateIds.has(t.id));
+
+          if (allTemplates.length === 0) {
+            return (
+              <p className="mt-4 text-xs text-gray-400 italic">
+                No templates assigned yet — assign templates in Device Selection to see the breakdown here.
+              </p>
+            );
+          }
+
+          return (
+            <div className="mt-6">
+              <h4 className="text-sm font-bold text-orange-800 mb-2">Template Components Breakdown</h4>
+              <div className="space-y-4">
+                {allTemplates.map(tmpl => {
+                  const props = (tmpl.properties ?? {}) as Record<string, any>;
+                  const displayNames: Record<string, string> = props.__displayNames || {};
+                  const lockedRows: string[]                  = props.__locked || [];
+
+                  // Strip metadata entries, only keep real property entries.
+                  const propertyEntries = Object.entries(props).filter(
+                    ([k, val]) => k !== '__displayNames' && k !== '__locked'
+                      && val && Array.isArray((val as any).parts) && (val as any).parts.length > 0
+                  );
+
+                  return (
+                    <div key={tmpl.id} className="border border-orange-100 rounded">
+                      <div className="px-3 py-1.5 bg-orange-50 border-b border-orange-100 flex items-center justify-between">
+                        <div className="text-xs">
+                          <span className="font-semibold text-orange-900">{tmpl.name}</span>
+                          <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            tmpl.type === 'LV' ? 'bg-green-100 text-green-800'
+                            : tmpl.type === 'MV' ? 'bg-yellow-100 text-yellow-800'
+                            : 'bg-red-100 text-red-800'
+                          }`}>{tmpl.type}</span>
+                        </div>
+                        <span className="text-[10px] text-gray-500">
+                          {propertyEntries.length} properties with parts
+                        </span>
+                      </div>
+                      {propertyEntries.length === 0 ? (
+                        <p className="px-3 py-2 text-xs italic text-gray-400">No parts assigned to this template yet.</p>
+                      ) : (
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-orange-50/60 text-orange-900">
+                              <th className="px-3 py-1.5 text-left">Property</th>
+                              <th className="px-3 py-1.5 text-left">Part Number</th>
+                              <th className="px-3 py-1.5 text-left">Manufacturer</th>
+                              <th className="px-3 py-1.5 text-left">Rating</th>
+                              <th className="px-3 py-1.5 text-left">Label</th>
+                              <th className="px-3 py-1.5 text-center">Qty</th>
+                              <th className="px-3 py-1.5 text-center">Priority</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {propertyEntries.flatMap(([propName, propVal]) => {
+                              const parts = (propVal as any).parts as any[];
+                              const label = displayNames[propName] || propName;
+                              const locked = lockedRows.includes(propName);
+                              const manufacturers = Array.from(new Set(
+                                parts.map(p => p.fullData?.Manufacturer).filter(Boolean)
+                              )).join(' / ');
+                              return parts.map((part, pi) => (
+                                <tr key={`${propName}-${pi}`} className="border-b border-gray-50">
+                                  {pi === 0 && (
+                                    <td className="px-3 py-1 align-top font-medium" rowSpan={parts.length}>
+                                      <span className={locked ? 'line-through text-gray-400' : ''}>{label}</span>
+                                      {locked && <span className="ml-1 text-[10px] text-amber-600">🔒</span>}
+                                      {manufacturers && (
+                                        <div className="text-[10px] font-normal text-gray-500">{manufacturers}</div>
+                                      )}
+                                    </td>
+                                  )}
+                                  <td className="px-3 py-1 font-mono">{v(part.partNumber)}</td>
+                                  <td className="px-3 py-1">{v(part.fullData?.Manufacturer)}</td>
+                                  <td className="px-3 py-1">{v(part.fullData?.Designation3)}</td>
+                                  <td className="px-3 py-1">{v(part.label)}</td>
+                                  <td className="px-3 py-1 text-center">{part.quantity ?? 1}</td>
+                                  <td className="px-3 py-1 text-center">{part.priority ?? 1}</td>
+                                </tr>
+                              ));
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
       </Section>
 
       <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
