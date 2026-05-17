@@ -1766,12 +1766,17 @@ Rules:
 
 Title:"""
 
+        # Use whatever the stack's default LLM mode is. Hardcoding "online"
+        # broke title generation entirely whenever OpenAI was unavailable
+        # (expired/missing key, no internet, etc.) and produced a
+        # cascading "Failed to generate chat title" error on every new
+        # chat. The local LLM is plenty for a 5-word title.
         result = llm.generate(
             messages=[
                 {"role": "system", "content": "You are an expert at creating concise, descriptive titles."},
                 {"role": "user", "content": title_prompt}
             ],
-            mode="online",  # Force online for quality
+            mode=os.getenv("DEFAULT_LLM_MODE", "offline"),
             temperature=0.3,
             max_tokens=20,
             use_cache=False
