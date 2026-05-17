@@ -785,6 +785,16 @@ async def legacy_login(
 
     # Build the cacheable profile and write it to Redis.
     profile = build_profile(user)
+
+    # TPMS is read-only and most legacy users don't have a recognised
+    # "role" string that maps to one of our canonical buckets. Treat
+    # every legacy-login user as a technical user by default — they
+    # are EplanIX engineers logging into the company TPMS, after all.
+    # Override only if TPMS exposes a clearly higher-privilege role
+    # (admin / manager / etc.) that normalize_role_category() picked up.
+    if profile["role_category"] == "other":
+        profile["role_category"] = "expert_technical"
+
     write_profile_to_redis(profile)
 
     # JWT carries the canonical bucket so downstream services can gate
