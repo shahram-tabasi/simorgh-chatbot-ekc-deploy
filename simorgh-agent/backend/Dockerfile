@@ -24,13 +24,22 @@ ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
 
 # Rewrite apt sources to use the Nexus apt-proxy when provided
 # (jammy-style sources in /etc/apt/sources.list on the pytorch base image).
+# Also tell apt to talk to the Nexus host DIRECT, not via $http_proxy
+# (otherwise BuildKit's outer HTTP proxy tries to relay LAN traffic and 503s).
 RUN if [ -n "${UBUNTU_MIRROR}" ]; then \
         sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list && \
         sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" /etc/apt/sources.list || true; \
     fi && \
     if [ -n "${UBUNTU_SECURITY_MIRROR}" ]; then \
         sed -i "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" /etc/apt/sources.list || true; \
-    fi
+    fi && \
+    for url in "${UBUNTU_MIRROR}" "${UBUNTU_SECURITY_MIRROR}"; do \
+        host=$(echo "$url" | sed -E 's|^https?://([^/:]+).*|\1|'); \
+        if [ -n "$host" ]; then \
+            printf 'Acquire::http::Proxy::%s "DIRECT";\n' "$host" >> /etc/apt/apt.conf.d/99nexus-direct; \
+        fi; \
+    done && \
+    if [ -f /etc/apt/apt.conf.d/99nexus-direct ]; then cat /etc/apt/apt.conf.d/99nexus-direct; fi
 
 
 # -------------------------------------------------
