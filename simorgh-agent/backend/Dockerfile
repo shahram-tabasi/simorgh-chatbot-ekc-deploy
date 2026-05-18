@@ -36,7 +36,20 @@ RUN if [ -n "${UBUNTU_MIRROR}" ]; then \
     # Drop components we don't install from. A flaky Nexus upstream often
     # returns 502 on the restricted/multiverse Packages indexes, and apt
     # treats those as fatal errors even though we never use them.
-    sed -i -E 's/[[:space:]]+restricted//g;  s/[[:space:]]+multiverse//g' /etc/apt/sources.list && \
+    # Use awk so we can also delete lines that end up with no components.
+    awk '/^[[:space:]]*#/ || /^[[:space:]]*$/ { print; next } \
+         /^[[:space:]]*deb(-src)?[[:space:]]/ { \
+             out=""; n=0; \
+             for (i=1; i<=NF; i++) { \
+                 if (i<=3) { out=(out?out" ":"")$i; continue } \
+                 if ($i=="restricted" || $i=="multiverse") continue; \
+                 out=out" "$i; n++; \
+             } \
+             if (n>0) print out; \
+             next \
+         } \
+         { print }' /etc/apt/sources.list > /etc/apt/sources.list.new && \
+    mv /etc/apt/sources.list.new /etc/apt/sources.list && \
     for url in "${UBUNTU_MIRROR}" "${UBUNTU_SECURITY_MIRROR}"; do \
         host=$(echo "$url" | sed -E 's|^https?://([^/:]+).*|\1|'); \
         if [ -n "$host" ]; then \
@@ -44,7 +57,7 @@ RUN if [ -n "${UBUNTU_MIRROR}" ]; then \
         fi; \
     done && \
     if [ -f /etc/apt/apt.conf.d/99nexus-direct ]; then cat /etc/apt/apt.conf.d/99nexus-direct; fi && \
-    cat /etc/apt/sources.list
+    echo "--- /etc/apt/sources.list ---" && cat /etc/apt/sources.list
 
 
 # -------------------------------------------------
