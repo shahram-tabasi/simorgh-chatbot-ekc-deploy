@@ -33,13 +33,18 @@ RUN if [ -n "${UBUNTU_MIRROR}" ]; then \
     if [ -n "${UBUNTU_SECURITY_MIRROR}" ]; then \
         sed -i "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" /etc/apt/sources.list || true; \
     fi && \
+    # Drop components we don't install from. A flaky Nexus upstream often
+    # returns 502 on the restricted/multiverse Packages indexes, and apt
+    # treats those as fatal errors even though we never use them.
+    sed -i -E 's/[[:space:]]+restricted//g;  s/[[:space:]]+multiverse//g' /etc/apt/sources.list && \
     for url in "${UBUNTU_MIRROR}" "${UBUNTU_SECURITY_MIRROR}"; do \
         host=$(echo "$url" | sed -E 's|^https?://([^/:]+).*|\1|'); \
         if [ -n "$host" ]; then \
             printf 'Acquire::http::Proxy::%s "DIRECT";\n' "$host" >> /etc/apt/apt.conf.d/99nexus-direct; \
         fi; \
     done && \
-    if [ -f /etc/apt/apt.conf.d/99nexus-direct ]; then cat /etc/apt/apt.conf.d/99nexus-direct; fi
+    if [ -f /etc/apt/apt.conf.d/99nexus-direct ]; then cat /etc/apt/apt.conf.d/99nexus-direct; fi && \
+    cat /etc/apt/sources.list
 
 
 # -------------------------------------------------
