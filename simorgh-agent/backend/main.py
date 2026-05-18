@@ -311,10 +311,16 @@ async def startup_event():
         logger.info("✅ Unified Memory service initialized")
     except Exception as e:
         logger.warning(f"⚠️ Unified Memory service initialization failed (non-fatal): {e}")
-        unified_memory_service = get_unified_memory_service(
-            redis_service=redis_service,
-            llm_service=llm_service
-        )
+        try:
+            unified_memory_service = get_unified_memory_service(
+                redis_service=redis_service,
+                llm_service=llm_service
+            )
+        except Exception as fallback_err:
+            logger.warning(
+                f"⚠️ Unified Memory fallback construction also failed (non-fatal): {fallback_err}"
+            )
+            unified_memory_service = None
         qdrant = None
 
     # Initialize Unified LLM Context Service

@@ -15,10 +15,22 @@ FROM pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TRUSTED_HOST=
 ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG UBUNTU_MIRROR=
+ARG UBUNTU_SECURITY_MIRROR=
 ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     npm_config_registry=${NPM_REGISTRY}
+
+# Rewrite apt sources to use the Nexus apt-proxy when provided
+# (jammy-style sources in /etc/apt/sources.list on the pytorch base image).
+RUN if [ -n "${UBUNTU_MIRROR}" ]; then \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list && \
+        sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" /etc/apt/sources.list || true; \
+    fi && \
+    if [ -n "${UBUNTU_SECURITY_MIRROR}" ]; then \
+        sed -i "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" /etc/apt/sources.list || true; \
+    fi
 
 
 # -------------------------------------------------
@@ -143,6 +155,20 @@ RUN echo "=== Downloading NLTK data ===" && \
     nltk.download('averaged_perceptron_tagger', quiet=True); \
     nltk.download('averaged_perceptron_tagger_eng', quiet=True)" && \
     echo "=== NLTK data downloaded ==="
+
+# -------------------------------------------------
+#  Pre-cache tiktoken BPE files (cl100k_base + o200k_base)
+#  Avoids runtime fetch of openaipublic.blob.core.windows.net
+#  on air-gapped hosts.
+# -------------------------------------------------
+ENV TIKTOKEN_CACHE_DIR=/root/.cache/tiktoken
+RUN mkdir -p ${TIKTOKEN_CACHE_DIR} && \
+    echo "=== Pre-caching tiktoken encodings ===" && \
+    python3.11 -c "import tiktoken; \
+    tiktoken.get_encoding('cl100k_base').encode('warm'); \
+    tiktoken.get_encoding('o200k_base').encode('warm'); \
+    print('tiktoken encodings cached')" && \
+    echo "=== tiktoken cached ==="
 
 # -------------------------------------------------
 #  Pre-download SentenceTransformer model

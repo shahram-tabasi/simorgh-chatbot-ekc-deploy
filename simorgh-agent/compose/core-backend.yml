@@ -21,6 +21,8 @@ services:
       - TRANSFORMERS_CACHE=/root/.cache/huggingface/hub
       - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
       - HF_HUB_OFFLINE=0
+      # Use the BPE files baked into the image (avoids egress at startup)
+      - TIKTOKEN_CACHE_DIR=/root/.cache/tiktoken
       # Neo4j (optional)
       - NEO4J_URI=${NEO4J_URI:-}
       - NEO4J_USER=${NEO4J_USER:-}
