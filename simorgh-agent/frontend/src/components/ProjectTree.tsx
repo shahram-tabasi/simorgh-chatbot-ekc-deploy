@@ -24,7 +24,8 @@ interface ProjectTreeProps {
   onSelectChat: (projectId: string | null, chatId: string) => void;
   onCreateProject: () => void;
   onCreateChat: (projectId: string, title: string) => void;
-  onCreateGeneralChat: () => void;
+  // Optional: when undefined the "new general chat" entry is hidden (legacy users).
+  onCreateGeneralChat?: () => void;
   onRenameChat: (chatId: string, newName: string, projectId: string | null) => void;
   onDeleteChat: (chatId: string, projectId: string | null) => void;
   onDeleteProject: (projectId: string) => void;
@@ -124,8 +125,8 @@ export function ProjectTree({
     if (contextMenu && contextMenu.projectId) {
       handleAddPage(contextMenu.projectId);
       setContextMenu(null);
-    } else {
-      // General chat
+    } else if (onCreateGeneralChat) {
+      // General chat (hidden for legacy users — onCreateGeneralChat is undefined)
       onCreateGeneralChat();
       setContextMenu(null);
     }
@@ -179,7 +180,8 @@ export function ProjectTree({
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-6">
-        {/* General Chats */}
+        {/* General Chats — hidden entirely for legacy users (onCreateGeneralChat undefined). */}
+        {onCreateGeneralChat && (
         <div>
           <button
             onClick={onToggleGeneralChats}
@@ -223,6 +225,7 @@ export function ProjectTree({
             </motion.div>
           )}
         </div>
+        )}
 
         {/* Projects Section */}
         <div>

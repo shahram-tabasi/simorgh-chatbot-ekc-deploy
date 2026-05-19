@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routes.chatbot_v2 import router as chatbot_v2_router
 from routes.project_session import router as project_session_router
+from routes.project_chat_session import router as project_chat_session_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("chat-service")
@@ -43,6 +44,7 @@ app.add_middleware(
 # Don't add a second one.
 app.include_router(chatbot_v2_router)
 app.include_router(project_session_router)
+app.include_router(project_chat_session_router)
 
 
 @app.get("/health")

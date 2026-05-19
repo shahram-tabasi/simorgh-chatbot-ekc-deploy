@@ -9,6 +9,8 @@ import SettingsPanel from './components/SettingsPanel';
 import MobileHeader from './components/MobileHeader';
 import CreateProjectModal from './components/CreateProjectModal';
 import CreateAgentProjectModal from './components/CreateAgentProjectModal';
+import CreateProjectWizard from './components/CreateProjectWizard';
+import ProjectSessionDeepLink from './pages/ProjectSessionDeepLink';
 import CreateChatModal from './components/CreateChatModal';
 import CreateProjectChatModal from './components/CreateProjectChatModal';
 import Login from './components/Login';
@@ -302,7 +304,8 @@ function MainChat() {
             onToggle={rightSidebar.toggle}
             side="right"
             onNewProject={canCreateProjects ? handleCreateProject : undefined}
-            onNewGeneralChat={handleCreateGeneralChat}
+            // Legacy users get project-only chat: hide the "new general chat" entry point.
+            onNewGeneralChat={user && isLegacyUser(user) ? undefined : handleCreateGeneralChat}
           >
             {/* Quota Badge for modern users */}
             {isModernTier && (
@@ -328,16 +331,17 @@ function MainChat() {
             )}
             <ProjectTree
               projects={displayProjects}
-              generalChats={generalChats}
+              // Hide general chats entirely for legacy users — project chat only.
+              generalChats={user && isLegacyUser(user) ? [] : generalChats}
               activeProjectId={activeProjectId}
               activeChatId={activeChatId}
-              showGeneralChats={showGeneralChats}
+              showGeneralChats={user && isLegacyUser(user) ? false : showGeneralChats}
               onToggleProject={toggleProject}
               onToggleGeneralChats={toggleGeneralChats}
               onSelectChat={handleSelectChat}
               onCreateProject={handleCreateProject}
               onCreateChat={handleCreateChat}
-              onCreateGeneralChat={handleCreateGeneralChat}
+              onCreateGeneralChat={user && isLegacyUser(user) ? undefined as any : handleCreateGeneralChat}
               onRenameChat={renameChat}
               onDeleteChat={deleteChat}
               onDeleteProject={deleteProject}
@@ -396,26 +400,16 @@ function MainChat() {
           onExternalClose={() => setSettingsPanelOpen(false)}
         />
 
-        {/* مودال ساخت پروژه - Smart: legacy users get TPMS modal, modern users get name-only modal */}
-        {user && isLegacyUser(user) ? (
-          <CreateProjectModal
-            isOpen={showCreateModal}
-            onClose={() => setShowCreateModal(false)}
-            onCreate={(oenum, projectName, firstPageTitle) => {
-              createProject(projectName, { tpmsOenum: oenum, firstPageTitle });
-              setShowCreateModal(false);
-            }}
-          />
-        ) : (
-          <CreateAgentProjectModal
-            isOpen={showCreateModal}
-            onClose={() => setShowCreateModal(false)}
-            onCreate={async (name, description) => {
-              await createProject(name, { description });
-              setShowCreateModal(false);
-            }}
-          />
-        )}
+        {/* New per-project container wizard (legacy + modern, both flows). */}
+        <CreateProjectWizard
+          isOpen={showCreateModal}
+          onClose={() => setShowCreateModal(false)}
+          onCreated={(_projectId, sessionToken) => {
+            setShowCreateModal(false);
+            // Navigate to the deep-link so the rest of the app picks up the session.
+            window.location.assign(`/chatbot/project/${sessionToken}`);
+          }}
+        />
 
         {/* مودال ساخت چت جدید (Not used - general chats are created immediately) */}
         {/* <CreateChatModal
@@ -537,6 +531,15 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <UpgradePage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Deep link: /chatbot/project/session_<token> */}
+        <Route
+          path="/project/:sessionToken"
+          element={
+            <ProtectedRoute>
+              <ProjectSessionDeepLink />
             </ProtectedRoute>
           }
         />

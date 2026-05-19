@@ -375,6 +375,18 @@ def get_mcp_manager() -> MCPManager:
                 # prompt. Exposes get_project_context(oenum, sections).
                 "TPMS_CONTEXT_MCP_URL", "http://tpms-context-agent:8050/mcp"
             ),
+            "runtime_broker": os.getenv(
+                # Per-project long-lived shell-runtime containers.
+                # Exposes session_start/stop/exec, session_read_file /
+                # write_file, session_git_commit / push.
+                "RUNTIME_BROKER_MCP_URL", "http://runtime-broker:8048/mcp"
+            ),
+            "project_explorer": os.getenv(
+                # Two-phase project exploration. Exposes explore_tool
+                # and get_exploration; result also lives in Redis under
+                # project:{id}:exploration for the CoT engine to pull.
+                "PROJECT_EXPLORER_MCP_URL", "http://project-explorer:8052/mcp"
+            ),
         }
 
         for name, url in servers.items():
