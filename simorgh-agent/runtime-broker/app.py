@@ -1,44 +1,56 @@
 """
 runtime-broker
 ==============
-Replaces shell-service. Spawns a fresh, ephemeral docker container per
-request from one of three stock images (python / node / shell), runs the
-caller-supplied script inside it under hard cgroup limits, captures
-stdout/stderr/exit_code, then destroys the container.
+Per-project long-lived shell-runtime containers.
+
+This is the replacement for both:
+  • the old shell-service (per-user persistent workspace), and
+  • the brief ephemeral-only runtime-broker (every /run a fresh container).
 
 Design:
-  • No persistent /workspace per project (the old shell-service model).
-    Callers either (a) pass `inputs` as in-memory files, or (b) ask the
-    broker to mount a read-only checkout of a GitLab repo (via the sidecar
-    `prefetch` flow).
-  • Network defaults to `none` — task containers cannot reach the LAN. Set
-    `network: "bridge"` per-request only when truly needed.
-  • Docker socket is mounted from the host. No privileged containers.
-  • Limits enforced: mem, cpu_quota, pids_limit, tmpfs root, no caps,
-    seccomp default, read-only rootfs.
+  • One named container per project (created by /sessions/{project_id}/start).
+  • A docker named volume holds the project's working dir (persistent across
+    container restarts — survives stop, dies only on /sessions/{pid}/delete).
+  • Container is started/stopped by the CoT engine: it boots when the project
+    chat needs a tool, stops when idle.
+  • Image is `BROKER_SESSION_IMAGE` (Ubuntu-based with git + python + node
+    pre-installed). Network = bridge by default so the container can reach
+    GitLab (internal LAN), techserver SMB (192.168.1.3), and push back.
+  • Exec endpoints (/sessions/{pid}/exec) run a command inside the live
+    container and stream stdout/stderr; results also logged to host so
+    chat-service can mirror them.
 
 REST:
-  POST /run            — execute a script, get result back
-  POST /run/python     — convenience: language=python
-  POST /run/shell      — convenience: language=shell
-  POST /run/node       — convenience: language=node
-  GET  /health
-  GET  /images         — what stock images are configured
+  POST   /sessions/{project_id}/start
+  POST   /sessions/{project_id}/stop
+  POST   /sessions/{project_id}/exec        — run a shell command, return result
+  POST   /sessions/{project_id}/write_file  — put a file into working dir
+  GET    /sessions/{project_id}/read_file   — read a file from working dir
+  GET    /sessions/{project_id}/status
+  DELETE /sessions/{project_id}             — stop + remove container + volume
+  GET    /health
+  GET    /images
 
-MCP tools:
-  run_python(script, inputs?, timeout?)
-  run_shell(script, inputs?, timeout?)
-  run_node(script, inputs?, timeout?)
+MCP tools (called by the CoT engine):
+  session_start(project_id)
+  session_stop(project_id)
+  session_exec(project_id, command, timeout_sec?, workdir?)
+  session_write_file(project_id, path, content)
+  session_read_file(project_id, path)
+  session_git_commit(project_id, message, paths?)
+  session_git_push(project_id, branch?)
 """
+import base64
 import io
 import os
+import shlex
 import tarfile
 import time
 import uuid
 from typing import Literal
 
 import docker
-from docker.errors import ContainerError, ImageNotFound, APIError
+from docker.errors import APIError, ImageNotFound, NotFound
 from fastapi import Depends, FastAPI, Header, HTTPException
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -49,54 +61,104 @@ configure(service="runtime-broker")
 log = get_logger(__name__)
 
 BROKER_TOKEN     = os.getenv("BROKER_TOKEN", "")
-NETWORK          = os.getenv("BROKER_NETWORK", "none")
-PYTHON_IMAGE     = os.getenv("BROKER_PYTHON_IMAGE", "python:3.12-slim")
-NODE_IMAGE       = os.getenv("BROKER_NODE_IMAGE", "node:20-alpine")
-SHELL_IMAGE      = os.getenv("BROKER_SHELL_IMAGE", "ubuntu:22.04")
-DEFAULT_TIMEOUT  = int(os.getenv("BROKER_DEFAULT_TIMEOUT", "30"))
-MAX_TIMEOUT      = int(os.getenv("BROKER_MAX_TIMEOUT", "300"))
-MEM_LIMIT        = os.getenv("BROKER_MEM_LIMIT", "512m")
-CPU_QUOTA        = int(os.getenv("BROKER_CPU_QUOTA", "50000"))   # of 100000 / cpu
-PIDS_LIMIT       = int(os.getenv("BROKER_PIDS_LIMIT", "128"))
-TMPFS_SIZE       = os.getenv("BROKER_TMPFS_SIZE", "128m")
+
+# Single session image — ships with git, python3, nodejs, smbclient, openssh-client.
+SESSION_IMAGE    = os.getenv("BROKER_SESSION_IMAGE", "simorgh/session-runtime:latest")
+# Network: bridge so the container can reach GitLab + techserver SMB + push.
+SESSION_NETWORK  = os.getenv("BROKER_SESSION_NETWORK", "bridge")
+
+DEFAULT_TIMEOUT  = int(os.getenv("BROKER_DEFAULT_TIMEOUT", "60"))
+MAX_TIMEOUT      = int(os.getenv("BROKER_MAX_TIMEOUT", "1800"))
+MEM_LIMIT        = os.getenv("BROKER_MEM_LIMIT", "1g")
+CPU_QUOTA        = int(os.getenv("BROKER_CPU_QUOTA", "100000"))   # of 100000 / cpu
+PIDS_LIMIT       = int(os.getenv("BROKER_PIDS_LIMIT", "512"))
+
+WORKING_DIR      = "/work"
+CONTAINER_PREFIX = "simorgh-proj-"
+VOLUME_PREFIX    = "simorgh-proj-vol-"
 
 _dockerc = docker.from_env()
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _container_name(project_id: str) -> str:
+    return f"{CONTAINER_PREFIX}{project_id}"
+
+
+def _volume_name(project_id: str) -> str:
+    return f"{VOLUME_PREFIX}{project_id}"
+
+
+def _get_container(project_id: str):
+    try:
+        return _dockerc.containers.get(_container_name(project_id))
+    except NotFound:
+        return None
+
+
+def _ensure_image(image: str) -> None:
+    try:
+        _dockerc.images.get(image)
+    except ImageNotFound:
+        log.info("pull_image", image=image)
+        _dockerc.images.pull(image)
+
+
+def _ensure_volume(project_id: str) -> str:
+    name = _volume_name(project_id)
+    try:
+        _dockerc.volumes.get(name)
+    except NotFound:
+        _dockerc.volumes.create(name=name, labels={"simorgh.project": project_id})
+    return name
+
+
+# ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
-Lang = Literal["python", "shell", "node"]
-
-
-class FileInput(BaseModel):
-    path: str = Field(..., description="path inside /work, e.g. data.json")
-    content: str = Field(..., description="utf-8 text contents")
-
-
-class RunRequest(BaseModel):
-    language: Lang
-    script: str = Field(..., min_length=1, max_length=200_000)
-    inputs: list[FileInput] = []
-    timeout_sec: int = Field(DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
-    network: Literal["none", "bridge"] | None = None
+class StartRequest(BaseModel):
+    project_id: str
+    image: str | None = None
     env: dict[str, str] = {}
 
 
-class RunResult(BaseModel):
+class ExecRequest(BaseModel):
+    command: str = Field(..., description="Shell command to run inside the session container")
+    timeout_sec: int = Field(DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
+    workdir: str | None = None
+    user: str | None = None
+
+
+class ExecResult(BaseModel):
     exit_code: int
     stdout: str
     stderr: str
     duration_ms: int
-    container_id: str
-    image: str
     timed_out: bool
+
+
+class WriteFileRequest(BaseModel):
+    path: str = Field(..., description="path relative to /work")
+    content: str
+    encoding: Literal["text", "base64"] = "text"
+
+
+class SessionStatus(BaseModel):
+    project_id: str
+    container_name: str
+    container_id: str | None
+    image: str | None
+    status: str    # 'absent' | 'created' | 'running' | 'exited' | 'paused' | ...
+    volume: str
+    working_dir: str
 
 
 # ---------------------------------------------------------------------------
 # FastAPI
 # ---------------------------------------------------------------------------
-app = FastAPI(title="runtime-broker", version="0.1.0")
+app = FastAPI(title="runtime-broker", version="0.3.0")
 app.middleware("http")(request_id_middleware)
 
 
@@ -109,161 +171,376 @@ def require_token(authorization: str | None = Header(default=None)):
         raise HTTPException(status_code=403, detail="bad token")
 
 
-def _image_for(lang: Lang) -> str:
-    return {"python": PYTHON_IMAGE, "node": NODE_IMAGE, "shell": SHELL_IMAGE}[lang]
-
-
-def _entrypoint(lang: Lang) -> list[str]:
-    """Run the user script as $WORK/main.* with the appropriate interpreter."""
-    if lang == "python":
-        return ["python", "/work/main.py"]
-    if lang == "node":
-        return ["node", "/work/main.js"]
-    return ["/bin/bash", "/work/main.sh"]
-
-
-def _script_filename(lang: Lang) -> str:
-    return {"python": "main.py", "node": "main.js", "shell": "main.sh"}[lang]
-
-
-def _build_input_tar(req: RunRequest) -> bytes:
-    """Pack the user script + inputs into an in-memory tar to upload via put_archive."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tar:
-        def _add(path: str, data: bytes, mode: int = 0o644):
-            ti = tarfile.TarInfo(name=path)
-            ti.size = len(data)
-            ti.mode = mode
-            tar.addfile(ti, io.BytesIO(data))
-        _add(_script_filename(req.language), req.script.encode("utf-8"), 0o755)
-        for f in req.inputs:
-            # Reject path traversal — files must land under /work directly.
-            if "/" in f.path or f.path.startswith(".."):
-                raise HTTPException(status_code=400, detail=f"invalid input path {f.path!r}")
-            _add(f.path, f.content.encode("utf-8"))
-    return buf.getvalue()
-
-
-def _run(req: RunRequest) -> RunResult:
-    image     = _image_for(req.language)
-    entry     = _entrypoint(req.language)
-    container = None
-    name      = f"sim-task-{uuid.uuid4().hex[:12]}"
-    network   = req.network or NETWORK
-    started   = time.perf_counter()
-    timed_out = False
-
-    try:
-        # Pre-pull image if missing — fail fast with a clear error.
-        try:
-            _dockerc.images.get(image)
-        except ImageNotFound:
-            log.info("pull_image", image=image)
-            _dockerc.images.pull(image)
-
-        container = _dockerc.containers.create(
-            image=image,
-            command=entry,
-            name=name,
-            working_dir="/work",
-            environment=req.env,
-            network_mode=network,
-            mem_limit=MEM_LIMIT,
-            memswap_limit=MEM_LIMIT,             # disable swap
-            cpu_period=100_000,
-            cpu_quota=CPU_QUOTA,
-            pids_limit=PIDS_LIMIT,
-            read_only=True,
-            tmpfs={"/work": f"rw,size={TMPFS_SIZE},mode=1777",
-                   "/tmp":  f"rw,size={TMPFS_SIZE},mode=1777"},
-            cap_drop=["ALL"],
-            security_opt=["no-new-privileges"],
-            user="65534:65534",                   # nobody:nogroup
-            detach=True,
-        )
-
-        # Upload script + inputs into /work BEFORE start.
-        tar_bytes = _build_input_tar(req)
-        container.put_archive("/work", tar_bytes)
-
-        container.start()
-        try:
-            result = container.wait(timeout=req.timeout_sec)
-            exit_code = int(result.get("StatusCode", -1))
-        except Exception:
-            timed_out = True
-            try: container.kill()
-            except Exception: pass
-            exit_code = 124   # GNU timeout convention
-
-        stdout = container.logs(stdout=True, stderr=False).decode("utf-8", "replace")
-        stderr = container.logs(stdout=False, stderr=True).decode("utf-8", "replace")
-
-        # Truncate to keep responses bounded.
-        MAX = 100_000
-        stdout = stdout[:MAX]
-        stderr = stderr[:MAX]
-
-        duration_ms = int((time.perf_counter() - started) * 1000)
-        log.info("run", lang=req.language, image=image, exit_code=exit_code,
-                 duration_ms=duration_ms, timed_out=timed_out, container=name)
-
-        return RunResult(
-            exit_code=exit_code, stdout=stdout, stderr=stderr,
-            duration_ms=duration_ms, container_id=container.id, image=image,
-            timed_out=timed_out,
-        )
-    except APIError as e:
-        raise HTTPException(status_code=502, detail=f"docker error: {e.explanation}")
-    finally:
-        if container is not None:
-            try: container.remove(force=True)
-            except Exception: pass
-
-
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "runtime-broker"}
+    return {"status": "ok", "service": "runtime-broker", "version": "0.3.0"}
 
 
 @app.get("/images")
 def images():
-    return {"python": PYTHON_IMAGE, "node": NODE_IMAGE, "shell": SHELL_IMAGE}
-
-
-@app.post("/run", response_model=RunResult, dependencies=[Depends(require_token)])
-def run(req: RunRequest):
-    return _run(req)
+    return {"session": SESSION_IMAGE}
 
 
 # ---------------------------------------------------------------------------
-# MCP — tools the agent calls instead of shell-service.
+# Session lifecycle
+# ---------------------------------------------------------------------------
+def _create_and_start(project_id: str, image: str, env: dict[str, str]):
+    volume = _ensure_volume(project_id)
+    _ensure_image(image)
+    name = _container_name(project_id)
+
+    container = _dockerc.containers.create(
+        image=image,
+        # Keep the container alive; CoT execs into it as needed.
+        command=["/bin/sh", "-c", "trap 'exit 0' TERM; while :; do sleep 3600 & wait $!; done"],
+        name=name,
+        working_dir=WORKING_DIR,
+        environment=env,
+        network_mode=SESSION_NETWORK,
+        mem_limit=MEM_LIMIT,
+        memswap_limit=MEM_LIMIT,
+        cpu_period=100_000,
+        cpu_quota=CPU_QUOTA,
+        pids_limit=PIDS_LIMIT,
+        volumes={volume: {"bind": WORKING_DIR, "mode": "rw"}},
+        labels={"simorgh.project": project_id, "simorgh.role": "session"},
+        cap_drop=["ALL"],
+        cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"],
+        security_opt=["no-new-privileges"],
+        detach=True,
+        restart_policy={"Name": "unless-stopped"},
+    )
+    container.start()
+    return container
+
+
+@app.post("/sessions/{project_id}/start", response_model=SessionStatus,
+          dependencies=[Depends(require_token)])
+def start_session(project_id: str, req: StartRequest | None = None):
+    if req is None:
+        req = StartRequest(project_id=project_id)
+    image = req.image or SESSION_IMAGE
+    env = req.env or {}
+
+    existing = _get_container(project_id)
+    if existing is not None:
+        existing.reload()
+        if existing.status != "running":
+            try:
+                existing.start()
+                existing.reload()
+            except APIError as e:
+                raise HTTPException(status_code=502, detail=f"docker start: {e.explanation}")
+        return SessionStatus(
+            project_id=project_id, container_name=existing.name,
+            container_id=existing.id, image=image,
+            status=existing.status, volume=_volume_name(project_id),
+            working_dir=WORKING_DIR,
+        )
+    try:
+        container = _create_and_start(project_id, image, env)
+    except APIError as e:
+        raise HTTPException(status_code=502, detail=f"docker create: {e.explanation}")
+    container.reload()
+    return SessionStatus(
+        project_id=project_id, container_name=container.name,
+        container_id=container.id, image=image, status=container.status,
+        volume=_volume_name(project_id), working_dir=WORKING_DIR,
+    )
+
+
+@app.post("/sessions/{project_id}/stop", response_model=SessionStatus,
+          dependencies=[Depends(require_token)])
+def stop_session(project_id: str, timeout: int = 10):
+    c = _get_container(project_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="session container not found")
+    try:
+        c.stop(timeout=timeout)
+        c.reload()
+    except APIError as e:
+        raise HTTPException(status_code=502, detail=f"docker stop: {e.explanation}")
+    return SessionStatus(
+        project_id=project_id, container_name=c.name, container_id=c.id,
+        image=(c.image.tags[0] if c.image.tags else None),
+        status=c.status, volume=_volume_name(project_id), working_dir=WORKING_DIR,
+    )
+
+
+@app.get("/sessions/{project_id}/status", response_model=SessionStatus,
+         dependencies=[Depends(require_token)])
+def session_status(project_id: str):
+    c = _get_container(project_id)
+    if c is None:
+        return SessionStatus(
+            project_id=project_id, container_name=_container_name(project_id),
+            container_id=None, image=None, status="absent",
+            volume=_volume_name(project_id), working_dir=WORKING_DIR,
+        )
+    c.reload()
+    return SessionStatus(
+        project_id=project_id, container_name=c.name, container_id=c.id,
+        image=(c.image.tags[0] if c.image.tags else None),
+        status=c.status, volume=_volume_name(project_id), working_dir=WORKING_DIR,
+    )
+
+
+@app.delete("/sessions/{project_id}", dependencies=[Depends(require_token)])
+def delete_session(project_id: str, keep_volume: bool = False):
+    """Stop + remove the container, and (default) destroy the named volume.
+    Called when the project chat session is deleted by the user.
+    """
+    c = _get_container(project_id)
+    removed_container = False
+    if c is not None:
+        try:
+            c.remove(force=True)
+            removed_container = True
+        except APIError as e:
+            raise HTTPException(status_code=502, detail=f"docker rm: {e.explanation}")
+
+    removed_volume = False
+    if not keep_volume:
+        try:
+            v = _dockerc.volumes.get(_volume_name(project_id))
+            v.remove(force=True)
+            removed_volume = True
+        except NotFound:
+            pass
+        except APIError as e:
+            raise HTTPException(status_code=502, detail=f"docker volume rm: {e.explanation}")
+
+    return {
+        "project_id": project_id,
+        "removed_container": removed_container,
+        "removed_volume": removed_volume,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Exec / file IO
+# ---------------------------------------------------------------------------
+def _require_running(project_id: str):
+    c = _get_container(project_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="session not started")
+    c.reload()
+    if c.status != "running":
+        # Auto-start: CoT often calls exec immediately after start; tolerate a stopped one.
+        try:
+            c.start()
+            c.reload()
+        except APIError as e:
+            raise HTTPException(status_code=409,
+                                detail=f"session not running and could not start: {e.explanation}")
+    return c
+
+
+@app.post("/sessions/{project_id}/exec", response_model=ExecResult,
+          dependencies=[Depends(require_token)])
+def session_exec(project_id: str, req: ExecRequest):
+    c = _require_running(project_id)
+    workdir = req.workdir or WORKING_DIR
+    user = req.user or "root"
+    cmd = ["/bin/bash", "-lc", req.command]
+
+    started = time.perf_counter()
+    timed_out = False
+    try:
+        # docker-py exec_run doesn't support timeout directly; use the low-level API.
+        exec_create = _dockerc.api.exec_create(
+            c.id, cmd=cmd, stdout=True, stderr=True, workdir=workdir, user=user, tty=False,
+        )
+        exec_id = exec_create["Id"]
+        # exec_start with stream=False blocks until completion; pair with a
+        # client-side wait loop to honour timeout.
+        sock = _dockerc.api.exec_start(exec_id, detach=False, stream=True, demux=True)
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        deadline = started + req.timeout_sec
+        for out_chunk, err_chunk in sock:
+            if out_chunk:
+                stdout_chunks.append(out_chunk)
+            if err_chunk:
+                stderr_chunks.append(err_chunk)
+            if time.perf_counter() > deadline:
+                timed_out = True
+                break
+
+        info = _dockerc.api.exec_inspect(exec_id)
+        exit_code = int(info.get("ExitCode") or (124 if timed_out else 0))
+    except APIError as e:
+        raise HTTPException(status_code=502, detail=f"docker exec: {e.explanation}")
+
+    stdout = b"".join(stdout_chunks).decode("utf-8", "replace")
+    stderr = b"".join(stderr_chunks).decode("utf-8", "replace")
+    MAX = 200_000
+    stdout = stdout[:MAX]
+    stderr = stderr[:MAX]
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    log.info("session_exec", project_id=project_id, exit_code=exit_code,
+             duration_ms=duration_ms, timed_out=timed_out)
+    return ExecResult(exit_code=exit_code, stdout=stdout, stderr=stderr,
+                      duration_ms=duration_ms, timed_out=timed_out)
+
+
+@app.post("/sessions/{project_id}/write_file", dependencies=[Depends(require_token)])
+def session_write_file(project_id: str, req: WriteFileRequest):
+    c = _require_running(project_id)
+    if req.path.startswith("/") or ".." in req.path.split("/"):
+        raise HTTPException(status_code=400, detail="path must be relative to /work without ..")
+    raw = base64.b64decode(req.content) if req.encoding == "base64" else req.content.encode("utf-8")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        ti = tarfile.TarInfo(name=req.path)
+        ti.size = len(raw)
+        ti.mode = 0o644
+        tar.addfile(ti, io.BytesIO(raw))
+    try:
+        c.put_archive(WORKING_DIR, buf.getvalue())
+    except APIError as e:
+        raise HTTPException(status_code=502, detail=f"docker put_archive: {e.explanation}")
+    return {"path": req.path, "size": len(raw)}
+
+
+@app.get("/sessions/{project_id}/read_file", dependencies=[Depends(require_token)])
+def session_read_file(project_id: str, path: str):
+    c = _require_running(project_id)
+    if path.startswith("/") or ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="path must be relative to /work without ..")
+    try:
+        stream, stat = c.get_archive(f"{WORKING_DIR}/{path}")
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="not found")
+    buf = io.BytesIO(b"".join(stream))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r") as tar:
+        for member in tar.getmembers():
+            if member.isfile():
+                data = tar.extractfile(member).read()
+                try:
+                    return {"path": path, "encoding": "utf-8",
+                            "size": len(data), "content": data.decode("utf-8")}
+                except UnicodeDecodeError:
+                    return {"path": path, "encoding": "base64",
+                            "size": len(data),
+                            "content": base64.b64encode(data).decode("ascii")}
+    raise HTTPException(status_code=404, detail="empty archive")
+
+
+# ---------------------------------------------------------------------------
+# Git convenience endpoints (commit locally / push to remote-tracked simorgh branch)
+# ---------------------------------------------------------------------------
+class CommitRequest(BaseModel):
+    message: str
+    paths: list[str] = []          # empty = git add -A
+    author_email: str = "simorgh-agent@local"
+    author_name: str = "simorgh-agent"
+    workdir: str = WORKING_DIR + "/gitlab"
+
+
+class PushRequest(BaseModel):
+    branch: str | None = None      # None = current branch
+    workdir: str = WORKING_DIR + "/gitlab"
+    remote: str = "origin"
+
+
+@app.post("/sessions/{project_id}/git/commit", response_model=ExecResult,
+          dependencies=[Depends(require_token)])
+def session_git_commit(project_id: str, req: CommitRequest):
+    add_cmd = "git add -A" if not req.paths else (
+        "git add " + " ".join(shlex.quote(p) for p in req.paths)
+    )
+    script = (
+        f"set -e\n"
+        f"cd {shlex.quote(req.workdir)}\n"
+        f"git config user.email {shlex.quote(req.author_email)}\n"
+        f"git config user.name {shlex.quote(req.author_name)}\n"
+        f"{add_cmd}\n"
+        f"if git diff --cached --quiet; then echo 'no changes'; exit 0; fi\n"
+        f"git commit -m {shlex.quote(req.message)}\n"
+    )
+    return session_exec(project_id, ExecRequest(command=script, timeout_sec=60))
+
+
+@app.post("/sessions/{project_id}/git/push", response_model=ExecResult,
+          dependencies=[Depends(require_token)])
+def session_git_push(project_id: str, req: PushRequest):
+    branch_part = shlex.quote(req.branch) if req.branch else "$(git rev-parse --abbrev-ref HEAD)"
+    script = (
+        f"set -e\n"
+        f"cd {shlex.quote(req.workdir)}\n"
+        f"git push -u {shlex.quote(req.remote)} {branch_part}\n"
+    )
+    return session_exec(project_id, ExecRequest(command=script, timeout_sec=180))
+
+
+# ---------------------------------------------------------------------------
+# MCP — tools the CoT engine calls
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
     "runtime-broker",
     instructions=(
-        "Run code in a fresh, sandboxed container. Use run_python for "
-        "Python, run_node for JS, run_shell for bash. No persistent state."
+        "Manage the per-project session container. Each project has one "
+        "long-lived shell-runtime container with a persistent /work volume. "
+        "Use session_start before exec; session_stop when idle. session_exec "
+        "runs a bash command and returns stdout/stderr/exit_code."
     ),
 )
 
 
 @mcp.tool()
-async def run_python(script: str, timeout_sec: int = DEFAULT_TIMEOUT) -> dict:
-    """Run a Python 3 script in an ephemeral container. Returns exit_code + stdout + stderr."""
-    return _run(RunRequest(language="python", script=script, timeout_sec=timeout_sec)).model_dump()
+async def session_start(project_id: str) -> dict:
+    """Start (or resume) the project's session container."""
+    return start_session(project_id, StartRequest(project_id=project_id)).model_dump()
 
 
 @mcp.tool()
-async def run_node(script: str, timeout_sec: int = DEFAULT_TIMEOUT) -> dict:
-    """Run a Node.js script in an ephemeral container."""
-    return _run(RunRequest(language="node", script=script, timeout_sec=timeout_sec)).model_dump()
+async def session_stop(project_id: str) -> dict:
+    """Stop the project's session container (volume is preserved)."""
+    return stop_session(project_id).model_dump()
 
 
 @mcp.tool()
-async def run_shell(script: str, timeout_sec: int = DEFAULT_TIMEOUT) -> dict:
-    """Run a bash script in an ephemeral Ubuntu container."""
-    return _run(RunRequest(language="shell", script=script, timeout_sec=timeout_sec)).model_dump()
+async def session_status_tool(project_id: str) -> dict:
+    """Return current status of the project's session container."""
+    return session_status(project_id).model_dump()
+
+
+@mcp.tool()
+async def session_exec_tool(project_id: str, command: str,
+                            timeout_sec: int = DEFAULT_TIMEOUT,
+                            workdir: str = "") -> dict:
+    """Run a shell command inside the project container. Returns exit_code, stdout, stderr."""
+    return session_exec(project_id,
+                        ExecRequest(command=command, timeout_sec=timeout_sec,
+                                    workdir=workdir or None)).model_dump()
+
+
+@mcp.tool()
+async def session_write_file_tool(project_id: str, path: str, content: str) -> dict:
+    """Write a utf-8 file into the project container's /work directory."""
+    return session_write_file(project_id, WriteFileRequest(path=path, content=content))
+
+
+@mcp.tool()
+async def session_read_file_tool(project_id: str, path: str) -> dict:
+    """Read a file from the project container's /work directory."""
+    return session_read_file(project_id, path=path)
+
+
+@mcp.tool()
+async def session_git_commit_tool(project_id: str, message: str,
+                                  paths: list[str] | None = None) -> dict:
+    """Stage and commit changes locally inside the cloned gitlab repo."""
+    return session_git_commit(project_id, CommitRequest(message=message,
+                                                        paths=paths or [])).model_dump()
+
+
+@mcp.tool()
+async def session_git_push_tool(project_id: str, branch: str = "") -> dict:
+    """Push the simorgh working branch to the user's GitLab repo."""
+    return session_git_push(project_id, PushRequest(branch=branch or None)).model_dump()
 
 
 app.mount("/mcp", mcp.streamable_http_app())

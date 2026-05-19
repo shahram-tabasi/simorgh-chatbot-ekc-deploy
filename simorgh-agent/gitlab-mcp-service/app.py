@@ -111,6 +111,90 @@ def list_projects(group: str | None = None, search: str | None = None, per_page:
              "web_url": p.web_url} for p in items]
 
 
+@app.get("/user-projects")
+def list_user_projects(user_token: str | None = None, search: str | None = None,
+                       per_page: int = 50,
+                       x_user_gitlab_token: str | None = Header(default=None)):
+    """List projects the *end user* owns or is a member of on GitLab.
+
+    Requires the end user's personal access token (preferred via the
+    `X-User-Gitlab-Token` header; query param `user_token` is a fallback).
+    The simorgh agent token is NOT used here — we want the user's own
+    visibility, not the service account's.
+    """
+    token = x_user_gitlab_token or user_token
+    if not token:
+        raise HTTPException(status_code=401, detail="user gitlab token required")
+    try:
+        ugl = gitlab.Gitlab(GITLAB_URL, private_token=token, timeout=30)
+        ugl.auth()
+    except gitlab.exceptions.GitlabAuthenticationError:
+        raise HTTPException(status_code=401, detail="invalid gitlab token")
+    items = ugl.projects.list(membership=True, search=search, per_page=per_page,
+                              order_by="last_activity_at", all=False)
+    return [{"id": p.id, "path": p.path_with_namespace, "name": p.name,
+             "default_branch": getattr(p, "default_branch", None),
+             "web_url": p.web_url,
+             "ssh_url": getattr(p, "ssh_url_to_repo", None),
+             "http_url": getattr(p, "http_url_to_repo", None)} for p in items]
+
+
+@app.get("/branches")
+def list_branches(project: str, search: str | None = None, per_page: int = 100):
+    """List branches for a project. Used by the project-creation wizard so
+    the user can pick which branch to clone into the container."""
+    p = _project(project)
+    items = p.branches.list(search=search, per_page=per_page, all=False)
+    return [{"name": b.name,
+             "default": getattr(b, "default", False),
+             "protected": getattr(b, "protected", False),
+             "commit": (b.commit or {}).get("id") if hasattr(b, "commit") else None}
+            for b in items]
+
+
+class DeployKeyRequest(BaseModel):
+    project: str
+    title: str = "simorgh-chatbot"
+    key: str                       # public key, e.g. ssh-ed25519 AAAA... simorgh
+    can_push: bool = True
+
+
+@app.post("/deploy-keys", dependencies=[Depends(require_agent)])
+def add_deploy_key(req: DeployKeyRequest):
+    """Add the chatbot's public deploy key to a user's project so the
+    session container can `git push` to the simorgh working branch.
+    This is invoked from the wizard when the user grants access."""
+    p = _project(req.project)
+    try:
+        k = p.keys.create({"title": req.title, "key": req.key, "can_push": req.can_push})
+    except gitlab.exceptions.GitlabCreateError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": k.id, "title": k.title, "can_push": k.can_push}
+
+
+@app.get("/access-instructions")
+def access_instructions(project: str | None = None):
+    """Human-readable guide returned to the wizard when the user has not yet
+    granted the chatbot access to their project. The frontend shows this
+    inline so the user knows exactly what to do on GitLab."""
+    chatbot_pubkey = os.getenv("SIMORGH_DEPLOY_PUBKEY", "")
+    return {
+        "title": "Grant the chatbot access to your GitLab project",
+        "steps": [
+            "1. Open your project on GitLab",
+            "2. Go to Settings → Repository → Deploy keys",
+            "3. Click 'Add deploy key'",
+            "4. Title: simorgh-chatbot",
+            "5. Paste the public key shown below",
+            "6. Tick 'Grant write permissions' so the chatbot can push the simorgh/<hex> working branch",
+            "7. Click 'Add key'",
+            "8. Return here and re-select your repository",
+        ],
+        "public_key": chatbot_pubkey or "(SIMORGH_DEPLOY_PUBKEY not configured on the server)",
+        "project": project,
+    }
+
+
 @app.get("/tree")
 def get_tree(project: str, ref: str = DEFAULT_REF, path: str = "", recursive: bool = True,
              per_page: int = 200):
@@ -298,6 +382,12 @@ async def search_blobs(query: str, project: str = "", group: str = "") -> Any:
 async def search_technical_knowledge(query: str) -> Any:
     """Convenience: search the corporate technical-knowledge repo for relevant content."""
     return search(query=query, project=TECH_KB_REPO, scope="blobs")
+
+
+@mcp.tool()
+async def list_branches_mcp(project: str, search_term: str = "") -> list[dict]:
+    """List branches in a project. Used by the wizard for branch selection."""
+    return list_branches(project=project, search=search_term or None)
 
 
 app.mount("/mcp", mcp.streamable_http_app())

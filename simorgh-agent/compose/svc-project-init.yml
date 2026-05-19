@@ -17,14 +17,26 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}
       - TPMS_CONTEXT_URL=${TPMS_CONTEXT_URL:-http://tpms-context-agent:8050}
+      - TPMS_FETCHER_URL=${TPMS_FETCHER_URL:-http://tpms-fetcher:8021}
       - CONTEXT_SEARCH_URL=${CONTEXT_SEARCH_URL:-http://context-search:8049}
+      - PROJECT_EXPLORER_URL=${PROJECT_EXPLORER_URL:-http://project-explorer:8052}
       - GITLAB_PROJECTS_GROUP=${GITLAB_PROJECTS_GROUP:-simorgh-projects}
+      - GITLAB_TECH_KB_REPO=${GITLAB_TECH_KB_REPO:-simorgh-knowledge/technical-knowledge}
+      - EKC_KB_CLONE_URL=${EKC_KB_CLONE_URL:-}
+      - TECHSERVER_HOST=${TECHSERVER_HOST:-192.168.1.3}
+      - TECHSERVER_SHARE=${TECHSERVER_SHARE:-techser}
+      - TECHSERVER_USER=${TECHSERVER_USER:-}
+      - TECHSERVER_PASS=${TECHSERVER_PASS:-}
       - AGENT_TOKEN=${AGENT_TOKEN:-}
+      - BROKER_TOKEN=${BROKER_TOKEN:-}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
     depends_on:
       gitlab-mcp:
+        condition: service_healthy
+      runtime-broker:
         condition: service_healthy
       tpms-context-agent:
         condition: service_healthy

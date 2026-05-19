@@ -1,0 +1,43 @@
+# Base image for per-project session containers managed by runtime-broker.
+# Tag and push as `simorgh/session-runtime:latest` so the broker can pull it.
+FROM ubuntu:22.04
+
+ARG APT_MIRROR=
+ARG APT_SECURITY_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      printf 'deb %s jammy main universe\ndeb %s jammy-updates main universe\n' \
+        "$APT_MIRROR" "$APT_MIRROR" > /etc/apt/sources.list; \
+      if [ -n "$APT_SECURITY_MIRROR" ]; then \
+        printf 'deb %s jammy-security main universe\n' "$APT_SECURITY_MIRROR" \
+          >> /etc/apt/sources.list; \
+      fi; \
+    fi
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        git-lfs \
+        curl wget \
+        python3 python3-pip python3-venv \
+        nodejs npm \
+        bash \
+        smbclient cifs-utils \
+        openssh-client \
+        rsync \
+        jq \
+        tini \
+        less \
+    && git lfs install --system \
+    && rm -rf /var/lib/apt/lists/*
+
+# Working directory is mounted as a docker volume by runtime-broker.
+WORKDIR /work
+
+# Default identity for local commits; runtime-broker overrides per-commit.
+RUN git config --system user.email "simorgh-agent@local" \
+ && git config --system user.name  "simorgh-agent"
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/bin/bash", "-lc", "trap 'exit 0' TERM; while :; do sleep 3600 & wait $!; done"]
