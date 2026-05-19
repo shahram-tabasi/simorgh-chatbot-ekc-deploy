@@ -942,7 +942,7 @@ app.delete('/api/selected-part', async (req, res) => {
 });
 
 // ============================================
-// AI Chatbot Endpoints (local stub + online passthrough)
+// AI Chatbot Endpoints (local model + online passthrough)
 // ============================================
 // Multer in memory so we can inspect uploaded files without persisting them.
 // 25 MB per file × 10 files cap — adjust as needed.
@@ -951,79 +951,302 @@ const chatUpload = multer({
   limits: { fileSize: 25 * 1024 * 1024, files: 10 },
 });
 
-// LOCAL endpoint — a minimal stub that simply acknowledges the prompt and
-// describes the uploaded files. Wire this up to a real local model server
-// (e.g. an Ollama/llama.cpp proxy) by replacing the body of the handler.
+// ── Tool-call protocol helpers ──────────────────────────────────────────────
+// The frontend sends the user's prompt together with:
+//   • `context`  — JSON snapshot of the active project (equipments, selected one, template counts)
+//   • `tools`    — JSON schemas of the frontend tools the assistant is allowed to call
+//   • `excelPreviews` — parsed rows from any attached Excel/CSV file
+// The model must reply in this exact shape so the frontend can execute the calls:
+//   {
+//     "reply": "human-readable explanation in Persian if the user wrote Persian",
+//     "tool_calls": [ { "name": "update_row", "args": {...} }, ... ]
+//   }
+// When the answer is purely conversational, `tool_calls` is `[]`.
+function buildSystemPrompt(toolSchemas, context, excelPreviews) {
+  const toolsBlock = (Array.isArray(toolSchemas) && toolSchemas.length > 0)
+    ? toolSchemas.map(t => {
+        const args = Object.entries(t.args || {})
+          .map(([k, v]) => `      "${k}": ${v.type}${v.required ? ' (required)' : ''} — ${v.description}`)
+          .join('\n');
+        return `  - ${t.name}: ${t.description}\n    args:\n${args}`;
+      }).join('\n\n')
+    : '  (no tools available)';
+
+  const ctxText = context
+    ? JSON.stringify(context, null, 2)
+    : '(no project context)';
+
+  const excelText = (Array.isArray(excelPreviews) && excelPreviews.length > 0)
+    ? excelPreviews.map(p => {
+        const headers = p.rows[0] ? Object.keys(p.rows[0]) : [];
+        return `[Excel: ${p.name}] columns=${JSON.stringify(headers)}, rowCount=${p.rows.length}`;
+      }).join('\n')
+    : '(no spreadsheet attachments)';
+
+  return [
+    'You are Simorgh AI, an electrical-design assistant embedded inside the Simorgh Soft application.',
+    'You both ANSWER questions and ACT on the running project by calling tools.',
+    'The user may write in Persian, English, or a mix; reply in the same language as the user.',
+    '',
+    'You MUST respond with a single JSON object — no prose outside it — of the form:',
+    '  {"reply": "<your answer>", "tool_calls": [ {"name": "<tool>", "args": { ... }}, ... ]}',
+    'If no action is needed, return an empty tool_calls array.',
+    '',
+    'Rules:',
+    '  • Use only the tools listed below; do not invent tool names.',
+    '  • For row-level edits, prefer `bulk_update` over many `update_row` calls.',
+    '  • When the user attached an Excel file, you may call `apply_excel` with the parsed rows.',
+    '    The frontend already parsed each Excel attachment into JSON; you must use the EXACT column header names from the file as keys in `columnMapping`.',
+    '  • Reference columns by their internal field name (wiringType, ratingPower, flc, feederNo, busSection, tag, description, cableSize, sfdHfd, moduleNo, size, templateName).',
+    '  • Validate that the targeted equipment exists in the context before issuing an edit; if you are unsure, ask in `reply` and return tool_calls=[].',
+    '  • Never wrap the JSON in code fences. Return raw JSON only.',
+    '',
+    '── Project context ──',
+    ctxText,
+    '',
+    '── Spreadsheet attachments ──',
+    excelText,
+    '',
+    '── Available tools ──',
+    toolsBlock,
+  ].join('\n');
+}
+
+// Pull a JSON envelope out of the model's reply. The model is instructed to
+// emit raw JSON; in practice it sometimes wraps it in prose or fences.
+function extractToolEnvelope(content) {
+  if (typeof content !== 'string') content = String(content ?? '');
+  const tryParse = (s) => {
+    try {
+      const obj = JSON.parse(s);
+      if (obj && typeof obj === 'object') {
+        return {
+          reply: typeof obj.reply === 'string' ? obj.reply : '',
+          tool_calls: Array.isArray(obj.tool_calls) ? obj.tool_calls : [],
+        };
+      }
+    } catch { /* not JSON */ }
+    return null;
+  };
+
+  // 1) Whole content as JSON
+  const whole = tryParse(content.trim());
+  if (whole) return whole;
+
+  // 2) Fenced ```json … ```
+  const fence = content.match(/```(?:json)?\s*([\s\S]+?)```/i);
+  if (fence) {
+    const parsed = tryParse(fence[1].trim());
+    if (parsed) return parsed;
+  }
+
+  // 3) First balanced `{...}` block via brace counting
+  const start = content.indexOf('{');
+  if (start >= 0) {
+    let depth = 0;
+    for (let i = start; i < content.length; i++) {
+      if (content[i] === '{') depth++;
+      else if (content[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          const parsed = tryParse(content.slice(start, i + 1));
+          if (parsed) return parsed;
+          break;
+        }
+      }
+    }
+  }
+
+  // 4) Pure text reply, no tools
+  return { reply: content, tool_calls: [] };
+}
+
+// Detect which transport to use for the local model.
+//   - Explicit `LOCAL_MODEL_URL` → POST as-is. If the URL contains `/v1/chat/completions`
+//     it's treated as OpenAI-compatible; if it ends with `/api/chat` it's Ollama.
+//   - Otherwise fall back to default Ollama at http://127.0.0.1:11434/api/chat.
+async function callLocalModel({ system, user, model, abortMs }) {
+  const explicit = process.env.LOCAL_MODEL_URL;
+  const ollamaHost = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+  const apiKey = process.env.LOCAL_MODEL_KEY || '';
+
+  const url = explicit || `${ollamaHost}/api/chat`;
+  const isOpenAI = /\/v1\/chat\/completions/i.test(url);
+  const isOllama = !isOpenAI; // default
+
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user',   content: user },
+  ];
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+  };
+
+  const body = isOllama
+    ? { model: model || process.env.LOCAL_MODEL_NAME || 'llama3.1', messages, stream: false, format: 'json', options: { temperature: 0.1 } }
+    : { model: model || process.env.LOCAL_MODEL_NAME || 'local',    messages, temperature: 0.1, response_format: { type: 'json_object' } };
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), abortMs || 90_000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`Local model ${res.status}: ${text.slice(0, 500)}`);
+    }
+    let json;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    // Normalise different response shapes into a single `content` string.
+    const content =
+      json?.message?.content ??
+      json?.choices?.[0]?.message?.content ??
+      json?.response ??
+      json?.raw ??
+      '';
+    return { content, raw: json, url, transport: isOllama ? 'ollama' : 'openai-compatible' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// LOCAL endpoint — forwards prompts to a local model (Ollama by default,
+// or any OpenAI-compatible `/v1/chat/completions` server via LOCAL_MODEL_URL).
+// Returns `{reply, tool_calls}` ready for the frontend tool runner.
 app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
   try {
     const prompt = (req.body?.prompt || '').toString();
     const files = (req.files || []).map(f => ({
-      name: f.originalname,
-      mimetype: f.mimetype,
-      size: f.size,
+      name: f.originalname, mimetype: f.mimetype, size: f.size,
     }));
 
-    // If a real local model URL is configured, forward to it.
-    const upstream = process.env.LOCAL_MODEL_URL;
-    if (upstream) {
-      try {
-        const upRes = await fetch(upstream, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, files }),
-        });
-        const text = await upRes.text();
-        return res.status(upRes.status).type(upRes.headers.get('content-type') || 'text/plain').send(text);
-      } catch (e) {
-        console.error('Local model upstream error:', e.message);
-        // fall through to stub reply
-      }
+    // Parse multipart strings that the frontend sent as JSON blobs.
+    const parseJSON = (s, fallback) => {
+      try { return s ? JSON.parse(s) : fallback; } catch { return fallback; }
+    };
+    const context        = parseJSON(req.body?.context,        null);
+    const toolSchemas    = parseJSON(req.body?.tools,          []);
+    const excelPreviews  = parseJSON(req.body?.excelPreviews,  []);
+
+    const system = buildSystemPrompt(toolSchemas, context, excelPreviews);
+    const fileNote = files.length
+      ? `\n[Attached files: ${files.map(f => f.name).join(', ')}]`
+      : '';
+    const userMsg = `${prompt}${fileNote}`;
+
+    let content = '';
+    let usedTransport = 'stub';
+    let modelError = '';
+
+    try {
+      const out = await callLocalModel({ system, user: userMsg });
+      content = out.content || '';
+      usedTransport = out.transport;
+    } catch (e) {
+      modelError = e?.message || String(e);
+      console.error('Local model call failed:', modelError);
     }
 
-    // Stub reply (no model attached yet).
-    const fileDesc = files.length
-      ? `\n\nAttached ${files.length} file(s):\n` + files.map(f => `  • ${f.name} (${f.mimetype || 'unknown'}, ${f.size} bytes)`).join('\n')
-      : '';
+    // If the model is unreachable, return a graceful stub so the frontend
+    // still sees the project context made it through.
+    if (!content) {
+      const stub = {
+        reply:
+          (modelError
+            ? `🛈 Could not reach local model: ${modelError}\n`
+            : '🛈 Local model not configured.\n') +
+          `Set LOCAL_MODEL_URL (OpenAI-compatible) or run Ollama on ${process.env.OLLAMA_HOST || 'http://127.0.0.1:11434'} and set LOCAL_MODEL_NAME.\n\n` +
+          `Echo: ${prompt || '(empty)'}` + fileNote,
+        tool_calls: [],
+      };
+      return res.json(stub);
+    }
+
+    const envelope = extractToolEnvelope(content);
+    // Tag the reply with the transport used so it's debuggable from the UI.
     return res.json({
-      reply: `🛈 (LOCAL stub) Echoing your prompt back.\n\nPrompt: ${prompt || '(empty)'}${fileDesc}\n\nSet LOCAL_MODEL_URL in .env to forward to your local model.`,
+      reply: envelope.reply,
+      tool_calls: envelope.tool_calls,
+      _transport: usedTransport,
     });
   } catch (err) {
     console.error('Chat local error:', err);
-    res.status(500).json({ reply: '', error: err.message });
+    res.status(500).json({ reply: '', tool_calls: [], error: err.message });
   }
 });
 
-// ONLINE endpoint — passthrough to a configured online model (env var
-// ONLINE_MODEL_URL). If not configured, returns a clear message so the
-// user knows what to set.
+// ONLINE endpoint — calls an OpenAI-compatible chat completions URL (any
+// provider that speaks the OpenAI schema works: OpenAI, Anthropic gateways,
+// Together, Groq, OpenRouter, etc.). Uses the same JSON tool-call protocol
+// as the local endpoint so the frontend code path is identical.
 app.post('/api/chat-online', chatUpload.array('files', 10), async (req, res) => {
   try {
     const prompt = (req.body?.prompt || '').toString();
     const files = (req.files || []).map(f => ({
-      name: f.originalname,
-      mimetype: f.mimetype,
-      size: f.size,
+      name: f.originalname, mimetype: f.mimetype, size: f.size,
     }));
+
+    const parseJSON = (s, fallback) => {
+      try { return s ? JSON.parse(s) : fallback; } catch { return fallback; }
+    };
+    const context       = parseJSON(req.body?.context,       null);
+    const toolSchemas   = parseJSON(req.body?.tools,         []);
+    const excelPreviews = parseJSON(req.body?.excelPreviews, []);
 
     const upstream = process.env.ONLINE_MODEL_URL;
     if (!upstream) {
       return res.json({
-        reply: '🌐 (ONLINE) endpoint is not configured. Set ONLINE_MODEL_URL in the backend .env to a real API URL and try again.',
+        reply: '🌐 ONLINE endpoint is not configured. Set ONLINE_MODEL_URL (OpenAI-compatible) and ONLINE_MODEL_KEY in the backend .env.',
+        tool_calls: [],
       });
     }
+
+    const system  = buildSystemPrompt(toolSchemas, context, excelPreviews);
+    const userMsg = `${prompt}${files.length ? `\n[Attached files: ${files.map(f => f.name).join(', ')}]` : ''}`;
+
+    const body = {
+      model: process.env.ONLINE_MODEL_NAME || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user',   content: userMsg },
+      ],
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+    };
+
     const upRes = await fetch(upstream, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(process.env.ONLINE_MODEL_KEY ? { Authorization: `Bearer ${process.env.ONLINE_MODEL_KEY}` } : {}),
       },
-      body: JSON.stringify({ prompt, files }),
+      body: JSON.stringify(body),
     });
     const text = await upRes.text();
-    return res.status(upRes.status).type(upRes.headers.get('content-type') || 'text/plain').send(text);
+    if (!upRes.ok) {
+      return res.status(upRes.status).json({
+        reply: `❌ Online model error ${upRes.status}: ${text.slice(0, 500)}`,
+        tool_calls: [],
+      });
+    }
+    let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    const content =
+      json?.choices?.[0]?.message?.content ??
+      json?.message?.content ??
+      json?.response ??
+      json?.raw ??
+      '';
+    const envelope = extractToolEnvelope(content || '');
+    return res.json({ reply: envelope.reply, tool_calls: envelope.tool_calls, _transport: 'openai-online' });
   } catch (err) {
     console.error('Chat online error:', err);
-    res.status(500).json({ reply: '', error: err.message });
+    res.status(500).json({ reply: '', tool_calls: [], error: err.message });
   }
 });
 
