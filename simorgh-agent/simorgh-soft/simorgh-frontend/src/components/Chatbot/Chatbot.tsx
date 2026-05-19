@@ -188,26 +188,34 @@ export const Chatbot: React.FC = () => {
     }
   };
 
-  // ── Floating launcher button when closed ─────────────────────────────────
+  // ── Closed: slim activity-bar column with a launcher button ─────────────
+  // The chatbot is embedded as part of the main application layout (a flex
+  // sibling), not a floating overlay. When closed it collapses to a narrow
+  // 48px sidebar so the main content owns the rest of the width.
   if (!open) {
     return (
-      <button
-        onClick={() => setOpen(true)}
-        title="AI Assistant"
-        className="fixed bottom-5 right-5 z-50 w-12 h-12 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg flex items-center justify-center transition-transform hover:scale-105"
-      >
-        <MessageSquareIcon className="w-5 h-5" />
-      </button>
+      <div className="w-12 bg-gray-100 border-l border-gray-300 flex flex-col items-center pt-3 flex-shrink-0">
+        <button
+          onClick={() => setOpen(true)}
+          title="Open AI Assistant"
+          className="w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow flex items-center justify-center transition-transform hover:scale-105"
+        >
+          <MessageSquareIcon className="w-4 h-4" />
+        </button>
+        <span className="mt-2 text-[10px] text-gray-500 [writing-mode:vertical-rl] rotate-180 tracking-wide">
+          AI Assistant
+        </span>
+      </div>
     );
   }
 
-  // ── Open panel — width depends on maximized mode ─────────────────────────
+  // ── Open: embedded as a flex column. Maximized → overlay full viewport.
   const panelClass = maximized
     ? 'fixed inset-4 z-50'
-    : 'fixed top-4 right-4 bottom-4 z-50 w-[420px]';
+    : 'w-[420px] flex-shrink-0 border-l border-gray-300';
 
   return (
-    <div className={`${panelClass} bg-white border border-gray-200 shadow-2xl rounded-lg flex flex-col overflow-hidden`}>
+    <div className={`${panelClass} bg-white shadow-md flex flex-col overflow-hidden`}>
       {/* Title bar */}
       <div className="bg-blue-600 text-white px-4 py-2 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-2">

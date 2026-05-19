@@ -255,24 +255,149 @@ const LV_COLUMNS: DeviceColumnDef[] = [
 const getColumnsForType = (type: 'LV' | 'MV' | 'HV'): DeviceColumnDef[] =>
   type === 'LV' ? LV_COLUMNS : MV_COLUMNS;
 
-// Row/cell color palette (Tailwind-aligned soft tones). Empty string = clear color.
+// Row/cell color palette. Includes soft pastels plus saturated red/green/yellow
+// (per spec). Empty string = clear color.
 const ROW_COLOR_PALETTE: { label: string; value: string }[] = [
-  { label: 'No color',  value: '' },
-  { label: 'Yellow',    value: '#fef3c7' },
-  { label: 'Amber',     value: '#fde68a' },
-  { label: 'Orange',    value: '#fed7aa' },
-  { label: 'Rose',      value: '#fecdd3' },
-  { label: 'Red',       value: '#fecaca' },
-  { label: 'Lime',      value: '#d9f99d' },
-  { label: 'Green',     value: '#bbf7d0' },
-  { label: 'Teal',      value: '#99f6e4' },
-  { label: 'Cyan',      value: '#a5f3fc' },
-  { label: 'Sky',       value: '#bae6fd' },
-  { label: 'Indigo',    value: '#c7d2fe' },
-  { label: 'Purple',    value: '#e9d5ff' },
-  { label: 'Pink',      value: '#fbcfe8' },
-  { label: 'Gray',      value: '#e5e7eb' },
+  { label: 'No color',     value: '' },
+  // Saturated / bold (added per spec — sit at the top for quick access)
+  { label: 'Bold Red',     value: '#ef4444' },
+  { label: 'Bold Green',   value: '#22c55e' },
+  { label: 'Bold Yellow',  value: '#facc15' },
+  // Softer pastels
+  { label: 'Yellow',       value: '#fef3c7' },
+  { label: 'Amber',        value: '#fde68a' },
+  { label: 'Orange',       value: '#fed7aa' },
+  { label: 'Rose',         value: '#fecdd3' },
+  { label: 'Red',          value: '#fecaca' },
+  { label: 'Lime',         value: '#d9f99d' },
+  { label: 'Green',        value: '#bbf7d0' },
+  { label: 'Teal',         value: '#99f6e4' },
+  { label: 'Cyan',         value: '#a5f3fc' },
+  { label: 'Sky',          value: '#bae6fd' },
+  { label: 'Indigo',       value: '#c7d2fe' },
+  { label: 'Purple',       value: '#e9d5ff' },
+  { label: 'Pink',         value: '#fbcfe8' },
+  { label: 'Gray',         value: '#e5e7eb' },
 ];
+
+// Excel-style per-column dropdown filter. Stores the SET of values kept
+// (i.e. only rows whose column value is in the set are shown). `undefined`
+// means no filter for this column. No sort capability is exposed — sort is
+// intentionally disabled per spec.
+interface ColumnFilterDropdownProps {
+  colKey: string;
+  columnHeader: string;
+  allValues: string[];           // unique values from the unfiltered dataset
+  selectedValues?: Set<string>;  // currently kept values (undefined = all)
+  onApply: (next: Set<string> | undefined) => void;
+  onClose: () => void;
+}
+
+const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
+  columnHeader, allValues, selectedValues, onApply, onClose,
+}) => {
+  // Working copy of the selection. Start from current filter or "everything".
+  const initial = selectedValues ? new Set(selectedValues) : new Set(allValues);
+  const [draft, setDraft] = useState<Set<string>>(initial);
+  const [search, setSearch] = useState('');
+
+  const filteredValues = allValues.filter(v =>
+    !search || v.toLowerCase().includes(search.toLowerCase())
+  );
+  const allChecked = filteredValues.length > 0 && filteredValues.every(v => draft.has(v));
+
+  const toggle = (v: string) => {
+    const next = new Set(draft);
+    if (next.has(v)) next.delete(v); else next.add(v);
+    setDraft(next);
+  };
+
+  const toggleAll = () => {
+    const next = new Set(draft);
+    if (allChecked) filteredValues.forEach(v => next.delete(v));
+    else filteredValues.forEach(v => next.add(v));
+    setDraft(next);
+  };
+
+  const handleApply = () => {
+    // If the selection covers everything, treat as "no filter" (undefined).
+    if (allValues.every(v => draft.has(v))) onApply(undefined);
+    else onApply(draft);
+    onClose();
+  };
+
+  const handleClear = () => {
+    onApply(undefined);
+    onClose();
+  };
+
+  return (
+    <div
+      className="absolute z-30 top-full left-0 mt-1 w-64 bg-white border border-gray-300 rounded shadow-lg text-xs"
+      onClick={e => e.stopPropagation()}
+    >
+      <div className="px-3 py-2 border-b bg-gray-50">
+        <p className="font-semibold text-gray-700 truncate" title={columnHeader}>
+          Filter: {columnHeader}
+        </p>
+      </div>
+      <div className="p-2 border-b">
+        <input
+          type="text"
+          autoFocus
+          placeholder="Search…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-400"
+        />
+      </div>
+      <div className="max-h-56 overflow-y-auto">
+        <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-100 cursor-pointer border-b">
+          <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+          <span className="font-semibold">(Select All)</span>
+        </label>
+        {filteredValues.length === 0 && (
+          <div className="px-3 py-2 text-gray-400 italic">No values</div>
+        )}
+        {filteredValues.map(v => (
+          <label key={v} className="flex items-center gap-2 px-3 py-1 hover:bg-gray-100 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.has(v)}
+              onChange={() => toggle(v)}
+            />
+            <span className="truncate" title={v}>
+              {v === '' ? <em className="text-gray-400">(Blanks)</em> : v}
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-2 p-2 border-t bg-gray-50">
+        <button
+          className="text-xs text-gray-500 hover:text-red-600 underline"
+          onClick={handleClear}
+          title="Remove filter for this column"
+        >
+          Clear Filter
+        </button>
+        <div className="flex gap-2">
+          <button
+            className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+            onClick={handleApply}
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ===== DEVICE TABLE COMPONENT =====
 const DeviceTable: React.FC<DeviceTableProps> = ({
@@ -288,8 +413,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const [rows, setRows] = useState<DeviceTableRow[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [lastSelectedIdx, setLastSelectedIdx] = useState<number>(-1);
-  // Per-column text filters, keyed by column key. Empty string = no filter.
-  const [filters, setFilters] = useState<Partial<Record<DeviceColumnKey, string>>>({});
+  // Per-column Excel-style filters. A column has an active filter iff its
+  // entry is a Set — and only rows whose value is in that Set are shown.
+  // `undefined` / absent entry = no filter for that column.
+  const [filters, setFilters] = useState<Partial<Record<DeviceColumnKey, Set<string>>>>({});
+  // Which column's filter dropdown is currently open (null = none).
+  const [openFilterCol, setOpenFilterCol] = useState<DeviceColumnKey | null>(null);
   // For cell colorize submenu: which cell is being targeted
   const [colorTarget, setColorTarget] = useState<{ rowId: string; colKey: DeviceColumnKey } | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -341,16 +470,25 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     }
   };
 
-  // Returns rows filtered by column search inputs (any column in the active layout)
+  // Returns rows filtered by Excel-style per-column value filters.
   const activeColumns = getColumnsForType(selectedEquipment?.type ?? 'MV');
   const getFilteredRows = () => rows.filter(row =>
     activeColumns.every(col => {
-      const q = (filters[col.key] || '').toLowerCase().trim();
-      if (!q) return true;
-      const val = String((row as any)[col.key] ?? '').toLowerCase();
-      return val.includes(q);
+      const allowed = filters[col.key];
+      if (!allowed) return true;
+      const val = String((row as any)[col.key] ?? '');
+      return allowed.has(val);
     })
   );
+
+  // Unique values for a column (used to populate the filter dropdown).
+  // Note: this looks at the FULL row set, not the filtered one, so users can
+  // re-broaden a filter even when other columns are filtered down.
+  const getUniqueValuesForColumn = (key: DeviceColumnKey): string[] => {
+    const values = new Set<string>();
+    rows.forEach(r => values.add(String((r as any)[key] ?? '')));
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  };
 
   const handleContextMenu = (e: React.MouseEvent, type: 'row' | 'cell', rowId?: string) => {
     e.preventDefault();
@@ -383,6 +521,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [contextMenu]);
+
+  // Close the Excel-style filter dropdown when clicking anywhere outside it.
+  useEffect(() => {
+    if (!openFilterCol) return;
+    const handler = () => setOpenFilterCol(null);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [openFilterCol]);
 
   const reorderRows = (newRows: DeviceTableRow[]) => {
     const reordered = newRows.map((row, index) => ({
@@ -716,27 +862,49 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           <thead>
             <tr className="bg-gray-50">
               <th className="px-4 py-2 text-left font-medium text-gray-600 border-b w-12">#</th>
-              {activeColumns.map(col => (
-                <th key={col.key} className="px-4 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap">
-                  {col.header}
-                </th>
-              ))}
-            </tr>
-            {/* Per-column filter row */}
-            <tr className="bg-white border-b border-gray-200">
-              <td className="px-2 py-1 w-12" />
-              {activeColumns.map(col => (
-                <td key={col.key} className="px-2 py-1">
-                  <input
-                    type="text"
-                    placeholder="🔍"
-                    className="w-full border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-blue-400 bg-gray-50"
-                    value={filters[col.key] || ''}
-                    onChange={e => setFilters(prev => ({ ...prev, [col.key]: e.target.value }))}
-                    onClick={e => e.stopPropagation()}
-                  />
-                </td>
-              ))}
+              {activeColumns.map(col => {
+                const hasActiveFilter = !!filters[col.key];
+                const isOpen = openFilterCol === col.key;
+                return (
+                  <th
+                    key={col.key}
+                    className="px-4 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap relative"
+                  >
+                    <div className="flex items-center gap-1">
+                      <span>{col.header}</span>
+                      <button
+                        className={`ml-1 px-1 rounded text-[10px] border ${
+                          hasActiveFilter
+                            ? 'bg-blue-600 text-white border-blue-700'
+                            : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'
+                        }`}
+                        title={hasActiveFilter ? 'Filter active — click to edit' : 'Filter column'}
+                        onClick={e => {
+                          e.stopPropagation();
+                          setOpenFilterCol(isOpen ? null : col.key);
+                        }}
+                      >
+                        {hasActiveFilter ? '⏷●' : '⏷'}
+                      </button>
+                    </div>
+                    {isOpen && (
+                      <ColumnFilterDropdown
+                        colKey={col.key}
+                        columnHeader={col.header}
+                        allValues={getUniqueValuesForColumn(col.key)}
+                        selectedValues={filters[col.key]}
+                        onApply={next => setFilters(prev => {
+                          const nextFilters = { ...prev };
+                          if (next === undefined) delete nextFilters[col.key];
+                          else nextFilters[col.key] = next;
+                          return nextFilters;
+                        })}
+                        onClose={() => setOpenFilterCol(null)}
+                      />
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -776,13 +944,16 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                       className="px-4 py-2 border-b"
                       style={cellStyle}
                       onContextMenu={(e) => {
-                        // shift+right-click on a cell sets the colorize target
-                        if (e.shiftKey) {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setColorTarget({ rowId: row.id, colKey: col.key });
-                          setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'row' });
+                        // Right-click on a data cell: open the row context menu
+                        // AND mark this cell as the colorize target so the
+                        // "Highlight Cell" palette appears alongside row ops.
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!selectedRows.has(row.id)) {
+                          setSelectedRows(new Set([row.id]));
                         }
+                        setColorTarget({ rowId: row.id, colKey: col.key });
+                        setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'row' });
                       }}
                     >
                       <input

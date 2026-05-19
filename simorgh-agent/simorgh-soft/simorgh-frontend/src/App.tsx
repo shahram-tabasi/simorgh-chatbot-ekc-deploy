@@ -306,16 +306,23 @@ const MainApp: React.FC = () => {
         </div>
       </div>
 
-      {/* محتوای اصلی */}
-      <div className="container mx-auto px-4 py-4 flex-1">
-        <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={(tabId) => {
-          // When user manually clicks the Project Definition tab, reset to Project Data sub-tab
-          if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
-          setActiveTab(tabId);
-        }} />
-        <div className="mt-4 bg-white rounded-lg shadow-md p-6">
-          {tabs[activeTab].component}
+      {/* محتوای اصلی + پنل چت‌بات (split layout) */}
+      <div className="flex flex-row flex-1 min-h-0">
+        <div className="flex-1 min-w-0 overflow-auto">
+          <div className="container mx-auto px-4 py-4">
+            <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={(tabId) => {
+              // When user manually clicks the Project Definition tab, reset to Project Data sub-tab
+              if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
+              setActiveTab(tabId);
+            }} />
+            <div className="mt-4 bg-white rounded-lg shadow-md p-6">
+              {tabs[activeTab].component}
+            </div>
+          </div>
         </div>
+
+        {/* AI chatbot — embedded sibling column (not a floating overlay) */}
+        <Chatbot />
       </div>
 
       {/* Footer */}
@@ -325,9 +332,6 @@ const MainApp: React.FC = () => {
           <span>Version 1.0.0 | Auto-save: Enabled</span>
         </div>
       </div>
-
-      {/* Global AI chatbot — floating launcher / side panel */}
-      <Chatbot />
     </div>
   );
 };
