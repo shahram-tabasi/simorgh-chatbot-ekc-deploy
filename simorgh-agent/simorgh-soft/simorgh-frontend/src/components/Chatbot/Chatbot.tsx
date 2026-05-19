@@ -13,9 +13,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  MessageSquareIcon, XIcon, SendIcon, PaperclipIcon, Trash2Icon,
+  SparklesIcon, XIcon, SendIcon, PaperclipIcon, Trash2Icon,
   ImageIcon, FileTextIcon, FileSpreadsheetIcon, FileIcon, Loader2Icon,
-  MaximizeIcon, MinimizeIcon, BotIcon, UserIcon, ZapIcon,
+  MaximizeIcon, MinimizeIcon, UserIcon, ZapIcon,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useProject } from '../../context/ProjectContext';
@@ -75,12 +75,15 @@ function parseToolEnvelope(raw: string): { reply: string; tool_calls: ChatToolCa
   return { reply: raw, tool_calls: [] };
 }
 
-// Default endpoints. The local one points at the same backend host the
-// frontend is served from; the online one defaults to /api/chat-online
-// (override via VITE_CHATBOT_LOCAL_URL / VITE_CHATBOT_ONLINE_URL at build).
+// Default endpoints. The app is served under a base path (e.g.
+// /simorgh-design-suite/) and the container nginx maps `<base>/api/*` to the
+// Node backend. Resolving against `import.meta.env.BASE_URL` keeps the chat
+// requests inside the simorgh-soft container — otherwise a bare `/api/...`
+// gets caught by the host-level nginx and routed to the wrong backend.
 const env: any = (import.meta as any).env || {};
-const LOCAL_DEFAULT  = env.VITE_CHATBOT_LOCAL_URL  || '/api/chat-local';
-const ONLINE_DEFAULT = env.VITE_CHATBOT_ONLINE_URL || '/api/chat-online';
+const BASE = (env.BASE_URL || '/').replace(/\/+$/, '/');
+const LOCAL_DEFAULT  = env.VITE_CHATBOT_LOCAL_URL  || `${BASE}api/chat-local`;
+const ONLINE_DEFAULT = env.VITE_CHATBOT_ONLINE_URL || `${BASE}api/chat-online`;
 
 const ACCEPTED_TYPES = '.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf,.xls,.xlsx,.csv,.txt,.md,.json,.docx,.doc';
 
@@ -112,13 +115,25 @@ export const Chatbot: React.FC = () => {
       id: 'welcome',
       role: 'assistant',
       text:
-        'سلام! من دستیار طراحی سیمرغ هستم.\n' +
-        '— می‌توانی سؤال بپرسی یا دستور بدهی (مثلاً «در equipment فعلی، هر جا wiringType برابر M3 است را به M4 تغییر بده» یا «ردیف ۳ ستون feederNo را L03 کن»).\n' +
-        '— برای دستور دادن، گزینهٔ Agent فعال باشد.\n' +
-        '— می‌توانی فایل (عکس، PDF، Excel) ضمیمه کنی؛ Excel به‌صورت ساختاریافته به مدل ارسال می‌شود.',
+        "Hi — I'm the Simorgh design assistant.\n" +
+        '• Ask a question or give an instruction (e.g. "in the active equipment, change every row where wiringType is M3 to M4" or "set row 3 feederNo to L03").\n' +
+        '• Toggle the Agent switch on to let me act on the project, off to keep it text-only.\n' +
+        '• Attach files (image / PDF / Excel) — Excel sheets are parsed and forwarded as structured rows.',
     },
   ]);
   const [busy, setBusy] = useState(false);
+
+  // Expose our column width via a CSS custom property so other components
+  // (e.g. the Device Selection fullscreen overlay) can leave room for the
+  // chatbot instead of covering it. Closed=48px, Open=420px, Maximized=0px
+  // (the chatbot is a floating overlay in that case and z-orders above).
+  useEffect(() => {
+    const w = !open ? '48px' : (maximized ? '0px' : '420px');
+    document.documentElement.style.setProperty('--simorgh-chat-w', w);
+    return () => {
+      document.documentElement.style.removeProperty('--simorgh-chat-w');
+    };
+  }, [open, maximized]);
   // Agent mode = the assistant is allowed to call frontend tools that mutate
   // project state (update rows, set colours, create templates, …). When off,
   // the chatbot only displays text replies and ignores any tool_calls.
@@ -172,7 +187,7 @@ export const Chatbot: React.FC = () => {
     setMessages([{
       id: 'welcome',
       role: 'assistant',
-      text: 'گفتگو پاک شد. می‌توانی پرسش جدید بپرسی.',
+      text: 'Conversation cleared. Ask anything to get started.',
     }]);
   };
 
@@ -287,7 +302,7 @@ export const Chatbot: React.FC = () => {
       const msg = err?.message || String(err);
       setMessages(prev => prev.map(m =>
         m.id === pendingId
-          ? { ...m, text: `❌ ${msg}\n\nبررسی کن endpoint روی «${endpoint}» در دسترس است.`, error: true, pending: false }
+          ? { ...m, text: `❌ ${msg}\n\nCheck the endpoint at "${endpoint}" is reachable from the browser.`, error: true, pending: false }
           : m
       ));
     } finally {
@@ -309,32 +324,37 @@ export const Chatbot: React.FC = () => {
   // 48px sidebar so the main content owns the rest of the width.
   if (!open) {
     return (
-      <div className="w-12 bg-gray-100 border-l border-gray-300 flex flex-col items-center pt-3 flex-shrink-0">
+      // `relative z-50` keeps the column visible above any fullscreen modal
+      // mounted elsewhere in the app (Device Selection fullscreen leaves
+      // room for us via --simorgh-chat-w but is itself `fixed`).
+      <div className="relative z-50 w-12 bg-gradient-to-b from-indigo-50 to-purple-50 border-l border-indigo-200 flex flex-col items-center pt-3 flex-shrink-0">
         <button
           onClick={() => setOpen(true)}
-          title="Open AI Assistant"
-          className="w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow flex items-center justify-center transition-transform hover:scale-105"
+          title="Open Simorgh AI Assistant"
+          className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white shadow-lg flex items-center justify-center transition-transform hover:scale-110 ring-2 ring-white"
         >
-          <MessageSquareIcon className="w-4 h-4" />
+          <SparklesIcon className="w-5 h-5" />
         </button>
-        <span className="mt-2 text-[10px] text-gray-500 [writing-mode:vertical-rl] rotate-180 tracking-wide">
-          AI Assistant
+        <span className="mt-3 text-[10px] font-semibold text-indigo-700 [writing-mode:vertical-rl] rotate-180 tracking-widest">
+          SIMORGH&nbsp;AI
         </span>
       </div>
     );
   }
 
   // ── Open: embedded as a flex column. Maximized → overlay full viewport.
+  // `relative z-50` again so the column floats above any fixed fullscreen
+  // overlay coming from sibling tabs.
   const panelClass = maximized
     ? 'fixed inset-4 z-50'
-    : 'w-[420px] flex-shrink-0 border-l border-gray-300';
+    : 'relative z-50 w-[420px] flex-shrink-0 border-l border-gray-300';
 
   return (
     <div className={`${panelClass} bg-white shadow-md flex flex-col overflow-hidden`}>
       {/* Title bar */}
-      <div className="bg-blue-600 text-white px-4 py-2 flex items-center justify-between flex-shrink-0">
+      <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white px-4 py-2 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-2">
-          <BotIcon className="w-4 h-4" />
+          <SparklesIcon className="w-4 h-4" />
           <span className="text-sm font-semibold">Simorgh AI Assistant</span>
           <span className="text-[10px] bg-blue-800 px-2 py-0.5 rounded-full uppercase">
             {mode}
@@ -422,7 +442,7 @@ export const Chatbot: React.FC = () => {
             <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
               m.role === 'user' ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-700'
             }`}>
-              {m.role === 'user' ? <UserIcon className="w-3.5 h-3.5" /> : <BotIcon className="w-3.5 h-3.5" />}
+              {m.role === 'user' ? <UserIcon className="w-3.5 h-3.5" /> : <SparklesIcon className="w-3.5 h-3.5" />}
             </div>
             <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words ${
               m.role === 'user'
@@ -522,7 +542,7 @@ export const Chatbot: React.FC = () => {
           value={prompt}
           onChange={e => setPrompt(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="یک پرسش بنویس… (Ctrl/Cmd + Enter to send)"
+          placeholder="Ask Simorgh AI… (Ctrl/Cmd + Enter to send)"
           rows={2}
           className="flex-1 text-sm border border-gray-300 rounded px-2 py-1.5 resize-none focus:outline-none focus:border-blue-400"
           disabled={busy}

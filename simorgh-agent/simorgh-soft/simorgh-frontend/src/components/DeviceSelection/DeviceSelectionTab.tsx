@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
-import { PlusIcon, UploadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon } from 'lucide-react';
+import { PlusIcon, UploadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon } from 'lucide-react';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
 
 // ===== PROPS INTERFACES =====
@@ -284,19 +285,22 @@ const ROW_COLOR_PALETTE: { label: string; value: string }[] = [
 // (i.e. only rows whose column value is in the set are shown). `undefined`
 // means no filter for this column. No sort capability is exposed — sort is
 // intentionally disabled per spec.
+//
+// Rendered through a portal so it escapes any overflow:auto/hidden parent
+// (the table scroll container would otherwise clip it). Position is given
+// in viewport coordinates by the caller (the anchor button's bounding rect).
 interface ColumnFilterDropdownProps {
-  colKey: string;
   columnHeader: string;
   allValues: string[];           // unique values from the unfiltered dataset
   selectedValues?: Set<string>;  // currently kept values (undefined = all)
+  anchorRect: DOMRect;
   onApply: (next: Set<string> | undefined) => void;
   onClose: () => void;
 }
 
 const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
-  columnHeader, allValues, selectedValues, onApply, onClose,
+  columnHeader, allValues, selectedValues, anchorRect, onApply, onClose,
 }) => {
-  // Working copy of the selection. Start from current filter or "everything".
   const initial = selectedValues ? new Set(selectedValues) : new Set(allValues);
   const [draft, setDraft] = useState<Set<string>>(initial);
   const [search, setSearch] = useState('');
@@ -311,91 +315,182 @@ const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
     if (next.has(v)) next.delete(v); else next.add(v);
     setDraft(next);
   };
-
   const toggleAll = () => {
     const next = new Set(draft);
     if (allChecked) filteredValues.forEach(v => next.delete(v));
     else filteredValues.forEach(v => next.add(v));
     setDraft(next);
   };
-
   const handleApply = () => {
-    // If the selection covers everything, treat as "no filter" (undefined).
     if (allValues.every(v => draft.has(v))) onApply(undefined);
     else onApply(draft);
     onClose();
   };
+  const handleClear = () => { onApply(undefined); onClose(); };
 
-  const handleClear = () => {
-    onApply(undefined);
+  // Position the dropdown just below the anchor, clamped to viewport.
+  const dropdownWidth = 280;
+  let left = anchorRect.left;
+  if (left + dropdownWidth > window.innerWidth - 8) {
+    left = Math.max(8, window.innerWidth - dropdownWidth - 8);
+  }
+  const top = anchorRect.bottom + 4;
+
+  return createPortal(
+    <>
+      {/* Click-catcher behind the dropdown so clicks anywhere else close it. */}
+      <div className="fixed inset-0 z-[9998]" onClick={onClose} />
+      <div
+        className="fixed z-[9999] bg-white border border-gray-300 rounded shadow-2xl text-xs"
+        style={{ top, left, width: dropdownWidth }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-3 py-2 border-b bg-gradient-to-r from-blue-50 to-indigo-50">
+          <p className="font-semibold text-gray-700 truncate" title={columnHeader}>
+            Filter: {columnHeader}
+          </p>
+        </div>
+        <div className="p-2 border-b">
+          <input
+            type="text"
+            autoFocus
+            placeholder="Search…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-400"
+          />
+        </div>
+        <div className="max-h-60 overflow-y-auto">
+          <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-100 cursor-pointer border-b">
+            <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+            <span className="font-semibold">(Select All)</span>
+          </label>
+          {filteredValues.length === 0 && (
+            <div className="px-3 py-2 text-gray-400 italic">No values</div>
+          )}
+          {filteredValues.map(v => (
+            <label key={v} className="flex items-center gap-2 px-3 py-1 hover:bg-gray-100 cursor-pointer">
+              <input type="checkbox" checked={draft.has(v)} onChange={() => toggle(v)} />
+              <span className="truncate" title={v}>
+                {v === '' ? <em className="text-gray-400">(Blanks)</em> : v}
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="flex items-center justify-between gap-2 p-2 border-t bg-gray-50">
+          <button
+            className="text-xs text-gray-500 hover:text-red-600 underline"
+            onClick={handleClear}
+            title="Remove filter for this column"
+          >
+            Clear Filter
+          </button>
+          <div className="flex gap-2">
+            <button className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700" onClick={handleApply}>
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+};
+
+// Standalone "Filter by color" dropdown. Filters rows by their rowColor field;
+// `null` color means "rows with no colour set". Mirrors the same Excel-style
+// checkbox UX but operates on a colour palette rather than free-form values.
+interface ColorFilterDropdownProps {
+  /** Unique row colours currently present in the dataset. `''` = no colour. */
+  allColors: string[];
+  selectedColors?: Set<string>;
+  anchorRect: DOMRect;
+  onApply: (next: Set<string> | undefined) => void;
+  onClose: () => void;
+}
+
+const ColorFilterDropdown: React.FC<ColorFilterDropdownProps> = ({
+  allColors, selectedColors, anchorRect, onApply, onClose,
+}) => {
+  const initial = selectedColors ? new Set(selectedColors) : new Set(allColors);
+  const [draft, setDraft] = useState<Set<string>>(initial);
+
+  const colorLabel = (c: string) =>
+    ROW_COLOR_PALETTE.find(p => p.value === c)?.label || c || '(No colour)';
+
+  const toggle = (c: string) => {
+    const next = new Set(draft);
+    if (next.has(c)) next.delete(c); else next.add(c);
+    setDraft(next);
+  };
+  const toggleAll = () => {
+    const allChecked = allColors.every(c => draft.has(c));
+    if (allChecked) setDraft(new Set());
+    else setDraft(new Set(allColors));
+  };
+  const allChecked = allColors.length > 0 && allColors.every(c => draft.has(c));
+  const handleApply = () => {
+    if (allColors.every(c => draft.has(c))) onApply(undefined);
+    else onApply(draft);
     onClose();
   };
 
-  return (
-    <div
-      className="absolute z-30 top-full left-0 mt-1 w-64 bg-white border border-gray-300 rounded shadow-lg text-xs"
-      onClick={e => e.stopPropagation()}
-    >
-      <div className="px-3 py-2 border-b bg-gray-50">
-        <p className="font-semibold text-gray-700 truncate" title={columnHeader}>
-          Filter: {columnHeader}
-        </p>
-      </div>
-      <div className="p-2 border-b">
-        <input
-          type="text"
-          autoFocus
-          placeholder="Search…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-400"
-        />
-      </div>
-      <div className="max-h-56 overflow-y-auto">
-        <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-100 cursor-pointer border-b">
-          <input type="checkbox" checked={allChecked} onChange={toggleAll} />
-          <span className="font-semibold">(Select All)</span>
-        </label>
-        {filteredValues.length === 0 && (
-          <div className="px-3 py-2 text-gray-400 italic">No values</div>
-        )}
-        {filteredValues.map(v => (
-          <label key={v} className="flex items-center gap-2 px-3 py-1 hover:bg-gray-100 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={draft.has(v)}
-              onChange={() => toggle(v)}
-            />
-            <span className="truncate" title={v}>
-              {v === '' ? <em className="text-gray-400">(Blanks)</em> : v}
-            </span>
+  const width = 240;
+  let left = anchorRect.left;
+  if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[9998]" onClick={onClose} />
+      <div
+        className="fixed z-[9999] bg-white border border-gray-300 rounded shadow-2xl text-xs"
+        style={{ top: anchorRect.bottom + 4, left, width }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-3 py-2 border-b bg-gradient-to-r from-pink-50 to-amber-50 font-semibold text-gray-700">
+          Filter by row colour
+        </div>
+        <div className="max-h-60 overflow-y-auto">
+          <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-100 cursor-pointer border-b">
+            <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+            <span className="font-semibold">(Select All)</span>
           </label>
-        ))}
-      </div>
-      <div className="flex items-center justify-between gap-2 p-2 border-t bg-gray-50">
-        <button
-          className="text-xs text-gray-500 hover:text-red-600 underline"
-          onClick={handleClear}
-          title="Remove filter for this column"
-        >
-          Clear Filter
-        </button>
-        <div className="flex gap-2">
+          {allColors.length === 0 && (
+            <div className="px-3 py-2 text-gray-400 italic">No coloured rows yet</div>
+          )}
+          {allColors.map(c => (
+            <label key={c || 'none'} className="flex items-center gap-2 px-3 py-1 hover:bg-gray-100 cursor-pointer">
+              <input type="checkbox" checked={draft.has(c)} onChange={() => toggle(c)} />
+              <span
+                className="inline-block w-4 h-4 rounded border border-gray-300 flex-shrink-0"
+                style={{ background: c || '#fff' }}
+              />
+              <span className="truncate">{colorLabel(c)}</span>
+            </label>
+          ))}
+        </div>
+        <div className="flex items-center justify-between gap-2 p-2 border-t bg-gray-50">
           <button
-            className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100"
-            onClick={onClose}
+            className="text-xs text-gray-500 hover:text-red-600 underline"
+            onClick={() => { onApply(undefined); onClose(); }}
           >
-            Cancel
+            Clear
           </button>
-          <button
-            className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-            onClick={handleApply}
-          >
-            OK
-          </button>
+          <div className="flex gap-2">
+            <button className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700" onClick={handleApply}>
+              OK
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </>,
+    document.body
   );
 };
 
@@ -417,8 +512,18 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // entry is a Set — and only rows whose value is in that Set are shown.
   // `undefined` / absent entry = no filter for that column.
   const [filters, setFilters] = useState<Partial<Record<DeviceColumnKey, Set<string>>>>({});
+  // Filter by row background colour. `undefined` = no colour filter.
+  const [colorFilter, setColorFilter] = useState<Set<string> | undefined>(undefined);
+  // Master "filtering enabled" switch. When OFF the per-column ▼ icons are
+  // hidden and existing filters are bypassed (visually clear, structurally
+  // remembered so flipping ON restores them).
+  const [filtersEnabled, setFiltersEnabled] = useState(false);
   // Which column's filter dropdown is currently open (null = none).
   const [openFilterCol, setOpenFilterCol] = useState<DeviceColumnKey | null>(null);
+  // Anchor rect for the currently-open dropdown (column filter or color filter).
+  const [filterAnchor, setFilterAnchor] = useState<DOMRect | null>(null);
+  // Whether the global "Filter by colour" popup is open.
+  const [colorFilterOpen, setColorFilterOpen] = useState(false);
   // For cell colorize submenu: which cell is being targeted
   const [colorTarget, setColorTarget] = useState<{ rowId: string; colKey: DeviceColumnKey } | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -470,16 +575,22 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     }
   };
 
-  // Returns rows filtered by Excel-style per-column value filters.
+  // Returns rows filtered by Excel-style per-column value filters and the
+  // optional row-colour filter. Both are bypassed entirely when filtering is
+  // disabled at the toolbar level.
   const activeColumns = getColumnsForType(selectedEquipment?.type ?? 'MV');
-  const getFilteredRows = () => rows.filter(row =>
-    activeColumns.every(col => {
-      const allowed = filters[col.key];
-      if (!allowed) return true;
-      const val = String((row as any)[col.key] ?? '');
-      return allowed.has(val);
-    })
-  );
+  const getFilteredRows = () => {
+    if (!filtersEnabled) return rows;
+    return rows.filter(row => {
+      if (colorFilter && !colorFilter.has(row.rowColor || '')) return false;
+      return activeColumns.every(col => {
+        const allowed = filters[col.key];
+        if (!allowed) return true;
+        const val = String((row as any)[col.key] ?? '');
+        return allowed.has(val);
+      });
+    });
+  };
 
   // Unique values for a column (used to populate the filter dropdown).
   // Note: this looks at the FULL row set, not the filtered one, so users can
@@ -489,6 +600,18 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     rows.forEach(r => values.add(String((r as any)[key] ?? '')));
     return Array.from(values).sort((a, b) => a.localeCompare(b));
   };
+
+  // Unique row colours (incl. '' for "no colour") for the colour-filter popup.
+  const getUniqueRowColors = (): string[] => {
+    const values = new Set<string>();
+    rows.forEach(r => values.add(r.rowColor || ''));
+    return Array.from(values);
+  };
+
+  const hasAnyFilter = filtersEnabled && (
+    !!colorFilter || Object.values(filters).some(f => !!f)
+  );
+  const clearAllFilters = () => { setFilters({}); setColorFilter(undefined); };
 
   const handleContextMenu = (e: React.MouseEvent, type: 'row' | 'cell', rowId?: string) => {
     e.preventDefault();
@@ -522,13 +645,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     }
   }, [contextMenu]);
 
-  // Close the Excel-style filter dropdown when clicking anywhere outside it.
-  useEffect(() => {
-    if (!openFilterCol) return;
-    const handler = () => setOpenFilterCol(null);
-    document.addEventListener('click', handler);
-    return () => document.removeEventListener('click', handler);
-  }, [openFilterCol]);
+  // Filter dropdowns are portals with their own click-catcher — no global
+  // listener needed here.
 
   const reorderRows = (newRows: DeviceTableRow[]) => {
     const reordered = newRows.map((row, index) => ({
@@ -849,13 +967,54 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         </div>
       </div>
 
-      {/* Active filter indicator */}
-      {Object.values(filters).some(f => f) && (
-        <div className="mb-2 flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-1.5">
-          <span>Filters active — showing {getFilteredRows().length} of {rows.length} rows</span>
-          <button className="ml-auto underline hover:no-underline" onClick={() => setFilters({})}>Clear all</button>
-        </div>
-      )}
+      {/* Filter toolbar — toggles whether column ▼ icons + colour filter
+          are surfaced. When OFF, all filters are bypassed (kept in memory
+          so flipping ON restores them). */}
+      <div className="mb-2 flex items-center gap-2 text-xs">
+        <button
+          onClick={() => {
+            // Turning OFF also clears any active filters per the user spec
+            // ("with another press, filter is removed").
+            if (filtersEnabled) clearAllFilters();
+            setFiltersEnabled(e => !e);
+          }}
+          className={`px-3 py-1.5 rounded border flex items-center gap-1.5 font-medium transition-colors ${
+            filtersEnabled
+              ? 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700'
+              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+          }`}
+          title="Toggle column filters and colour filter on/off"
+        >
+          <FilterIcon className="w-3.5 h-3.5" />
+          {filtersEnabled ? 'Filters: ON' : 'Filters: OFF'}
+        </button>
+
+        {filtersEnabled && (
+          <button
+            onClick={e => {
+              setFilterAnchor((e.currentTarget as HTMLElement).getBoundingClientRect());
+              setColorFilterOpen(true);
+            }}
+            className={`px-3 py-1.5 rounded border flex items-center gap-1.5 font-medium ${
+              colorFilter
+                ? 'bg-pink-600 text-white border-pink-700 hover:bg-pink-700'
+                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+            }`}
+            title="Filter rows by background colour"
+          >
+            <PaletteIcon className="w-3.5 h-3.5" />
+            Colour Filter
+            {colorFilter && <span className="ml-1 px-1.5 rounded-full bg-white/30 text-[10px]">{colorFilter.size}</span>}
+          </button>
+        )}
+
+        {hasAnyFilter && (
+          <div className="flex items-center gap-2 text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-1.5">
+            <span>Showing {getFilteredRows().length} of {rows.length} rows</span>
+            <button className="underline hover:no-underline" onClick={clearAllFilters}>Clear all</button>
+          </div>
+        )}
+      </div>
 
       <div className="border border-gray-200 rounded overflow-auto" onContextMenu={(e) => handleContextMenu(e, 'row')}>
         <table className="w-full text-sm">
@@ -863,45 +1022,35 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             <tr className="bg-gray-50">
               <th className="px-4 py-2 text-left font-medium text-gray-600 border-b w-12">#</th>
               {activeColumns.map(col => {
-                const hasActiveFilter = !!filters[col.key];
-                const isOpen = openFilterCol === col.key;
+                const hasActiveFilter = filtersEnabled && !!filters[col.key];
                 return (
                   <th
                     key={col.key}
-                    className="px-4 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap relative"
+                    className="px-4 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap"
                   >
                     <div className="flex items-center gap-1">
                       <span>{col.header}</span>
-                      <button
-                        className={`ml-1 px-1 rounded text-[10px] border ${
-                          hasActiveFilter
-                            ? 'bg-blue-600 text-white border-blue-700'
-                            : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-100'
-                        }`}
-                        title={hasActiveFilter ? 'Filter active — click to edit' : 'Filter column'}
-                        onClick={e => {
-                          e.stopPropagation();
-                          setOpenFilterCol(isOpen ? null : col.key);
-                        }}
-                      >
-                        {hasActiveFilter ? '⏷●' : '⏷'}
-                      </button>
+                      {filtersEnabled && (
+                        <button
+                          className={`ml-1 inline-flex items-center justify-center rounded transition-colors ${
+                            hasActiveFilter
+                              ? 'bg-blue-600 text-white hover:bg-blue-700 px-1.5 py-0.5'
+                              : 'text-gray-500 hover:bg-gray-200 px-1 py-0.5'
+                          }`}
+                          style={{ minWidth: hasActiveFilter ? 'auto' : '20px' }}
+                          title={hasActiveFilter ? 'Filter active — click to edit' : 'Filter column'}
+                          onClick={e => {
+                            e.stopPropagation();
+                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            setFilterAnchor(rect);
+                            setOpenFilterCol(openFilterCol === col.key ? null : col.key);
+                          }}
+                        >
+                          <FilterIcon className="w-3 h-3" />
+                          {hasActiveFilter && <span className="ml-0.5 text-[9px] font-bold">●</span>}
+                        </button>
+                      )}
                     </div>
-                    {isOpen && (
-                      <ColumnFilterDropdown
-                        colKey={col.key}
-                        columnHeader={col.header}
-                        allValues={getUniqueValuesForColumn(col.key)}
-                        selectedValues={filters[col.key]}
-                        onApply={next => setFilters(prev => {
-                          const nextFilters = { ...prev };
-                          if (next === undefined) delete nextFilters[col.key];
-                          else nextFilters[col.key] = next;
-                          return nextFilters;
-                        })}
-                        onClose={() => setOpenFilterCol(null)}
-                      />
-                    )}
                   </th>
                 );
               })}
@@ -981,6 +1130,35 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           </div>
         )}
       </div>
+
+      {/* Portal-rendered filter dropdowns (anchored to their trigger button).
+          Rendering through a portal so the table's overflow:auto can't clip
+          them — this was the previous "filter not visible" bug. */}
+      {openFilterCol && filterAnchor && (
+        <ColumnFilterDropdown
+          columnHeader={activeColumns.find(c => c.key === openFilterCol)?.header || openFilterCol}
+          allValues={getUniqueValuesForColumn(openFilterCol)}
+          selectedValues={filters[openFilterCol]}
+          anchorRect={filterAnchor}
+          onApply={next => setFilters(prev => {
+            const nextFilters = { ...prev };
+            if (next === undefined) delete nextFilters[openFilterCol];
+            else nextFilters[openFilterCol] = next;
+            return nextFilters;
+          })}
+          onClose={() => { setOpenFilterCol(null); setFilterAnchor(null); }}
+        />
+      )}
+
+      {colorFilterOpen && filterAnchor && (
+        <ColorFilterDropdown
+          allColors={getUniqueRowColors()}
+          selectedColors={colorFilter}
+          anchorRect={filterAnchor}
+          onApply={next => setColorFilter(next)}
+          onClose={() => { setColorFilterOpen(false); setFilterAnchor(null); }}
+        />
+      )}
 
       {contextMenu?.visible && contextMenu.type === 'row' && selectedEquipment && (
         <div
@@ -1760,10 +1938,16 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
 
   if (isFullscreen) {
     return (
-      <div className="fixed inset-0 bg-white z-50 overflow-auto">
+      // `right` leaves room for the chatbot column (var set by Chatbot.tsx;
+      // falls back to 48px when the chatbot is not mounted). This way the
+      // assistant stays visible and usable while the device table is maximised.
+      <div
+        className="fixed top-0 left-0 bottom-0 bg-white z-40 overflow-auto shadow-xl"
+        style={{ right: 'var(--simorgh-chat-w, 0px)' }}
+      >
         <div className="p-6">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold">Device Specifications - Fullscreen</h2>
+            <h2 className="text-xl font-semibold">Device Specifications — Fullscreen</h2>
             <button
               className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 flex items-center"
               onClick={handleToggleFullscreen}
