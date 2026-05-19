@@ -148,6 +148,59 @@ async def get_session(session_token: str,
     return _row_to_response(row)
 
 
+@router.get("/sessions/{session_token}/messages")
+async def get_session_messages(session_token: str,
+                               limit: int = 200,
+                               current_user: dict = Depends(get_current_user)):
+    """Return the historical messages for a deep-linked project chat
+    session, in chronological order. Used by the frontend's
+    `selectChat` to populate the chat area when revisiting an existing
+    session.
+
+    Frontend renders rows as `{id, role, content, timestamp, metadata}`,
+    so the response uses those shapes directly rather than the raw
+    project_messages column names.
+    """
+    pool = await _db()
+    row = await pool.fetchrow(
+        "SELECT s.project_id, p.owner_id "
+        "FROM project_chat_sessions s "
+        "JOIN projects p ON p.id = s.project_id "
+        "WHERE s.session_token = $1", session_token,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    owner_id = str(current_user.get("id") or current_user.get("EMPUSERNAME") or "")
+    if row["owner_id"] != owner_id:
+        raise HTTPException(status_code=403, detail="not your session")
+
+    messages = await pool.fetch(
+        """
+        SELECT id, role, content, channel, metadata, created_at
+        FROM project_messages
+        WHERE project_id = $1::uuid AND chat_id = $2
+        ORDER BY created_at ASC
+        LIMIT $3
+        """,
+        str(row["project_id"]), session_token, limit,
+    )
+    return {
+        "session_token": session_token,
+        "messages": [
+            {
+                "id": str(m["id"]),
+                "message_id": str(m["id"]),
+                "role": m["role"],
+                "content": m["content"],
+                "channel": m["channel"],
+                "timestamp": m["created_at"].isoformat(),
+                "metadata": m["metadata"] or {},
+            }
+            for m in messages
+        ],
+    }
+
+
 @router.get("/{project_id}/sessions", response_model=list[SessionResponse])
 async def list_sessions(project_id: str,
                         current_user: dict = Depends(get_current_user)):

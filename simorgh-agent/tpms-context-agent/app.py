@@ -111,8 +111,35 @@ async def _render(oenum: str, sections: list[str] | None) -> tuple[str, list[str
     return text, available_sections
 
 
+async def _check_entitlement(oenum: str, auth: "TpmsAuth") -> None:
+    """Forward per-user TPMS credentials to tpms-fetcher's entitlement
+    endpoint. Raises HTTPException(403) on auth/entitlement failure,
+    HTTPException(502) if the fetcher is unreachable."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{TPMS_FETCHER_URL}/projects/{oenum}/check-access",
+                json={"user": auth.user, "pass": auth.password},
+            )
+            r.raise_for_status()
+            body = r.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502,
+                            detail=f"tpms-fetcher unavailable: {e}")
+    if not body.get("ok"):
+        raise HTTPException(status_code=403,
+                            detail=body.get("reason") or "not entitled")
+
+
 @app.post("/context", response_model=ContextResponse)
 async def get_context(req: ContextRequest):
+    # Per-OE entitlement gate. When the wizard forwards per-user TPMS
+    # credentials we MUST verify the user is entitled for this oenum
+    # before returning any project data (draft_permission table). Without
+    # auth we keep the existing service-level behaviour for backward compat.
+    if req.auth is not None:
+        await _check_entitlement(req.oenum, req.auth)
+
     key = _cache_key(req.oenum, req.sections)
     if not req.refresh:
         cached = await _redis().get(key)

@@ -590,11 +590,18 @@ export function useProjects(userId?: string) {
 
       console.log('📥 Loading chat history for:', chatId);
 
-      const response = await axios.get(`${API_BASE}/chats/${chatId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      // Project chat sessions use the new deep-link token format
+      // (session_<urlsafe>). They live in project_messages, not the
+      // legacy chats table. Route the GET accordingly.
+      const isProjectSession = chatId.startsWith('session_');
+      const response = isProjectSession
+        ? await axios.get(
+            `${API_BASE}/v2/chatbot/project/sessions/${chatId}/messages`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          )
+        : await axios.get(`${API_BASE}/chats/${chatId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
 
       const messages = response.data.messages || [];
       const chatMetadata = response.data.chat || {};

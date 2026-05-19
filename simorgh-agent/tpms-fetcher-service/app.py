@@ -355,6 +355,68 @@ SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010
 SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
 
 
+class AccessCheckRequest(BaseModel):
+    user: str
+    password: str = Field(..., alias="pass")
+
+    class Config:
+        populate_by_name = True
+
+
+@app.post("/projects/{oenum}/check-access")
+def check_oenum_access(oenum: str, req: AccessCheckRequest):
+    """Verify that `user` exists in TPMS' `technical_users` table with the
+    given password, AND that they hold a `draft_permission` row for the
+    project whose OENUM is `oenum`. Used by tpms-context-agent / project-init
+    before exposing a legacy project's data to the chatbot.
+
+    Returns {ok, reason} — never raises 401/403 directly so the caller can
+    surface a friendly message; HTTP 5xx is reserved for genuine errors.
+    """
+    try:
+        conn = get_mysql_connection()
+        try:
+            with conn.cursor() as cur:
+                # 1. Auth.
+                cur.execute(
+                    "SELECT EMPUSERNAME, EMPPASSWORD FROM technical_users "
+                    "WHERE EMPUSERNAME = %s LIMIT 1",
+                    (req.user,),
+                )
+                u = cur.fetchone()
+                if not u:
+                    return {"ok": False, "reason": "user not found"}
+                # MySQL stores plaintext in TPMS technical_users (per the
+                # existing tpms_auth_service); a future SHA migration
+                # should swap this comparator without touching callers.
+                if u.get("EMPPASSWORD") != req.password:
+                    return {"ok": False, "reason": "bad password"}
+
+                # 2. Resolve the project's IDProjectMain.
+                project = _fetch_project_main(conn, oenum)
+                if not project:
+                    return {"ok": False, "reason": "oenum not in TPMS"}
+                id_pm = project["id_project_main"]
+
+                # 3. Entitlement: user must have a draft_permission row.
+                cur.execute(
+                    "SELECT 1 FROM draft_permission "
+                    "WHERE user = %s "
+                    "  AND (project_ID = %s OR project_ID = CAST(%s AS CHAR)) "
+                    "LIMIT 1",
+                    (req.user, id_pm, id_pm),
+                )
+                if cur.fetchone() is None:
+                    return {"ok": False,
+                            "reason": "user not entitled for this oenum"}
+        finally:
+            conn.close()
+        return {"ok": True, "oenum": oenum, "id_project_main": id_pm}
+    except Exception as e:
+        logger.error("check_oenum_access error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/projects/{oenum}/exists")
 def project_exists(oenum: str):
     """Cheap precheck endpoint: does this OE-number resolve in TPMS?"""
