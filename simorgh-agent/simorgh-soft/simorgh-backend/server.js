@@ -1061,53 +1061,83 @@ function extractToolEnvelope(content) {
   return { reply: content, tool_calls: [] };
 }
 
-// Detect which transport to use for the local model.
-//   - Explicit `LOCAL_MODEL_URL` → POST as-is. If the URL contains `/v1/chat/completions`
-//     it's treated as OpenAI-compatible; if it ends with `/api/chat` it's Ollama.
-//   - Otherwise fall back to default Ollama at http://127.0.0.1:11434/api/chat.
+// Pick which transport to use for the local model. Two paths are supported:
+//
+//   A) llm-gateway (preferred when running inside the simorgh-agent stack)
+//      Set LLM_GATEWAY_URL=http://llm-gateway:8030 (or .../api/llm-gateway
+//      via the host nginx). The gateway speaks a custom `/generate` shape
+//      with {messages, mode, …} and returns {response, model, …}; it
+//      handles online↔offline fallback and strips <think> tags for us.
+//
+//   B) Direct OpenAI-compatible HTTP — what the local LLM cluster exposes
+//      on .61 (`gpt-oss-20b` behind Unsloth+vLLM+FastAPI). Default URL is
+//      `http://192.168.1.61/v1/chat/completions`; default model name is
+//      `gpt-oss-20b`. Override either via env if you point at .62 (VLM)
+//      or a personal local server (LM Studio, llama.cpp, vLLM, Ollama).
+//
+//      For Ollama specifically: set LOCAL_MODEL_URL=http://127.0.0.1:11434/api/chat
+//      and the body is rewritten to Ollama's chat shape automatically.
+//
+// All paths return a single `content` string for the downstream parser.
 async function callLocalModel({ system, user, model, abortMs }) {
-  const explicit = process.env.LOCAL_MODEL_URL;
-  const ollamaHost = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/+$/, '');
-  const apiKey = process.env.LOCAL_MODEL_KEY || '';
-
-  const url = explicit || `${ollamaHost}/api/chat`;
-  const isOpenAI = /\/v1\/chat\/completions/i.test(url);
-  const isOllama = !isOpenAI; // default
+  const gatewayUrl  = process.env.LLM_GATEWAY_URL;            // A) gateway
+  const explicit    = process.env.LOCAL_MODEL_URL;             // B) direct
+  const apiKey      = process.env.LOCAL_MODEL_KEY || process.env.LOCAL_LLM_API_KEY || '';
 
   const messages = [
     { role: 'system', content: system },
     { role: 'user',   content: user },
   ];
-
   const headers = {
     'Content-Type': 'application/json',
     ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
   };
-
-  const body = isOllama
-    ? { model: model || process.env.LOCAL_MODEL_NAME || 'llama3.1', messages, stream: false, format: 'json', options: { temperature: 0.1 } }
-    : { model: model || process.env.LOCAL_MODEL_NAME || 'local',    messages, temperature: 0.1, response_format: { type: 'json_object' } };
-
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), abortMs || 90_000);
+  const timer = setTimeout(() => ctrl.abort(), abortMs || 120_000);
+
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      throw new Error(`Local model ${res.status}: ${text.slice(0, 500)}`);
+    // ── Path A: llm-gateway ─────────────────────────────────────────────
+    if (gatewayUrl) {
+      const url = gatewayUrl.replace(/\/+$/, '') + '/generate';
+      const body = {
+        messages,
+        mode: process.env.LLM_GATEWAY_MODE || 'offline',  // route to local LLM cluster
+        temperature: 0.1,
+      };
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`llm-gateway ${res.status}: ${text.slice(0, 500)}`);
+      let json; try { json = JSON.parse(text); } catch { json = {}; }
+      return { content: json.response ?? '', raw: json, url, transport: 'llm-gateway' };
     }
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-    // Normalise different response shapes into a single `content` string.
+
+    // ── Path B: direct ──────────────────────────────────────────────────
+    // Default points at the Simorgh local LLM box.
+    const url = explicit || 'http://192.168.1.61/v1/chat/completions';
+    const isOllama = /\/api\/chat$/i.test(url);   // Ollama's chat endpoint
+
+    const body = isOllama
+      ? {
+          model: model || process.env.LOCAL_MODEL_NAME || 'llama3.1',
+          messages, stream: false, format: 'json',
+          options: { temperature: 0.1 },
+        }
+      : {
+          model: model || process.env.LOCAL_MODEL_NAME || 'gpt-oss-20b',
+          messages, temperature: 0.1,
+          // Many OpenAI-compat servers (incl. vLLM) honour this; ones that
+          // don't simply ignore unknown fields — harmless either way.
+          response_format: { type: 'json_object' },
+        };
+
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Local model ${res.status}: ${text.slice(0, 500)}`);
+    let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
     const content =
-      json?.message?.content ??
-      json?.choices?.[0]?.message?.content ??
-      json?.response ??
+      json?.choices?.[0]?.message?.content ??  // OpenAI / vLLM
+      json?.message?.content ??                // Ollama
+      json?.response ??                        // some local servers
       json?.raw ??
       '';
     return { content, raw: json, url, transport: isOllama ? 'ollama' : 'openai-compatible' };
@@ -1156,12 +1186,17 @@ app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
     // If the model is unreachable, return a graceful stub so the frontend
     // still sees the project context made it through.
     if (!content) {
+      const target = process.env.LLM_GATEWAY_URL
+        ? `llm-gateway @ ${process.env.LLM_GATEWAY_URL}`
+        : (process.env.LOCAL_MODEL_URL || 'http://192.168.1.61/v1/chat/completions');
       const stub = {
         reply:
           (modelError
-            ? `🛈 Could not reach local model: ${modelError}\n`
-            : '🛈 Local model not configured.\n') +
-          `Set LOCAL_MODEL_URL (OpenAI-compatible) or run Ollama on ${process.env.OLLAMA_HOST || 'http://127.0.0.1:11434'} and set LOCAL_MODEL_NAME.\n\n` +
+            ? `🛈 Could not reach local LLM (${target}):\n   ${modelError}\n\n`
+            : `🛈 No reply from local LLM (${target}).\n\n`) +
+          `Default routing: simorgh-agent local cluster on 192.168.1.61 (model: gpt-oss-20b).\n` +
+          `Overrides via .env — see backend/.env.example for LLM_GATEWAY_URL / LOCAL_MODEL_URL / LOCAL_MODEL_NAME.\n` +
+          `Note: the .61 box IP-allowlists 192.168.1.68 + localhost — calls from elsewhere will be refused at the nginx layer.\n\n` +
           `Echo: ${prompt || '(empty)'}` + fileNote,
         tool_calls: [],
       };
