@@ -21,8 +21,10 @@ import * as XLSX from 'xlsx';
 import { useProject } from '../../context/ProjectContext';
 import {
   chatToolSchemas, executeChatToolBatch, ChatToolCall, ChatToolResult,
+  ChatToolContext, ProposedAction,
 } from '../../services/chatbotTools';
 import { MarkdownView } from './MarkdownView';
+import { ProposalCard } from './ProposalCard';
 
 // Tab labels used both in the context snapshot we send to the model and in
 // the local tool runner that resolves `set_active_tab`.
@@ -43,6 +45,8 @@ interface ChatMessage {
   attachments?: { name: string; type: string; size: number }[];
   /** Per-tool outcomes (executed locally against the project). */
   toolResults?: { tool: string; summary: string; ok: boolean }[];
+  /** Pending proposals — rendered as an interactive card with Apply/Reject. */
+  proposals?: { title: string; actions: ProposedAction[] }[];
   error?: boolean;
   pending?: boolean;
 }
@@ -167,6 +171,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       text:
         "## Hi — I'm Simorgh AI ✨\n\n" +
         "I can drive **every tab** for you. Some things to try:\n\n" +
+        "**📄 Upload a project PDF** — I read it, extract project metadata, technical settings, equipment & devices, and show you a preview card. Pick which items to keep and hit **Apply** to fill the project.\n\n" +
         "**Project Definition**\n" +
         "- `Set project name to Pars Refinery, client NIORDC, standard IEC`\n" +
         "- `Altitude is 1200 m and design temperature is 45 °C`\n\n" +
@@ -413,6 +418,19 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         });
       }
 
+      // Pull out `propose_changes` results — those are staged for user
+      // approval rather than counted as already-executed actions. Their
+      // tool result still gets shown (as the "Staged N change(s)" line) but
+      // the actual edits land via the ProposalCard component when the user
+      // clicks Apply.
+      const proposals: { title: string; actions: ProposedAction[] }[] = [];
+      toolResults.forEach((r) => {
+        const proposal = r?.data?.proposal;
+        if (proposal && Array.isArray(proposal.actions)) {
+          proposals.push({ title: String(proposal.title || 'Proposed changes'), actions: proposal.actions });
+        }
+      });
+
       setMessages(prev => prev.map(m =>
         m.id === pendingId ? {
           ...m,
@@ -424,6 +442,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
             summary: r.summary,
             ok: r.ok,
           })),
+          proposals,
           pending: false,
         } : m
       ));
@@ -593,9 +612,36 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
                   {m.role === 'assistant' && !m.error
                     ? <MarkdownView text={m.text} />
                     : <div>{m.text}</div>}
-                  {m.toolResults && m.toolResults.length > 0 && (
+                  {/* Interactive preview cards for staged proposals. The
+                      AI returns these from `propose_changes` whenever the
+                      user uploads a document and asks to extract fields. */}
+                  {m.proposals && m.proposals.length > 0 && m.proposals.map((p, i) => (
+                    <ProposalCard
+                      key={i}
+                      title={p.title}
+                      actions={p.actions}
+                      ctx={{
+                        projectData, selectedEquipment, updateEquipment,
+                        updateProjectData, addEquipment, deleteEquipment,
+                        setSelectedEquipment, deleteTemplate, setActiveTab,
+                        saveProject,
+                      } as ChatToolContext}
+                      onApplied={results => {
+                        setMessages(prev => prev.map(mm =>
+                          mm.id === m.id ? {
+                            ...mm,
+                            toolResults: [...(mm.toolResults || []), ...results],
+                          } : mm
+                        ));
+                      }}
+                    />
+                  ))}
+                  {/* Filter out the propose_changes "Staged N change(s)"
+                      noise — the ProposalCard above conveys the same info
+                      more clearly. */}
+                  {m.toolResults && m.toolResults.filter(tr => tr.tool !== 'propose_changes').length > 0 && (
                     <div className="mt-2 space-y-1 border-t border-gray-200/40 pt-1.5">
-                      {m.toolResults.map((tr, i) => (
+                      {m.toolResults.filter(tr => tr.tool !== 'propose_changes').map((tr, i) => (
                         <div
                           key={i}
                           className={`text-[10px] px-2 py-1 rounded flex items-start gap-1.5 ${

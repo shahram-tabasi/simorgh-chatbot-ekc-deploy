@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import sql from 'mssql';
 import mysql from 'mysql2/promise';
 import multer from 'multer';
+import { PDFParse } from 'pdf-parse';
 
 dotenv.config();
 
@@ -1001,6 +1002,11 @@ function buildSystemPrompt(toolSchemas, context, excelPreviews) {
     '  • Create Template     → create_template, search_templates, delete_template, find_similar_templates, set_template_property_parts',
     '  • Device Selection    → add_equipment, delete_equipment, select_equipment, add_row, update_row, bulk_update, delete_row, apply_excel, set_cell_color, set_row_color, list_equipments, list_rows',
     '  • Navigate            → set_active_tab (project | template | devices | output)',
+    '  • Document extraction → propose_changes (STAGE changes for user approval — see rule below)',
+    '',
+    'IMPORTANT — document extraction workflow:',
+    '  When the user uploads a PDF / image / Excel and asks you to "extract / fill in / read" data, you MUST NOT call set_project_fields, add_equipment, etc. directly.',
+    '  Instead, call exactly ONE `propose_changes` tool whose `actions` array wraps the changes you would have made. The frontend shows the proposal as a preview card; the user clicks Apply to commit each one. This applies to every field you pull from the document — project metadata, technical settings, device library entries, equipment, rows, anything.',
     '',
     'Rules:',
     '  • Only call tools listed in "Available tools" below — do not invent names.',
@@ -1028,6 +1034,8 @@ function buildSystemPrompt(toolSchemas, context, excelPreviews) {
     '  {"reply":"Found 2 matching LV templates:\\n\\n- **Motor 22kW** — S8/OFW/FCB1/OUTGOING · motor · 22 kW\\n- **Motor 30kW** — S8/OFW/FCB1/OUTGOING · motor · 30 kW","tool_calls":[{"name":"search_templates","args":{"query":"S8","type":"LV"}}]}',
     'Example 8 (user: "row 100" but only 4 rows exist):',
     '  {"reply":"Row 100 doesn\'t exist — the active equipment has only 4 rows. Want me to add one?","tool_calls":[]}',
+    'Example 9 (user uploads project_report.pdf and asks "fill in the project from this"):',
+    '  {"reply":"I read **project_report.pdf** and found the following — review and click Apply.","tool_calls":[{"name":"propose_changes","args":{"title":"Extracted from project_report.pdf","actions":[{"name":"set_project_fields","args":{"fields":{"projectName":"Pars Refinery Phase II","client":"NIORDC","standard":"IEC","location":"Bandar Abbas","planner":"SIMORGH"}},"summary":"Set project metadata (5 fields)"},{"name":"set_tech_setting","args":{"path":"general.altitudeAboveSeaLevel","value":"15"},"summary":"Altitude = 15 m"},{"name":"set_tech_setting","args":{"path":"general.designTemperature","value":"50"},"summary":"Design temperature = 50 °C"},{"name":"add_equipment","args":{"name":"MCC-01","type":"LV"},"summary":"Add LV equipment MCC-01"},{"name":"add_equipment","args":{"name":"SWB-MV","type":"MV"},"summary":"Add MV equipment SWB-MV"}]}}]}',
     '',
     '── Project context (THE source of truth — read it before answering) ──',
     ctxText,
@@ -1205,6 +1213,28 @@ async function callLocalModel({ system, user, model, abortMs }) {
   }
 }
 
+// Extract text from a PDF buffer. Returns { text, pageCount } or null on
+// failure. Truncates very long PDFs so we don't blow the model context.
+async function extractPdfText(buffer, filename) {
+  try {
+    const parser = new PDFParse({ data: new Uint8Array(buffer) });
+    const result = await parser.getText();
+    await parser.destroy();
+    const fullText = (result?.text || '').trim();
+    const MAX_CHARS = Number(process.env.PDF_TEXT_MAX_CHARS || 25000);
+    const truncated = fullText.length > MAX_CHARS;
+    return {
+      text:      truncated ? fullText.slice(0, MAX_CHARS) + '\n…[truncated]…' : fullText,
+      truncated,
+      fullLength: fullText.length,
+      pageCount: result?.pages?.length ?? null,
+    };
+  } catch (err) {
+    console.error(`PDF parse error for ${filename}:`, err.message);
+    return null;
+  }
+}
+
 // LOCAL endpoint — forwards prompts to the deployed local LLM cluster
 // (`gpt-oss-20b` on 192.168.1.61, OpenAI-compatible HTTP). Returns
 // `{reply, tool_calls}` ready for the frontend tool runner.
@@ -1223,11 +1253,32 @@ app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
     const toolSchemas    = parseJSON(req.body?.tools,          []);
     const excelPreviews  = parseJSON(req.body?.excelPreviews,  []);
 
+    // Extract text from any attached PDFs so the model can read them. This
+    // is the magic that powers the "upload a project PDF and have the AI
+    // fill in fields" flow — we hand the raw text to the LLM and instruct
+    // it (via the system prompt) to wrap its proposals in propose_changes.
+    const pdfExtracts = [];
+    for (const f of (req.files || [])) {
+      if (f.mimetype === 'application/pdf' ||
+          (f.originalname || '').toLowerCase().endsWith('.pdf')) {
+        const parsed = await extractPdfText(f.buffer, f.originalname);
+        if (parsed) pdfExtracts.push({ name: f.originalname, ...parsed });
+      }
+    }
+
     const system = buildSystemPrompt(toolSchemas, context, excelPreviews);
     const fileNote = files.length
       ? `\n[Attached files: ${files.map(f => f.name).join(', ')}]`
       : '';
-    const userMsg = `${prompt}${fileNote}`;
+    const pdfNote = pdfExtracts.length
+      ? '\n\n── Extracted text from attached PDF(s) ──\n' +
+        pdfExtracts.map(p =>
+          `📄 ${p.name} (${p.pageCount ?? '?'} pages` +
+          `${p.truncated ? `, truncated from ${p.fullLength} chars` : ''}):\n` +
+          `<<<\n${p.text}\n>>>`
+        ).join('\n\n')
+      : '';
+    const userMsg = `${prompt}${fileNote}${pdfNote}`;
 
     let content = '';
     let usedTransport = 'stub';

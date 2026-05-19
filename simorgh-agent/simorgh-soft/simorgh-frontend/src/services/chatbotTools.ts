@@ -717,6 +717,44 @@ const set_template_property_parts: ChatTool = {
 };
 
 // ──────────────────────────────────────────────────────────────────────────
+// Document extraction — staged proposal (user must Apply before changes land)
+// ──────────────────────────────────────────────────────────────────────────
+export interface ProposedAction {
+  name:    string;             // any other tool name from this registry
+  args:    Record<string, any>;
+  summary: string;             // short human description shown to the user
+}
+
+const propose_changes: ChatTool = {
+  name: 'propose_changes',
+  description: "STAGE a list of edits (e.g. fields extracted from an uploaded PDF) for user approval instead of applying them. Use this whenever the user asked you to read/extract/fill from a document — the frontend renders a preview card with checkboxes and an Apply button. Each `actions` entry is a regular tool call wrapped with a short `summary`.",
+  args: {
+    title:   { type: 'string', description: 'Short title shown on the preview card (e.g. "Extracted from report.pdf").', required: true },
+    actions: { type: 'array',  description: 'Array of { name, args, summary } — each item is a regular tool call.', required: true },
+  },
+  // Do NOT run the actions here. We return them as `data.proposal` so the
+  // chatbot UI can render a confirmation card. The user picks which ones to
+  // apply; the Chatbot component then runs `executeChatToolBatch` on those.
+  execute: (args, _ctx) => {
+    const actions = Array.isArray(args.actions) ? args.actions : [];
+    return {
+      ok: true,
+      summary: `Staged ${actions.length} change(s) — awaiting your approval.`,
+      data: {
+        proposal: {
+          title: String(args.title || 'Proposed changes'),
+          actions: actions.map((a: any, i: number) => ({
+            name:    String(a.name || ''),
+            args:    a.args && typeof a.args === 'object' ? a.args : {},
+            summary: String(a.summary || `Action #${i + 1}`),
+          })),
+        },
+      },
+    };
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
 // Registry
 // ──────────────────────────────────────────────────────────────────────────
 const TOOLS: ChatTool[] = [
@@ -734,6 +772,8 @@ const TOOLS: ChatTool[] = [
   // Rows
   list_equipments, list_rows, update_row, bulk_update, add_row, delete_row,
   set_cell_color, set_row_color, apply_excel,
+  // Document-driven workflows (staged proposal awaiting user approval)
+  propose_changes,
 ];
 
 export const CHAT_TOOLS: Record<string, ChatTool> = Object.fromEntries(
