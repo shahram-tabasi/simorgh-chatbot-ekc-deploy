@@ -15,8 +15,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   MessageSquareIcon, XIcon, SendIcon, PaperclipIcon, Trash2Icon,
   ImageIcon, FileTextIcon, FileSpreadsheetIcon, FileIcon, Loader2Icon,
-  MaximizeIcon, MinimizeIcon, BotIcon, UserIcon,
+  MaximizeIcon, MinimizeIcon, BotIcon, UserIcon, ZapIcon,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { useProject } from '../../context/ProjectContext';
+import {
+  chatToolSchemas, executeChatToolBatch, ChatToolCall, ChatToolResult,
+} from '../../services/chatbotTools';
 
 type Mode = 'local' | 'online';
 
@@ -31,8 +36,43 @@ interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   text: string;
   attachments?: { name: string; type: string; size: number }[];
+  /** Per-tool outcomes (executed locally against the project). */
+  toolResults?: { tool: string; summary: string; ok: boolean }[];
   error?: boolean;
   pending?: boolean;
+}
+
+/** Parse an AI reply that may contain a JSON envelope with tool_calls.
+ *  Accepts either:
+ *    1. A raw JSON object  `{ "reply": "...", "tool_calls": [...] }`
+ *    2. A fenced ```json ... ``` block in an otherwise-text reply
+ *    3. Plain text (no tools)
+ */
+function parseToolEnvelope(raw: string): { reply: string; tool_calls: ChatToolCall[] } {
+  const tryJson = (s: string) => {
+    try {
+      const obj = JSON.parse(s);
+      if (obj && typeof obj === 'object' && Array.isArray(obj.tool_calls)) {
+        return {
+          reply: typeof obj.reply === 'string' ? obj.reply : '',
+          tool_calls: obj.tool_calls as ChatToolCall[],
+        };
+      }
+    } catch { /* not JSON */ }
+    return null;
+  };
+  const direct = tryJson(raw.trim());
+  if (direct) return direct;
+
+  const fence = raw.match(/```json\s*([\s\S]+?)```/i);
+  if (fence) {
+    const parsed = tryJson(fence[1].trim());
+    if (parsed) {
+      const stripped = raw.replace(fence[0], '').trim();
+      return { reply: parsed.reply || stripped, tool_calls: parsed.tool_calls };
+    }
+  }
+  return { reply: raw, tool_calls: [] };
 }
 
 // Default endpoints. The local one points at the same backend host the
@@ -71,10 +111,22 @@ export const Chatbot: React.FC = () => {
     {
       id: 'welcome',
       role: 'assistant',
-      text: 'سلام! من دستیار طراحی سیمرغ هستم. می‌توانی متن بنویسی یا فایل (عکس، PDF، Excel) بفرستی. حالت پیش‌فرض «لوکال» است؛ از تنظیمات می‌توانی «آنلاین» را انتخاب کنی.',
+      text:
+        'سلام! من دستیار طراحی سیمرغ هستم.\n' +
+        '— می‌توانی سؤال بپرسی یا دستور بدهی (مثلاً «در equipment فعلی، هر جا wiringType برابر M3 است را به M4 تغییر بده» یا «ردیف ۳ ستون feederNo را L03 کن»).\n' +
+        '— برای دستور دادن، گزینهٔ Agent فعال باشد.\n' +
+        '— می‌توانی فایل (عکس، PDF، Excel) ضمیمه کنی؛ Excel به‌صورت ساختاریافته به مدل ارسال می‌شود.',
     },
   ]);
   const [busy, setBusy] = useState(false);
+  // Agent mode = the assistant is allowed to call frontend tools that mutate
+  // project state (update rows, set colours, create templates, …). When off,
+  // the chatbot only displays text replies and ignores any tool_calls.
+  const [agentMode, setAgentMode] = useState<boolean>(true);
+
+  const {
+    projectData, selectedEquipment, updateEquipment, updateProjectData,
+  } = useProject();
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const scrollRef    = useRef<HTMLDivElement | null>(null);
@@ -149,24 +201,87 @@ export const Chatbot: React.FC = () => {
     setBusy(true);
 
     try {
+      // Pre-parse any attached Excel files into JSON so the AI can reference
+      // them by name and use the `apply_excel` tool against the active table.
+      const excelPreviews: { name: string; rows: any[] }[] = [];
+      for (const a of filesToSend) {
+        const ext = (a.file.name.split('.').pop() || '').toLowerCase();
+        if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') {
+          try {
+            const buf = await a.file.arrayBuffer();
+            const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+            const sheet = wb.Sheets[wb.SheetNames[0]];
+            const rows  = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '', raw: false });
+            excelPreviews.push({ name: a.file.name, rows });
+          } catch { /* ignore parse errors */ }
+        }
+      }
+
       const fd = new FormData();
       fd.append('prompt', text);
       fd.append('mode', mode);
+      // Send a compact snapshot of the project so the LLM has context.
+      const ctxSnapshot = {
+        projectName: projectData.projectName,
+        activeEquipment: selectedEquipment ? {
+          id: selectedEquipment.id, name: selectedEquipment.name,
+          type: selectedEquipment.type, rowCount: selectedEquipment.devices?.length ?? 0,
+        } : null,
+        equipments: (projectData.equipments ?? []).map(e => ({
+          id: e.id, name: e.name, type: e.type, rows: e.devices?.length ?? 0,
+        })),
+        templateCounts: {
+          LV: projectData.templates?.LV?.length ?? 0,
+          MV: projectData.templates?.MV?.length ?? 0,
+          HV: projectData.templates?.HV?.length ?? 0,
+        },
+      };
+      fd.append('context', JSON.stringify(ctxSnapshot));
+      if (agentMode) fd.append('tools', JSON.stringify(chatToolSchemas()));
+      if (excelPreviews.length > 0) fd.append('excelPreviews', JSON.stringify(excelPreviews));
       filesToSend.forEach(a => fd.append('files', a.file, a.file.name));
 
       const res = await fetch(endpoint, { method: 'POST', body: fd });
-      let reply = '';
+      let raw = '';
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('application/json')) {
         const j = await res.json();
-        reply = j.reply ?? j.message ?? j.error ?? JSON.stringify(j);
+        // If the backend already returned a {reply, tool_calls} shape, keep it
+        // as-is by re-stringifying so parseToolEnvelope handles it uniformly.
+        if (j && (Array.isArray(j.tool_calls) || typeof j.reply === 'string')) {
+          raw = JSON.stringify(j);
+        } else {
+          raw = j.message ?? j.error ?? JSON.stringify(j);
+        }
       } else {
-        reply = await res.text();
+        raw = await res.text();
       }
-      if (!res.ok) throw new Error(reply || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(raw || `HTTP ${res.status}`);
+
+      const { reply, tool_calls } = parseToolEnvelope(raw);
+      const callsToRun = agentMode ? tool_calls : [];
+
+      // Run any tools the assistant asked for.
+      let toolResults: ChatToolResult[] = [];
+      if (callsToRun.length > 0) {
+        toolResults = await executeChatToolBatch(callsToRun, {
+          projectData, selectedEquipment, updateEquipment, updateProjectData,
+        });
+      }
 
       setMessages(prev => prev.map(m =>
-        m.id === pendingId ? { ...m, text: reply, pending: false } : m
+        m.id === pendingId ? {
+          ...m,
+          text: reply || (callsToRun.length > 0
+            ? `Executed ${callsToRun.length} action(s).`
+            : '(empty reply)'),
+          toolResults: toolResults.map((r, i) => ({
+            tool: callsToRun[i]?.name || '?',
+            summary: r.summary,
+            ok: r.ok,
+          })),
+          pending: false,
+        } : m
       ));
     } catch (err: any) {
       const msg = err?.message || String(err);
@@ -260,6 +375,15 @@ export const Chatbot: React.FC = () => {
         >
           {showSettings ? 'Hide settings' : 'Endpoint…'}
         </button>
+        <label className="ml-2 inline-flex items-center gap-1 text-xs text-gray-600" title="Allow the assistant to take actions on the project (edit rows, set colours, create templates).">
+          <input
+            type="checkbox"
+            checked={agentMode}
+            onChange={e => setAgentMode(e.target.checked)}
+            className="accent-blue-600"
+          />
+          Agent
+        </label>
         <button
           className="ml-auto text-xs text-red-600 hover:underline flex items-center gap-1"
           onClick={clearChat}
@@ -315,6 +439,24 @@ export const Chatbot: React.FC = () => {
               ) : (
                 <>
                   <div>{m.text}</div>
+                  {m.toolResults && m.toolResults.length > 0 && (
+                    <div className="mt-2 space-y-1 border-t border-gray-200/40 pt-1.5">
+                      {m.toolResults.map((tr, i) => (
+                        <div
+                          key={i}
+                          className={`text-[10px] px-2 py-1 rounded flex items-start gap-1.5 ${
+                            tr.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700'
+                          }`}
+                        >
+                          <ZapIcon className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <span className="font-mono font-semibold">{tr.tool}</span>
+                            <span className="ml-1">{tr.summary}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {m.attachments && m.attachments.length > 0 && (
                     <div className={`mt-1.5 flex flex-wrap gap-1.5 ${m.role === 'user' ? 'text-blue-100' : 'text-gray-500'}`}>
                       {m.attachments.map((a, i) => (

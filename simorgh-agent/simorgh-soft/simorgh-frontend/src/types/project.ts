@@ -148,11 +148,41 @@ export interface ProjectData {
   outputTypes?: OutputType[];
 }
 
+// ── Hierarchical template path ───────────────────────────────────────────────
+// Templates are organised in a category tree the user explored when
+// authoring them. This metadata lets the chatbot (and a forthcoming browser
+// UI) propose similar templates that already exist at the same path.
+//
+// LV path example:
+//   ['S8', 'OFW', 'FCB1', 'OUTGOING']  ← top → leaf
+//   ['8PT', 'CCS']
+//   ['S8', 'OFW', 'SFD']
+//
+// MV path is simpler:
+//   ['INCOMING'] | ['COUPLING'] | ['METERING'] | ['RISER'] | ['MET&RISER'] | ['OUTGOING']
+//
+// `leafKind` describes what equipment family this template is for, so the
+// suggestion engine can short-list templates with matching power/current.
+
+export type TemplateLeafKind = 'motor' | 'transformer' | 'lighting' | 'other';
+
+export interface TemplateHierarchy {
+  path: string[];                  // top → leaf nodes
+  leafKind?: TemplateLeafKind;
+  params?: {
+    kw?: string;                   // rated power (kW or kVA)
+    currentA?: string;             // rated full-load current
+    notes?: string;
+  };
+}
+
 export interface TemplateItem {
   id: string;
   name: string;
   type: 'LV' | 'MV' | 'HV';
   properties: Record<string, string>;
+  /** Optional hierarchical classification used by recommendations / AI tools. */
+  hierarchy?: TemplateHierarchy;
 }
 
 export interface DeviceItem {
