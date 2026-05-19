@@ -321,8 +321,10 @@ const MainApp: React.FC = () => {
           </div>
         </div>
 
-        {/* AI chatbot — embedded sibling column (not a floating overlay) */}
-        <Chatbot />
+        {/* AI chatbot — embedded sibling column (not a floating overlay).
+            We hand it the active-tab state so it can both surface the
+            current tab to the model and let the AI navigate between tabs. */}
+        <Chatbot activeTab={activeTab} setActiveTab={setActiveTab} />
       </div>
 
       {/* Footer */}

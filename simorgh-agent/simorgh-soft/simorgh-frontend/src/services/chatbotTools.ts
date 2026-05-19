@@ -14,14 +14,26 @@
 
 import {
   ProjectData, Equipment, DeviceTableRow, TemplateItem, TemplateHierarchy,
+  DeviceLibraryItem,
 } from '../types/project';
 
 // ── Shared context passed to every tool ──────────────────────────────────────
+// The frontend wires every relevant ProjectContext / UI handle in here, so
+// tools can drive any tab without reaching for window globals.
 export interface ChatToolContext {
   projectData: ProjectData;
   selectedEquipment: Equipment | null;
   updateEquipment: (id: string, data: Partial<Equipment>) => void;
   updateProjectData: (data: Partial<ProjectData>) => void;
+  addEquipment: (eq: Equipment) => void;
+  deleteEquipment: (id: string) => void;
+  setSelectedEquipment: (eq: Equipment | null) => void;
+  deleteTemplate: (id: string) => void;
+  /** Switch between top-level tabs. Indices: 0 Project Definition,
+   *  1 Template Creation, 2 Device Selection, 3 Output Types. */
+  setActiveTab?: (idx: number) => void;
+  /** Save the project to the backend (Mongo). */
+  saveProject?: () => Promise<void>;
 }
 
 export interface ChatToolCall {
@@ -348,11 +360,380 @@ const create_template: ChatTool = {
   },
 };
 
-// ── Registry ────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────
+// Tab navigation
+// ──────────────────────────────────────────────────────────────────────────
+const TAB_NAMES: Record<string, number> = {
+  // Multiple aliases per tab so the model can be sloppy about phrasing.
+  'project':            0, 'project-definition': 0, 'project_definition': 0, 'definition': 0,
+  'template':           1, 'templates': 1, 'create-template': 1, 'create_template': 1, 'create template': 1,
+  'devices':            2, 'device-selection': 2, 'device_selection': 2, 'device selection': 2,
+  'output':             3, 'output-types': 3, 'output_types': 3, 'output types': 3, 'export': 3,
+};
+
+const set_active_tab: ChatTool = {
+  name: 'set_active_tab',
+  description: 'Switch the visible tab. Accepts "project", "template", "devices", or "output" (case-insensitive; spaces/hyphens/underscores are OK).',
+  args: {
+    tab: { type: 'string', description: 'project | template | devices | output', required: true },
+  },
+  execute: ({ tab }, ctx) => {
+    const idx = TAB_NAMES[String(tab || '').toLowerCase().trim()];
+    if (idx === undefined) return { ok: false, summary: `Unknown tab "${tab}".` };
+    if (!ctx.setActiveTab) return { ok: false, summary: 'Tab navigation not wired into this context.' };
+    ctx.setActiveTab(idx);
+    const label = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types'][idx];
+    return { ok: true, summary: `Switched to "${label}" tab.` };
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// Project Definition tab — project-level metadata & technical settings
+// ──────────────────────────────────────────────────────────────────────────
+const PROJECT_TEXT_FIELDS = new Set([
+  'projectName', 'projectId', 'projectNumber', 'projectDescription',
+  'planner', 'designOffice', 'location', 'client', 'standard',
+  'country', 'language', 'comment',
+  'noticeToProceedDate', 'deliveryDate',
+]);
+
+const set_project_fields: ChatTool = {
+  name: 'set_project_fields',
+  description: 'Update one or more top-level project metadata fields (projectName, projectId, projectNumber, client, location, standard, country, language, planner, designOffice, projectDescription, comment, noticeToProceedDate, deliveryDate).',
+  args: {
+    fields: { type: 'object', description: 'Map of field → new value.', required: true },
+  },
+  execute: ({ fields }, ctx) => {
+    if (!fields || typeof fields !== 'object') return { ok: false, summary: 'fields must be an object.' };
+    const accepted: Record<string, any> = {};
+    const rejected: string[] = [];
+    for (const [k, v] of Object.entries(fields)) {
+      if (PROJECT_TEXT_FIELDS.has(k)) accepted[k] = String(v ?? '');
+      else rejected.push(k);
+    }
+    if (Object.keys(accepted).length === 0) {
+      return { ok: false, summary: `No accepted fields. Unknown: ${rejected.join(', ')}` };
+    }
+    ctx.updateProjectData(accepted);
+    return {
+      ok: true,
+      summary: `Updated ${Object.keys(accepted).length} project field(s): ${Object.keys(accepted).join(', ')}.` +
+               (rejected.length ? ` (Ignored: ${rejected.join(', ')})` : ''),
+    };
+  },
+};
+
+const set_tech_setting: ChatTool = {
+  name: 'set_tech_setting',
+  description: 'Update one technical-settings value. `path` is a dot-path under `techSettings`: e.g. "general.altitudeAboveSeaLevel", "wireSize.controlCircuit", "wireColor.acPhase", "wireManufacturer.lv", "others.thicknessOfPainting".',
+  args: {
+    path:  { type: 'string', description: 'Dot path under techSettings.', required: true },
+    value: { type: 'string', description: 'New value (string).', required: true },
+  },
+  execute: ({ path, value }, ctx) => {
+    if (!path) return { ok: false, summary: 'path is required.' };
+    const segments = String(path).split('.').filter(Boolean);
+    if (segments.length < 2) return { ok: false, summary: 'path must have at least 2 segments (e.g. general.altitudeAboveSeaLevel).' };
+    const tech = JSON.parse(JSON.stringify(ctx.projectData.techSettings || {}));
+    let node: any = tech;
+    for (let i = 0; i < segments.length - 1; i++) {
+      const seg = segments[i];
+      if (typeof node[seg] !== 'object' || node[seg] == null) node[seg] = {};
+      node = node[seg];
+    }
+    node[segments[segments.length - 1]] = String(value);
+    ctx.updateProjectData({ techSettings: tech });
+    return { ok: true, summary: `Set techSettings.${path} = "${value}".` };
+  },
+};
+
+const save_project: ChatTool = {
+  name: 'save_project',
+  description: 'Persist the current project to the backend (MongoDB) immediately. Auto-save also runs every 5s, but this forces it.',
+  args: {},
+  execute: async (_args, ctx) => {
+    if (!ctx.saveProject) return { ok: false, summary: 'Save handle not available in this context.' };
+    try {
+      await ctx.saveProject();
+      return { ok: true, summary: 'Project saved.' };
+    } catch (e: any) {
+      return { ok: false, summary: `Save failed: ${e?.message || e}` };
+    }
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// Device Library (Project Definition → Device Library sub-tab)
+// ──────────────────────────────────────────────────────────────────────────
+const add_library_device: ChatTool = {
+  name: 'add_library_device',
+  description: 'Create a new device-library entry in a given tier (LV/MV/HV) with optional pre-filled properties.',
+  args: {
+    type:       { type: 'string', description: 'LV | MV | HV', required: true },
+    name:       { type: 'string', description: 'Display name for the device.', required: true },
+    properties: { type: 'object', description: 'Optional DeviceLibraryProperties map.', required: false },
+  },
+  execute: ({ type, name, properties }, ctx) => {
+    const tier = String(type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
+    if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    if (!name) return { ok: false, summary: 'name is required.' };
+    const item: DeviceLibraryItem = {
+      id: `dev-${Date.now()}`,
+      name: String(name),
+      type: tier,
+      properties: (properties && typeof properties === 'object' ? properties : {}) as any,
+    };
+    const lib = ctx.projectData.deviceLibrary || { LV: [], MV: [], HV: [] };
+    ctx.updateProjectData({ deviceLibrary: { ...lib, [tier]: [...(lib[tier] ?? []), item] } });
+    return { ok: true, summary: `Added ${tier} device "${name}" to the library.`, data: { id: item.id } };
+  },
+};
+
+const update_library_device: ChatTool = {
+  name: 'update_library_device',
+  description: 'Modify an existing device-library entry by id OR by name (case-insensitive match within the tier).',
+  args: {
+    type:       { type: 'string', description: 'LV | MV | HV', required: true },
+    id:         { type: 'string', description: 'Device id (preferred when known).', required: false },
+    name:       { type: 'string', description: 'Device name (case-insensitive). Used if id is missing.', required: false },
+    fields:     { type: 'object', description: 'Patch — fields to overwrite. May include `name` and any DeviceLibraryProperties key.', required: true },
+  },
+  execute: ({ type, id, name, fields }, ctx) => {
+    const tier = String(type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
+    if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    if (!fields || typeof fields !== 'object') return { ok: false, summary: 'fields is required.' };
+    const lib = ctx.projectData.deviceLibrary || { LV: [], MV: [], HV: [] };
+    const list = lib[tier] || [];
+    const idx = id
+      ? list.findIndex(d => d.id === id)
+      : list.findIndex(d => d.name?.toLowerCase() === String(name || '').toLowerCase());
+    if (idx < 0) return { ok: false, summary: `Device not found in ${tier} library.` };
+    const target = list[idx];
+    const { name: newName, ...propPatch } = fields as any;
+    const next: DeviceLibraryItem = {
+      ...target,
+      ...(newName ? { name: String(newName) } : {}),
+      properties: { ...(target.properties as any), ...propPatch } as any,
+    };
+    const nextList = [...list]; nextList[idx] = next;
+    ctx.updateProjectData({ deviceLibrary: { ...lib, [tier]: nextList } });
+    return { ok: true, summary: `Updated ${tier} device "${target.name}".` };
+  },
+};
+
+const delete_library_device: ChatTool = {
+  name: 'delete_library_device',
+  description: 'Remove a device-library entry by id OR by name (case-insensitive within the tier).',
+  args: {
+    type: { type: 'string', description: 'LV | MV | HV', required: true },
+    id:   { type: 'string', description: 'Device id.', required: false },
+    name: { type: 'string', description: 'Device name.', required: false },
+  },
+  execute: ({ type, id, name }, ctx) => {
+    const tier = String(type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
+    if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    const lib = ctx.projectData.deviceLibrary || { LV: [], MV: [], HV: [] };
+    const list = lib[tier] || [];
+    const target = id
+      ? list.find(d => d.id === id)
+      : list.find(d => d.name?.toLowerCase() === String(name || '').toLowerCase());
+    if (!target) return { ok: false, summary: `Device not found in ${tier} library.` };
+    ctx.updateProjectData({ deviceLibrary: { ...lib, [tier]: list.filter(d => d.id !== target.id) } });
+    return { ok: true, summary: `Deleted ${tier} device "${target.name}".` };
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// Equipment (Device Selection tab's right-side tree)
+// ──────────────────────────────────────────────────────────────────────────
+const add_equipment: ChatTool = {
+  name: 'add_equipment',
+  description: 'Create a new equipment in the equipment tree. Optionally bind it to a device-library item.',
+  args: {
+    name: { type: 'string', description: 'Equipment name.', required: true },
+    type: { type: 'string', description: 'LV | MV | HV', required: true },
+    deviceLibraryItemName: { type: 'string', description: 'Optional device-library item name to bind.', required: false },
+    select: { type: 'boolean', description: 'Auto-select the new equipment (default true).', required: false },
+  },
+  execute: ({ name, type, deviceLibraryItemName, select }, ctx) => {
+    const tier = String(type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
+    if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    if (!name) return { ok: false, summary: 'name is required.' };
+    let libId: string | undefined;
+    if (deviceLibraryItemName) {
+      const lib = (ctx.projectData.deviceLibrary?.[tier] ?? []);
+      const item = lib.find(d => d.name?.toLowerCase() === String(deviceLibraryItemName).toLowerCase());
+      if (item) libId = item.id;
+    }
+    const newEq: Equipment = {
+      id: `eq-${Date.now()}`,
+      name: String(name),
+      type: tier,
+      properties: libId ? { deviceLibraryItemId: libId } : {},
+      devices: [],
+    };
+    ctx.addEquipment(newEq);
+    if (select !== false) ctx.setSelectedEquipment(newEq);
+    return { ok: true, summary: `Added ${tier} equipment "${name}".`, data: { id: newEq.id } };
+  },
+};
+
+const delete_equipment: ChatTool = {
+  name: 'delete_equipment',
+  description: 'Delete an equipment (and its rows). Reference by `name` (case-insensitive).',
+  args: {
+    name: { type: 'string', description: 'Equipment name.', required: true },
+  },
+  execute: ({ name }, ctx) => {
+    const eq = (ctx.projectData.equipments ?? []).find(e => e.name?.toLowerCase() === String(name || '').toLowerCase());
+    if (!eq) return { ok: false, summary: `Equipment "${name}" not found.` };
+    ctx.deleteEquipment(eq.id);
+    return { ok: true, summary: `Deleted equipment "${eq.name}".` };
+  },
+};
+
+const select_equipment: ChatTool = {
+  name: 'select_equipment',
+  description: 'Set the active equipment (the one the Device Selection editor focuses on).',
+  args: {
+    name: { type: 'string', description: 'Equipment name (case-insensitive).', required: true },
+  },
+  execute: ({ name }, ctx) => {
+    const eq = (ctx.projectData.equipments ?? []).find(e => e.name?.toLowerCase() === String(name || '').toLowerCase());
+    if (!eq) return { ok: false, summary: `Equipment "${name}" not found.` };
+    ctx.setSelectedEquipment(eq);
+    return { ok: true, summary: `Active equipment: ${eq.name} (${eq.type}).` };
+  },
+};
+
+const delete_row: ChatTool = {
+  name: 'delete_row',
+  description: 'Delete one row from an equipment by row number.',
+  args: {
+    rowNumber:     { type: 'number', description: '1-based row number.', required: true },
+    equipmentName: { type: 'string', description: 'Optional — defaults to the selected equipment.', required: false },
+  },
+  execute: ({ rowNumber, equipmentName }, ctx) => {
+    const eq = findEquipment(ctx, equipmentName);
+    if (!eq) return { ok: false, summary: 'Equipment not found.' };
+    const before = eq.devices.length;
+    const next = (eq.devices || []).filter(r => r.rowNumber !== Number(rowNumber))
+      .map((r, i) => ({ ...r, rowNumber: i + 1 }));
+    if (next.length === before) return { ok: false, summary: `Row #${rowNumber} not found.` };
+    ctx.updateEquipment(eq.id, { devices: next });
+    return { ok: true, summary: `Deleted row #${rowNumber} from ${eq.name}.` };
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// Templates (Create Template tab)
+// ──────────────────────────────────────────────────────────────────────────
+const search_templates: ChatTool = {
+  name: 'search_templates',
+  description: 'Substring-search templates by name and/or hierarchy path. Optionally restrict to a tier.',
+  args: {
+    query: { type: 'string',  description: 'Substring (case-insensitive).', required: false },
+    type:  { type: 'string',  description: 'LV | MV | HV (optional filter).', required: false },
+    limit: { type: 'number',  description: 'Max results (default 10).', required: false },
+  },
+  execute: ({ query, type, limit }, ctx) => {
+    const q = String(query || '').toLowerCase().trim();
+    const tiers: ('LV'|'MV'|'HV')[] = type ? [String(type).toUpperCase() as any] : ['LV', 'MV', 'HV'];
+    const out: any[] = [];
+    for (const tier of tiers) {
+      for (const t of (ctx.projectData.templates?.[tier] ?? [])) {
+        const hayName = (t.name || '').toLowerCase();
+        const hayPath = (t.hierarchy?.path || []).join('/').toLowerCase();
+        if (!q || hayName.includes(q) || hayPath.includes(q)) {
+          out.push({
+            id: t.id, name: t.name, type: t.type,
+            hierarchy: t.hierarchy || null,
+          });
+        }
+      }
+    }
+    const trimmed = out.slice(0, Number(limit) || 10);
+    return { ok: true, summary: `${trimmed.length} of ${out.length} matching template(s).`, data: trimmed };
+  },
+};
+
+const delete_template: ChatTool = {
+  name: 'delete_template',
+  description: 'Delete a template by id OR by name within a tier (case-insensitive).',
+  args: {
+    id:   { type: 'string', description: 'Template id (preferred).', required: false },
+    type: { type: 'string', description: 'LV | MV | HV (required if using name).', required: false },
+    name: { type: 'string', description: 'Template name (case-insensitive). Used if id is missing.', required: false },
+  },
+  execute: ({ id, type, name }, ctx) => {
+    let templateId = id;
+    if (!templateId) {
+      const tier = String(type || '').toUpperCase() as 'LV'|'MV'|'HV';
+      if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type is required when looking up by name.' };
+      const t = (ctx.projectData.templates?.[tier] ?? []).find(t => t.name?.toLowerCase() === String(name || '').toLowerCase());
+      if (!t) return { ok: false, summary: `Template "${name}" not found in ${tier}.` };
+      templateId = t.id;
+    }
+    ctx.deleteTemplate(templateId);
+    return { ok: true, summary: `Deleted template ${templateId}.` };
+  },
+};
+
+const set_template_property_parts: ChatTool = {
+  name: 'set_template_property_parts',
+  description: "Set or replace the `parts` list of one property on a template (e.g. CB ORDER, AMMETER, …). Use this to record which Siemens/EPLAN parts a template's slot uses.",
+  args: {
+    templateId: { type: 'string', description: 'Target template id.', required: true },
+    property:   { type: 'string', description: "Property name (e.g. 'CB ORDER').", required: true },
+    parts:      { type: 'array',  description: 'Array of {partNumber, label?, quantity?, priority?} objects.', required: true },
+  },
+  execute: ({ templateId, property, parts }, ctx) => {
+    if (!Array.isArray(parts)) return { ok: false, summary: 'parts must be an array.' };
+    const templates = ctx.projectData.templates || { LV: [], MV: [], HV: [] };
+    let found: TemplateItem | null = null;
+    let foundTier: 'LV' | 'MV' | 'HV' | null = null;
+    for (const tier of ['LV','MV','HV'] as const) {
+      const t = templates[tier].find(x => x.id === templateId);
+      if (t) { found = t; foundTier = tier; break; }
+    }
+    if (!found || !foundTier) return { ok: false, summary: `Template ${templateId} not found.` };
+    const props = JSON.parse(JSON.stringify(found.properties || {}));
+    props[property] = {
+      parts: parts.map((p: any, i: number) => ({
+        partNumber: String(p.partNumber || ''),
+        label:      String(p.label || ''),
+        quantity:   typeof p.quantity === 'number' ? p.quantity : 1,
+        priority:   typeof p.priority === 'number' ? p.priority : (i + 1),
+      })),
+    };
+    const nextList = templates[foundTier].map(t =>
+      t.id === templateId ? ({ ...t, properties: props } as TemplateItem) : t
+    );
+    ctx.updateProjectData({
+      templates: { ...templates, [foundTier]: nextList },
+    });
+    return { ok: true, summary: `Set ${parts.length} part(s) on "${found.name}" → "${property}".` };
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// Registry
+// ──────────────────────────────────────────────────────────────────────────
 const TOOLS: ChatTool[] = [
-  list_equipments, list_rows, update_row, bulk_update, add_row,
+  // Navigation
+  set_active_tab,
+  // Project metadata + persistence
+  set_project_fields, set_tech_setting, save_project,
+  // Device library
+  add_library_device, update_library_device, delete_library_device,
+  // Equipment
+  add_equipment, delete_equipment, select_equipment,
+  // Templates
+  create_template, delete_template, search_templates,
+  find_similar_templates, set_template_property_parts,
+  // Rows
+  list_equipments, list_rows, update_row, bulk_update, add_row, delete_row,
   set_cell_color, set_row_color, apply_excel,
-  find_similar_templates, create_template,
 ];
 
 export const CHAT_TOOLS: Record<string, ChatTool> = Object.fromEntries(

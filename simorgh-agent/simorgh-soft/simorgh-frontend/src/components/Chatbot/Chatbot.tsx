@@ -22,6 +22,11 @@ import { useProject } from '../../context/ProjectContext';
 import {
   chatToolSchemas, executeChatToolBatch, ChatToolCall, ChatToolResult,
 } from '../../services/chatbotTools';
+import { MarkdownView } from './MarkdownView';
+
+// Tab labels used both in the context snapshot we send to the model and in
+// the local tool runner that resolves `set_active_tab`.
+const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types'] as const;
 
 type Mode = 'local' | 'online';
 
@@ -138,7 +143,15 @@ function formatBytes(b: number) {
   return `${(b / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export const Chatbot: React.FC = () => {
+interface ChatbotProps {
+  /** Current top-level tab index, so the snapshot the AI receives includes
+   *  what the user is looking at right now. */
+  activeTab?: number;
+  /** Setter so `set_active_tab` can route through the same React state. */
+  setActiveTab?: (idx: number) => void;
+}
+
+export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => {
   const [open, setOpen]               = useState(false);
   const [maximized, setMaximized]     = useState(false);
   const [mode, setMode]               = useState<Mode>('local');
@@ -152,10 +165,21 @@ export const Chatbot: React.FC = () => {
       id: 'welcome',
       role: 'assistant',
       text:
-        "Hi — I'm the Simorgh design assistant.\n" +
-        '• Ask a question or give an instruction (e.g. "in the active equipment, change every row where wiringType is M3 to M4" or "set row 3 feederNo to L03").\n' +
-        '• Toggle the Agent switch on to let me act on the project, off to keep it text-only.\n' +
-        '• Attach files (image / PDF / Excel) — Excel sheets are parsed and forwarded as structured rows.',
+        "## Hi — I'm Simorgh AI ✨\n\n" +
+        "I can drive **every tab** for you. Some things to try:\n\n" +
+        "**Project Definition**\n" +
+        "- `Set project name to Pars Refinery, client NIORDC, standard IEC`\n" +
+        "- `Altitude is 1200 m and design temperature is 45 °C`\n\n" +
+        "**Create Template**\n" +
+        "- `Make a new LV template at S8 / OFW / FCB1 / OUTGOING for a 22 kW motor`\n" +
+        "- `Search templates that contain FCB1`\n\n" +
+        "**Device Selection**\n" +
+        "- `Add a new LV equipment called MCC-01`\n" +
+        "- `Set row 3 feederNo to L03`\n" +
+        "- `Everywhere wiringType is M3, change it to M4`\n" +
+        "- `Highlight row 2 red`\n" +
+        "- Attach an Excel and say `Apply this Excel, map Wiring → wiringType`\n\n" +
+        "Switch **Agent** off to keep replies text-only.",
     },
   ]);
   const [busy, setBusy] = useState(false);
@@ -178,6 +202,8 @@ export const Chatbot: React.FC = () => {
 
   const {
     projectData, selectedEquipment, updateEquipment, updateProjectData,
+    addEquipment, deleteEquipment, setSelectedEquipment, deleteTemplate,
+    saveProject,
   } = useProject();
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -305,10 +331,30 @@ export const Chatbot: React.FC = () => {
       });
 
       const activeDevices = selectedEquipment?.devices ?? [];
+      const slimLibDevice = (d: any) => ({
+        id: d.id, name: d.name, type: d.type,
+        // Surface only frequently-referenced library props to keep token usage low.
+        ip: d.properties?.ip || null,
+        ral: d.properties?.ral || null,
+        frequency: d.properties?.frequency || null,
+        height: d.properties?.height || null,
+        width: d.properties?.width || null,
+      });
+
       const ctxSnapshot = {
-        projectName: projectData.projectName,
-        standard:    projectData.standard,
-        activeEquipment: selectedEquipment ? {
+        projectName:       projectData.projectName,
+        projectId:         projectData.projectId,
+        projectNumber:     projectData.projectNumber,
+        client:            projectData.client,
+        location:          projectData.location,
+        standard:          projectData.standard,
+        country:           projectData.country,
+        language:          projectData.language,
+        planner:           projectData.planner,
+        designOffice:      projectData.designOffice,
+        techSettings:      projectData.techSettings || null,
+        activeTab:         activeTab != null ? { index: activeTab, label: TAB_LABELS[activeTab] || '?' } : null,
+        activeEquipment:   selectedEquipment ? {
           id:        selectedEquipment.id,
           name:      selectedEquipment.name,
           type:      selectedEquipment.type,
@@ -323,6 +369,11 @@ export const Chatbot: React.FC = () => {
           LV: (projectData.templates?.LV ?? []).map(slimTemplate),
           MV: (projectData.templates?.MV ?? []).map(slimTemplate),
           HV: (projectData.templates?.HV ?? []).map(slimTemplate),
+        },
+        deviceLibrary: {
+          LV: (projectData.deviceLibrary?.LV ?? []).map(slimLibDevice),
+          MV: (projectData.deviceLibrary?.MV ?? []).map(slimLibDevice),
+          HV: (projectData.deviceLibrary?.HV ?? []).map(slimLibDevice),
         },
       };
       fd.append('context', JSON.stringify(ctxSnapshot));
@@ -350,11 +401,15 @@ export const Chatbot: React.FC = () => {
       const { reply, tool_calls } = parseToolEnvelope(raw);
       const callsToRun = agentMode ? tool_calls : [];
 
-      // Run any tools the assistant asked for.
+      // Run any tools the assistant asked for. The full context handle set
+      // lets the AI drive every tab (project metadata, device library,
+      // templates, equipment, rows, navigation).
       let toolResults: ChatToolResult[] = [];
       if (callsToRun.length > 0) {
         toolResults = await executeChatToolBatch(callsToRun, {
           projectData, selectedEquipment, updateEquipment, updateProjectData,
+          addEquipment, deleteEquipment, setSelectedEquipment, deleteTemplate,
+          setActiveTab, saveProject,
         });
       }
 
@@ -518,11 +573,11 @@ export const Chatbot: React.FC = () => {
             }`}>
               {m.role === 'user' ? <UserIcon className="w-3.5 h-3.5" /> : <SparklesIcon className="w-3.5 h-3.5" />}
             </div>
-            <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words ${
+            <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm break-words ${
               m.role === 'user'
-                ? 'bg-blue-600 text-white'
+                ? 'bg-blue-600 text-white whitespace-pre-wrap'
                 : m.error
-                  ? 'bg-red-50 text-red-800 border border-red-200'
+                  ? 'bg-red-50 text-red-800 border border-red-200 whitespace-pre-wrap'
                   : 'bg-white text-gray-800 border border-gray-200'
             }`}>
               {m.pending ? (
@@ -532,7 +587,12 @@ export const Chatbot: React.FC = () => {
                 </span>
               ) : (
                 <>
-                  <div>{m.text}</div>
+                  {/* User & error messages stay literal; assistant replies
+                      render as Markdown so headings/lists/tables/code show
+                      with proper formatting. */}
+                  {m.role === 'assistant' && !m.error
+                    ? <MarkdownView text={m.text} />
+                    : <div>{m.text}</div>}
                   {m.toolResults && m.toolResults.length > 0 && (
                     <div className="mt-2 space-y-1 border-t border-gray-200/40 pt-1.5">
                       {m.toolResults.map((tr, i) => (
