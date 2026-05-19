@@ -186,6 +186,24 @@ location /api/v2/chat/ {
     proxy_read_timeout 600s;
 }
 
+# Project chat sessions (chat-service:8034) — new deep-link surface added
+# in migration 004. Routes: POST/GET/DELETE /api/v2/chatbot/project/...
+location /api/v2/chatbot/ {
+    limit_req zone=api_limit burst=30 nodelay;
+    proxy_pass http://chat_service;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    add_header X-Accel-Buffering "no" always;
+    proxy_connect_timeout 60s;
+    proxy_read_timeout 120s;
+}
+
 # Project workspace (chat-service:8034)
 # Router has prefix /api/v2/project (singular). Phase 10 used the
 # regex /api/v2/projects/.+/sessions which was wrong on both fronts.

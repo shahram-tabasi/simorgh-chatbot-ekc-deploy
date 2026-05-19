@@ -25,6 +25,7 @@ What is NO LONGER mandatory:
 """
 import os
 import secrets
+import shlex
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -70,6 +71,14 @@ class SourcesEnabled(BaseModel):
     upload: bool = True   # default-on; this is the catch-all working dir
 
 
+class TpmsAuth(BaseModel):
+    user: str
+    password: str = Field(..., alias="pass")
+
+    class Config:
+        populate_by_name = True
+
+
 class InitRequest(BaseModel):
     project_id: str = Field(..., description="Internal project UUID")
     project_name: str = Field(..., min_length=1)
@@ -79,6 +88,10 @@ class InitRequest(BaseModel):
     gitlab_repo_url: str | None = None        # full clone URL (https or git@)
     gitlab_base_branch: str | None = None     # branch the user wants to fork from
     sources: SourcesEnabled = Field(default_factory=SourcesEnabled)
+    # Optional TPMS credentials. Required by the user only when tpms or
+    # techserver sources are ticked. Falls back to TECHSERVER_USER/PASS
+    # env vars on this service if not supplied.
+    tpms_auth: TpmsAuth | None = None
     # Legacy field — kept for backward compat. New flow uses sources.techserver_oenum.
     oenum: str | None = None
 
@@ -144,12 +157,20 @@ async def _clone_user_repo(client: httpx.AsyncClient, project_id: str,
     return await _exec(client, project_id, script, timeout_sec=600)
 
 
-async def _pull_tpms(client: httpx.AsyncClient, project_id: str, oenum: str) -> dict:
+async def _pull_tpms(client: httpx.AsyncClient, project_id: str, oenum: str,
+                     tpms_auth: TpmsAuth | None = None) -> dict:
     """Fetch TPMS rendered context and write it into the container as a file
     under /work/tpms/. The hot path is still tpms-context-agent → Redis; this
-    just stages a local copy the CoT can reference as a doc."""
-    r = await client.post(f"{TPMS_CONTEXT_URL}/context",
-                          json={"oenum": oenum, "refresh": True})
+    just stages a local copy the CoT can reference as a doc.
+
+    If `tpms_auth` is supplied, the credentials are forwarded to the
+    tpms-context-agent so the request runs as that user; otherwise the
+    agent falls back to its service-level credentials.
+    """
+    payload: dict[str, Any] = {"oenum": oenum, "refresh": True}
+    if tpms_auth is not None:
+        payload["auth"] = {"user": tpms_auth.user, "password": tpms_auth.password}
+    r = await client.post(f"{TPMS_CONTEXT_URL}/context", json=payload)
     r.raise_for_status()
     rendered = r.json().get("rendered", "")
     write = await client.post(f"{RUNTIME_BROKER_URL}/sessions/{project_id}/write_file",
@@ -161,17 +182,34 @@ async def _pull_tpms(client: httpx.AsyncClient, project_id: str, oenum: str) -> 
     return {"oenum": oenum, "bytes": len(rendered)}
 
 
-async def _pull_techserver(client: httpx.AsyncClient, project_id: str, oenum: str) -> dict:
-    """SMB-copy //TECHSERVER_HOST/TECHSERVER_SHARE/<oenum> into /work/techserver/<oenum>."""
-    if not (TECHSERVER_USER and TECHSERVER_PASS):
-        raise RuntimeError("TECHSERVER_USER / TECHSERVER_PASS not configured on project-init-service")
+async def _pull_techserver(client: httpx.AsyncClient, project_id: str, oenum: str,
+                           tpms_auth: TpmsAuth | None = None) -> dict:
+    """SMB-copy //TECHSERVER_HOST/TECHSERVER_SHARE/<oenum> into /work/techserver/<oenum>.
+
+    Per-user credentials from the wizard take precedence over the
+    service-level TECHSERVER_USER / TECHSERVER_PASS env vars.
+    """
+    user = tpms_auth.user     if tpms_auth else TECHSERVER_USER
+    pwd  = tpms_auth.password if tpms_auth else TECHSERVER_PASS
+    if not (user and pwd):
+        raise RuntimeError(
+            "Techserver credentials not provided (wizard tpms_auth missing and "
+            "TECHSERVER_USER / TECHSERVER_PASS not configured)."
+        )
+    # Run the smbclient password through an env var so it doesn't end up in
+    # the container's process list. shlex.quote on the oenum keeps the
+    # remote `cd` safe.
+    safe_oenum = shlex.quote(oenum)
     script = (
         f"set -e\n"
         f"mkdir -p /work/techserver/{oenum}\n"
         f"cd /work/techserver/{oenum}\n"
-        f"smbclient //{TECHSERVER_HOST}/{TECHSERVER_SHARE} "
-        f"  -U '{TECHSERVER_USER}%{TECHSERVER_PASS}' "
-        f"  -c 'prompt OFF; recurse ON; lcd /work/techserver/{oenum}; cd \"{oenum}\"; mget *'\n"
+        f"export USER={shlex.quote(user)}\n"
+        f"export PASSWD={shlex.quote(pwd)}\n"
+        f"smbclient //{TECHSERVER_HOST}/{TECHSERVER_SHARE} \"$PASSWD\" "
+        f"  -U \"$USER\" "
+        f"  -c 'prompt OFF; recurse ON; lcd /work/techserver/{oenum}; "
+        f"      cd {safe_oenum}; mget *'\n"
     )
     return await _exec(client, project_id, script, timeout_sec=1200)
 
@@ -259,7 +297,8 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
             if req.sources.tpms and tpms_oe:
                 s["current_step"] = "pull_tpms"
                 try:
-                    res = await _pull_tpms(client, req.project_id, tpms_oe)
+                    res = await _pull_tpms(client, req.project_id, tpms_oe,
+                                           tpms_auth=req.tpms_auth)
                     _record("pull_tpms", "ok", **res)
                 except (httpx.HTTPError, RuntimeError) as e:
                     _record("pull_tpms", "error", error=str(e))
@@ -268,7 +307,8 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
             if req.sources.techserver and tpms_oe:
                 s["current_step"] = "pull_techserver"
                 try:
-                    res = await _pull_techserver(client, req.project_id, tpms_oe)
+                    res = await _pull_techserver(client, req.project_id, tpms_oe,
+                                                 tpms_auth=req.tpms_auth)
                     _record("pull_techserver", "ok", exit_code=res.get("exit_code"))
                 except (httpx.HTTPError, RuntimeError) as e:
                     _record("pull_techserver", "error", error=str(e))

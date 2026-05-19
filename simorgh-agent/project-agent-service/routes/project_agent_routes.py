@@ -358,21 +358,28 @@ async def create_project(
         # two-phase explorer. Runs in background; status is pollable.
         if _wizard_flow:
             try:
+                init_payload: Dict[str, Any] = {
+                    "project_id": project_id,
+                    "project_name": data.name,
+                    "owner_id": current_user,
+                    "gitlab_repo_path": data.gitlab_repo_path,
+                    "gitlab_repo_url": data.gitlab_repo_url,
+                    "gitlab_base_branch": data.gitlab_base_branch,
+                    "sources": sources_enabled,
+                    "oenum": (data.tpms_oenum
+                              or sources_enabled.get("techserver_oenum")),
+                }
+                # Forward TPMS credentials only when a TPMS-backed source
+                # is ticked. The wizard only collects them in that case.
+                if data.tpms_auth and (
+                    sources_enabled.get("tpms") or sources_enabled.get("techserver")
+                ):
+                    init_payload["tpms_auth"] = {
+                        "user": data.tpms_auth.user,
+                        "pass": data.tpms_auth.password,
+                    }
                 async with httpx.AsyncClient(timeout=30.0) as c:
-                    r = await c.post(
-                        f"{PROJECT_INIT_URL}/init",
-                        json={
-                            "project_id": project_id,
-                            "project_name": data.name,
-                            "owner_id": current_user,
-                            "gitlab_repo_path": data.gitlab_repo_path,
-                            "gitlab_repo_url": data.gitlab_repo_url,
-                            "gitlab_base_branch": data.gitlab_base_branch,
-                            "sources": sources_enabled,
-                            "oenum": (data.tpms_oenum
-                                      or sources_enabled.get("techserver_oenum")),
-                        },
-                    )
+                    r = await c.post(f"{PROJECT_INIT_URL}/init", json=init_payload)
                     init_result["project_init"] = (
                         r.json() if r.status_code == 200
                         else {"ok": False, "error": r.text[:300]}
