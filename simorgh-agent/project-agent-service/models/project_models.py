@@ -124,22 +124,6 @@ class ProjectCreate(BaseModel):
     tpms_auth: Optional[TpmsAuth] = Field(None, description="only when tpms/techserver ticked")
 
 
-class ProjectSourcesPrecheckRequest(BaseModel):
-    """Request to probe selected external sources before project creation."""
-    sources: List[str] = Field(..., description="Subset of: techserver, tpms, tech_knowledge")
-    tpms_oenum: Optional[str] = Field(None, description="Required when 'tpms' is in sources")
-
-
-class ProjectSourcePrecheckResult(BaseModel):
-    source: str           # e.g. "techserver"
-    ok: bool
-    detail: Optional[str] = None  # error message on failure
-
-
-class ProjectSourcesPrecheckResponse(BaseModel):
-    results: List[ProjectSourcePrecheckResult]
-
-
 class ProjectUpdate(BaseModel):
     """Request to update a project."""
     name: Optional[str] = Field(None, min_length=1, max_length=255)

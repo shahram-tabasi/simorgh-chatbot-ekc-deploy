@@ -36,10 +36,15 @@ _SERVICES: List[Dict[str, Any]] = [
     {"name": "llm-gateway",           "port": 8030, "container": "llm-gateway"},
     {"name": "hr-kb-service",         "port": 8021, "container": "hr-kb-service"},
     {"name": "org-data-service",      "port": 8022, "container": "org-data-service"},
-    {"name": "techserver-service",    "port": 8023, "container": "techserver-service"},
     {"name": "eplan-sql-service",     "port": 8024, "container": "eplan-sql-service"},
-    {"name": "project-mail-service",  "port": 8025, "container": "project-mail-service"},
-    {"name": "tech-kb-service",       "port": 8026, "container": "tech-kb-service"},
+    # 2026-05 enterprise migration: techserver-service, tech-kb-service and
+    # project-mail-service were retired. Their replacements:
+    {"name": "gitlab-mcp",            "port": 8047, "container": "gitlab-mcp"},
+    {"name": "runtime-broker",        "port": 8048, "container": "runtime-broker"},
+    {"name": "context-search",        "port": 8049, "container": "context-search"},
+    {"name": "tpms-context-agent",    "port": 8050, "container": "tpms-context-agent"},
+    {"name": "mail-bridge",           "port": 8051, "container": "mail-bridge"},
+    {"name": "project-explorer",      "port": 8052, "container": "project-explorer"},
 ]
 
 

@@ -24,11 +24,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-# Shell-service on .69 — used to push uploaded files into the
-# project workspace at ~/projects/<id>/uploads/<sha[:12]>/<filename>.
-SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
-SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
-
 from chatbot_core.models import (
     ChatType,
     SessionStage,
@@ -383,58 +378,47 @@ async def upload_document(
             category=request.category,
         )
 
-        # Also push the upload into the project workspace on .69 with
-        # sha256-prefixed pathing so re-uploads don't overwrite. Failures
-        # are logged but don't fail the request — Qdrant ingest above is
-        # what the user actually needs for chat retrieval.
+        # For project chats with an active session container, also drop a
+        # copy of the upload into /work/uploads/ so the in-container tools
+        # (and the explorer's deep-walk) can see it. Failures are logged
+        # but don't fail the request — Qdrant ingest above is what the
+        # chat retrieval path needs.
         try:
             project_id = None
             if hasattr(ctx, "project") and ctx.project:
                 project_id = ctx.project.project_number
             if project_id:
+                from simorgh_clients.runtime_broker import (
+                    RUNTIME_BROKER_URL, RUNTIME_BROKER_TOKEN,
+                )
                 content_bytes = (
                     request.content.encode("utf-8")
                     if isinstance(request.content, str)
                     else bytes(request.content)
                 )
-                async with httpx.AsyncClient(timeout=120.0) as c:
-                    headers = (
-                        {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
-                        if SHELL_SERVICE_TOKEN else {}
-                    )
-                    files = {
-                        "file": (
-                            request.filename, content_bytes,
-                            "application/octet-stream",
-                        ),
-                    }
-                    data = {
-                        "project_id": project_id,
-                        "subdir": "uploads",
-                        "filename": request.filename,
-                        "dedupe": "true",
-                        "commit_message": (
-                            f"upload(user): {request.filename} "
-                            f"(chat={chat_id}, user={request.user_id})"
-                        ),
-                    }
+                import base64 as _b64
+                headers = ({"authorization": f"Bearer {RUNTIME_BROKER_TOKEN}"}
+                           if RUNTIME_BROKER_TOKEN else {})
+                async with httpx.AsyncClient(timeout=60.0) as c:
                     r = await c.post(
-                        f"{SHELL_SERVICE_URL}/workspace/upload-file",
-                        headers=headers, files=files, data=data,
+                        f"{RUNTIME_BROKER_URL}/sessions/{project_id}/write_file",
+                        json={
+                            "path": f"uploads/{request.filename}",
+                            "content": _b64.b64encode(content_bytes).decode("ascii"),
+                            "encoding": "base64",
+                        },
+                        headers=headers,
                     )
                     if r.status_code == 200:
-                        body = r.json()
-                        # Surface workspace-side info as warnings (non-fatal info).
                         result.setdefault("warnings", []).append(
-                            f"workspace_upload: {body.get('status')} "
-                            f"sha={body.get('sha256','?')[:12]} path={body.get('path','?')}"
+                            f"container_upload: /work/uploads/{request.filename}"
                         )
                     else:
                         result.setdefault("warnings", []).append(
-                            f"workspace_upload_failed: {r.status_code} {r.text[:120]}"
+                            f"container_upload_failed: {r.status_code} {r.text[:120]}"
                         )
         except Exception as e:
-            logger.warning("workspace upload push failed (non-fatal): %s", e)
+            logger.warning("container upload push failed (non-fatal): %s", e)
 
         return UploadDocumentResponse(
             success=result.get("success", False),

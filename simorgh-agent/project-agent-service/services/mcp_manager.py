@@ -326,20 +326,8 @@ def get_mcp_manager() -> MCPManager:
             "org_data": os.getenv(
                 "ORG_DATA_MCP_URL", "http://org-data-service:8042/mcp"
             ),
-            "techserver": os.getenv(
-                # 2026-05: replaced by gitlab-mcp; keep var so deploys
-                # that still set TECHSERVER_MCP_URL don't error, but the
-                # default is empty (= not registered).
-                "TECHSERVER_MCP_URL", ""
-            ),
             "eplan_sql": os.getenv(
                 "EPLAN_SQL_MCP_URL", "http://eplan-sql-service:8044/mcp"
-            ),
-            "tech_kb": os.getenv(
-                # 2026-05: tech-kb-service was deleted; the technical
-                # knowledge repo now lives in GitLab and is searchable
-                # via gitlab-mcp.search_technical_knowledge. Default empty.
-                "TECH_KB_MCP_URL", ""
             ),
             # documents-rag and graph-rag MCP endpoints land in commits 2 + 3
             # of this batch — adding the env names now so the upgrade is

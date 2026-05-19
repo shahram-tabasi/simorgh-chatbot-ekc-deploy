@@ -29,23 +29,20 @@ from models.project_models import (
     ShellCommandRequest, ShellCommandResponse,
     GitCommitRequest, AgentState,
     ProjectStatus, TaskStatus, MessageChannel, TaskTrigger,
-    ProjectSourcesPrecheckRequest, ProjectSourcePrecheckResult,
-    ProjectSourcesPrecheckResponse,
 )
 import os
 import httpx
 
 # External-source gateway URLs (per EXTERNAL_GATEWAY_POLICY.md). The agent
 # never connects to the underlying systems directly — it goes through these.
-TECHSERVER_URL  = os.getenv("TECHSERVER_URL",      "http://techserver-service:8043")
-TPMS_FETCHER_URL = os.getenv("TPMS_FETCHER_URL",   "http://tpms-fetcher:8021")
-TECH_KB_URL     = os.getenv("TECH_KB_URL",         "http://tech-kb-service:8046")
-# shell-service runs on .69 (separate physical machine). Used for the
-# project workspace lifecycle: /workspace/init on create, and
-# /workspace/archive on delete (soft-archive — moves to projects-archived/).
-SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
-SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
-PROJECT_INIT_URL    = os.getenv("PROJECT_INIT_URL",    "http://project-init:8022")
+# The 2026-05 enterprise migration consolidated the old techserver-service,
+# tech-kb-service and 192.168.1.69 shell-service into:
+#   • gitlab-mcp        — all GitLab repo I/O (incl. EKC technical-knowledge)
+#   • runtime-broker    — per-project shell-runtime containers
+#   • project-init      — orchestrator of the create-project flow
+#   • tpms-fetcher      — sole MySQL gateway to TPMS
+TPMS_FETCHER_URL  = os.getenv("TPMS_FETCHER_URL",  "http://tpms-fetcher:8021")
+PROJECT_INIT_URL  = os.getenv("PROJECT_INIT_URL",  "http://project-init:8022")
 
 # Restrictions file (admin-managed). Read on every turn (mtime-cached
 # inside the agent) and prepended to the system prompt as hard
@@ -76,75 +73,12 @@ router = APIRouter(prefix="/api/v2/agent", tags=["Project Agent"])
 
 
 # ---------------------------------------------------------------------------
-# Source precheck — frontend dialog asks "is each source actually reachable
-# right now" before locking in the project's source list. Each branch hits
-# the relevant gateway's /health/deep (cheap probe) and reports back.
+# Source precheck used to live here, hitting techserver-service /
+# tech-kb-service / shell-service. All three were retired in 2026-05.
+# The new wizard validates per-source inline (gitlab via gitlab-mcp,
+# tpms/techserver via tpms-fetcher /projects/{oenum}/check-access, ekc
+# via gitlab-mcp on the technical-knowledge repo, upload always-on).
 # ---------------------------------------------------------------------------
-async def _probe_source(source: str, *, tpms_oenum: Optional[str]) -> ProjectSourcePrecheckResult:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            if source == "techserver":
-                r = await c.get(f"{TECHSERVER_URL}/health/deep")
-                ok = r.status_code == 200 and r.json().get("status") == "healthy"
-                return ProjectSourcePrecheckResult(
-                    source=source, ok=ok,
-                    detail=None if ok else r.text[:200],
-                )
-
-            if source == "tpms":
-                # Health probe is cheap; the actual oenum existence check is
-                # also worthwhile since a typo would make later import fail.
-                r = await c.get(f"{TPMS_FETCHER_URL}/health")
-                if r.status_code != 200:
-                    return ProjectSourcePrecheckResult(
-                        source=source, ok=False, detail=r.text[:200],
-                    )
-                if tpms_oenum:
-                    # Optional: ask tpms-fetcher whether the oenum exists.
-                    r2 = await c.get(f"{TPMS_FETCHER_URL}/projects/{tpms_oenum}/exists")
-                    if r2.status_code == 200 and r2.json().get("exists"):
-                        return ProjectSourcePrecheckResult(source=source, ok=True)
-                    if r2.status_code == 404 or r2.status_code == 200:
-                        return ProjectSourcePrecheckResult(
-                            source=source, ok=False,
-                            detail=f"OE-number {tpms_oenum} not found in TPMS",
-                        )
-                    # Endpoint not implemented yet — fall back to health-only.
-                return ProjectSourcePrecheckResult(source=source, ok=True)
-
-            if source == "tech_knowledge":
-                r = await c.get(f"{TECH_KB_URL}/health/deep")
-                ok = r.status_code == 200 and r.json().get("status") == "healthy"
-                return ProjectSourcePrecheckResult(
-                    source=source, ok=ok,
-                    detail=None if ok else r.text[:200],
-                )
-
-            return ProjectSourcePrecheckResult(
-                source=source, ok=False, detail="unknown source",
-            )
-    except httpx.HTTPError as e:
-        return ProjectSourcePrecheckResult(source=source, ok=False, detail=str(e)[:200])
-
-
-@router.post("/projects/precheck-sources", response_model=ProjectSourcesPrecheckResponse)
-async def precheck_sources(
-    req: ProjectSourcesPrecheckRequest,
-    auth_user: dict = Depends(require_role(*PROJECT_CREATE_ALLOWED_ROLES)),
-):
-    """
-    Probe the selected external sources before locking in project creation.
-
-    Frontend opens a dialog with three checkboxes (techserver, tpms,
-    tech_knowledge); whenever one is ticked, it POSTs the current set
-    here and renders a green check / red cross per source based on the
-    `ok` boolean in the response. The actual project creation then
-    POSTs only the green-checked sources in ProjectCreate.sources.
-    """
-    results = []
-    for source in req.sources:
-        results.append(await _probe_source(source, tpms_oenum=req.tpms_oenum))
-    return ProjectSourcesPrecheckResponse(results=results)
 
 
 # ---------------------------------------------------------------------------
@@ -241,25 +175,20 @@ async def create_project(
     # explicitly ticked the tpms/techserver sources — that's enforced below
     # against `sources_enabled` rather than as a blanket precondition.
 
-    # Normalise sources: accept either the legacy list-of-strings form or
-    # the new SourcesEnabled object from the wizard.
+    # Resolve sources to the canonical SourcesEnabled form. The wizard
+    # always sends one directly; clients that still send a bare list of
+    # strings are coerced to the new shape.
     from models.project_models import SourcesEnabled
     if isinstance(data.sources, SourcesEnabled):
-        _wizard_flow = True
         sources_enabled = data.sources.model_dump()
-        legacy_sources_list = [k for k in ("tpms", "techserver")
-                               if sources_enabled.get(k)]
-        if sources_enabled.get("ekc"):
-            legacy_sources_list.append("tech_knowledge")
     else:
-        _wizard_flow = False
-        legacy_sources_list = list(data.sources or [])
+        legacy_list = list(data.sources or [])
         sources_enabled = {
             "gitlab": bool(data.gitlab_repo_path),
-            "tpms": "tpms" in legacy_sources_list,
-            "techserver": "techserver" in legacy_sources_list,
+            "tpms": "tpms" in legacy_list,
+            "techserver": "techserver" in legacy_list,
             "techserver_oenum": data.tpms_oenum,
-            "ekc": "tech_knowledge" in legacy_sources_list,
+            "ekc": "tech_knowledge" in legacy_list,
             "upload": True,
         }
 
@@ -296,49 +225,11 @@ async def create_project(
             raise HTTPException(status_code=500, detail="Failed to create project")
 
         project_id = str(project["id"])
+        init_result: Dict[str, Any] = {}
 
-        # Step 1 — legacy workspace init on .69 (shell-service). The
-        # 2026-05 enterprise migration replaced this with a GitLab repo
-        # (created via gitlab-mcp) + runtime-broker for ephemeral exec.
-        # Leaving the call in place behind a feature flag so a future
-        # re-enable of shell-service for hybrid setups still works; the
-        # default behaviour now is to skip it gracefully.
-        init_result: Dict[str, Any] = {"workspace": None, "sources": {}}
-        if os.getenv("SHELL_SERVICE_ENABLED", "false").lower() in ("1", "true", "yes"):
-            try:
-                async with httpx.AsyncClient(timeout=60.0) as c:
-                    headers = (
-                        {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
-                        if SHELL_SERVICE_TOKEN else {}
-                    )
-                    r = await c.post(
-                        f"{SHELL_SERVICE_URL}/workspace/init",
-                        headers=headers,
-                        json={
-                            "project_id":   project_id,
-                            "project_name": data.name,
-                            "sources":      data.sources,
-                        },
-                    )
-                    if r.status_code != 200:
-                        logger.warning(
-                            "shell-service /workspace/init returned %s (continuing): %s",
-                            r.status_code, r.text[:200],
-                        )
-                    else:
-                        init_result["workspace"] = r.json()
-            except httpx.HTTPError as e:
-                logger.warning("shell-service unreachable (continuing): %s", e)
-        else:
-            logger.info(
-                "shell-service disabled (SHELL_SERVICE_ENABLED=false); "
-                "workspace is created in GitLab via gitlab-mcp instead.",
-            )
-
-        # Step 2 — legacy agent-side init (TPMS sync to PostgreSQL slice,
-        # techserver project linking in `projects` table, etc.). The
-        # filesystem mkdir part of this is now redundant with /workspace/init
-        # but the DB-side bookkeeping it does is still needed.
+        # Step 1 — agent-side bookkeeping (TPMS slice sync, project linking
+        # in the in-memory agent state). Filesystem work that used to live
+        # here moved to project-init-service in 2026-05.
         try:
             agent_init = await agent.initialize_project(
                 project_id, data.name, current_user,
@@ -346,107 +237,50 @@ async def create_project(
                 is_legacy=is_legacy,
             )
             init_result["agent"] = agent_init
-            logger.info(f"agent.initialize_project: {project_id}, results: {agent_init}")
+            logger.info("agent.initialize_project: %s, results: %s",
+                        project_id, agent_init)
         except Exception as e:
             logger.exception("agent.initialize_project failed (continuing): %s", e)
             init_result["agent"] = {"ok": False, "error": str(e)[:300]}
 
-        # Step 2b — kick off project-init-service for the new wizard flow.
-        # This orchestrates: start session container, optional gitlab repo
+        # Step 2 — kick off project-init-service. This is the sole
+        # orchestrator now: start session container, optional gitlab repo
         # clone + simorgh/<hex> branch, optional TPMS pull, optional
         # techserver SMB copy, optional EKC clone, uploads/ dir, then the
-        # two-phase explorer. Runs in background; status is pollable.
-        if _wizard_flow:
-            try:
-                init_payload: Dict[str, Any] = {
-                    "project_id": project_id,
-                    "project_name": data.name,
-                    "owner_id": current_user,
-                    "gitlab_repo_path": data.gitlab_repo_path,
-                    "gitlab_repo_url": data.gitlab_repo_url,
-                    "gitlab_base_branch": data.gitlab_base_branch,
-                    "sources": sources_enabled,
-                    "oenum": (data.tpms_oenum
-                              or sources_enabled.get("techserver_oenum")),
-                }
-                # Forward TPMS credentials only when a TPMS-backed source
-                # is ticked. The wizard only collects them in that case.
-                if data.tpms_auth and (
-                    sources_enabled.get("tpms") or sources_enabled.get("techserver")
-                ):
-                    init_payload["tpms_auth"] = {
-                        "user": data.tpms_auth.user,
-                        "pass": data.tpms_auth.password,
-                    }
-                async with httpx.AsyncClient(timeout=30.0) as c:
-                    r = await c.post(f"{PROJECT_INIT_URL}/init", json=init_payload)
-                    init_result["project_init"] = (
-                        r.json() if r.status_code == 200
-                        else {"ok": False, "error": r.text[:300]}
-                    )
-            except httpx.HTTPError as e:
-                logger.warning("project-init unreachable: %s", e)
-                init_result["project_init"] = {"ok": False, "error": str(e)[:200]}
+        # two-phase explorer. Runs in background; status is pollable via
+        # GET {PROJECT_INIT_URL}/status/{init_id}.
+        init_payload: Dict[str, Any] = {
+            "project_id":         project_id,
+            "project_name":       data.name,
+            "owner_id":           current_user,
+            "gitlab_repo_path":   data.gitlab_repo_path,
+            "gitlab_repo_url":    data.gitlab_repo_url,
+            "gitlab_base_branch": data.gitlab_base_branch,
+            "sources":            sources_enabled,
+            "oenum":              (data.tpms_oenum
+                                   or sources_enabled.get("techserver_oenum")),
+        }
+        # Forward TPMS credentials only when a TPMS-backed source is
+        # ticked. The wizard only collects them in that case.
+        if data.tpms_auth and (
+            sources_enabled.get("tpms") or sources_enabled.get("techserver")
+        ):
+            init_payload["tpms_auth"] = {
+                "user": data.tpms_auth.user,
+                "pass": data.tpms_auth.password,
+            }
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as c:
+                r = await c.post(f"{PROJECT_INIT_URL}/init", json=init_payload)
+                init_result["project_init"] = (
+                    r.json() if r.status_code == 200
+                    else {"ok": False, "error": r.text[:300]}
+                )
+        except httpx.HTTPError as e:
+            logger.warning("project-init unreachable: %s", e)
+            init_result["project_init"] = {"ok": False, "error": str(e)[:200]}
 
-        # Step 3 — per-source population (legacy callers only — the new
-        # wizard flow above handles all sources via project-init-service).
-        # Each `_wizard_flow` guard short-circuits the legacy populator when
-        # the wizard already enqueued the same work via project-init.
-        sources_status: Dict[str, Any] = {}
-        async with httpx.AsyncClient(timeout=600.0) as c:
-            if (not _wizard_flow) and "techserver" in legacy_sources_list:
-                if not data.tpms_oenum:
-                    sources_status["techserver"] = {
-                        "ok": False, "detail": "techserver source needs tpms_oenum",
-                    }
-                else:
-                    try:
-                        r = await c.post(
-                            f"{TECHSERVER_URL}/clone-to-shell",
-                            json={"project_id": project_id,
-                                  "oenum":      data.tpms_oenum,
-                                  "subdir":     "techserver"},
-                        )
-                        sources_status["techserver"] = {
-                            "ok": r.status_code == 200,
-                            "detail": (r.json() if r.status_code == 200 else r.text[:300]),
-                        }
-                    except Exception as e:
-                        sources_status["techserver"] = {"ok": False, "detail": str(e)[:200]}
-
-            if (not _wizard_flow) and "tpms" in legacy_sources_list:
-                if not data.tpms_oenum:
-                    sources_status["tpms"] = {
-                        "ok": False, "detail": "tpms source needs tpms_oenum",
-                    }
-                else:
-                    try:
-                        r = await c.post(
-                            f"{TPMS_FETCHER_URL}/projects/{data.tpms_oenum}/import",
-                            json={"project_id": project_id, "subdir": "tpms"},
-                        )
-                        sources_status["tpms"] = {
-                            "ok": r.status_code in (200, 202),
-                            "detail": (r.json() if r.status_code in (200, 202) else r.text[:300]),
-                        }
-                    except Exception as e:
-                        sources_status["tpms"] = {"ok": False, "detail": str(e)[:200]}
-
-            if (not _wizard_flow) and "tech_knowledge" in legacy_sources_list:
-                try:
-                    r = await c.post(
-                        f"{TECH_KB_URL}/snapshot-to-shell",
-                        json={"project_id": project_id, "subdir": "tech-knowledge"},
-                    )
-                    sources_status["tech_knowledge"] = {
-                        "ok": r.status_code == 200,
-                        "detail": (r.json() if r.status_code == 200 else r.text[:300]),
-                    }
-                except Exception as e:
-                    sources_status["tech_knowledge"] = {"ok": False, "detail": str(e)[:200]}
-
-        init_result["sources"] = sources_status
-        logger.info("Project %s sources: %s", project_id, sources_status)
+        logger.info("Project %s init queued: %s", project_id, init_result)
 
         return ProjectResponse(
             id=project["id"],
@@ -604,29 +438,11 @@ async def delete_project(
     if project["owner_id"] != current_user:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Clean up all layers (PostgreSQL slice, Qdrant, Redis, etc.)
+    # Clean up all layers (PostgreSQL slice, Qdrant, Redis, etc.).
+    # Container teardown is handled by the chat-service cascade-delete
+    # route when the user removes a project chat session — see
+    # routes/project_chat_session.py.
     results = await memory.cleanup_project(project_id)
-
-    # Soft-archive the on-disk workspace on .69 instead of hard-deleting.
-    # POST /workspace/archive moves ~/projects/<id>/ to
-    # ~/projects-archived/<id>.<UTC-timestamp>/, recoverable with `mv`.
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as c:
-            headers = (
-                {"Authorization": f"Bearer {SHELL_SERVICE_TOKEN}"}
-                if SHELL_SERVICE_TOKEN else {}
-            )
-            r = await c.post(
-                f"{SHELL_SERVICE_URL}/workspace/archive",
-                headers=headers,
-                json={"project_id": project_id},
-            )
-            results["shell"] = (
-                r.json() if r.status_code == 200
-                else {"ok": False, "status": r.status_code, "body": r.text[:300]}
-            )
-    except Exception as e:
-        results["shell"] = {"ok": False, "error": str(e)[:200]}
 
     return {"status": "deleted", "project_id": project_id, "details": results}
 

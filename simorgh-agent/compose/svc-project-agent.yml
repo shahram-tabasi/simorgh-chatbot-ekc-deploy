@@ -67,11 +67,15 @@ services:
       - SPECIFICATION_AGENT_MCP_URL=http://specification-agent-service:8036/mcp
       - HR_KB_MCP_URL=http://hr-kb-service:8041/mcp
       - ORG_DATA_MCP_URL=http://org-data-service:8042/mcp
-      - TECHSERVER_MCP_URL=http://techserver-service:8043/mcp
       - EPLAN_SQL_MCP_URL=http://eplan-sql-service:8044/mcp
-      - TECH_KB_MCP_URL=http://tech-kb-service:8046/mcp
       - DOCUMENTS_RAG_MCP_URL=http://documents-rag-service:8033/mcp
       - GRAPH_RAG_MCP_URL=http://graph-rag-service:8037/mcp
+      # 2026-05 enterprise migration — new MCP surfaces consumed by CoT.
+      - GITLAB_MCP_URL_MCP=http://gitlab-mcp:8047/mcp
+      - RUNTIME_BROKER_MCP_URL=http://runtime-broker:8048/mcp
+      - PROJECT_EXPLORER_MCP_URL=http://project-explorer:8052/mcp
+      - TPMS_CONTEXT_MCP_URL=http://tpms-context-agent:8050/mcp
+      - CONTEXT_SEARCH_MCP_URL=http://context-search:8049/mcp
       # MySQL TPMS (legacy)
       - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
       - MYSQL_PORT=${MYSQL_PORT:-3306}
