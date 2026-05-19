@@ -897,6 +897,28 @@ export function useProjects(userId?: string) {
           ?.chats.find(c => c.id === activeChatId)
       : generalChats.find(c => c.id === activeChatId);
 
+  // Prepend a synthetic chat row for a project chat session that was
+  // just created via the wizard or arrived through the deep-link
+  // resolver, so the user sees it in the sidebar before the next
+  // background project-list refresh catches up.
+  const ensureSessionChat = (projectId: string, sessionToken: string,
+                             title: string) => {
+    setProjects(prev =>
+      prev.map(p => {
+        if (p.id !== projectId) return p;
+        if (p.chats.some(c => c.id === sessionToken)) return p;
+        const synthetic = {
+          id: sessionToken,
+          title: title || 'New session',
+          messages: [],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as any;
+        return { ...p, chats: [synthetic, ...p.chats] };
+      })
+    );
+  };
+
   return {
     projects,
     generalChats,
@@ -916,6 +938,7 @@ export function useProjects(userId?: string) {
     deleteProject,
     toggleProject,
     toggleGeneralChats,
-    selectChat
+    selectChat,
+    ensureSessionChat,
   };
 }

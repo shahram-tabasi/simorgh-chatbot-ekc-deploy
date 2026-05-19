@@ -80,7 +80,8 @@ function MainChat() {
     deleteProject,
     toggleProject,
     toggleGeneralChats,
-    selectChat
+    selectChat,
+    ensureSessionChat,
   } = useProjects(userId);
 
   // Get projectNumber for chat
@@ -241,6 +242,8 @@ function MainChat() {
       try {
         const s = JSON.parse(pending);
         if (s.session_token === sessionToken) {
+          // Inject a synthetic chat row so the sidebar shows it immediately.
+          ensureSessionChat(projectId, sessionToken, s.title || 'New session');
           selectChat(projectId, sessionToken);
           sessionStorage.removeItem('simorgh_pending_session');
           // Strip the query string so back/forward stay clean.
@@ -248,7 +251,7 @@ function MainChat() {
         }
       } catch {}
     }
-  }, [selectChat]);
+  }, [selectChat, ensureSessionChat]);
 
   // Handle chat selection from history - close left sidebar on mobile
   const handleSelectChatFromHistory = React.useCallback((projectId: string | null, chatId: string) => {

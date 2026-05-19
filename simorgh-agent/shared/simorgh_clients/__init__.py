@@ -12,10 +12,12 @@
 """
 from .runtime_broker import RuntimeBrokerClient, get_runtime_broker
 from .gitlab_mcp     import GitlabMCPClient, get_gitlab_mcp
+from .container_mirror import mirror_message, destroy_session_container
 from . import context_search
 
 __all__ = [
     "RuntimeBrokerClient", "get_runtime_broker",
     "GitlabMCPClient", "get_gitlab_mcp",
+    "mirror_message", "destroy_session_container",
     "context_search",
 ]

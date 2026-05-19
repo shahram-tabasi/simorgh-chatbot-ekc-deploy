@@ -49,10 +49,25 @@ def health():
     return {"status": "ok", "service": "tpms-context-agent"}
 
 
+class TpmsAuth(BaseModel):
+    user: str
+    password: str = Field(..., alias="pass")
+
+    class Config:
+        populate_by_name = True
+
+
 class ContextRequest(BaseModel):
     oenum: str = Field(..., min_length=1)
     sections: list[str] | None = None
     refresh: bool = False
+    # Per-user TPMS credentials, forwarded from the wizard when the user
+    # ticked tpms / techserver. Reserved for future per-OE entitlement
+    # enforcement against the technical_users table. Today it is accepted
+    # and threaded through to /fetch but not yet used as a gate — when
+    # the entitlement endpoint lands in tpms-fetcher this becomes the
+    # auth check point.
+    auth: TpmsAuth | None = None
 
 
 class ContextResponse(BaseModel):
