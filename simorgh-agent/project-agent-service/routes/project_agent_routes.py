@@ -45,6 +45,7 @@ TECH_KB_URL     = os.getenv("TECH_KB_URL",         "http://tech-kb-service:8046"
 # /workspace/archive on delete (soft-archive — moves to projects-archived/).
 SHELL_SERVICE_URL   = os.getenv("SHELL_SERVICE_URL",   "http://192.168.1.69:8010")
 SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
+PROJECT_INIT_URL    = os.getenv("PROJECT_INIT_URL",    "http://project-init:8022")
 
 # Restrictions file (admin-managed). Read on every turn (mtime-cached
 # inside the agent) and prepended to the system prompt as hard
@@ -234,12 +235,41 @@ async def create_project(
             detail="Modern users cannot link TPMS projects. Create a project by name."
         )
 
-    # Legacy users must provide TPMS OENUM
-    if is_legacy and not data.tpms_oenum:
-        raise HTTPException(
-            status_code=400,
-            detail="Legacy users must provide a TPMS OENUM to create a project."
-        )
+    # The 2026-05 per-project container flow allows legacy users to create
+    # projects without a TPMS oenum (they can pick a GitLab repo or use the
+    # upload-only fallback). TPMS oenum is only required if the wizard
+    # explicitly ticked the tpms/techserver sources — that's enforced below
+    # against `sources_enabled` rather than as a blanket precondition.
+
+    # Normalise sources: accept either the legacy list-of-strings form or
+    # the new SourcesEnabled object from the wizard.
+    from models.project_models import SourcesEnabled
+    if isinstance(data.sources, SourcesEnabled):
+        _wizard_flow = True
+        sources_enabled = data.sources.model_dump()
+        legacy_sources_list = [k for k in ("tpms", "techserver")
+                               if sources_enabled.get(k)]
+        if sources_enabled.get("ekc"):
+            legacy_sources_list.append("tech_knowledge")
+    else:
+        _wizard_flow = False
+        legacy_sources_list = list(data.sources or [])
+        sources_enabled = {
+            "gitlab": bool(data.gitlab_repo_path),
+            "tpms": "tpms" in legacy_sources_list,
+            "techserver": "techserver" in legacy_sources_list,
+            "techserver_oenum": data.tpms_oenum,
+            "ekc": "tech_knowledge" in legacy_sources_list,
+            "upload": True,
+        }
+
+    # If tpms/techserver are enabled, an OE number is required.
+    if sources_enabled.get("tpms") or sources_enabled.get("techserver"):
+        if not (sources_enabled.get("techserver_oenum") or data.tpms_oenum):
+            raise HTTPException(
+                status_code=400,
+                detail="TPMS / techserver sources need an OE number.",
+            )
 
     # Enforce LLM mode: modern users always use online AI
     agent_model = data.agent_model or "gpt-4o"
@@ -252,9 +282,14 @@ async def create_project(
             owner_id=current_user,
             name=data.name,
             description=data.description,
-            tpms_oenum=data.tpms_oenum if is_legacy else None,
+            tpms_oenum=(data.tpms_oenum
+                        or sources_enabled.get("techserver_oenum")) if is_legacy else None,
             agent_model=agent_model,
             metadata={**(data.metadata or {}), "is_legacy": is_legacy},
+            gitlab_repo_path=data.gitlab_repo_path,
+            gitlab_repo_url=data.gitlab_repo_url,
+            gitlab_base_branch=data.gitlab_base_branch,
+            sources_enabled=sources_enabled,
         )
 
         if not project:
@@ -316,13 +351,43 @@ async def create_project(
             logger.exception("agent.initialize_project failed (continuing): %s", e)
             init_result["agent"] = {"ok": False, "error": str(e)[:300]}
 
-        # Step 3 — per-source population. Each populator pushes its result
-        # straight to shell-service /workspace/upload-tarball so the data
-        # lands in the right subdir. Failures are non-fatal — recorded per
-        # source; retry endpoints can re-run any one of these later.
+        # Step 2b — kick off project-init-service for the new wizard flow.
+        # This orchestrates: start session container, optional gitlab repo
+        # clone + simorgh/<hex> branch, optional TPMS pull, optional
+        # techserver SMB copy, optional EKC clone, uploads/ dir, then the
+        # two-phase explorer. Runs in background; status is pollable.
+        if _wizard_flow:
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as c:
+                    r = await c.post(
+                        f"{PROJECT_INIT_URL}/init",
+                        json={
+                            "project_id": project_id,
+                            "project_name": data.name,
+                            "owner_id": current_user,
+                            "gitlab_repo_path": data.gitlab_repo_path,
+                            "gitlab_repo_url": data.gitlab_repo_url,
+                            "gitlab_base_branch": data.gitlab_base_branch,
+                            "sources": sources_enabled,
+                            "oenum": (data.tpms_oenum
+                                      or sources_enabled.get("techserver_oenum")),
+                        },
+                    )
+                    init_result["project_init"] = (
+                        r.json() if r.status_code == 200
+                        else {"ok": False, "error": r.text[:300]}
+                    )
+            except httpx.HTTPError as e:
+                logger.warning("project-init unreachable: %s", e)
+                init_result["project_init"] = {"ok": False, "error": str(e)[:200]}
+
+        # Step 3 — per-source population (legacy callers only — the new
+        # wizard flow above handles all sources via project-init-service).
+        # Each `_wizard_flow` guard short-circuits the legacy populator when
+        # the wizard already enqueued the same work via project-init.
         sources_status: Dict[str, Any] = {}
         async with httpx.AsyncClient(timeout=600.0) as c:
-            if "techserver" in data.sources:
+            if (not _wizard_flow) and "techserver" in legacy_sources_list:
                 if not data.tpms_oenum:
                     sources_status["techserver"] = {
                         "ok": False, "detail": "techserver source needs tpms_oenum",
@@ -342,7 +407,7 @@ async def create_project(
                     except Exception as e:
                         sources_status["techserver"] = {"ok": False, "detail": str(e)[:200]}
 
-            if "tpms" in data.sources:
+            if (not _wizard_flow) and "tpms" in legacy_sources_list:
                 if not data.tpms_oenum:
                     sources_status["tpms"] = {
                         "ok": False, "detail": "tpms source needs tpms_oenum",
@@ -360,7 +425,7 @@ async def create_project(
                     except Exception as e:
                         sources_status["tpms"] = {"ok": False, "detail": str(e)[:200]}
 
-            if "tech_knowledge" in data.sources:
+            if (not _wizard_flow) and "tech_knowledge" in legacy_sources_list:
                 try:
                     r = await c.post(
                         f"{TECH_KB_URL}/snapshot-to-shell",

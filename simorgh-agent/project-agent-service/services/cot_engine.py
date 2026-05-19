@@ -346,10 +346,34 @@ class COTEngine:
         else:
             mcp_tools = _FALLBACK_MCP_TOOLS
 
-        # Inject EKC knowledge context if available
-        ekc_knowledge_str = project_context.get("ekc_knowledge", "")
-        if ekc_knowledge_str:
-            context_parts.append(f"\nEKC Knowledge Base:\n{ekc_knowledge_str[:3000]}")
+        # Inject EKC knowledge context only if the project ticked the EKC
+        # source at creation time. Without that flag the project is
+        # grounded by the user's own GitLab repo + uploads only — we must
+        # NOT leak EKC-derived electrical-domain priors into the prompt.
+        # sources_enabled may live at the top level (when callers spread
+        # the project dict) or nested under `project` (build_agent_context).
+        sources_enabled = (
+            project_context.get("sources_enabled")
+            or (project_context.get("project") or {}).get("sources_enabled")
+            or {}
+        )
+        # Legacy projects predating the wizard have no sources_enabled at
+        # all — default to "EKC on" for backward compatibility.
+        ekc_allowed = (not sources_enabled) or bool(sources_enabled.get("ekc"))
+        if ekc_allowed:
+            ekc_knowledge_str = project_context.get("ekc_knowledge", "")
+            if ekc_knowledge_str:
+                context_parts.append(
+                    f"\nEKC Knowledge Base:\n{ekc_knowledge_str[:3000]}"
+                )
+        else:
+            context_parts.append(
+                "\nGrounding scope: USER REPO ONLY. The user did not tick "
+                "ekc-technical-knowledge for this project, so do NOT use "
+                "gitlab_mcp.search_technical_knowledge or any EKC-derived "
+                "electrical-domain assumptions. Answer strictly from the "
+                "user's selected GitLab repository and uploaded documents."
+            )
 
         # Build messages for LLM
         tpms_instructions = get_tpms_instructions()

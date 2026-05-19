@@ -104,20 +104,36 @@ class ProjectMemoryService:
     async def create_project(self, owner_id: str, name: str,
                              description: str = None, tpms_oenum: str = None,
                              agent_model: str = "gpt-4o",
-                             metadata: Dict = None) -> Dict[str, Any]:
-        """Create a new project in PostgreSQL."""
+                             metadata: Dict = None,
+                             gitlab_repo_path: str = None,
+                             gitlab_repo_url: str = None,
+                             gitlab_base_branch: str = None,
+                             sources_enabled: Dict = None) -> Dict[str, Any]:
+        """Create a new project in PostgreSQL.
+
+        Extra fields land in the migration-004 columns; older callers that
+        don't pass them get NULL/`{}` defaults.
+        """
         project_id = str(uuid.uuid4())
         query = """
-            INSERT INTO projects (id, owner_id, name, description, tpms_oenum,
-                                  agent_model, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO projects (
+                id, owner_id, name, description, tpms_oenum,
+                agent_model, metadata,
+                gitlab_repo_path, gitlab_repo_url, gitlab_base_branch,
+                sources_enabled
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
             RETURNING id, owner_id, name, description, tpms_oenum, status,
                       agent_enabled, agent_model, git_repo_initialized,
+                      gitlab_repo_path, gitlab_repo_url, gitlab_base_branch,
+                      simorgh_branch, sources_enabled,
                       metadata, created_at, updated_at
         """
         result = await self.pg.execute_one_async(
             query, project_id, owner_id, name, description, tpms_oenum,
-            agent_model, json.dumps(metadata or {})
+            agent_model, json.dumps(metadata or {}),
+            gitlab_repo_path, gitlab_repo_url, gitlab_base_branch,
+            json.dumps(sources_enabled or {}),
         )
         return dict(result) if result else None
 
@@ -320,7 +336,13 @@ class ProjectMemoryService:
     async def store_message(self, project_id: str, role: str, content: str,
                             channel: str = "chat", chat_id: str = None,
                             task_id: str = None, **kwargs) -> Dict:
-        """Store a project message."""
+        """Store a project message.
+
+        Write-through: after the Postgres insert succeeds, mirror the
+        message into the project's runtime-broker session container under
+        /work/.simorgh/messages.jsonl. Mirror failures are logged but never
+        raised — Postgres remains the source of truth.
+        """
         # Strip null bytes that cause PostgreSQL CharacterNotInRepertoireError
         if content:
             content = content.replace('\x00', '')
@@ -340,6 +362,16 @@ class ProjectMemoryService:
             kwargs.get('document_id'), kwargs.get('document_filename'),
             json.dumps(kwargs.get('metadata', {})),
         )
+        # Mirror into the project's session container — best-effort, async.
+        if result:
+            try:
+                from services.container_mirror import mirror_message
+                await mirror_message(project_id, role, content,
+                                     session_token=chat_id,
+                                     metadata=kwargs.get('metadata'))
+            except Exception:
+                # Never let mirror failure break message persistence.
+                pass
         return dict(result) if result else None
 
     async def get_messages(self, project_id: str, channel: str = None,

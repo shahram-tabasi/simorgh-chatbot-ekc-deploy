@@ -86,6 +86,24 @@ class DocumentProcessingStatus(str, Enum):
 # PROJECT MODELS
 # =============================================================================
 
+class SourcesEnabled(BaseModel):
+    """Source flags ticked by the user in the create-project wizard."""
+    gitlab: bool = False
+    tpms: bool = False
+    techserver: bool = False
+    techserver_oenum: Optional[str] = None
+    ekc: bool = False
+    upload: bool = True
+
+
+class TpmsAuth(BaseModel):
+    user: str
+    password: str = Field(..., alias="pass")
+
+    class Config:
+        populate_by_name = True
+
+
 class ProjectCreate(BaseModel):
     """Request to create a new project (modern users: name only)."""
     name: str = Field(..., min_length=1, max_length=255, description="Project name")
@@ -97,8 +115,13 @@ class ProjectCreate(BaseModel):
     # Valid values today: "techserver", "tpms", "tech_knowledge".
     # Frontend collects these from the precheck dialog (only the ones
     # whose probe came back green should be passed in).
-    sources: List[str] = Field(default_factory=list,
+    sources: List[str] | SourcesEnabled = Field(default_factory=list,
                                description="External sources enabled for this project")
+    # New wizard fields (2026-05 per-project container flow):
+    gitlab_repo_path: Optional[str] = Field(None, description="'group/repo' user picked")
+    gitlab_repo_url: Optional[str] = Field(None, description="clone URL for the user's repo")
+    gitlab_base_branch: Optional[str] = Field(None, description="branch to fork simorgh/<hex> from")
+    tpms_auth: Optional[TpmsAuth] = Field(None, description="only when tpms/techserver ticked")
 
 
 class ProjectSourcesPrecheckRequest(BaseModel):

@@ -228,6 +228,28 @@ function MainChat() {
     }
   }, [selectChat, rightSidebar]);
 
+  // Auto-open a session when arriving via /chatbot/project/session_<token>.
+  // The deep-link page stashes the resolved session in sessionStorage and
+  // navigates here with ?project=...&session=... in the query string.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get('project');
+    const sessionToken = params.get('session');
+    if (!projectId || !sessionToken) return;
+    const pending = sessionStorage.getItem('simorgh_pending_session');
+    if (pending) {
+      try {
+        const s = JSON.parse(pending);
+        if (s.session_token === sessionToken) {
+          selectChat(projectId, sessionToken);
+          sessionStorage.removeItem('simorgh_pending_session');
+          // Strip the query string so back/forward stay clean.
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      } catch {}
+    }
+  }, [selectChat]);
+
   // Handle chat selection from history - close left sidebar on mobile
   const handleSelectChatFromHistory = React.useCallback((projectId: string | null, chatId: string) => {
     selectChat(projectId, chatId);

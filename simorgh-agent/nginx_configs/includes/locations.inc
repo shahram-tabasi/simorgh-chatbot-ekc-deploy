@@ -216,6 +216,22 @@ location /api/v2/agent/ {
     proxy_read_timeout 600s;
 }
 
+# GitLab MCP gateway (gitlab-mcp:8047) — exposes the user-repo / branch
+# pickers and access-instructions endpoints used by the project wizard.
+# The path is rewritten so /api/gitlab/branches → /branches upstream.
+location /api/gitlab/ {
+    limit_req zone=api_limit burst=10 nodelay;
+    rewrite ^/api/gitlab/(.*)$ /$1 break;
+    proxy_pass http://gitlab_mcp_service;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_read_timeout 60s;
+}
+
 # Specification agent (specification-agent-service:8036, REST)
 location /api/v2/specs/ {
     limit_req zone=api_limit burst=30 nodelay;
