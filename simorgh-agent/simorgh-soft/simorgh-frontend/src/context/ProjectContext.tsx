@@ -1,12 +1,12 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
-import { ProjectData, TemplateItem, DeviceItem, Equipment } from '../types/project';
+import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy } from '../types/project';
 import { projectService } from '../services/projectService';
 
 interface ProjectContextType {
   projectData: ProjectData;
   updateProjectData: (data: Partial<ProjectData>) => void;
   saveProject: () => Promise<void>;
-  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string) => void;
+  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   deleteTemplate: (templateId: string) => void;
   addDevice: (device: Partial<DeviceItem>) => void;
@@ -128,21 +128,37 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     }
   };
 
-  const addTemplate = (type: 'LV' | 'MV' | 'HV', name: string) => {
-    const newTemplate: TemplateItem = {
-      id: `${type}-${Date.now()}`,
-      name,
-      type,
-      properties: {}
-    };
-    setProjectData(prev => ({
-      ...prev,
-      templates: {
-        ...prev.templates,
-        [type]: [...prev.templates[type], newTemplate]
-      },
-      changedOn: new Date().toISOString()
-    }));
+  const addTemplate = (
+    type: 'LV' | 'MV' | 'HV',
+    name: string,
+    hierarchy?: TemplateHierarchy,
+    copyFromId?: string,
+  ) => {
+    setProjectData(prev => {
+      // Optional clone of an existing template's properties (deep enough for
+      // our value tree). Used by the hierarchical wizard's "use as a starting
+      // point" flow.
+      let baseProps: Record<string, any> = {};
+      if (copyFromId) {
+        const source = prev.templates[type].find(t => t.id === copyFromId);
+        if (source) baseProps = JSON.parse(JSON.stringify(source.properties || {}));
+      }
+      const newTemplate: TemplateItem = {
+        id: `${type}-${Date.now()}`,
+        name,
+        type,
+        properties: baseProps,
+        ...(hierarchy ? { hierarchy } : {}),
+      };
+      return {
+        ...prev,
+        templates: {
+          ...prev.templates,
+          [type]: [...prev.templates[type], newTemplate],
+        },
+        changedOn: new Date().toISOString(),
+      };
+    });
   };
 
   const updateTemplate = (templateId: string, properties: Record<string, string>) => {
