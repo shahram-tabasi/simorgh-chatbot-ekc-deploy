@@ -978,8 +978,10 @@ function buildSystemPrompt(toolSchemas, context, excelPreviews) {
 
   const excelText = (Array.isArray(excelPreviews) && excelPreviews.length > 0)
     ? excelPreviews.map(p => {
-        const headers = p.rows[0] ? Object.keys(p.rows[0]) : [];
-        return `[Excel: ${p.name}] columns=${JSON.stringify(headers)}, rowCount=${p.rows.length}`;
+        const headers = (p.rows && p.rows[0]) ? Object.keys(p.rows[0]) : [];
+        const sample = (p.rows || []).slice(0, 3);
+        return `[Excel: ${p.name}] columns=${JSON.stringify(headers)}, rowCount=${(p.rows || []).length}\n` +
+               `  first rows: ${JSON.stringify(sample)}`;
       }).join('\n')
     : '(no spreadsheet attachments)';
 
@@ -988,20 +990,29 @@ function buildSystemPrompt(toolSchemas, context, excelPreviews) {
     'You both ANSWER questions and ACT on the running project by calling tools.',
     'The user may write in Persian, English, or a mix; reply in the same language as the user.',
     '',
-    'You MUST respond with a single JSON object — no prose outside it — of the form:',
-    '  {"reply": "<your answer>", "tool_calls": [ {"name": "<tool>", "args": { ... }}, ... ]}',
-    'If no action is needed, return an empty tool_calls array.',
+    'OUTPUT FORMAT (mandatory): your entire reply MUST be a SINGLE JSON object — nothing before it, nothing after it, no markdown fences, no <think> tags in the output. Shape:',
+    '  {"reply": "<short human answer>", "tool_calls": [ {"name": "<tool>", "args": { ... }}, ... ]}',
+    'If you don\'t need to act, return tool_calls: [].',
     '',
     'Rules:',
-    '  • Use only the tools listed below; do not invent tool names.',
-    '  • For row-level edits, prefer `bulk_update` over many `update_row` calls.',
-    '  • When the user attached an Excel file, you may call `apply_excel` with the parsed rows.',
-    '    The frontend already parsed each Excel attachment into JSON; you must use the EXACT column header names from the file as keys in `columnMapping`.',
-    '  • Reference columns by their internal field name (wiringType, ratingPower, flc, feederNo, busSection, tag, description, cableSize, sfdHfd, moduleNo, size, templateName).',
-    '  • Validate that the targeted equipment exists in the context before issuing an edit; if you are unsure, ask in `reply` and return tool_calls=[].',
-    '  • Never wrap the JSON in code fences. Return raw JSON only.',
+    '  • Only call tools listed in "Available tools" below — do not invent names.',
+    '  • For row-level edits affecting many rows, prefer a single `bulk_update` over many `update_row` calls.',
+    '  • Column field names you may reference: wiringType, ratingPower, flc, feederNo, busSection, tag, description, cableSize, sfdHfd, moduleNo, size, templateName.',
+    '  • Equipment is identified by `name` (case-insensitive). If the user doesn\'t name one, default to the active equipment from context.',
+    '  • If a row number is out of range or the equipment doesn\'t exist, return tool_calls: [] and explain in `reply`.',
+    '  • Excel previews below are already parsed. When applying them, use `apply_excel` and pass `excelRows` exactly as shown (full row array, not just preview) and `columnMapping` mapping the spreadsheet header → internal field name.',
     '',
-    '── Project context ──',
+    'Examples — STUDY THESE.',
+    'Example 1 (user: "row 3 feederNo to L03"):',
+    '  {"reply":"Set row #3 feederNo to L03.","tool_calls":[{"name":"update_row","args":{"rowNumber":3,"column":"feederNo","value":"L03"}}]}',
+    'Example 2 (user: "هرجا wiringType مساوی M3 است را M4 کن"):',
+    '  {"reply":"تمام ردیف‌هایی که wiringType=M3 دارند به M4 تغییر یافت.","tool_calls":[{"name":"bulk_update","args":{"where":{"column":"wiringType","equals":"M3"},"set":{"column":"wiringType","value":"M4"}}}]}',
+    'Example 3 (user: "what equipment do I have?"):',
+    '  {"reply":"You have 2 equipment: test (LV, 4 rows) and testmv (MV, 3 rows).","tool_calls":[]}',
+    'Example 4 (user: "row 100" but only 4 rows exist):',
+    '  {"reply":"Row 100 doesn\'t exist — the active equipment has only 4 rows. Want me to add one?","tool_calls":[]}',
+    '',
+    '── Project context (THE source of truth — read it before answering) ──',
     ctxText,
     '',
     '── Spreadsheet attachments ──',
@@ -1009,13 +1020,49 @@ function buildSystemPrompt(toolSchemas, context, excelPreviews) {
     '',
     '── Available tools ──',
     toolsBlock,
+    '',
+    'Now produce the single JSON object response.',
   ].join('\n');
 }
 
+// Strip out any <think>/<reasoning>/<analysis>/<plan>/<scratchpad> blocks that
+// gpt-oss-20b (and similar reasoning models) emit before the final answer.
+// Without this the JSON-envelope parser sees the thinking text first and
+// fails. The patterns mirror simorgh-agent/llm-gateway/output_parser.py so
+// behaviour stays consistent whether we go direct or through the gateway.
+function stripReasoning(content) {
+  if (typeof content !== 'string') return '';
+  const patterns = [
+    /<think>[\s\S]*?<\/think>/gi,
+    /<thinking>[\s\S]*?<\/thinking>/gi,
+    /<reasoning>[\s\S]*?<\/reasoning>/gi,
+    /<reason>[\s\S]*?<\/reason>/gi,
+    /<analysis>[\s\S]*?<\/analysis>/gi,
+    /<analyze>[\s\S]*?<\/analyze>/gi,
+    /<plan>[\s\S]*?<\/plan>/gi,
+    /<planning>[\s\S]*?<\/planning>/gi,
+    /<scratchpad>[\s\S]*?<\/scratchpad>/gi,
+    /<scratch>[\s\S]*?<\/scratch>/gi,
+    /<cot>[\s\S]*?<\/cot>/gi,
+    /<chain_of_thought>[\s\S]*?<\/chain_of_thought>/gi,
+    /<step>[\s\S]*?<\/step>/gi,
+    /<steps>[\s\S]*?<\/steps>/gi,
+    /<internal>[\s\S]*?<\/internal>/gi,
+  ];
+  let out = content;
+  for (const p of patterns) out = out.replace(p, '');
+  // Also strip a leading unterminated <think>… if the model ran out of tokens.
+  out = out.replace(/<think>[\s\S]*$/i, '');
+  return out.trim();
+}
+
 // Pull a JSON envelope out of the model's reply. The model is instructed to
-// emit raw JSON; in practice it sometimes wraps it in prose or fences.
+// emit raw JSON; in practice it sometimes wraps it in prose, fences, or
+// preceding <think> blocks (gpt-oss-20b). Strip reasoning first, then try
+// progressively looser parses.
 function extractToolEnvelope(content) {
   if (typeof content !== 'string') content = String(content ?? '');
+  content = stripReasoning(content);
   const tryParse = (s) => {
     try {
       const obj = JSON.parse(s);
@@ -1110,13 +1157,20 @@ async function callLocalModel({ system, user, model, abortMs }) {
     }
 
     // ── Path B: direct OpenAI-compatible call to .61 (or override) ──────
+    // Note: the .61 FastAPI service ignores `response_format`, so we rely on
+    // a strong system prompt + post-processing to extract JSON. We do pump
+    // max_tokens up enough that the model has room for both its <think>
+    // block AND the JSON envelope.
     const url = explicit || 'http://192.168.1.61/v1/chat/completions';
     const body = {
       model: model || process.env.LOCAL_MODEL_NAME || 'gpt-oss-20b',
       messages,
       temperature: 0.1,
-      // vLLM honours this; servers that don't simply ignore unknown fields.
-      response_format: { type: 'json_object' },
+      max_tokens: Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
+      // .61's ai_service exposes this custom field; for a tool-calling agent
+      // we want shorter reasoning so the JSON answer doesn't get truncated.
+      // Servers that don't know the field silently ignore it.
+      reasoning_effort: process.env.LOCAL_MODEL_REASONING || 'low',
     };
 
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });

@@ -42,20 +42,42 @@ interface ChatMessage {
   pending?: boolean;
 }
 
+/** Strip reasoning tags some local models emit (gpt-oss-20b uses <think>).
+ *  Defence-in-depth: the backend also strips, but if a different transport
+ *  surfaces raw text we want the frontend parser to cope on its own. */
+function stripReasoning(s: string): string {
+  if (!s) return '';
+  const patterns = [
+    /<think>[\s\S]*?<\/think>/gi,
+    /<thinking>[\s\S]*?<\/thinking>/gi,
+    /<reasoning>[\s\S]*?<\/reasoning>/gi,
+    /<analysis>[\s\S]*?<\/analysis>/gi,
+    /<plan>[\s\S]*?<\/plan>/gi,
+    /<scratchpad>[\s\S]*?<\/scratchpad>/gi,
+  ];
+  let out = s;
+  for (const p of patterns) out = out.replace(p, '');
+  // Trim an unterminated leading <think> if the model ran out of tokens.
+  out = out.replace(/<think>[\s\S]*$/i, '');
+  return out.trim();
+}
+
 /** Parse an AI reply that may contain a JSON envelope with tool_calls.
- *  Accepts either:
+ *  Accepts:
  *    1. A raw JSON object  `{ "reply": "...", "tool_calls": [...] }`
  *    2. A fenced ```json ... ``` block in an otherwise-text reply
- *    3. Plain text (no tools)
+ *    3. The first balanced `{…}` substring (model preceded JSON with prose)
+ *    4. Plain text → reply only, no tools
  */
 function parseToolEnvelope(raw: string): { reply: string; tool_calls: ChatToolCall[] } {
+  raw = stripReasoning(raw);
   const tryJson = (s: string) => {
     try {
       const obj = JSON.parse(s);
-      if (obj && typeof obj === 'object' && Array.isArray(obj.tool_calls)) {
+      if (obj && typeof obj === 'object') {
         return {
           reply: typeof obj.reply === 'string' ? obj.reply : '',
-          tool_calls: obj.tool_calls as ChatToolCall[],
+          tool_calls: Array.isArray(obj.tool_calls) ? (obj.tool_calls as ChatToolCall[]) : [],
         };
       }
     } catch { /* not JSON */ }
@@ -64,14 +86,29 @@ function parseToolEnvelope(raw: string): { reply: string; tool_calls: ChatToolCa
   const direct = tryJson(raw.trim());
   if (direct) return direct;
 
-  const fence = raw.match(/```json\s*([\s\S]+?)```/i);
+  const fence = raw.match(/```(?:json)?\s*([\s\S]+?)```/i);
   if (fence) {
     const parsed = tryJson(fence[1].trim());
-    if (parsed) {
-      const stripped = raw.replace(fence[0], '').trim();
-      return { reply: parsed.reply || stripped, tool_calls: parsed.tool_calls };
+    if (parsed) return parsed;
+  }
+
+  // First balanced {…} substring (in case the model wrapped JSON in prose).
+  const start = raw.indexOf('{');
+  if (start >= 0) {
+    let depth = 0;
+    for (let i = start; i < raw.length; i++) {
+      if (raw[i] === '{') depth++;
+      else if (raw[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          const parsed = tryJson(raw.slice(start, i + 1));
+          if (parsed) return parsed;
+          break;
+        }
+      }
     }
   }
+
   return { reply: raw, tool_calls: [] };
 }
 
@@ -235,20 +272,57 @@ export const Chatbot: React.FC = () => {
       const fd = new FormData();
       fd.append('prompt', text);
       fd.append('mode', mode);
-      // Send a compact snapshot of the project so the LLM has context.
+
+      // Send a snapshot of the project so the model can answer questions
+      // about it AND target specific rows / templates with tool calls.
+      // We include up to MAX_ROWS device rows from the active equipment so
+      // "row 3 …" style commands have something concrete to resolve.
+      const MAX_ROWS = 80;
+      const slimRow = (r: any) => ({
+        rowNumber: r.rowNumber,
+        templateName: r.templateName || '',
+        wiringType:   r.wiringType   || '',
+        ratingPower:  r.ratingPower  || '',
+        flc:          r.flc          || '',
+        feederNo:     r.feederNo     || '',
+        busSection:   r.busSection   || '',
+        tag:          r.tag          || '',
+        cableSize:    r.cableSize    || '',
+        sfdHfd:       r.sfdHfd       || '',
+        moduleNo:     r.moduleNo     || '',
+        size:         r.size         || '',
+        description:  r.description  || '',
+      });
+
+      const slimTemplate = (t: any) => ({
+        id:   t.id,
+        name: t.name,
+        type: t.type,
+        hierarchyPath: t.hierarchy?.path || [],
+        leafKind:      t.hierarchy?.leafKind || null,
+        kw:            t.hierarchy?.params?.kw || null,
+        currentA:      t.hierarchy?.params?.currentA || null,
+      });
+
+      const activeDevices = selectedEquipment?.devices ?? [];
       const ctxSnapshot = {
         projectName: projectData.projectName,
+        standard:    projectData.standard,
         activeEquipment: selectedEquipment ? {
-          id: selectedEquipment.id, name: selectedEquipment.name,
-          type: selectedEquipment.type, rowCount: selectedEquipment.devices?.length ?? 0,
+          id:        selectedEquipment.id,
+          name:      selectedEquipment.name,
+          type:      selectedEquipment.type,
+          rowCount:  activeDevices.length,
+          rows:      activeDevices.slice(0, MAX_ROWS).map(slimRow),
+          rowsTruncated: activeDevices.length > MAX_ROWS,
         } : null,
-        equipments: (projectData.equipments ?? []).map(e => ({
+        allEquipments: (projectData.equipments ?? []).map(e => ({
           id: e.id, name: e.name, type: e.type, rows: e.devices?.length ?? 0,
         })),
-        templateCounts: {
-          LV: projectData.templates?.LV?.length ?? 0,
-          MV: projectData.templates?.MV?.length ?? 0,
-          HV: projectData.templates?.HV?.length ?? 0,
+        templates: {
+          LV: (projectData.templates?.LV ?? []).map(slimTemplate),
+          MV: (projectData.templates?.MV ?? []).map(slimTemplate),
+          HV: (projectData.templates?.HV ?? []).map(slimTemplate),
         },
       };
       fd.append('context', JSON.stringify(ctxSnapshot));
