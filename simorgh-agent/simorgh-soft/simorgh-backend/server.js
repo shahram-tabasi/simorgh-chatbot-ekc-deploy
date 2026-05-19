@@ -1061,7 +1061,7 @@ function extractToolEnvelope(content) {
   return { reply: content, tool_calls: [] };
 }
 
-// Pick which transport to use for the local model. Two paths are supported:
+// Call the local LLM. Two transports are supported:
 //
 //   A) llm-gateway (preferred when running inside the simorgh-agent stack)
 //      Set LLM_GATEWAY_URL=http://llm-gateway:8030 (or .../api/llm-gateway
@@ -1069,20 +1069,18 @@ function extractToolEnvelope(content) {
 //      with {messages, mode, …} and returns {response, model, …}; it
 //      handles online↔offline fallback and strips <think> tags for us.
 //
-//   B) Direct OpenAI-compatible HTTP — what the local LLM cluster exposes
-//      on .61 (`gpt-oss-20b` behind Unsloth+vLLM+FastAPI). Default URL is
-//      `http://192.168.1.61/v1/chat/completions`; default model name is
-//      `gpt-oss-20b`. Override either via env if you point at .62 (VLM)
-//      or a personal local server (LM Studio, llama.cpp, vLLM, Ollama).
+//   B) Direct OpenAI-compatible HTTP — the deployed local cluster on .61
+//      (`gpt-oss-20b` behind Unsloth+vLLM+FastAPI). Default URL is
+//      `http://192.168.1.61/v1/chat/completions`, default model name is
+//      `gpt-oss-20b`. Override LOCAL_MODEL_URL / LOCAL_MODEL_NAME to point
+//      at any other OpenAI-compat server (e.g. .62 VLM, or a personal vLLM
+//      / LM Studio / llama.cpp instance).
 //
-//      For Ollama specifically: set LOCAL_MODEL_URL=http://127.0.0.1:11434/api/chat
-//      and the body is rewritten to Ollama's chat shape automatically.
-//
-// All paths return a single `content` string for the downstream parser.
+// Both paths return a single `content` string for the downstream parser.
 async function callLocalModel({ system, user, model, abortMs }) {
-  const gatewayUrl  = process.env.LLM_GATEWAY_URL;            // A) gateway
-  const explicit    = process.env.LOCAL_MODEL_URL;             // B) direct
-  const apiKey      = process.env.LOCAL_MODEL_KEY || process.env.LOCAL_LLM_API_KEY || '';
+  const gatewayUrl = process.env.LLM_GATEWAY_URL;
+  const explicit   = process.env.LOCAL_MODEL_URL;
+  const apiKey     = process.env.LOCAL_MODEL_KEY || process.env.LOCAL_LLM_API_KEY || '';
 
   const messages = [
     { role: 'system', content: system },
@@ -1101,7 +1099,7 @@ async function callLocalModel({ system, user, model, abortMs }) {
       const url = gatewayUrl.replace(/\/+$/, '') + '/generate';
       const body = {
         messages,
-        mode: process.env.LLM_GATEWAY_MODE || 'offline',  // route to local LLM cluster
+        mode: process.env.LLM_GATEWAY_MODE || 'offline',  // → local LLM cluster
         temperature: 0.1,
       };
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
@@ -1111,44 +1109,34 @@ async function callLocalModel({ system, user, model, abortMs }) {
       return { content: json.response ?? '', raw: json, url, transport: 'llm-gateway' };
     }
 
-    // ── Path B: direct ──────────────────────────────────────────────────
-    // Default points at the Simorgh local LLM box.
+    // ── Path B: direct OpenAI-compatible call to .61 (or override) ──────
     const url = explicit || 'http://192.168.1.61/v1/chat/completions';
-    const isOllama = /\/api\/chat$/i.test(url);   // Ollama's chat endpoint
-
-    const body = isOllama
-      ? {
-          model: model || process.env.LOCAL_MODEL_NAME || 'llama3.1',
-          messages, stream: false, format: 'json',
-          options: { temperature: 0.1 },
-        }
-      : {
-          model: model || process.env.LOCAL_MODEL_NAME || 'gpt-oss-20b',
-          messages, temperature: 0.1,
-          // Many OpenAI-compat servers (incl. vLLM) honour this; ones that
-          // don't simply ignore unknown fields — harmless either way.
-          response_format: { type: 'json_object' },
-        };
+    const body = {
+      model: model || process.env.LOCAL_MODEL_NAME || 'gpt-oss-20b',
+      messages,
+      temperature: 0.1,
+      // vLLM honours this; servers that don't simply ignore unknown fields.
+      response_format: { type: 'json_object' },
+    };
 
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
     const text = await res.text();
     if (!res.ok) throw new Error(`Local model ${res.status}: ${text.slice(0, 500)}`);
     let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
     const content =
-      json?.choices?.[0]?.message?.content ??  // OpenAI / vLLM
-      json?.message?.content ??                // Ollama
-      json?.response ??                        // some local servers
+      json?.choices?.[0]?.message?.content ??
+      json?.response ??
       json?.raw ??
       '';
-    return { content, raw: json, url, transport: isOllama ? 'ollama' : 'openai-compatible' };
+    return { content, raw: json, url, transport: 'openai-compatible' };
   } finally {
     clearTimeout(timer);
   }
 }
 
-// LOCAL endpoint — forwards prompts to a local model (Ollama by default,
-// or any OpenAI-compatible `/v1/chat/completions` server via LOCAL_MODEL_URL).
-// Returns `{reply, tool_calls}` ready for the frontend tool runner.
+// LOCAL endpoint — forwards prompts to the deployed local LLM cluster
+// (`gpt-oss-20b` on 192.168.1.61, OpenAI-compatible HTTP). Returns
+// `{reply, tool_calls}` ready for the frontend tool runner.
 app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
   try {
     const prompt = (req.body?.prompt || '').toString();
