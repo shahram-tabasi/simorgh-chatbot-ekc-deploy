@@ -283,8 +283,12 @@ const MainApp: React.FC = () => {
     }
   ];
 
+  // h-screen + overflow-hidden on the outer shell pins the whole app to
+  // the viewport. Without this the chatbot's `flex-1 overflow-y-auto`
+  // message list grows past the viewport and ends up scrolling the
+  // document instead of staying inside its own column.
   return (
-    <div className="flex flex-col w-full min-h-screen bg-gray-100">
+    <div className="flex flex-col w-full h-screen overflow-hidden bg-gray-100">
       {/* Menu Bar */}
       <MenuBar onShowProjectSelection={() => window.location.reload()} />
       
