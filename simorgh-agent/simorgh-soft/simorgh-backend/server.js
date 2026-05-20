@@ -1173,9 +1173,14 @@ function extractToolEnvelope(content) {
 // system message — we prepend system here and append the new user turn.
 async function callLocalModel({ system, user, history, model, abortMs }) {
   const gatewayUrl = process.env.LLM_GATEWAY_URL;
-  const explicit   = process.env.LOCAL_MODEL_URL;          // OpenAI-compat chat URL
-  const aiSvcBase  = process.env.AI_SERVICE_URL ||         // bespoke .61 service
-                     (explicit ? null : 'http://192.168.1.61');
+  const aiSvcBase  = process.env.AI_SERVICE_URL;            // bespoke .61 service
+  // Default points at .62 (Qwen2.5-VL-7B via standard vllm-openai). Qwen
+  // is instruction-tuned and respects `response_format: json_object`,
+  // which is what we need for the tool-calling contract. gpt-oss-20b on
+  // .61 is a reasoning model that mostly ignores JSON instructions, so we
+  // only fall back to it when AI_SERVICE_URL is set explicitly.
+  const explicit   = process.env.LOCAL_MODEL_URL
+                  || (aiSvcBase ? null : 'http://192.168.1.62/v1/chat/completions');
   const apiKey     = process.env.LOCAL_MODEL_KEY || process.env.LOCAL_LLM_API_KEY || '';
 
   // Build the full message thread (system + history + user).
@@ -1193,7 +1198,7 @@ async function callLocalModel({ system, user, history, model, abortMs }) {
     ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
   };
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), abortMs || 120_000);
+  const timer = setTimeout(() => ctrl.abort(), abortMs || 300_000);
 
   try {
     // ── Path A: llm-gateway ─────────────────────────────────────────────
@@ -1211,14 +1216,12 @@ async function callLocalModel({ system, user, history, model, abortMs }) {
       return { content: json.response ?? '', raw: json, url, transport: 'llm-gateway' };
     }
 
-    // ── Path B: ai-service /generate (DEFAULT for .61) ──────────────────
-    // .61's /v1/chat/completions auto-routes to a LangChain agent whenever
-    // _should_use_tools() trips on keywords like "iec" / "current" / "siemens"
-    // that the project context inevitably contains. The agent does its own
-    // text post-processing and drops our JSON envelope. We bypass that by
-    // calling the legacy /generate endpoint with use_tools=False, which
-    // forces direct generation. History is flattened into a single
-    // user_prompt because the legacy endpoint has no message-array support.
+    // ── Path B: ai-service /generate (only if AI_SERVICE_URL is set) ────
+    // .61's /v1/chat/completions auto-routes to a LangChain Wikipedia/
+    // search agent whenever the project context contains keywords like
+    // "iec" / "current" / "siemens". /generate with use_tools=false bypasses
+    // that routing, but gpt-oss-20b is a reasoning model that mostly
+    // refuses to emit our JSON envelope, so this path is opt-in only.
     if (aiSvcBase) {
       const base = aiSvcBase.replace(/\/+$/, '');
       const url  = `${base}/generate`;
@@ -1233,7 +1236,7 @@ async function callLocalModel({ system, user, history, model, abortMs }) {
         thinking_level: process.env.LOCAL_MODEL_REASONING || 'low',
         max_tokens:    Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
         stream: false,
-        use_tools: false,   // ← THE fix: disable LangChain agent path entirely
+        use_tools: false,
       };
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
       const text = await res.text();
@@ -1243,16 +1246,17 @@ async function callLocalModel({ system, user, history, model, abortMs }) {
       return { content, raw: json, url, transport: 'ai-service' };
     }
 
-    // ── Path C: explicit OpenAI-compatible chat URL ─────────────────────
-    // For LM Studio / vLLM / external OpenAI-style endpoints. Honours
-    // response_format when supported; relies on stripReasoning() otherwise.
+    // ── Path C: OpenAI-compatible chat URL (DEFAULT — .62 Qwen) ─────────
+    // .62 runs upstream `vllm/vllm-openai` so it honours response_format
+    // for guided JSON decoding. That + Qwen's instruction-following gives
+    // us a much more reliable tool-call output than gpt-oss-20b.
     const url = explicit;
     const body = {
-      model: model || process.env.LOCAL_MODEL_NAME || 'gpt-oss-20b',
+      model: model || process.env.LOCAL_MODEL_NAME || 'qwen2.5-vl-7b',
       messages,
       temperature: 0.1,
       max_tokens: Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
-      reasoning_effort: process.env.LOCAL_MODEL_REASONING || 'low',
+      response_format: { type: 'json_object' },
     };
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
     const text = await res.text();

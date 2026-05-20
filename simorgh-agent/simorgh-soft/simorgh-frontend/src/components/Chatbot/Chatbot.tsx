@@ -23,6 +23,7 @@ import {
   chatToolSchemas, executeChatToolBatch, ChatToolCall, ChatToolResult,
   ChatToolContext, ProposedAction,
 } from '../../services/chatbotTools';
+import { intentParse } from '../../services/intentParser';
 import { MarkdownView } from './MarkdownView';
 import { ProposalCard } from './ProposalCard';
 
@@ -442,7 +443,23 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       }
 
       const { reply, tool_calls } = parseToolEnvelope(raw);
-      const callsToRun = agentMode ? tool_calls : [];
+      let callsToRun = agentMode ? tool_calls : [];
+
+      // Fallback intent parser — if the model didn't emit any tool_calls
+      // (gpt-oss-20b often refuses, returning prose instead), try to match
+      // the user's prompt against a handful of common command shapes
+      // (row/cell edits, colours, tech-setting fields, project fields,
+      // tab navigation, bulk updates). This guarantees that "row 3 feederNo
+      // to L03" style commands always do *something*, even when the LLM is
+      // being uncooperative.
+      let fallbackUsed = false;
+      if (agentMode && callsToRun.length === 0) {
+        const intent = intentParse(text, { projectData, selectedEquipment });
+        if (intent) {
+          callsToRun = [intent.call];
+          fallbackUsed = true;
+        }
+      }
 
       // Run any tools the assistant asked for. The full context handle set
       // lets the AI drive every tab (project metadata, device library,
@@ -469,12 +486,23 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         }
       });
 
+      // If the model gave an empty / unstructured reply but the fallback
+      // matched something, prefix the reply with a one-line note so the
+      // user knows the action came from a heuristic rather than the AI.
+      const finalReply = (() => {
+        const base = reply || (callsToRun.length > 0
+          ? `Executed ${callsToRun.length} action(s).`
+          : '(empty reply)');
+        if (fallbackUsed) {
+          return `_Heuristic match — the model didn't return a tool call but your prompt looked like a command, so I ran it directly._\n\n${base}`;
+        }
+        return base;
+      })();
+
       setMessages(prev => prev.map(m =>
         m.id === pendingId ? {
           ...m,
-          text: reply || (callsToRun.length > 0
-            ? `Executed ${callsToRun.length} action(s).`
-            : '(empty reply)'),
+          text: finalReply,
           toolResults: toolResults.map((r, i) => ({
             tool: callsToRun[i]?.name || '?',
             summary: r.summary,
@@ -486,9 +514,18 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       ));
     } catch (err: any) {
       const msg = err?.message || String(err);
+      // Common "Failed to fetch" → either the backend is down, or nginx
+      // rejected the body size (PDFs + history pushes past 1 MB default),
+      // or the model timed out. Surface a pointer the user can act on.
+      const hint = /Failed to fetch|NetworkError|aborted/i.test(msg)
+        ? '\n\nCommon causes:\n' +
+          '• The simorgh-soft Node backend (port 3001) is not running — `docker compose logs simorgh-soft`.\n' +
+          '• The request body exceeded the nginx limit. We set `client_max_body_size 50M` in `simorgh-agent/simorgh-soft/docker/nginx.conf` — re-build the container if you uploaded a large PDF.\n' +
+          '• The local LLM (.62 by default) timed out — try a shorter prompt or check `docker compose logs nginx` on the .62 host.'
+        : `\n\nCheck the endpoint at "${endpoint}" is reachable from the browser.`;
       setMessages(prev => prev.map(m =>
         m.id === pendingId
-          ? { ...m, text: `❌ ${msg}\n\nCheck the endpoint at "${endpoint}" is reachable from the browser.`, error: true, pending: false }
+          ? { ...m, text: `❌ ${msg}${hint}`, error: true, pending: false }
           : m
       ));
     } finally {
