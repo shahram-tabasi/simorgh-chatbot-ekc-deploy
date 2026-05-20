@@ -116,8 +116,11 @@ services:
     networks:
       - app_net
     healthcheck:
-      # /-/readiness returns 200 once Rails + Postgres + Redis are up.
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/-/readiness || exit 1"]
+      # GitLab is configured under a /gitlab/ path prefix (see external_url
+      # in gitlab.rb), so /-/readiness on the bare root returns 404 from
+      # nginx. The actual probe is /gitlab/-/readiness?all=1 — returns 200
+      # once Rails + Postgres + Redis are up, 503 while still booting.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/gitlab/-/readiness?all=1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 20
