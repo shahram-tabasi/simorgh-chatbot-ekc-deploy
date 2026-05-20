@@ -51,6 +51,49 @@ jobs:
       - name: Install huggingface_hub
         run: pip install --quiet "huggingface_hub[cli]==0.24.6"
 
+      - name: Normalise model name
+        id: model
+        env:
+          RAW: ${{ inputs.model }}
+        run: |
+          set -eu
+          # Accept three shapes for convenience and normalise to the
+          # canonical "owner/repo" form HuggingFace expects:
+          #   1. "Qwen/Qwen2.5-7B-Instruct-AWQ"        ← canonical, kept as-is
+          #   2. "hf-Qwen__Qwen2.5-7B-Instruct-AWQ"    ← our artifact-name form
+          #   3. "Qwen__Qwen2.5-7B-Instruct-AWQ"       ← `tr '/' '__'` round-trip
+          # Anything that doesn't look like owner/repo after normalisation
+          # gets rejected with a clear message before we hit the HF API
+          # (otherwise the only feedback is a misleading "401 Unauthorized").
+          MODEL="${RAW}"
+          # Strip leading `hf-` if present (artifact prefix)
+          MODEL="${MODEL#hf-}"
+          # Trim whitespace
+          MODEL="$(echo -n "$MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          # Convert `__` (artifact form) back to `/` — but only once,
+          # between owner and repo. We replace the FIRST `__` only.
+          if [[ "$MODEL" != */* && "$MODEL" == *__* ]]; then
+            MODEL="${MODEL/__//}"
+          fi
+          # Also accept a single `_` between owner and repo (some users
+          # type `Qwen_Qwen2.5-VL-7B` by mistake). Heuristic: when the
+          # input has NO `/` AND exactly one `_` segment that looks like
+          # an owner ([A-Za-z0-9][A-Za-z0-9-]*) we treat that as the
+          # owner/repo separator.
+          if [[ "$MODEL" != */* ]]; then
+            if [[ "$MODEL" =~ ^([A-Za-z0-9][A-Za-z0-9-]*)_([A-Za-z0-9].+)$ ]]; then
+              MODEL="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+            fi
+          fi
+          # Final validation — must look like "owner/repo"
+          if [[ ! "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::Invalid model name '$RAW'. Expected HuggingFace repo id like 'Qwen/Qwen2.5-VL-7B-Instruct-AWQ' (owner/repo). Got '$MODEL' after normalisation."
+            exit 1
+          fi
+          echo "Input  : $RAW"
+          echo "Lookup : $MODEL"
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+
       - name: Download model into cache layout
         env:
           # Explicitly disable hf_transfer / xet — its blob-only layout
@@ -58,12 +101,18 @@ jobs:
           # snapshot files. Standard downloader = proper symlinks.
           HF_HUB_ENABLE_HF_TRANSFER: "0"
           HF_HUB_DISABLE_XET: "1"
-          MODEL: ${{ inputs.model }}
+          MODEL: ${{ steps.model.outputs.model }}
           REVISION: ${{ inputs.revision }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           mkdir -p hf-cache
           ARGS=( "$MODEL" --cache-dir hf-cache )
           if [ -n "$REVISION" ]; then ARGS+=( --revision "$REVISION" ); fi
+          # If the repo is gated/private the workflow's HF_TOKEN secret
+          # (PAT with `read` scope) lets us in. For public repos it's
+          # ignored — passing it costs nothing.
+          if [ -n "$HF_TOKEN" ]; then ARGS+=( --token "$HF_TOKEN" ); fi
+          echo "Fetching $MODEL …"
           huggingface-cli download "${ARGS[@]}"
           echo "----- snapshot contents -----"
           find hf-cache -maxdepth 5 -printf '%y %p\n' | head -40
@@ -71,9 +120,11 @@ jobs:
 
       - name: Compute archive name
         id: name
+        env:
+          MODEL: ${{ steps.model.outputs.model }}
         run: |
           # safe filename: replace / with __
-          fname=$(echo "${{ inputs.model }}" | tr '/' '__')
+          fname=$(echo "$MODEL" | tr '/' '__')
           echo "fname=$fname" >> "$GITHUB_OUTPUT"
 
       - name: Pack tarball
