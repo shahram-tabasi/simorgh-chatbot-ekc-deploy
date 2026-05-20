@@ -5,7 +5,11 @@ pydantic[email]>=2.7.0,<3.0.0
 asyncpg>=0.29.0
 psycopg2-binary>=2.9.9
 pymysql>=1.1.0
-bcrypt>=4.1.0
+# bcrypt 4.1+ raises ValueError on passwords > 72 bytes inside passlib's
+# own first-call self-test (detect_wrap_bug), making every register/login
+# return HTTP 500 until the password is changed. Pin to 4.0.x until
+# passlib 1.7.5+ is in the index AND we upgrade passlib to match.
+bcrypt>=4.0,<4.1
 passlib[bcrypt]>=1.7.4
 python-jose[cryptography]>=3.3.0
 PyJWT>=2.8.0

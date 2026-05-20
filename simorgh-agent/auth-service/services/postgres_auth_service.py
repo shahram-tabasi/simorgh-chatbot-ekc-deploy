@@ -47,15 +47,30 @@ class PostgresAuthService:
     # =========================================================================
 
     @staticmethod
+    def _bcrypt_safe(password: str) -> str:
+        """bcrypt only hashes the first 72 bytes — bcrypt>=4.1 raises a hard
+        ValueError instead of silently truncating, which breaks passlib's
+        own self-test on first call. Truncate explicitly so hash() and
+        verify() both see the same 72-byte slice, regardless of which
+        bcrypt version is installed."""
+        if password is None:
+            return ""
+        encoded = password.encode("utf-8")[:72]
+        return encoded.decode("utf-8", errors="ignore")
+
+    @staticmethod
     def hash_password(password: str) -> str:
-        """Hash a password using bcrypt."""
-        return pwd_context.hash(password)
+        """Hash a password using bcrypt (truncated to 72 bytes)."""
+        return pwd_context.hash(PostgresAuthService._bcrypt_safe(password))
 
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Verify a password against a hash."""
         try:
-            return pwd_context.verify(plain_password, hashed_password)
+            return pwd_context.verify(
+                PostgresAuthService._bcrypt_safe(plain_password),
+                hashed_password,
+            )
         except Exception as e:
             logger.error(f"Password verification error: {e}")
             return False
