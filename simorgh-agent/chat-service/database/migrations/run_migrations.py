@@ -59,9 +59,17 @@ def get_applied_migrations(conn):
 
 
 def get_migration_files():
-    """Get all SQL migration files sorted by name."""
+    """Get all SQL migration files sorted by name.
+
+    Excludes `*_rollback.sql` files — those are only invoked by
+    rollback_last() via the --rollback flag. Letting the forward pass
+    pick them up would silently destroy data (e.g. running
+    001_create_auth_tables_rollback.sql as if it were a normal
+    migration drops the auth tables).
+    """
     migrations_dir = Path(__file__).parent
     files = glob.glob(str(migrations_dir / "*.sql"))
+    files = [f for f in files if not f.endswith("_rollback.sql")]
     return sorted(files)
 
 
