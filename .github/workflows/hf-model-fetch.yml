@@ -1,16 +1,22 @@
 name: Download HuggingFace model
 
 # Downloads a HuggingFace model on a GitHub-hosted runner (fast internet)
-# and uploads it as a tarball artifact. On .68:
+# and uploads it as one or more tarball artifacts. The default is to
+# split into TWO parts so a contributor on a metered link (e.g. the
+# Iranian-proxy 5 GB/day cap) can fetch one half each day, then
+# reassemble on the target machine.
 #
-#   gh run download <RUN_ID> -n hf-model -R shahram-tabasi/simorgh-chatbot-ekc-deploy
-#   scp hf-model.tar.gz tech@192.168.1.68:/tmp/
-#   # then on .68:
-#   docker run --rm \
-#     -v simorgh_huggingface_cache:/dst \
-#     -v /tmp:/src alpine \
-#     tar xzf /src/hf-model.tar.gz -C /dst --strip-components=2
-#   docker compose restart embeddings-service
+# Single-piece download still works — pass `parts: 1` when launching
+# the workflow if you have plenty of bandwidth.
+#
+#   gh run download <RUN_ID> -n hf-MODEL-part-1of2 -R …   # day 1
+#   gh run download <RUN_ID> -n hf-MODEL-part-2of2 -R …   # day 2
+#   cat MODEL.tar.gz.part.* > MODEL.tar.gz                 # reassemble
+#   sha256sum -c MODEL.tar.gz.sha256                       # verify
+#
+# Each part is uploaded as its own artifact, so they can be downloaded
+# independently — and `actions/upload-artifact@v4` keeps them around for
+# 14 days by default.
 
 on:
   workflow_dispatch:
@@ -23,6 +29,11 @@ on:
         description: "Branch / tag / commit to pin (blank = main)"
         type: string
         default: ""
+      parts:
+        description: "Split the tarball into N parts (1 = no split, 2 = default)"
+        type: choice
+        default: "2"
+        options: ["1", "2", "3", "4", "5", "6"]
 
 permissions:
   contents: read
@@ -66,6 +77,7 @@ jobs:
           echo "fname=$fname" >> "$GITHUB_OUTPUT"
 
       - name: Pack tarball
+        id: pack
         run: |
           set -eu
           # We want the archive to contain just the 'hub/' directory so that
@@ -77,49 +89,174 @@ jobs:
           tar -C staging -czf "$OUT" huggingface
           ls -lh "$OUT"
           sha256sum "$OUT" | tee "$OUT.sha256"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          echo "size=$(stat -c%s "$OUT")" >> "$GITHUB_OUTPUT"
 
-      - name: Upload artifact
+      - name: Split tarball into N parts
+        id: split
+        env:
+          OUT: ${{ steps.pack.outputs.out }}
+          PARTS: ${{ inputs.parts }}
+        run: |
+          set -eu
+          mkdir -p parts
+          if [ "$PARTS" -le 1 ]; then
+            cp "$OUT" parts/
+            cp "$OUT.sha256" parts/
+            echo "split=false" >> "$GITHUB_OUTPUT"
+            echo "Single-piece mode: parts/ contains the whole tarball."
+            ls -lh parts/
+            exit 0
+          fi
+          # `-n N` (byte-exact split) is fine for binary tarballs. Suffix
+          # length 2 keeps things tidy through PARTS=99. Output names look
+          # like  MODEL.tar.gz.part.00  ..  MODEL.tar.gz.part.N-1.
+          split -n "$PARTS" -d --suffix-length=2 "$OUT" "parts/${OUT}.part."
+          # Carry the sha256 alongside part .00 so it's recoverable from
+          # the first download; reassembly verifies against the full tarball.
+          cp "$OUT.sha256" "parts/"
+          # Also drop a tiny reassembly helper for the recipient.
+          cat > "parts/REASSEMBLE.sh" <<BASH
+          #!/usr/bin/env bash
+          # Concatenate all .part.NN files in this directory back into the
+          # original tarball, then verify the sha256.
+          set -e
+          base="${OUT}"
+          parts=( \$(ls "\${base}".part.* | sort) )
+          echo "Reassembling \${#parts[@]} parts → \${base} …"
+          cat "\${parts[@]}" > "\${base}"
+          echo "Verifying SHA256 …"
+          sha256sum -c "\${base}.sha256"
+          echo "✅ \${base} ready."
+          BASH
+          chmod +x parts/REASSEMBLE.sh
+          ls -lh parts/
+          echo "split=true" >> "$GITHUB_OUTPUT"
+
+      # ── Single-piece upload (parts == 1) ───────────────────────────────
+      - name: Upload artifact (single piece)
+        if: steps.split.outputs.split == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: hf-${{ steps.name.outputs.fname }}
           path: |
-            ${{ steps.name.outputs.fname }}.tar.gz
-            ${{ steps.name.outputs.fname }}.tar.gz.sha256
+            parts/${{ steps.name.outputs.fname }}.tar.gz
+            parts/${{ steps.name.outputs.fname }}.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      # ── Split upload: ONE artifact per part, so each can be downloaded
+      #     on a different day. The `if` per step keeps the unused ones
+      #     from running when PARTS is smaller. Upload-artifact silently
+      #     no-ops when a path doesn't match, so we also guard with `if:`
+      #     to avoid the warning. ──────────────────────────────────────────
+      - name: Upload part 1 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-${{ steps.name.outputs.fname }}-part-1of${{ inputs.parts }}
+          path: |
+            parts/${{ steps.name.outputs.fname }}.tar.gz.part.00
+            parts/${{ steps.name.outputs.fname }}.tar.gz.sha256
+            parts/REASSEMBLE.sh
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 2 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-${{ steps.name.outputs.fname }}-part-2of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.01
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 3 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-${{ steps.name.outputs.fname }}-part-3of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.02
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 4 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '4'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-${{ steps.name.outputs.fname }}-part-4of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.03
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 5 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '5'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-${{ steps.name.outputs.fname }}-part-5of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.04
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 6 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '6'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-${{ steps.name.outputs.fname }}-part-6of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.05
           retention-days: 14
           compression-level: 0
 
       - name: Install instructions
+        env:
+          FNAME: ${{ steps.name.outputs.fname }}
+          PARTS: ${{ inputs.parts }}
+          SPLIT: ${{ steps.split.outputs.split }}
         run: |
-          cat <<EOF
-          ============================================================
-          Artifact: hf-${{ steps.name.outputs.fname }}
-          ============================================================
-          On a workstation with internet:
-            gh run download \${RUN_ID} \\
-                -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
-                -n hf-${{ steps.name.outputs.fname }}
+          if [ "$SPLIT" != "true" ]; then
+            cat <<EOF
+            ============================================================
+            Artifact: hf-${FNAME}   (single piece)
+            ============================================================
+            gh run download \$RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
+                -n hf-${FNAME}
 
-          Transfer to .68:
-            scp ${{ steps.name.outputs.fname }}.tar.gz \\
-                tech@192.168.1.68:/tmp/
-
-          On .68 — extract directly into the docker named volume that
-          embeddings-service / chat-service / documents-rag-service mount:
-
-            sha256sum -c /tmp/${{ steps.name.outputs.fname }}.tar.gz.sha256
+            scp ${FNAME}.tar.gz tech@192.168.1.68:/tmp/
 
             docker run --rm \\
               -v simorgh_huggingface_cache:/dst \\
               -v /tmp:/src \\
-              alpine tar xzf /src/${{ steps.name.outputs.fname }}.tar.gz \\
-                              -C /dst --strip-components=1
+              alpine tar xzf /src/${FNAME}.tar.gz -C /dst --strip-components=1
+            ============================================================
+          EOF
+            exit 0
+          fi
 
-            docker compose -f \\
-              ~/simorgh-chatbot-ekc-deploy/simorgh-agent/docker-compose.yml \\
-              restart embeddings-service
+          cat <<EOF
+          ============================================================
+          Artifact: hf-${FNAME}   (split into ${PARTS} parts)
+          ============================================================
+          The tarball was split byte-exact into ${PARTS} parts. Each is
+          its own artifact, so you can download them on different days
+          to stay under a daily-bandwidth cap.
 
-          Verify on .68 that the model is now local:
-            docker exec embeddings-service \\
-              ls /root/.cache/huggingface/hub/
+          # On a workstation with internet — download whichever parts
+          # you haven't fetched yet. Each command pulls only that piece.
+          for i in \$(seq 1 ${PARTS}); do
+            gh run download \$RUN_ID \\
+              -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
+              -n hf-${FNAME}-part-\${i}of${PARTS}
+          done
+
+          # Reassemble (script comes inside part 1):
+          chmod +x REASSEMBLE.sh
+          ./REASSEMBLE.sh
+          # → produces ${FNAME}.tar.gz, verified by sha256
+
+          # Transfer + install on .68:
+          scp ${FNAME}.tar.gz tech@192.168.1.68:/tmp/
+          ssh tech@192.168.1.68 'docker run --rm \\
+              -v simorgh_huggingface_cache:/dst -v /tmp:/src alpine \\
+              tar xzf /src/${FNAME}.tar.gz -C /dst --strip-components=1'
           ============================================================
           EOF
