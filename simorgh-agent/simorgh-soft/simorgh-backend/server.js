@@ -991,10 +991,16 @@ function buildSystemPrompt(toolSchemas, context, excelPreviews) {
     'You both ANSWER questions and ACT on the running project by calling tools.',
     'The user may write in Persian, English, or a mix; reply in the same language as the user.',
     '',
-    'OUTPUT FORMAT (mandatory): your entire reply MUST be a SINGLE JSON object — nothing before it, nothing after it, no markdown fences, no <think> tags in the output. Shape:',
-    '  {"reply": "<answer>", "tool_calls": [ {"name": "<tool>", "args": { ... }}, ... ]}',
-    'The `reply` IS rendered as Markdown in the UI — feel free to use **bold**, `code`, headings, bullet lists, and tables when they help.',
-    'If you don\'t need to act, return tool_calls: [].',
+    'OUTPUT FORMAT (CRITICAL):',
+    '  • Your entire response MUST be a SINGLE JSON object — nothing before it, nothing after it.',
+    '  • No markdown fences (no ```json), no <think>/<analysis>/<commentary> tags, no narration of your reasoning.',
+    '  • Start your response with `{` and end with `}`. Do NOT explain what you are about to do — just do it via tool_calls.',
+    '  • Shape: {"reply": "<answer>", "tool_calls": [ {"name": "<tool>", "args": { ... }}, ... ]}',
+    '  • The `reply` value IS rendered as Markdown in the UI — use **bold**, `code`, headings, bullet lists, and tables when they help.',
+    '  • If you don\'t need to act, return tool_calls: [].',
+    '  • If the user uploads a document and asks you to extract / fill in / use its data, your default behaviour is to ACT (via propose_changes), not to ask "what should I do?". Read the document, propose every field you can extract, and let the user uncheck what they don\'t want.',
+    '',
+    'Conversation history: the messages array contains earlier turns. Treat any text inside `<<<…>>>` blocks as document content (PDF/Excel) the user uploaded on a previous turn — it is still available to you, no need to ask for it again.',
     '',
     'You can drive every tab through tools:',
     '  • Project Definition  → set_project_fields, set_tech_setting, save_project',
@@ -1050,13 +1056,22 @@ function buildSystemPrompt(toolSchemas, context, excelPreviews) {
   ].join('\n');
 }
 
-// Strip out any <think>/<reasoning>/<analysis>/<plan>/<scratchpad> blocks that
-// gpt-oss-20b (and similar reasoning models) emit before the final answer.
-// Without this the JSON-envelope parser sees the thinking text first and
-// fails. The patterns mirror simorgh-agent/llm-gateway/output_parser.py so
-// behaviour stays consistent whether we go direct or through the gateway.
+// Strip reasoning / analysis chatter that reasoning-class models prepend to
+// the actual answer. Covers three families:
+//
+//   1) <think>…</think> + variants (DeepSeek / Claude / generic).
+//   2) Harmony-format channels used by gpt-oss-20b. The raw output looks
+//      like  `<|channel|>analysis<|message|>…<|end|>`
+//             `<|start|>assistant<|channel|>final<|message|>…<|end|>`
+//      and we want only the final-channel content (or whatever sits after
+//      the last channel marker if no final channel is present).
+//   3) The leading "analysis…assistantfinal …" form that ai_service on .61
+//      occasionally emits when the channel markers are flattened to text.
 function stripReasoning(content) {
   if (typeof content !== 'string') return '';
+  let out = content;
+
+  // ── 1) Standard reasoning tags ──────────────────────────────────────────
   const patterns = [
     /<think>[\s\S]*?<\/think>/gi,
     /<thinking>[\s\S]*?<\/thinking>/gi,
@@ -1073,11 +1088,31 @@ function stripReasoning(content) {
     /<step>[\s\S]*?<\/step>/gi,
     /<steps>[\s\S]*?<\/steps>/gi,
     /<internal>[\s\S]*?<\/internal>/gi,
+    /<commentary>[\s\S]*?<\/commentary>/gi,
   ];
-  let out = content;
   for (const p of patterns) out = out.replace(p, '');
-  // Also strip a leading unterminated <think>… if the model ran out of tokens.
   out = out.replace(/<think>[\s\S]*$/i, '');
+
+  // ── 2) Harmony channels (gpt-oss). Prefer the LAST `final`-channel block. ─
+  // Match BOTH the proper bracketed form and the flattened text form.
+  const harmonyFinal = out.match(/<\|channel\|>\s*final\s*<\|message\|>([\s\S]*?)(?:<\|(?:end|return|start)\|>|$)/i);
+  if (harmonyFinal) {
+    out = harmonyFinal[1];
+  } else {
+    // Sometimes the server strips the angle brackets, leaving plain
+    // "analysis<reasoning>…assistantfinal<answer>" or "…analysis…final…"
+    // We keep only the substring after the last "final" marker.
+    const flatFinal = out.match(/(?:^|\s)final\b[\s:]*([\s\S]*)$/i);
+    const flatAssistantFinal = out.match(/assistant\s*final[\s:]*([\s\S]*)$/i);
+    if (flatAssistantFinal) out = flatAssistantFinal[1];
+    else if (flatFinal && /\banalysis\b|\bcommentary\b/i.test(content)) out = flatFinal[1];
+  }
+
+  // ── 3) Strip any leftover harmony tokens — `<|whatever|>` and the
+  //       Cyrillic/Greek lookalikes some tokenizers emit. ──────────────────
+  out = out.replace(/<\|[^|>]*\|>/g, '');
+  out = out.replace(/<\/?(?:start|end|message|channel|return)>/gi, '');
+
   return out.trim();
 }
 
@@ -1133,30 +1168,25 @@ function extractToolEnvelope(content) {
   return { reply: content, tool_calls: [] };
 }
 
-// Call the local LLM. Two transports are supported:
-//
-//   A) llm-gateway (preferred when running inside the simorgh-agent stack)
-//      Set LLM_GATEWAY_URL=http://llm-gateway:8030 (or .../api/llm-gateway
-//      via the host nginx). The gateway speaks a custom `/generate` shape
-//      with {messages, mode, …} and returns {response, model, …}; it
-//      handles online↔offline fallback and strips <think> tags for us.
-//
-//   B) Direct OpenAI-compatible HTTP — the deployed local cluster on .61
-//      (`gpt-oss-20b` behind Unsloth+vLLM+FastAPI). Default URL is
-//      `http://192.168.1.61/v1/chat/completions`, default model name is
-//      `gpt-oss-20b`. Override LOCAL_MODEL_URL / LOCAL_MODEL_NAME to point
-//      at any other OpenAI-compat server (e.g. .62 VLM, or a personal vLLM
-//      / LM Studio / llama.cpp instance).
-//
-// Both paths return a single `content` string for the downstream parser.
-async function callLocalModel({ system, user, model, abortMs }) {
+// Call the local LLM. Three transports are supported (see paths A/B/C below).
+// `history` is the prior turns (alternating user/assistant) without the
+// system message — we prepend system here and append the new user turn.
+async function callLocalModel({ system, user, history, model, abortMs }) {
   const gatewayUrl = process.env.LLM_GATEWAY_URL;
-  const explicit   = process.env.LOCAL_MODEL_URL;
+  const explicit   = process.env.LOCAL_MODEL_URL;          // OpenAI-compat chat URL
+  const aiSvcBase  = process.env.AI_SERVICE_URL ||         // bespoke .61 service
+                     (explicit ? null : 'http://192.168.1.61');
   const apiKey     = process.env.LOCAL_MODEL_KEY || process.env.LOCAL_LLM_API_KEY || '';
+
+  // Build the full message thread (system + history + user).
+  const cleanHistory = (Array.isArray(history) ? history : [])
+    .filter(m => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
+    .map(m => ({ role: m.role, content: m.content }));
 
   const messages = [
     { role: 'system', content: system },
-    { role: 'user',   content: user },
+    ...cleanHistory,
+    { role: 'user', content: user },
   ];
   const headers = {
     'Content-Type': 'application/json',
@@ -1181,23 +1211,49 @@ async function callLocalModel({ system, user, model, abortMs }) {
       return { content: json.response ?? '', raw: json, url, transport: 'llm-gateway' };
     }
 
-    // ── Path B: direct OpenAI-compatible call to .61 (or override) ──────
-    // Note: the .61 FastAPI service ignores `response_format`, so we rely on
-    // a strong system prompt + post-processing to extract JSON. We do pump
-    // max_tokens up enough that the model has room for both its <think>
-    // block AND the JSON envelope.
-    const url = explicit || 'http://192.168.1.61/v1/chat/completions';
+    // ── Path B: ai-service /generate (DEFAULT for .61) ──────────────────
+    // .61's /v1/chat/completions auto-routes to a LangChain agent whenever
+    // _should_use_tools() trips on keywords like "iec" / "current" / "siemens"
+    // that the project context inevitably contains. The agent does its own
+    // text post-processing and drops our JSON envelope. We bypass that by
+    // calling the legacy /generate endpoint with use_tools=False, which
+    // forces direct generation. History is flattened into a single
+    // user_prompt because the legacy endpoint has no message-array support.
+    if (aiSvcBase) {
+      const base = aiSvcBase.replace(/\/+$/, '');
+      const url  = `${base}/generate`;
+      const historyText = cleanHistory.length === 0 ? '' :
+        '── Conversation history ──\n' +
+        cleanHistory.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n') +
+        '\n\n── Current user turn ──\n';
+      const userPrompt = historyText + 'USER: ' + user;
+      const body = {
+        system_prompt: system,
+        user_prompt:   userPrompt,
+        thinking_level: process.env.LOCAL_MODEL_REASONING || 'low',
+        max_tokens:    Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
+        stream: false,
+        use_tools: false,   // ← THE fix: disable LangChain agent path entirely
+      };
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`ai-service ${res.status}: ${text.slice(0, 500)}`);
+      let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+      const content = json?.output ?? json?.response ?? json?.raw ?? '';
+      return { content, raw: json, url, transport: 'ai-service' };
+    }
+
+    // ── Path C: explicit OpenAI-compatible chat URL ─────────────────────
+    // For LM Studio / vLLM / external OpenAI-style endpoints. Honours
+    // response_format when supported; relies on stripReasoning() otherwise.
+    const url = explicit;
     const body = {
       model: model || process.env.LOCAL_MODEL_NAME || 'gpt-oss-20b',
       messages,
       temperature: 0.1,
       max_tokens: Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
-      // .61's ai_service exposes this custom field; for a tool-calling agent
-      // we want shorter reasoning so the JSON answer doesn't get truncated.
-      // Servers that don't know the field silently ignore it.
       reasoning_effort: process.env.LOCAL_MODEL_REASONING || 'low',
     };
-
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
     const text = await res.text();
     if (!res.ok) throw new Error(`Local model ${res.status}: ${text.slice(0, 500)}`);
@@ -1252,6 +1308,7 @@ app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
     const context        = parseJSON(req.body?.context,        null);
     const toolSchemas    = parseJSON(req.body?.tools,          []);
     const excelPreviews  = parseJSON(req.body?.excelPreviews,  []);
+    const history        = parseJSON(req.body?.history,        []);
 
     // Extract text from any attached PDFs so the model can read them. This
     // is the magic that powers the "upload a project PDF and have the AI
@@ -1285,7 +1342,7 @@ app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
     let modelError = '';
 
     try {
-      const out = await callLocalModel({ system, user: userMsg });
+      const out = await callLocalModel({ system, user: userMsg, history });
       content = out.content || '';
       usedTransport = out.transport;
     } catch (e) {
@@ -1314,11 +1371,14 @@ app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
     }
 
     const envelope = extractToolEnvelope(content);
-    // Tag the reply with the transport used so it's debuggable from the UI.
+    // Tag the reply with the transport used so it's debuggable from the UI,
+    // and echo back the extracted PDF text so the frontend can keep it on
+    // the user message for future turns.
     return res.json({
       reply: envelope.reply,
       tool_calls: envelope.tool_calls,
       _transport: usedTransport,
+      _extractedDocs: pdfExtracts.map(p => ({ name: p.name, text: p.text })),
     });
   } catch (err) {
     console.error('Chat local error:', err);

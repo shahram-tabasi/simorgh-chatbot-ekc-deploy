@@ -47,6 +47,10 @@ interface ChatMessage {
   toolResults?: { tool: string; summary: string; ok: boolean }[];
   /** Pending proposals — rendered as an interactive card with Apply/Reject. */
   proposals?: { title: string; actions: ProposedAction[] }[];
+  /** Extracted text from any documents attached on this turn (PDF/Excel).
+   *  Carried in history so subsequent turns can still reference the file
+   *  without the user having to re-upload it. */
+  extractedDocs?: { name: string; text: string }[];
   error?: boolean;
   pending?: boolean;
 }
@@ -304,6 +308,25 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       fd.append('prompt', text);
       fd.append('mode', mode);
 
+      // Send the last N messages as conversation history so the model has
+      // continuity across turns (otherwise every prompt is one-shot and
+      // the AI forgets that the user attached a PDF two turns ago). We
+      // strip pending/error messages, drop the welcome, and re-include the
+      // extracted text from any PDFs the user attached in earlier turns.
+      const MAX_HISTORY = 10;
+      const history = messages
+        .filter(m => m.id !== 'welcome' && !m.pending && !m.error)
+        .slice(-MAX_HISTORY)
+        .map(m => {
+          let body = m.text || '';
+          if (m.extractedDocs && m.extractedDocs.length > 0) {
+            body += '\n\n── Document text from this turn ──\n' +
+              m.extractedDocs.map(d => `📄 ${d.name}:\n<<<\n${d.text}\n>>>`).join('\n\n');
+          }
+          return { role: m.role, content: body };
+        });
+      fd.append('history', JSON.stringify(history));
+
       // Send a snapshot of the project so the model can answer questions
       // about it AND target specific rows / templates with tool calls.
       // We include up to MAX_ROWS device rows from the active equipment so
@@ -388,9 +411,16 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
 
       const res = await fetch(endpoint, { method: 'POST', body: fd });
       let raw = '';
+      let backendExtractedDocs: { name: string; text: string }[] | undefined;
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('application/json')) {
         const j = await res.json();
+        // Backend echoes back the text it extracted from any PDFs/Excels —
+        // we stash that on the user's message so future turns can re-send
+        // it as history without the user re-uploading the file.
+        if (j && Array.isArray(j._extractedDocs)) {
+          backendExtractedDocs = j._extractedDocs;
+        }
         // If the backend already returned a {reply, tool_calls} shape, keep it
         // as-is by re-stringifying so parseToolEnvelope handles it uniformly.
         if (j && (Array.isArray(j.tool_calls) || typeof j.reply === 'string')) {
@@ -402,6 +432,14 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         raw = await res.text();
       }
       if (!res.ok) throw new Error(raw || `HTTP ${res.status}`);
+
+      // Persist extracted document text on the user message so the next
+      // turn's history payload still carries it.
+      if (backendExtractedDocs && backendExtractedDocs.length > 0) {
+        setMessages(prev => prev.map(m =>
+          m.id === userMsg.id ? { ...m, extractedDocs: backendExtractedDocs } : m
+        ));
+      }
 
       const { reply, tool_calls } = parseToolEnvelope(raw);
       const callsToRun = agentMode ? tool_calls : [];
