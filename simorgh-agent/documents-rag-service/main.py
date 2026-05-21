@@ -44,16 +44,16 @@ _qdrant: Optional[QdrantService] = None
 async def lifespan(app: FastAPI):
     """Construct the Qdrant client once on startup so MCP tools can reuse it."""
     global _qdrant
-    try:
-        # llm_service is None here; QdrantService falls back to its bundled
-        # SentenceTransformer for embeddings. After phase C this will be
-        # swapped for an embeddings-service HTTP client.
-        _qdrant = QdrantService(llm_service=None)
-        logger.info("documents-rag-service: Qdrant client ready")
-    except Exception as e:
-        logger.warning("Qdrant unavailable; MCP tools will return 503: %s", e)
-        _qdrant = None
-    yield
+    # FastAPI ignores @app.on_event when lifespan= is set, so the MCP
+    # streamable-http session manager has to be started here.
+    async with mcp.session_manager.run():
+        try:
+            _qdrant = QdrantService(llm_service=None)
+            logger.info("documents-rag-service: Qdrant client ready")
+        except Exception as e:
+            logger.warning("Qdrant unavailable; MCP tools will return 503: %s", e)
+            _qdrant = None
+        yield
 
 
 app = FastAPI(

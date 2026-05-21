@@ -134,11 +134,14 @@ async def watch_dir():
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    HR_DOCS_PATH.mkdir(parents=True, exist_ok=True)
-    task = asyncio.create_task(watch_dir())
-    logger.info("hr-kb-service ready, watching %s", HR_DOCS_PATH)
-    yield
-    task.cancel()
+    # FastAPI ignores @app.on_event when lifespan= is set, so the MCP
+    # streamable-http session manager has to be started here.
+    async with mcp.session_manager.run():
+        HR_DOCS_PATH.mkdir(parents=True, exist_ok=True)
+        task = asyncio.create_task(watch_dir())
+        logger.info("hr-kb-service ready, watching %s", HR_DOCS_PATH)
+        yield
+        task.cancel()
 
 
 app = FastAPI(title="Simorgh HR Knowledge Base", version="0.1.0", lifespan=lifespan)

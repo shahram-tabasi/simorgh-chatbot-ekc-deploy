@@ -39,26 +39,29 @@ _graph_rag_service: Optional[GraphRAGService] = None
 async def lifespan(app: FastAPI):
     global _neo4j_driver, _graph_rag, _graph_rag_service
 
-    neo4j_uri = os.getenv("NEO4J_URI")
-    if not neo4j_uri:
-        logger.warning("NEO4J_URI not set; graph-rag-service will return 503 on every call")
-    else:
-        try:
-            from neo4j import GraphDatabase
-            _neo4j_driver = GraphDatabase.driver(
-                neo4j_uri,
-                auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "")),
-            )
-            _graph_rag = GraphRAG(driver=_neo4j_driver, openai_api_key=os.getenv("OPENAI_API_KEY"))
-            _graph_rag_service = GraphRAGService(driver=_neo4j_driver)
-            logger.info("graph-rag-service ready")
-        except Exception as e:
-            logger.error("Neo4j init failed: %s", e)
+    # FastAPI ignores @app.on_event when lifespan= is set, so the MCP
+    # streamable-http session manager has to be started here.
+    async with mcp.session_manager.run():
+        neo4j_uri = os.getenv("NEO4J_URI")
+        if not neo4j_uri:
+            logger.warning("NEO4J_URI not set; graph-rag-service will return 503 on every call")
+        else:
+            try:
+                from neo4j import GraphDatabase
+                _neo4j_driver = GraphDatabase.driver(
+                    neo4j_uri,
+                    auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "")),
+                )
+                _graph_rag = GraphRAG(driver=_neo4j_driver, openai_api_key=os.getenv("OPENAI_API_KEY"))
+                _graph_rag_service = GraphRAGService(driver=_neo4j_driver)
+                logger.info("graph-rag-service ready")
+            except Exception as e:
+                logger.error("Neo4j init failed: %s", e)
 
-    yield
+        yield
 
-    if _neo4j_driver is not None:
-        _neo4j_driver.close()
+        if _neo4j_driver is not None:
+            _neo4j_driver.close()
 
 
 app = FastAPI(title="Simorgh Graph RAG Service", version="1.0.0", lifespan=lifespan)

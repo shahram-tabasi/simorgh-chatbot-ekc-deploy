@@ -61,15 +61,18 @@ def conn():
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    try:
-        with conn() as c:
-            with c.cursor() as cur:
-                cur.execute("SELECT 1 AS ok")
-                cur.fetchone()
-        logger.info("MSSQL reachable at %s:%d/%s", EPLAN_SQL_HOST, EPLAN_SQL_PORT, EPLAN_SQL_DATABASE)
-    except Exception as e:
-        logger.warning("MSSQL unreachable at startup: %s", e)
-    yield
+    # FastAPI ignores @app.on_event when lifespan= is set, so the MCP
+    # streamable-http session manager has to be started here.
+    async with mcp.session_manager.run():
+        try:
+            with conn() as c:
+                with c.cursor() as cur:
+                    cur.execute("SELECT 1 AS ok")
+                    cur.fetchone()
+            logger.info("MSSQL reachable at %s:%d/%s", EPLAN_SQL_HOST, EPLAN_SQL_PORT, EPLAN_SQL_DATABASE)
+        except Exception as e:
+            logger.warning("MSSQL unreachable at startup: %s", e)
+        yield
 
 
 app = FastAPI(title="Simorgh Eplan SQL Gateway", version="0.1.0", lifespan=lifespan)

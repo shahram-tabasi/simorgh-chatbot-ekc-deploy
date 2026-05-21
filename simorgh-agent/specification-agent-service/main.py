@@ -47,46 +47,49 @@ async def lifespan(app: FastAPI):
     global _classifier, _spec_extractor
     logger.info("Initializing specification-agent-service dependencies...")
 
-    _classifier = DocumentClassifier()
+    # FastAPI ignores @app.on_event when lifespan= is set, so the MCP
+    # streamable-http session manager has to be started here.
+    async with mcp.session_manager.run():
+        _classifier = DocumentClassifier()
 
-    # EnhancedSpecExtractor needs llm_service + qdrant_service + graph_initializer.
-    # graph_initializer wraps a Neo4j driver; if Neo4j isn't configured, we
-    # still construct the extractor with None and let it fail per-call rather
-    # than at import.
-    llm_service = get_llm_service()
-    try:
-        qdrant_service = QdrantService(llm_service=llm_service)
-    except Exception as e:
-        logger.warning("Qdrant not reachable; spec extraction disabled: %s", e)
-        qdrant_service = None
-
-    graph_initializer = None
-    neo4j_uri = os.getenv("NEO4J_URI", "")
-    if neo4j_uri:
+        # EnhancedSpecExtractor needs llm_service + qdrant_service + graph_initializer.
+        # graph_initializer wraps a Neo4j driver; if Neo4j isn't configured, we
+        # still construct the extractor with None and let it fail per-call rather
+        # than at import.
+        llm_service = get_llm_service()
         try:
-            from neo4j import GraphDatabase
-            from services.project_graph_init import ProjectGraphInitializer
-            driver = GraphDatabase.driver(
-                neo4j_uri,
-                auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "")),
-            )
-            graph_initializer = ProjectGraphInitializer(driver=driver)
+            qdrant_service = QdrantService(llm_service=llm_service)
         except Exception as e:
-            logger.warning("Neo4j unavailable; graph-aware extraction disabled: %s", e)
+            logger.warning("Qdrant not reachable; spec extraction disabled: %s", e)
+            qdrant_service = None
 
-    if qdrant_service is not None:
-        try:
-            _spec_extractor = EnhancedSpecExtractor(
-                llm_service=llm_service,
-                qdrant_service=qdrant_service,
-                graph_initializer=graph_initializer,
-            )
-        except Exception as e:
-            logger.warning("EnhancedSpecExtractor init failed: %s", e)
+        graph_initializer = None
+        neo4j_uri = os.getenv("NEO4J_URI", "")
+        if neo4j_uri:
+            try:
+                from neo4j import GraphDatabase
+                from services.project_graph_init import ProjectGraphInitializer
+                driver = GraphDatabase.driver(
+                    neo4j_uri,
+                    auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "")),
+                )
+                graph_initializer = ProjectGraphInitializer(driver=driver)
+            except Exception as e:
+                logger.warning("Neo4j unavailable; graph-aware extraction disabled: %s", e)
 
-    logger.info("specification-agent-service ready")
-    yield
-    logger.info("specification-agent-service shutting down")
+        if qdrant_service is not None:
+            try:
+                _spec_extractor = EnhancedSpecExtractor(
+                    llm_service=llm_service,
+                    qdrant_service=qdrant_service,
+                    graph_initializer=graph_initializer,
+                )
+            except Exception as e:
+                logger.warning("EnhancedSpecExtractor init failed: %s", e)
+
+        logger.info("specification-agent-service ready")
+        yield
+        logger.info("specification-agent-service shutting down")
 
 
 app = FastAPI(title="Simorgh Specification Agent", version="1.0.0", lifespan=lifespan)

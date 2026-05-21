@@ -61,14 +61,17 @@ def db():
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Sanity-check connection at startup; don't fail boot if DB is briefly down.
-    try:
-        with db() as c, c.cursor() as cur:
-            cur.execute("SELECT 1")
-        logger.info("MySQL reachable at %s:%d", MYSQL_HOST, MYSQL_PORT)
-    except Exception as e:
-        logger.warning("MySQL unreachable at startup: %s", e)
-    yield
+    # FastAPI ignores @app.on_event when lifespan= is set, so the MCP
+    # streamable-http session manager has to be started here.
+    async with mcp.session_manager.run():
+        # Sanity-check connection at startup; don't fail boot if DB is briefly down.
+        try:
+            with db() as c, c.cursor() as cur:
+                cur.execute("SELECT 1")
+            logger.info("MySQL reachable at %s:%d", MYSQL_HOST, MYSQL_PORT)
+        except Exception as e:
+            logger.warning("MySQL unreachable at startup: %s", e)
+        yield
 
 
 app = FastAPI(title="Simorgh Organization Data", version="0.1.0", lifespan=lifespan)
