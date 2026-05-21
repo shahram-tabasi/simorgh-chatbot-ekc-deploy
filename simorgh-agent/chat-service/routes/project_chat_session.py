@@ -95,6 +95,11 @@ def _mirror_session_to_legacy_redis(row: asyncpg.Record, project: asyncpg.Record
             "message_count": 0,
             "status": "active",
             "session_token": chat_id,
+            # Git context — surfaced in the sidebar so the user can see
+            # the repo and working branch without opening the session.
+            "repo_path": project.get("gitlab_repo_path"),
+            "base_branch": project.get("gitlab_base_branch"),
+            "working_branch": project.get("simorgh_branch"),
         }
         r.set(f"chat:{chat_id}:metadata", json.dumps(chat_data))
         r.sadd(f"user:{owner_id}:chats:all", chat_id)
@@ -195,7 +200,9 @@ async def create_session(req: CreateSessionRequest,
     # Mirror to the legacy Redis chat index so the existing sidebar UI
     # (/api/users/{user}/project-chats) sees this session immediately.
     project = await pool.fetchrow(
-        "SELECT id, name, tpms_oenum, gitlab_repo_path FROM projects WHERE id = $1::uuid",
+        "SELECT id, name, tpms_oenum, gitlab_repo_path, gitlab_base_branch, "
+        "       simorgh_branch "
+        "FROM projects WHERE id = $1::uuid",
         req.project_id,
     )
     if project is not None:

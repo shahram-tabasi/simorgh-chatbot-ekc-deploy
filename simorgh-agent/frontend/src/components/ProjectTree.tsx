@@ -6,12 +6,24 @@ import {
   ChevronDown,
   ChevronRight,
   Plus,
-  Sparkles
+  Sparkles,
+  GitBranch
 } from 'lucide-react';
 import { Project, Chat } from '../types';
 import ContextMenu from './ContextMenu';
 import RenameModal from './RenameModal';
 import { Tooltip } from './Tooltip';
+
+function timeAgo(d: Date | string | undefined): string {
+  if (!d) return '';
+  const t = typeof d === 'string' ? new Date(d) : d;
+  const s = Math.floor((Date.now() - t.getTime()) / 1000);
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 604800) return `${Math.floor(s / 86400)}d`;
+  return t.toLocaleDateString();
+}
 
 interface ProjectTreeProps {
   projects: Project[];
@@ -168,57 +180,58 @@ export function ProjectTree({
 
   return (
     <div className="h-full flex flex-col text-white">
-      {/* Header */}
-      <div className="p-4 border-b border-white/10">
+      {/* Header — quiet "+ New project" button, Claude-Code style */}
+      <div className="px-3 pt-3 pb-2 border-b border-white/[0.06]">
         <button
           onClick={onCreateProject}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-semibold transition-all shadow-lg"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-md bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 hover:border-white/20 text-gray-100 text-sm font-medium transition"
         >
-          <Plus className="w-5 h-5" />
-          New Project
+          <Plus className="w-4 h-4 text-gray-300" />
+          New project
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-6">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3 space-y-4">
         {/* General Chats — hidden entirely for legacy users (onCreateGeneralChat undefined). */}
         {onCreateGeneralChat && (
         <div>
-          <button
-            onClick={onToggleGeneralChats}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition"
-          >
-            {showGeneralChats ? (
-              <ChevronDown className="w-5 h-5 text-gray-400" />
-            ) : (
-              <ChevronRight className="w-5 h-5 text-gray-400" />
-            )}
-            <Sparkles className="w-5 h-5 text-purple-400" />
-            <span className="font-semibold">General Chats</span>
+          <div className="flex items-center px-2 mb-1">
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onCreateGeneralChat();
-              }}
-              className="ml-auto p-1.5 hover:bg-white/10 rounded transition"
+              onClick={onToggleGeneralChats}
+              className="flex items-center gap-1.5 flex-1 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-300 transition"
             >
-              <Plus className="w-4 h-4 text-gray-400" />
+              {showGeneralChats ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronRight className="w-3 h-3" />
+              )}
+              <Sparkles className="w-3 h-3" />
+              <span>General</span>
             </button>
-          </button>
+            <button
+              onClick={onCreateGeneralChat}
+              className="p-1 hover:bg-white/10 rounded text-gray-500 hover:text-gray-300 transition"
+              title="New general chat"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
 
           {showGeneralChats && generalChats.length > 0 && (
-            <motion.div className="ml-8 mt-2 space-y-1">
+            <motion.div className="space-y-0.5">
               {generalChats.map((chat) => (
                 <Tooltip key={chat.id} content={chat.title} position="right">
                   <button
                     onClick={() => onSelectChat(null, chat.id)}
                     onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, null)}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition ${
+                    className={`group w-full text-left pl-7 pr-2 py-1.5 rounded text-sm transition flex items-center gap-2 border-l-2 ${
                       activeChatId === chat.id && !activeProjectId
-                        ? 'bg-emerald-500/20 text-emerald-400'
-                        : 'text-gray-300 hover:bg-white/10'
+                        ? 'bg-white/[0.06] border-emerald-400/70 text-white'
+                        : 'border-transparent text-gray-300 hover:bg-white/[0.04] hover:text-white'
                     }`}
                   >
-                    <span className="block truncate">{chat.title}</span>
+                    <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" />
+                    <span className="block truncate flex-1">{chat.title}</span>
                   </button>
                 </Tooltip>
               ))}
@@ -229,74 +242,106 @@ export function ProjectTree({
 
         {/* Projects Section */}
         <div>
-          <div className="px-3 py-2 text-xs font-bold text-gray-500 uppercase tracking-wider">
-            List Projects
+          <div className="px-2 mb-1 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+            Projects
           </div>
 
           {realProjects.length === 0 ? (
             <div className="px-3 py-8 text-center text-gray-500 text-sm">
-              No projects yet. Click "New Project" to start!
+              No projects yet. Tap <span className="text-gray-300">+ New project</span> to start.
             </div>
           ) : (
-            realProjects.map((project) => (
-              <div key={project.id} className="mt-4">
-                {/* Project Row */}
+            <div className="space-y-1">
+            {realProjects.map((project) => {
+              const isActive = activeProjectId === project.id;
+              const repo = project.repoPath;
+              const branch = project.workingBranch || project.baseBranch;
+              return (
+              <div key={project.id}>
+                {/* Project Row — name, repo subtitle, branch chip */}
                 <div
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition"
+                  className={`group flex items-start gap-2 pl-2 pr-1 py-2 rounded-md transition border-l-2 ${
+                    isActive
+                      ? 'bg-white/[0.05] border-sky-400/70'
+                      : 'border-transparent hover:bg-white/[0.03]'
+                  }`}
                   onContextMenu={(e) => handleProjectContextMenu(e, project.id, project.name)}
                 >
-                  <Tooltip content={project.name} position="right">
-                    <button
-                      onClick={() => onToggleProject(project.id)}
-                      className="flex items-center gap-3 flex-1 text-left"
-                    >
-                      {project.isExpanded ? (
-                        <ChevronDown className="w-5 h-5 text-gray-400" />
-                      ) : (
-                        <ChevronRight className="w-5 h-5 text-gray-400" />
-                      )}
-                      <Folder className="w-5 h-5 text-indigo-400" />
-                      <span className="font-bold text-white">
-                        {(project as any).oeNumber || project.id}
-                      </span>
-                    </button>
-                  </Tooltip>
-
-                  {/* Add Page + */}
+                  <button
+                    onClick={() => onToggleProject(project.id)}
+                    className="mt-0.5 flex-shrink-0 text-gray-500 hover:text-gray-300 transition"
+                  >
+                    {project.isExpanded ? (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                  <Folder className="w-4 h-4 mt-0.5 text-sky-300/80 flex-shrink-0" />
+                  <button
+                    onClick={() => onToggleProject(project.id)}
+                    className="flex-1 min-w-0 text-left"
+                  >
+                    <div className="text-[13px] font-medium text-gray-100 truncate">
+                      {project.name || (project as any).oeNumber || project.id}
+                    </div>
+                    {repo && (
+                      <div className="text-[11px] text-gray-500 font-mono truncate">
+                        {repo}
+                      </div>
+                    )}
+                    {branch && (
+                      <div className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/[0.08] border border-emerald-400/20 text-[10px] font-mono text-emerald-300/90 max-w-full">
+                        <GitBranch className="w-2.5 h-2.5 flex-shrink-0" />
+                        <span className="truncate">{branch}</span>
+                      </div>
+                    )}
+                  </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleAddPage(project.id);
                     }}
-                    className="p-1.5 hover:bg-white/10 rounded transition"
-                    title="Add new page"
+                    className="mt-0.5 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-white/10 transition opacity-0 group-hover:opacity-100 flex-shrink-0"
+                    title="New chat in this project"
                   >
-                    <Plus className="w-4 h-4 text-emerald-400" />
+                    <Plus className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
-                {/* Pages */}
+                {/* Chats within the project */}
                 {project.isExpanded && project.chats.length > 0 && (
-                  <motion.div className="ml-10 mt-2 space-y-1">
-                    {project.chats.map((chat) => (
+                  <motion.div className="mt-0.5 space-y-0.5">
+                    {project.chats.map((chat) => {
+                      const isChatActive = activeChatId === chat.id;
+                      return (
                       <Tooltip key={chat.id} content={chat.title} position="right">
                         <button
                           onClick={() => onSelectChat(project.id, chat.id)}
                           onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, project.id)}
-                          className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition ${
-                            activeChatId === chat.id
-                              ? 'bg-emerald-500/20 text-emerald-400'
-                              : 'text-gray-300 hover:bg-white/10'
+                          className={`w-full text-left pl-9 pr-2 py-1.5 rounded text-[13px] transition flex items-center gap-2 border-l-2 ${
+                            isChatActive
+                              ? 'bg-white/[0.06] border-emerald-400/70 text-white'
+                              : 'border-transparent text-gray-300 hover:bg-white/[0.04] hover:text-white'
                           }`}
                         >
-                          <span className="block truncate">{chat.title}</span>
+                          <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" />
+                          <span className="block truncate flex-1">{chat.title}</span>
+                          {chat.updatedAt && (
+                            <span className="text-[10px] text-gray-500 flex-shrink-0">
+                              {timeAgo(chat.updatedAt)}
+                            </span>
+                          )}
                         </button>
                       </Tooltip>
-                    ))}
+                      );
+                    })}
                   </motion.div>
                 )}
               </div>
-            ))
+              );
+            })}
+            </div>
           )}
         </div>
       </div>

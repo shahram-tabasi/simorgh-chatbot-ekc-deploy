@@ -169,8 +169,18 @@ export function useProjects(userId?: string) {
               name: projectName,
               chats: [],
               createdAt: new Date(chat.created_at),
-              isExpanded: false
+              isExpanded: false,
+              repoPath: chat.repo_path ?? null,
+              baseBranch: chat.base_branch ?? null,
+              workingBranch: chat.working_branch ?? null
             });
+          } else {
+            // Fill in git context from whichever chat in the project
+            // carries it — older sessions may pre-date the mirror change.
+            const existing = projectsMap.get(projectId);
+            if (!existing.repoPath && chat.repo_path) existing.repoPath = chat.repo_path;
+            if (!existing.baseBranch && chat.base_branch) existing.baseBranch = chat.base_branch;
+            if (!existing.workingBranch && chat.working_branch) existing.workingBranch = chat.working_branch;
           }
 
           const project = projectsMap.get(projectId);
