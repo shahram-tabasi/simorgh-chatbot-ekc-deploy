@@ -302,6 +302,19 @@ async def create_project(
     except HTTPException:
         raise
     except Exception as e:
+        # Unique-name collision (per migration 003's idx_projects_owner_name)
+        # — surface as 409 with a friendly message so the wizard can prompt
+        # the user to rename instead of showing a stack trace.
+        msg = str(e)
+        if "idx_projects_owner_name" in msg or "duplicate key" in msg.lower():
+            existing_name = data.name
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"You already have a project named '{existing_name}'. "
+                    "Pick a different name or open the existing project."
+                ),
+            )
         logger.error(f"Project creation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
