@@ -446,7 +446,27 @@ class COTEngine:
             return fallback
 
     async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
-        """Call the LLM service for COT analysis."""
+        """Call the LLM service for COT analysis.
+
+        If COT_LLM_BASE_URL is set, route the planner step through an
+        OpenAI-compatible endpoint (e.g. the VLM on 192.168.1.62 via
+        http://nginx/api/vlm/v1). Qwen2.5-VL-7B follows JSON-output
+        instructions far more reliably than gpt-oss-20b. Final-answer
+        generation still uses whatever the rest of the agent uses.
+        """
+        cot_base_url = os.getenv("COT_LLM_BASE_URL", "").strip()
+        if cot_base_url:
+            try:
+                return await self._call_llm_openai_compat(
+                    messages, base_url=cot_base_url,
+                    model=os.getenv("COT_LLM_MODEL", "qwen2.5-vl-7b"),
+                )
+            except Exception as e:
+                logger.warning(
+                    f"CoT planner via {cot_base_url} failed: {e}; "
+                    "falling back to default llm_service"
+                )
+
         try:
             # Try async generation first
             if hasattr(self.llm_service, 'async_generate'):
@@ -465,6 +485,26 @@ class COTEngine:
         except Exception as e:
             logger.error(f"LLM call failed in COT engine: {e}")
             raise
+
+    async def _call_llm_openai_compat(
+        self, messages: List[Dict[str, str]], *, base_url: str, model: str
+    ) -> str:
+        """POST OpenAI-format chat/completions to base_url. Used for the
+        VLM-hosted planner (qwen2.5-vl-7b on 192.168.1.62 via nginx)."""
+        import httpx
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
+            "stream": False,
+        }
+        async with httpx.AsyncClient(timeout=120) as c:
+            r = await c.post(url, json=payload)
+            r.raise_for_status()
+            data = r.json()
+        return data["choices"][0]["message"]["content"]
 
     def _parse_llm_response(
         self, response: str, chain_id: uuid.UUID, request: COTRequest
