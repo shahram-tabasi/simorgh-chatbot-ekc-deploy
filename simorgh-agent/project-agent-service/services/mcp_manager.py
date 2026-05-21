@@ -78,18 +78,34 @@ class MCPManager:
         self.servers[name] = MCPServerConfig(name, url, description)
 
     async def connect_all(self):
-        """Connect to all registered MCP servers and discover tools."""
-        connected = 0
-        for name, config in self.servers.items():
+        """Connect to all registered MCP servers and discover tools.
+
+        Runs every connect in parallel so one slow/cold server doesn't
+        push the next over its timeout. Sequential connects also caused
+        empty-error CancelledErrors when the per-server wait_for fired
+        while the prior streamablehttp_client task group was still
+        winding down — the cancellation cascaded into the next attempt.
+        """
+        per_server_timeout = float(os.getenv("MCP_CONNECT_TIMEOUT_SEC", "30"))
+
+        async def _attempt(name: str, config: MCPServerConfig) -> bool:
             try:
                 await asyncio.wait_for(
                     self._connect_server(name, config),
-                    timeout=15.0,
+                    timeout=per_server_timeout,
                 )
-                connected += 1
                 logger.info(f"MCP connected: {name} ({config.url})")
+                return True
             except (Exception, asyncio.CancelledError) as e:
-                logger.warning(f"MCP server {name} unavailable: {e}")
+                msg = str(e) or type(e).__name__
+                logger.warning(f"MCP server {name} unavailable: {msg}")
+                return False
+
+        results = await asyncio.gather(
+            *(_attempt(name, cfg) for name, cfg in self.servers.items()),
+            return_exceptions=False,
+        )
+        connected = sum(1 for ok in results if ok)
 
         self._connected = connected > 0
         logger.info(
