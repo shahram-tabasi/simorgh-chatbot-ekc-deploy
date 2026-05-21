@@ -648,6 +648,12 @@ export function useProjects(userId?: string) {
         metadata: m.metadata || {}
       }));
 
+      // Guard: a 200-OK-with-empty-messages from the backend used to
+      // nuke the in-memory thread on every project switch (the blanking
+      // bug). Only replace local messages if the server actually
+      // returned some, or there were none locally.
+      const mapped = mapMessages(messages);
+
       if (projectId !== null) {
         // Project chat
         setProjects(prev =>
@@ -660,7 +666,9 @@ export function useProjects(userId?: string) {
                       ? {
                           ...c,
                           title: chatMetadata.chat_name || c.title,
-                          messages: mapMessages(messages),
+                          messages: (mapped.length > 0 || c.messages.length === 0)
+                            ? mapped
+                            : c.messages,
                           updatedAt: new Date()
                         }
                       : c
@@ -678,7 +686,9 @@ export function useProjects(userId?: string) {
               ? {
                   ...c,
                   title: chatMetadata.chat_name || c.title,
-                  messages: mapMessages(messages),
+                  messages: (mapped.length > 0 || c.messages.length === 0)
+                    ? mapped
+                    : c.messages,
                   updatedAt: new Date()
                 }
               : c
@@ -899,11 +909,23 @@ export function useProjects(userId?: string) {
       // Update localStorage to persist deletion
       localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(updatedProjects));
 
-      // Clear active project if it was deleted
+      // Clear active project if it was deleted, AND strip any deep-link
+      // ?project=X&session=Y from the URL so a refresh doesn't try to
+      // re-open the just-deleted session (the "page sticks after delete"
+      // bug).
       if (activeProjectId === projectId) {
         setActiveChatId(null);
         setActiveProjectId(null);
       }
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('project') === projectId) {
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      } catch {}
+      try {
+        sessionStorage.removeItem('simorgh_pending_session');
+      } catch {}
 
       const deletedChatCount = response.data.deleted_chat_count || 0;
       const deletedNeo4jNodes = response.data.deleted_neo4j_nodes || 0;
