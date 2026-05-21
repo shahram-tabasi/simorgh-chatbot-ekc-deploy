@@ -20,12 +20,15 @@ These routes handle:
 
 The session token is short and URL-safe (token_urlsafe(16)).
 """
+import json
 import logging
 import os
 import secrets
+from datetime import datetime, timezone
 from typing import Any
 
 import asyncpg
+import redis as redis_lib
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -41,8 +44,12 @@ POSTGRES_URL = os.getenv(
     "POSTGRES_AUTH_URL",
     "postgresql://simorgh:simorgh_secure_2024@postgres_auth:5432/simorgh_auth",
 )
+REDIS_HOST     = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT     = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_CHAT_DB  = int(os.getenv("REDIS_CHAT_DB", "1"))
 
 _pool: asyncpg.Pool | None = None
+_redis_chat: redis_lib.Redis | None = None
 
 
 async def _db() -> asyncpg.Pool:
@@ -50,6 +57,53 @@ async def _db() -> asyncpg.Pool:
     if _pool is None:
         _pool = await asyncpg.create_pool(POSTGRES_URL, min_size=1, max_size=8)
     return _pool
+
+
+def _redis() -> redis_lib.Redis:
+    """Synchronous Redis client for the chat-metadata DB the legacy backend
+    indexes for /api/users/{user}/project-chats. Sync is fine here — chat
+    creation is rare and the calls are small."""
+    global _redis_chat
+    if _redis_chat is None:
+        _redis_chat = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT,
+                                       db=REDIS_CHAT_DB, decode_responses=True)
+    return _redis_chat
+
+
+def _mirror_session_to_legacy_redis(row: asyncpg.Record, project: asyncpg.Record,
+                                    owner_id: str) -> None:
+    """Write the per-chat metadata + user-chat-index keys that the legacy
+    backend's /api/users/{user}/project-chats reads. Without this the new
+    wizard's session is invisible to the existing sidebar UI."""
+    try:
+        r = _redis()
+        chat_id = row["session_token"]
+        project_id = str(project["id"])
+        project_number = (project.get("tpms_oenum")
+                          or project.get("gitlab_repo_path")
+                          or project_id)
+        chat_data = {
+            "chat_id": chat_id,
+            "chat_name": row.get("title") or project["name"],
+            "user_id": owner_id,
+            "chat_type": "project",
+            "project_number": project_number,
+            "project_id": project_id,
+            "project_name": project["name"],
+            "page_name": row.get("title") or "Main",
+            "created_at": row["created_at"].isoformat(),
+            "message_count": 0,
+            "status": "active",
+            "session_token": chat_id,
+        }
+        r.set(f"chat:{chat_id}:metadata", json.dumps(chat_data))
+        r.sadd(f"user:{owner_id}:chats:all", chat_id)
+        r.sadd(f"user:{owner_id}:chats:project:{project_number}", chat_id)
+        logger.info("legacy-mirror: project chat indexed user=%s chat=%s project=%s",
+                    owner_id, chat_id, project_number)
+    except Exception as e:
+        # Mirror is best-effort: Postgres remains source of truth.
+        logger.warning("legacy redis mirror failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +192,14 @@ async def create_session(req: CreateSessionRequest,
         req.project_id, token, req.title, req.stage,
         _owner_id(current_user),
     )
+    # Mirror to the legacy Redis chat index so the existing sidebar UI
+    # (/api/users/{user}/project-chats) sees this session immediately.
+    project = await pool.fetchrow(
+        "SELECT id, name, tpms_oenum, gitlab_repo_path FROM projects WHERE id = $1::uuid",
+        req.project_id,
+    )
+    if project is not None:
+        _mirror_session_to_legacy_redis(row, project, _owner_id(current_user))
     return _row_to_response(row)
 
 
@@ -247,6 +309,19 @@ async def delete_session(session_token: str,
 
     # 1. Tear down container (best-effort; we proceed even if it fails).
     container_result = await destroy_session_container(project_id)
+
+    # 1b. Best-effort: remove the legacy Redis chat-index entries so the
+    #     sidebar UI stops showing this session immediately.
+    try:
+        r = _redis()
+        r.delete(f"chat:{session_token}:metadata")
+        r.srem(f"user:{owner_id}:chats:all", session_token)
+        # Remove from any per-project set too (we don't know the project_number
+        # cheaply post-delete, so brute-force scan the user's project sets).
+        for key in r.scan_iter(f"user:{owner_id}:chats:project:*"):
+            r.srem(key, session_token)
+    except Exception as e:
+        logger.warning("legacy redis cleanup failed: %s", e)
 
     # 2. Cascade Postgres rows. project_messages/tasks/docs/commits/instructions/
     #    project_chat_sessions are all FK'd to projects with ON DELETE CASCADE,
