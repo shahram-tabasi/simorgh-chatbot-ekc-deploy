@@ -54,7 +54,7 @@ class MCPManager:
 
     Usage:
         manager = MCPManager()
-        manager.register_server("search", "http://search-service:8020/mcp")
+        manager.register_server("search", "http://search-service:8020/mcp/")
         await manager.connect_all()
 
         # Dynamic tool discovery
@@ -292,25 +292,25 @@ def get_mcp_manager() -> MCPManager:
         servers = {
             # Original microservices (always present)
             "search": os.getenv(
-                "SEARCH_MCP_URL", "http://search-service:8020/mcp"
+                "SEARCH_MCP_URL", "http://search-service:8020/mcp/"
             ),
             "tpms_fetcher": os.getenv(
-                "TPMS_FETCHER_MCP_URL", "http://tpms-fetcher:8021/mcp"
+                "TPMS_FETCHER_MCP_URL", "http://tpms-fetcher:8021/mcp/"
             ),
             "project_init": os.getenv(
-                "PROJECT_INIT_MCP_URL", "http://project-init:8022/mcp"
+                "PROJECT_INIT_MCP_URL", "http://project-init:8022/mcp/"
             ),
             "project_analysis": os.getenv(
-                "PROJECT_ANALYSIS_MCP_URL", "http://project-analysis:8023/mcp"
+                "PROJECT_ANALYSIS_MCP_URL", "http://project-analysis:8023/mcp/"
             ),
             "command_gen": os.getenv(
-                "COMMAND_GEN_MCP_URL", "http://command-gen:8024/mcp"
+                "COMMAND_GEN_MCP_URL", "http://command-gen:8024/mcp/"
             ),
             "file_export": os.getenv(
-                "FILE_EXPORT_MCP_URL", "http://file-export:8025/mcp"
+                "FILE_EXPORT_MCP_URL", "http://file-export:8025/mcp/"
             ),
             "eplan_bridge": os.getenv(
-                "EPLAN_BRIDGE_MCP_URL", "http://eplan-bridge:8026/mcp"
+                "EPLAN_BRIDGE_MCP_URL", "http://eplan-bridge:8026/mcp/"
             ),
 
             # Extracted services that also expose MCP (added during the
@@ -318,25 +318,25 @@ def get_mcp_manager() -> MCPManager:
             # one; connect_mcp() tolerates a missing/unreachable server.
             "specification_agent": os.getenv(
                 "SPECIFICATION_AGENT_MCP_URL",
-                "http://specification-agent-service:8036/mcp",
+                "http://specification-agent-service:8036/mcp/",
             ),
             "hr_kb": os.getenv(
-                "HR_KB_MCP_URL", "http://hr-kb-service:8041/mcp"
+                "HR_KB_MCP_URL", "http://hr-kb-service:8041/mcp/"
             ),
             "org_data": os.getenv(
-                "ORG_DATA_MCP_URL", "http://org-data-service:8042/mcp"
+                "ORG_DATA_MCP_URL", "http://org-data-service:8042/mcp/"
             ),
             "eplan_sql": os.getenv(
-                "EPLAN_SQL_MCP_URL", "http://eplan-sql-service:8044/mcp"
+                "EPLAN_SQL_MCP_URL", "http://eplan-sql-service:8044/mcp/"
             ),
             # documents-rag and graph-rag MCP endpoints land in commits 2 + 3
             # of this batch — adding the env names now so the upgrade is
             # purely deploy-config when those services restart.
             "documents_rag": os.getenv(
-                "DOCUMENTS_RAG_MCP_URL", "http://documents-rag-service:8033/mcp"
+                "DOCUMENTS_RAG_MCP_URL", "http://documents-rag-service:8033/mcp/"
             ),
             "graph_rag": os.getenv(
-                "GRAPH_RAG_MCP_URL", "http://graph-rag-service:8037/mcp"
+                "GRAPH_RAG_MCP_URL", "http://graph-rag-service:8037/mcp/"
             ),
 
             # 2026-05 enterprise migration — these were missing from the
@@ -347,7 +347,7 @@ def get_mcp_manager() -> MCPManager:
                 # GitLab projects + technical-knowledge — exposes
                 # list_projects_mcp, get_project_tree, read_file_mcp,
                 # search_blobs, search_technical_knowledge.
-                "GITLAB_MCP_URL_MCP", "http://gitlab-mcp:8047/mcp"
+                "GITLAB_MCP_URL_MCP", "http://gitlab-mcp:8047/mcp/"
             ),
             "context_search": os.getenv(
                 # Hybrid (BM25+kNN) search across all indexed simorgh
@@ -355,32 +355,32 @@ def get_mcp_manager() -> MCPManager:
                 # Exposes search_context, search_projects_mcp,
                 # search_past_cot, search_logs_mcp, aggregate_field,
                 # time_series_query, index_cot_trace.
-                "CONTEXT_SEARCH_MCP_URL", "http://context-search:8049/mcp"
+                "CONTEXT_SEARCH_MCP_URL", "http://context-search:8049/mcp/"
             ),
             "tpms_context_agent": os.getenv(
                 # Renders requested slices of a project's TPMS data
                 # into Markdown blocks for direct inclusion in the
                 # prompt. Exposes get_project_context(oenum, sections).
-                "TPMS_CONTEXT_MCP_URL", "http://tpms-context-agent:8050/mcp"
+                "TPMS_CONTEXT_MCP_URL", "http://tpms-context-agent:8050/mcp/"
             ),
             "runtime_broker": os.getenv(
                 # Per-project long-lived shell-runtime containers.
                 # Exposes session_start/stop/exec, session_read_file /
                 # write_file, session_git_commit / push.
-                "RUNTIME_BROKER_MCP_URL", "http://runtime-broker:8048/mcp"
+                "RUNTIME_BROKER_MCP_URL", "http://runtime-broker:8048/mcp/"
             ),
             "project_explorer": os.getenv(
                 # Two-phase project exploration. Exposes explore_tool
                 # and get_exploration; result also lives in Redis under
                 # project:{id}:exploration for the CoT engine to pull.
-                "PROJECT_EXPLORER_MCP_URL", "http://project-explorer:8052/mcp"
+                "PROJECT_EXPLORER_MCP_URL", "http://project-explorer:8052/mcp/"
             ),
             "mail_bridge": os.getenv(
                 # Outbound email via Mailcow's SMTP submission. Exposes
                 # send_email(to, subject, body_text, body_html?, cc?,
                 # in_reply_to?). Inbound is push-driven via webhook —
                 # no MCP tool needed for that direction.
-                "MAIL_BRIDGE_MCP_URL", "http://mail-bridge:8051/mcp"
+                "MAIL_BRIDGE_MCP_URL", "http://mail-bridge:8051/mcp/"
             ),
         }
 
