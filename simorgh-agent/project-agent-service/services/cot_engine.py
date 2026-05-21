@@ -379,6 +379,56 @@ class COTEngine:
                 "user's selected GitLab repository and uploaded documents."
             )
 
+        # Source-aware planner guardrails. The CoT system prompt baked in
+        # a TPMS-first workflow; if the user didn't tick tpms / techserver
+        # at project creation we MUST NOT plan steps against those tools.
+        # Likewise, when the user picked a GitLab repo the planner should
+        # default to gitlab_mcp.get_project_tree / read_file_mcp.
+        if sources_enabled:
+            allowed_lines = ["\nAllowed data sources for THIS project "
+                             "(do not plan steps against any other):"]
+            if sources_enabled.get("gitlab"):
+                repo = (project_context.get("gitlab_repo_path")
+                        or (project_context.get("project") or {})
+                            .get("gitlab_repo_path"))
+                branch = (project_context.get("simorgh_branch")
+                          or (project_context.get("project") or {})
+                              .get("simorgh_branch"))
+                allowed_lines.append(
+                    f"  - gitlab_mcp on repo `{repo or '(see project)'}`"
+                    f" branch `{branch or 'simorgh/*'}`. For "
+                    "\"what's in my repository\"-class questions, CALL "
+                    "gitlab_mcp.get_project_tree(project=repo) first, "
+                    "then gitlab_mcp.read_file_mcp for any file the user "
+                    "asks about. Do NOT call project_analyze unless the "
+                    "user explicitly asks for a workspace-wide audit."
+                )
+            if sources_enabled.get("tpms"):
+                allowed_lines.append(
+                    "  - tpms_context_agent / tpms_fetcher — only when the "
+                    "question is about TPMS project records (oenum, panels, "
+                    "feeders, scopes)."
+                )
+            else:
+                allowed_lines.append(
+                    "  - TPMS is DISABLED for this project. DO NOT call "
+                    "tpms_fetch, tpms_get_text, or tpms_context_agent. "
+                    "Ignore the TPMS schema instructions below."
+                )
+            if sources_enabled.get("techserver"):
+                allowed_lines.append(
+                    "  - techserver_sync — for SMB-mounted project files."
+                )
+            else:
+                allowed_lines.append(
+                    "  - techserver is DISABLED — do NOT call techserver_sync."
+                )
+            if sources_enabled.get("upload"):
+                allowed_lines.append(
+                    "  - documents_rag / uploaded files."
+                )
+            context_parts.append("\n".join(allowed_lines))
+
         # Build messages for LLM
         tpms_instructions = get_tpms_instructions()
         system_prompt = COT_SYSTEM_PROMPT.format(

@@ -142,11 +142,25 @@ class ProjectMemoryService:
         query = """
             SELECT id, owner_id, name, description, tpms_oenum, status,
                    agent_enabled, agent_model, git_repo_initialized,
+                   gitlab_repo_path, gitlab_repo_url, gitlab_base_branch,
+                   simorgh_branch, sources_enabled, exploration_status,
                    metadata, created_at, updated_at
             FROM projects WHERE id = $1
         """
         result = await self.pg.execute_one_async(query, project_id)
-        return dict(result) if result else None
+        if not result:
+            return None
+        row = dict(result)
+        # sources_enabled is stored as JSONB / jsonb-text — normalise to dict.
+        se = row.get("sources_enabled")
+        if isinstance(se, str):
+            try:
+                row["sources_enabled"] = json.loads(se)
+            except Exception:
+                row["sources_enabled"] = {}
+        elif se is None:
+            row["sources_enabled"] = {}
+        return row
 
     async def list_projects(self, owner_id: str) -> List[Dict[str, Any]]:
         """List all projects for a user with counts."""
