@@ -182,7 +182,7 @@ CANONICAL EXAMPLE — "Switch ABC plant 6.6kV to 3.3kV — blast radius?":
            + read_file_mcp(... "SLD-main.json")
    Step 5: search_technical_knowledge("6kV to 3.3kV conversion checklist")
    Step 6: aggregate_field(index="projects", group_by="motor_type",
-                           filter_query=f"oenum:{oenum}")
+                           filter_query=f"oenum:{{oenum}}")
    Step 7: Synthesize answer with citations.
 
 The reasoning trace is auto-indexed at the end so future runs benefit

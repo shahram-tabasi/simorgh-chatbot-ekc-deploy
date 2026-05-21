@@ -591,6 +591,13 @@ async def send_message_stream(
                     auto_execute=True,
                 )
             except Exception as e:
+                # The SSE consumer only sees str(e); log the full traceback
+                # here so operators can pinpoint the source. The user still
+                # sees just the message via the event:error stream.
+                logger.exception(
+                    "handle_input failed for project_id=%s chat_id=%s: %s",
+                    project_id, data.chat_id, e,
+                )
                 result_holder["error"] = str(e)
             finally:
                 # Signal completion
