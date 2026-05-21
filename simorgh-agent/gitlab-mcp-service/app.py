@@ -56,7 +56,14 @@ _gl: gitlab.Gitlab | None = None
 def _client() -> gitlab.Gitlab:
     global _gl
     if _gl is None:
-        _gl = gitlab.Gitlab(GITLAB_URL, private_token=GITLAB_TOKEN, timeout=30)
+        # keep_base_url=True: after .auth(), python-gitlab would otherwise
+        # rewrite the client URL to GitLab's configured external_url
+        # (https://simorghai.electrokavir.com/gitlab). Inside the docker
+        # network the internal URL (http://gitlab/gitlab) is what we want
+        # to keep using — the external one would force TLS through nginx
+        # with a self-signed cert and may not even resolve.
+        _gl = gitlab.Gitlab(GITLAB_URL, private_token=GITLAB_TOKEN,
+                            timeout=30, keep_base_url=True)
         _gl.auth()
     return _gl
 
@@ -126,7 +133,8 @@ def list_user_projects(user_token: str | None = None, search: str | None = None,
     if not token:
         raise HTTPException(status_code=401, detail="user gitlab token required")
     try:
-        ugl = gitlab.Gitlab(GITLAB_URL, private_token=token, timeout=30)
+        ugl = gitlab.Gitlab(GITLAB_URL, private_token=token, timeout=30,
+                            keep_base_url=True)
         ugl.auth()
     except gitlab.exceptions.GitlabAuthenticationError:
         raise HTTPException(status_code=401, detail="invalid gitlab token")
