@@ -414,18 +414,49 @@ export function useProjects(userId?: string) {
         return;
       }
 
-      // Create project page/chat in backend
-      const response = await axios.post(`${API_BASE}/chats`, {
-        chat_name: pageName,
-        user_id: userId,
-        chat_type: 'project',
-        project_number: projectId,  // projectId is OENUM
-        page_name: pageName
-      }, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      // For wizard projects (any chat id starts with `session_`) we use
+      // the new endpoint; need the project's UUID for it. The first
+      // session chat's metadata holds it — resolve once.
+      const existingProject = projects.find(p => p.id === projectId);
+      const anySessionChat = existingProject?.chats.find(c => c.id.startsWith('session_'));
+
+      let response;
+      if (anySessionChat) {
+        const sessMeta = await axios.get(
+          `${API_BASE}/v2/chatbot/project/sessions/${anySessionChat.id}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        const projectUuid = sessMeta.data.project_id;
+        const created = await axios.post(
+          `${API_BASE}/v2/chatbot/project/sessions`,
+          { project_id: projectUuid, title: pageName, stage: 'general' },
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        // Shape the response to match what the legacy path returned so
+        // the downstream code keeps working unchanged.
+        response = {
+          data: {
+            chat: {
+              chat_id: created.data.session_token,
+              project_name: existingProject?.name || projectId,
+            },
+          },
+        };
+      } else {
+        // Legacy OENUM-based project (no session_ chat yet) — keep using
+        // the old endpoint. Falls back to current behaviour for old data.
+        response = await axios.post(`${API_BASE}/chats`, {
+          chat_name: pageName,
+          user_id: userId,
+          chat_type: 'project',
+          project_number: projectId,
+          page_name: pageName,
+        }, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+      }
 
       const backendChatId = response.data.chat.chat_id;
       const projectName = response.data.chat.project_name || `Project ${projectId}`;
@@ -838,13 +869,26 @@ export function useProjects(userId?: string) {
         return;
       }
 
-      // Delete all project chats from backend
-      console.log('🗑️ Deleting all chats for project:', projectId);
-      const response = await axios.delete(`${API_BASE}/projects/${projectId}/chats`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      // 2026-05 enterprise migration: wizard projects use session tokens.
+      // DELETE /api/v2/chatbot/project/sessions/{token} cascades to the
+      // whole project (drops project + all sessions + messages + tasks +
+      // documents + git_commits + containers + volumes).
+      const sessionChat = project.chats.find(c => c.id.startsWith('session_'));
+      let response;
+      if (sessionChat) {
+        console.log('🗑️ Cascading delete via session:', sessionChat.id);
+        response = await axios.delete(
+          `${API_BASE}/v2/chatbot/project/sessions/${sessionChat.id}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+      } else {
+        // Legacy projects (OENUM-based) still use the old per-chat sweep.
+        console.log('🗑️ Deleting all chats for legacy project:', projectId);
+        response = await axios.delete(
+          `${API_BASE}/projects/${projectId}/chats`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+      }
 
       console.log(`✅ Backend deletion result:`, response.data);
 
