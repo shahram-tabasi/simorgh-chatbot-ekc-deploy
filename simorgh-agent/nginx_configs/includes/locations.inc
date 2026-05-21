@@ -94,6 +94,41 @@ location /api/llm/ {
 }
 
 # ====================================================================
+# VLM (Vision-Language Model) — direct proxy to 192.168.1.62.
+# Use this for image-bearing OpenAI-compatible POSTs:
+#   POST /api/vlm/v1/chat/completions
+#   { "model": "qwen2.5-vl-7b", "messages": [{role,content:[{type:text},
+#                                              {type:image_url,...}]}] }
+# For mixed text/vision traffic that should auto-route, prefer the
+# llm-gateway (/api/llm-gateway/v1/chat/completions) instead.
+# ====================================================================
+location /api/vlm/ {
+    limit_req zone=api_limit burst=10 nodelay;
+    rewrite ^/api/vlm/(.*)$ /$1 break;
+    proxy_pass http://vlm_servers;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_request_buffering off;
+    chunked_transfer_encoding on;
+
+    add_header X-Accel-Buffering "no" always;
+
+    # Images can make payloads large; vision generation can be slow.
+    client_max_body_size 50M;
+    proxy_connect_timeout 300s;
+    proxy_send_timeout 1800s;
+    proxy_read_timeout 1800s;
+}
+
+# ====================================================================
 # AUTHENTICATION API
 # ====================================================================
 location /api/auth/ {
