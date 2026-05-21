@@ -41,6 +41,9 @@ export interface Project {
   repoPath?: string | null;
   baseBranch?: string | null;
   workingBranch?: string | null;
+  // Files-changed indicator since the active session's start. Refreshed
+  // by selectChat off the messages endpoint.
+  filesChangedCount?: number;
 }
 
 export interface Chat {
@@ -53,6 +56,8 @@ export interface Chat {
   projectId?: string;
   conversationId?: string;
   metadata?: Record<string, any>;
+  // Soft-deleted; hidden from the default sidebar list but recoverable.
+  archived?: boolean;
 }
 
 // ============================================

@@ -100,6 +100,8 @@ def _mirror_session_to_legacy_redis(row: asyncpg.Record, project: asyncpg.Record
             "repo_path": project.get("gitlab_repo_path"),
             "base_branch": project.get("gitlab_base_branch"),
             "working_branch": project.get("simorgh_branch"),
+            # Soft-delete flag (false on creation; archive endpoint flips it).
+            "archived": False,
         }
         r.set(f"chat:{chat_id}:metadata", json.dumps(chat_data))
         r.sadd(f"user:{owner_id}:chats:all", chat_id)
@@ -265,6 +267,30 @@ async def get_session_messages(session_token: str,
         """,
         str(row["project_id"]), session_token, limit,
     )
+
+    # Files-changed count since session start — drives the "+N files" diff
+    # indicator in the chat header (Claude-Code-style). Cheap aggregation:
+    # union the files_changed arrays from every commit linked to this
+    # project that happened after the session was created.
+    session_created = await pool.fetchval(
+        "SELECT created_at FROM project_chat_sessions WHERE session_token = $1",
+        session_token,
+    )
+    files_changed_count = 0
+    if session_created is not None:
+        files_changed_count = await pool.fetchval(
+            """
+            SELECT COALESCE(COUNT(DISTINCT f), 0)
+            FROM project_git_commits c, UNNEST(c.files_changed) AS f
+            WHERE c.project_id = $1::uuid AND c.created_at >= $2
+            """,
+            str(row["project_id"]), session_created,
+        ) or 0
+
+    archived_at = await pool.fetchval(
+        "SELECT archived_at FROM project_chat_sessions WHERE session_token = $1",
+        session_token,
+    )
     return {
         "session_token": session_token,
         "context": {
@@ -273,6 +299,8 @@ async def get_session_messages(session_token: str,
             "repo_path": row["gitlab_repo_path"],
             "base_branch": row["gitlab_base_branch"],
             "working_branch": row["simorgh_branch"],
+            "files_changed_count": int(files_changed_count),
+            "archived": archived_at is not None,
         },
         "messages": [
             {
@@ -351,3 +379,59 @@ async def delete_session(session_token: str,
         "project_id": project_id,
         "container": container_result,
     }
+
+
+async def _set_archive(session_token: str, current_user: dict, archive: bool) -> dict:
+    pool = await _db()
+    row = await pool.fetchrow(
+        "SELECT s.id, p.owner_id "
+        "FROM project_chat_sessions s "
+        "JOIN projects p ON p.id = s.project_id "
+        "WHERE s.session_token = $1", session_token,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if row["owner_id"] != _owner_id(current_user):
+        raise HTTPException(status_code=403, detail="not your session")
+    if archive:
+        await pool.execute(
+            "UPDATE project_chat_sessions "
+            "SET archived_at = now(), is_active = FALSE "
+            "WHERE session_token = $1", session_token,
+        )
+    else:
+        await pool.execute(
+            "UPDATE project_chat_sessions "
+            "SET archived_at = NULL, is_active = TRUE "
+            "WHERE session_token = $1", session_token,
+        )
+
+    # Mirror to Redis so the sidebar reflects the change on next load
+    # without having to call selectChat on every row.
+    try:
+        r = _redis()
+        key = f"chat:{session_token}:metadata"
+        raw = r.get(key)
+        if raw:
+            data = json.loads(raw)
+            data["archived"] = archive
+            r.set(key, json.dumps(data))
+    except Exception as e:
+        logger.warning("legacy redis archive mirror failed: %s", e)
+
+    return {"session_token": session_token, "archived": archive}
+
+
+@router.post("/sessions/{session_token}/archive")
+async def archive_session(session_token: str,
+                          current_user: dict = Depends(get_current_user)):
+    """Soft-delete: hides the session from the default sidebar view but
+    keeps all messages/branches/container artefacts intact. Reversible
+    via the matching unarchive endpoint."""
+    return await _set_archive(session_token, current_user, archive=True)
+
+
+@router.post("/sessions/{session_token}/unarchive")
+async def unarchive_session(session_token: str,
+                            current_user: dict = Depends(get_current_user)):
+    return await _set_archive(session_token, current_user, archive=False)

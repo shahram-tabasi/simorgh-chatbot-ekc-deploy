@@ -7,12 +7,34 @@ import {
   ChevronRight,
   Plus,
   Sparkles,
-  GitBranch
+  GitBranch,
+  Archive
 } from 'lucide-react';
 import { Project, Chat } from '../types';
 import ContextMenu from './ContextMenu';
 import RenameModal from './RenameModal';
 import { Tooltip } from './Tooltip';
+
+type StatusFilter = 'active' | 'archived' | 'all';
+
+// Tiny colored pill — Claude-Code-style session status. We derive what
+// little we can client-side: streaming → Running, archived → Archived.
+function StatusPill({ kind }: { kind: 'running' | 'archived' | null }) {
+  if (kind === null) return null;
+  if (kind === 'running') {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sky-500/15 border border-sky-400/30 text-[10px] font-medium text-sky-300">
+        <span className="w-1 h-1 rounded-full bg-sky-300 animate-pulse" />
+        Running
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-white/[0.05] border border-white/10 text-[10px] font-medium text-gray-400">
+      Archived
+    </span>
+  );
+}
 
 function timeAgo(d: Date | string | undefined): string {
   if (!d) return '';
@@ -31,6 +53,9 @@ interface ProjectTreeProps {
   activeProjectId: string | null;
   activeChatId: string | null;
   showGeneralChats: boolean;
+  // Whether the active chat is currently streaming a response. Drives the
+  // "Running" status pill on that single row.
+  isStreaming?: boolean;
   onToggleProject: (projectId: string) => void;
   onToggleGeneralChats: () => void;
   onSelectChat: (projectId: string | null, chatId: string) => void;
@@ -41,6 +66,7 @@ interface ProjectTreeProps {
   onRenameChat: (chatId: string, newName: string, projectId: string | null) => void;
   onDeleteChat: (chatId: string, projectId: string | null) => void;
   onDeleteProject: (projectId: string) => void;
+  onArchiveChat?: (chatId: string, projectId: string | null, archive: boolean) => void;
 }
 
 export function ProjectTree({
@@ -49,6 +75,7 @@ export function ProjectTree({
   activeProjectId,
   activeChatId,
   showGeneralChats,
+  isStreaming = false,
   onToggleProject,
   onToggleGeneralChats,
   onSelectChat,
@@ -57,8 +84,10 @@ export function ProjectTree({
   onCreateGeneralChat,
   onRenameChat,
   onDeleteChat,
-  onDeleteProject
+  onDeleteProject,
+  onArchiveChat
 }: ProjectTreeProps) {
+  const [statusFilter, setStatusFilter] = React.useState<StatusFilter>('active');
   const [showPageModal, setShowPageModal] = React.useState(false);
   const [selectedProjectId, setSelectedProjectId] = React.useState<string | null>(null);
 
@@ -133,6 +162,19 @@ export function ProjectTree({
     }
   };
 
+  const handleArchive = () => {
+    if (contextMenu && onArchiveChat) {
+      // Look up current archived state so the menu becomes a toggle.
+      const chat = (contextMenu.projectId
+        ? projects.find(p => p.id === contextMenu.projectId)?.chats
+        : generalChats
+      )?.find(c => c.id === contextMenu.chatId);
+      const isCurrentlyArchived = chat?.archived === true;
+      onArchiveChat(contextMenu.chatId, contextMenu.projectId, !isCurrentlyArchived);
+      setContextMenu(null);
+    }
+  };
+
   const handleCreateNew = () => {
     if (contextMenu && contextMenu.projectId) {
       handleAddPage(contextMenu.projectId);
@@ -191,6 +233,23 @@ export function ProjectTree({
         </button>
       </div>
 
+      {/* Filter chips — Claude-Code style: Active / Archived / All. */}
+      <div className="px-3 pt-2 pb-1 flex items-center gap-1 text-[11px]">
+        {(['active', 'archived', 'all'] as StatusFilter[]).map(f => (
+          <button
+            key={f}
+            onClick={() => setStatusFilter(f)}
+            className={`px-2 py-0.5 rounded-full border transition ${
+              statusFilter === f
+                ? 'bg-white/[0.08] border-white/20 text-gray-100'
+                : 'bg-transparent border-white/[0.06] text-gray-500 hover:text-gray-300 hover:border-white/15'
+            }`}
+          >
+            {f[0].toUpperCase() + f.slice(1)}
+          </button>
+        ))}
+      </div>
+
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3 space-y-4">
         {/* General Chats — hidden entirely for legacy users (onCreateGeneralChat undefined). */}
         {onCreateGeneralChat && (
@@ -219,22 +278,33 @@ export function ProjectTree({
 
           {showGeneralChats && generalChats.length > 0 && (
             <motion.div className="space-y-0.5">
-              {generalChats.map((chat) => (
+              {generalChats
+                .filter(c => statusFilter === 'all'
+                  ? true
+                  : statusFilter === 'archived' ? c.archived === true : c.archived !== true)
+                .map((chat) => {
+                const isChatActive = activeChatId === chat.id && !activeProjectId;
+                const pill = chat.archived
+                  ? 'archived' as const
+                  : (isChatActive && isStreaming ? 'running' as const : null);
+                return (
                 <Tooltip key={chat.id} content={chat.title} position="right">
                   <button
                     onClick={() => onSelectChat(null, chat.id)}
                     onContextMenu={(e) => handleContextMenu(e, chat.id, chat.title, null)}
                     className={`group w-full text-left pl-7 pr-2 py-1.5 rounded text-sm transition flex items-center gap-2 border-l-2 ${
-                      activeChatId === chat.id && !activeProjectId
+                      isChatActive
                         ? 'bg-white/[0.06] border-emerald-400/70 text-white'
                         : 'border-transparent text-gray-300 hover:bg-white/[0.04] hover:text-white'
                     }`}
                   >
                     <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" />
                     <span className="block truncate flex-1">{chat.title}</span>
+                    <StatusPill kind={pill} />
                   </button>
                 </Tooltip>
-              ))}
+                );
+              })}
             </motion.div>
           )}
         </div>
@@ -310,10 +380,20 @@ export function ProjectTree({
                 </div>
 
                 {/* Chats within the project */}
-                {project.isExpanded && project.chats.length > 0 && (
+                {project.isExpanded && (() => {
+                  const visibleChats = project.chats.filter(c =>
+                    statusFilter === 'all'
+                      ? true
+                      : statusFilter === 'archived' ? c.archived === true : c.archived !== true
+                  );
+                  if (visibleChats.length === 0) return null;
+                  return (
                   <motion.div className="mt-0.5 space-y-0.5">
-                    {project.chats.map((chat) => {
+                    {visibleChats.map((chat) => {
                       const isChatActive = activeChatId === chat.id;
+                      const pill = chat.archived
+                        ? 'archived' as const
+                        : (isChatActive && isStreaming ? 'running' as const : null);
                       return (
                       <Tooltip key={chat.id} content={chat.title} position="right">
                         <button
@@ -323,11 +403,12 @@ export function ProjectTree({
                             isChatActive
                               ? 'bg-white/[0.06] border-emerald-400/70 text-white'
                               : 'border-transparent text-gray-300 hover:bg-white/[0.04] hover:text-white'
-                          }`}
+                          } ${chat.archived ? 'opacity-60' : ''}`}
                         >
                           <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" />
                           <span className="block truncate flex-1">{chat.title}</span>
-                          {chat.updatedAt && (
+                          <StatusPill kind={pill} />
+                          {!pill && chat.updatedAt && (
                             <span className="text-[10px] text-gray-500 flex-shrink-0">
                               {timeAgo(chat.updatedAt)}
                             </span>
@@ -337,7 +418,8 @@ export function ProjectTree({
                       );
                     })}
                   </motion.div>
-                )}
+                  );
+                })()}
               </div>
               );
             })}
@@ -370,6 +452,14 @@ export function ProjectTree({
           onRename={handleRename}
           onDelete={handleDelete}
           onCreateNew={handleCreateNew}
+          onArchive={onArchiveChat ? handleArchive : undefined}
+          isArchived={(() => {
+            const chat = (contextMenu.projectId
+              ? projects.find(p => p.id === contextMenu.projectId)?.chats
+              : generalChats
+            )?.find(c => c.id === contextMenu.chatId);
+            return chat?.archived === true;
+          })()}
           target={contextMenu.projectId ? 'page' : 'project'}
         />
       )}

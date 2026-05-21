@@ -190,7 +190,8 @@ export function useProjects(userId?: string) {
             messages: [],
             createdAt: new Date(chat.created_at),
             updatedAt: new Date(chat.created_at),
-            projectId: projectId
+            projectId: projectId,
+            archived: chat.archived === true
           });
 
           // Update project createdAt to earliest chat
@@ -675,6 +676,9 @@ export function useProjects(userId?: string) {
                   repoPath: ctx?.repo_path ?? p.repoPath ?? null,
                   baseBranch: ctx?.base_branch ?? p.baseBranch ?? null,
                   workingBranch: ctx?.working_branch ?? p.workingBranch ?? null,
+                  filesChangedCount: typeof ctx?.files_changed_count === 'number'
+                    ? ctx.files_changed_count
+                    : p.filesChangedCount,
                   chats: p.chats.map(c =>
                     c.id === chatId
                       ? {
@@ -683,7 +687,8 @@ export function useProjects(userId?: string) {
                           messages: (mapped.length > 0 || c.messages.length === 0)
                             ? mapped
                             : c.messages,
-                          updatedAt: new Date()
+                          updatedAt: new Date(),
+                          archived: ctx?.archived ?? c.archived
                         }
                       : c
                   )
@@ -1006,6 +1011,46 @@ export function useProjects(userId?: string) {
     );
   };
 
+  const archiveChat = async (chatId: string, projectId: string | null, archive: boolean) => {
+    if (!chatId.startsWith('session_')) {
+      // Only wizard sessions support archive (the legacy endpoint isn't wired).
+      showError('Not supported', 'Archive is only available for project sessions.');
+      return;
+    }
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) return;
+      const path = archive ? 'archive' : 'unarchive';
+      await axios.post(
+        `${API_BASE}/v2/chatbot/project/sessions/${chatId}/${path}`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      // Update local state — flip the chat's archived flag.
+      if (projectId !== null) {
+        setProjects(prev =>
+          prev.map(p =>
+            p.id === projectId
+              ? {
+                  ...p,
+                  chats: p.chats.map(c =>
+                    c.id === chatId ? { ...c, archived: archive } : c
+                  )
+                }
+              : p
+          )
+        );
+      } else {
+        setGeneralChats(prev =>
+          prev.map(c => c.id === chatId ? { ...c, archived: archive } : c)
+        );
+      }
+    } catch (e: any) {
+      console.error('archive failed', e);
+      showError('Archive failed', e?.response?.data?.detail || 'Could not update session.');
+    }
+  };
+
   return {
     projects,
     generalChats,
@@ -1023,6 +1068,7 @@ export function useProjects(userId?: string) {
     renameChat,
     deleteChat,
     deleteProject,
+    archiveChat,
     toggleProject,
     toggleGeneralChats,
     selectChat,

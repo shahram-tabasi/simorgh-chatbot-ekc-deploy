@@ -1,6 +1,6 @@
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { GitBranchIcon, FolderGitIcon, CpuIcon } from 'lucide-react';
+import { GitBranchIcon, FolderGitIcon, CpuIcon, FileDiffIcon, ExternalLinkIcon } from 'lucide-react';
 import WelcomeScreen from './WelcomeScreen';
 import GeneralWelcome from './GeneralWelcome';
 import { MessageList } from './MessageList';
@@ -13,6 +13,15 @@ export interface ChatHeaderContext {
   baseBranch?: string | null;
   projectName?: string | null;
   model?: string | null;
+  filesChanged?: number | null;
+}
+
+// Build a GitLab web URL from a repo path. We hit env-configurable hosts
+// via VITE_GITLAB_BASE_URL so on-prem / dev / prod stay decoupled.
+function gitlabUrl(repoPath: string, suffix = ''): string {
+  const base = (import.meta.env.VITE_GITLAB_BASE_URL as string | undefined)
+    || 'https://gitlab.electrokavir.com';
+  return `${base.replace(/\/$/, '')}/${repoPath}${suffix}`;
 }
 
 interface ChatAreaProps {
@@ -35,9 +44,24 @@ function ChatHeaderChip({ ctx }: { ctx: ChatHeaderContext }) {
   const repo = ctx.repoPath || ctx.projectName;
   const branch = ctx.workingBranch || ctx.baseBranch;
   const model = ctx.model;
+  const files = ctx.filesChanged;
   if (!repo && !branch && !model) return null;
+
+  // Action row only makes sense for real GitLab-linked sessions, not
+  // synthetic "project name only" rows.
+  const hasRepo = Boolean(ctx.repoPath);
+  const repoHref = hasRepo ? gitlabUrl(ctx.repoPath as string) : null;
+  const branchHref = hasRepo && branch
+    ? gitlabUrl(ctx.repoPath as string, `/-/tree/${encodeURIComponent(branch)}`)
+    : null;
+  const mrHref = hasRepo && branch && ctx.baseBranch
+    ? gitlabUrl(ctx.repoPath as string,
+        `/-/merge_requests/new?merge_request[source_branch]=${encodeURIComponent(branch)}` +
+        `&merge_request[target_branch]=${encodeURIComponent(ctx.baseBranch)}`)
+    : null;
+
   return (
-    <div className="flex-shrink-0 w-full flex justify-center pt-2 px-2 sm:px-4 md:px-8 lg:px-20">
+    <div className="flex-shrink-0 w-full flex flex-col items-center gap-1.5 pt-2 px-2 sm:px-4 md:px-8 lg:px-20">
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.04] border border-white/10 text-xs text-gray-300 backdrop-blur-sm max-w-full overflow-hidden">
         {repo && (
           <span className="flex items-center gap-1.5 min-w-0">
@@ -63,7 +87,41 @@ function ChatHeaderChip({ ctx }: { ctx: ChatHeaderContext }) {
             </span>
           </>
         )}
+        {typeof files === 'number' && files > 0 && (
+          <>
+            <span className="text-white/15">·</span>
+            <span className="flex items-center gap-1.5 min-w-0">
+              <FileDiffIcon className="w-3.5 h-3.5 text-amber-300/80 flex-shrink-0" />
+              <span className="text-amber-200/90 font-medium">{files} file{files === 1 ? '' : 's'}</span>
+            </span>
+          </>
+        )}
       </div>
+      {(repoHref || branchHref || mrHref) && (
+        <div className="flex items-center gap-3 text-[11px] text-gray-500">
+          {repoHref && (
+            <a href={repoHref} target="_blank" rel="noreferrer"
+               className="flex items-center gap-1 hover:text-gray-200 transition">
+              <ExternalLinkIcon className="w-3 h-3" />
+              Open repo
+            </a>
+          )}
+          {branchHref && (
+            <a href={branchHref} target="_blank" rel="noreferrer"
+               className="flex items-center gap-1 hover:text-gray-200 transition">
+              <GitBranchIcon className="w-3 h-3" />
+              View branch
+            </a>
+          )}
+          {mrHref && (
+            <a href={mrHref} target="_blank" rel="noreferrer"
+               className="flex items-center gap-1 hover:text-emerald-300 transition">
+              <ExternalLinkIcon className="w-3 h-3" />
+              Open MR
+            </a>
+          )}
+        </div>
+      )}
     </div>
   );
 }

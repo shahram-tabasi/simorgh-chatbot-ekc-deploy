@@ -75,6 +75,7 @@ function MainChat() {
     renameChat,
     deleteChat,
     deleteProject,
+    archiveChat,
     toggleProject,
     toggleGeneralChats,
     selectChat,
@@ -365,6 +366,7 @@ function MainChat() {
               activeProjectId={activeProjectId}
               activeChatId={activeChatId}
               showGeneralChats={user && isLegacyUser(user) ? false : showGeneralChats}
+              isStreaming={isTyping}
               onToggleProject={toggleProject}
               onToggleGeneralChats={toggleGeneralChats}
               onSelectChat={handleSelectChat}
@@ -374,6 +376,7 @@ function MainChat() {
               onRenameChat={renameChat}
               onDeleteChat={deleteChat}
               onDeleteProject={deleteProject}
+              onArchiveChat={archiveChat}
             />
           </Sidebar>
 
@@ -422,6 +425,9 @@ function MainChat() {
                       baseBranch: activeProject.baseBranch || null,
                       projectName: activeProject.name,
                       model: defaultModel,
+                      filesChanged: typeof activeProject.filesChangedCount === 'number'
+                        ? activeProject.filesChangedCount
+                        : null,
                     }
                   : null
               }
