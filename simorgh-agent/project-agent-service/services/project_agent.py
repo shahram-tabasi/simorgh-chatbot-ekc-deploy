@@ -543,8 +543,19 @@ class ProjectManagerAgent:
                 k: v.get("output", "")[:3000] for k, v in prev_results.items()
             }
 
+        has_mcp_tool = (
+            self.mcp_manager
+            and self.mcp_manager.is_connected
+            and self.mcp_manager.has_tool(tool)
+        )
+        logger.info(
+            f"dispatch: tool={tool!r} type={task_type!r} "
+            f"mcp_match={has_mcp_tool} "
+            f"input_keys={list(tool_input.keys()) if isinstance(tool_input, dict) else None}"
+        )
+
         # Try MCP first for microservice tools (dynamic routing)
-        if self.mcp_manager and self.mcp_manager.is_connected and self.mcp_manager.has_tool(tool):
+        if has_mcp_tool:
             try:
                 return await self.mcp_manager.call_tool(tool, tool_input)
             except Exception as e:
