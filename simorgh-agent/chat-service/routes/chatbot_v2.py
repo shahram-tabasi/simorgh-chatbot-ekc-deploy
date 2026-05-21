@@ -388,9 +388,9 @@ async def upload_document(
             if hasattr(ctx, "project") and ctx.project:
                 project_id = ctx.project.project_number
             if project_id:
-                from simorgh_clients.runtime_broker import (
-                    RUNTIME_BROKER_URL, RUNTIME_BROKER_TOKEN,
-                )
+                RUNTIME_BROKER_URL   = os.getenv("RUNTIME_BROKER_URL",
+                                                 "http://runtime-broker:8048")
+                RUNTIME_BROKER_TOKEN = os.getenv("BROKER_TOKEN", "")
                 content_bytes = (
                     request.content.encode("utf-8")
                     if isinstance(request.content, str)
