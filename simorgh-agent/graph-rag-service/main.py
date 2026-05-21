@@ -275,4 +275,22 @@ async def graph_document_specifications(document_id: str) -> Dict[str, Any]:
 
 # FastMCP's streamable_http_app exposes route /mcp internally. Mount at
 # "/" so its public path is /mcp (mounting at "/mcp" would produce /mcp/mcp).
-app.mount("/", mcp.streamable_http_app())
+# Its session_manager needs an active TaskGroup; when the inner app is
+# mounted under another FastAPI, the inner lifespan never fires — start
+# the session manager from the outer app's lifespan instead, otherwise
+# every POST returns 500 with "Task group is not initialized".
+_mcp_streamable_app = mcp.streamable_http_app()
+
+@app.on_event("startup")
+async def _mcp_session_manager_start():
+    cm = mcp.session_manager.run()
+    app.state._mcp_session_manager_cm = cm
+    await cm.__aenter__()
+
+@app.on_event("shutdown")
+async def _mcp_session_manager_stop():
+    cm = getattr(app.state, "_mcp_session_manager_cm", None)
+    if cm is not None:
+        await cm.__aexit__(None, None, None)
+
+app.mount("/", _mcp_streamable_app)
