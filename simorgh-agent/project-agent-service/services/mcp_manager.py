@@ -375,6 +375,13 @@ def get_mcp_manager() -> MCPManager:
                 # project:{id}:exploration for the CoT engine to pull.
                 "PROJECT_EXPLORER_MCP_URL", "http://project-explorer:8052/mcp"
             ),
+            "mail_bridge": os.getenv(
+                # Outbound email via Mailcow's SMTP submission. Exposes
+                # send_email(to, subject, body_text, body_html?, cc?,
+                # in_reply_to?). Inbound is push-driven via webhook —
+                # no MCP tool needed for that direction.
+                "MAIL_BRIDGE_MCP_URL", "http://mail-bridge:8051/mcp"
+            ),
         }
 
         for name, url in servers.items():

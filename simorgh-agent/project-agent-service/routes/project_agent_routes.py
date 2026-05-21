@@ -43,6 +43,7 @@ import httpx
 #   • tpms-fetcher      — sole MySQL gateway to TPMS
 TPMS_FETCHER_URL  = os.getenv("TPMS_FETCHER_URL",  "http://tpms-fetcher:8021")
 PROJECT_INIT_URL  = os.getenv("PROJECT_INIT_URL",  "http://project-init:8022")
+MAIL_BRIDGE_URL   = os.getenv("MAIL_BRIDGE_URL",   "http://mail-bridge:8051")
 
 # Restrictions file (admin-managed). Read on every turn (mtime-cached
 # inside the agent) and prepended to the system prompt as hard
@@ -64,8 +65,9 @@ PROJECT_CREATE_ALLOWED_ROLES = tuple(
     ).split(",") if r.strip()
 )
 
-# Where to post outbound email replies (when channel=email).
-PROJECT_MAIL_URL = os.getenv("PROJECT_MAIL_URL", "http://project-mail-service:8045")
+# Where to post outbound email replies (when channel=email). project-mail
+# was retired in 2026-05; mail-bridge fronts Mailcow's SMTP submission.
+
 
 logger = logging.getLogger(__name__)
 
@@ -495,22 +497,25 @@ async def send_message(
         ):
             try:
                 async with httpx.AsyncClient(timeout=30.0) as c:
-                    await c.post(
-                        f"{PROJECT_MAIL_URL}/send",
-                        json={
-                            "to":          data.email_from,
-                            "subject":     f"Re: {data.email_subject or 'Simorgh project update'}",
-                            "body":        result["response"],
-                            "project_id":  project_id,
-                            "chat_id":     data.chat_id,
-                            "in_reply_to": data.email_message_id if hasattr(data, "email_message_id") else None,
-                        },
-                    )
+                    payload: Dict[str, Any] = {
+                        "to":         [data.email_from],
+                        "subject":    f"Re: {data.email_subject or 'Simorgh project update'}",
+                        "body_text":  result["response"],
+                    }
+                    msg_id = getattr(data, "email_message_id", None)
+                    if msg_id:
+                        payload["in_reply_to"] = msg_id
+                        payload["references"]  = [msg_id]
+                    payload["extra_headers"] = {
+                        "X-Simorgh-Project": project_id,
+                        "X-Simorgh-Chat":    data.chat_id or "",
+                    }
+                    await c.post(f"{MAIL_BRIDGE_URL}/send", json=payload)
             except Exception:
                 # Don't fail the agent turn if the outbound mail fails;
                 # the response is already persisted in chat history and
                 # the user can retrieve it via the chat channel.
-                logger.exception("project-mail-service /send failed; reply not delivered by email")
+                logger.exception("mail-bridge /send failed; reply not delivered by email")
 
         return {
             "response": result["response"],

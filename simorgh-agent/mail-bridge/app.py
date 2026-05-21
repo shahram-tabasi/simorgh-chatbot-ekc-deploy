@@ -28,6 +28,7 @@ import aioimaplib
 import aiosmtplib
 import httpx
 from fastapi import FastAPI, HTTPException
+from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, EmailStr, Field
 
 from simorgh_logging import configure, get_logger, request_id_middleware
@@ -215,3 +216,33 @@ async def send_mail(req: SendRequest):
         raise HTTPException(status_code=502, detail=f"smtp send failed: {e}")
     log.info("outbound", to=req.to, subject=req.subject)
     return {"status": "sent", "to": req.to}
+
+
+# ---------------------------------------------------------------------------
+# MCP — exposes a single send_email tool so the CoT engine can dispatch
+# mail from a project turn without hand-rolling an HTTP call.
+# ---------------------------------------------------------------------------
+mcp = FastMCP(
+    "mail-bridge",
+    instructions=(
+        "Send a plaintext or HTML email via Mailcow's SMTP submission "
+        "endpoint. The From address defaults to the mailbox the bridge "
+        "is logged in as. Recipients are a list of RFC 5322 addresses."
+    ),
+)
+
+
+@mcp.tool()
+async def send_email(to: list[str], subject: str, body_text: str,
+                     body_html: str = "", cc: list[str] | None = None,
+                     in_reply_to: str = "") -> dict:
+    """Send an email through Mailcow. Returns {status, to}."""
+    req = SendRequest(
+        to=to, cc=cc or [], subject=subject, body_text=body_text,
+        body_html=body_html or None,
+        in_reply_to=in_reply_to or None,
+    )
+    return await send_mail(req)
+
+
+app.mount("/mcp", mcp.streamable_http_app())
