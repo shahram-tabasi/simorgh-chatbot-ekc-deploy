@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import sql from 'mssql';
 import mysql from 'mysql2/promise';
 import multer from 'multer';
+import { PDFParse } from 'pdf-parse';
 
 dotenv.config();
 
@@ -942,7 +943,7 @@ app.delete('/api/selected-part', async (req, res) => {
 });
 
 // ============================================
-// AI Chatbot Endpoints (local stub + online passthrough)
+// AI Chatbot Endpoints (local model + online passthrough)
 // ============================================
 // Multer in memory so we can inspect uploaded files without persisting them.
 // 25 MB per file × 10 files cap — adjust as needed.
@@ -951,79 +952,510 @@ const chatUpload = multer({
   limits: { fileSize: 25 * 1024 * 1024, files: 10 },
 });
 
-// LOCAL endpoint — a minimal stub that simply acknowledges the prompt and
-// describes the uploaded files. Wire this up to a real local model server
-// (e.g. an Ollama/llama.cpp proxy) by replacing the body of the handler.
+// ── Tool-call protocol helpers ──────────────────────────────────────────────
+// The frontend sends the user's prompt together with:
+//   • `context`  — JSON snapshot of the active project (equipments, selected one, template counts)
+//   • `tools`    — JSON schemas of the frontend tools the assistant is allowed to call
+//   • `excelPreviews` — parsed rows from any attached Excel/CSV file
+// The model must reply in this exact shape so the frontend can execute the calls:
+//   {
+//     "reply": "human-readable explanation in Persian if the user wrote Persian",
+//     "tool_calls": [ { "name": "update_row", "args": {...} }, ... ]
+//   }
+// When the answer is purely conversational, `tool_calls` is `[]`.
+function buildSystemPrompt(toolSchemas, context, excelPreviews) {
+  const toolsBlock = (Array.isArray(toolSchemas) && toolSchemas.length > 0)
+    ? toolSchemas.map(t => {
+        const args = Object.entries(t.args || {})
+          .map(([k, v]) => `      "${k}": ${v.type}${v.required ? ' (required)' : ''} — ${v.description}`)
+          .join('\n');
+        return `  - ${t.name}: ${t.description}\n    args:\n${args}`;
+      }).join('\n\n')
+    : '  (no tools available)';
+
+  const ctxText = context
+    ? JSON.stringify(context, null, 2)
+    : '(no project context)';
+
+  const excelText = (Array.isArray(excelPreviews) && excelPreviews.length > 0)
+    ? excelPreviews.map(p => {
+        const headers = (p.rows && p.rows[0]) ? Object.keys(p.rows[0]) : [];
+        const sample = (p.rows || []).slice(0, 3);
+        return `[Excel: ${p.name}] columns=${JSON.stringify(headers)}, rowCount=${(p.rows || []).length}\n` +
+               `  first rows: ${JSON.stringify(sample)}`;
+      }).join('\n')
+    : '(no spreadsheet attachments)';
+
+  return [
+    'You are Simorgh AI, an electrical-design assistant embedded inside the Simorgh Soft application.',
+    'You both ANSWER questions and ACT on the running project by calling tools.',
+    'The user may write in Persian, English, or a mix; reply in the same language as the user.',
+    '',
+    'OUTPUT FORMAT (CRITICAL):',
+    '  • Your entire response MUST be a SINGLE JSON object — nothing before it, nothing after it.',
+    '  • No markdown fences (no ```json), no <think>/<analysis>/<commentary> tags, no narration of your reasoning.',
+    '  • Start your response with `{` and end with `}`. Do NOT explain what you are about to do — just do it via tool_calls.',
+    '  • Shape: {"reply": "<answer>", "tool_calls": [ {"name": "<tool>", "args": { ... }}, ... ]}',
+    '  • The `reply` value IS rendered as Markdown in the UI — use **bold**, `code`, headings, bullet lists, and tables when they help.',
+    '  • If you don\'t need to act, return tool_calls: [].',
+    '  • If the user uploads a document and asks you to extract / fill in / use its data, your default behaviour is to ACT (via propose_changes), not to ask "what should I do?". Read the document, propose every field you can extract, and let the user uncheck what they don\'t want.',
+    '',
+    'Conversation history: the messages array contains earlier turns. Treat any text inside `<<<…>>>` blocks as document content (PDF/Excel) the user uploaded on a previous turn — it is still available to you, no need to ask for it again.',
+    '',
+    'You can drive every tab through tools:',
+    '  • Project Definition  → set_project_fields, set_tech_setting, save_project',
+    '  • Device Library      → add_library_device, update_library_device, delete_library_device',
+    '  • Create Template     → create_template, search_templates, delete_template, find_similar_templates, set_template_property_parts',
+    '  • Device Selection    → add_equipment, delete_equipment, select_equipment, add_row, update_row, bulk_update, delete_row, apply_excel, set_cell_color, set_row_color, list_equipments, list_rows',
+    '  • Navigate            → set_active_tab (project | template | devices | output)',
+    '  • Document extraction → propose_changes (STAGE changes for user approval — see rule below)',
+    '',
+    'IMPORTANT — document extraction workflow:',
+    '  When the user uploads a PDF / image / Excel and asks you to "extract / fill in / read" data, you MUST NOT call set_project_fields, add_equipment, etc. directly.',
+    '  Instead, call exactly ONE `propose_changes` tool whose `actions` array wraps the changes you would have made. The frontend shows the proposal as a preview card; the user clicks Apply to commit each one. This applies to every field you pull from the document — project metadata, technical settings, device library entries, equipment, rows, anything.',
+    '',
+    'Rules:',
+    '  • Only call tools listed in "Available tools" below — do not invent names.',
+    '  • Prefer one `bulk_update` over many `update_row` calls when the predicate covers it.',
+    '  • Column field names you may reference: wiringType, ratingPower, flc, feederNo, busSection, tag, description, cableSize, sfdHfd, moduleNo, size, templateName.',
+    '  • Equipment/library devices/templates are identified by `name` (case-insensitive). If the user doesn\'t name one, default to the active equipment from context.',
+    '  • If a row number is out of range or a referenced thing doesn\'t exist, return tool_calls: [] and explain it in `reply`.',
+    '  • When applying an attached Excel, use `apply_excel` — `columnMapping` keys MUST match the spreadsheet header names exactly as shown.',
+    '  • You may emit multiple tool calls in one reply (e.g. set_active_tab → then create_template). Calls run in array order.',
+    '',
+    'Examples — STUDY THESE.',
+    'Example 1 (user: "row 3 feederNo to L03"):',
+    '  {"reply":"Set row **#3** `feederNo` to `L03`.","tool_calls":[{"name":"update_row","args":{"rowNumber":3,"column":"feederNo","value":"L03"}}]}',
+    'Example 2 (user: "هرجا wiringType مساوی M3 است را M4 کن"):',
+    '  {"reply":"تمام ردیف‌هایی که `wiringType=M3` دارند به `M4` تغییر یافت.","tool_calls":[{"name":"bulk_update","args":{"where":{"column":"wiringType","equals":"M3"},"set":{"column":"wiringType","value":"M4"}}}]}',
+    'Example 3 (user: "what equipment do I have?"):',
+    '  {"reply":"## Equipment\\n\\n| Name | Type | Rows |\\n|---|---|---|\\n| test | LV | 4 |\\n| testmv | MV | 3 |\\n","tool_calls":[]}',
+    'Example 4 (user: "open the template tab"):',
+    '  {"reply":"Switched to **Create Template**.","tool_calls":[{"name":"set_active_tab","args":{"tab":"template"}}]}',
+    'Example 5 (user: "create a new project named Pars Refinery, standard IEC, client NIORDC"):',
+    '  {"reply":"Updated project metadata.","tool_calls":[{"name":"set_project_fields","args":{"fields":{"projectName":"Pars Refinery","standard":"IEC","client":"NIORDC"}}}]}',
+    'Example 6 (user: "add a new LV equipment called MCC-01 then go to device selection"):',
+    '  {"reply":"Added **MCC-01** and switched to the Device Selection tab.","tool_calls":[{"name":"add_equipment","args":{"name":"MCC-01","type":"LV"}},{"name":"set_active_tab","args":{"tab":"devices"}}]}',
+    'Example 7 (user: "list LV templates that contain S8"):',
+    '  {"reply":"Found 2 matching LV templates:\\n\\n- **Motor 22kW** — S8/OFW/FCB1/OUTGOING · motor · 22 kW\\n- **Motor 30kW** — S8/OFW/FCB1/OUTGOING · motor · 30 kW","tool_calls":[{"name":"search_templates","args":{"query":"S8","type":"LV"}}]}',
+    'Example 8 (user: "row 100" but only 4 rows exist):',
+    '  {"reply":"Row 100 doesn\'t exist — the active equipment has only 4 rows. Want me to add one?","tool_calls":[]}',
+    'Example 9 (user uploads project_report.pdf and asks "fill in the project from this"):',
+    '  {"reply":"I read **project_report.pdf** and found the following — review and click Apply.","tool_calls":[{"name":"propose_changes","args":{"title":"Extracted from project_report.pdf","actions":[{"name":"set_project_fields","args":{"fields":{"projectName":"Pars Refinery Phase II","client":"NIORDC","standard":"IEC","location":"Bandar Abbas","planner":"SIMORGH"}},"summary":"Set project metadata (5 fields)"},{"name":"set_tech_setting","args":{"path":"general.altitudeAboveSeaLevel","value":"15"},"summary":"Altitude = 15 m"},{"name":"set_tech_setting","args":{"path":"general.designTemperature","value":"50"},"summary":"Design temperature = 50 °C"},{"name":"add_equipment","args":{"name":"MCC-01","type":"LV"},"summary":"Add LV equipment MCC-01"},{"name":"add_equipment","args":{"name":"SWB-MV","type":"MV"},"summary":"Add MV equipment SWB-MV"}]}}]}',
+    '',
+    '── Project context (THE source of truth — read it before answering) ──',
+    ctxText,
+    '',
+    '── Spreadsheet attachments ──',
+    excelText,
+    '',
+    '── Available tools ──',
+    toolsBlock,
+    '',
+    'Now produce the single JSON object response.',
+  ].join('\n');
+}
+
+// Strip reasoning / analysis chatter that reasoning-class models prepend to
+// the actual answer. Covers three families:
+//
+//   1) <think>…</think> + variants (DeepSeek / Claude / generic).
+//   2) Harmony-format channels used by gpt-oss-20b. The raw output looks
+//      like  `<|channel|>analysis<|message|>…<|end|>`
+//             `<|start|>assistant<|channel|>final<|message|>…<|end|>`
+//      and we want only the final-channel content (or whatever sits after
+//      the last channel marker if no final channel is present).
+//   3) The leading "analysis…assistantfinal …" form that ai_service on .61
+//      occasionally emits when the channel markers are flattened to text.
+function stripReasoning(content) {
+  if (typeof content !== 'string') return '';
+  let out = content;
+
+  // ── 1) Standard reasoning tags ──────────────────────────────────────────
+  const patterns = [
+    /<think>[\s\S]*?<\/think>/gi,
+    /<thinking>[\s\S]*?<\/thinking>/gi,
+    /<reasoning>[\s\S]*?<\/reasoning>/gi,
+    /<reason>[\s\S]*?<\/reason>/gi,
+    /<analysis>[\s\S]*?<\/analysis>/gi,
+    /<analyze>[\s\S]*?<\/analyze>/gi,
+    /<plan>[\s\S]*?<\/plan>/gi,
+    /<planning>[\s\S]*?<\/planning>/gi,
+    /<scratchpad>[\s\S]*?<\/scratchpad>/gi,
+    /<scratch>[\s\S]*?<\/scratch>/gi,
+    /<cot>[\s\S]*?<\/cot>/gi,
+    /<chain_of_thought>[\s\S]*?<\/chain_of_thought>/gi,
+    /<step>[\s\S]*?<\/step>/gi,
+    /<steps>[\s\S]*?<\/steps>/gi,
+    /<internal>[\s\S]*?<\/internal>/gi,
+    /<commentary>[\s\S]*?<\/commentary>/gi,
+  ];
+  for (const p of patterns) out = out.replace(p, '');
+  out = out.replace(/<think>[\s\S]*$/i, '');
+
+  // ── 2) Harmony channels (gpt-oss). Prefer the LAST `final`-channel block. ─
+  // Match BOTH the proper bracketed form and the flattened text form.
+  const harmonyFinal = out.match(/<\|channel\|>\s*final\s*<\|message\|>([\s\S]*?)(?:<\|(?:end|return|start)\|>|$)/i);
+  if (harmonyFinal) {
+    out = harmonyFinal[1];
+  } else {
+    // Sometimes the server strips the angle brackets, leaving plain
+    // "analysis<reasoning>…assistantfinal<answer>" or "…analysis…final…"
+    // We keep only the substring after the last "final" marker.
+    const flatFinal = out.match(/(?:^|\s)final\b[\s:]*([\s\S]*)$/i);
+    const flatAssistantFinal = out.match(/assistant\s*final[\s:]*([\s\S]*)$/i);
+    if (flatAssistantFinal) out = flatAssistantFinal[1];
+    else if (flatFinal && /\banalysis\b|\bcommentary\b/i.test(content)) out = flatFinal[1];
+  }
+
+  // ── 3) Strip any leftover harmony tokens — `<|whatever|>` and the
+  //       Cyrillic/Greek lookalikes some tokenizers emit. ──────────────────
+  out = out.replace(/<\|[^|>]*\|>/g, '');
+  out = out.replace(/<\/?(?:start|end|message|channel|return)>/gi, '');
+
+  return out.trim();
+}
+
+// Pull a JSON envelope out of the model's reply. The model is instructed to
+// emit raw JSON; in practice it sometimes wraps it in prose, fences, or
+// preceding <think> blocks (gpt-oss-20b). Strip reasoning first, then try
+// progressively looser parses.
+function extractToolEnvelope(content) {
+  if (typeof content !== 'string') content = String(content ?? '');
+  content = stripReasoning(content);
+  const tryParse = (s) => {
+    try {
+      const obj = JSON.parse(s);
+      if (obj && typeof obj === 'object') {
+        return {
+          reply: typeof obj.reply === 'string' ? obj.reply : '',
+          tool_calls: Array.isArray(obj.tool_calls) ? obj.tool_calls : [],
+        };
+      }
+    } catch { /* not JSON */ }
+    return null;
+  };
+
+  // 1) Whole content as JSON
+  const whole = tryParse(content.trim());
+  if (whole) return whole;
+
+  // 2) Fenced ```json … ```
+  const fence = content.match(/```(?:json)?\s*([\s\S]+?)```/i);
+  if (fence) {
+    const parsed = tryParse(fence[1].trim());
+    if (parsed) return parsed;
+  }
+
+  // 3) First balanced `{...}` block via brace counting
+  const start = content.indexOf('{');
+  if (start >= 0) {
+    let depth = 0;
+    for (let i = start; i < content.length; i++) {
+      if (content[i] === '{') depth++;
+      else if (content[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          const parsed = tryParse(content.slice(start, i + 1));
+          if (parsed) return parsed;
+          break;
+        }
+      }
+    }
+  }
+
+  // 4) Pure text reply, no tools
+  return { reply: content, tool_calls: [] };
+}
+
+// Call the local LLM. Three transports are supported (see paths A/B/C below).
+// `history` is the prior turns (alternating user/assistant) without the
+// system message — we prepend system here and append the new user turn.
+async function callLocalModel({ system, user, history, model, abortMs }) {
+  const gatewayUrl = process.env.LLM_GATEWAY_URL;
+  const aiSvcBase  = process.env.AI_SERVICE_URL;            // bespoke .61 service
+  // Default points at .62 (Qwen2.5-VL-7B via standard vllm-openai). Qwen
+  // is instruction-tuned and respects `response_format: json_object`,
+  // which is what we need for the tool-calling contract. gpt-oss-20b on
+  // .61 is a reasoning model that mostly ignores JSON instructions, so we
+  // only fall back to it when AI_SERVICE_URL is set explicitly.
+  const explicit   = process.env.LOCAL_MODEL_URL
+                  || (aiSvcBase ? null : 'http://192.168.1.62/v1/chat/completions');
+  const apiKey     = process.env.LOCAL_MODEL_KEY || process.env.LOCAL_LLM_API_KEY || '';
+
+  // Build the full message thread (system + history + user).
+  const cleanHistory = (Array.isArray(history) ? history : [])
+    .filter(m => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
+    .map(m => ({ role: m.role, content: m.content }));
+
+  const messages = [
+    { role: 'system', content: system },
+    ...cleanHistory,
+    { role: 'user', content: user },
+  ];
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+  };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), abortMs || 300_000);
+
+  try {
+    // ── Path A: llm-gateway ─────────────────────────────────────────────
+    if (gatewayUrl) {
+      const url = gatewayUrl.replace(/\/+$/, '') + '/generate';
+      const body = {
+        messages,
+        mode: process.env.LLM_GATEWAY_MODE || 'offline',  // → local LLM cluster
+        temperature: 0.1,
+      };
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`llm-gateway ${res.status}: ${text.slice(0, 500)}`);
+      let json; try { json = JSON.parse(text); } catch { json = {}; }
+      return { content: json.response ?? '', raw: json, url, transport: 'llm-gateway' };
+    }
+
+    // ── Path B: ai-service /generate (only if AI_SERVICE_URL is set) ────
+    // .61's /v1/chat/completions auto-routes to a LangChain Wikipedia/
+    // search agent whenever the project context contains keywords like
+    // "iec" / "current" / "siemens". /generate with use_tools=false bypasses
+    // that routing, but gpt-oss-20b is a reasoning model that mostly
+    // refuses to emit our JSON envelope, so this path is opt-in only.
+    if (aiSvcBase) {
+      const base = aiSvcBase.replace(/\/+$/, '');
+      const url  = `${base}/generate`;
+      const historyText = cleanHistory.length === 0 ? '' :
+        '── Conversation history ──\n' +
+        cleanHistory.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n') +
+        '\n\n── Current user turn ──\n';
+      const userPrompt = historyText + 'USER: ' + user;
+      const body = {
+        system_prompt: system,
+        user_prompt:   userPrompt,
+        thinking_level: process.env.LOCAL_MODEL_REASONING || 'low',
+        max_tokens:    Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
+        stream: false,
+        use_tools: false,
+      };
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`ai-service ${res.status}: ${text.slice(0, 500)}`);
+      let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+      const content = json?.output ?? json?.response ?? json?.raw ?? '';
+      return { content, raw: json, url, transport: 'ai-service' };
+    }
+
+    // ── Path C: OpenAI-compatible chat URL (DEFAULT — .62 Qwen) ─────────
+    // .62 runs upstream `vllm/vllm-openai` so it honours response_format
+    // for guided JSON decoding. That + Qwen's instruction-following gives
+    // us a much more reliable tool-call output than gpt-oss-20b.
+    const url = explicit;
+    const body = {
+      model: model || process.env.LOCAL_MODEL_NAME || 'qwen2.5-vl-7b',
+      messages,
+      temperature: 0.1,
+      max_tokens: Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
+      response_format: { type: 'json_object' },
+    };
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Local model ${res.status}: ${text.slice(0, 500)}`);
+    let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    const content =
+      json?.choices?.[0]?.message?.content ??
+      json?.response ??
+      json?.raw ??
+      '';
+    return { content, raw: json, url, transport: 'openai-compatible' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Extract text from a PDF buffer. Returns { text, pageCount } or null on
+// failure. Truncates very long PDFs so we don't blow the model context.
+async function extractPdfText(buffer, filename) {
+  try {
+    const parser = new PDFParse({ data: new Uint8Array(buffer) });
+    const result = await parser.getText();
+    await parser.destroy();
+    const fullText = (result?.text || '').trim();
+    const MAX_CHARS = Number(process.env.PDF_TEXT_MAX_CHARS || 25000);
+    const truncated = fullText.length > MAX_CHARS;
+    return {
+      text:      truncated ? fullText.slice(0, MAX_CHARS) + '\n…[truncated]…' : fullText,
+      truncated,
+      fullLength: fullText.length,
+      pageCount: result?.pages?.length ?? null,
+    };
+  } catch (err) {
+    console.error(`PDF parse error for ${filename}:`, err.message);
+    return null;
+  }
+}
+
+// LOCAL endpoint — forwards prompts to the deployed local LLM cluster
+// (`gpt-oss-20b` on 192.168.1.61, OpenAI-compatible HTTP). Returns
+// `{reply, tool_calls}` ready for the frontend tool runner.
 app.post('/api/chat-local', chatUpload.array('files', 10), async (req, res) => {
   try {
     const prompt = (req.body?.prompt || '').toString();
     const files = (req.files || []).map(f => ({
-      name: f.originalname,
-      mimetype: f.mimetype,
-      size: f.size,
+      name: f.originalname, mimetype: f.mimetype, size: f.size,
     }));
 
-    // If a real local model URL is configured, forward to it.
-    const upstream = process.env.LOCAL_MODEL_URL;
-    if (upstream) {
-      try {
-        const upRes = await fetch(upstream, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, files }),
-        });
-        const text = await upRes.text();
-        return res.status(upRes.status).type(upRes.headers.get('content-type') || 'text/plain').send(text);
-      } catch (e) {
-        console.error('Local model upstream error:', e.message);
-        // fall through to stub reply
+    // Parse multipart strings that the frontend sent as JSON blobs.
+    const parseJSON = (s, fallback) => {
+      try { return s ? JSON.parse(s) : fallback; } catch { return fallback; }
+    };
+    const context        = parseJSON(req.body?.context,        null);
+    const toolSchemas    = parseJSON(req.body?.tools,          []);
+    const excelPreviews  = parseJSON(req.body?.excelPreviews,  []);
+    const history        = parseJSON(req.body?.history,        []);
+
+    // Extract text from any attached PDFs so the model can read them. This
+    // is the magic that powers the "upload a project PDF and have the AI
+    // fill in fields" flow — we hand the raw text to the LLM and instruct
+    // it (via the system prompt) to wrap its proposals in propose_changes.
+    const pdfExtracts = [];
+    for (const f of (req.files || [])) {
+      if (f.mimetype === 'application/pdf' ||
+          (f.originalname || '').toLowerCase().endsWith('.pdf')) {
+        const parsed = await extractPdfText(f.buffer, f.originalname);
+        if (parsed) pdfExtracts.push({ name: f.originalname, ...parsed });
       }
     }
 
-    // Stub reply (no model attached yet).
-    const fileDesc = files.length
-      ? `\n\nAttached ${files.length} file(s):\n` + files.map(f => `  • ${f.name} (${f.mimetype || 'unknown'}, ${f.size} bytes)`).join('\n')
+    const system = buildSystemPrompt(toolSchemas, context, excelPreviews);
+    const fileNote = files.length
+      ? `\n[Attached files: ${files.map(f => f.name).join(', ')}]`
       : '';
+    const pdfNote = pdfExtracts.length
+      ? '\n\n── Extracted text from attached PDF(s) ──\n' +
+        pdfExtracts.map(p =>
+          `📄 ${p.name} (${p.pageCount ?? '?'} pages` +
+          `${p.truncated ? `, truncated from ${p.fullLength} chars` : ''}):\n` +
+          `<<<\n${p.text}\n>>>`
+        ).join('\n\n')
+      : '';
+    const userMsg = `${prompt}${fileNote}${pdfNote}`;
+
+    let content = '';
+    let usedTransport = 'stub';
+    let modelError = '';
+
+    try {
+      const out = await callLocalModel({ system, user: userMsg, history });
+      content = out.content || '';
+      usedTransport = out.transport;
+    } catch (e) {
+      modelError = e?.message || String(e);
+      console.error('Local model call failed:', modelError);
+    }
+
+    // If the model is unreachable, return a graceful stub so the frontend
+    // still sees the project context made it through.
+    if (!content) {
+      const target = process.env.LLM_GATEWAY_URL
+        ? `llm-gateway @ ${process.env.LLM_GATEWAY_URL}`
+        : (process.env.LOCAL_MODEL_URL || 'http://192.168.1.61/v1/chat/completions');
+      const stub = {
+        reply:
+          (modelError
+            ? `🛈 Could not reach local LLM (${target}):\n   ${modelError}\n\n`
+            : `🛈 No reply from local LLM (${target}).\n\n`) +
+          `Default routing: simorgh-agent local cluster on 192.168.1.61 (model: gpt-oss-20b).\n` +
+          `Overrides via .env — see backend/.env.example for LLM_GATEWAY_URL / LOCAL_MODEL_URL / LOCAL_MODEL_NAME.\n` +
+          `Note: the .61 box IP-allowlists 192.168.1.68 + localhost — calls from elsewhere will be refused at the nginx layer.\n\n` +
+          `Echo: ${prompt || '(empty)'}` + fileNote,
+        tool_calls: [],
+      };
+      return res.json(stub);
+    }
+
+    const envelope = extractToolEnvelope(content);
+    // Tag the reply with the transport used so it's debuggable from the UI,
+    // and echo back the extracted PDF text so the frontend can keep it on
+    // the user message for future turns.
     return res.json({
-      reply: `🛈 (LOCAL stub) Echoing your prompt back.\n\nPrompt: ${prompt || '(empty)'}${fileDesc}\n\nSet LOCAL_MODEL_URL in .env to forward to your local model.`,
+      reply: envelope.reply,
+      tool_calls: envelope.tool_calls,
+      _transport: usedTransport,
+      _extractedDocs: pdfExtracts.map(p => ({ name: p.name, text: p.text })),
     });
   } catch (err) {
     console.error('Chat local error:', err);
-    res.status(500).json({ reply: '', error: err.message });
+    res.status(500).json({ reply: '', tool_calls: [], error: err.message });
   }
 });
 
-// ONLINE endpoint — passthrough to a configured online model (env var
-// ONLINE_MODEL_URL). If not configured, returns a clear message so the
-// user knows what to set.
+// ONLINE endpoint — calls an OpenAI-compatible chat completions URL (any
+// provider that speaks the OpenAI schema works: OpenAI, Anthropic gateways,
+// Together, Groq, OpenRouter, etc.). Uses the same JSON tool-call protocol
+// as the local endpoint so the frontend code path is identical.
 app.post('/api/chat-online', chatUpload.array('files', 10), async (req, res) => {
   try {
     const prompt = (req.body?.prompt || '').toString();
     const files = (req.files || []).map(f => ({
-      name: f.originalname,
-      mimetype: f.mimetype,
-      size: f.size,
+      name: f.originalname, mimetype: f.mimetype, size: f.size,
     }));
+
+    const parseJSON = (s, fallback) => {
+      try { return s ? JSON.parse(s) : fallback; } catch { return fallback; }
+    };
+    const context       = parseJSON(req.body?.context,       null);
+    const toolSchemas   = parseJSON(req.body?.tools,         []);
+    const excelPreviews = parseJSON(req.body?.excelPreviews, []);
 
     const upstream = process.env.ONLINE_MODEL_URL;
     if (!upstream) {
       return res.json({
-        reply: '🌐 (ONLINE) endpoint is not configured. Set ONLINE_MODEL_URL in the backend .env to a real API URL and try again.',
+        reply: '🌐 ONLINE endpoint is not configured. Set ONLINE_MODEL_URL (OpenAI-compatible) and ONLINE_MODEL_KEY in the backend .env.',
+        tool_calls: [],
       });
     }
+
+    const system  = buildSystemPrompt(toolSchemas, context, excelPreviews);
+    const userMsg = `${prompt}${files.length ? `\n[Attached files: ${files.map(f => f.name).join(', ')}]` : ''}`;
+
+    const body = {
+      model: process.env.ONLINE_MODEL_NAME || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user',   content: userMsg },
+      ],
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+    };
+
     const upRes = await fetch(upstream, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(process.env.ONLINE_MODEL_KEY ? { Authorization: `Bearer ${process.env.ONLINE_MODEL_KEY}` } : {}),
       },
-      body: JSON.stringify({ prompt, files }),
+      body: JSON.stringify(body),
     });
     const text = await upRes.text();
-    return res.status(upRes.status).type(upRes.headers.get('content-type') || 'text/plain').send(text);
+    if (!upRes.ok) {
+      return res.status(upRes.status).json({
+        reply: `❌ Online model error ${upRes.status}: ${text.slice(0, 500)}`,
+        tool_calls: [],
+      });
+    }
+    let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    const content =
+      json?.choices?.[0]?.message?.content ??
+      json?.message?.content ??
+      json?.response ??
+      json?.raw ??
+      '';
+    const envelope = extractToolEnvelope(content || '');
+    return res.json({ reply: envelope.reply, tool_calls: envelope.tool_calls, _transport: 'openai-online' });
   } catch (err) {
     console.error('Chat online error:', err);
-    res.status(500).json({ reply: '', error: err.message });
+    res.status(500).json({ reply: '', tool_calls: [], error: err.message });
   }
 });
 

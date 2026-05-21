@@ -46,6 +46,202 @@ const DEVICE_PROP_LABELS: Record<string, string> = {
 const v = (val: any) => (val == null || val === '' ? '—' : String(val));
 const boolStr = (val: any) => (val ? '✓' : '—');
 
+// ─── Per-tier template property lists (must mirror TemplateProperties.tsx &
+//     DeviceSelection so the wide LV/MV report tables align with the editor) ─
+const LV_TEMPLATE_PROPERTIES = [
+  'CB ORDER', 'ACCESSORY', 'CONTACTOR. ORDER', 'OVER LOAD RELAY',
+  'EARTH FAULT', 'COREBALANCE CT', 'PROTECTION RELAY', 'CT RATING',
+  'AMMETER', 'AMMETER selector', 'PT RATING', 'VOLTMETER',
+  'VOLTMETER selector', 'MULTIMETER', 'TEST BLOCK', 'TRANSDUSER',
+  'ALARM ANUNCIATOR',
+  'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5', 'SPARE 6', 'SPARE 7',
+];
+const MV_TEMPLATE_PROPERTIES = [
+  'VCB OR VC/FUSE', 'ACCESSORY', 'VOLTAGE INDICATOR', 'COREBALANCE CT',
+  'PROTECTION RELAY', 'CT RATING', 'AMMETER', 'AMMETER selector',
+  'PT RATING', 'VOLTMETER', 'VOLTMETER selector', 'MULTIMETER',
+  'TEST BLOCK', 'TRANSDUSER', 'ALARM WINDDOW', 'SURGE ARRESTER',
+  'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5',
+];
+
+// Per-tier "device row identifier" columns (left side of the wide table)
+// LV-only columns (SIZE, SFD/HFD, MODULE NO.) are absent in MV.
+interface DeviceColSpec { key: string; header: string; }
+const LV_DEVICE_COLS: DeviceColSpec[] = [
+  { key: 'rowNumber',    header: 'ORDER NO.' },   // matches device row's rowNumber (= equipment label idx)
+  { key: 'templateName', header: 'TEMPLATE' },
+  { key: 'size',         header: 'SIZE' },
+  { key: 'sfdHfd',       header: 'SFD/HFD' },
+  { key: 'cableSize',    header: 'CABLE SIZE' },
+  { key: 'wiringType',   header: 'WIRING TYPE' },
+  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
+  { key: 'flc',          header: 'FLC (A)' },
+  { key: 'feederNo',     header: 'FEEDER NO.' },
+  { key: 'busSection',   header: 'BUS SECTION' },
+  { key: 'moduleNo',     header: 'MODULE NO.' },
+  { key: 'tag',          header: 'TAG' },
+  { key: 'description',  header: 'DESCRIPTION' },
+];
+const MV_DEVICE_COLS: DeviceColSpec[] = [
+  { key: 'rowNumber',    header: 'ORDER NO.' },
+  { key: 'templateName', header: 'TEMPLATE' },
+  { key: 'cableSize',    header: 'CABLE SIZE' },
+  { key: 'wiringType',   header: 'WIRING TYPE' },
+  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
+  { key: 'flc',          header: 'FLC (A)' },
+  { key: 'feederNo',     header: 'FEEDER NO.' },
+  { key: 'busSection',   header: 'BUS SECTION' },
+  { key: 'tag',          header: 'TAG' },
+  { key: 'description',  header: 'DESCRIPTION' },
+];
+
+// Extract a part's "alt / catalog" number from arbitrary fullData shapes.
+// `partNumber` carries the (typically Siemens-style) ORDER NUMBER, while the
+// raw imported records often also expose a separate catalog/article number.
+function partAltNumber(part: any): string {
+  const d = part?.fullData ?? {};
+  return (
+    d['Article Number'] || d['ArticleNumber'] ||
+    d['Part Number']    || d['PartNumber']    ||
+    d['Designation1']   || d['Catalog Number'] || ''
+  );
+}
+
+// Compose the multi-line text for one Property cell across export targets:
+//   ORDER NO. | PART NO. | LABEL | ×QTY
+// Lines that are empty / redundant are skipped. Joined with the separator.
+function partsCellText(parts: any[], separator = '\n'): string {
+  if (!parts || parts.length === 0) return '';
+  return parts.map(p => {
+    const lines: string[] = [];
+    if (p.partNumber) lines.push(`Order: ${p.partNumber}`);
+    const alt = partAltNumber(p);
+    if (alt && alt !== p.partNumber) lines.push(`Part: ${alt}`);
+    if (p.label) lines.push(`Label: ${p.label}`);
+    const q = p.quantity ?? 1;
+    lines.push(`×${q}`);
+    return lines.join(separator);
+  }).join(`${separator}— —${separator}`);
+}
+
+// Build {propKey → parts[]} for a single template, ignoring metadata keys.
+function templateParts(template: any): Record<string, any[]> {
+  const out: Record<string, any[]> = {};
+  const props = (template?.properties ?? {}) as Record<string, any>;
+  for (const [k, val] of Object.entries(props)) {
+    if (k === '__displayNames' || k === '__locked') continue;
+    if (val && Array.isArray((val as any).parts) && (val as any).parts.length > 0) {
+      out[k] = (val as any).parts;
+    }
+  }
+  return out;
+}
+
+// Flatten LV/MV equipment + device rows into a 2-D array for Excel + table
+// rendering. The number of columns is fixed; cells without a matching
+// template property come out empty (per spec).
+function buildTierMatrix(
+  data: ProjectData,
+  tier: 'LV' | 'MV'
+): { headers: string[]; rows: (string | number)[][] } {
+  const deviceCols = tier === 'LV' ? LV_DEVICE_COLS : MV_DEVICE_COLS;
+  const propCols   = tier === 'LV' ? LV_TEMPLATE_PROPERTIES : MV_TEMPLATE_PROPERTIES;
+  const headers = ['EQUIPMENT', ...deviceCols.map(c => c.header), ...propCols];
+
+  const tierTemplates = (data.templates?.[tier] ?? []);
+  const tmplById = new Map(tierTemplates.map(t => [t.id, t]));
+
+  const rows: (string | number)[][] = [];
+  const eqs = (data.equipments ?? []).filter(e => e.type === tier);
+  for (const eq of eqs) {
+    const devices = eq.devices ?? [];
+    if (devices.length === 0) {
+      rows.push([eq.name, ...deviceCols.map(() => ''), ...propCols.map(() => '')]);
+      continue;
+    }
+    devices.forEach((row, ri) => {
+      const tmpl  = row.templateId ? tmplById.get(row.templateId) : undefined;
+      const parts = tmpl ? templateParts(tmpl) : {};
+      const baseValues = deviceCols.map(c => {
+        const raw = (row as any)[c.key];
+        return raw == null ? '' : String(raw);
+      });
+      const propValues = propCols.map(p => partsCellText(parts[p] || []));
+      rows.push([
+        ri === 0 ? eq.name : '',
+        ...baseValues,
+        ...propValues,
+      ]);
+    });
+  }
+  return { headers, rows };
+}
+
+// ─── Per-section Excel export ─────────────────────────────────────────────────
+function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {
+  const { headers, rows } = buildTierMatrix(data, tier);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  XLSX.utils.book_append_sheet(wb, ws, `${tier} Equipment`);
+  XLSX.writeFile(wb, `${data.projectName}_${tier}_Equipment.xlsx`);
+}
+
+// ─── Per-section PDF (print-to-PDF window) ────────────────────────────────────
+function exportTierPDF(data: ProjectData, tier: 'LV' | 'MV') {
+  const { headers, rows } = buildTierMatrix(data, tier);
+  const accent = tier === 'LV' ? '#065f46' : '#92400e';
+  const accentSoft = tier === 'LV' ? '#d1fae5' : '#fef3c7';
+
+  const thHtml = headers
+    .map(h => `<th style="background:${accent};color:#fff;padding:5px 7px;font-size:10px;text-align:left;border:1px solid #fff;white-space:nowrap">${h}</th>`)
+    .join('');
+  const rowsHtml = rows.map((r, i) => `<tr style="background:${i % 2 ? '#fafafa' : '#fff'}">${
+    r.map((cell, ci) => {
+      const safe = String(cell ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      const isFirst = ci === 0;
+      return `<td style="padding:4px 6px;border:1px solid #e5e7eb;font-size:9.5px;vertical-align:top;white-space:pre-wrap;${isFirst ? 'font-weight:600' : ''}">${safe}</td>`;
+    }).join('')
+  }</tr>`).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>${data.projectName} — ${tier} Equipment</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#111;padding:12px}
+    @page{size:A2 landscape;margin:10mm}
+    @media print{.no-print{display:none}body{padding:0}}
+    table{page-break-inside:auto;border-collapse:collapse;width:100%}
+    tr{page-break-inside:avoid}
+  </style></head><body>
+  <div style="background:${accent};color:#fff;padding:14px 18px;border-radius:6px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <div style="font-size:9px;letter-spacing:.8px;opacity:.8">SIMORGH DESIGN — ${tier} EQUIPMENT REPORT</div>
+      <div style="font-size:17px;font-weight:800;margin-top:2px">${data.projectName}</div>
+    </div>
+    <div style="text-align:right;font-size:10px;opacity:.85">
+      <div>${new Date().toLocaleString()}</div>
+      <div>${rows.length} rows × ${headers.length} cols</div>
+    </div>
+  </div>
+  <div class="no-print" style="margin-bottom:10px;text-align:right">
+    <button onclick="window.print()" style="background:${accent};color:#fff;border:none;padding:6px 16px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600">🖨 Print / Save as PDF</button>
+  </div>
+  <div style="overflow-x:auto"><table>
+    <thead><tr>${thHtml}</tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table></div>
+  <div style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:6px;font-size:9px;color:#9ca3af">
+    Generated by Simorgh Design Software — ${tier} section export
+  </div>
+  <script>window.onload=()=>{window.focus();window.print();}<\/script>
+  </body></html>`;
+
+  const win = window.open('', '_blank', 'width=1400,height=900');
+  if (win) { win.document.write(html); win.document.close(); }
+  // also silence the unused-variable warning if accentSoft is not used elsewhere
+  void accentSoft;
+}
+
 function buildProjectRows(p: ProjectData) {
   return [
     ['Project Name',          v(p.projectName)],
@@ -533,6 +729,114 @@ function exportHTML(data: ProjectData) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TIER SECTION — wide equipment × template-property matrix table
+// One section per tier (LV → 04, MV → 05) with its own Excel/PDF buttons.
+// ─────────────────────────────────────────────────────────────────────────────
+interface TierEquipmentSectionProps {
+  tier: 'LV' | 'MV';
+  badge: string;
+  color: string;
+  equipments: any[];
+  projectData: ProjectData;
+}
+
+const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
+  tier, badge, color, equipments, projectData,
+}) => {
+  const [expanded, setExpanded] = useState(true);
+  const { headers, rows } = buildTierMatrix(projectData, tier);
+  const deviceColCount = (tier === 'LV' ? LV_DEVICE_COLS : MV_DEVICE_COLS).length;
+  const propCols = tier === 'LV' ? LV_TEMPLATE_PROPERTIES : MV_TEMPLATE_PROPERTIES;
+  const totalRows = rows.length;
+  const totalEquipments = equipments.length;
+
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden mb-3">
+      <div className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100">
+        <button
+          className="flex items-center gap-3 text-left flex-1"
+          onClick={() => setExpanded(e => !e)}
+        >
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: color }}>{badge}</span>
+          <span className="font-medium text-sm text-gray-800">
+            {tier} Equipment &amp; Templates ({totalEquipments} units, {totalRows} rows)
+          </span>
+          {expanded
+            ? <ChevronDownIcon className="w-4 h-4 text-gray-400" />
+            : <ChevronRightIcon className="w-4 h-4 text-gray-400" />}
+        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => exportTierExcel(projectData, tier)}
+            disabled={totalEquipments === 0}
+            className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700 disabled:opacity-50"
+            title={`Export ${tier} section to Excel`}
+          >
+            <FileSpreadsheetIcon className="w-3.5 h-3.5" /> Excel
+          </button>
+          <button
+            onClick={() => exportTierPDF(projectData, tier)}
+            disabled={totalEquipments === 0}
+            className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded text-xs hover:bg-red-700 disabled:opacity-50"
+            title={`Export ${tier} section to PDF`}
+          >
+            <FileTextIcon className="w-3.5 h-3.5" /> PDF
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="p-3 border-t border-gray-100 bg-white">
+          {totalEquipments === 0 ? (
+            <p className="text-sm text-gray-400">No {tier} equipment defined.</p>
+          ) : (
+            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+              <table className="text-[10px] border-collapse" style={{ minWidth: '1400px' }}>
+                <thead className="sticky top-0 z-10">
+                  <tr>
+                    {headers.map((h, i) => (
+                      <th
+                        key={h + i}
+                        className="px-2 py-1.5 border border-gray-300 text-left whitespace-nowrap font-semibold"
+                        style={{
+                          background: i === 0 || i <= deviceColCount ? color : '#374151',
+                          color: '#fff',
+                          minWidth: i === 0 ? '120px' : i <= deviceColCount ? '90px' : '130px',
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, ri) => (
+                    <tr key={ri} className={ri % 2 ? 'bg-gray-50' : 'bg-white'}>
+                      {r.map((cell, ci) => (
+                        <td
+                          key={ci}
+                          className="px-2 py-1 border border-gray-200 align-top whitespace-pre-wrap"
+                          style={{ fontWeight: ci === 0 ? 600 : 400 }}
+                        >
+                          {String(cell ?? '')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="mt-2 text-[10px] text-gray-500">
+                {propCols.length} property columns × {totalRows} device rows. Empty cells indicate the row's template doesn't define that property.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN TAB COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export const OutputTypesTab: React.FC = () => {
@@ -748,162 +1052,29 @@ export const OutputTypesTab: React.FC = () => {
         }
       </Section>
 
-      <Section id="equipment" title={`Equipment & Device Selections (${eqs.length} units, ${rowTotal} rows)`} badge="04" color="#b45309">
-        {eqs.length === 0
-          ? <p className="text-sm text-gray-400">No equipment defined.</p>
-          : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="bg-orange-700 text-white">
-                    {['Equipment','Type','Device (Library)','Row','Template','Bus Section','Feeder No','Wiring Type','Rating Power','FLC (A)']
-                      .map(h => <th key={h} className="px-3 py-2 text-left whitespace-nowrap">{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {eqs.flatMap((eq, eqi) => {
-                    const libItemId = eq.properties?.deviceLibraryItemId as string | undefined;
-                    const libItem   = libItemId
-                      ? [...(lib?.LV??[]),...(lib?.MV??[]),...(lib?.HV??[])].find(d=>d.id===libItemId)
-                      : null;
-                    const rowBg = eqi % 2 === 1 ? 'bg-orange-50' : 'bg-white';
-                    if (!eq.devices || eq.devices.length === 0) {
-                      return [(
-                        <tr key={eq.id} className={rowBg}>
-                          <td className="px-3 py-1.5 border-b font-semibold">{eq.name}</td>
-                          <td className="px-3 py-1.5 border-b">{eq.type}</td>
-                          <td className="px-3 py-1.5 border-b">{libItem?.name ?? '—'}</td>
-                          {Array(7).fill(null).map((_, i) => <td key={i} className="px-3 py-1.5 border-b text-gray-400">—</td>)}
-                        </tr>
-                      )];
-                    }
-                    return eq.devices.map((row, ri) => (
-                      <tr key={row.id} className={rowBg}>
-                        <td className="px-3 py-1.5 border-b font-semibold">{ri === 0 ? eq.name : ''}</td>
-                        <td className="px-3 py-1.5 border-b">{ri === 0 ? eq.type : ''}</td>
-                        <td className="px-3 py-1.5 border-b">{ri === 0 ? (libItem?.name ?? '—') : ''}</td>
-                        <td className="px-3 py-1.5 border-b">{row.rowNumber}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.templateName)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.busSection)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.feederNo)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.wiringType)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.ratingPower)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.flc)}</td>
-                      </tr>
-                    ));
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )
-        }
+      {/* ── Section 04: LV Equipment & Template Matrix ─────────────────────
+          Wide table — every row is one device-row from an LV equipment, and
+          every template property becomes its own column. Empty cells mean
+          that row's template doesn't define that property. */}
+      <TierEquipmentSection
+        tier="LV"
+        badge="04"
+        color="#065f46"
+        equipments={eqs.filter(e => e.type === 'LV')}
+        projectData={projectData}
+      />
 
-        {/* ── Template Components Breakdown ───────────────────────────────────
-            For each template used by the equipment above, list its component
-            parts (property → part number / rating / label / qty / priority)
-            grouped per template. Locked properties are visually struck. */}
-        {(() => {
-          // Gather the set of templates actually referenced by these equipment.
-          const usedTemplateIds = new Set<string>();
-          eqs.forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedTemplateIds.add(d.templateId); }));
-          const allTemplates = [
-            ...(projectData.templates?.LV ?? []),
-            ...(projectData.templates?.MV ?? []),
-            ...(projectData.templates?.HV ?? []),
-          ].filter(t => usedTemplateIds.has(t.id));
+      {/* ── Section 05: MV Equipment & Template Matrix ───────────────────── */}
+      <TierEquipmentSection
+        tier="MV"
+        badge="05"
+        color="#92400e"
+        equipments={eqs.filter(e => e.type === 'MV')}
+        projectData={projectData}
+      />
 
-          if (allTemplates.length === 0) {
-            return (
-              <p className="mt-4 text-xs text-gray-400 italic">
-                No templates assigned yet — assign templates in Device Selection to see the breakdown here.
-              </p>
-            );
-          }
-
-          return (
-            <div className="mt-6">
-              <h4 className="text-sm font-bold text-orange-800 mb-2">Template Components Breakdown</h4>
-              <div className="space-y-4">
-                {allTemplates.map(tmpl => {
-                  const props = (tmpl.properties ?? {}) as Record<string, any>;
-                  const displayNames: Record<string, string> = props.__displayNames || {};
-                  const lockedRows: string[]                  = props.__locked || [];
-
-                  // Strip metadata entries, only keep real property entries.
-                  const propertyEntries = Object.entries(props).filter(
-                    ([k, val]) => k !== '__displayNames' && k !== '__locked'
-                      && val && Array.isArray((val as any).parts) && (val as any).parts.length > 0
-                  );
-
-                  return (
-                    <div key={tmpl.id} className="border border-orange-100 rounded">
-                      <div className="px-3 py-1.5 bg-orange-50 border-b border-orange-100 flex items-center justify-between">
-                        <div className="text-xs">
-                          <span className="font-semibold text-orange-900">{tmpl.name}</span>
-                          <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            tmpl.type === 'LV' ? 'bg-green-100 text-green-800'
-                            : tmpl.type === 'MV' ? 'bg-yellow-100 text-yellow-800'
-                            : 'bg-red-100 text-red-800'
-                          }`}>{tmpl.type}</span>
-                        </div>
-                        <span className="text-[10px] text-gray-500">
-                          {propertyEntries.length} properties with parts
-                        </span>
-                      </div>
-                      {propertyEntries.length === 0 ? (
-                        <p className="px-3 py-2 text-xs italic text-gray-400">No parts assigned to this template yet.</p>
-                      ) : (
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="bg-orange-50/60 text-orange-900">
-                              <th className="px-3 py-1.5 text-left">Property</th>
-                              <th className="px-3 py-1.5 text-left">Part Number</th>
-                              <th className="px-3 py-1.5 text-left">Manufacturer</th>
-                              <th className="px-3 py-1.5 text-left">Rating</th>
-                              <th className="px-3 py-1.5 text-left">Label</th>
-                              <th className="px-3 py-1.5 text-center">Qty</th>
-                              <th className="px-3 py-1.5 text-center">Priority</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {propertyEntries.flatMap(([propName, propVal]) => {
-                              const parts = (propVal as any).parts as any[];
-                              const label = displayNames[propName] || propName;
-                              const locked = lockedRows.includes(propName);
-                              const manufacturers = Array.from(new Set(
-                                parts.map(p => p.fullData?.Manufacturer).filter(Boolean)
-                              )).join(' / ');
-                              return parts.map((part, pi) => (
-                                <tr key={`${propName}-${pi}`} className="border-b border-gray-50">
-                                  {pi === 0 && (
-                                    <td className="px-3 py-1 align-top font-medium" rowSpan={parts.length}>
-                                      <span className={locked ? 'line-through text-gray-400' : ''}>{label}</span>
-                                      {locked && <span className="ml-1 text-[10px] text-amber-600">🔒</span>}
-                                      {manufacturers && (
-                                        <div className="text-[10px] font-normal text-gray-500">{manufacturers}</div>
-                                      )}
-                                    </td>
-                                  )}
-                                  <td className="px-3 py-1 font-mono">{v(part.partNumber)}</td>
-                                  <td className="px-3 py-1">{v(part.fullData?.Manufacturer)}</td>
-                                  <td className="px-3 py-1">{v(part.fullData?.Designation3)}</td>
-                                  <td className="px-3 py-1">{v(part.label)}</td>
-                                  <td className="px-3 py-1 text-center">{part.quantity ?? 1}</td>
-                                  <td className="px-3 py-1 text-center">{part.priority ?? 1}</td>
-                                </tr>
-                              ));
-                            })}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })()}
-      </Section>
+      {/* (HV equipment breakdown intentionally omitted — covered by the full
+          Excel/PDF export buttons at the top.) */}
 
       <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
         <CheckCircleIcon className="w-3.5 h-3.5 text-green-500" />

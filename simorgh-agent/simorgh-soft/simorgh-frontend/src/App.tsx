@@ -283,8 +283,12 @@ const MainApp: React.FC = () => {
     }
   ];
 
+  // h-screen + overflow-hidden on the outer shell pins the whole app to
+  // the viewport. Without this the chatbot's `flex-1 overflow-y-auto`
+  // message list grows past the viewport and ends up scrolling the
+  // document instead of staying inside its own column.
   return (
-    <div className="flex flex-col w-full min-h-screen bg-gray-100">
+    <div className="flex flex-col w-full h-screen overflow-hidden bg-gray-100">
       {/* Menu Bar */}
       <MenuBar onShowProjectSelection={() => window.location.reload()} />
       
@@ -306,16 +310,25 @@ const MainApp: React.FC = () => {
         </div>
       </div>
 
-      {/* محتوای اصلی */}
-      <div className="container mx-auto px-4 py-4 flex-1">
-        <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={(tabId) => {
-          // When user manually clicks the Project Definition tab, reset to Project Data sub-tab
-          if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
-          setActiveTab(tabId);
-        }} />
-        <div className="mt-4 bg-white rounded-lg shadow-md p-6">
-          {tabs[activeTab].component}
+      {/* محتوای اصلی + پنل چت‌بات (split layout) */}
+      <div className="flex flex-row flex-1 min-h-0">
+        <div className="flex-1 min-w-0 overflow-auto">
+          <div className="container mx-auto px-4 py-4">
+            <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={(tabId) => {
+              // When user manually clicks the Project Definition tab, reset to Project Data sub-tab
+              if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
+              setActiveTab(tabId);
+            }} />
+            <div className="mt-4 bg-white rounded-lg shadow-md p-6">
+              {tabs[activeTab].component}
+            </div>
+          </div>
         </div>
+
+        {/* AI chatbot — embedded sibling column (not a floating overlay).
+            We hand it the active-tab state so it can both surface the
+            current tab to the model and let the AI navigate between tabs. */}
+        <Chatbot activeTab={activeTab} setActiveTab={setActiveTab} />
       </div>
 
       {/* Footer */}
@@ -325,9 +338,6 @@ const MainApp: React.FC = () => {
           <span>Version 1.0.0 | Auto-save: Enabled</span>
         </div>
       </div>
-
-      {/* Global AI chatbot — floating launcher / side panel */}
-      <Chatbot />
     </div>
   );
 };
