@@ -16,6 +16,18 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # The docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (Xray)
+      # into every container. The proxy returns 503 / hangs on internal
+      # service hostnames (e.g. project-explorer), which breaks MCP
+      # connect_all because httpx routes streamablehttp_client traffic
+      # through it. project-agent only talks to internal docker
+      # services, so disable the proxy outright here.
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - NO_PROXY=*
+      - http_proxy=
+      - https_proxy=
+      - no_proxy=*
       # Redis
       - REDIS_URL=redis://redis:6379/0
       - REDIS_AGENT_DB=5
