@@ -33,7 +33,7 @@ from services.microservice_clients import (
     get_search_client, get_tpms_fetcher_client, get_project_init_client,
     get_project_analysis_client, get_command_gen_client,
     get_file_export_client, get_eplan_bridge_client,
-    get_mail_gateway_client,
+    # mail-gateway client deleted in 2026-05 — mail-bridge replaces it.
 )
 from services.ekc_knowledge_service import EKCKnowledgeService, get_ekc_knowledge_service
 
@@ -1233,52 +1233,29 @@ class ProjectManagerAgent:
                                  owner_id: str, tpms_oenum: str = None,
                                  is_legacy: bool = False) -> Dict:
         """
-        Initialize all systems for a new project.
+        Initialize lightweight per-project state.
 
-        For legacy users (organize members):
-          - Fetches TPMS data and stores in tpms_data/ directory
-          - Connects to \\\\techserver, copies project files to documents/
-          - Initializes git for version tracking
+        Heavy lifting (session container, repo clone, TPMS pull, techserver
+        SMB copy, EKC clone, explorer kick-off) now lives in
+        project-init-service. This method is kept for the bookkeeping the
+        in-process agent state needs:
+          * a Qdrant collection for project semantic search
+          * (legacy) sanity-check the TPMS oenum exists in the cache
 
-        For modern users:
-          - Creates minimal workspace with documents/ directory
-          - No TPMS integration
+        The previous implementation tried to:
+          * git_init via shell-service /run        — 404 (deleted in 2026-05)
+          * mkdir/ln -s via shell.exec_command     — 404
+          * create_project_email via mail-gateway  — 503 (deleted)
+          * shell.file_write + git_commit          — 404
+        all of which generated log noise on every create. Those paths are
+        removed; the work is now performed by project-init-service when
+        the wizard ticks the relevant sources.
         """
-        results = {}
+        results: Dict = {}
 
-        # 1. Init git workspace + project directory structure
-        try:
-            if self.shell:
-                git_result = await self.shell.git_init(project_id)
-                results["git"] = git_result
-
-                # Create project directory structure
-                await self.shell.exec_command(
-                    project_id=project_id,
-                    command="mkdir -p tpms_data documents documents/metadata",
-                    timeout=10,
-                )
-
-                # Link ekc-knowledge shared volume into project workspace
-                ekc_knowledge_path = os.environ.get("EKC_KNOWLEDGE_PATH", "/ekc-knowledge")
-                await self.shell.exec_command(
-                    project_id=project_id,
-                    command=f"ln -sfn {ekc_knowledge_path} ekc-knowledge",
-                    timeout=10,
-                )
-                results["directories"] = "created"
-
-                await self.memory.update_project(
-                    project_id, git_repo_initialized=True,
-                    git_repo_path=f"/workspace/{project_id}"
-                )
-        except Exception as e:
-            results["git"] = {"status": "error", "error": str(e)}
-
-        # 2. Init Qdrant collection for project semantic search
+        # 1. Qdrant collection for project semantic search.
         try:
             if self.memory.qdrant:
-                # Use OENUM (not UUID) so collection name matches search queries
                 qdrant_oenum = tpms_oenum or project_id
                 self.memory.qdrant.ensure_collection_exists(
                     user_id="system", project_oenum=qdrant_oenum
@@ -1287,80 +1264,29 @@ class ProjectManagerAgent:
         except Exception as e:
             results["qdrant"] = {"status": "error", "error": str(e)}
 
-        # 3. For legacy users: verify TPMS project, copy files from techserver
+        # 2. (legacy) verify the TPMS oenum and cache the mapping. The
+        #    actual project data is now pulled into the session container
+        #    by project-init-service when the user ticks `tpms`.
         if tpms_oenum and is_legacy:
-            # Verify project in TPMS and cache mapping (on-demand queries later)
-            tpms_result = await self._verify_tpms_project(project_id, tpms_oenum)
-            results["tpms"] = tpms_result
-
-            # Copy project files from techserver via SMB
-            techserver_result = await self._copy_from_techserver(
-                project_id, tpms_oenum, project_name=name,
-            )
-            results["techserver"] = techserver_result
-
-            # 4. Analyze project structure after techserver copy
-            if techserver_result.get("status") == "copied":
-                analysis_result = await self._analyze_project_structure(
-                    project_id, name, tpms_oenum,
-                )
-                results["structure_analysis"] = analysis_result
-
-        # 5. Create project email address (for legacy projects)
-        project_email = None
-        if is_legacy:
             try:
-                mail_client = get_mail_gateway_client()
-                email_result = await mail_client.create_project_email(
-                    project_id=project_id,
-                    project_name=name,
-                    oenum=tpms_oenum,
-                    owner_id=owner_id,
-                )
-                project_email = email_result.get("email_address")
-                results["project_email"] = {
-                    "status": "created",
-                    "email": project_email,
-                }
-                logger.info(f"Project email created: {project_email}")
+                tpms_result = await self._verify_tpms_project(project_id, tpms_oenum)
+                results["tpms"] = tpms_result
             except Exception as e:
-                logger.warning(f"Failed to create project email: {e}")
-                results["project_email"] = {"status": "error", "error": str(e)}
+                results["tpms"] = {"status": "error", "error": str(e)}
 
-        # 6. Commit initial project structure to git
+        # Set initial agent state for the in-process scheduler.
         try:
-            if self.shell:
-                # Write a project manifest
-                manifest = json.dumps({
-                    "project_id": project_id,
-                    "name": name,
-                    "owner_id": owner_id,
-                    "tpms_oenum": tpms_oenum,
-                    "is_legacy": is_legacy,
-                    "project_email": project_email,
-                    "created_at": datetime.utcnow().isoformat(),
-                }, indent=2)
-                await self.shell.file_write(
-                    project_id=project_id,
-                    path="project.json",
-                    content=manifest,
-                )
-                await self.shell.git_commit(project_id, "Initialize project structure")
+            agent_state_data = {
+                "status": "idle",
+                "project_name": name,
+                "initialized_at": datetime.utcnow().isoformat(),
+                "pending_tasks": 0,
+                "is_legacy": is_legacy,
+                "tpms_oenum": tpms_oenum,
+            }
+            await self.memory.set_agent_state(project_id, agent_state_data)
         except Exception as e:
-            logger.warning(f"Initial git commit failed: {e}")
-
-        # 7. Set initial agent state
-        agent_state_data = {
-            "status": "idle",
-            "project_name": name,
-            "initialized_at": datetime.utcnow().isoformat(),
-            "pending_tasks": 0,
-            "is_legacy": is_legacy,
-            "tpms_oenum": tpms_oenum,
-        }
-        if project_email:
-            agent_state_data["project_email"] = project_email
-        await self.memory.set_agent_state(project_id, agent_state_data)
+            logger.warning("set_agent_state failed: %s", e)
 
         results["agent_state"] = "initialized"
         logger.info(f"Project {project_id} ({name}) initialized: {results}")
