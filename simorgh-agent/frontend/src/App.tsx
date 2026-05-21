@@ -84,6 +84,13 @@ function MainChat() {
   // Get projectNumber for chat
   const projectNumber = activeProjectId || null;
 
+  // Active project row for the header chip (repo/branch context).
+  const activeProject = React.useMemo(
+    () => projects.find(p => p.id === activeProjectId) || null,
+    [projects, activeProjectId]
+  );
+  const defaultModel = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'claude-sonnet-4-6';
+
   const handleSpecTaskCreated = (taskId: string) => {
     console.log('📊 New spec task:', taskId);
     setActiveSpecTasks(prev => [...prev, taskId]);
@@ -407,6 +414,17 @@ function MainChat() {
               disabled={!activeChatId}
               isProjectChat={activeProjectId !== null}
               quotaExceeded={quotaExceeded}
+              headerContext={
+                activeProject
+                  ? {
+                      repoPath: activeProject.repoPath || null,
+                      workingBranch: activeProject.workingBranch || null,
+                      baseBranch: activeProject.baseBranch || null,
+                      projectName: activeProject.name,
+                      model: defaultModel,
+                    }
+                  : null
+              }
             />
           </div>
 

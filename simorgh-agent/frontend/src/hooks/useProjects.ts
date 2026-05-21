@@ -636,6 +636,7 @@ export function useProjects(userId?: string) {
 
       const messages = response.data.messages || [];
       const chatMetadata = response.data.chat || {};
+      const ctx = response.data.context || null;
 
       console.log(`✅ Loaded ${messages.length} messages for chat ${chatId}`);
 
@@ -661,6 +662,9 @@ export function useProjects(userId?: string) {
             p.id === projectId
               ? {
                   ...p,
+                  repoPath: ctx?.repo_path ?? p.repoPath ?? null,
+                  baseBranch: ctx?.base_branch ?? p.baseBranch ?? null,
+                  workingBranch: ctx?.working_branch ?? p.workingBranch ?? null,
                   chats: p.chats.map(c =>
                     c.id === chatId
                       ? {

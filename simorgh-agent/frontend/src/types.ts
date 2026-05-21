@@ -37,6 +37,10 @@ export interface Project {
   updatedAt?: Date;
   isExpanded?: boolean;
   metadata?: Record<string, any>;
+  // Backend-supplied git context (populated lazily by selectChat).
+  repoPath?: string | null;
+  baseBranch?: string | null;
+  workingBranch?: string | null;
 }
 
 export interface Chat {

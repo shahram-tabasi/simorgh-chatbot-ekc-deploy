@@ -236,7 +236,8 @@ async def get_session_messages(session_token: str,
     """
     pool = await _db()
     row = await pool.fetchrow(
-        "SELECT s.project_id, p.owner_id "
+        "SELECT s.project_id, p.owner_id, p.name AS project_name, "
+        "       p.gitlab_repo_path, p.gitlab_base_branch, p.simorgh_branch "
         "FROM project_chat_sessions s "
         "JOIN projects p ON p.id = s.project_id "
         "WHERE s.session_token = $1", session_token,
@@ -259,6 +260,13 @@ async def get_session_messages(session_token: str,
     )
     return {
         "session_token": session_token,
+        "context": {
+            "project_id": str(row["project_id"]),
+            "project_name": row["project_name"],
+            "repo_path": row["gitlab_repo_path"],
+            "base_branch": row["gitlab_base_branch"],
+            "working_branch": row["simorgh_branch"],
+        },
         "messages": [
             {
                 "id": str(m["id"]),

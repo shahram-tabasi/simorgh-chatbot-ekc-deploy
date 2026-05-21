@@ -1,10 +1,19 @@
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { GitBranchIcon, FolderGitIcon, CpuIcon } from 'lucide-react';
 import WelcomeScreen from './WelcomeScreen';
 import GeneralWelcome from './GeneralWelcome';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
 import { Message, UploadedFile } from '../types';
+
+export interface ChatHeaderContext {
+  repoPath?: string | null;
+  workingBranch?: string | null;
+  baseBranch?: string | null;
+  projectName?: string | null;
+  model?: string | null;
+}
 
 interface ChatAreaProps {
   messages: Message[];
@@ -19,6 +28,44 @@ interface ChatAreaProps {
   editingMessage?: Message | null;
   isProjectChat?: boolean; // NEW: Indicates if this is a project-specific chat
   quotaExceeded?: boolean;
+  headerContext?: ChatHeaderContext | null;
+}
+
+function ChatHeaderChip({ ctx }: { ctx: ChatHeaderContext }) {
+  const repo = ctx.repoPath || ctx.projectName;
+  const branch = ctx.workingBranch || ctx.baseBranch;
+  const model = ctx.model;
+  if (!repo && !branch && !model) return null;
+  return (
+    <div className="flex-shrink-0 w-full flex justify-center pt-2 px-2 sm:px-4 md:px-8 lg:px-20">
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.04] border border-white/10 text-xs text-gray-300 backdrop-blur-sm max-w-full overflow-hidden">
+        {repo && (
+          <span className="flex items-center gap-1.5 min-w-0">
+            <FolderGitIcon className="w-3.5 h-3.5 text-sky-300/80 flex-shrink-0" />
+            <span className="truncate font-mono text-gray-200">{repo}</span>
+          </span>
+        )}
+        {branch && (
+          <>
+            <span className="text-white/15">·</span>
+            <span className="flex items-center gap-1.5 min-w-0">
+              <GitBranchIcon className="w-3.5 h-3.5 text-emerald-300/80 flex-shrink-0" />
+              <span className="truncate font-mono text-gray-200">{branch}</span>
+            </span>
+          </>
+        )}
+        {model && (
+          <>
+            <span className="text-white/15">·</span>
+            <span className="flex items-center gap-1.5 min-w-0">
+              <CpuIcon className="w-3.5 h-3.5 text-violet-300/80 flex-shrink-0" />
+              <span className="truncate text-gray-200">{model}</span>
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function ChatArea({
@@ -33,7 +80,8 @@ export function ChatArea({
   disabled = false,
   editingMessage = null,
   isProjectChat = false,
-  quotaExceeded = false
+  quotaExceeded = false,
+  headerContext = null,
 }: ChatAreaProps) {
   const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
   // Track chatting state: starts as false (idle), becomes true after first message send
@@ -113,8 +161,10 @@ export function ChatArea({
       {/* CHATTING MODE: Messages with fixed bottom ChatInput */}
       {!isIdle && (
         <>
+          {/* Repo / branch / model chip — Claude-Code style header strip. */}
+          {isProjectChat && headerContext && <ChatHeaderChip ctx={headerContext} />}
           {/* Remove overflow-y-auto from here - let MessageList handle scrolling */}
-          <div className="flex-1 flex flex-col pt-14 md:pt-0 overflow-hidden px-2 sm:px-4 md:px-8 lg:px-20">
+          <div className="flex-1 flex flex-col pt-2 md:pt-2 overflow-hidden px-2 sm:px-4 md:px-8 lg:px-20">
             <MessageList
               messages={messages}
               isTyping={isTyping}
