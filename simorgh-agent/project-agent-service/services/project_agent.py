@@ -459,6 +459,62 @@ class ProjectManagerAgent:
 
         return results, final_response
 
+    async def _try_gitlab_rest(self, tool: str, tool_input: dict):
+        """Fallback path for gitlab_mcp tools when the streamable-HTTP
+        transport misbehaves. gitlab-mcp exposes equivalent REST routes
+        we can hit directly. Returns the same {output, metadata} shape
+        the MCP path returns, or None if the tool isn't covered."""
+        import httpx
+        base = os.getenv("GITLAB_MCP_URL", "http://gitlab-mcp:8047").rstrip("/")
+        project = tool_input.get("project") or tool_input.get("project_id")
+        if not project:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                if tool == "get_project_tree":
+                    r = await c.get(f"{base}/tree", params={
+                        "project": project,
+                        "ref": tool_input.get("ref", "main"),
+                        "path": tool_input.get("path", ""),
+                        "recursive": True,
+                    })
+                elif tool == "read_file_mcp":
+                    r = await c.get(f"{base}/file", params={
+                        "project": project,
+                        "path": tool_input.get("path", ""),
+                        "ref": tool_input.get("ref", "main"),
+                    })
+                elif tool == "list_branches_mcp":
+                    r = await c.get(f"{base}/branches", params={
+                        "project": project, "per_page": 100,
+                    })
+                elif tool == "list_projects_mcp":
+                    r = await c.get(f"{base}/projects", params={
+                        "group": tool_input.get("group", ""),
+                        "search": tool_input.get("search_term", ""),
+                    })
+                elif tool == "search_blobs":
+                    r = await c.get(f"{base}/search", params={
+                        "project": project,
+                        "scope": "blobs",
+                        "search": tool_input.get("query", ""),
+                    })
+                else:
+                    return None
+                r.raise_for_status()
+                import json as _json
+                body = r.json()
+                return {
+                    "output": _json.dumps(body, ensure_ascii=False)[:8000],
+                    "metadata": {
+                        "via": "gitlab_mcp_rest_fallback",
+                        "tool": tool,
+                    },
+                }
+        except Exception as e:
+            logger.warning(f"gitlab REST fallback for {tool} failed: {e}")
+            return None
+
     async def _execute_single_task(
         self,
         project_id: str,
@@ -573,6 +629,12 @@ class ProjectManagerAgent:
                 return await self.mcp_manager.call_tool(tool, tool_input)
             except Exception as e:
                 logger.warning(f"MCP call failed for {tool}, falling back to HTTP: {e}")
+                # gitlab-mcp also exposes REST endpoints that work fine
+                # when the streamable-HTTP transport is misbehaving. Try
+                # those directly before giving up.
+                rest_fallback = await self._try_gitlab_rest(tool, tool_input)
+                if rest_fallback is not None:
+                    return rest_fallback
 
         # Direct execution for core tools + HTTP fallback for microservice tools
         if tool == "llm" or task_type in ("generation", "analysis", "review"):

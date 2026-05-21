@@ -237,9 +237,18 @@ class MCPManager:
 
         # The persistent streamable-HTTP session can be evicted server-side
         # after idle. The first POST then 400s with a stale session id. Try
-        # once, then on any failure rebuild the session and retry.
+        # once, then on any failure rebuild the session and retry. Wrap the
+        # call in wait_for so a hung SSE doesn't freeze the whole turn.
+        per_call_timeout = float(os.getenv("MCP_CALL_TIMEOUT_SEC", "30"))
+
+        async def _do_call(s):
+            return await asyncio.wait_for(
+                s.call_tool(tool_name, clean_args),
+                timeout=per_call_timeout,
+            )
+
         try:
-            result = await session.call_tool(tool_name, clean_args)
+            result = await _do_call(session)
         except Exception as e:
             logger.warning(
                 f"MCP call_tool {tool_name} on {server_name} failed "
@@ -259,7 +268,7 @@ class MCPManager:
             session = self.sessions.get(server_name)
             if session is None:
                 raise
-            result = await session.call_tool(tool_name, clean_args)
+            result = await _do_call(session)
 
         # Parse result content blocks
         output_parts = []
