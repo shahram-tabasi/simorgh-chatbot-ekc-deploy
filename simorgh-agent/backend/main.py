@@ -3156,6 +3156,7 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             # exploration summary that project-explorer wrote to redis db 5
             # so the LLM sees the user's repo files even though /api/chat/stream
             # doesn't have CoT tool-use. Best-effort: silent on lookup failure.
+            _enrichment_applied = False
             if message.chat_id and message.chat_id.startswith("session_"):
                 try:
                     from database.postgres_connection import get_db
@@ -3214,10 +3215,28 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                                 "treat it as authoritative for project-specific "
                                 "questions."
                             )
+                            _enrichment_applied = True
+                            logger.info(
+                                "project-session prompt enrichment applied "
+                                f"chat={message.chat_id} project={project_id_str} "
+                                f"repo={repo_path} system_prompt_len={len(system_prompt)}"
+                            )
+                        else:
+                            logger.info(
+                                "project-session enrichment: no exploration "
+                                f"state for project_id={project_id_str} "
+                                "(redis db 5 miss)"
+                            )
+                    else:
+                        logger.info(
+                            f"project-session enrichment: chat_id "
+                            f"{message.chat_id} not found in project_chat_sessions"
+                        )
                 except Exception as e:
                     logger.warning(
                         "project-session prompt enrichment failed for "
-                        f"chat_id={message.chat_id}: {e}"
+                        f"chat_id={message.chat_id}: {e}",
+                        exc_info=True,
                     )
 
             # Build LLM messages
@@ -3277,8 +3296,15 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             # as system evidence in `llm_messages` so the final response is
             # grounded in real project data, not just the user's prompt +
             # memory. For general chats this is skipped.
+            #
+            # Skip when chat_id is a wizard session_<token>: the legacy CoT
+            # path treats project_number as an OENUM / UUID, but our wizard
+            # uses gitlab_repo_path. We already injected the project's
+            # exploration summary into the system prompt above (the
+            # _enrichment_applied flag), which gives the LLM the same data
+            # the CoT block would have surfaced.
             # =====================================================================
-            if chat_type == "project":
+            if chat_type == "project" and not _enrichment_applied:
                 try:
                     from services.project_agent import get_project_agent
                     from models.project_models import COTRequest, MessageChannel
