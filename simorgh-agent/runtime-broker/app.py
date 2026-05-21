@@ -543,4 +543,6 @@ async def session_git_push_tool(project_id: str, branch: str = "") -> dict:
     return session_git_push(project_id, PushRequest(branch=branch or None)).model_dump()
 
 
-app.mount("/mcp", mcp.streamable_http_app())
+# FastMCP's streamable_http_app exposes route /mcp internally. Mount at
+# "/" so its public path is /mcp (mounting at "/mcp" would produce /mcp/mcp).
+app.mount("/", mcp.streamable_http_app())

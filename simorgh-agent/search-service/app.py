@@ -171,7 +171,9 @@ def web_search_news(query: str, max_results: int = 5, region: str = "wt-wt",
 
 
 # Mount MCP on the existing FastAPI app
-app.mount("/mcp", mcp.streamable_http_app())
+# FastMCP's streamable_http_app exposes route /mcp internally. Mount at
+# "/" so its public path is /mcp (mounting at "/mcp" would produce /mcp/mcp).
+app.mount("/", mcp.streamable_http_app())
 
 if __name__ == "__main__":
     import uvicorn

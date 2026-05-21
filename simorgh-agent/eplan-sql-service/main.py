@@ -181,4 +181,6 @@ async def get_eplan_part(part_no: str) -> Dict[str, Any]:
         return {"found": False, "part_no": part_no}
 
 
-app.mount("/mcp", mcp.streamable_http_app())
+# FastMCP's streamable_http_app exposes route /mcp internally. Mount at
+# "/" so its public path is /mcp (mounting at "/mcp" would produce /mcp/mcp).
+app.mount("/", mcp.streamable_http_app())

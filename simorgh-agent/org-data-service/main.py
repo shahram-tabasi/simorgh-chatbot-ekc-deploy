@@ -162,4 +162,6 @@ async def list_departments() -> List[Dict[str, Any]]:
     return []
 
 
-app.mount("/mcp", mcp.streamable_http_app())
+# FastMCP's streamable_http_app exposes route /mcp internally. Mount at
+# "/" so its public path is /mcp (mounting at "/mcp" would produce /mcp/mcp).
+app.mount("/", mcp.streamable_http_app())

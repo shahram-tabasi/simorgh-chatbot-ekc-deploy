@@ -312,4 +312,6 @@ async def get_exploration(project_id: str) -> dict:
     return json.loads(raw) if raw else {"project_id": project_id, "phase": "absent"}
 
 
-app.mount("/mcp", mcp.streamable_http_app())
+# FastMCP's streamable_http_app exposes route /mcp internally. Mount at
+# "/" so its public path is /mcp (mounting at "/mcp" would produce /mcp/mcp).
+app.mount("/", mcp.streamable_http_app())
