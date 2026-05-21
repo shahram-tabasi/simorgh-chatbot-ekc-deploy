@@ -80,22 +80,30 @@ class MCPManager:
     async def connect_all(self):
         """Connect to all registered MCP servers and discover tools.
 
-        Strategy:
-          1. Connect in parallel but bounded by a semaphore — the
-             streamablehttp_client opens a long-lived SSE stream and
-             anyio's task group started hitting BrokenResourceError /
-             CancelledError when 19 SSE handshakes raced each other in
-             the same event loop.
-          2. After the first pass, retry any failed connections once,
-             serially. By then the failed peer has handled its first
-             request and warmed up, and we're no longer racing.
+        Strategy: fully sequential with a small gap between peers and
+        up to 3 retries per peer with backoff. Earlier parallel/bounded
+        approaches all hit anyio races (BrokenResourceError /
+        ClosedResourceError) in streamablehttp_client when SSE streams
+        were established concurrently — moving to sequential plus a
+        short cooldown between connects eliminates the race entirely.
+
+        Total wallclock ~19 * 1.5s = ~30s for a clean run, retries add
+        up to ~3s per straggler. Fine for a process that runs forever.
         """
         per_server_timeout = float(os.getenv("MCP_CONNECT_TIMEOUT_SEC", "30"))
-        max_parallel = int(os.getenv("MCP_CONNECT_PARALLELISM", "5"))
-        sem = asyncio.Semaphore(max_parallel)
+        retries = int(os.getenv("MCP_CONNECT_RETRIES", "3"))
+        gap = float(os.getenv("MCP_CONNECT_GAP_SEC", "0.5"))
 
         async def _attempt(name: str, config: MCPServerConfig) -> bool:
-            async with sem:
+            for attempt in range(retries):
+                # Discard any half-built state from a prior attempt.
+                self.sessions.pop(name, None)
+                stale = self._server_stacks.pop(name, None)
+                if stale is not None:
+                    try:
+                        await stale.aclose()
+                    except Exception:
+                        pass
                 try:
                     await asyncio.wait_for(
                         self._connect_server(name, config),
@@ -105,43 +113,26 @@ class MCPManager:
                     return True
                 except (Exception, asyncio.CancelledError) as e:
                     msg = str(e) or type(e).__name__
+                    if attempt + 1 < retries:
+                        logger.info(
+                            f"MCP server {name} attempt {attempt+1} failed: "
+                            f"{msg}; retrying"
+                        )
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
                     logger.warning(f"MCP server {name} unavailable: {msg}")
                     return False
+            return False
 
-        # First pass — bounded parallel.
-        results = await asyncio.gather(
-            *(_attempt(name, cfg) for name, cfg in self.servers.items()),
-            return_exceptions=False,
-        )
-        failed = [
-            (name, cfg)
-            for ok, (name, cfg) in zip(results, self.servers.items())
-            if not ok
-        ]
-
-        # Second pass — sequential retry for stragglers. The streamable
-        # transport recovers cleanly between attempts and most flakes
-        # land on this pass.
-        if failed:
-            logger.info(f"MCP retry pass for {len(failed)} stragglers")
-            await asyncio.sleep(2)
-            for name, cfg in failed:
-                # Clear any half-built state from the failed attempt.
-                self.sessions.pop(name, None)
-                stale = self._server_stacks.pop(name, None)
-                if stale is not None:
-                    try:
-                        await stale.aclose()
-                    except Exception:
-                        pass
-                ok = await _attempt(name, cfg)
-                if ok:
-                    results = [
-                        (True if (n == name) else r)
-                        for r, (n, _) in zip(results, self.servers.items())
-                    ]
-
-        connected = sum(1 for ok in results if ok)
+        connected = 0
+        for name, cfg in self.servers.items():
+            ok = await _attempt(name, cfg)
+            if ok:
+                connected += 1
+            # Brief cooldown between peers so the streamable transport
+            # has a chance to fully tear down its SSE consumer before
+            # we open the next one.
+            await asyncio.sleep(gap)
 
         self._connected = connected > 0
         logger.info(
@@ -169,23 +160,10 @@ class MCPManager:
             self.sessions[name] = session
             self._server_stacks[name] = server_stack
 
-            # Discover tools from this server. Some FastMCP peers
-            # (gitlab-mcp, context-search, runtime-broker) sporadically
-            # 400 on a list_tools that arrives before the SSE stream is
-            # fully wired — retry a couple of times with a small backoff
-            # before giving up the whole connection.
-            tools_result = None
-            last_exc: Exception | None = None
-            for attempt in range(3):
-                try:
-                    tools_result = await session.list_tools()
-                    break
-                except Exception as e:
-                    last_exc = e
-                    await asyncio.sleep(0.2 * (attempt + 1))
-            if tools_result is None:
-                raise last_exc if last_exc else RuntimeError("list_tools failed")
-
+            # Discover tools from this server. If list_tools fails the
+            # session's transport is dead; let the outer connect_all
+            # retry loop create a fresh streamablehttp_client.
+            tools_result = await session.list_tools()
             for tool in tools_result.tools:
                 self.tools[tool.name] = name
                 self.tool_schemas[tool.name] = tool
