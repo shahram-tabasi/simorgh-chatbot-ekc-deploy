@@ -135,7 +135,18 @@ async def _exec(client: httpx.AsyncClient, project_id: str, command: str,
         payload["workdir"] = workdir
     r = await client.post(f"{RUNTIME_BROKER_URL}/sessions/{project_id}/exec",
                           json=payload, headers=_broker_headers())
-    r.raise_for_status()
+    if r.status_code >= 400:
+        # Surface the response body so 422 (Pydantic validation) and
+        # 502 (docker exec failures) don't appear as opaque status codes
+        # in the higher-level init log.
+        body = r.text[:500]
+        log.error("session_exec_failed", project_id=project_id,
+                  status=r.status_code, body=body,
+                  command_head=command.splitlines()[0][:120] if command else "")
+        raise httpx.HTTPStatusError(
+            f"runtime-broker exec returned {r.status_code}: {body}",
+            request=r.request, response=r,
+        )
     return r.json()
 
 
