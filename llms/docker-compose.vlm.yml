@@ -47,7 +47,7 @@ services:
       --dtype ${VLM_DTYPE:-half}
       --max-model-len ${VLM_MAX_MODEL_LEN:-32768}
       --max-num-seqs ${VLM_MAX_NUM_SEQS:-8}
-      --limit-mm-per-prompt image=${VLM_MAX_IMAGES_PER_PROMPT:-5}
+      --limit-mm-per-prompt {"image":${VLM_MAX_IMAGES_PER_PROMPT:-5}}
       --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92}
       --enable-prefix-caching
       --api-key ${VLLM_API_KEY:-}
