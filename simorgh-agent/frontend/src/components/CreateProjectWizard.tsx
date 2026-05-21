@@ -309,9 +309,11 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
                 <div className="space-y-2">
                   <select value={selectedRepo?.path || ''}
                     onChange={(e) => setSelectedRepo(repos.find(r => r.path === e.target.value) || null)}
-                    className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500">
-                    <option value="">— No repository (continue without) —</option>
-                    {repos.map(r => <option key={r.id} value={r.path}>{r.path}</option>)}
+                    className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 [&>option]:bg-gray-900 [&>option]:text-white">
+                    <option value="" className="bg-gray-900 text-gray-300">— No repository (continue without) —</option>
+                    {repos.map(r => (
+                      <option key={r.id} value={r.path} className="bg-gray-900 text-white">{r.path}</option>
+                    ))}
                   </select>
 
                   {selectedRepo && (
@@ -319,10 +321,14 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
                       <GitBranch className="w-4 h-4 text-gray-400 flex-shrink-0" />
                       <select value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)}
                         disabled={branchesLoading}
-                        className="flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500">
-                        {branches.length === 0 && <option value="">{branchesLoading ? 'Loading branches...' : 'No branches found'}</option>}
+                        className="flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 [&>option]:bg-gray-900 [&>option]:text-white">
+                        {branches.length === 0 && (
+                          <option value="" className="bg-gray-900 text-gray-300">
+                            {branchesLoading ? 'Loading branches...' : 'No branches found'}
+                          </option>
+                        )}
                         {branches.map(b => (
-                          <option key={b.name} value={b.name}>
+                          <option key={b.name} value={b.name} className="bg-gray-900 text-white">
                             {b.name}{b.default ? ' (default)' : ''}{b.protected ? ' (protected)' : ''}
                           </option>
                         ))}
