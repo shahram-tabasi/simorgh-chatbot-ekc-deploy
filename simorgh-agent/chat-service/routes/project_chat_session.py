@@ -93,9 +93,20 @@ def _row_to_response(row: asyncpg.Record) -> SessionResponse:
     )
 
 
+def _owner_id(user: Any) -> str:
+    """`get_current_user` returns either a string (legacy/JWT sub) or a dict
+    with id/EMPUSERNAME. Normalise to a plain string for projects.owner_id
+    comparisons."""
+    if isinstance(user, str):
+        return user
+    if isinstance(user, dict):
+        return str(user.get("id") or user.get("EMPUSERNAME") or "")
+    return ""
+
+
 async def _verify_project_access(pool: asyncpg.Pool, project_id: str,
-                                 user: dict[str, Any]) -> None:
-    owner_id = str(user.get("id") or user.get("EMPUSERNAME") or "")
+                                 user: Any) -> None:
+    owner_id = _owner_id(user)
     if not owner_id:
         raise HTTPException(status_code=401, detail="unauthenticated")
     row = await pool.fetchrow(
@@ -125,7 +136,7 @@ async def create_session(req: CreateSessionRequest,
         RETURNING *
         """,
         req.project_id, token, req.title, req.stage,
-        str(current_user.get("id") or current_user.get("EMPUSERNAME")),
+        _owner_id(current_user),
     )
     return _row_to_response(row)
 
@@ -142,7 +153,7 @@ async def get_session(session_token: str,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    owner_id = str(current_user.get("id") or current_user.get("EMPUSERNAME") or "")
+    owner_id = _owner_id(current_user)
     if row["owner_id"] != owner_id:
         raise HTTPException(status_code=403, detail="not your session")
     return _row_to_response(row)
@@ -170,7 +181,7 @@ async def get_session_messages(session_token: str,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    owner_id = str(current_user.get("id") or current_user.get("EMPUSERNAME") or "")
+    owner_id = _owner_id(current_user)
     if row["owner_id"] != owner_id:
         raise HTTPException(status_code=403, detail="not your session")
 
@@ -228,7 +239,7 @@ async def delete_session(session_token: str,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    owner_id = str(current_user.get("id") or current_user.get("EMPUSERNAME") or "")
+    owner_id = _owner_id(current_user)
     if row["owner_id"] != owner_id:
         raise HTTPException(status_code=403, detail="not your session")
 
