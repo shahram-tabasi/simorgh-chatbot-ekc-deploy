@@ -234,6 +234,168 @@ export function useChat(
       updateAgentPlan(plan);
     };
 
+    // Wizard project sessions (chat_id starts with `session_`) route through
+    // project-agent-service /api/v2/agent/projects/{pid}/message/stream so
+    // the CoT engine + MCP tools (gitlab-mcp, runtime-broker, etc.) actually
+    // run. Legacy /api/chat/stream stays only for general chats.
+    if (chatId.startsWith('session_')) {
+      try {
+        // Resolve project_id from the session token (one-time per session).
+        const sessResp = await axios.get(
+          `${API_BASE}/v2/chatbot/project/sessions/${chatId}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        const projectId = sessResp.data.project_id;
+        if (!projectId) throw new Error('session has no project_id');
+
+        const url = `${API_BASE}/v2/agent/projects/${projectId}/message/stream`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'text/event-stream',
+          },
+          body: JSON.stringify({
+            content,
+            channel: 'chat',
+            chat_id: chatId,
+          }),
+          signal: abortControllerRef.current?.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} from project-agent`);
+        }
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('No response body from project-agent');
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let curEvent = 'message';
+        let curData = '';
+        let accumulated = '';
+
+        const flushEvent = () => {
+          if (!curData) { curEvent = 'message'; return; }
+          let payload: any = curData;
+          try { payload = JSON.parse(curData); } catch {}
+          if (curEvent === 'complete') {
+            accumulated = payload.response || '';
+            const tasks: AgentTaskGroup[] = (payload.tasks || []).map((t: any) => ({
+              id: String(t.id || t.task_id || `task-${Math.random()}`),
+              title: t.title || t.task_type || 'task',
+              status: 'completed',
+              subtasks: [],
+            }));
+            if (!messageAdded) {
+              messageAdded = true;
+              setIsTyping(false);
+              setMessages(prev => [...prev, {
+                id: aiMessageId,
+                content: accumulated,
+                role: 'assistant',
+                timestamp: new Date(),
+                metadata: {
+                  streaming: false,
+                  agentPlan: tasks.length ? { tasks } : currentAgentPlan || undefined,
+                  cot_chain: payload.chain_id,
+                  cot_reasoning: payload.reasoning,
+                },
+              }]);
+            } else {
+              setMessages(prev => prev.map(m =>
+                m.id === aiMessageId
+                  ? { ...m, content: accumulated, metadata: {
+                      ...m.metadata, streaming: false,
+                      agentPlan: tasks.length ? { tasks } : m.metadata?.agentPlan,
+                      cot_chain: payload.chain_id, cot_reasoning: payload.reasoning,
+                    } }
+                  : m
+              ));
+            }
+          } else if (curEvent === 'error') {
+            setIsTyping(false);
+            const errMsg: Message = {
+              id: aiMessageId,
+              content: `Error: ${payload.error || curData}`,
+              role: 'assistant',
+              timestamp: new Date(),
+              metadata: { error: true },
+            };
+            if (!messageAdded) {
+              messageAdded = true;
+              setMessages(prev => [...prev, errMsg]);
+            } else {
+              setMessages(prev => prev.map(m => m.id === aiMessageId ? errMsg : m));
+            }
+          } else if (curEvent === 'ping') {
+            // keepalive — ignore
+          } else {
+            // progress / step / anything-else → surface as an agent step
+            const step = (payload && typeof payload === 'object' && payload.title)
+              ? payload
+              : { title: curEvent, status: 'active', detail: typeof payload === 'string' ? payload : '' };
+            handleAgentStep({ agent_step: {
+              task_id: step.task_id || `cot-${curEvent}`,
+              status: step.status || 'active',
+              title: step.title || curEvent,
+              detail: step.detail,
+              tool: step.tool || step.tool_needed,
+            }});
+            if (!currentAgentPlan) {
+              // bootstrap a plan so subsequent steps have a place to live
+              currentAgentPlan = { tasks: [{
+                id: step.task_id || `cot-${curEvent}`,
+                title: step.title || curEvent,
+                status: 'active',
+                subtasks: [],
+              }] };
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId, content: '', role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { streaming: true, agentPlan: currentAgentPlan },
+                }]);
+              }
+            }
+          }
+          curEvent = 'message';
+          curData = '';
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let nl;
+          while ((nl = buffer.indexOf('\n')) !== -1) {
+            const rawLine = buffer.slice(0, nl).replace(/\r$/, '');
+            buffer = buffer.slice(nl + 1);
+            if (rawLine === '') { flushEvent(); continue; }
+            if (rawLine.startsWith(':')) continue;          // SSE comment
+            if (rawLine.startsWith('event: ')) curEvent = rawLine.slice(7).trim();
+            else if (rawLine.startsWith('data: ')) curData = rawLine.slice(6);
+          }
+        }
+        flushEvent();
+        return;
+      } catch (e: any) {
+        console.error('project-agent stream failed:', e);
+        setIsTyping(false);
+        const errMsg: Message = {
+          id: aiMessageId,
+          content: `Failed to reach project agent: ${e.message || e}`,
+          role: 'assistant',
+          timestamp: new Date(),
+          metadata: { error: true },
+        };
+        setMessages(prev => [...prev, errMsg]);
+        return;
+      }
+    }
+
     try {
       const response = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
