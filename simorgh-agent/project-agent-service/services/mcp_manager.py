@@ -169,8 +169,23 @@ class MCPManager:
             self.sessions[name] = session
             self._server_stacks[name] = server_stack
 
-            # Discover tools from this server
-            tools_result = await session.list_tools()
+            # Discover tools from this server. Some FastMCP peers
+            # (gitlab-mcp, context-search, runtime-broker) sporadically
+            # 400 on a list_tools that arrives before the SSE stream is
+            # fully wired — retry a couple of times with a small backoff
+            # before giving up the whole connection.
+            tools_result = None
+            last_exc: Exception | None = None
+            for attempt in range(3):
+                try:
+                    tools_result = await session.list_tools()
+                    break
+                except Exception as e:
+                    last_exc = e
+                    await asyncio.sleep(0.2 * (attempt + 1))
+            if tools_result is None:
+                raise last_exc if last_exc else RuntimeError("list_tools failed")
+
             for tool in tools_result.tools:
                 self.tools[tool.name] = name
                 self.tool_schemas[tool.name] = tool
