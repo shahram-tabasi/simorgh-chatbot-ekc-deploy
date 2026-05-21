@@ -19,7 +19,10 @@ services:
       - PYTHONUNBUFFERED=1
       - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
       - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/5}
+      # Hard-coded redis db so the operator's top-level REDIS_URL in .env
+      # (typically /0 for the legacy backend) can't accidentally clobber
+      # the explorer's per-project exploration store on /5.
+      - REDIS_URL=redis://redis:6379/5
       - BROKER_TOKEN=${BROKER_TOKEN:-}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}

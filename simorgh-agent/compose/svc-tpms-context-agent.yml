@@ -18,7 +18,9 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - TPMS_FETCHER_URL=${TPMS_FETCHER_URL:-http://tpms-fetcher:8021}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/4}
+      # Hard-coded redis db so the operator's top-level REDIS_URL in .env
+      # (typically /0) can't clobber the per-OE rendered-context cache on /4.
+      - REDIS_URL=redis://redis:6379/4
       - CONTEXT_TTL_SEC=${TPMS_CONTEXT_TTL_SEC:-300}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
