@@ -3152,6 +3152,74 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                 system_prompt += stream_context_result.context_text
                 system_prompt += """\n\n🎯 CRITICAL: Use the above project data to answer. Be specific and cite actual values."""
 
+            # Project chat sessions (chat_id starts with `session_`) — pull the
+            # exploration summary that project-explorer wrote to redis db 5
+            # so the LLM sees the user's repo files even though /api/chat/stream
+            # doesn't have CoT tool-use. Best-effort: silent on lookup failure.
+            if message.chat_id and message.chat_id.startswith("session_"):
+                try:
+                    from database.postgres_connection import get_db
+                    import redis as _redis_lib_local
+                    pg = get_db()
+                    sess_row = await pg.execute_one_async(
+                        "SELECT s.project_id, p.name AS project_name, "
+                        "       p.gitlab_repo_path, p.simorgh_branch "
+                        "FROM project_chat_sessions s "
+                        "JOIN projects p ON p.id = s.project_id "
+                        "WHERE s.session_token = $1",
+                        message.chat_id,
+                    )
+                    if sess_row:
+                        project_id_str = str(sess_row["project_id"])
+                        r5 = _redis_lib_local.Redis(
+                            host=os.getenv("REDIS_HOST", "redis"),
+                            port=int(os.getenv("REDIS_PORT", "6379")),
+                            db=5, decode_responses=True, socket_timeout=2,
+                        )
+                        exploration_raw = r5.get(f"project:{project_id_str}:exploration")
+                        if exploration_raw:
+                            exploration = json.loads(exploration_raw)
+                            system_prompt += f"\n\n{'=' * 50}\n# PROJECT REPOSITORY CONTEXT\n{'=' * 50}\n"
+                            project_name = sess_row.get("project_name") or "this project"
+                            repo_path = sess_row.get("gitlab_repo_path") or ""
+                            branch = sess_row.get("simorgh_branch") or "(simorgh working branch)"
+                            system_prompt += (
+                                f"\nProject: **{project_name}**\n"
+                                f"GitLab repo: `{repo_path}` "
+                                f"(cloned at /work/gitlab on branch `{branch}` "
+                                f"inside the project's runtime-broker container)\n"
+                            )
+                            if exploration.get("remote_summary"):
+                                system_prompt += (
+                                    "\n## Repository overview\n"
+                                    + exploration["remote_summary"][:5000]
+                                )
+                            if exploration.get("container_summary"):
+                                system_prompt += (
+                                    "\n\n## File index (deep walk)\n"
+                                    + exploration["container_summary"][:4000]
+                                )
+                            file_index = exploration.get("file_index") or []
+                            if file_index:
+                                system_prompt += (
+                                    "\n\n## Full file list (sample)\n"
+                                    + "\n".join("- " + f for f in file_index[:60])
+                                )
+                            system_prompt += (
+                                "\n\n🎯 CRITICAL: When the user asks about "
+                                "repo files, project structure, or specific "
+                                "code/text from the repo, answer from the above "
+                                "context. The whole repo is cloned at "
+                                "/work/gitlab inside the session container — "
+                                "treat it as authoritative for project-specific "
+                                "questions."
+                            )
+                except Exception as e:
+                    logger.warning(
+                        "project-session prompt enrichment failed for "
+                        f"chat_id={message.chat_id}: {e}"
+                    )
+
             # Build LLM messages
             llm_messages = [{"role": "system", "content": system_prompt}]
 
