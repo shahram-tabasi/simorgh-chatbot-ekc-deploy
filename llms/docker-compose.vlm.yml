@@ -50,11 +50,11 @@ services:
       --limit-mm-per-prompt '{"image":${VLM_MAX_IMAGES_PER_PROMPT:-5}}'
       --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92}
       --enable-prefix-caching
-      --api-key ${VLLM_API_KEY:-}
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - HF_HOME=/models/huggingface
       - VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-INFO}
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
     volumes:
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
     expose:
