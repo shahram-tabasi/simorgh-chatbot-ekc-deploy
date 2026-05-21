@@ -470,6 +470,19 @@ class ProjectManagerAgent:
         raw_input = task.get("tool_input")
         task_type = task.get("task_type", "action")
 
+        # The planner sometimes prefixes the tool name with the MCP
+        # server, e.g. "gitlab_mcp.get_project_tree". The tool registry
+        # is keyed by the bare name. Strip the prefix if the dotted form
+        # doesn't match but the suffix does.
+        if (
+            isinstance(tool, str) and "." in tool
+            and self.mcp_manager
+            and not self.mcp_manager.has_tool(tool)
+        ):
+            bare = tool.rsplit(".", 1)[-1]
+            if self.mcp_manager.has_tool(bare):
+                tool = bare
+
         # Normalize tool_input: LLM may return a string instead of dict
         if isinstance(raw_input, str) and raw_input:
             if tool == "memory_query":
