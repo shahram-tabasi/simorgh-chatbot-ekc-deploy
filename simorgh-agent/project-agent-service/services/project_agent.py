@@ -260,6 +260,7 @@ class ProjectManagerAgent:
             execution_results, final_response = await self._execute_task_chain(
                 project_id, str(analysis.chain_id), tasks_created,
                 project_context=project_context,
+                user_input=user_input,
             )
         elif not auto_execute:
             final_response = (
@@ -314,6 +315,7 @@ class ProjectManagerAgent:
         chain_id: str,
         tasks: List[Dict],
         project_context: Dict[str, Any] = None,
+        user_input: str = "",
     ) -> tuple:
         """Execute a chain of COT tasks sequentially."""
         results = []
@@ -439,23 +441,59 @@ class ProjectManagerAgent:
                 # Continue with next task instead of stopping
                 continue
 
-        # If no generation task produced a response, summarize results
+        # If no generation task produced a response, synthesize one with
+        # the LLM using all the tool outputs so the user gets natural
+        # language instead of a raw JSON dump.
         if not final_response:
             completed = [r for r in results if r["status"] == "completed"]
             failed = [r for r in results if r["status"] == "failed"]
 
-            parts = []
             if completed:
-                parts.append(f"Completed {len(completed)} task(s):")
+                synth_parts = [
+                    "The user asked:", user_input or "(unknown request)",
+                    "",
+                    "Tool results from the plan:",
+                ]
                 for r in completed:
-                    output_preview = r.get("output", "")[:150]
-                    parts.append(f"- {r['title']}: {output_preview}")
-            if failed:
-                parts.append(f"\nFailed {len(failed)} task(s):")
-                for r in failed:
-                    parts.append(f"- {r['title']}: {r.get('error', 'Unknown error')}")
+                    out = r.get("output", "")
+                    if not isinstance(out, str):
+                        try:
+                            import json as _json
+                            out = _json.dumps(out, ensure_ascii=False)
+                        except Exception:
+                            out = str(out)
+                    synth_parts.append(f"\n## {r['title']}\n{out[:4000]}")
+                synth_parts.append(
+                    "\n\nWrite a concise, natural-language answer for the "
+                    "user using ONLY the tool results above. Use markdown "
+                    "lists / code fences where helpful. If a tool returned "
+                    "structured data like a file tree, present it clearly. "
+                    "Do not ask the user for information already shown above."
+                )
+                try:
+                    synth = await self._execute_llm_task(
+                        project_id,
+                        {"title": "synthesize", "description": "compose final answer",
+                         "task_type": "generation"},
+                        {"prompt": "\n".join(synth_parts)},
+                    )
+                    final_response = synth.get("output", "") if isinstance(synth, dict) else str(synth)
+                except Exception as e:
+                    logger.warning(f"final synthesis LLM call failed: {e}")
+                    final_response = ""
 
-            final_response = "\n".join(parts) or "Tasks executed but no output generated."
+            if not final_response:
+                parts = []
+                if completed:
+                    parts.append(f"Completed {len(completed)} task(s):")
+                    for r in completed:
+                        output_preview = r.get("output", "")[:150]
+                        parts.append(f"- {r['title']}: {output_preview}")
+                if failed:
+                    parts.append(f"\nFailed {len(failed)} task(s):")
+                    for r in failed:
+                        parts.append(f"- {r['title']}: {r.get('error', 'Unknown error')}")
+                final_response = "\n".join(parts) or "Tasks executed but no output generated."
 
         return results, final_response
 
