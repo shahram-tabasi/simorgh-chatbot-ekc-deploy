@@ -509,6 +509,34 @@ class ProjectManagerAgent:
             if not pid or str(pid).lower() in ("unknown", "none", "null", ""):
                 tool_input["project_id"] = str(project_id)
 
+        # gitlab_mcp.* tools take `project` as the GitLab path (e.g.
+        # "shahram-tabasi/test"), NOT the chatbot UUID. The planner
+        # often substitutes the UUID anyway. Replace it with the
+        # project's gitlab_repo_path from memory whenever the value
+        # looks like a UUID or is missing.
+        if (
+            isinstance(tool_input, dict)
+            and self.mcp_manager
+            and self.mcp_manager.is_connected
+        ):
+            server_name = self.mcp_manager.tools.get(tool)
+            if server_name == "gitlab_mcp":
+                proj_arg = tool_input.get("project") or tool_input.get("project_id")
+                looks_like_uuid = (
+                    isinstance(proj_arg, str)
+                    and len(proj_arg) == 36
+                    and proj_arg.count("-") == 4
+                )
+                if not proj_arg or looks_like_uuid:
+                    try:
+                        meta = await self.memory.get_project(str(project_id))
+                    except Exception:
+                        meta = None
+                    repo_path = (meta or {}).get("gitlab_repo_path")
+                    if repo_path:
+                        tool_input["project"] = repo_path
+                        tool_input.pop("project_id", None)
+
         # Inject previous results into context (3000 char limit per result)
         if prev_results:
             tool_input["_previous_results"] = {
