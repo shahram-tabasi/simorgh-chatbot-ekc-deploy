@@ -47,14 +47,15 @@ services:
       --dtype ${VLM_DTYPE:-half}
       --max-model-len ${VLM_MAX_MODEL_LEN:-32768}
       --max-num-seqs ${VLM_MAX_NUM_SEQS:-8}
-      --limit-mm-per-prompt image=${VLM_MAX_IMAGES_PER_PROMPT:-5}
+      --limit-mm-per-prompt '{"image":${VLM_MAX_IMAGES_PER_PROMPT:-5}}'
       --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92}
       --enable-prefix-caching
-      --api-key ${VLLM_API_KEY:-}
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - HF_HOME=/models/huggingface
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
       - VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-INFO}
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
     volumes:
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
     expose:
@@ -68,7 +69,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
