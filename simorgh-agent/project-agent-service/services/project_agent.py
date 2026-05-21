@@ -483,6 +483,32 @@ class ProjectManagerAgent:
         else:
             tool_input = {}
 
+        # Qwen2.5-VL sometimes wraps the real arg dict as a JSON string
+        # inside a "prompt" key, e.g.
+        #   tool_input = {"prompt": "{\"depth\":\"medium\",\"project_id\":\"x\"}"}
+        # Unwrap that so the MCP tool sees the named arguments it expects.
+        if (
+            isinstance(tool_input, dict)
+            and set(tool_input.keys()) == {"prompt"}
+            and isinstance(tool_input.get("prompt"), str)
+            and tool_input["prompt"].lstrip().startswith("{")
+        ):
+            try:
+                import json as _json
+                parsed = _json.loads(tool_input["prompt"])
+                if isinstance(parsed, dict):
+                    tool_input = parsed
+            except Exception:
+                pass
+
+        # Always pass through the canonical project_id when the LLM left
+        # a placeholder ("unknown", empty, missing) — MCP tools like
+        # project_analyze require it.
+        if isinstance(tool_input, dict):
+            pid = tool_input.get("project_id")
+            if not pid or str(pid).lower() in ("unknown", "none", "null", ""):
+                tool_input["project_id"] = str(project_id)
+
         # Inject previous results into context (3000 char limit per result)
         if prev_results:
             tool_input["_previous_results"] = {

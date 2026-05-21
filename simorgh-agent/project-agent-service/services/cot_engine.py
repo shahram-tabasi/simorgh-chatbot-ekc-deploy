@@ -306,6 +306,10 @@ class COTEngine:
 
         # Project info
         context_parts.append(f"Project: {project_context.get('name', 'Unknown')}")
+        # The project_id is required by many MCP tools as their first
+        # positional argument. Without injecting it here the planner
+        # emits placeholders like "unknown" and tool calls fail.
+        context_parts.append(f"project_id: {request.project_id}")
         context_parts.append(f"Status: {project_context.get('status', 'active')}")
 
         if project_context.get('description'):
