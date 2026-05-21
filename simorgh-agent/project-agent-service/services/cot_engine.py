@@ -341,7 +341,9 @@ class COTEngine:
         if request.document_id:
             context_parts.append(f"Document attached: {request.document_id}")
 
-        context_str = "\n".join(context_parts)
+        # NOTE: context_str is joined further down, after the EKC and
+        # sources_enabled blocks have appended their guardrails. Joining
+        # it here would silently drop those guardrails from the prompt.
 
         # Build dynamic tool list from MCP or use fallback
         if self.mcp_manager and self.mcp_manager.is_connected:
@@ -428,6 +430,10 @@ class COTEngine:
                     "  - documents_rag / uploaded files."
                 )
             context_parts.append("\n".join(allowed_lines))
+
+        # Now that every guardrail block has been appended, freeze the
+        # user-side context.
+        context_str = "\n".join(context_parts)
 
         # Build messages for LLM
         tpms_instructions = get_tpms_instructions()
