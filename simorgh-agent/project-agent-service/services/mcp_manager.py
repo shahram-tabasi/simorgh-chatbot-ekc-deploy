@@ -235,7 +235,31 @@ class MCPManager:
         # Remove internal keys (e.g., _previous_results) before sending to MCP
         clean_args = {k: v for k, v in arguments.items() if not k.startswith("_")}
 
-        result = await session.call_tool(tool_name, clean_args)
+        # The persistent streamable-HTTP session can be evicted server-side
+        # after idle. The first POST then 400s with a stale session id. Try
+        # once, then on any failure rebuild the session and retry.
+        try:
+            result = await session.call_tool(tool_name, clean_args)
+        except Exception as e:
+            logger.warning(
+                f"MCP call_tool {tool_name} on {server_name} failed "
+                f"({type(e).__name__}: {e}); reconnecting and retrying"
+            )
+            cfg = self.servers.get(server_name)
+            stale = self._server_stacks.pop(server_name, None)
+            self.sessions.pop(server_name, None)
+            if stale is not None:
+                try:
+                    await stale.aclose()
+                except Exception:
+                    pass
+            if cfg is None:
+                raise
+            await self._connect_server(server_name, cfg)
+            session = self.sessions.get(server_name)
+            if session is None:
+                raise
+            result = await session.call_tool(tool_name, clean_args)
 
         # Parse result content blocks
         output_parts = []
