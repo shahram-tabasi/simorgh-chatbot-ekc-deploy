@@ -616,6 +616,15 @@ class COTEngine:
                     logger.warning("Failed to parse COT LLM response as JSON")
 
         steps = []
+        # Map step titles → numbers so we can coerce Qwen-style
+        # depends_on=["query tpms"] references into real step indices.
+        title_to_num: dict[str, int] = {}
+        for s in data.get("steps", []):
+            t = (s.get("title") or "").strip().lower()
+            n = s.get("step_number")
+            if t and isinstance(n, int):
+                title_to_num[t] = n
+
         for step_data in data.get("steps", []):
             # Map task_type string to enum
             task_type_str = step_data.get("task_type", "action")
@@ -624,6 +633,22 @@ class COTEngine:
             except ValueError:
                 task_type = TaskType.ACTION
 
+            # depends_on must be list[int]. The planner sometimes emits
+            # step titles instead — resolve via the title→number map,
+            # drop anything we can't coerce.
+            raw_deps = step_data.get("depends_on") or []
+            clean_deps: list[int] = []
+            for d in raw_deps:
+                if isinstance(d, int):
+                    clean_deps.append(d)
+                elif isinstance(d, str):
+                    if d.isdigit():
+                        clean_deps.append(int(d))
+                    else:
+                        n = title_to_num.get(d.strip().lower())
+                        if n is not None:
+                            clean_deps.append(n)
+
             steps.append(COTStep(
                 step_number=step_data.get("step_number", len(steps) + 1),
                 title=step_data.get("title", "Untitled step"),
@@ -631,7 +656,7 @@ class COTEngine:
                 task_type=task_type,
                 tool_needed=step_data.get("tool_needed"),
                 tool_input=step_data.get("tool_input"),
-                depends_on=step_data.get("depends_on", []),
+                depends_on=clean_deps,
                 priority=step_data.get("priority", 5),
                 estimated_duration=step_data.get("estimated_duration"),
             ))
