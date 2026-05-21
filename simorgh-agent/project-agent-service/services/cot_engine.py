@@ -490,6 +490,22 @@ class COTEngine:
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
+            # Default to a fallback plan so `data` is always bound, even if
+            # neither the json_str parse nor the find-the-braces fallback
+            # below succeed.
+            data = {
+                "reasoning": "Failed to parse structured plan. Falling back to direct response.",
+                "steps": [{
+                    "step_number": 1,
+                    "title": "Direct response",
+                    "description": "Respond directly using LLM",
+                    "task_type": "generation",
+                    "tool_needed": "llm",
+                    "tool_input": {"prompt": request.user_input},
+                    "depends_on": [],
+                    "priority": 5,
+                }]
+            }
             # Try to find JSON object in the response
             start = response.find("{")
             end = response.rfind("}") + 1
@@ -498,19 +514,6 @@ class COTEngine:
                     data = json.loads(response[start:end])
                 except json.JSONDecodeError:
                     logger.warning("Failed to parse COT LLM response as JSON")
-                    data = {
-                        "reasoning": "Failed to parse structured plan. Falling back to direct response.",
-                        "steps": [{
-                            "step_number": 1,
-                            "title": "Direct response",
-                            "description": "Respond directly using LLM",
-                            "task_type": "generation",
-                            "tool_needed": "llm",
-                            "tool_input": {"prompt": request.user_input},
-                            "depends_on": [],
-                            "priority": 5,
-                        }]
-                    }
 
         steps = []
         for step_data in data.get("steps", []):
