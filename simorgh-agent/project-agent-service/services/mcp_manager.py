@@ -27,6 +27,7 @@ import os
 from typing import Optional, Dict, List, Any
 from contextlib import AsyncExitStack
 
+import httpx
 from mcp import ClientSession
 try:
     from mcp.client.streamable_http import streamablehttp_client
@@ -263,12 +264,34 @@ class MCPManager:
                 except Exception:
                     pass
             if cfg is None:
+                # Last-ditch: try the REST fallback for servers that have one.
+                rest = await self._rest_fallback(server_name, tool_name, clean_args)
+                if rest is not None:
+                    return rest
                 raise
             await self._connect_server(server_name, cfg)
             session = self.sessions.get(server_name)
             if session is None:
+                rest = await self._rest_fallback(server_name, tool_name, clean_args)
+                if rest is not None:
+                    return rest
                 raise
-            result = await _do_call(session)
+            try:
+                result = await _do_call(session)
+            except Exception as e2:
+                # Second MCP attempt failed too — the streamable-HTTP
+                # transport is genuinely down. For servers that expose a
+                # REST surface alongside MCP (gitlab-mcp), fall back to
+                # plain HTTPS so the CoT step still completes.
+                logger.warning(
+                    f"MCP call_tool {tool_name} on {server_name} second "
+                    f"attempt failed ({type(e2).__name__}: {e2}); "
+                    "trying REST fallback"
+                )
+                rest = await self._rest_fallback(server_name, tool_name, clean_args)
+                if rest is not None:
+                    return rest
+                raise
 
         # Parse result content blocks
         output_parts = []
@@ -291,6 +314,117 @@ class MCPManager:
                 "server": server_name,
                 "tool": tool_name,
                 "is_error": getattr(result, 'isError', False),
+            },
+        }
+
+    # =========================================================================
+    # REST FALLBACK
+    # =========================================================================
+    # Some MCP servers (gitlab-mcp today) also publish a plain-HTTP REST
+    # surface. The MCP streamable-HTTP transport has a long tail of
+    # session-id-stale / SSE-hang failures; when that happens we'd
+    # rather degrade to REST than fail the CoT step. Each entry maps
+    #
+    #   tool_name -> (HTTP method, path_template, query_arg_names,
+    #                 optional path-substitution lambda).
+    #
+    # The MCP tools are intentionally thin wrappers around these REST
+    # routes (read_artifact_mcp literally calls the REST handler), so
+    # the returned JSON is identical.
+    GITLAB_MCP_REST_BASE = os.getenv("GITLAB_MCP_URL", "http://gitlab-mcp:8047")
+    TECH_KB_REPO         = os.getenv(
+        "GITLAB_TECH_KB_REPO", "simorgh-knowledge/technical-knowledge"
+    )
+
+    def _gitlab_rest_recipe(
+        self, tool_name: str, args: Dict[str, Any],
+    ) -> tuple[str, str, Dict[str, Any]] | None:
+        """Translate a gitlab-mcp tool call into (method, url, params).
+        Returns None when the tool has no REST equivalent."""
+        base = self.GITLAB_MCP_REST_BASE.rstrip("/")
+        if tool_name == "list_projects_mcp":
+            return ("GET", f"{base}/projects", {
+                "group":  args.get("group") or "",
+                "search": args.get("search_term") or "",
+            })
+        if tool_name == "get_project_tree":
+            return ("GET", f"{base}/tree", {
+                "project":   args.get("project"),
+                "ref":       args.get("ref") or "main",
+                "path":      args.get("path") or "",
+                "recursive": "true",
+            })
+        if tool_name == "read_file_mcp":
+            return ("GET", f"{base}/file", {
+                "project": args.get("project"),
+                "path":    args.get("path"),
+                "ref":     args.get("ref") or "main",
+            })
+        if tool_name == "read_artifact_mcp":
+            return ("GET", f"{base}/artifact", {
+                "project": args.get("project"),
+                "path":    args.get("path"),
+                "ref":     args.get("ref") or "main",
+            })
+        if tool_name == "search_blobs":
+            return ("GET", f"{base}/search", {
+                "query":   args.get("query"),
+                "project": args.get("project") or "",
+                "group":   args.get("group") or "",
+                "scope":   "blobs",
+            })
+        if tool_name == "search_technical_knowledge":
+            return ("GET", f"{base}/search", {
+                "query":   args.get("query"),
+                "project": self.TECH_KB_REPO,
+                "scope":   "blobs",
+            })
+        if tool_name == "list_branches_mcp":
+            return ("GET", f"{base}/branches", {
+                "project": args.get("project"),
+                "search":  args.get("search_term") or "",
+            })
+        return None
+
+    async def _rest_fallback(
+        self, server_name: str, tool_name: str, args: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Best-effort REST shadow of an MCP call. Returns None when no
+        REST equivalent is registered for the (server, tool) pair."""
+        recipe = None
+        if server_name == "gitlab_mcp":
+            recipe = self._gitlab_rest_recipe(tool_name, args)
+        # Other servers can be wired in here in the future.
+        if recipe is None:
+            return None
+
+        method, url, params = recipe
+        # Drop None / empty-string params so we don't push unset filters
+        # into GitLab's API.
+        params = {k: v for k, v in params.items() if v not in (None, "")}
+        try:
+            timeout = float(os.getenv("MCP_REST_TIMEOUT_SEC", "15"))
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                resp = await c.request(method, url, params=params)
+            resp.raise_for_status()
+            body = resp.json()
+        except Exception as e:
+            logger.warning(
+                "REST fallback %s on %s also failed (%s: %s)",
+                tool_name, server_name, type(e).__name__, e,
+            )
+            return None
+
+        # Match the shape of the MCP path: {"output": str, "metadata": {...}}.
+        # CoT consumers parse output as text (often as JSON), so we
+        # json.dumps the REST body.
+        return {
+            "output": json.dumps(body),
+            "metadata": {
+                "via":    "rest-fallback",
+                "server": server_name,
+                "tool":   tool_name,
+                "url":    url,
             },
         }
 
