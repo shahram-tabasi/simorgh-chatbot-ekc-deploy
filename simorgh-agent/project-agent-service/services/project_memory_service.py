@@ -692,9 +692,93 @@ class ProjectMemoryService:
 
         return context
 
+    def _sweep_redis_project_chats(
+        self, project_idents: set[str], owner_id: Optional[str] = None,
+    ) -> int:
+        """Wipe every chat in Redis whose metadata.project_number matches
+        one of ``project_idents`` (the project's UUID and/or its
+        tpms_oenum). Returns the number of chats removed.
+
+        Without this, the sidebar's /api/users/{id}/project-chats keeps
+        showing chats whose project row has already been deleted —
+        DELETE FROM projects only touches Postgres, but the sidebar
+        reads from Redis.
+        """
+        if not project_idents:
+            return 0
+        chat_client = None
+        try:
+            # project-agent's RedisService exposes a "chat" client at db=1.
+            clients = self.redis.get_clients() if hasattr(self.redis, "get_clients") else None
+            if clients and "chat" in clients:
+                chat_client = clients["chat"]
+            else:
+                chat_client = getattr(self.redis, "chat_client", None)
+            if chat_client is None:
+                logger.warning("cleanup_project: chat redis client unavailable; skipping")
+                return 0
+        except Exception as e:
+            logger.warning("cleanup_project: redis client lookup failed: %s", e)
+            return 0
+
+        removed = 0
+        try:
+            for raw_key in chat_client.scan_iter(match="chat:*:metadata", count=200):
+                key = raw_key if isinstance(raw_key, str) else raw_key.decode()
+                try:
+                    raw_meta = chat_client.get(key)
+                    if not raw_meta:
+                        continue
+                    meta = json.loads(raw_meta) if isinstance(raw_meta, str) else json.loads(raw_meta.decode())
+                except Exception:
+                    continue
+
+                # Match on every field a chat might carry the project on.
+                # Both the legacy "project_number" and modern "project_id"
+                # have shown up here over time, so check both.
+                hit = any(
+                    str(meta.get(field) or "") in project_idents
+                    for field in ("project_number", "project_id", "project_id_main")
+                )
+                if not hit:
+                    continue
+
+                chat_id = key.split(":")[1]  # chat:<id>:metadata
+                try:
+                    chat_client.delete(key)
+                    chat_client.delete(f"chat:history:{chat_id}")
+                    # User-side indices: remove the chat from owner sets.
+                    if owner_id:
+                        chat_client.srem(f"user:{owner_id}:chats:all", chat_id)
+                        chat_client.srem(f"user:{owner_id}:chats:general", chat_id)
+                        for ident in project_idents:
+                            chat_client.srem(
+                                f"user:{owner_id}:chats:project:{ident}", chat_id,
+                            )
+                    removed += 1
+                except Exception as e:
+                    logger.warning("cleanup_project: chat %s sweep failed: %s",
+                                   chat_id, e)
+        except Exception as e:
+            logger.warning("cleanup_project: scan_iter failed: %s", e)
+            return removed
+
+        if removed:
+            logger.info("cleanup_project: removed %d redis chat(s) for idents=%s",
+                        removed, sorted(project_idents))
+        return removed
+
     async def cleanup_project(self, project_id: str) -> Dict[str, Any]:
         """Clean up all memory for a project across all layers."""
         results = {}
+
+        # Resolve the identifiers a project's chats might be filed under
+        # in Redis BEFORE we delete the row in Postgres. Modern users
+        # have project_id == the UUID, legacy users have a TPMS oenum.
+        project_row = await self.get_project(project_id)
+        owner_id = (project_row or {}).get("owner_id")
+        oenum    = (project_row or {}).get("tpms_oenum")
+        project_idents = {str(v) for v in (project_id, oenum) if v}
 
         # Redis cleanup
         try:
@@ -705,7 +789,17 @@ class ProjectMemoryService:
             for key in keys_to_delete:
                 self.redis.delete(key, db="session")
                 self.redis.delete(key, db="cache")
+
+            # Sidebar chats live in redis chat-db under chat:<id>:metadata
+            # keyed by project_number (== oenum for legacy / project UUID
+            # for modern users). Project delete used to leave these
+            # orphaned — the chats kept appearing in the sidebar long
+            # after their project was gone.
+            chat_sweep = self._sweep_redis_project_chats(
+                project_idents=project_idents, owner_id=owner_id,
+            )
             results["redis"] = "cleaned"
+            results["redis_chats_removed"] = chat_sweep
         except Exception as e:
             results["redis"] = f"error: {e}"
 
