@@ -660,11 +660,14 @@ class ProjectManagerAgent:
                         tool_input["project"] = repo_path
                         tool_input.pop("project_id", None)
 
-                # Default ref to the project's simorgh_branch / base
-                # branch when the planner omitted one. gitlab-mcp's
-                # DEFAULT_REF is "main" but our working branches are
-                # simorgh/<oenum>/<hex>, which is where the user's
-                # committed work actually lives.
+                # Default ref to the project's *base* branch when the
+                # planner omitted one. Important: prefer the base branch
+                # (always exists on origin) over simorgh_branch — the
+                # simorgh working branch may not have been pushed yet
+                # if the deploy key wasn't granted at clone time, which
+                # would make every read fail with "404 Commit Not Found".
+                # Reads should target the user's canonical state, not
+                # the agent's in-flight workspace.
                 if not tool_input.get("ref"):
                     try:
                         meta = locals().get("meta") or await self.memory.get_project(
@@ -673,8 +676,8 @@ class ProjectManagerAgent:
                     except Exception:
                         meta = None
                     ref = (
-                        (meta or {}).get("simorgh_branch")
-                        or (meta or {}).get("gitlab_base_branch")
+                        (meta or {}).get("gitlab_base_branch")
+                        or (meta or {}).get("simorgh_branch")
                         or "main"
                     )
                     tool_input["ref"] = ref

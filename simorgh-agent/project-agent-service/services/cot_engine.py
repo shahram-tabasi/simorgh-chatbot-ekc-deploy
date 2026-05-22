@@ -130,6 +130,15 @@ the right plan is:
 Prefer read_artifact_mcp over read_file_mcp whenever you are not certain the file is
 plain text — read_file_mcp returns base64 for binaries, which you cannot reason on.
 
+KEEP PLANS MINIMAL — RULES THAT MUST NOT BE BROKEN:
+  • For "what's in my repo / project / files" listing questions: ONE step is enough
+    — get_project_tree. Do NOT add a follow-up read step. The tree already lists
+    everything; the model writes the answer from that.
+  • Never call read_artifact_mcp or read_file_mcp without a specific filename you
+    saw in a previous step. Passing path="/", path="", path="*" always 404s.
+  • Never plan more than 3 steps for a yes/no, summary, or "what is X" question.
+    Extra steps cost real time on gpt-oss; each one is ~10–20s. Brevity wins.
+
 DOCUMENT PROCESSING WORKFLOW (uploads only — when a NEW file lands via chat or email):
 When a document arrives via the chatbot upload affordance or email attachment (NOT
 already in the user's GitLab repo), create tasks in this order:
