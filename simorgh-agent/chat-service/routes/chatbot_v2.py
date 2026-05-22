@@ -139,6 +139,12 @@ class SendMessageResponse(BaseModel):
     sources: List[str] = []
     error: Optional[str] = None
     quota: Optional[dict] = None
+    # Token-budget telemetry from the wrapper's fit_history pass, so the
+    # frontend can render the round usage ring (priority 2 feature).
+    # Shape: {used_tokens, history_tokens, budget, context_limit,
+    #         fixed_tokens, response_reserve, dropped_count,
+    #         trigger_compaction}.
+    token_budget: Optional[dict] = None
 
 
 class UploadDocumentRequest(BaseModel):
@@ -332,6 +338,7 @@ async def send_message(
             tokens_used=result.get("tokens_used", 0),
             sources=result.get("sources", []),
             error=result.get("error"),
+            token_budget=result.get("token_budget"),
         )
 
     except HTTPException:

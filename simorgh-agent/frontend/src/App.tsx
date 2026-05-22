@@ -424,6 +424,7 @@ function MainChat() {
                       workingBranch: activeProject.workingBranch || null,
                       baseBranch: activeProject.baseBranch || null,
                       projectName: activeProject.name,
+                      projectId: activeProject.id,
                       model: defaultModel,
                       filesChanged: typeof activeProject.filesChangedCount === 'number'
                         ? activeProject.filesChangedCount

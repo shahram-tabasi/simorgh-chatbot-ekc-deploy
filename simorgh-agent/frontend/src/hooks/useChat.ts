@@ -677,7 +677,10 @@ export function useChat(
           context_used: data.sources?.length > 0 || data.context_used,
           cached_response: data.cached_response,
           tokens: data.tokens_used || data.tokens,
-          sources: data.sources  // v2 provides sources
+          sources: data.sources,  // v2 provides sources
+          // Surfaces priority-2's fit_history telemetry so the chat
+          // input's TokenUsageRing can paint live context-window usage.
+          token_budget: data.token_budget,
         }
       };
 
@@ -906,7 +909,8 @@ export function useChat(
             context_used: data.sources?.length > 0 || data.context_used,
             cached_response: data.cached_response,
             tokens: data.tokens_used || data.tokens,
-            sources: data.sources
+            sources: data.sources,
+            token_budget: data.token_budget,
           },
           currentVersionIndex: currentVersion.length
         };

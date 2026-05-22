@@ -318,6 +318,9 @@ class ChatbotCore:
                 "tokens_used": response.tokens_used,
                 "sources": response.sources_referenced,
                 "error": response.error,
+                # Surfaces the wrapper's fit_history telemetry so the
+                # frontend can paint the round token-usage ring.
+                "token_budget": (context.metadata or {}).get("_token_budget"),
             }
 
     async def upload_document(

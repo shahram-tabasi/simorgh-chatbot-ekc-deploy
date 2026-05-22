@@ -1,4 +1,5 @@
 import React from 'react';
+import axios from 'axios';
 import { AnimatePresence, motion } from 'framer-motion';
 import { GitBranchIcon, FolderGitIcon, CpuIcon, FileDiffIcon, ExternalLinkIcon } from 'lucide-react';
 import WelcomeScreen from './WelcomeScreen';
@@ -7,6 +8,8 @@ import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
 import { Message, UploadedFile } from '../types';
 
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
 export interface ChatHeaderContext {
   repoPath?: string | null;
   workingBranch?: string | null;
@@ -14,6 +17,47 @@ export interface ChatHeaderContext {
   projectName?: string | null;
   model?: string | null;
   filesChanged?: number | null;
+  /** Internal project UUID — needed by the diff-stat polling. */
+  projectId?: string | null;
+}
+
+interface DiffStats {
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+}
+
+/** Poll /git/diffstat for the active project so the chat input can
+ * paint the +N -M chips. Returns null until the first probe lands. */
+function useProjectDiffStats(projectId?: string | null): DiffStats | null {
+  const [stats, setStats] = React.useState<DiffStats | null>(null);
+  React.useEffect(() => {
+    if (!projectId) { setStats(null); return; }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const token = localStorage.getItem('simorgh_token');
+        if (!token) return;
+        const res = await axios.get(
+          `${API_BASE}/v2/agent/projects/${projectId}/git/diffstat`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (cancelled) return;
+        const d = res.data || {};
+        setStats({
+          files_changed: d.files_changed ?? 0,
+          insertions:    d.insertions ?? 0,
+          deletions:     d.deletions ?? 0,
+        });
+      } catch {
+        // best-effort — leave previous value
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 30_000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [projectId]);
+  return stats;
 }
 
 // Build a GitLab web URL from a repo path. We hit env-configurable hosts
@@ -147,6 +191,38 @@ export function ChatArea({
 
   const isIdle = messages.length === 0 && !isChatting;
 
+  // Live diff stats for the chat-input header's +N -M chips.
+  const diffStats = useProjectDiffStats(headerContext?.projectId ?? null);
+
+  // The token-budget ring reads off the most recent assistant message
+  // (set by useChat.sendMessage from the backend's token_budget field).
+  const tokenUsage = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== 'assistant') continue;
+      const tb = (m.metadata as any)?.token_budget;
+      if (tb && (tb.context_limit || tb.used_tokens != null)) {
+        const used = (tb.fixed_tokens ?? 0) + (tb.used_tokens ?? 0);
+        return { used, total: tb.context_limit ?? null };
+      }
+    }
+    return null;
+  }, [messages]);
+
+  // Build the props for ChatInput's status row. Reused by the two
+  // ChatInput call sites below (idle + chatting modes).
+  const chatInputHeader = headerContext && (headerContext.repoPath || headerContext.workingBranch)
+    ? {
+        repoPath:      headerContext.repoPath ?? null,
+        workingBranch: headerContext.workingBranch ?? null,
+        baseBranch:    headerContext.baseBranch ?? null,
+        projectName:   headerContext.projectName ?? null,
+        filesChanged:  diffStats?.files_changed ?? headerContext.filesChanged ?? null,
+        insertions:    diffStats?.insertions ?? null,
+        deletions:     diffStats?.deletions ?? null,
+      }
+    : null;
+
   // Handle double-click to execute prompt directly
   const handlePromptDoubleClick = (prompt: string) => {
     if (!disabled && prompt) {
@@ -210,6 +286,9 @@ export function ChatArea({
                 centered={true}
                 quotaExceeded={quotaExceeded}
                 uploadsAllowed={isProjectChat}
+                header={chatInputHeader}
+                modelLabel={headerContext?.model ?? null}
+                tokenUsage={tokenUsage}
               />
             </div>
           </div>
@@ -219,8 +298,12 @@ export function ChatArea({
       {/* CHATTING MODE: Messages with fixed bottom ChatInput */}
       {!isIdle && (
         <>
-          {/* Repo / branch / model chip — Claude-Code style header strip. */}
-          {isProjectChat && headerContext && <ChatHeaderChip ctx={headerContext} />}
+          {/* The standalone chip duplicates the chat-input top bar
+              whenever the input shows repo/branch (project chats with
+              a real GitLab link). Hide it then so we don't double up. */}
+          {isProjectChat && headerContext && !chatInputHeader && (
+            <ChatHeaderChip ctx={headerContext} />
+          )}
           {/* Remove overflow-y-auto from here - let MessageList handle scrolling */}
           <div className="flex-1 flex flex-col pt-2 md:pt-2 overflow-hidden px-2 sm:px-4 md:px-8 lg:px-20">
             <MessageList
@@ -249,6 +332,9 @@ export function ChatArea({
                 centered={false}
                 quotaExceeded={quotaExceeded}
                 uploadsAllowed={isProjectChat}
+                header={chatInputHeader}
+                modelLabel={headerContext?.model ?? null}
+                tokenUsage={tokenUsage}
               />
             </div>
           </div>

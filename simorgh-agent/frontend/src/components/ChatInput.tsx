@@ -1,11 +1,28 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   SendIcon, PaperclipIcon, MicIcon, StopCircleIcon,
-  FileTextIcon, XIcon, LoaderIcon, Loader2Icon
+  FileTextIcon, XIcon, LoaderIcon, Loader2Icon,
+  FolderGitIcon, GitBranchIcon, GitPullRequestIcon,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { UploadedFile } from '../types';
 import { showError, showInfo } from '../utils/alerts';
+import { TokenUsageRing } from './TokenUsageRing';
+
+/** Header context the chat input renders inside its top bar. Mirrors
+ * the shape ChatArea already constructs for its standalone header. */
+export interface ChatInputHeaderContext {
+  repoPath?: string | null;
+  workingBranch?: string | null;
+  baseBranch?: string | null;
+  projectName?: string | null;
+  filesChanged?: number | null;
+  insertions?: number | null;
+  deletions?: number | null;
+  /** Full GitLab URL for the "Create PR" button. When omitted we
+   * build one from VITE_GITLAB_BASE_URL + repoPath. */
+  mrHref?: string | null;
+}
 
 interface ChatInputProps {
   onSend: (message: string, files?: UploadedFile[]) => void;
@@ -21,6 +38,90 @@ interface ChatInputProps {
   // Defaults to true so existing call sites that don't know the chat
   // type degrade open rather than blocking everyone.
   uploadsAllowed?: boolean;
+  // ---- Claude-Code-style status row props ----
+  /** Repo / branch / diff stats for the top bar. */
+  header?: ChatInputHeaderContext | null;
+  /** Model name shown next to the token ring (e.g. "Opus 4.7 · High"). */
+  modelLabel?: string | null;
+  /** Token-budget telemetry from the last assistant reply. */
+  tokenUsage?: { used?: number | null; total?: number | null } | null;
+}
+
+function buildGitlabUrl(repoPath: string, suffix = ''): string {
+  const base = (import.meta.env.VITE_GITLAB_BASE_URL as string | undefined)
+    || 'https://gitlab.electrokavir.com';
+  return `${base.replace(/\/$/, '')}/${repoPath}${suffix}`;
+}
+
+/** Top bar: repo / branch / +N -M / Create PR. Replicates the layout
+ * shown in the Claude Code reference screenshot. */
+function ChatInputHeaderBar({
+  header,
+}: {
+  header: ChatInputHeaderContext;
+}) {
+  const repo = header.repoPath || header.projectName;
+  const branch = header.workingBranch || header.baseBranch;
+  const ins = header.insertions ?? 0;
+  const del = header.deletions ?? 0;
+  const hasDiff = ins > 0 || del > 0;
+  if (!repo && !branch && !hasDiff) return null;
+
+  const mrHref =
+    header.mrHref ||
+    (header.repoPath && branch && header.baseBranch
+      ? buildGitlabUrl(
+          header.repoPath,
+          `/-/merge_requests/new?merge_request[source_branch]=${encodeURIComponent(
+            branch
+          )}&merge_request[target_branch]=${encodeURIComponent(header.baseBranch)}`
+        )
+      : null);
+
+  return (
+    <div className="flex items-center gap-2 px-3 pt-1.5 pb-1 text-xs text-gray-400 overflow-hidden">
+      {repo && (
+        <span className="flex items-center gap-1.5 min-w-0">
+          <FolderGitIcon className="w-3.5 h-3.5 text-sky-300/80 flex-shrink-0" />
+          <span className="truncate font-mono text-gray-300">{repo}</span>
+        </span>
+      )}
+      {branch && (
+        <span className="flex items-center gap-1.5 min-w-0">
+          <GitBranchIcon className="w-3.5 h-3.5 text-emerald-300/80 flex-shrink-0" />
+          <span className="truncate font-mono text-gray-300">{branch}</span>
+        </span>
+      )}
+      {hasDiff && (
+        <span className="flex items-center gap-2 ml-auto text-[11px] font-mono">
+          {ins > 0 && (
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">
+              +{ins.toLocaleString()}
+            </span>
+          )}
+          {del > 0 && (
+            <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300">
+              -{del.toLocaleString()}
+            </span>
+          )}
+        </span>
+      )}
+      {mrHref && (
+        <a
+          href={mrHref}
+          target="_blank"
+          rel="noreferrer"
+          className={`${hasDiff ? '' : 'ml-auto'} flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px]
+                     bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-gray-200
+                     transition-colors`}
+          title="Open a merge request from this branch"
+        >
+          <GitPullRequestIcon className="w-3 h-3" />
+          Create PR
+        </a>
+      )}
+    </div>
+  );
 }
 
 export function ChatInput({
@@ -33,6 +134,9 @@ export function ChatInput({
   promptToInsert = null,
   quotaExceeded = false,
   uploadsAllowed = true,
+  header = null,
+  modelLabel = null,
+  tokenUsage = null,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -319,59 +423,12 @@ export function ChatInput({
         </div>
       )}
 
-      <div className="flex gap-1.5 md:gap-2 items-center bg-black/40 backdrop-blur-xl rounded-2xl border border-white/10 p-1.5 md:p-2">
-        {/* File upload — hidden in general sessions (uploads are project-only). */}
-        {uploadsAllowed && (
-          <>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || isUploading}
-              className="p-2 md:p-2.5 rounded-xl hover:bg-white/10 transition-colors disabled:opacity-50 flex-shrink-0"
-              title="Attach files"
-            >
-              <PaperclipIcon className="w-5 h-5 text-gray-300" />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.doc,.docx,.txt,image/*,video/*,audio/*"
-              multiple
-              className="hidden"
-              onChange={handleFileSelect}
-            />
-          </>
-        )}
+      <div className="bg-black/40 backdrop-blur-xl rounded-2xl border border-white/10 p-1.5 md:p-2">
+        {/* Top bar — repo / branch / +N -M / Create PR. */}
+        {header && <ChatInputHeaderBar header={header} />}
 
-        {/* Voice recording with STT - visible on all screens (matches Claude/ChatGPT mobile) */}
-        <button
-          onClick={isRecording ? stopRecording : startRecording}
-          disabled={disabled || isTranscribing}
-          className={`p-2 md:p-2.5 rounded-xl transition-colors flex-shrink-0 ${
-            isTranscribing
-              ? 'bg-blue-500/20 cursor-wait'
-              : isRecording
-              ? 'bg-red-500/20 hover:bg-red-500/30'
-              : 'hover:bg-white/10'
-            } disabled:opacity-50`}
-          title={
-            isTranscribing
-              ? 'Transcribing...'
-              : isRecording
-              ? 'Stop recording'
-              : 'Start voice recording (Speech-to-Text)'
-          }
-        >
-          {isTranscribing ? (
-            <Loader2Icon className="w-5 h-5 text-blue-400 animate-spin" />
-          ) : isRecording ? (
-            <StopCircleIcon className="w-5 h-5 text-red-400 animate-pulse" />
-          ) : (
-            <MicIcon className="w-5 h-5 text-gray-300" />
-          )}
-        </button>
-
-        {/* Text input */}
-        <div className="flex-1 relative flex items-center min-h-[40px] md:min-h-[44px]">
+        {/* Text input row */}
+        <div className="flex items-center min-h-[40px] md:min-h-[44px]">
           <textarea
             ref={textareaRef}
             value={message}
@@ -390,24 +447,91 @@ export function ChatInput({
           />
         </div>
 
-        {/* Send or Stop button */}
-        {isGenerating ? (
+        {/* Bottom toolbar — small attach/mic on the left, model badge
+            and round token usage ring on the right. Mirrors the layout
+            in the user's Claude Code reference screenshot. */}
+        <div className="flex items-center gap-2 px-2 pt-1 pb-0.5">
+          {uploadsAllowed && (
+            <>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || isUploading}
+                className="p-1.5 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50 flex-shrink-0"
+                title="Attach files"
+              >
+                <PaperclipIcon className="w-4 h-4 text-gray-300" />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.doc,.docx,.txt,image/*,video/*,audio/*"
+                multiple
+                className="hidden"
+                onChange={handleFileSelect}
+              />
+            </>
+          )}
+
           <button
-            onClick={onCancel}
-            className="p-2 md:p-2.5 rounded-xl bg-red-500 hover:bg-red-600 transition-all flex-shrink-0"
-            title="Stop generating"
+            onClick={isRecording ? stopRecording : startRecording}
+            disabled={disabled || isTranscribing}
+            className={`p-1.5 rounded-lg transition-colors flex-shrink-0 ${
+              isTranscribing
+                ? 'bg-blue-500/20 cursor-wait'
+                : isRecording
+                ? 'bg-red-500/20 hover:bg-red-500/30'
+                : 'hover:bg-white/10'
+              } disabled:opacity-50`}
+            title={
+              isTranscribing
+                ? 'Transcribing...'
+                : isRecording
+                ? 'Stop recording'
+                : 'Start voice recording (Speech-to-Text)'
+            }
           >
-            <StopCircleIcon className="w-5 h-5 text-white" />
+            {isTranscribing ? (
+              <Loader2Icon className="w-4 h-4 text-blue-400 animate-spin" />
+            ) : isRecording ? (
+              <StopCircleIcon className="w-4 h-4 text-red-400 animate-pulse" />
+            ) : (
+              <MicIcon className="w-4 h-4 text-gray-300" />
+            )}
           </button>
-        ) : (
-          <button
-            onClick={handleSend}
-            disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
-            className="p-2 md:p-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
-          >
-            <SendIcon className="w-5 h-5 text-white" />
-          </button>
-        )}
+
+          {/* Right side: model badge + token ring + send/stop. */}
+          <div className="ml-auto flex items-center gap-2">
+            {(modelLabel || tokenUsage) && (
+              <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                {modelLabel && <span className="truncate max-w-[160px]">{modelLabel}</span>}
+                {tokenUsage && (
+                  <TokenUsageRing
+                    used={tokenUsage.used ?? null}
+                    total={tokenUsage.total ?? null}
+                  />
+                )}
+              </span>
+            )}
+
+            {isGenerating ? (
+              <button
+                onClick={onCancel}
+                className="p-2 rounded-xl bg-red-500 hover:bg-red-600 transition-all flex-shrink-0"
+                title="Stop generating"
+              >
+                <StopCircleIcon className="w-4 h-4 text-white" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
+                className="p-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
+              >
+                <SendIcon className="w-4 h-4 text-white" />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

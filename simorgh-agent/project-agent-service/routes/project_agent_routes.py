@@ -514,6 +514,109 @@ async def batch_project_runtime_status(
     return out
 
 
+class GitDiffStats(BaseModel):
+    base_branch: Optional[str] = None
+    working_branch: Optional[str] = None
+    files_changed: int = 0
+    insertions: int = 0
+    deletions: int = 0
+    ahead: int = 0       # commits on working branch not in base
+    behind: int = 0      # commits on base not in working branch
+    error: Optional[str] = None
+
+
+@router.get("/projects/{project_id}/git/diffstat", response_model=GitDiffStats)
+async def get_project_diff_stats(
+    project_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """``git diff --shortstat`` against the project's base branch.
+
+    Powers the +/- numbers in the chat-input header (the user's
+    sidebar mockup shows ``+10,698 -14,326``). Runs ``git`` inside the
+    project's runtime-broker container so the working tree is the live
+    workspace, not a stale clone.
+    """
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    meta = project.get("metadata") or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            meta = {}
+
+    base   = meta.get("gitlab_base_branch") or project.get("base_branch") or "main"
+    branch = (
+        meta.get("simorgh_branch")
+        or project.get("simorgh_branch")
+        or "HEAD"
+    )
+
+    script = (
+        "set -e\n"
+        "cd /work/gitlab 2>/dev/null || { echo '__NO_REPO__'; exit 0; }\n"
+        "git fetch origin --quiet 2>/dev/null || true\n"
+        f"BASE={base!r}\n"
+        f"BRANCH={branch!r}\n"
+        # shortstat gives "N files changed, X insertions(+), Y deletions(-)"
+        "git diff --shortstat \"origin/$BASE...HEAD\" 2>/dev/null || "
+        "  git diff --shortstat HEAD~1 2>/dev/null || echo ''\n"
+        "echo '---REV-LIST---'\n"
+        "git rev-list --left-right --count \"origin/$BASE...HEAD\" 2>/dev/null || echo '0\t0'\n"
+    )
+
+    try:
+        headers = {"authorization": f"Bearer {BROKER_TOKEN}"} if BROKER_TOKEN else {}
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(
+                f"{RUNTIME_BROKER_URL}/sessions/{project_id}/exec",
+                json={"command": script, "timeout_sec": 8},
+                headers=headers,
+            )
+        if r.status_code != 200:
+            return GitDiffStats(base_branch=base, working_branch=branch,
+                                error=f"broker {r.status_code}")
+        out = (r.json().get("stdout") or "").strip()
+        if "__NO_REPO__" in out:
+            return GitDiffStats(base_branch=base, working_branch=branch,
+                                error="no repo cloned in this session")
+    except Exception as e:
+        return GitDiffStats(base_branch=base, working_branch=branch,
+                            error=f"{type(e).__name__}: {e}")
+
+    # Parse ``N files changed, X insertions(+), Y deletions(-)``.
+    import re as _re
+    shortstat, _, rev = out.partition("---REV-LIST---")
+    files_changed = insertions = deletions = 0
+    m = _re.search(r"(\d[\d,]*)\s+files? changed", shortstat)
+    if m: files_changed = int(m.group(1).replace(",", ""))
+    m = _re.search(r"(\d[\d,]*)\s+insertions?", shortstat)
+    if m: insertions = int(m.group(1).replace(",", ""))
+    m = _re.search(r"(\d[\d,]*)\s+deletions?", shortstat)
+    if m: deletions = int(m.group(1).replace(",", ""))
+
+    behind = ahead = 0
+    parts = rev.strip().split()
+    if len(parts) == 2:
+        try:
+            behind = int(parts[0]); ahead = int(parts[1])
+        except ValueError:
+            pass
+
+    return GitDiffStats(
+        base_branch=base, working_branch=branch,
+        files_changed=files_changed,
+        insertions=insertions, deletions=deletions,
+        ahead=ahead, behind=behind,
+    )
+
+
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: str,
