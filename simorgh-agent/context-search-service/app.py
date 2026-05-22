@@ -22,8 +22,12 @@ REST:
 
 MCP tools (preferred surface for the COT agent):
   search_context, search_past_cot, search_logs_mcp,
-  search_projects, aggregate_field, time_series_query, index_cot_trace
+  search_projects, aggregate_field, time_series_query, index_cot_trace,
+
+  -- priority-4 split surface (parallelizable) --
+  bm25_search, vector_search, graph_search, merged_search
 """
+import asyncio
 import os
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -35,6 +39,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from simorgh_logging import configure, get_logger, request_id_middleware
+from simorgh_rank_fusion import labeled_rrf
 
 from index_setup import ensure_templates
 
@@ -46,6 +51,9 @@ ES_USER         = os.getenv("ELASTIC_USER", "")
 ES_PASSWORD     = os.getenv("ELASTIC_PASSWORD", "")
 EMBEDDINGS_URL  = os.getenv("EMBEDDINGS_URL", "http://embeddings:8037")
 EMBED_DIMS      = int(os.getenv("EMBED_DIMS", "768"))
+QDRANT_URL      = os.getenv("QDRANT_URL", "http://qdrant:6333")
+AGE_DSN         = os.getenv("AGE_DSN", "")  # empty = graph tools disabled
+AGE_GRAPH_NAME  = os.getenv("AGE_GRAPH_NAME", "simorgh")
 
 
 def _es() -> Elasticsearch:
@@ -767,6 +775,216 @@ async def index_cot_trace(trace_json: dict) -> dict:
     Returns the assigned ES _id and index name. Idempotent on chain_id.
     """
     return await index_cot(CotTrace(**trace_json))
+
+
+# ---------------------------------------------------------------------------
+# Priority-4: separated retrievers + RRF merger
+# ---------------------------------------------------------------------------
+# Three retriever tools exposed on their own so the agent can fire them
+# in parallel via a single tool-call array. ``merged_search`` is the
+# reciprocal-rank-fusion combiner — useful when the agent doesn't want
+# to think about which retriever to ask.
+
+_age_client = None  # lazy
+
+
+def _age():
+    """Lazy AgeClient. Returns None if AGE isn't configured (no DSN)."""
+    global _age_client
+    if not AGE_DSN:
+        return None
+    if _age_client is None:
+        try:
+            from simorgh_graph import AgeClient
+            _age_client = AgeClient(dsn=AGE_DSN, graph_name=AGE_GRAPH_NAME)
+        except Exception as e:
+            log.warning("age_client_init_failed", error=str(e))
+            return None
+    return _age_client
+
+
+@mcp.tool()
+async def bm25_search(query: str, project_id: str = "", oenum: str = "",
+                      k: int = 8) -> dict:
+    """BM25-only search over the content index. Use when you want
+    lexical recall — exact part numbers, oenums, identifiers."""
+    req = SearchRequest(query=query, project_id=project_id or None,
+                        oenum=oenum or None, k=k, use_knn=False)
+    return (await search_content(req)).model_dump()
+
+
+@mcp.tool()
+async def vector_search(query: str, project_id: str = "", oenum: str = "",
+                        k: int = 8) -> dict:
+    """Dense-vector (kNN) search via Qdrant collections. Use when you
+    want semantic recall over project document chunks ("the panel
+    with overcurrent issue").
+
+    Returns hits in the same shape as bm25_search so the RRF fuser
+    can stitch them. Empty result when no Qdrant collection matches.
+    """
+    if not project_id and not oenum:
+        return {"hits": [], "took_ms": 0, "note": "vector_search needs project_id or oenum"}
+    try:
+        vec = await _embed(query)
+        if vec is None:
+            return {"hits": [], "took_ms": 0, "note": "embeddings unavailable"}
+        # Collection naming follows project-agent-service's convention.
+        collection = f"project_{(oenum or project_id).strip().lower()}"
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.post(
+                f"{QDRANT_URL}/collections/{collection}/points/search",
+                json={"vector": vec, "limit": k, "with_payload": True},
+            )
+        if r.status_code == 404:
+            return {"hits": [], "took_ms": 0, "note": f"no qdrant collection {collection!r}"}
+        r.raise_for_status()
+        body = r.json()
+        hits = []
+        for p in body.get("result", []):
+            payload = p.get("payload") or {}
+            hits.append({
+                "id": str(p.get("id", "")),
+                "score": float(p.get("score", 0.0)),
+                "source": "qdrant",
+                "title": payload.get("section_title") or payload.get("filename"),
+                "path": payload.get("filename"),
+                "snippet": (payload.get("text") or "")[:300],
+                "metadata": payload,
+            })
+        return {"hits": hits, "took_ms": int(body.get("time", 0) * 1000)}
+    except Exception as e:
+        log.warning("vector_search_failed", error=str(e))
+        return {"hits": [], "took_ms": 0, "error": str(e)}
+
+
+@mcp.tool()
+async def graph_search(query: str, project_id: str = "", oenum: str = "",
+                       entities: list[str] | None = None,
+                       hops: int = 2, limit: int = 20) -> dict:
+    """Property-graph traversal over Apache AGE.
+
+    Use when the question is about relationships — "what's connected to
+    breaker F-103?", "which components share net BUS-1?", "what
+    decisions touched the main transformer?". Pass ``entities`` (a list
+    of component tags) to seed the traversal; otherwise the query is
+    used as a substring match against component tag and document path.
+
+    Returns up to ``limit`` paths within ``hops`` of any seed vertex.
+    Empty result when AGE isn't configured.
+    """
+    client = _age()
+    if client is None:
+        return {"hits": [], "note": "AGE not configured (AGE_DSN unset)"}
+    seed = (entities or [])[:10]
+    if not seed:
+        # Fall back to a substring match on the query so the tool is
+        # always useful even without entity extraction in the caller.
+        seed = [tok for tok in query.split() if len(tok) > 2][:5]
+    if not seed:
+        return {"hits": [], "note": "no seed entities derived from query"}
+
+    project_filter = ""
+    if oenum:
+        # Restrict the start vertex to the project's components.
+        project_filter = (
+            "WITH start MATCH (p:Project {oenum: $oenum})-[:HAS*1..3]->(start) "
+        )
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        for tag in seed:
+            cypher = (
+                "MATCH (start:Component {tag: $tag}) "
+                + project_filter
+                + f"MATCH path = (start)-[*1..{int(hops)}]-(other) "
+                f"RETURN start, other, length(path) AS hops LIMIT {int(limit)}"
+            )
+            params: dict[str, Any] = {"tag": tag}
+            if oenum:
+                params["oenum"] = oenum
+            res = await asyncio.to_thread(client.cypher, cypher, params,
+                                          [("start", "agtype"),
+                                           ("other", "agtype"),
+                                           ("hops", "integer")])
+            for r in res:
+                other = r.get("other") or {}
+                # AGE's vertex agtype is {"id": ..., "label": ..., "properties": {...}}
+                props = other.get("properties") if isinstance(other, dict) else {}
+                key = f"{other.get('label')}/{(props or {}).get('tag') or other.get('id')}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append({
+                    "id": key,
+                    "score": 1.0 / max(1, int(r.get("hops") or 1)),
+                    "source": "age",
+                    "title": (props or {}).get("tag") or (props or {}).get("name") or key,
+                    "snippet": "",
+                    "metadata": {
+                        "label": other.get("label"),
+                        "properties": props,
+                        "hops": r.get("hops"),
+                        "seed": tag,
+                    },
+                })
+    except Exception as e:
+        log.warning("graph_search_failed", error=str(e))
+        return {"hits": [], "error": str(e)}
+    # Already deduplicated; sort by score (closer = higher).
+    rows.sort(key=lambda d: d["score"], reverse=True)
+    return {"hits": rows[:limit]}
+
+
+@mcp.tool()
+async def merged_search(query: str, project_id: str = "", oenum: str = "",
+                        k: int = 8, hops: int = 2) -> dict:
+    """Run bm25/vector/graph in parallel and reciprocal-rank-fuse them.
+
+    Use when you want one ranked list without thinking about which
+    retriever owns the answer. The response carries per-hit
+    ``rrf_sources`` so you can see which retrievers agreed.
+    """
+    bm25_task = bm25_search(query=query, project_id=project_id, oenum=oenum, k=k)
+    vec_task = vector_search(query=query, project_id=project_id, oenum=oenum, k=k)
+    graph_task = graph_search(query=query, project_id=project_id, oenum=oenum, hops=hops, limit=k)
+    bm25_out, vec_out, graph_out = await asyncio.gather(
+        bm25_task, vec_task, graph_task, return_exceptions=True,
+    )
+
+    def _hits(r: Any) -> list[dict]:
+        if isinstance(r, dict):
+            return r.get("hits") or []
+        return []
+
+    fused = labeled_rrf(
+        {
+            "bm25":   _hits(bm25_out),
+            "vector": _hits(vec_out),
+            "graph":  _hits(graph_out),
+        },
+        id_key="id",
+        top_n=k,
+    )
+    return {
+        "hits": fused,
+        "retriever_meta": {
+            "bm25_count":   len(_hits(bm25_out)),
+            "vector_count": len(_hits(vec_out)),
+            "graph_count":  len(_hits(graph_out)),
+        },
+    }
+
+
+@app.get("/age/health")
+async def age_health():
+    """Liveness probe for the AGE side of the search surface."""
+    client = _age()
+    if client is None:
+        return {"status": "disabled", "reason": "AGE_DSN unset"}
+    ok = await asyncio.to_thread(client.health_check)
+    return {"status": "ok" if ok else "unhealthy"}
 
 
 # FastMCP's streamable_http_app exposes route /mcp internally. Mount at

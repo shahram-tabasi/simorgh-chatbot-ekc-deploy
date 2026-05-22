@@ -1,0 +1,72 @@
+# =============================================================================
+# POSTGRES + APACHE AGE — graph database for entity/relationship reasoning.
+#
+# Apache AGE is a Postgres extension that adds openCypher property-graph
+# support. Used by the simorgh stack for:
+#   • component / net / spec / decision graphs per project,
+#   • cross-project relationships (same chassis, same customer, ...),
+#   • CoT trace → entity provenance.
+#
+# Stood up as a SEPARATE postgres instance so the auth DB stays untouched.
+# The Bitnine apache/age image already bundles Postgres 16 + AGE.
+# =============================================================================
+services:
+  postgres_age:
+    image: apache/age:PG16_latest
+    container_name: postgres_age
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_AGE_USER:-simorgh_graph}
+      - POSTGRES_PASSWORD=${POSTGRES_AGE_PASSWORD:-simorgh_graph_2024}
+      - POSTGRES_DB=${POSTGRES_AGE_DATABASE:-simorgh_graph}
+      # PGDATA at the canonical apache/age path.
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=${POSTGRES_AGE_MAX_CONNECTIONS:-200}"
+      - "-c"
+      - "shared_buffers=${POSTGRES_AGE_SHARED_BUFFERS:-512MB}"
+      - "-c"
+      - "effective_cache_size=${POSTGRES_AGE_EFFECTIVE_CACHE:-1500MB}"
+      - "-c"
+      - "work_mem=${POSTGRES_AGE_WORK_MEM:-16MB}"
+      - "-c"
+      - "maintenance_work_mem=${POSTGRES_AGE_MAINT_WORK_MEM:-128MB}"
+      # AGE is loaded per-session via SELECT load_extension; ensure
+      # the extension is on the search_path automatically.
+      - "-c"
+      - "search_path=ag_catalog,\"$$user\",public"
+      - "-c"
+      - "shared_preload_libraries=age"
+    volumes:
+      - postgres_age_data:/var/lib/postgresql/data
+      # Bootstrap script: create extension, create the simorgh graph,
+      # define vertex labels and edge types.
+      - ./postgres-age-init/001_init_age.sql:/docker-entrypoint-initdb.d/001_init_age.sql:ro
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_AGE_MEM_LIMIT:-2g}
+        reservations:
+          memory: ${POSTGRES_AGE_MEM_RESERVATION:-512m}
+    ports:
+      - "${POSTGRES_AGE_HTTP_PORT:-5434}:5432"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_AGE_USER:-simorgh_graph} -d ${POSTGRES_AGE_DATABASE:-simorgh_graph}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  postgres_age_data:
+    name: simorgh_postgres_age_data
+    driver: local

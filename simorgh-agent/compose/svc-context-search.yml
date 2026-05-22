@@ -24,6 +24,11 @@ services:
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - EMBEDDINGS_URL=${EMBEDDINGS_URL:-http://embeddings:8037}
       - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      # Apache AGE — empty AGE_DSN keeps graph_search dormant; populate
+      # it (e.g. postgresql://simorgh_graph:.../simorgh_graph) once the
+      # infra-postgres-age.yml service is up.
+      - AGE_DSN=${AGE_DSN:-}
+      - AGE_GRAPH_NAME=${AGE_GRAPH_NAME:-simorgh}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
     deploy:
