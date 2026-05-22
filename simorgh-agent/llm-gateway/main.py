@@ -120,7 +120,15 @@ class GenerateRequest(BaseModel):
     # Optional explicit model override. If null we pick per backend
     # (OPENAI_MODEL online, LOCAL_LLM_MODEL_{TEXT,VLM} offline).
     model: Optional[str] = None
+    # Force a specific local backend regardless of image-content sniffing.
+    # "text" → gpt-oss on .61 (fast, supports guided decoding).
+    # "vlm"  → Qwen-VL on .62 (only when vision is actually needed).
+    # None   → legacy auto behaviour (image content → VLM else text).
+    force_backend: Optional[str] = Field(
+        None, description='"text" | "vlm" | None  (offline only)',
+    )
     # Carried through to OpenAI / vllm but not interpreted here.
+    # Use this to pass guided_json / guided_regex / response_format etc.
     extra: Optional[Dict[str, Any]] = None
 
 
@@ -150,6 +158,7 @@ def _has_image(messages: List[Dict[str, Any]]) -> bool:
 
 def _resolve_backend(
     mode: Optional[str], messages: List[Dict[str, Any]],
+    force_backend: Optional[str] = None,
 ) -> Tuple[str, str, str, Optional[str]]:
     """
     Pick (mode, base_url, model, api_key) for a request.
@@ -157,7 +166,9 @@ def _resolve_backend(
     mode resolution:
         request.mode > DEFAULT_LLM_MODE
     backend resolution within mode=offline:
-        has image content → VLM (.62), else LLM (.61)
+        force_backend="text" → LLM (.61)
+        force_backend="vlm"  → VLM (.62)
+        else: has image content → VLM (.62), else LLM (.61)
     """
     effective_mode = (mode or _default_llm_mode()).lower()
     if effective_mode not in {"online", "offline", "auto"}:
@@ -171,6 +182,13 @@ def _resolve_backend(
 
     # offline OR auto-with-online-failure: pick local backend
     local_key = _local_llm_api_key() or None
+    fb = (force_backend or "").lower() or None
+    if fb == "text":
+        return ("offline_text", _local_llm_url_text(), _local_llm_model_text(), local_key)
+    if fb == "vlm":
+        return ("offline_vlm", _local_llm_url_vlm(), _local_llm_model_vlm(), local_key)
+    if fb is not None:
+        raise HTTPException(status_code=400, detail=f"unknown force_backend: {force_backend!r}")
     if _has_image(messages):
         return ("offline_vlm", _local_llm_url_vlm(), _local_llm_model_vlm(), local_key)
     return ("offline_text", _local_llm_url_text(), _local_llm_model_text(), local_key)
@@ -315,7 +333,9 @@ async def generate(req: GenerateRequest) -> Dict[str, Any]:
     _stats["total"] += 1
     msgs = [m.model_dump() for m in req.messages]
     mode_resolve = (req.mode or _default_llm_mode()).lower()
-    primary_kind, primary_url, primary_model, primary_key = _resolve_backend(req.mode, msgs)
+    primary_kind, primary_url, primary_model, primary_key = _resolve_backend(
+        req.mode, msgs, req.force_backend,
+    )
     payload = _build_payload(
         msgs, model=req.model or primary_model,
         temperature=req.temperature, max_tokens=req.max_tokens,
@@ -343,7 +363,7 @@ async def generate(req: GenerateRequest) -> Dict[str, Any]:
         _stats["fallbacks"] += 1
 
         fallback_kind, fallback_url, fallback_model, fallback_key = _resolve_backend(
-            "offline", msgs,
+            "offline", msgs, req.force_backend,
         )
         payload["model"] = req.model or fallback_model
         try:
@@ -416,7 +436,9 @@ async def generate_stream(req: GenerateRequest):
     """
     _stats["total"] += 1
     msgs = [m.model_dump() for m in req.messages]
-    backend_kind, base_url, model, api_key = _resolve_backend(req.mode, msgs)
+    backend_kind, base_url, model, api_key = _resolve_backend(
+        req.mode, msgs, req.force_backend,
+    )
     payload = _build_payload(
         msgs, model=req.model or model,
         temperature=req.temperature, max_tokens=req.max_tokens,

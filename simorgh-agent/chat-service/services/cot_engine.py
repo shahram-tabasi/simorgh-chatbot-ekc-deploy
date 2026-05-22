@@ -8,9 +8,12 @@ then produces executable task steps.
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
+
+import httpx
 
 from models.project_models import (
     COTAnalysis, COTStep, COTRequest, TaskType,
@@ -19,6 +22,52 @@ from models.project_models import (
 from knowledge.tpms_schema_instructions import get_tpms_instructions
 
 logger = logging.getLogger(__name__)
+
+
+# JSON Schema for the COT plan. Passed to llm-gateway as guided_json so
+# gpt-oss-20b's output is constrained to a valid plan at decode time —
+# this is what lets us run CoT on the fast LLM instead of the 7B VLM.
+COT_PLAN_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["reasoning", "steps"],
+    "properties": {
+        "reasoning": {"type": "string"},
+        "estimated_total_duration": {"type": "string"},
+        "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": True,
+                "required": [
+                    "step_number", "title", "description",
+                    "task_type", "tool_needed",
+                ],
+                "properties": {
+                    "step_number": {"type": "integer", "minimum": 1},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "task_type": {
+                        "type": "string",
+                        "enum": [
+                            "action", "query", "analysis", "generation",
+                            "review", "shell_command", "email",
+                        ],
+                    },
+                    "tool_needed": {"type": "string"},
+                    "tool_input": {"type": "object"},
+                    "depends_on": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "priority": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "estimated_duration": {"type": "string"},
+                },
+            },
+        },
+    },
+}
 
 # System prompt for COT analysis
 COT_SYSTEM_PROMPT = """You are a Project Manager Agent analyzing a user request for a project.
@@ -281,7 +330,23 @@ class COTEngine:
             )
 
     async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
-        """Call the LLM service for COT analysis."""
+        """Call the LLM service for COT analysis.
+
+        Prefers a grammar-constrained call through llm-gateway pinned to the
+        text backend (gpt-oss-20b on .61). This gives schema-valid JSON
+        without paying the VLM-7B latency cost. Falls back to the legacy
+        llm_service.async_generate path if the gateway is not reachable.
+        """
+        gateway_url = os.getenv("LLM_GATEWAY_URL", "").rstrip("/")
+        if gateway_url:
+            try:
+                return await self._call_llm_gateway_structured(gateway_url, messages)
+            except Exception as e:
+                logger.warning(
+                    "Structured CoT call via llm-gateway failed (%s); "
+                    "falling back to legacy llm_service path", e,
+                )
+
         try:
             # Try async generation first
             if hasattr(self.llm_service, 'async_generate'):
@@ -300,6 +365,33 @@ class COTEngine:
         except Exception as e:
             logger.error(f"LLM call failed in COT engine: {e}")
             raise
+
+    async def _call_llm_gateway_structured(
+        self, gateway_url: str, messages: List[Dict[str, str]],
+    ) -> str:
+        """POST to llm-gateway with guided_json + force_backend=text.
+
+        The gateway forwards guided_json via `extra` to the local LLM server,
+        which builds a vLLM GuidedDecodingParams so output is constrained
+        token-by-token to COT_PLAN_SCHEMA.
+        """
+        timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
+        payload = {
+            "messages": messages,
+            "mode": "offline",
+            "force_backend": "text",
+            "temperature": 0.3,
+            "max_tokens": int(os.getenv("COT_MAX_TOKENS", "2048")),
+            "extra": {
+                "guided_json": COT_PLAN_SCHEMA,
+                "response_format": {"type": "json_object"},
+            },
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(f"{gateway_url}/generate", json=payload)
+            r.raise_for_status()
+            body = r.json()
+        return body.get("response", "") or ""
 
     def _parse_llm_response(
         self, response: str, chain_id: uuid.UUID, request: COTRequest

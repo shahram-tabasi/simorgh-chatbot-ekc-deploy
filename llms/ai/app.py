@@ -291,6 +291,11 @@ async def non_streaming_chat_completion(
                     temperature=request.temperature,
                     top_p=request.top_p,
                     reasoning_effort=request.reasoning_effort,
+                    guided_json=request.guided_json,
+                    guided_regex=request.guided_regex,
+                    guided_choice=request.guided_choice,
+                    guided_grammar=request.guided_grammar,
+                    response_format=request.response_format,
                 )
 
             # Parse output to remove thinking sections
@@ -370,6 +375,11 @@ async def stream_chat_completion(
                 temperature=request.temperature,
                 top_p=request.top_p,
                 reasoning_effort=request.reasoning_effort,
+                guided_json=request.guided_json,
+                guided_regex=request.guided_regex,
+                guided_choice=request.guided_choice,
+                guided_grammar=request.guided_grammar,
+                response_format=request.response_format,
             ):
                 # Filter thinking sections if parser available
                 if streaming_parser:
