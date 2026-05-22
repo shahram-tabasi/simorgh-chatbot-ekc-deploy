@@ -668,6 +668,7 @@ class ProjectManagerAgent:
                 # would make every read fail with "404 Commit Not Found".
                 # Reads should target the user's canonical state, not
                 # the agent's in-flight workspace.
+                base_branch = None
                 if not tool_input.get("ref"):
                     try:
                         meta = locals().get("meta") or await self.memory.get_project(
@@ -675,12 +676,43 @@ class ProjectManagerAgent:
                         )
                     except Exception:
                         meta = None
-                    ref = (
-                        (meta or {}).get("gitlab_base_branch")
-                        or (meta or {}).get("simorgh_branch")
-                        or "main"
+                    base_branch = (meta or {}).get("gitlab_base_branch") or "main"
+                    tool_input["ref"] = base_branch
+
+                # Hard override: if the planner explicitly passed a
+                # simorgh/* working branch, force the base branch for
+                # READ-side calls. Working branches frequently don't
+                # exist on origin (push deferred) and produce
+                # "404 Commit Not Found"; the user's intent on a read
+                # is always "what's in my repo on the canonical branch".
+                # Write/commit tools (commit_file, create_branch,
+                # merge_mr) keep whatever ref the planner picked.
+                read_only_tools = {
+                    "get_project_tree", "read_file_mcp", "read_artifact_mcp",
+                    "search_blobs", "search_technical_knowledge",
+                    "list_branches_mcp", "list_projects_mcp",
+                }
+                cur_ref = tool_input.get("ref")
+                if (
+                    tool in read_only_tools
+                    and isinstance(cur_ref, str)
+                    and cur_ref.startswith("simorgh/")
+                ):
+                    if base_branch is None:
+                        try:
+                            meta = locals().get("meta") or await self.memory.get_project(
+                                str(project_id)
+                            )
+                        except Exception:
+                            meta = None
+                        base_branch = (meta or {}).get("gitlab_base_branch") or "main"
+                    logger.info(
+                        "gitlab_mcp: overriding read ref %r -> %r for %s "
+                        "(simorgh working branches aren't reliably pushed "
+                        "to origin)",
+                        cur_ref, base_branch, tool,
                     )
-                    tool_input["ref"] = ref
+                    tool_input["ref"] = base_branch
 
         # Inject previous results into context (3000 char limit per result)
         if prev_results:
