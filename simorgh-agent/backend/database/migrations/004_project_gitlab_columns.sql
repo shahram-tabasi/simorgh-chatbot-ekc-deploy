@@ -25,7 +25,11 @@ ALTER TABLE projects
     ADD COLUMN IF NOT EXISTS gitlab_repo_url     VARCHAR(500),
     ADD COLUMN IF NOT EXISTS gitlab_base_branch  VARCHAR(255),
     ADD COLUMN IF NOT EXISTS simorgh_branch      VARCHAR(255),
-    ADD COLUMN IF NOT EXISTS sources_enabled     JSONB DEFAULT '{}';
+    ADD COLUMN IF NOT EXISTS sources_enabled     JSONB DEFAULT '{}',
+    -- project-explorer's two-phase status: 'pending' → 'remote_done'
+    -- → 'container_done' (or 'failed'). project_memory_service.get_project
+    -- selects this column, so projects without it 500 on message-send.
+    ADD COLUMN IF NOT EXISTS exploration_status  VARCHAR(50) DEFAULT 'pending';
 
 -- Helpful index for the runtime-status batch probe, which looks projects
 -- up by oenum *or* by gitlab_repo_path depending on which sidebar
