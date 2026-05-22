@@ -45,12 +45,16 @@ services:
       - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://nginx/api/llm}
       - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
       - LLM_GATEWAY_URL=http://llm-gateway:8030
-      # CoT planner endpoint (separate from final-answer LLM). The local
-      # gpt-oss-20b is too small to reliably emit the JSON the planner
-      # parser needs — route the planner through the VLM box (Qwen2.5-VL
-      # on 192.168.1.62) which honours the JSON schema. Unset/empty falls
-      # back to the default llm_service path.
-      - COT_LLM_BASE_URL=${COT_LLM_BASE_URL:-http://nginx/api/vlm/v1}
+      # CoT planner endpoint. Priority order in cot_engine._call_llm:
+      #   1. LLM_GATEWAY_URL (above) → gpt-oss-20b on .61 with
+      #      grammar-constrained JSON. Fast AND reliable.
+      #   2. COT_LLM_BASE_URL → legacy VLM-7B route (kept as opt-in
+      #      override for ops; empty by default).
+      #   3. self.llm_service legacy path.
+      #
+      # Set COT_LLM_BASE_URL=http://nginx/api/vlm/v1 in .env only if
+      # the gateway / gpt-oss is unavailable and you need a fallback.
+      - COT_LLM_BASE_URL=${COT_LLM_BASE_URL:-}
       - COT_LLM_MODEL=${COT_LLM_MODEL:-qwen2.5-vl-7b}
       - COT_LLM_MAX_TOKENS=${COT_LLM_MAX_TOKENS:-2048}
       # 2026-05 enterprise migration: code exec → runtime-broker (ephemeral

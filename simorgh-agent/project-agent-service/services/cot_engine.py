@@ -96,6 +96,52 @@ def _read_restrictions() -> str:
     return content
 
 # System prompt for COT analysis
+# JSON Schema for the COT plan. Passed to llm-gateway as guided_json so
+# gpt-oss-20b's output is constrained to a valid plan at decode time —
+# this is what lets us run CoT on the fast LLM instead of the 7B VLM.
+COT_PLAN_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["reasoning", "steps"],
+    "properties": {
+        "reasoning": {"type": "string"},
+        "estimated_total_duration": {"type": "string"},
+        "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": True,
+                "required": [
+                    "step_number", "title", "description",
+                    "task_type", "tool_needed",
+                ],
+                "properties": {
+                    "step_number": {"type": "integer", "minimum": 1},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "task_type": {
+                        "type": "string",
+                        "enum": [
+                            "action", "query", "analysis", "generation",
+                            "review", "shell_command", "email",
+                        ],
+                    },
+                    "tool_needed": {"type": "string"},
+                    "tool_input": {"type": "object"},
+                    "depends_on": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "priority": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "estimated_duration": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
 COT_SYSTEM_PROMPT = """You are a Project Manager Agent analyzing a user request for a project.
 Your job is to break down the request into concrete, executable task steps.
 
@@ -540,12 +586,28 @@ class COTEngine:
     async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call the LLM service for COT analysis.
 
-        If COT_LLM_BASE_URL is set, route the planner step through an
-        OpenAI-compatible endpoint (e.g. the VLM on 192.168.1.62 via
-        http://nginx/api/vlm/v1). Qwen2.5-VL-7B follows JSON-output
-        instructions far more reliably than gpt-oss-20b. Final-answer
-        generation still uses whatever the rest of the agent uses.
+        Routing precedence:
+          1. ``LLM_GATEWAY_URL`` (preferred) — POST /generate with
+             ``force_backend=text`` + ``guided_json=COT_PLAN_SCHEMA`` so
+             gpt-oss-20b on .61 emits schema-valid JSON via grammar
+             constraint (priority-1 work). Fast AND reliable; no
+             reason to fall back to the 7B VLM for structured output.
+          2. ``COT_LLM_BASE_URL`` (legacy) — pre-grammar fallback that
+             routed the planner to Qwen2.5-VL-7B because gpt-oss
+             without grammar produced unreliable JSON. Kept so an
+             operator can override per-env without code changes.
+          3. ``self.llm_service`` — generic legacy path.
         """
+        gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
+        if gateway_url:
+            try:
+                return await self._call_llm_gateway_structured(gateway_url, messages)
+            except Exception as e:
+                logger.warning(
+                    "CoT planner via gateway (%s) failed: %s; falling back",
+                    gateway_url, e,
+                )
+
         cot_base_url = os.getenv("COT_LLM_BASE_URL", "").strip()
         if cot_base_url:
             try:
@@ -597,6 +659,34 @@ class COTEngine:
             r.raise_for_status()
             data = r.json()
         return data["choices"][0]["message"]["content"]
+
+    async def _call_llm_gateway_structured(
+        self, gateway_url: str, messages: List[Dict[str, str]],
+    ) -> str:
+        """POST to llm-gateway pinned to the text backend with a JSON
+        schema. gpt-oss-20b's vLLM build enforces the schema at decode
+        time so the response is guaranteed-parseable JSON — no
+        retries, no markdown-fence stripping. Runs on .61 (faster
+        than the 7B VLM) without sacrificing structured-output
+        reliability."""
+        import httpx
+        timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
+        payload = {
+            "messages": messages,
+            "mode": "offline",
+            "force_backend": "text",
+            "temperature": 0.3,
+            "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
+            "extra": {
+                "guided_json": COT_PLAN_SCHEMA,
+                "response_format": {"type": "json_object"},
+            },
+        }
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(f"{gateway_url}/generate", json=payload)
+            r.raise_for_status()
+            body = r.json()
+        return body.get("response", "") or ""
 
     def _parse_llm_response(
         self, response: str, chain_id: uuid.UUID, request: COTRequest
