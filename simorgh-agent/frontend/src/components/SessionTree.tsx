@@ -22,6 +22,7 @@ import {
   Edit2,
 } from 'lucide-react';
 import { ChatSession, SessionStage, Project, Chat } from '../types';
+import { ProjectStatusIcon } from './ProjectStatusIcon';
 import { StageBadge } from './SessionStageSelector';
 import { Tooltip } from './Tooltip';
 import ContextMenu from './ContextMenu';
@@ -596,6 +597,7 @@ function LegacyProjectItem({
               <ChevronRight className="w-5 h-5 text-gray-400" />
             )}
             <Folder className="w-5 h-5 text-indigo-400" />
+            <ProjectStatusIcon status={project.runtimeStatus} />
             <span className="font-bold text-white">
               {(project as any).oeNumber || project.id}
             </span>

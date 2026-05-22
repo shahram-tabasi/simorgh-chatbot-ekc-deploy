@@ -28,6 +28,26 @@ export interface AgentProject {
   document_count?: number;
   created_at: string;
   updated_at: string;
+  // Sidebar-dot status; matches the backend RuntimeStatus shape.
+  runtime_status?: {
+    container:
+      | 'absent'
+      | 'running'
+      | 'busy'
+      | 'paused'
+      | 'stopped'
+      | 'stopped_incomplete'
+      | 'error';
+    branch:
+      | 'none'
+      | 'created'
+      | 'committed'
+      | 'pushed'
+      | 'merged'
+      | 'conflict';
+    simorgh_branch?: string | null;
+    pending_commit_sha?: string | null;
+  };
 }
 
 export interface AgentTask {

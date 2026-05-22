@@ -29,6 +29,7 @@ from models.project_models import (
     ShellCommandRequest, ShellCommandResponse,
     GitCommitRequest, AgentState,
     ProjectStatus, TaskStatus, MessageChannel, TaskTrigger,
+    ContainerStatus, BranchStatus, RuntimeStatus,
 )
 import os
 import httpx
@@ -41,9 +42,11 @@ import httpx
 #   • runtime-broker    — per-project shell-runtime containers
 #   • project-init      — orchestrator of the create-project flow
 #   • tpms-fetcher      — sole MySQL gateway to TPMS
-TPMS_FETCHER_URL  = os.getenv("TPMS_FETCHER_URL",  "http://tpms-fetcher:8021")
-PROJECT_INIT_URL  = os.getenv("PROJECT_INIT_URL",  "http://project-init:8022")
-MAIL_BRIDGE_URL   = os.getenv("MAIL_BRIDGE_URL",   "http://mail-bridge:8051")
+TPMS_FETCHER_URL    = os.getenv("TPMS_FETCHER_URL",    "http://tpms-fetcher:8021")
+PROJECT_INIT_URL    = os.getenv("PROJECT_INIT_URL",    "http://project-init:8022")
+MAIL_BRIDGE_URL     = os.getenv("MAIL_BRIDGE_URL",     "http://mail-bridge:8051")
+RUNTIME_BROKER_URL  = os.getenv("RUNTIME_BROKER_URL",  "http://runtime-broker:8048")
+BROKER_TOKEN        = os.getenv("BROKER_TOKEN",        "")
 
 # Restrictions file (admin-managed). Read on every turn (mtime-cached
 # inside the agent) and prepended to the system prompt as hard
@@ -319,6 +322,84 @@ async def create_project(
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
 
+# =============================================================================
+# Runtime status (sidebar dot) — derived from runtime-broker + project meta.
+# =============================================================================
+# Maps docker container state (running / paused / exited / created / absent)
+# onto the higher-level ContainerStatus enum the frontend renders.
+_DOCKER_STATE_TO_CONTAINER: dict[str, ContainerStatus] = {
+    "running":    ContainerStatus.RUNNING,
+    "paused":     ContainerStatus.PAUSED,
+    "exited":     ContainerStatus.STOPPED,
+    "created":    ContainerStatus.STOPPED,
+    "restarting": ContainerStatus.RUNNING,
+    "removing":   ContainerStatus.STOPPED,
+    "dead":       ContainerStatus.ERROR,
+    "absent":     ContainerStatus.ABSENT,
+}
+
+
+async def _compute_runtime_status(
+    project_id: str, project_meta: dict[str, Any],
+    active_task_count: int = 0,
+) -> RuntimeStatus:
+    """Best-effort: ask the broker for container state, blend with project
+    metadata to produce the single ``RuntimeStatus`` the sidebar renders.
+
+    Never raises — a broker outage shouldn't blank-out the project list.
+    """
+    simorgh_branch = (
+        project_meta.get("simorgh_branch")
+        or (project_meta.get("metadata") or {}).get("simorgh_branch")
+    )
+    pending_sha   = (project_meta.get("metadata") or {}).get("pending_commit_sha")
+    push_conflict = bool((project_meta.get("metadata") or {}).get("push_conflict"))
+    branch_pushed = bool((project_meta.get("metadata") or {}).get("branch_pushed"))
+
+    # ----- branch_status ---------------------------------------------------
+    if push_conflict:
+        branch_status = BranchStatus.CONFLICT
+    elif simorgh_branch and branch_pushed:
+        branch_status = BranchStatus.PUSHED
+    elif simorgh_branch:
+        branch_status = BranchStatus.CREATED
+    else:
+        branch_status = BranchStatus.NONE
+
+    # ----- container_status ------------------------------------------------
+    container_status = ContainerStatus.ABSENT
+    try:
+        headers = {"authorization": f"Bearer {BROKER_TOKEN}"} if BROKER_TOKEN else {}
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(
+                f"{RUNTIME_BROKER_URL}/sessions/{project_id}/status",
+                headers=headers,
+            )
+            if r.status_code == 200:
+                docker_state = (r.json().get("status") or "absent").lower()
+                container_status = _DOCKER_STATE_TO_CONTAINER.get(
+                    docker_state, ContainerStatus.ABSENT,
+                )
+    except Exception as e:
+        logger.debug("runtime_status broker probe failed for %s: %s",
+                     project_id, e)
+
+    # Refine: an in-progress task while the container is running = BUSY.
+    if container_status == ContainerStatus.RUNNING and active_task_count > 0:
+        container_status = ContainerStatus.BUSY
+    elif container_status == ContainerStatus.STOPPED and active_task_count > 0:
+        # Container exited while a task was still in-flight — the user
+        # killed work mid-CoT. This is the orange dot in Claude Code.
+        container_status = ContainerStatus.STOPPED_INCOMPLETE
+
+    return RuntimeStatus(
+        container=container_status,
+        branch=branch_status,
+        simorgh_branch=simorgh_branch,
+        pending_commit_sha=pending_sha if push_conflict else None,
+    )
+
+
 @router.get("/projects", response_model=ProjectListResponse)
 async def list_projects(
     current_user: str = Depends(get_current_user),
@@ -328,8 +409,18 @@ async def list_projects(
 
     try:
         projects = await memory.list_projects(current_user)
+        # Run all broker probes concurrently — the worst case (broker
+        # down) caps at ~3s once thanks to per-probe timeout, not Nx3s.
+        status_tasks = [
+            _compute_runtime_status(
+                str(p["id"]), p, active_task_count=p.get("active_task_count", 0),
+            )
+            for p in projects
+        ]
+        runtime_statuses = await asyncio.gather(*status_tasks, return_exceptions=False)
+
         responses = []
-        for p in projects:
+        for p, rs in zip(projects, runtime_statuses):
             responses.append(ProjectResponse(
                 id=p["id"],
                 owner_id=p["owner_id"],
@@ -347,6 +438,7 @@ async def list_projects(
                 active_task_count=p.get("active_task_count", 0),
                 message_count=p.get("message_count", 0),
                 document_count=p.get("document_count", 0),
+                runtime_status=rs,
             ))
 
         return ProjectListResponse(projects=responses, total=len(responses))
@@ -354,6 +446,72 @@ async def list_projects(
     except Exception as e:
         logger.error(f"Failed to list projects: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_id}/runtime", response_model=RuntimeStatus)
+async def get_project_runtime_status(
+    project_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Lightweight polling endpoint: just the sidebar dot, no joins.
+
+    Used by the frontend to refresh status every ~10s on expanded
+    projects without re-fetching the whole list.
+    """
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return await _compute_runtime_status(
+        project_id, project,
+        active_task_count=project.get("active_task_count", 0),
+    )
+
+
+@router.get("/projects/runtime/batch")
+async def batch_project_runtime_status(
+    current_user: str = Depends(get_current_user),
+):
+    """Batch sidebar-dot probe. Returns ``{project_id: RuntimeStatus}``.
+
+    The sidebar uses two unrelated project lists (legacy
+    ``/users/{id}/project-chats`` for project_number-keyed rows, and the
+    agent's ``/projects`` for UUID-keyed rows). This route gives the
+    frontend a single source of truth for the dot regardless of which
+    list it's rendering — caller picks projects by id and the merge is
+    trivial.
+    """
+    memory = get_project_memory_service()
+    try:
+        projects = await memory.list_projects(current_user)
+    except Exception as e:
+        logger.warning("batch_runtime list_projects failed: %s", e)
+        return {}
+
+    if not projects:
+        return {}
+
+    tasks = [
+        _compute_runtime_status(
+            str(p["id"]), p, active_task_count=p.get("active_task_count", 0),
+        )
+        for p in projects
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    out: dict[str, dict] = {}
+    for p, r in zip(projects, results):
+        if isinstance(r, Exception):
+            logger.debug("runtime probe failed for %s: %s", p.get("id"), r)
+            continue
+        # Index by both UUID and tpms_oenum so the legacy sidebar (keyed
+        # by oenum) can look the project up without an extra translation.
+        out[str(p["id"])] = r.model_dump()
+        oenum = p.get("tpms_oenum")
+        if oenum:
+            out[str(oenum)] = r.model_dump()
+    return out
 
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)

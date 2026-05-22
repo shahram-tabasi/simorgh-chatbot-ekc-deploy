@@ -27,6 +27,32 @@ export type AIMode = 'online' | 'local';
 // Project & Chat Types
 // ============================================
 
+// Live container + branch state for the sidebar dot. Mirrors the
+// backend `RuntimeStatus` pydantic model.
+export type ContainerStatus =
+  | 'absent'
+  | 'running'
+  | 'busy'
+  | 'paused'
+  | 'stopped'
+  | 'stopped_incomplete'
+  | 'error';
+
+export type BranchStatus =
+  | 'none'
+  | 'created'
+  | 'committed'
+  | 'pushed'
+  | 'merged'
+  | 'conflict';
+
+export interface RuntimeStatus {
+  container: ContainerStatus;
+  branch: BranchStatus;
+  simorgh_branch?: string | null;
+  pending_commit_sha?: string | null;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -44,6 +70,9 @@ export interface Project {
   // Files-changed indicator since the active session's start. Refreshed
   // by selectChat off the messages endpoint.
   filesChangedCount?: number;
+  // Sidebar status icon — populated by /api/v2/agent/projects on list,
+  // refreshed by /api/v2/agent/projects/{id}/runtime on poll.
+  runtimeStatus?: RuntimeStatus;
 }
 
 export interface Chat {

@@ -240,6 +240,46 @@ export function useProjects(userId?: string) {
     fetchProjects();
   }, [userId]);
 
+  // ---------------------------------------------------------------------
+  // Sidebar status dots — poll the batch runtime endpoint and merge the
+  // result into the existing project list. Independent of either project
+  // source (legacy /project-chats or agent /v2/agent/projects) because
+  // the backend keys the response by both UUID and oenum.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+
+    const refreshRuntime = async () => {
+      try {
+        const token = localStorage.getItem('simorgh_token');
+        if (!token) return;
+        const res = await axios.get(
+          `${API_BASE}/v2/agent/projects/runtime/batch`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const map = res.data || {};
+        if (cancelled || !map || Object.keys(map).length === 0) return;
+        setProjects(prev =>
+          prev.map(p => {
+            const next = map[p.id] || (p as any).oeNumber && map[(p as any).oeNumber];
+            return next ? { ...p, runtimeStatus: next } : p;
+          })
+        );
+      } catch (err) {
+        // Status is best-effort. Don't surface 401/5xx — the sidebar
+        // just falls back to the "idle" dot.
+      }
+    };
+
+    refreshRuntime();
+    const id = window.setInterval(refreshRuntime, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [userId]);
+
   // Save projects to localStorage (per user)
   useEffect(() => {
     if (!userId) return;

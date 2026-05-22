@@ -23,6 +23,37 @@ class ProjectStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class ContainerStatus(str, Enum):
+    """Runtime state of the project's session container.
+
+    Mirrors the dots Claude Code shows next to sessions: blue when the
+    work is done and the container is just resting; an animated marker
+    while CoT is actively running; orange when the user stopped a
+    container mid-task; gray for everything else.
+    """
+    ABSENT             = "absent"              # never started, or deleted
+    RUNNING            = "running"             # container running, no active CoT
+    BUSY               = "busy"                # container running, CoT in progress
+    PAUSED             = "paused"              # docker paused (rare)
+    STOPPED            = "stopped"             # cleanly stopped after work
+    STOPPED_INCOMPLETE = "stopped_incomplete"  # stopped with an unfinished CoT
+    ERROR              = "error"               # broker / docker error
+
+
+class BranchStatus(str, Enum):
+    """Lifecycle of the simorgh working branch in GitLab.
+
+    Independent of container_status: a project can be ``BUSY`` (CoT
+    running) and ``PUSHED`` (changes already up) at the same time.
+    """
+    NONE      = "none"      # no branch yet (no GitLab source linked)
+    CREATED   = "created"   # branch exists on origin, no commits yet
+    COMMITTED = "committed" # local commits, not yet pushed
+    PUSHED    = "pushed"    # in sync with origin
+    MERGED    = "merged"    # MR was merged into base
+    CONFLICT  = "conflict"  # last push rejected — requires human review
+
+
 class TaskType(str, Enum):
     ACTION = "action"
     QUERY = "query"
@@ -134,6 +165,22 @@ class ProjectUpdate(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class RuntimeStatus(BaseModel):
+    """Live container + branch status for the sidebar dot.
+
+    Cheap to compute (single broker round-trip + one redis get); safe to
+    return on every project-list response.
+    """
+    container: ContainerStatus = ContainerStatus.ABSENT
+    branch:    BranchStatus    = BranchStatus.NONE
+    # Echoed back so the frontend can show 'simorgh/12345/work-a3f9c2'
+    # in a tooltip without an extra round-trip.
+    simorgh_branch: Optional[str] = None
+    # Set when branch=CONFLICT — the SHA the agent committed but
+    # couldn't push, so the frontend can deep-link the user to a diff.
+    pending_commit_sha: Optional[str] = None
+
+
 class ProjectResponse(BaseModel):
     """Project response model."""
     id: UUID
@@ -153,6 +200,10 @@ class ProjectResponse(BaseModel):
     active_task_count: Optional[int] = None
     message_count: Optional[int] = None
     document_count: Optional[int] = None
+    # Sidebar dot. Optional so the field can be omitted on cheap reads
+    # that don't want to hit the broker; ``GET /projects`` populates it
+    # for every row and ``GET /projects/{id}/runtime`` returns just it.
+    runtime_status: Optional[RuntimeStatus] = None
 
 
 class ProjectListResponse(BaseModel):
