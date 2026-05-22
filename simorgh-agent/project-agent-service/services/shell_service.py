@@ -122,6 +122,88 @@ class ShellServiceClient:
         logger.info("git_commit shim: no-op (commits are per-file via gitlab-mcp)")
         return {"status": "ok", "noop": True, "message": message}
 
+    async def git_commit_push(
+        self, project_id: str, message: str,
+        paths: list[str] | None = None, branch: str | None = None,
+        allow_empty: bool = False,
+    ) -> dict:
+        """Stage → commit → push inside the project's session container.
+
+        Routes through runtime-broker's ``/sessions/{id}/git/commit_push``
+        endpoint (which performs the whole sequence atomically and
+        surfaces non-fast-forward as a structured conflict). On the way
+        back, persists branch state to project metadata so the sidebar
+        dot reflects the latest result:
+
+          * push succeeded → ``branch_pushed=true`` + ``last_push_sha``
+          * conflict       → ``push_conflict=true`` + ``pending_commit_sha``
+          * other failure  → leaves prior state untouched
+
+        Returns the broker's CommitPushResult dict unchanged.
+        """
+        body = {
+            "message": message,
+            "paths":   paths or [],
+            "branch":  branch or "",
+            "allow_empty": allow_empty,
+        }
+        headers = self._broker_headers()
+        async with httpx.AsyncClient(timeout=300.0) as c:
+            r = await c.post(
+                f"{RUNTIME_BROKER_URL}/sessions/{project_id}/git/commit_push",
+                json=body, headers=headers,
+            )
+            r.raise_for_status()
+            result = r.json()
+
+        try:
+            await self._record_push_state(project_id, result)
+        except Exception as e:
+            logger.warning("git_commit_push: metadata write failed for %s: %s",
+                           project_id, e)
+        return result
+
+    async def _record_push_state(self, project_id: str, result: dict) -> None:
+        """Mirror a commit_push result into project.metadata so the
+        sidebar's RuntimeStatus picker sees the right branch state."""
+        from services.project_memory_service import get_project_memory_service
+        memory = get_project_memory_service()
+        project = await memory.get_project(project_id)
+        if not project:
+            return
+        meta = project.get("metadata") or {}
+        if isinstance(meta, str):
+            try:
+                import json as _json
+                meta = _json.loads(meta)
+            except Exception:
+                meta = {}
+
+        if result.get("pushed"):
+            # Clean push: clear any stale conflict, record the SHA.
+            meta["branch_pushed"]     = True
+            meta["last_push_sha"]     = result.get("commit_sha")
+            meta["last_push_branch"]  = result.get("branch")
+            meta.pop("push_conflict", None)
+            meta.pop("pending_commit_sha", None)
+        elif result.get("conflict") or result.get("requires_human_review"):
+            # Local commit went through but push was rejected — surface
+            # the red bang in the sidebar.
+            meta["push_conflict"]      = True
+            meta["pending_commit_sha"] = result.get("commit_sha")
+            meta["last_push_branch"]   = result.get("branch")
+        else:
+            # No commit happened (nothing to push, or hard error) — leave
+            # prior state alone so a transient broker blip doesn't reset
+            # the dot to grey.
+            return
+
+        await memory.update_project(project_id, metadata=meta)
+
+    def _broker_headers(self) -> dict[str, str]:
+        token = os.getenv("BROKER_TOKEN", "")
+        return {"authorization": f"Bearer {token}"} if token else {}
+
     async def git_log(self, project_id: str, limit: int = 20) -> dict:
         return {"status": "ok", "commits": [], "limit": limit, "via": "gitlab-mcp"}
 

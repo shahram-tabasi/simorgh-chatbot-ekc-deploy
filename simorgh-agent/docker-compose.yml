@@ -25,12 +25,15 @@ include:
   # ---- New enterprise infra (GitLab + ELK + Mailcow) ------------------------
   - compose/infra-gitlab.yml
   - compose/infra-elastic.yml
+  - compose/infra-postgres-age.yml    # Apache AGE graph DB (CoT graph_search)
   # Mailcow runs as its own sibling stack — see compose/infra-mailcow.yml for
   # bring-up. Uncomment to add the network-attached probe container.
   # - compose/infra-mailcow.yml
 
   # ---- Infrastructure (optional — uncomment to enable) ----------------------
-  # - compose/infra-neo4j.yml         # Knowledge graph (legacy GraphRAG)
+  # - compose/infra-neo4j.yml         # Knowledge graph (legacy GraphRAG, being
+  #                                   # replaced by AGE; enable only if you
+  #                                   # still depend on graph-rag-service)
   # - compose/infra-cocoindex-db.yml  # pgvector DB for CocoIndex
   # - compose/infra-cocoindex.yml     # CocoIndex pipeline (needs cocoindex-db)
 
