@@ -55,6 +55,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from simorgh_artifacts import (
+    DocProcessorClient,
+    classify,
+    extracted_path_for,
+)
 from simorgh_logging import configure, get_logger, request_id_middleware
 
 configure(service="runtime-broker")
@@ -428,6 +433,85 @@ def session_read_file(project_id: str, path: str):
     raise HTTPException(status_code=404, detail="empty archive")
 
 
+_doc_proc: DocProcessorClient | None = None
+
+
+def _doc() -> DocProcessorClient:
+    """Lazy doc-processor client (one per process)."""
+    global _doc_proc
+    if _doc_proc is None:
+        _doc_proc = DocProcessorClient()
+    return _doc_proc
+
+
+def _read_container_bytes(c, path: str) -> bytes:
+    """Pull a single file out of the container as raw bytes via get_archive."""
+    if path.startswith("/") or ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="path must be relative to /work without ..")
+    try:
+        stream, _stat = c.get_archive(f"{WORKING_DIR}/{path}")
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="not found")
+    buf = io.BytesIO(b"".join(stream))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r") as tar:
+        for m in tar.getmembers():
+            if m.isfile():
+                return tar.extractfile(m).read()
+    raise HTTPException(status_code=404, detail="empty archive")
+
+
+@app.get("/sessions/{project_id}/read_artifact", dependencies=[Depends(require_token)])
+async def session_read_artifact(project_id: str, path: str):
+    """Type-aware container read. Returns utf-8 markdown for the CoT.
+
+    * Text files → identical to ``read_file``.
+    * Non-text (PDF, Office, image, etc.) → first try the ingest-time
+      cache at ``.simorgh/extracted/<path>.md``; if missing, pull the
+      raw bytes from the container and run them through doc-processor.
+    """
+    cls = classify(path)
+    if cls == "skip":
+        raise HTTPException(status_code=415,
+                            detail=f"unsupported artifact type for {path!r}")
+    c = _require_running(project_id)
+
+    if cls == "text":
+        body = session_read_file(project_id, path=path)
+        return {**body, "artifact_class": "text", "via": "raw"}
+
+    # 1. Pre-extracted cache?
+    cache_path = extracted_path_for(path)
+    try:
+        cached = session_read_file(project_id, path=cache_path)
+        if cached.get("encoding") == "utf-8":
+            return {
+                "path": path, "encoding": "utf-8",
+                "size": cached.get("size", 0),
+                "content": cached.get("content", ""),
+                "artifact_class": cls, "via": "cache",
+                "cache_path": cache_path,
+            }
+    except HTTPException as e:
+        if e.status_code != 404:
+            raise
+
+    # 2. No cache — extract on demand.
+    raw = _read_container_bytes(c, path)
+    filename = path.rsplit("/", 1)[-1]
+    res = await _doc().process_bytes(raw, filename=filename,
+                                      user_id="runtime-broker")
+    if not res.get("success"):
+        raise HTTPException(status_code=502,
+                            detail=f"doc-processor: {res.get('error')}")
+    md = res.get("content") or ""
+    return {
+        "path": path, "encoding": "utf-8", "size": len(md), "content": md,
+        "artifact_class": cls, "via": "doc-processor",
+        "doc_type": res.get("doc_type"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Git convenience endpoints (commit locally / push to remote-tracked simorgh branch)
 # ---------------------------------------------------------------------------
@@ -527,6 +611,18 @@ async def session_write_file_tool(project_id: str, path: str, content: str) -> d
 async def session_read_file_tool(project_id: str, path: str) -> dict:
     """Read a file from the project container's /work directory."""
     return session_read_file(project_id, path=path)
+
+
+@mcp.tool()
+async def session_read_artifact_tool(project_id: str, path: str) -> dict:
+    """Type-aware file read for the CoT. Prefer this over read_file.
+
+    Always returns utf-8 markdown — text files are returned raw; PDFs,
+    Office docs, and images come from the ingest-time extraction cache
+    (``.simorgh/extracted/<path>.md``) if present, otherwise are
+    extracted on demand via doc-processor.
+    """
+    return await session_read_artifact(project_id, path=path)
 
 
 @mcp.tool()

@@ -24,6 +24,7 @@ services:
       - GITLAB_PROJECTS_GROUP=${GITLAB_PROJECTS_GROUP:-simorgh-projects}
       - GITLAB_TECH_KB_REPO=${GITLAB_TECH_KB_REPO:-simorgh-knowledge/technical-knowledge}
       - AGENT_TOKEN=${AGENT_TOKEN:-}
+      - DOC_PROCESSOR_URL=${DOC_PROCESSOR_URL:-http://doc-processor:8000}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
     deploy:

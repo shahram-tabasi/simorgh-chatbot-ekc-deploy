@@ -30,11 +30,18 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import base64
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from simorgh_artifacts import (
+    DocProcessorClient,
+    EXTRACTED_DIR,
+    classify,
+    extracted_path_for,
+)
 from simorgh_logging import configure, get_logger, request_id_middleware
 
 configure(service="project-init")
@@ -225,6 +232,144 @@ async def _pull_techserver(client: httpx.AsyncClient, project_id: str, oenum: st
     return await _exec(client, project_id, script, timeout_sec=1200)
 
 
+async def _list_workspace_files(
+    client: httpx.AsyncClient, project_id: str, root: str,
+) -> list[str]:
+    """Return paths relative to /work for every regular file under ``root``.
+
+    Uses ``find`` inside the container — fast enough for tens of
+    thousands of files, and we don't need to roundtrip per-file just to
+    discover what's there.
+    """
+    script = (
+        f"set -e\n"
+        f"if [ -d {shlex.quote(root)} ]; then\n"
+        f"  cd /work && find {shlex.quote(root.lstrip('/work/'))} -type f "
+        f"    -not -path '*/.git/*' -not -path '*/.simorgh/*' "
+        f"    -size -50M\n"
+        f"fi\n"
+    )
+    r = await _exec(client, project_id, script, timeout_sec=120)
+    out = (r.get("stdout") or "").strip()
+    if not out:
+        return []
+    return [line for line in out.splitlines() if line.strip()]
+
+
+async def _extract_one_artifact(
+    client: httpx.AsyncClient,
+    project_id: str,
+    workspace_path: str,
+    doc: DocProcessorClient,
+) -> tuple[str, bool, str]:
+    """Read one file from the container, send it to doc-processor, write
+    the extracted markdown back into the container.
+
+    Returns ``(path, ok, message)`` so the caller can report a summary
+    without bailing on a single failure.
+    """
+    # 1. Read raw bytes out of the container via the broker.
+    r = await client.get(
+        f"{RUNTIME_BROKER_URL}/sessions/{project_id}/read_file",
+        params={"path": workspace_path}, headers=_broker_headers(),
+        timeout=120.0,
+    )
+    if r.status_code != 200:
+        return workspace_path, False, f"read_file {r.status_code}"
+    body = r.json()
+    encoding = body.get("encoding", "utf-8")
+    if encoding == "utf-8":
+        # Text after all — no extraction needed.
+        return workspace_path, True, "text-after-read"
+    try:
+        raw = base64.b64decode(body.get("content", "") or "")
+    except Exception as e:
+        return workspace_path, False, f"decode {e}"
+    if not raw:
+        return workspace_path, False, "empty"
+
+    # 2. Hand to doc-processor.
+    filename = workspace_path.rsplit("/", 1)[-1]
+    res = await doc.process_bytes(raw, filename=filename,
+                                  user_id="project-init")
+    if not res.get("success"):
+        return workspace_path, False, res.get("error", "doc-processor failed")
+    markdown = res.get("content") or ""
+    if not markdown.strip():
+        return workspace_path, False, "doc-processor empty output"
+
+    # 3. Write the extracted markdown back into the container at
+    #    .simorgh/extracted/<path>.md so it's both available to CoT and
+    #    committed alongside the source.
+    target = extracted_path_for(workspace_path)
+    # ensure parent directory exists in the container
+    await _exec(
+        client, project_id,
+        f"mkdir -p {shlex.quote('/work/' + target.rsplit('/', 1)[0])}",
+        timeout_sec=30,
+    )
+    w = await client.post(
+        f"{RUNTIME_BROKER_URL}/sessions/{project_id}/write_file",
+        json={"path": target, "content": markdown},
+        headers=_broker_headers(), timeout=60.0,
+    )
+    if w.status_code != 200:
+        return workspace_path, False, f"write_file {w.status_code}"
+    return workspace_path, True, f"{len(markdown)}B"
+
+
+async def _extract_artifacts(
+    client: httpx.AsyncClient, project_id: str, simorgh_branch: str | None,
+) -> dict:
+    """Walk /work/gitlab, normalize every non-text file into
+    ``.simorgh/extracted/<path>.md`` via doc-processor, then commit + push.
+
+    Best-effort: one failing file does not fail the project init.
+    Returns a small report dict the orchestrator can log.
+    """
+    doc = DocProcessorClient(timeout=240.0)
+    if not await doc.health_check():
+        return {"skipped": True, "reason": "doc-processor unhealthy"}
+
+    paths = await _list_workspace_files(client, project_id, "/work/gitlab")
+    extractable = [p for p in paths if classify(p) in {"doc", "image", "unknown"}]
+    if not extractable:
+        return {"scanned": len(paths), "extracted": 0}
+
+    ok, fail = 0, 0
+    failures: list[dict[str, str]] = []
+    for p in extractable:
+        _, success, msg = await _extract_one_artifact(client, project_id, p, doc)
+        if success:
+            ok += 1
+        else:
+            fail += 1
+            failures.append({"path": p, "reason": msg})
+
+    # Commit the extracted directory and push if we wrote anything.
+    if ok > 0:
+        commit_script = (
+            f"set -e\n"
+            f"cd /work/gitlab\n"
+            f"git add -- {shlex.quote(EXTRACTED_DIR)} || true\n"
+            f"git -c user.email=simorgh-agent@local -c user.name=simorgh-agent "
+            f"  diff --cached --quiet || git -c user.email=simorgh-agent@local "
+            f"  -c user.name=simorgh-agent commit -m 'simorgh: ingest-time artifact extraction'\n"
+            f"git push -u origin HEAD || echo 'push deferred — deploy key not granted yet'\n"
+        )
+        try:
+            await _exec(client, project_id, commit_script, timeout_sec=300)
+        except httpx.HTTPError as e:
+            log.warning("extract_commit_failed", error=str(e))
+
+    log.info("ingest_extraction_done", project_id=project_id,
+             ok=ok, fail=fail, scanned=len(paths))
+    return {
+        "scanned": len(paths), "extracted": ok, "failed": fail,
+        "failures": failures[:20],  # truncate so init logs don't explode
+    }
+
+
 async def _clone_ekc(client: httpx.AsyncClient, project_id: str) -> dict:
     """Clone ekc-technical-knowledge into /work/ekc-knowledge as a read-only
     snapshot. No remote configured for write — it is consult-only."""
@@ -290,6 +435,7 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
                 raise
 
             # 2. Optional: user gitlab repo clone + simorgh branch.
+            cloned_ok = False
             if req.sources.gitlab and req.gitlab_repo_url:
                 s["current_step"] = "clone_user_repo"
                 try:
@@ -297,11 +443,30 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
                         client, req.project_id, req.gitlab_repo_url,
                         req.gitlab_base_branch, simorgh_branch,
                     )
+                    cloned_ok = True
                     _record("clone_user_repo", "ok",
                             simorgh_branch=simorgh_branch,
                             exit_code=res.get("exit_code"))
                 except httpx.HTTPError as e:
                     _record("clone_user_repo", "error", error=str(e))
+
+            # 2.5 Ingest-time artifact extraction. PDFs, Office docs, and
+            #     images become .simorgh/extracted/<path>.md so the CoT
+            #     never has to reason on bytes. Safe to skip if the clone
+            #     didn't land or doc-processor isn't running.
+            if cloned_ok:
+                s["current_step"] = "extract_artifacts"
+                try:
+                    res = await _extract_artifacts(client, req.project_id, simorgh_branch)
+                    _record("extract_artifacts", "ok", **{
+                        k: v for k, v in res.items() if k != "failures"
+                    })
+                    if res.get("failed"):
+                        log.info("extract_artifacts_failures",
+                                 project_id=req.project_id,
+                                 failures=res.get("failures", []))
+                except Exception as e:
+                    _record("extract_artifacts", "error", error=str(e))
 
             # 3. Optional: TPMS data.
             tpms_oe = req.sources.techserver_oenum or req.oenum

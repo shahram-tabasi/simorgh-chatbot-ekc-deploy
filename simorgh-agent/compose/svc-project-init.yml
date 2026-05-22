@@ -22,6 +22,7 @@ services:
       - TPMS_FETCHER_URL=${TPMS_FETCHER_URL:-http://tpms-fetcher:8021}
       - CONTEXT_SEARCH_URL=${CONTEXT_SEARCH_URL:-http://context-search:8049}
       - PROJECT_EXPLORER_URL=${PROJECT_EXPLORER_URL:-http://project-explorer:8052}
+      - DOC_PROCESSOR_URL=${DOC_PROCESSOR_URL:-http://doc-processor:8000}
       - GITLAB_PROJECTS_GROUP=${GITLAB_PROJECTS_GROUP:-simorgh-projects}
       - GITLAB_TECH_KB_REPO=${GITLAB_TECH_KB_REPO:-simorgh-knowledge/technical-knowledge}
       - EKC_KB_CLONE_URL=${EKC_KB_CLONE_URL:-}

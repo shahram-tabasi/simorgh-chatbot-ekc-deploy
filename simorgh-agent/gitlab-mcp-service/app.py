@@ -34,6 +34,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from simorgh_artifacts import (
+    DocProcessorClient,
+    classify,
+    extracted_path_for,
+)
 from simorgh_logging import configure, get_logger, request_id_middleware
 
 configure(service="gitlab-mcp")
@@ -229,6 +234,73 @@ def read_file(project: str, path: str, ref: str = DEFAULT_REF):
                 "size": len(raw), "content": f.content}
 
 
+_doc_proc: DocProcessorClient | None = None
+
+
+def _doc() -> DocProcessorClient:
+    """Lazy doc-processor client. One per process."""
+    global _doc_proc
+    if _doc_proc is None:
+        _doc_proc = DocProcessorClient()
+    return _doc_proc
+
+
+@app.get("/artifact")
+async def read_artifact(project: str, path: str, ref: str = DEFAULT_REF):
+    """Type-aware file read. The hot path for CoT.
+
+    * Text files → identical to ``/file``.
+    * Non-text (PDF, Office, image, etc.) → first try the cached
+      ``.simorgh/extracted/<path>.md`` written by project-init at ingest
+      time; if that's missing, fetch the raw blob and call doc-processor
+      on demand. Callers always get markdown back, never bytes.
+    """
+    cls = classify(path)
+    if cls == "skip":
+        raise HTTPException(status_code=415,
+                            detail=f"unsupported artifact type for {path!r}")
+
+    if cls == "text":
+        body = read_file(project=project, path=path, ref=ref)
+        return {**body, "artifact_class": "text", "via": "raw"}
+
+    # 1. Prefer the pre-extracted markdown.
+    cache_path = extracted_path_for(path)
+    try:
+        cached = read_file(project=project, path=cache_path, ref=ref)
+        return {
+            "project": project, "path": path, "ref": ref,
+            "encoding": "utf-8", "size": cached.get("size", 0),
+            "content": cached.get("content", ""),
+            "artifact_class": cls, "via": "cache",
+            "cache_path": cache_path,
+        }
+    except HTTPException as e:
+        if e.status_code != 404:
+            raise
+
+    # 2. No cache — pull the raw blob and run it through doc-processor.
+    p = _project(project)
+    try:
+        f = p.files.get(file_path=path, ref=ref)
+    except gitlab.exceptions.GitlabGetError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    raw = base64.b64decode(f.content)
+    filename = path.rsplit("/", 1)[-1]
+    res = await _doc().process_bytes(raw, filename=filename,
+                                      user_id="gitlab-mcp")
+    if not res.get("success"):
+        raise HTTPException(status_code=502,
+                            detail=f"doc-processor: {res.get('error')}")
+    md = res.get("content") or ""
+    return {
+        "project": project, "path": path, "ref": ref,
+        "encoding": "utf-8", "size": len(md), "content": md,
+        "artifact_class": cls, "via": "doc-processor",
+        "doc_type": res.get("doc_type"),
+    }
+
+
 @app.get("/search")
 def search(query: str = Query(..., min_length=1), project: str | None = None,
            group: str | None = None, scope: str = "blobs"):
@@ -378,6 +450,19 @@ async def get_project_tree(project: str, ref: str = DEFAULT_REF, path: str = "")
 async def read_file_mcp(project: str, path: str, ref: str = DEFAULT_REF) -> dict:
     """Read a file from a GitLab project. Returns utf-8 text or base64 if binary."""
     return read_file(project=project, path=path, ref=ref)
+
+
+@mcp.tool()
+async def read_artifact_mcp(project: str, path: str, ref: str = DEFAULT_REF) -> dict:
+    """Type-aware file read for the CoT engine.
+
+    Always returns utf-8 markdown — text files are returned raw; PDFs,
+    Office docs, and images are served from the ingest-time extraction
+    cache (``.simorgh/extracted/<path>.md``) if present, otherwise
+    extracted on demand via doc-processor. CoT should call this instead
+    of ``read_file`` whenever it isn't certain the target is plain text.
+    """
+    return await read_artifact(project=project, path=path, ref=ref)
 
 
 @mcp.tool()
