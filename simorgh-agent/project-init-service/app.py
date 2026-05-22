@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import base64
+import re
+
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from mcp.server.fastmcp import FastMCP
@@ -94,6 +96,15 @@ class InitRequest(BaseModel):
     gitlab_repo_path: str | None = None       # 'group/repo' chosen by the user
     gitlab_repo_url: str | None = None        # full clone URL (https or git@)
     gitlab_base_branch: str | None = None     # branch the user wants to fork from
+    # Anything Git understands: branch / tag / SHA. Wins over
+    # gitlab_base_branch when both are set, so the wizard can pin a
+    # release tag or a specific revision without changing the request
+    # shape further.
+    base_ref: str | None = None
+    # Optional friendly hint for the simorgh working branch name. We
+    # always wrap it as `simorgh/<oenum-or-id>/<sanitized-hint>-<hex>`
+    # so multiple projects from the same repo never collide on a name.
+    branch_name_hint: str | None = None
     sources: SourcesEnabled = Field(default_factory=SourcesEnabled)
     # Optional TPMS credentials. Required by the user only when tpms or
     # techserver sources are ticked. Falls back to TECHSERVER_USER/PASS
@@ -119,9 +130,46 @@ def _broker_headers() -> dict[str, str]:
     return {"authorization": f"Bearer {BROKER_TOKEN}"} if BROKER_TOKEN else {}
 
 
-def _simorgh_branch_name() -> str:
-    """Generate a short-hex simorgh working branch: simorgh/a3f9c2."""
-    return f"simorgh/{secrets.token_hex(3)}"
+_BRANCH_SAFE_RE = re.compile(r"[^a-zA-Z0-9._-]+")
+
+
+def _sanitize_branch_segment(s: str) -> str:
+    """Reduce arbitrary user text to a git-branch-safe segment.
+
+    git's reference rules are stricter than this but for the trailing
+    segment of ``simorgh/<scope>/<hint>-<hex>`` this is enough — no
+    spaces, no slashes, no leading dot, length-bounded.
+    """
+    cleaned = _BRANCH_SAFE_RE.sub("-", s or "").strip("-.").lower()
+    return cleaned[:40] or "work"
+
+
+def _simorgh_branch_name(
+    scope: str | None = None, hint: str | None = None,
+) -> str:
+    """Compose the simorgh working branch name.
+
+    Examples
+    --------
+    >>> _simorgh_branch_name()
+    'simorgh/a3f9c2'
+    >>> _simorgh_branch_name(scope='12345')
+    'simorgh/12345/a3f9c2'
+    >>> _simorgh_branch_name(scope='12345', hint='Panel A redesign')
+    'simorgh/12345/panel-a-redesign-a3f9c2'
+
+    The trailing hex keeps two concurrent projects on the same source
+    repo from colliding on a branch name when both pick the same hint.
+    """
+    suffix = secrets.token_hex(3)
+    parts: list[str] = ["simorgh"]
+    if scope:
+        parts.append(_sanitize_branch_segment(scope))
+    if hint:
+        parts.append(f"{_sanitize_branch_segment(hint)}-{suffix}")
+    else:
+        parts.append(suffix)
+    return "/".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -157,20 +205,34 @@ async def _exec(client: httpx.AsyncClient, project_id: str, command: str,
     return r.json()
 
 
-async def _clone_user_repo(client: httpx.AsyncClient, project_id: str,
-                           repo_url: str, base_branch: str | None,
-                           simorgh_branch: str) -> dict:
-    """Clone the user's repo into /work/gitlab, create simorgh/<hex> off the
-    chosen base branch, and push it so origin tracks it."""
-    base_part = f" --branch {base_branch}" if base_branch else ""
+async def _clone_user_repo(
+    client: httpx.AsyncClient, project_id: str,
+    repo_url: str, base_ref: str | None, simorgh_branch: str,
+) -> dict:
+    """Clone the user's repo into /work/gitlab, branch from ``base_ref``,
+    and push the new simorgh branch so ``origin`` tracks it.
+
+    ``base_ref`` may be a branch, tag, or SHA. The clone is unconfigured
+    (no ``--branch``); we resolve the ref locally with ``git checkout -B``
+    after a full ``fetch --all`` so tags and arbitrary SHAs both work.
+    """
+    safe_ref = shlex.quote(base_ref) if base_ref else ""
+    safe_branch = shlex.quote(simorgh_branch)
+    safe_url = shlex.quote(repo_url)
+    checkout = (
+        f"git checkout -B {safe_branch} {safe_ref}\n"
+        if base_ref
+        else f"git checkout -B {safe_branch}\n"
+    )
     script = (
-        f"set -e\n"
-        f"rm -rf /work/gitlab\n"
-        f"git clone{base_part} {repo_url} /work/gitlab\n"
-        f"cd /work/gitlab\n"
-        f"git checkout -b {simorgh_branch}\n"
-        f"# Best-effort push; if write isn't granted yet we keep going.\n"
-        f"git push -u origin {simorgh_branch} || echo 'push deferred — deploy key not granted yet'\n"
+        "set -e\n"
+        "rm -rf /work/gitlab\n"
+        f"git clone {safe_url} /work/gitlab\n"
+        "cd /work/gitlab\n"
+        "git fetch --all --tags --prune\n"
+        f"{checkout}"
+        "# Best-effort push; if write isn't granted yet we keep going.\n"
+        f"git push -u origin {safe_branch} || echo 'push deferred — deploy key not granted yet'\n"
     )
     return await _exec(client, project_id, script, timeout_sec=600)
 
@@ -416,8 +478,14 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
     s = _init_status[init_id]
     s["status"] = "running"
     steps: list[dict[str, Any]] = []
-    simorgh_branch = _simorgh_branch_name() if req.sources.gitlab else None
-    s["simorgh_branch"] = simorgh_branch
+    # init_project already computed the branch name and stored it on the
+    # status dict so the wizard's response echoes the same name we use
+    # here. Read it back rather than re-rolling the random suffix.
+    simorgh_branch = s.get("simorgh_branch")
+    # Branch / tag / SHA the user picked. base_ref wins over the older
+    # gitlab_base_branch when both are provided.
+    base_ref = req.base_ref or req.gitlab_base_branch
+    s["base_ref"] = base_ref
 
     def _record(step: str, status: str, **extra: Any) -> None:
         steps.append({"step": step, "status": status, **extra})
@@ -441,11 +509,12 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
                 try:
                     res = await _clone_user_repo(
                         client, req.project_id, req.gitlab_repo_url,
-                        req.gitlab_base_branch, simorgh_branch,
+                        base_ref, simorgh_branch,
                     )
                     cloned_ok = True
                     _record("clone_user_repo", "ok",
                             simorgh_branch=simorgh_branch,
+                            base_ref=base_ref,
                             exit_code=res.get("exit_code"))
                 except httpx.HTTPError as e:
                     _record("clone_user_repo", "error", error=str(e))
@@ -529,7 +598,14 @@ def health():
 @app.post("/init", response_model=InitResponse)
 async def init_project(req: InitRequest, background_tasks: BackgroundTasks):
     init_id = str(uuid.uuid4())
-    simorgh_branch = _simorgh_branch_name() if req.sources.gitlab else None
+    # Pre-compute the branch name so the response can echo it back to the
+    # wizard immediately. _run_init re-derives the same name with the same
+    # inputs — there's no clock or random state in flight here.
+    scope = req.sources.techserver_oenum or req.oenum or req.project_id
+    simorgh_branch = (
+        _simorgh_branch_name(scope=scope, hint=req.branch_name_hint)
+        if req.sources.gitlab else None
+    )
     _init_status[init_id] = {
         "init_id": init_id,
         "project_id": req.project_id,

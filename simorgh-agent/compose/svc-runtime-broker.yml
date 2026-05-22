@@ -28,6 +28,10 @@ services:
       - BROKER_MEM_LIMIT=${BROKER_MEM_LIMIT:-1g}
       - BROKER_CPU_QUOTA=${BROKER_CPU_QUOTA:-100000}
       - BROKER_PIDS_LIMIT=${BROKER_PIDS_LIMIT:-512}
+      # Idle teardown — containers untouched for this many seconds get
+      # stopped (volume is preserved). 0 disables the sweeper.
+      - BROKER_IDLE_TTL_SEC=${BROKER_IDLE_TTL_SEC:-86400}
+      - BROKER_IDLE_SWEEP_SEC=${BROKER_IDLE_SWEEP_SEC:-600}
       - DOC_PROCESSOR_URL=${DOC_PROCESSOR_URL:-http://doc-processor:8000}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}

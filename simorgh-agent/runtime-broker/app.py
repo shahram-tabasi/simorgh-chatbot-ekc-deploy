@@ -78,11 +78,24 @@ MEM_LIMIT        = os.getenv("BROKER_MEM_LIMIT", "1g")
 CPU_QUOTA        = int(os.getenv("BROKER_CPU_QUOTA", "100000"))   # of 100000 / cpu
 PIDS_LIMIT       = int(os.getenv("BROKER_PIDS_LIMIT", "512"))
 
+# Idle teardown: containers untouched for this many seconds get stopped
+# (the named volume stays — session_start rehydrates it). 0 disables.
+IDLE_TTL_SEC     = int(os.getenv("BROKER_IDLE_TTL_SEC", "86400"))   # 24h
+IDLE_SWEEP_SEC   = int(os.getenv("BROKER_IDLE_SWEEP_SEC", "600"))   # 10m
+
 WORKING_DIR      = "/work"
 CONTAINER_PREFIX = "simorgh-proj-"
 VOLUME_PREFIX    = "simorgh-proj-vol-"
 
 _dockerc = docker.from_env()
+
+# Per-project last-activity wall clock (seconds since epoch). Updated by
+# every exec / file IO / git op so the sweeper can decide what's idle.
+_last_activity: dict[str, float] = {}
+
+
+def _touch(project_id: str) -> None:
+    _last_activity[project_id] = time.time()
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +249,7 @@ def start_session(project_id: str, req: StartRequest | None = None):
                 existing.reload()
             except APIError as e:
                 raise HTTPException(status_code=502, detail=f"docker start: {e.explanation}")
+        _touch(project_id)
         return SessionStatus(
             project_id=project_id, container_name=existing.name,
             container_id=existing.id, image=image,
@@ -247,6 +261,7 @@ def start_session(project_id: str, req: StartRequest | None = None):
     except APIError as e:
         raise HTTPException(status_code=502, detail=f"docker create: {e.explanation}")
     container.reload()
+    _touch(project_id)
     return SessionStatus(
         project_id=project_id, container_name=container.name,
         container_id=container.id, image=image, status=container.status,
@@ -338,6 +353,7 @@ def _require_running(project_id: str):
         except APIError as e:
             raise HTTPException(status_code=409,
                                 detail=f"session not running and could not start: {e.explanation}")
+    _touch(project_id)
     return c
 
 
@@ -559,6 +575,182 @@ def session_git_push(project_id: str, req: PushRequest):
     return session_exec(project_id, ExecRequest(command=script, timeout_sec=180))
 
 
+class CommitPushRequest(BaseModel):
+    """Combined commit-then-push body. Used by the CoT after any
+    workspace mutation so the simorgh branch stays in sync with the
+    user's GitLab repo without needing two separate tool calls."""
+    message: str
+    paths: list[str] = []          # empty = git add -A
+    author_email: str = "simorgh-agent@local"
+    author_name: str = "simorgh-agent"
+    workdir: str = WORKING_DIR + "/gitlab"
+    remote: str = "origin"
+    branch: str | None = None       # None = current branch
+    # If True, return ok even when there are no staged changes
+    # (avoids spurious failures when CoT calls this defensively).
+    allow_empty: bool = False
+
+
+class CommitPushResult(BaseModel):
+    pushed: bool
+    committed: bool
+    conflict: bool = False
+    commit_sha: str | None = None
+    branch: str | None = None
+    stdout: str = ""
+    stderr: str = ""
+    requires_human_review: bool = False
+    exit_code: int = 0
+
+
+def _parse_commit_push_output(
+    stdout: str, stderr: str,
+) -> tuple[bool, bool, bool, str | None, str | None]:
+    """Pure parser for the commit_push script's markers.
+
+    Returns ``(committed, pushed, conflict, commit_sha, branch)``.
+    Kept in module scope so it can be unit-tested without spinning
+    docker.
+    """
+    committed = False
+    pushed = False
+    commit_sha: str | None = None
+    branch: str | None = None
+    for line in (stdout or "").splitlines():
+        if line.startswith("__SIMORGH_COMMIT__:"):
+            try:
+                _, sha, br = line.split(":", 2)
+                committed, commit_sha, branch = True, sha, br
+            except ValueError:
+                committed = True
+        elif line == "__SIMORGH_PUSH_OK__":
+            pushed = True
+        elif line == "__SIMORGH_PUSH_FAIL__":
+            pushed = False
+
+    blob = ((stdout or "") + "\n" + (stderr or "")).lower()
+    conflict = False
+    if not pushed and committed:
+        conflict = any(t in blob for t in (
+            "non-fast-forward", "fetch first", "rejected",
+            "tip of your current branch is behind",
+        ))
+    return committed, pushed, conflict, commit_sha, branch
+
+
+@app.post("/sessions/{project_id}/git/commit_push",
+          response_model=CommitPushResult,
+          dependencies=[Depends(require_token)])
+def session_git_commit_push(project_id: str, req: CommitPushRequest):
+    """Stage, commit, push — atomic from the caller's point of view.
+
+    The script captures the resulting commit SHA, then attempts to push.
+    A non-fast-forward (someone else committed to this branch first)
+    surfaces as ``requires_human_review=True`` rather than an exception,
+    so chat-service can route it to the user without retrying blindly.
+    """
+    add_cmd = "git add -A" if not req.paths else (
+        "git add " + " ".join(shlex.quote(p) for p in req.paths)
+    )
+    branch_part = (
+        shlex.quote(req.branch) if req.branch
+        else "$(git rev-parse --abbrev-ref HEAD)"
+    )
+    empty_handler = (
+        "echo '__SIMORGH_NO_CHANGES__'; exit 0\n"
+        if req.allow_empty
+        else "echo '__SIMORGH_NO_CHANGES__'; exit 0\n"
+    )
+    # Bash markers (__SIMORGH_*__) let us parse the result without
+    # depending on git's locale-sensitive English output.
+    script = (
+        f"set -e\n"
+        f"cd {shlex.quote(req.workdir)}\n"
+        f"git config user.email {shlex.quote(req.author_email)}\n"
+        f"git config user.name  {shlex.quote(req.author_name)}\n"
+        f"{add_cmd}\n"
+        f"if git diff --cached --quiet; then {empty_handler}fi\n"
+        f"git commit -m {shlex.quote(req.message)}\n"
+        f"SHA=$(git rev-parse HEAD)\n"
+        f"BRANCH={branch_part}\n"
+        f"echo \"__SIMORGH_COMMIT__:$SHA:$BRANCH\"\n"
+        f"if git push -u {shlex.quote(req.remote)} \"$BRANCH\" 2>&1; then\n"
+        f"  echo '__SIMORGH_PUSH_OK__'\n"
+        f"else\n"
+        f"  echo '__SIMORGH_PUSH_FAIL__'\n"
+        f"  exit 0\n"
+        f"fi\n"
+    )
+    result = session_exec(project_id, ExecRequest(command=script, timeout_sec=240))
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    committed, pushed, conflict, commit_sha, branch = _parse_commit_push_output(stdout, stderr)
+    requires_human_review = committed and not pushed
+
+    return CommitPushResult(
+        pushed=pushed, committed=committed, conflict=conflict,
+        commit_sha=commit_sha, branch=branch,
+        stdout=stdout, stderr=stderr,
+        requires_human_review=requires_human_review,
+        exit_code=result.exit_code,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Idle-TTL sweeper — stop containers that have been quiet too long.
+#   - stop only (delete keeps the named volume so session_start rehydrates).
+#   - skipped when IDLE_TTL_SEC <= 0.
+#   - swept every IDLE_SWEEP_SEC seconds.
+# ---------------------------------------------------------------------------
+async def _idle_sweep_loop() -> None:
+    if IDLE_TTL_SEC <= 0:
+        log.info("idle_sweep_disabled")
+        return
+    import asyncio
+    log.info("idle_sweep_started",
+             ttl_sec=IDLE_TTL_SEC, sweep_sec=IDLE_SWEEP_SEC)
+    while True:
+        try:
+            await asyncio.sleep(IDLE_SWEEP_SEC)
+            now = time.time()
+            for c in _dockerc.containers.list(filters={"name": CONTAINER_PREFIX}):
+                if not c.name.startswith(CONTAINER_PREFIX):
+                    continue
+                if c.status != "running":
+                    continue
+                project_id = c.name[len(CONTAINER_PREFIX):]
+                last = _last_activity.get(project_id)
+                if last is None:
+                    # First sweep after restart — treat now as activity so
+                    # we don't kill containers from the previous broker.
+                    _last_activity[project_id] = now
+                    continue
+                idle = now - last
+                if idle >= IDLE_TTL_SEC:
+                    log.info("idle_stop", project_id=project_id, idle_sec=int(idle))
+                    try:
+                        c.stop(timeout=10)
+                    except APIError as e:
+                        log.warning("idle_stop_failed",
+                                    project_id=project_id, error=str(e))
+        except Exception as e:
+            # Don't let one sweep failure kill the loop.
+            log.warning("idle_sweep_iteration_failed", error=str(e))
+
+
+@app.on_event("startup")
+async def _start_idle_sweeper() -> None:
+    import asyncio
+    app.state._idle_sweep_task = asyncio.create_task(_idle_sweep_loop())
+
+
+@app.on_event("shutdown")
+async def _stop_idle_sweeper() -> None:
+    task = getattr(app.state, "_idle_sweep_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
 # ---------------------------------------------------------------------------
 # MCP — tools the CoT engine calls
 # ---------------------------------------------------------------------------
@@ -637,6 +829,28 @@ async def session_git_commit_tool(project_id: str, message: str,
 async def session_git_push_tool(project_id: str, branch: str = "") -> dict:
     """Push the simorgh working branch to the user's GitLab repo."""
     return session_git_push(project_id, PushRequest(branch=branch or None)).model_dump()
+
+
+@mcp.tool()
+async def session_git_commit_push_tool(
+    project_id: str, message: str,
+    paths: list[str] | None = None, branch: str = "",
+    allow_empty: bool = False,
+) -> dict:
+    """Stage, commit, and push the workspace in one call.
+
+    Prefer this over the separate commit/push tools whenever CoT
+    mutates the workspace — it surfaces remote conflicts as a
+    structured ``requires_human_review`` flag instead of an exception,
+    so the chat-service can route the divergence back to the user.
+    """
+    return session_git_commit_push(
+        project_id,
+        CommitPushRequest(
+            message=message, paths=paths or [],
+            branch=branch or None, allow_empty=allow_empty,
+        ),
+    ).model_dump()
 
 
 # FastMCP's streamable_http_app exposes route /mcp internally. Mount at
