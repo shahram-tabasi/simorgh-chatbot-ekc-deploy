@@ -696,6 +696,39 @@ class ProjectManagerAgent:
             f"input_keys={list(tool_input.keys()) if isinstance(tool_input, dict) else None}"
         )
 
+        # Short-circuit known-invalid file-read calls before they hit MCP.
+        # The LLM sometimes plans a redundant "read project files" step
+        # after get_project_tree and fills `path` with '/' or '' (i.e.
+        # "the whole repo"), which always 404s. Catch it here, return a
+        # synthetic no-op that nudges the model toward get_project_tree
+        # for tree-shaped questions.
+        if (
+            tool in ("read_file_mcp", "read_artifact_mcp", "session_read_file_tool",
+                     "session_read_artifact_tool")
+            and isinstance(tool_input, dict)
+        ):
+            raw_path = (tool_input.get("path") or "").strip()
+            if raw_path in ("", "/", "*", "."):
+                logger.info(
+                    "dispatch: short-circuiting %s with invalid path=%r "
+                    "(suggesting tree listing instead)",
+                    tool, raw_path,
+                )
+                return {
+                    "output": (
+                        f"{tool} was called with no specific file path "
+                        f"(path={raw_path!r}). To list repository contents "
+                        "use get_project_tree; to read a file pass its "
+                        "exact path from the tree (e.g. "
+                        "'README.md', 'docs/spec.pdf')."
+                    ),
+                    "metadata": {
+                        "via":  "dispatcher_guard",
+                        "tool": tool,
+                        "reason": "invalid_path_for_file_read",
+                    },
+                }
+
         # Try MCP first for microservice tools (dynamic routing)
         if has_mcp_tool:
             try:

@@ -285,6 +285,24 @@ async def create_project(
             logger.warning("project-init unreachable: %s", e)
             init_result["project_init"] = {"ok": False, "error": str(e)[:200]}
 
+        # project-init generates the simorgh/<oenum>/<hex> working branch
+        # name and returns it in the /init response, but the orchestrator
+        # never persisted it. Without this, every project row stays at
+        # simorgh_branch=NULL, and the sidebar's branch-status dot, the
+        # commit_push flow, and the dispatcher's ref-defaulting all
+        # silently fall back to gitlab_base_branch.
+        try:
+            sb = (init_result.get("project_init") or {}).get("simorgh_branch")
+            if sb:
+                await memory.update_project(project_id, simorgh_branch=sb)
+                logger.info(
+                    "Persisted simorgh_branch=%s for project %s", sb, project_id,
+                )
+        except Exception as e:
+            logger.warning(
+                "Failed to persist simorgh_branch for %s: %s", project_id, e,
+            )
+
         logger.info("Project %s init queued: %s", project_id, init_result)
 
         return ProjectResponse(
