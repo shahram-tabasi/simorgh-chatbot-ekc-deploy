@@ -73,11 +73,11 @@ function debounce(fn, ms) {
 function toast(message, kind = 'info', ms = 3500) {
   const host = $('#toast-host');
   const iconSvg = kind === 'ok'
-    ? `<svg class="w-4 h-4 flex-shrink-0" style="color:#4ade80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`
+    ? `<svg width="12" height="12" style="color:#16a34a" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`
     : kind === 'bad'
-    ? `<svg class="w-4 h-4 flex-shrink-0" style="color:#f87171" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>`
-    : `<svg class="w-4 h-4 flex-shrink-0" style="color:#a78bfa" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
-  const t = el('div', { class: `toast toast-${kind}`, html: `${iconSvg}<span class="flex-1 text-slate-200">${esc(message)}</span>` });
+    ? `<svg width="12" height="12" style="color:#dc2626" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>`
+    : `<svg width="12" height="12" style="color:#7c3aed" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
+  const t = el('div', { class: `toast toast-${kind}`, html: `${iconSvg}<span class="flex-1">${esc(message)}</span>` });
   host.appendChild(t);
   setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(12px)'; }, ms - 220);
   setTimeout(() => t.remove(), ms);
@@ -511,7 +511,7 @@ pages.users = async (host) => {
           <button class="btn btn-ghost btn-icon" data-act="toggle" data-id="${u.id}" data-active="${u.is_active}" title="${u.is_active ? 'Disable' : 'Enable'}">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${u.is_active ? 'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636' : 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'}"/></svg>
           </button>
-          <button class="btn btn-ghost btn-icon" style="color:#f87171" data-act="del" data-id="${u.id}" data-email="${esc(u.email)}" title="Delete">
+          <button class="btn btn-ghost btn-icon" style="color:#dc2626" data-act="del" data-id="${u.id}" data-email="${esc(u.email)}" title="Delete">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
           </button>
         </td>
@@ -998,7 +998,7 @@ pages.settings = async (host) => {
         <td class="space-x-1">${flags.join('')}</td>
         <td class="text-right whitespace-nowrap">
           <button class="btn btn-ghost" data-act="edit" data-key="${esc(r.key)}" data-scope="${esc(r.scope||'')}" ${r.is_readonly?'disabled':''} style="font-size:11.5px;padding:4px 9px">Edit</button>
-          <button class="btn btn-ghost" data-act="del" data-key="${esc(r.key)}" data-scope="${esc(r.scope||'')}" ${r.is_readonly?'disabled':''} style="font-size:11.5px;padding:4px 9px;color:#f87171">Delete</button>
+          <button class="btn btn-ghost" data-act="del" data-key="${esc(r.key)}" data-scope="${esc(r.scope||'')}" ${r.is_readonly?'disabled':''} style="font-size:11.5px;padding:4px 9px;color:#dc2626">Delete</button>
         </td>
       `;
       tb.appendChild(tr);
@@ -1267,7 +1267,7 @@ pages.shell = async (host) => {
   `;
 
   // Main split
-  const split = el('div', { class: 'grid grid-cols-1 lg:grid-cols-[200px_1fr] gap-4' });
+  const split = el('div', { class: 'grid grid-cols-1 lg:grid-cols-shell gap-4' });
   wrap.appendChild(split);
 
   // Tables pane
@@ -1334,11 +1334,11 @@ pages.shell = async (host) => {
     $('#sh-out').innerHTML = `<div class="flex items-center justify-center py-8"><span class="spinner"></span></div>`;
     try {
       const r = await api('/db/query', { method: 'POST', body: { sql, database: $('#sh-db').value } });
-      const suffix = r.truncated ? ' <span style="color:#fbbf24">(truncated)</span>' : '';
-      $('#sh-status').innerHTML = `<span style="color:#4ade80">${r.op}</span> · ${r.elapsed_ms} ms · ${r.rowcount ?? 0} rows${suffix}`;
+      const suffix = r.truncated ? ' <span style="color:#d97706">(truncated)</span>' : '';
+      $('#sh-status').innerHTML = `<span style="color:#16a34a">${r.op}</span> · ${r.elapsed_ms} ms · ${r.rowcount ?? 0} rows${suffix}`;
       renderResult(r);
     } catch (e) {
-      $('#sh-status').innerHTML = `<span style="color:#f87171">Error</span>`;
+      $('#sh-status').innerHTML = `<span style="color:#dc2626">Error</span>`;
       $('#sh-out').innerHTML = `<div class="text-red-400 text-sm font-mono">${esc(e.message)}</div>`;
     }
   }
