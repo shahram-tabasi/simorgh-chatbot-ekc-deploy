@@ -73,9 +73,9 @@ function debounce(fn, ms) {
 function toast(message, kind = 'info', ms = 3500) {
   const host = $('#toast-host');
   const iconSvg = kind === 'ok'
-    ? `<svg width="12" height="12" style="color:#16a34a" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`
+    ? `<svg width="12" height="12" style="color:#4ade80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`
     : kind === 'bad'
-    ? `<svg width="12" height="12" style="color:#dc2626" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>`
+    ? `<svg width="12" height="12" style="color:#f87171" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>`
     : `<svg width="12" height="12" style="color:#7c3aed" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
   const t = el('div', { class: `toast toast-${kind}`, html: `${iconSvg}<span class="flex-1">${esc(message)}</span>` });
   host.appendChild(t);
@@ -511,7 +511,7 @@ pages.users = async (host) => {
           <button class="btn btn-ghost btn-icon" data-act="toggle" data-id="${u.id}" data-active="${u.is_active}" title="${u.is_active ? 'Disable' : 'Enable'}">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${u.is_active ? 'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636' : 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'}"/></svg>
           </button>
-          <button class="btn btn-ghost btn-icon" style="color:#dc2626" data-act="del" data-id="${u.id}" data-email="${esc(u.email)}" title="Delete">
+          <button class="btn btn-ghost btn-icon" style="color:#f87171" data-act="del" data-id="${u.id}" data-email="${esc(u.email)}" title="Delete">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
           </button>
         </td>
@@ -998,7 +998,7 @@ pages.settings = async (host) => {
         <td class="space-x-1">${flags.join('')}</td>
         <td class="text-right whitespace-nowrap">
           <button class="btn btn-ghost" data-act="edit" data-key="${esc(r.key)}" data-scope="${esc(r.scope||'')}" ${r.is_readonly?'disabled':''} style="font-size:11.5px;padding:4px 9px">Edit</button>
-          <button class="btn btn-ghost" data-act="del" data-key="${esc(r.key)}" data-scope="${esc(r.scope||'')}" ${r.is_readonly?'disabled':''} style="font-size:11.5px;padding:4px 9px;color:#dc2626">Delete</button>
+          <button class="btn btn-ghost" data-act="del" data-key="${esc(r.key)}" data-scope="${esc(r.scope||'')}" ${r.is_readonly?'disabled':''} style="font-size:11.5px;padding:4px 9px;color:#f87171">Delete</button>
         </td>
       `;
       tb.appendChild(tr);
@@ -1259,8 +1259,11 @@ pages.shell = async (host) => {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
         </svg>
         <p class="text-xs text-amber-300">
-          Full read+write SQL access. Every query is audit-logged with the actor, SQL text, and elapsed time.
-          DDL/DML runs in autocommit — there is no rollback. Use <code class="code" style="padding:1px 6px">SELECT</code> for exploration.
+          Full read+write access to <code class="code" style="padding:1px 6px">postgres</code>,
+          <code class="code" style="padding:1px 6px">redis</code> and
+          <code class="code" style="padding:1px 6px">qdrant</code>. Every query is audit-logged
+          (actor, statement, elapsed). Writes run without rollback — destructive commands take
+          effect immediately.
         </p>
       </div>
     </div>
@@ -1278,6 +1281,17 @@ pages.shell = async (host) => {
   const right = el('div', { class: 'space-y-4' });
   split.appendChild(right);
 
+  const placeholders = {
+    auth:   'SELECT * FROM users LIMIT 10;',
+    chat:   'SELECT * FROM chat_messages LIMIT 10;',
+    redis:  'KEYS *\n# or: GET foo\n# or: HGETALL bar\n# or: TTL session:abc',
+    qdrant: 'GET /collections\n# or: POST /collections/my_col/points/search\n# {"vector":[0,0,…],"limit":10}',
+  };
+  const titles = {
+    auth: 'SQL Console · postgres', chat: 'SQL Console · postgres',
+    redis: 'Redis Console · redis-cli', qdrant: 'Qdrant Console · HTTP API',
+  };
+
   // Editor card
   right.innerHTML = `
     <div class="terminal-wrap">
@@ -1285,41 +1299,68 @@ pages.shell = async (host) => {
         <div class="t-dot t-dot-r"></div>
         <div class="t-dot t-dot-y"></div>
         <div class="t-dot t-dot-g"></div>
-        <span class="terminal-bar-title">SQL Console</span>
+        <span id="sh-title" class="terminal-bar-title">SQL Console</span>
         <div class="flex items-center gap-2 ml-auto">
-          <select id="sh-db" class="select" style="max-width:110px;background:#060710;font-size:12px;padding:5px 10px;border-color:#1a1d2e">
-            <option value="auth">auth</option><option value="chat">chat</option>
+          <select id="sh-db" class="select" style="max-width:130px;font-size:11.5px;padding:4px 9px">
+            <option value="auth">postgres · auth</option>
+            <option value="chat">postgres · chat</option>
+            <option value="redis">redis</option>
+            <option value="qdrant">qdrant</option>
           </select>
-          <span id="sh-status" class="text-xs text-slate-600 font-mono"></span>
-          <button id="sh-run" class="btn btn-primary" style="font-size:12px;padding:5px 12px">Run ⌘↵</button>
+          <span id="sh-status" class="text-xs text-slate-600" style="font-family:ui-monospace,monospace"></span>
+          <button id="sh-run" class="btn btn-primary" style="font-size:11.5px;padding:4px 11px">Run ⌘↵</button>
         </div>
       </div>
-      <div style="padding:12px">
-        <textarea id="sh-sql" class="textarea" rows="8" placeholder="SELECT * FROM users LIMIT 10;"
-          style="background:transparent;border-color:#111420;resize:vertical;width:100%"></textarea>
+      <div style="padding:10px">
+        <textarea id="sh-sql" class="textarea" rows="8"
+          style="background:transparent;border-color:#111420;resize:vertical;width:100%;font-family:ui-monospace,monospace"></textarea>
       </div>
     </div>
     <div id="sh-out" class="card card-sm"></div>
   `;
 
-  // Table browser
+  function updateForDb() {
+    const db = $('#sh-db').value;
+    $('#sh-sql').placeholder = placeholders[db] || '';
+    $('#sh-title').textContent = titles[db] || 'Console';
+  }
+
+  const browserLabels = { auth: 'Tables', chat: 'Tables', redis: 'Keys', qdrant: 'Collections' };
+  const onClickSnippet = {
+    auth:   (n) => `SELECT * FROM ${n} LIMIT 50;`,
+    chat:   (n) => `SELECT * FROM ${n} LIMIT 50;`,
+    redis:  (n) => `TYPE ${n}\n# next: GET ${n}  |  HGETALL ${n}  |  LRANGE ${n} 0 -1`,
+    qdrant: (n) => `GET /collections/${n}`,
+  };
+
+  // Table / key / collection browser
   async function loadTables() {
+    const db = $('#sh-db').value;
     tablesPane.innerHTML = `<div class="flex justify-center py-6"><span class="spinner"></span></div>`;
     try {
-      const r = await api(`/db/tables?database=${$('#sh-db').value}`);
-      tablesPane.innerHTML = `<div class="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2 px-1">Tables · ${esc(r.database)}</div>`;
+      const r = await api(`/db/tables?database=${db}`);
+      const label = browserLabels[db] || 'Items';
+      tablesPane.innerHTML = `<div class="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2 px-1">${label} · ${esc(r.database)}</div>`;
+      if (r.error) {
+        tablesPane.innerHTML += `<div class="text-[11px] text-red-400 px-2 py-1">${esc(r.error)}</div>`;
+        return;
+      }
+      if (!r.tables.length) {
+        tablesPane.innerHTML += `<div class="text-[11px] text-slate-600 px-2 py-1">(empty)</div>`;
+        return;
+      }
       r.tables.forEach(t => {
         const item = el('div', {
           class: 'flex items-center justify-between text-xs px-2 py-1.5 rounded-lg cursor-pointer',
           style: 'transition:background 80ms',
         });
         item.innerHTML = `
-          <span class="font-mono text-slate-400 truncate">${esc(t.name)}</span>
-          <span class="text-slate-600 ml-2 flex-shrink-0">${t.est_rows ? `~${Number(t.est_rows).toLocaleString()}` : ''}</span>
+          <span style="font-family:ui-monospace,monospace" class="text-slate-400 truncate">${esc(t.name)}</span>
+          ${t.est_rows && t.est_rows > 0 ? `<span class="text-slate-600 ml-2 flex-shrink-0">~${Number(t.est_rows).toLocaleString()}</span>` : ''}
         `;
         item.onmouseenter = () => item.style.background = 'rgba(255,255,255,0.04)';
         item.onmouseleave = () => item.style.background = '';
-        item.onclick = () => { $('#sh-sql').value = `SELECT * FROM ${t.name} LIMIT 50;`; };
+        item.onclick = () => { $('#sh-sql').value = onClickSnippet[db](t.name); };
         tablesPane.appendChild(item);
       });
     } catch (e) {
@@ -1334,11 +1375,11 @@ pages.shell = async (host) => {
     $('#sh-out').innerHTML = `<div class="flex items-center justify-center py-8"><span class="spinner"></span></div>`;
     try {
       const r = await api('/db/query', { method: 'POST', body: { sql, database: $('#sh-db').value } });
-      const suffix = r.truncated ? ' <span style="color:#d97706">(truncated)</span>' : '';
-      $('#sh-status').innerHTML = `<span style="color:#16a34a">${r.op}</span> · ${r.elapsed_ms} ms · ${r.rowcount ?? 0} rows${suffix}`;
+      const suffix = r.truncated ? ' <span style="color:#fbbf24">(truncated)</span>' : '';
+      $('#sh-status').innerHTML = `<span style="color:#4ade80">${r.op}</span> · ${r.elapsed_ms} ms · ${r.rowcount ?? 0} rows${suffix}`;
       renderResult(r);
     } catch (e) {
-      $('#sh-status').innerHTML = `<span style="color:#dc2626">Error</span>`;
+      $('#sh-status').innerHTML = `<span style="color:#f87171">Error</span>`;
       $('#sh-out').innerHTML = `<div class="text-red-400 text-sm font-mono">${esc(e.message)}</div>`;
     }
   }
@@ -1373,10 +1414,11 @@ pages.shell = async (host) => {
   }
 
   $('#sh-run').onclick = run;
-  $('#sh-db').onchange = loadTables;
+  $('#sh-db').onchange = () => { updateForDb(); loadTables(); };
   $('#sh-sql').addEventListener('keydown', ev => {
     if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') { ev.preventDefault(); run(); }
   });
+  updateForDb();
   loadTables();
 };
 
