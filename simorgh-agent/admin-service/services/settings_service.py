@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+import asyncpg
 from services.postgres_auth_service import get_postgres_auth_service
 from services.secret_box import encrypt, decrypt, mask
 
@@ -70,7 +71,10 @@ async def list_settings(
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY category, scope, key"
-    rows = await db.execute_async(sql, *params)
+    try:
+        rows = await db.execute_async(sql, *params)
+    except asyncpg.exceptions.UndefinedTableError:
+        return []
     return [_row_to_dict(r, reveal_secrets=reveal_secrets) for r in rows]
 
 
@@ -87,12 +91,16 @@ async def get_setting(
 async def for_scope(scope: str) -> Dict[str, str]:
     """Resolved (scope = '' OR scope = X) view, decrypted, for a service."""
     db = get_postgres_auth_service().db
-    rows = await db.execute_async(
-        "SELECT key, value, is_secret FROM system_settings "
-        "WHERE scope = '' OR scope = $1 "
-        "ORDER BY scope NULLS FIRST",  # global first, then service-specific overrides
-        scope,
-    )
+    try:
+        rows = await db.execute_async(
+            "SELECT key, value, is_secret FROM system_settings "
+            "WHERE scope = '' OR scope = $1 "
+            "ORDER BY scope NULLS FIRST",  # global first, then service-specific overrides
+            scope,
+        )
+    except asyncpg.exceptions.UndefinedTableError:
+        # Migration 004 not yet applied — return empty so callers fall back to env vars.
+        return {}
     out: Dict[str, str] = {}
     for r in rows:
         v = decrypt(r["value"]) if r["is_secret"] else r["value"]
@@ -176,7 +184,10 @@ async def delete_setting(key: str, scope: str = "") -> bool:
 async def categories() -> List[Dict[str, Any]]:
     """Distinct (category, count) pairs for the UI sidebar."""
     db = get_postgres_auth_service().db
-    rows = await db.execute_async(
-        "SELECT category, COUNT(*) AS n FROM system_settings GROUP BY category ORDER BY category"
-    )
+    try:
+        rows = await db.execute_async(
+            "SELECT category, COUNT(*) AS n FROM system_settings GROUP BY category ORDER BY category"
+        )
+    except asyncpg.exceptions.UndefinedTableError:
+        return []
     return [{"category": r["category"], "count": r["n"]} for r in rows]

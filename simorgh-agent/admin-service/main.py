@@ -6,6 +6,9 @@ Mounts:
   /api/v2/admin/ui/      Single-page admin UI (vanilla JS + Tailwind CDN)
   /api/v2/admin/internal/settings/scope/{scope}   service-to-service settings pull
 """
+import asyncio
+import glob
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -29,6 +32,46 @@ logger = logging.getLogger("admin-service")
 app = FastAPI(title="Simorgh Admin Service", version="2.0.0")
 
 
+async def _run_migrations(pool) -> None:
+    """Apply any pending SQL migrations from database/migrations/*.sql
+    (forward migrations only — files whose basename ends in _rollback.sql
+    are skipped). Tracks applied files in schema_migrations."""
+    migrations_dir = Path(__file__).parent / "database" / "migrations"
+    all_files = sorted(glob.glob(str(migrations_dir / "*.sql")))
+    # Exclude rollback files
+    forward = [f for f in all_files if not os.path.basename(f).endswith("_rollback.sql")]
+
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id SERIAL PRIMARY KEY,
+                filename VARCHAR(255) NOT NULL UNIQUE,
+                applied_at TIMESTAMPTZ DEFAULT NOW(),
+                checksum VARCHAR(64)
+            )
+        """)
+        applied = {r["filename"] for r in await conn.fetch(
+            "SELECT filename FROM schema_migrations"
+        )}
+
+        for filepath in forward:
+            name = os.path.basename(filepath)
+            if name in applied:
+                continue
+            sql_text = Path(filepath).read_text()
+            checksum = hashlib.sha256(sql_text.encode()).hexdigest()[:16]
+            try:
+                await conn.execute(sql_text)
+                await conn.execute(
+                    "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)",
+                    name, checksum,
+                )
+                logger.info("migration applied: %s", name)
+            except Exception as e:
+                logger.error("migration FAILED %s: %s", name, e)
+                # Don't abort — other migrations may still be independent.
+
+
 @app.on_event("startup")
 async def _bootstrap_services() -> None:
     """Open the Postgres pool and wire the singleton services that the
@@ -36,6 +79,13 @@ async def _bootstrap_services() -> None:
     returns 503 "Tier service not initialized"."""
     db = PostgresConnection()
     await db.init_async_pool()
+
+    # Run pending SQL migrations before wiring services so tables exist.
+    try:
+        await _run_migrations(db._async_pool)
+    except Exception as e:
+        logger.error("migration runner error: %s", e)
+
     init_tier_service(db)
     # Payment service is optional — only wire if importable + the helper
     # exists. Some deployments ship without it.
