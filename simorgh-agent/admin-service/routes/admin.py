@@ -48,10 +48,11 @@ async def setup_admin(request: AdminSetupRequest):
     if not tier_service:
         raise HTTPException(status_code=503, detail="Tier service not initialized")
 
-    # Authenticate the user first
-    user, auth_err = await auth_service.authenticate_user(request.email, request.password)
+    # Look up the user by email — the admin_secret is the security gate,
+    # so we don't require the user's password here.
+    user = await auth_service.get_user_by_email(request.email)
     if not user:
-        raise HTTPException(status_code=401, detail=auth_err or "Invalid email or password")
+        raise HTTPException(status_code=404, detail="No account found for that email")
 
     # Promote to admin via secret
     success, message = await tier_service.setup_admin(user["id"], request.admin_secret)

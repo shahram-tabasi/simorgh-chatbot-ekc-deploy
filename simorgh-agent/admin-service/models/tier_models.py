@@ -66,7 +66,7 @@ class UpdateUserRoleRequest(BaseModel):
 class AdminSetupRequest(BaseModel):
     """Request to create/promote admin user."""
     email: str
-    password: str
+    password: Optional[str] = None  # no longer required; admin_secret is the gate
     admin_secret: str
 
 
