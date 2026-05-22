@@ -23,6 +23,8 @@ from routes.features import router as features_router
 from routes.audit import router as audit_router
 from routes.users_extended import router as users_extended_router
 from routes.system_control import router as system_router
+from routes.projects_admin import router as projects_router
+from routes.db_shell import router as db_shell_router
 from database.postgres_connection import PostgresConnection
 from services.user_tier_service import init_tier_service
 
@@ -111,6 +113,8 @@ app.include_router(features_router)
 app.include_router(audit_router)
 app.include_router(users_extended_router)
 app.include_router(system_router)
+app.include_router(projects_router)
+app.include_router(db_shell_router)
 
 
 # ---------------------------------------------------------------------------

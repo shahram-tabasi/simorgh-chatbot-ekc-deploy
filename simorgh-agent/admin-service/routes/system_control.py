@@ -90,6 +90,53 @@ async def restart_service(
     return out
 
 
+@router.post("/system/services/{name}/start")
+async def start_service(
+    name: str, request: Request, admin: dict = Depends(require_admin),
+) -> Dict[str, Any]:
+    if not docker_control.is_enabled():
+        raise HTTPException(status_code=503, detail="Docker socket not mounted")
+    try:
+        out = await docker_control.start(name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    await audit_service.record(
+        admin, "system.start_service",
+        target_type="service", target_id=name, request=request,
+    )
+    return out
+
+
+@router.post("/system/services/{name}/stop")
+async def stop_service(
+    name: str, request: Request, admin: dict = Depends(require_admin),
+) -> Dict[str, Any]:
+    if not docker_control.is_enabled():
+        raise HTTPException(status_code=503, detail="Docker socket not mounted")
+    try:
+        out = await docker_control.stop(name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    await audit_service.record(
+        admin, "system.stop_service",
+        target_type="service", target_id=name, request=request,
+    )
+    return out
+
+
+@router.get("/system/services/{name}/logs")
+async def service_logs(
+    name: str, tail: int = 200, admin: dict = Depends(require_admin),
+) -> Dict[str, Any]:
+    if not docker_control.is_enabled():
+        raise HTTPException(status_code=503, detail="Docker socket not mounted")
+    try:
+        text = await docker_control.logs(name, tail=tail)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"name": name, "tail": tail, "logs": text}
+
+
 @router.get("/system/health-rollup")
 async def health_rollup(_: dict = Depends(require_admin)) -> Dict[str, Any]:
     """Hit /health on every known service in parallel. ~5s timeout each."""

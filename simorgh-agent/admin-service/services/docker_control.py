@@ -67,3 +67,53 @@ async def restart(name: str, timeout_sec: int = 10) -> Dict[str, Any]:
     if r.status_code not in (204, 304):
         raise RuntimeError(f"docker restart {name}: {r.status_code} {r.text[:200]}")
     return {"restarted": name, "status": r.status_code}
+
+
+async def start(name: str) -> Dict[str, Any]:
+    """POST /containers/{name}/start. 304 means it's already running."""
+    if not _ENABLED:
+        raise RuntimeError("Docker socket not available")
+    async with _client() as c:
+        r = await c.post(f"/containers/{name}/start")
+    if r.status_code not in (204, 304):
+        raise RuntimeError(f"docker start {name}: {r.status_code} {r.text[:200]}")
+    return {"started": name, "status": r.status_code, "already_running": r.status_code == 304}
+
+
+async def stop(name: str, timeout_sec: int = 10) -> Dict[str, Any]:
+    """POST /containers/{name}/stop?t=<seconds>. 304 means already stopped."""
+    if not _ENABLED:
+        raise RuntimeError("Docker socket not available")
+    async with _client(timeout=timeout_sec + 30) as c:
+        r = await c.post(f"/containers/{name}/stop", params={"t": str(timeout_sec)})
+    if r.status_code not in (204, 304):
+        raise RuntimeError(f"docker stop {name}: {r.status_code} {r.text[:200]}")
+    return {"stopped": name, "status": r.status_code, "already_stopped": r.status_code == 304}
+
+
+async def logs(name: str, tail: int = 200) -> str:
+    """GET /containers/{name}/logs — last N lines, stdout+stderr combined.
+    Docker sends a multiplexed stream; for simplicity we strip the 8-byte
+    framing headers before returning text."""
+    if not _ENABLED:
+        raise RuntimeError("Docker socket not available")
+    async with _client() as c:
+        r = await c.get(
+            f"/containers/{name}/logs",
+            params={"stdout": "true", "stderr": "true", "tail": str(tail), "timestamps": "true"},
+        )
+    if r.status_code != 200:
+        raise RuntimeError(f"docker logs {name}: {r.status_code} {r.text[:200]}")
+    # De-multiplex: each frame is 8 bytes (1 stream-id + 3 padding + 4 length BE) then payload.
+    data = r.content
+    out = bytearray()
+    i = 0
+    while i + 8 <= len(data):
+        # Heuristic: if the first byte isn't 1/2 (stdout/stderr), the stream
+        # isn't framed (rare, e.g. TTY containers) — fall back to raw bytes.
+        if data[i] not in (0, 1, 2):
+            return data.decode("utf-8", "replace")
+        length = int.from_bytes(data[i + 4 : i + 8], "big")
+        out.extend(data[i + 8 : i + 8 + length])
+        i += 8 + length
+    return out.decode("utf-8", "replace")
