@@ -1,68 +1,132 @@
 """
 Conversation Summarizer
 =======================
-Generates rolling summaries to compress long conversations.
-Maintains context while reducing token usage.
+Two-tier compaction in the Claude-Code style.
+
+Verbatim tail + rolling ``<summary>`` block. When the conversation grows
+past the trigger ratio (or a user runs ``/compact``), older turns are
+folded into a structured summary that preserves:
+
+  * decisions made,
+  * files / artifacts touched (paths),
+  * the current task and project stage,
+  * open questions,
+  * pinned facts (specs, equations, oenums) the model must never forget.
+
+The summary itself is bounded; once it exceeds ``MAX_SUMMARY_LENGTH``
+a summary-of-summary pass re-folds it without losing the pinned section.
 
 Author: Simorgh Industrial Assistant
 """
 
 import logging
+import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 
+# Wrap stored summaries in tags so the assembled prompt makes it explicit
+# this is a compacted view (and an easy regex target for re-summary).
+SUMMARY_OPEN_TAG = "<summary>"
+SUMMARY_CLOSE_TAG = "</summary>"
+
+
 class ConversationSummarizer:
-    """
-    Generates and maintains rolling conversation summaries.
+    """Two-tier compaction (verbatim tail + structured ``<summary>``).
 
-    Features:
-    - Incremental summarization (updates existing summary with new messages)
-    - Preserves key facts, decisions, and technical details
-    - Configurable summary triggers
-    - Fallback to truncation if LLM fails
+    Features
+    --------
+    * Incremental summarization — only new messages folded in each pass.
+    * Structured sections (decisions, files, task, stage, open questions,
+      pinned facts) so the model gets the same skeleton every time.
+    * Optional ``hint`` to steer manual ``/compact`` ("preserve panel-A
+      wiring decisions").
+    * Re-summary when the summary itself outgrows the limit.
+    * Routes through ``llm-gateway`` with ``force_backend=text`` so it
+      runs on the fast LLM, not the VLM.
     """
 
-    # Trigger summarization every N unsummarized messages
+    # Trigger automatic summarization every N unsummarized messages.
     SUMMARY_THRESHOLD = 8
 
-    # Maximum summary length in characters
-    MAX_SUMMARY_LENGTH = 1500
+    # Re-summary threshold for the summary itself (characters).
+    MAX_SUMMARY_LENGTH = 4000
 
-    # Summary prompt template
-    SUMMARY_PROMPT = """You are a conversation summarizer for a technical electrical engineering assistant.
+    SUMMARY_SYSTEM_PROMPT = (
+        "You are a context compaction agent for an electrical-engineering "
+        "assistant. Compact the conversation into a single structured block "
+        "that preserves every fact the next turn needs. Drop pleasantries "
+        "and re-stated context. Never lose: numeric specs, equations, "
+        "oenums, file paths, decisions, stage transitions."
+    )
 
-Your task is to create or update a conversation summary that captures the essential context needed for future responses.
+    SUMMARY_PROMPT = """\
+Compact the conversation below into a single block wrapped in <summary>...</summary>.
 
-CURRENT SUMMARY (if any):
+EXISTING SUMMARY (if any):
 {current_summary}
 
-NEW MESSAGES TO INCORPORATE:
+NEW MESSAGES TO FOLD IN:
 {new_messages}
 
-INSTRUCTIONS:
-1. Create a concise summary (max 300 words) that preserves:
-   - Key technical specifications mentioned (voltages, currents, equipment models)
-   - Important decisions or conclusions reached
-   - User preferences or requirements stated
-   - Any project-specific context
-   - Questions that remain unanswered
+{hint_block}
 
-2. Structure the summary as:
-   - **Topic**: Brief description of what's being discussed
-   - **Key Details**: Important technical facts (bullet points)
-   - **Context**: User's goals or requirements
-   - **Status**: Current state of the conversation
+Output ONLY this skeleton (keep section headers verbatim, omit a section
+only if truly empty):
 
-3. Remove:
-   - Redundant information
-   - Pleasantries and filler
-   - Information that's been superseded
+<summary>
+## Topic
+One sentence on what's being worked on.
 
-Generate the updated summary now:"""
+## Current Task
+The user's active task and any sub-step in progress.
+
+## Stage
+ANALYSIS | DESIGN | IMPLEMENTATION | REVIEW (omit if not a project chat).
+
+## Decisions
+- short bullets, one decision each, with the rationale if non-obvious.
+
+## Files & Artifacts
+- absolute paths, MR numbers, commit SHAs, GitLab repo refs.
+
+## Pinned Facts
+- specs, equations, oenums, part numbers — verbatim, never paraphrased.
+
+## Open Questions
+- bullets the next turn must address.
+
+## Tool Results (recent)
+- name + 1-line outcome ("gitlab.search_blobs: 3 hits in panel-A/").
+</summary>"""
+
+    def __init__(self, llm_service=None, redis_service=None):
+        """
+        Initialize summarizer.
+
+        Args:
+            llm_service: LLM service for generating summaries (legacy path)
+            redis_service: Redis service for storing summaries
+        """
+        self.llm = llm_service
+        self.redis = redis_service
+        self._gateway_url = (os.getenv("LLM_GATEWAY_URL") or "").rstrip("/")
+        logger.info(
+            "ConversationSummarizer initialized (gateway=%s)",
+            self._gateway_url or "off",
+        )
+
+    def set_services(self, llm_service=None, redis_service=None):
+        """Set services after initialization (for dependency injection)"""
+        if llm_service:
+            self.llm = llm_service
+        if redis_service:
+            self.redis = redis_service
 
     def __init__(self, llm_service=None, redis_service=None):
         """
@@ -129,11 +193,23 @@ Generate the updated summary now:"""
         except Exception:
             return 0
 
+    async def compact(
+        self,
+        chat_id: str,
+        messages: List[Dict[str, Any]],
+        hint: Optional[str] = None,
+    ) -> Optional[str]:
+        """Manual ``/compact``: force a fresh summary with optional hint."""
+        return await self.maybe_summarize(
+            chat_id=chat_id, messages=messages, force=True, hint=hint,
+        )
+
     async def maybe_summarize(
         self,
         chat_id: str,
         messages: List[Dict[str, Any]],
-        force: bool = False
+        force: bool = False,
+        hint: Optional[str] = None,
     ) -> Optional[str]:
         """
         Generate or update conversation summary if needed.
@@ -185,11 +261,26 @@ Generate the updated summary now:"""
         # Generate summary
         updated_summary = await self._generate_summary(
             current_summary=current_summary,
-            new_messages=new_messages
+            new_messages=new_messages,
+            hint=hint,
         )
 
         if updated_summary:
-            # Store updated summary
+            # If the summary itself is too long, re-fold it once.
+            if len(updated_summary) > self.MAX_SUMMARY_LENGTH:
+                logger.info(
+                    "Summary grew to %d chars; running re-summary pass",
+                    len(updated_summary),
+                )
+                refolded = await self._generate_summary(
+                    current_summary=updated_summary,
+                    new_messages=[],
+                    hint="Re-fold the existing summary to fit within "
+                         f"{self.MAX_SUMMARY_LENGTH} characters without "
+                         "dropping Pinned Facts.",
+                )
+                if refolded:
+                    updated_summary = refolded
             await self._store_summary(
                 chat_id=chat_id,
                 summary=updated_summary,
@@ -202,7 +293,8 @@ Generate the updated summary now:"""
     async def _generate_summary(
         self,
         current_summary: Optional[str],
-        new_messages: List[Dict[str, Any]]
+        new_messages: List[Dict[str, Any]],
+        hint: Optional[str] = None,
     ) -> Optional[str]:
         """
         Generate summary using LLM.
@@ -214,48 +306,96 @@ Generate the updated summary now:"""
         Returns:
             Generated summary or None on failure
         """
+        # Format messages and build the structured prompt once — both
+        # the gateway and the legacy llm_service path use the same body.
+        formatted_messages = self._format_messages_for_prompt(new_messages)
+        hint_block = f"USER HINT (apply when in doubt):\n{hint}" if hint else ""
+        prompt = self.SUMMARY_PROMPT.format(
+            current_summary=current_summary or "No previous summary.",
+            new_messages=formatted_messages or "No new messages.",
+            hint_block=hint_block,
+        )
+        messages = [
+            {"role": "system", "content": self.SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+
+        # Prefer the gateway path so this runs on gpt-oss (.61), pinned by
+        # force_backend=text. Falls back to legacy llm_service if the
+        # gateway is unreachable.
+        if self._gateway_url:
+            try:
+                summary = await self._summarize_via_gateway(messages)
+                summary = self._normalize_summary(summary)
+                if summary:
+                    logger.info("Generated summary via gateway: %d chars", len(summary))
+                    return summary
+            except Exception as e:
+                logger.warning(
+                    "Summary via llm-gateway failed (%s); falling back", e,
+                )
+
         if not self.llm:
             logger.warning("LLM service not available for summarization")
             return self._fallback_summary(new_messages)
 
         try:
-            # Format messages for the prompt
-            formatted_messages = self._format_messages_for_prompt(new_messages)
-
-            # Build prompt
-            prompt = self.SUMMARY_PROMPT.format(
-                current_summary=current_summary or "No previous summary.",
-                new_messages=formatted_messages
-            )
-
-            # Generate summary using LLM
             result = self.llm.generate(
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that creates concise conversation summaries."},
-                    {"role": "user", "content": prompt}
-                ],
-                mode="offline",  # Use local LLM for speed
+                messages=messages,
+                mode="offline",
                 temperature=0.3,
-                max_tokens=500,
-                use_cache=False  # Don't cache summaries
+                max_tokens=800,
+                use_cache=False,
             )
-
-            summary = result.get("response", "").strip()
-
+            summary = self._normalize_summary(result.get("response", ""))
             if not summary:
-                logger.warning("Empty summary returned from LLM")
+                logger.warning("Empty summary returned from legacy LLM path")
                 return self._fallback_summary(new_messages)
-
-            # Truncate if too long
-            if len(summary) > self.MAX_SUMMARY_LENGTH:
-                summary = summary[:self.MAX_SUMMARY_LENGTH - 3] + "..."
-
-            logger.info(f"Generated summary: {len(summary)} characters")
+            logger.info("Generated summary via legacy path: %d chars", len(summary))
             return summary
-
         except Exception as e:
             logger.error(f"LLM summarization failed: {e}")
             return self._fallback_summary(new_messages)
+
+    async def _summarize_via_gateway(self, messages: List[Dict[str, str]]) -> str:
+        """POST to llm-gateway pinned to the text backend (gpt-oss-20b)."""
+        timeout = float(os.getenv("LLM_GATEWAY_SUMMARY_TIMEOUT_SEC", "120"))
+        payload = {
+            "messages": messages,
+            "mode": "offline",
+            "force_backend": "text",
+            "temperature": 0.3,
+            "max_tokens": int(os.getenv("SUMMARY_MAX_TOKENS", "800")),
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(f"{self._gateway_url}/generate", json=payload)
+            r.raise_for_status()
+            body = r.json()
+        return body.get("response", "") or ""
+
+    def _normalize_summary(self, text: str) -> str:
+        """Strip code fences and ensure ``<summary>...</summary>`` framing.
+
+        The model is asked to emit the tags directly; if it forgets, we
+        wrap whatever was returned so downstream consumers can rely on
+        the framing.
+        """
+        s = (text or "").strip()
+        if not s:
+            return ""
+        # Strip a markdown fence if the model wrapped the block in one.
+        if s.startswith("```"):
+            lines = s.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            s = "\n".join(lines).strip()
+        if SUMMARY_OPEN_TAG not in s:
+            s = f"{SUMMARY_OPEN_TAG}\n{s}\n{SUMMARY_CLOSE_TAG}"
+        elif SUMMARY_CLOSE_TAG not in s:
+            s = f"{s}\n{SUMMARY_CLOSE_TAG}"
+        return s
 
     def _fallback_summary(self, messages: List[Dict[str, Any]]) -> str:
         """

@@ -566,6 +566,72 @@ async def get_chat_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class CompactRequest(BaseModel):
+    """Body for POST /{chat_id}/compact."""
+    hint: Optional[str] = Field(
+        None,
+        description="Optional steering for the summarizer "
+                    "(e.g. 'preserve panel-A wiring decisions').",
+    )
+
+
+@router.post("/{chat_id}/compact")
+async def compact_chat(
+    chat_id: str,
+    body: CompactRequest = Body(default_factory=CompactRequest),
+    user_id: str = Query(..., description="User identifier"),
+    core: ChatbotCore = Depends(get_core),
+):
+    """Manually compact this chat's history into a structured ``<summary>``.
+
+    Mirrors Claude Code's ``/compact``: folds prior turns into a single
+    summary block (decisions, files, current task, stage, open questions,
+    pinned facts). Future turns reason on the summary plus the verbatim
+    tail that still fits in the token budget. Pass ``hint`` to steer the
+    summarizer.
+    """
+    try:
+        context = await core.sessions.get_session(chat_id, user_id)
+        if not context:
+            raise HTTPException(status_code=404, detail="Chat not found")
+
+        project_id = None
+        if hasattr(context, "project") and context.project:
+            project_id = context.project.project_number
+
+        history = await core.memory.get_chat_history(
+            chat_type=context.chat_type,
+            chat_id=chat_id,
+            project_id=project_id,
+            limit=500,  # Compact the whole chat, not just the window.
+        )
+        if not history.success:
+            raise HTTPException(status_code=500, detail=history.error or "history fetch failed")
+
+        from services.conversation_summarizer import get_conversation_summarizer
+        summarizer = get_conversation_summarizer()
+        if summarizer.llm is None and getattr(core, "llm", None):
+            # core.llm is the wrapper; the underlying service hangs off it.
+            summarizer.set_services(llm_service=getattr(core.llm, "llm", None))
+
+        summary = await summarizer.compact(
+            chat_id=chat_id,
+            messages=history.data or [],
+            hint=body.hint,
+        )
+        return {
+            "success": bool(summary),
+            "chat_id": chat_id,
+            "messages_compacted": len(history.data or []),
+            "summary": summary,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error compacting chat {chat_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/{chat_id}")
 async def delete_chat(
     chat_id: str,

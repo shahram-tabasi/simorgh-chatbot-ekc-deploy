@@ -30,6 +30,13 @@ from .models import (
     ChatHistoryEntry,
     ExternalSearchResult,
 )
+from .token_budget import (
+    count_message_tokens,
+    count_tokens,
+    fit_history,
+    model_context_limit,
+    reserved_for_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -328,20 +335,15 @@ class EnhancedLLMWrapper:
         current_message: str,
         include_documents: bool = True,
         include_search_results: bool = True,
-        max_history: int = 20,
+        max_history: Optional[int] = None,
     ) -> List[Dict[str, str]]:
-        """
-        Build complete message list for LLM API.
+        """Build the OpenAI-shape message list with a real token budget.
 
-        Args:
-            context: Chat context
-            current_message: Current user message
-            include_documents: Whether to include document context
-            include_search_results: Whether to include search results
-            max_history: Maximum history messages to include
-
-        Returns:
-            List of messages in OpenAI format
+        The legacy ``max_history`` is now a hard upper bound only; the real
+        cutoff is the token budget computed by ``token_budget.fit_history``.
+        If older messages don't fit, a ``<summary>`` block stored in
+        ``context.metadata['conversation_summary']`` is prepended so the
+        model still gets the compacted view of what was dropped.
         """
         messages = []
 
@@ -382,39 +384,76 @@ class EnhancedLLMWrapper:
 
         messages.append({"role": "system", "content": system_prompt})
 
-        # Add chat history
-        history = context.history_window[:max_history] if context.history_window else []
+        # Inject the rolling <summary> block — when older history gets
+        # dropped, this is the model's only memory of it. Place it
+        # immediately after the system prompt so the model treats it as
+        # background, not as user input.
+        summary_text = (context.metadata or {}).get("conversation_summary") or ""
+        if summary_text:
+            messages.append({
+                "role": "system",
+                "content": f"## Compacted earlier context\n{summary_text}",
+            })
 
-        # For project chats, also include cross-chat history
+        # Collect history (project chats merge in cross-chat memory).
+        history_entries = context.history_window or []
         if isinstance(context, ProjectSessionContext) and context.cross_chat_history:
-            # Merge and sort by timestamp
-            all_history = history + context.cross_chat_history[:10]
-            all_history.sort(key=lambda x: x.timestamp if isinstance(x, ChatHistoryEntry) else x.get("timestamp", ""))
-            history = all_history[:max_history]
+            merged = list(history_entries) + list(context.cross_chat_history[:10])
+            merged.sort(
+                key=lambda x: (x.timestamp if isinstance(x, ChatHistoryEntry)
+                               else x.get("timestamp", "")),
+            )
+            history_entries = merged
 
-        for entry in history:
+        # Normalize to OpenAI-shape dicts.
+        history_msgs: List[Dict[str, str]] = []
+        for entry in history_entries:
             if isinstance(entry, ChatHistoryEntry):
-                messages.append({
-                    "role": entry.role,
-                    "content": entry.content,
-                })
+                history_msgs.append({"role": entry.role, "content": entry.content})
             else:
-                messages.append({
+                history_msgs.append({
                     "role": entry.get("role", "user"),
                     "content": entry.get("content") or entry.get("text", ""),
                 })
 
-        # Add external search results if available and allowed
+        # Apply the optional message-count cap (kept for callers that
+        # explicitly want it) BEFORE the token budget cuts further.
+        if max_history is not None and max_history > 0:
+            history_msgs = history_msgs[-max_history:]
+
+        # Compute the tokens already committed: system + summary + the
+        # current user message + search-result block (if any).
+        committed = list(messages)
+        search_msg: Optional[Dict[str, str]] = None
         if include_search_results:
             search_context = self._format_search_results(context)
             if search_context:
-                # Inject as assistant context before user message
-                messages.append({
+                search_msg = {
                     "role": "assistant",
-                    "content": f"I found the following relevant information:\n{search_context}"
-                })
+                    "content": f"I found the following relevant information:\n{search_context}",
+                }
+                committed.append(search_msg)
+        committed.append({"role": "user", "content": current_message})
 
-        # Add current user message
+        fixed_tokens = count_message_tokens(committed)
+        kept, dropped, info = fit_history(history_msgs, fixed_tokens=fixed_tokens)
+        if dropped:
+            logger.info(
+                "Token-budget trimmed %d of %d history messages "
+                "(used=%d budget=%d limit=%d)",
+                len(dropped), len(history_msgs),
+                info["used_tokens"], info["budget"], info["context_limit"],
+            )
+        # Record telemetry so the route layer can decide to fire compaction.
+        if context.metadata is not None:
+            context.metadata["_token_budget"] = info
+
+        # Stitch the final list: system [+ summary] + kept history
+        # + (search result) + current user message.
+        for m in kept:
+            messages.append(m)
+        if search_msg is not None:
+            messages.append(search_msg)
         messages.append({"role": "user", "content": current_message})
 
         return messages

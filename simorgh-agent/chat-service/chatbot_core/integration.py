@@ -254,6 +254,19 @@ class ChatbotCore:
             project_id=project_id,
         )
 
+        # Load the rolling <summary> block (if any) so llm_wrapper can
+        # prepend it. Cheap Redis read; safe if absent.
+        try:
+            from services.conversation_summarizer import get_conversation_summarizer
+            summarizer = get_conversation_summarizer()
+            existing_summary = await summarizer.get_summary(chat_id)
+            if existing_summary:
+                if context.metadata is None:
+                    context.metadata = {}
+                context.metadata["conversation_summary"] = existing_summary
+        except Exception as e:
+            logger.debug(f"No conversation summary loaded for {chat_id}: {e}")
+
         # Generate response
         if stream:
             return {
@@ -281,6 +294,21 @@ class ChatbotCore:
                     content=response.content,
                     project_id=project_id,
                 )
+
+            # Auto-compact: if the token-budget pass had to drop history
+            # (or we're past the trigger ratio), kick off a background
+            # summarization so the *next* turn benefits.
+            budget_info = (context.metadata or {}).get("_token_budget") or {}
+            if budget_info.get("trigger_compaction"):
+                try:
+                    import asyncio
+                    asyncio.create_task(self._auto_compact(
+                        chat_type=context.chat_type,
+                        chat_id=chat_id,
+                        project_id=project_id,
+                    ))
+                except Exception as e:
+                    logger.warning(f"Could not schedule auto-compact for {chat_id}: {e}")
 
             return {
                 "success": response.success,
@@ -340,6 +368,39 @@ class ChatbotCore:
     # =========================================================================
     # HELPER METHODS
     # =========================================================================
+
+    async def _auto_compact(
+        self,
+        chat_type: ChatType,
+        chat_id: str,
+        project_id: Optional[str],
+    ) -> None:
+        """Background-only: refresh the rolling summary after a hot turn.
+
+        Triggered when ``token_budget.fit_history`` had to drop messages
+        or crossed the configured trigger ratio. Failure is logged but
+        never propagated — this is a best-effort optimisation for the
+        next turn, not a correctness requirement for the current one.
+        """
+        try:
+            from services.conversation_summarizer import get_conversation_summarizer
+            summarizer = get_conversation_summarizer()
+            if summarizer.llm is None and getattr(self, "llm", None):
+                summarizer.set_services(llm_service=getattr(self.llm, "llm", None))
+
+            history = await self.memory.get_chat_history(
+                chat_type=chat_type,
+                chat_id=chat_id,
+                project_id=project_id,
+                limit=500,
+            )
+            if not history.success or not history.data:
+                return
+            await summarizer.maybe_summarize(
+                chat_id=chat_id, messages=history.data, force=True,
+            )
+        except Exception as e:
+            logger.info(f"auto_compact background task failed: {e}")
 
     def _should_use_tools(self, context: ChatContext, message: str) -> bool:
         """Determine if tools should be used"""
