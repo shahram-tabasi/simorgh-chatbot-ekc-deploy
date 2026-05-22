@@ -20,11 +20,31 @@ from routes.features import router as features_router
 from routes.audit import router as audit_router
 from routes.users_extended import router as users_extended_router
 from routes.system_control import router as system_router
+from database.postgres_connection import PostgresConnection
+from services.user_tier_service import init_tier_service
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("admin-service")
 
 app = FastAPI(title="Simorgh Admin Service", version="2.0.0")
+
+
+@app.on_event("startup")
+async def _bootstrap_services() -> None:
+    """Open the Postgres pool and wire the singleton services that the
+    routes look up via get_*_service(). Without this every admin route
+    returns 503 "Tier service not initialized"."""
+    db = PostgresConnection()
+    await db.init_async_pool()
+    init_tier_service(db)
+    # Payment service is optional — only wire if importable + the helper
+    # exists. Some deployments ship without it.
+    try:
+        from services.payment_service import init_payment_service  # type: ignore
+        init_payment_service(db)
+    except Exception as e:  # pragma: no cover
+        logger.info("payment service not wired: %s", e)
+    logger.info("admin-service bootstrap complete")
 
 app.add_middleware(
     CORSMiddleware,
