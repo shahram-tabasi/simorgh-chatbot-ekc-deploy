@@ -44,6 +44,7 @@ services:
       - postgres_auth_data:/var/lib/postgresql/data
       - ../backend/database/migrations/001_create_auth_tables.sql:/docker-entrypoint-initdb.d/001_create_auth_tables.sql:ro
       - ../backend/database/migrations/003_project_agent_system.sql:/docker-entrypoint-initdb.d/003_project_agent_system.sql:ro
+      - ../backend/database/migrations/004_project_gitlab_columns.sql:/docker-entrypoint-initdb.d/004_project_gitlab_columns.sql:ro
     deploy:
       resources:
         limits:
