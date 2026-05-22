@@ -12,7 +12,10 @@
 # =============================================================================
 services:
   postgres_age:
-    image: apache/age:PG16_latest
+    # apache/age has no `latest` tag for PG16 — pin to a release.
+    # Available stable tags: release_PG16_1.6.0, release_PG16_1.5.0.
+    # Bump the version on the right of "_" to upgrade AGE itself.
+    image: apache/age:${POSTGRES_AGE_IMAGE_TAG:-release_PG16_1.6.0}
     container_name: postgres_age
     restart: unless-stopped
     environment:
