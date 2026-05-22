@@ -617,10 +617,14 @@ class ProjectManagerAgent:
                 tool_input["project_id"] = str(project_id)
 
         # gitlab_mcp.* tools take `project` as the GitLab path (e.g.
-        # "shahram-tabasi/test"), NOT the chatbot UUID. The planner
-        # often substitutes the UUID anyway. Replace it with the
-        # project's gitlab_repo_path from memory whenever the value
-        # looks like a UUID or is missing.
+        # "shahram-tabasi/test") or a numeric GitLab project id — NEVER
+        # the chatbot UUID or the friendly project name. The planner
+        # has shown all three failure modes:
+        #   - omits `project` entirely
+        #   - passes the chatbot UUID
+        #   - passes the friendly project name ("aws-t01")
+        # Whenever the value isn't shaped like a GitLab path or numeric
+        # id, replace it with the project's stored gitlab_repo_path.
         if (
             isinstance(tool_input, dict)
             and self.mcp_manager
@@ -629,20 +633,51 @@ class ProjectManagerAgent:
             server_name = self.mcp_manager.tools.get(tool)
             if server_name == "gitlab_mcp":
                 proj_arg = tool_input.get("project") or tool_input.get("project_id")
-                looks_like_uuid = (
-                    isinstance(proj_arg, str)
-                    and len(proj_arg) == 36
-                    and proj_arg.count("-") == 4
+                # Acceptable shapes for gitlab-mcp:
+                #   "group/path"           — most common
+                #   "group/sub/path"       — nested groups
+                #   "123"                  — numeric GitLab project id
+                looks_like_path = (
+                    isinstance(proj_arg, str) and "/" in proj_arg
                 )
-                if not proj_arg or looks_like_uuid:
+                looks_like_numeric_id = (
+                    isinstance(proj_arg, str) and proj_arg.isdigit()
+                )
+                needs_substitution = not (looks_like_path or looks_like_numeric_id)
+                if needs_substitution:
                     try:
                         meta = await self.memory.get_project(str(project_id))
                     except Exception:
                         meta = None
                     repo_path = (meta or {}).get("gitlab_repo_path")
                     if repo_path:
+                        if proj_arg and proj_arg != repo_path:
+                            logger.info(
+                                "gitlab_mcp: substituting project arg %r -> %r "
+                                "(project_id=%s)",
+                                proj_arg, repo_path, project_id,
+                            )
                         tool_input["project"] = repo_path
                         tool_input.pop("project_id", None)
+
+                # Default ref to the project's simorgh_branch / base
+                # branch when the planner omitted one. gitlab-mcp's
+                # DEFAULT_REF is "main" but our working branches are
+                # simorgh/<oenum>/<hex>, which is where the user's
+                # committed work actually lives.
+                if not tool_input.get("ref"):
+                    try:
+                        meta = locals().get("meta") or await self.memory.get_project(
+                            str(project_id)
+                        )
+                    except Exception:
+                        meta = None
+                    ref = (
+                        (meta or {}).get("simorgh_branch")
+                        or (meta or {}).get("gitlab_base_branch")
+                        or "main"
+                    )
+                    tool_input["ref"] = ref
 
         # Inject previous results into context (3000 char limit per result)
         if prev_results:
