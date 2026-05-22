@@ -37,3 +37,39 @@ CREATE INDEX IF NOT EXISTS idx_projects_gitlab_repo_path
 CREATE INDEX IF NOT EXISTS idx_projects_simorgh_branch
     ON projects (simorgh_branch)
     WHERE simorgh_branch IS NOT NULL;
+
+
+-- =============================================================================
+-- project_chat_sessions
+--
+-- Deep-link surface for the "create a chat tied to this project" flow
+-- exposed via chat-service /api/v2/chatbot/project/sessions. The table
+-- was referenced by the route the day the route shipped but the CREATE
+-- TABLE was never written, so every POST/GET/DELETE on that surface
+-- returns 500 ("relation project_chat_sessions does not exist").
+--
+-- Cascades to project_messages via project_id FK (already in 003), so
+-- deleting a session removes its history.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS project_chat_sessions (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id        UUID NOT NULL
+                          REFERENCES projects(id) ON DELETE CASCADE,
+    session_token     TEXT NOT NULL UNIQUE,
+    title             VARCHAR(255),
+    stage             VARCHAR(50) DEFAULT 'general',
+    is_active         BOOLEAN     DEFAULT TRUE,
+    -- The user who created the session. Matches projects.owner_id type
+    -- (TEXT) — UUID for modern users, EMPUSERNAME for legacy.
+    created_by        TEXT,
+    created_at        TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_activity_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    archived_at       TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pcs_project_id
+    ON project_chat_sessions (project_id);
+CREATE INDEX IF NOT EXISTS idx_pcs_last_activity_at
+    ON project_chat_sessions (last_activity_at DESC);
+-- session_token already has a unique constraint above (used by all the
+-- /sessions/{token} lookups), so no extra index needed there.
