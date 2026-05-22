@@ -111,10 +111,30 @@ You have access to these core tools:
 
 {mcp_tools}
 
-DOCUMENT PROCESSING WORKFLOW:
-When a document is uploaded (via chatbot or email), create tasks in this order:
+REPO ARTIFACT READS — IMPORTANT:
+Files inside the user's GitLab repo (PDFs, Word, Excel, images, source code, anything)
+are read with `gitlab_mcp.read_artifact_mcp(project, path, ref?)`. This tool always
+returns utf-8 markdown:
+  • text files → raw contents (same as read_file_mcp)
+  • PDF / Office / image → markdown that doc-processor extracted at ingest time and
+    cached under .simorgh/extracted/<path>.md, OR re-extracted on demand if the
+    cache is missing.
+
+DO NOT ask the user to upload a file that already exists in their repo. If the user
+references a filename you saw via get_project_tree (e.g. "analyse HCS-DD-EL-SP-003.pdf"),
+the right plan is:
+  1. gitlab_mcp.read_artifact_mcp(project=<repo>, path="HCS-DD-EL-SP-003.pdf")
+  2. llm.generate(prompt="…analyse this content…", context=<markdown returned in step 1>)
+  3. (optional) memory_store / semantic_store the extracted markdown for future queries.
+
+Prefer read_artifact_mcp over read_file_mcp whenever you are not certain the file is
+plain text — read_file_mcp returns base64 for binaries, which you cannot reason on.
+
+DOCUMENT PROCESSING WORKFLOW (uploads only — when a NEW file lands via chat or email):
+When a document arrives via the chatbot upload affordance or email attachment (NOT
+already in the user's GitLab repo), create tasks in this order:
 1. Save the document to project workspace: documents/<filename> (tool: shell)
-2. Process/convert document content to clean markdown (tool: llm, type: generation)
+2. Process/convert document content to clean markdown (tool: document_process)
 3. Save markdown to project workspace: documents/<filename>.md (tool: shell)
 4. Index content in semantic search for future queries (tool: semantic_store)
 5. Commit document files to git with descriptive message (tool: git, operation: commit, message: "Add uploaded document: <filename>")
@@ -385,7 +405,7 @@ class COTEngine:
         # a TPMS-first workflow; if the user didn't tick tpms / techserver
         # at project creation we MUST NOT plan steps against those tools.
         # Likewise, when the user picked a GitLab repo the planner should
-        # default to gitlab_mcp.get_project_tree / read_file_mcp.
+        # default to gitlab_mcp.get_project_tree / read_artifact_mcp.
         if sources_enabled:
             allowed_lines = ["\nAllowed data sources for THIS project "
                              "(do not plan steps against any other):"]
@@ -401,9 +421,12 @@ class COTEngine:
                     f" branch `{branch or 'simorgh/*'}`. For "
                     "\"what's in my repository\"-class questions, CALL "
                     "gitlab_mcp.get_project_tree(project=repo) first, "
-                    "then gitlab_mcp.read_file_mcp for any file the user "
-                    "asks about. Do NOT call project_analyze unless the "
-                    "user explicitly asks for a workspace-wide audit."
+                    "then gitlab_mcp.read_artifact_mcp(project=repo, path=...) "
+                    "for any file the user asks about (it returns markdown "
+                    "for PDFs / Office / images too — never ask the user to "
+                    "re-upload a file that's already in their repo). "
+                    "Do NOT call project_analyze unless the user explicitly "
+                    "asks for a workspace-wide audit."
                 )
             if sources_enabled.get("tpms"):
                 allowed_lines.append(
