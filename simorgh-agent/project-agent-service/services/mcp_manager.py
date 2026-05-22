@@ -158,19 +158,54 @@ class MCPManager:
             )
             await session.initialize()
 
-            self.sessions[name] = session
-            self._server_stacks[name] = server_stack
-
             # Discover tools from this server. If list_tools fails the
             # session's transport is dead; let the outer connect_all
             # retry loop create a fresh streamablehttp_client.
+            #
+            # Important: do NOT put `session` into self.sessions until
+            # list_tools succeeds. The transport is sometimes alive
+            # enough to negotiate a session id but dies on the first
+            # JSON-RPC call (runtime-broker has shown this pattern at
+            # startup). If we store the broken session early, the
+            # status summary reports `connected=True, tools=[]` — a
+            # lie that hides the failure from the CoT planner and
+            # turns into "tool not available" errors at chat time.
             tools_result = await session.list_tools()
+            tool_names_for_log: list[str] = []
             for tool in tools_result.tools:
                 self.tools[tool.name] = name
                 self.tool_schemas[tool.name] = tool
+                tool_names_for_log.append(tool.name)
                 logger.debug(f"  Tool discovered: {tool.name} (from {name})")
+
+            # A successful list_tools that returns zero entries is
+            # almost always a partial-init failure too — every server
+            # in this stack exposes at least one tool. Treat as
+            # failure so connect_all's retry loop creates a fresh
+            # transport.
+            if not tools_result.tools:
+                raise RuntimeError(
+                    f"MCP server {name} returned empty tool list; "
+                    "treating as transport failure"
+                )
+
+            # Only commit to self.sessions after we know the session
+            # is functionally alive.
+            self.sessions[name] = session
+            self._server_stacks[name] = server_stack
+            logger.debug(
+                f"  Tools for {name}: {tool_names_for_log}"
+            )
         except BaseException:
-            # Clean up the per-server stack on failure
+            # Clean up both the per-server stack AND any half-populated
+            # entries we leaked into the shared maps. Without the
+            # tools-map cleanup, a partially-discovered server can
+            # leave entries in self.tools pointing at a dead session.
+            self.sessions.pop(name, None)
+            self._server_stacks.pop(name, None)
+            for tname in [t for t, srv in self.tools.items() if srv == name]:
+                self.tools.pop(tname, None)
+                self.tool_schemas.pop(tname, None)
             try:
                 await server_stack.aclose()
             except Exception:
