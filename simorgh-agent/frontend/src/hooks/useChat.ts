@@ -3,9 +3,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Message, UploadedFile, AgentPlan, AgentTaskGroup, AgentSubtask } from '../types';
 import axios from 'axios';
+import { sendMessageHrStream } from '../services/chatbotV2Api';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const API_V2_CHAT = `${API_BASE}/v2/chat`;
+
+// UUID-shaped user_id means a modern (postgres_auth) user; only modern
+// users are eligible for the HR/Strategy direct-RAG fast path. Legacy
+// TPMS users (EMPUSERNAME strings) keep the old flow.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isModernUser = (id?: string) => !!id && UUID_RE.test(id);
 
 export interface ChatOptions {
   llmMode?: 'online' | 'offline' | null; // null = use default
@@ -430,6 +438,112 @@ export function useChat(
         setMessages(prev => [...prev, errMsg]);
         return;
       }
+    }
+
+    // General chat for modern (UUID) users: route to the HR/Strategy
+    // direct-RAG path. No planner, no MCP, no OpenAI — straight to
+    // gpt-oss-20b on .61 via llm-gateway. The legacy /api/chat/stream
+    // fallback below still applies to legacy TPMS users.
+    if (isModernUser(userId) && !projectNumber) {
+      try {
+        await sendMessageHrStream(
+          userId!,
+          content,
+          {
+            onMeta: (meta) => {
+              // Citations arrive BEFORE the first token. Stamp them on
+              // a (still-empty) assistant message so the bubble renders
+              // source badges while gpt-oss is generating.
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: '',
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: {
+                    streaming: true,
+                    citations: meta.hits as any,
+                    top_score: meta.top_score,
+                  },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, metadata: {
+                      ...(m.metadata || {}),
+                      citations: meta.hits as any,
+                      top_score: meta.top_score,
+                    }}
+                  : m));
+              }
+            },
+            onChunk: (delta) => {
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: delta,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { streaming: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: (m.content || '') + delta }
+                  : m));
+              }
+            },
+            onRefusal: (text) => {
+              // Out-of-corpus query — refusal IS the assistant message;
+              // suppress citation badges (no sources backed this) and
+              // do NOT mark as error (otherwise the bubble turns red).
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: text,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { refusal: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: text, metadata: { ...(m.metadata||{}), refusal: true, citations: undefined } }
+                  : m));
+              }
+            },
+            onDone: () => {
+              setMessages(prev => prev.map(m => m.id === aiMessageId
+                ? { ...m, metadata: { ...(m.metadata||{}), streaming: false } }
+                : m));
+            },
+            onError: (err) => {
+              console.error('hr_chat stream failed:', err);
+              setIsTyping(false);
+              if (!messageAdded) {
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: `Error: ${err.message}`,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { error: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: `Error: ${err.message}`,
+                      metadata: { ...(m.metadata||{}), error: true, streaming: false } }
+                  : m));
+              }
+            },
+          },
+        );
+      } finally {
+        setIsTyping(false);
+      }
+      return;
     }
 
     try {
