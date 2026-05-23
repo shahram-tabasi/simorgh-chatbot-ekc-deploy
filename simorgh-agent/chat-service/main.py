@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes.chatbot_v2 import router as chatbot_v2_router
 from routes.project_session import router as project_session_router
 from routes.project_chat_session import router as project_chat_session_router
+from routes.general_chat_hr import router as general_chat_hr_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("chat-service")
@@ -45,6 +46,10 @@ app.add_middleware(
 app.include_router(chatbot_v2_router)
 app.include_router(project_session_router)
 app.include_router(project_chat_session_router)
+# Direct-RAG path for general-chat against the curated HR/Strategy KB.
+# Bypasses chatbot_core / planner / MCP entirely for sub-second
+# streaming via gpt-oss-20b on 192.168.1.61.
+app.include_router(general_chat_hr_router)
 
 
 @app.get("/health")

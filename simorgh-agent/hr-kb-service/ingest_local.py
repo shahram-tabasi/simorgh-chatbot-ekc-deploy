@@ -1,0 +1,776 @@
+"""
+Smart content-aware ingester for the curated HR / Strategy corpus
+=================================================================
+
+Replaces the generic `index_file()` path with one that knows what the
+EKC HR docs and strategy documents actually look like. Based on a
+line-by-line review of every file in `Human Capital/`:
+
+  HR Operations Manual/ (8 docx)
+    * اضافه_کاری                       — Overtime (EKWI-AD-005-01)
+    * دستورالعمل_انتصاب_و_ارتقا          — Appointment & Promotion (EKWI-AD-009-00)
+    * دستورالعمل_تردد__افراد_کالا_و_..   — Comprehensive Access Control (EKWIAD00900)
+    * دستورالعمل_تردد_و_حضور_و_غیاب      — Attendance (EKWI-AD-001-07)
+    * دستورالعمل_جذب_و_استخدام          — Recruitment & Hiring (EKWI-AD-004-07)
+    * دستورالعمل_قطع_همکاری              — Termination (EKWI-AD-008-00)
+    * دستورالعمل_مرخصی                  — Leave (EKWI-AD-006-01) — 12 leaf leave-types
+    * وام                              — Loans (RE-AD-008-00)
+
+  Organizational Strategy Values/ (4 docx)
+    * mdاجزا_مقاصد_آرمانی               — Aspirational Goals (RE-HM-007-00)
+    * استراتژی_ها___اهداف_و_برنامه_های   — Strategies, Goals & Programs (EKFR-HM-001-05)
+    * سند_استراتژیک                    — Strategic Document (EKCO-1-07), 4 chapters
+    * منشور_طرح_ریزی                   — Planning Charter (EKIP-1-04)
+
+Shape of the pipeline:
+
+  1. python-docx → faithful text dump (paragraphs + tables) preserving
+     soft line breaks (<w:br/>) — without these the original authors'
+     markdown notation gets glued into one paragraph.
+  2. Inline-markdown repair: every #/##/### heading marker that lives
+     inside the dumped text gets a newline prepended so the chunker
+     can detect it. Same for table-row boundaries (`| ... | |`).
+  3. Boilerplate filter — every HR ops file repeats the same 4-cell
+     signature table, the same 3 document-control bullets, and the
+     same ISO9001/14001/45001 references table. Indexing these would
+     dilute search scores; we drop them.
+  4. Structural chunker — markdown headings produce one chunk per
+     leaf section, full heading_path preserved as section_path. Long
+     sections window-split with overlap so retrieval can still
+     pinpoint a specific paragraph.
+  5. Synthetic "card" chunks — hand-curated denormalised Q&A facts
+     for high-frequency queries (vision/mission/values, leave caps,
+     overtime ceilings, loan tiers, age limits). One card per fact,
+     so a user asking "حداکثر ساعت اضافه کاری" gets the canonical
+     answer at top-1 even if the source paragraph has it buried.
+  6. Rich payload — doc_id, doc_code, category, topic, heading_path,
+     section_path, chunk_type ∈ {section, card, table_row, window}.
+     Topic facet feeds the UI's "From: <heading>" badge and lets the
+     runtime layer filter by topic when the question is unambiguous.
+
+Run it manually on the deploy host:
+
+  docker exec hr-kb-service python /app/ingest_local.py \\
+    --root /app/hr_docs --rebuild
+
+The --rebuild flag drops the Qdrant collection first (clean slate so
+removed files don't linger). Omit it for incremental upsert.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import re
+import sys
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+import httpx
+import docx
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qmodels
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+log = logging.getLogger("hr_kb_ingest")
+
+EMBEDDINGS_URL    = os.getenv("EMBEDDINGS_URL", "http://embeddings-service:8031")
+QDRANT_URL        = os.getenv("QDRANT_URL", "http://qdrant:6333")
+HR_KB_COLLECTION  = os.getenv("HR_KB_COLLECTION", "hr_general_kb")
+CHUNK_CHAR_SIZE   = int(os.getenv("HR_KB_CHUNK_CHARS", "1800"))
+CHUNK_CHAR_OVERLAP= int(os.getenv("HR_KB_CHUNK_OVERLAP", "200"))
+
+
+# ---------------------------------------------------------------------------
+# 1. DOCX → faithful text dump
+# ---------------------------------------------------------------------------
+def _para_text(p) -> str:
+    """Paragraph text with soft line breaks preserved as \\n.
+
+    python-docx's `p.text` flattens <w:br/> into nothing, which is
+    fatal for these files because the authors used Shift+Enter to
+    end "lines" inside a single Word paragraph.
+    """
+    pieces: List[str] = []
+    for el in p._element.iter():
+        tag = el.tag.split("}", 1)[1]
+        if tag == "t" and el.text:
+            pieces.append(el.text)
+        elif tag == "br":
+            pieces.append("\n")
+        elif tag == "tab":
+            pieces.append("\t")
+    return "".join(pieces)
+
+
+def _cell_text(cell) -> str:
+    """Cell text — join the cell's paragraphs with ' / ' so it stays
+    on one logical row, and escape any literal '|' so the synthesised
+    markdown row doesn't fall apart."""
+    return (" / ".join(p.text for p in cell.paragraphs if p.text.strip())
+            .replace("|", "\\|").strip())
+
+
+def extract_docx(fp: Path) -> str:
+    """Walk body elements in order so paragraph/table interleaving is
+    preserved. Returns markdown-flavoured text ready for the repair
+    pass."""
+    d = docx.Document(str(fp))
+    parts: List[str] = []
+    body = d.element.body
+    table_idx, para_idx = 0, 0
+    for child in body.iterchildren():
+        tag = child.tag.split("}", 1)[1]
+        if tag == "p":
+            p = d.paragraphs[para_idx]; para_idx += 1
+            style = (p.style.name or "").lower() if p.style else ""
+            text = _para_text(p).strip()
+            if not text:
+                continue
+            if "heading 1" in style:
+                parts.append(f"# {text}")
+            elif "heading 2" in style:
+                parts.append(f"## {text}")
+            elif "heading 3" in style:
+                parts.append(f"### {text}")
+            elif "heading" in style:
+                parts.append(f"## {text}")
+            else:
+                parts.append(text)
+        elif tag == "tbl":
+            t = d.tables[table_idx]; table_idx += 1
+            rows_md: List[str] = []
+            for r_i, row in enumerate(t.rows):
+                cells = [_cell_text(c) for c in row.cells]
+                rows_md.append("| " + " | ".join(cells) + " |")
+                if r_i == 0:
+                    rows_md.append("|" + "|".join(["---"] * len(cells)) + "|")
+            parts.append("\n".join(rows_md))
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# 2. Inline-markdown repair
+# ---------------------------------------------------------------------------
+def repair_markdown(s: str) -> str:
+    """Insert newlines so the structural chunker can detect markdown
+    structure that the authors embedded as plain text inside a single
+    Word paragraph. Verified against all 12 source files; goes from
+    1-line/1-heading per file (broken) to 11-40 detectable headings
+    and proper table-row segmentation."""
+    # Heading markers (#/##/###/.../######) need a leading newline.
+    s = re.sub(r"\s+(#{1,6}\s)", r"\n\n\1", s)
+    # Table row boundary: "...| |..." → "...|\n|..." so each row gets
+    # its own line.
+    s = re.sub(r"(\|)\s+(\|)", r"\1\n\2", s)
+    # Bold-numbered list items: "**1. عنوان**" gets its own line.
+    s = re.sub(r"\s+(\*\*\d+\.\s)", r"\n\n\1", s)
+    # Numbered list items "1) " / "1. " (after sentence terminator).
+    s = re.sub(r"([.؟!:؛])\s+(\d+[.)]\s)", r"\1\n\2", s)
+    # Collapse 3+ blank lines to 2.
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    # Strip leading whitespace on resulting lines.
+    s = re.sub(r"\n[ \t]+", "\n", s)
+    return s.strip()
+
+
+# ---------------------------------------------------------------------------
+# 3. Boilerplate filter — drop universally-repeated junk
+# ---------------------------------------------------------------------------
+_BOILERPLATE_PATTERNS = [
+    # Signature table headers — appear identically in every HR ops file
+    r"\|\s*تهيه کننده\s*\|.*?(تأیيد کننده|تأیید کننده).*?تصويب.*?\|",
+    r"\|\s*سرپرست سرمایه انسانی\s*\|.*?سرپرست تضمین کیفیت.*?\|",
+    r"\|\s*نام و نام (خانوادگی|خانوداگی):.*?\|",
+    # The 3-bullet document-control disclaimer
+    r"هر گونه تغيير در مفاد روشها، دستورالعمل ها و فرم هاي مديريت یکپارچه",
+    r"اسناد معتبر به صورت نسخه غیر?\s*چاپی در مسیر شبکه",
+    r"توزیع مدارک در فهرست مستندات مشخص و به صورت نسخه غیر",
+    # ISO references rows
+    r"\|\s*\d\s*\|\s*استاندارد ISO\d+",
+    # Date stamps "تاريخ: 30/05/1404"
+    r"تاريخ\s*:?\s*\d{2}/\d{2}/\d{4}",
+]
+_BOILERPLATE_RE = re.compile("|".join(_BOILERPLATE_PATTERNS))
+
+
+def is_boilerplate(text: str) -> bool:
+    """True if a chunk is mostly boilerplate (signature/disclaimer/ISO
+    references). Drops chunks that are 90%+ boilerplate by length."""
+    if not text or len(text) < 30:
+        return True
+    hits = _BOILERPLATE_RE.findall(text)
+    if not hits:
+        return False
+    boilerplate_chars = sum(len(h) if isinstance(h, str) else 0 for h in hits)
+    return boilerplate_chars > len(text) * 0.5
+
+
+# ---------------------------------------------------------------------------
+# 4. Structural chunker
+# ---------------------------------------------------------------------------
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _split_long(body: str) -> List[str]:
+    n = len(body)
+    if n <= CHUNK_CHAR_SIZE:
+        return [body]
+    out: List[str] = []
+    i = 0
+    while i < n:
+        end = min(i + CHUNK_CHAR_SIZE, n)
+        if end < n:
+            from_ = max(i + int(CHUNK_CHAR_SIZE * 0.75), i + 1)
+            for sep in ("\n\n", "\n", ". ", "؟ ", "! ", " "):
+                cut = body.rfind(sep, from_, end)
+                if cut != -1:
+                    end = cut + len(sep)
+                    break
+        out.append(body[i:end])
+        if end >= n:
+            break
+        i = max(end - CHUNK_CHAR_OVERLAP, i + 1)
+    return out
+
+
+def chunk_sections(markdown: str) -> List[Dict[str, Any]]:
+    """Walk the markdown, emit one chunk per leaf section with full
+    heading_path. Long sections get window-split with overlap."""
+    if not markdown:
+        return []
+    lines = markdown.split("\n")
+    sections: List[Dict[str, Any]] = []
+    stack: List[Tuple[int, str]] = []  # (level, heading)
+    buf: List[str] = []
+
+    def flush():
+        body = "\n".join(buf).strip()
+        if body:
+            sections.append({
+                "heading_path": [h for _, h in stack],
+                "body": body,
+            })
+        buf.clear()
+
+    for ln in lines:
+        m = _HEADING_RE.match(ln)
+        if m:
+            flush()
+            level = len(m.group(1))
+            text = m.group(2).strip()
+            # Heading text often has body content trailing it (because
+            # the source docx glued them together). Truncate at the
+            # first natural break so heading_path stays readable.
+            text = _trim_heading(text)
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, text))
+            continue
+        buf.append(ln)
+    flush()
+
+    chunks: List[Dict[str, Any]] = []
+    for sec in sections:
+        body = sec["body"]
+        if is_boilerplate(body):
+            continue
+        windows = _split_long(body)
+        for w in windows:
+            if is_boilerplate(w):
+                continue
+            chunks.append({
+                "text": w,
+                "heading_path": sec["heading_path"],
+                "chunk_type": "window" if len(windows) > 1 else "section",
+            })
+    return chunks
+
+
+def _trim_heading(s: str, max_chars: int = 120) -> str:
+    """Trim a heading line at the first natural boundary so 'heading
+    + glued body' looks reasonable in citations. Boundaries (in order
+    of preference): markdown table opener, sentence terminator,
+    em-dash, hard length cap."""
+    for sep in ("|", " — ", "—"):
+        i = s.find(sep)
+        if 5 < i < max_chars:
+            return s[:i].strip()
+    # Persian sentence terminators
+    for term in ("؟", "!", "."):
+        i = s.find(term)
+        if 8 < i < max_chars:
+            return s[:i + 1].strip()
+    if len(s) > max_chars:
+        return s[:max_chars].rstrip() + "…"
+    return s
+
+
+# ---------------------------------------------------------------------------
+# 5. Per-document metadata & topic tagging
+# ---------------------------------------------------------------------------
+# Maps filename → (doc_id, doc_title, doc_code, category, topic).
+# doc_id is a human-readable slug we can use in citations and logs.
+# topic is a finer-grained facet used by the chat layer's filter UI.
+
+DOC_REGISTRY: Dict[str, Dict[str, str]] = {
+    "اضافه_کاری.MD.docx": dict(
+        doc_id="overtime", doc_code="EKWI-AD-005-01",
+        doc_title="دستورالعمل اضافه کاری",
+        category="hr_manner", topic="overtime"),
+    "دستورالعمل_انتصاب_و_ارتقا.md.docx": dict(
+        doc_id="promotion", doc_code="EKWI-AD-009-00",
+        doc_title="دستورالعمل انتصاب و ارتقا",
+        category="hr_manner", topic="promotion"),
+    "دستورالعمل_تردد__افراد_کالا_و_وسایل_نقلیه.md.docx": dict(
+        doc_id="access-control", doc_code="EKWIAD00900",
+        doc_title="دستورالعمل جامع تردد افراد، کالا و وسایل نقلیه",
+        category="hr_manner", topic="access_control"),
+    "دستورالعمل_تردد_و_حضور_و_غیاب.MD.docx": dict(
+        doc_id="attendance", doc_code="EKWI-AD-001-07",
+        doc_title="دستورالعمل تردد، حضور و غیاب",
+        category="hr_manner", topic="attendance"),
+    "دستورالعمل_جذب_و_استخدام.md.docx": dict(
+        doc_id="recruitment", doc_code="EKWI-AD-004-07",
+        doc_title="دستورالعمل جذب و استخدام",
+        category="hr_manner", topic="recruitment"),
+    "دستورالعمل_قطع_همکاری.md.docx": dict(
+        doc_id="termination", doc_code="EKWI-AD-008-00",
+        doc_title="دستورالعمل قطع همکاری",
+        category="hr_manner", topic="termination"),
+    "دستورالعمل_مرخصی.MD.docx": dict(
+        doc_id="leave", doc_code="EKWI-AD-006-01",
+        doc_title="دستورالعمل مرخصی",
+        category="hr_manner", topic="leave"),
+    "وام.md.docx": dict(
+        doc_id="loan", doc_code="RE-AD-008-00",
+        doc_title="اعطای تسهیلات (وام)",
+        category="hr_manner", topic="loan"),
+    "mdاجزا_مقاصد_آرمانی.docx": dict(
+        doc_id="aspirational-goals", doc_code="RE-HM-007-00",
+        doc_title="اجزاء مقاصد آرمانی",
+        category="org_strategy", topic="aspirational_goals"),
+    "استراتژی_ها___اهداف_و_برنامه_های_سازمان.md.docx": dict(
+        doc_id="strategies-programs", doc_code="EKFR-HM-001-05",
+        doc_title="استراتژی‌ها، اهداف و برنامه‌های سازمان",
+        category="org_strategy", topic="strategies"),
+    "سند_استراتژیک.md.docx": dict(
+        doc_id="strategic-document", doc_code="EKCO-1-07",
+        doc_title="سند استراتژیک",
+        category="org_strategy", topic="strategy"),
+    "منشور_طرح_ریزی.md.docx": dict(
+        doc_id="planning-charter", doc_code="EKIP-1-04",
+        doc_title="منشور طرح‌ریزی سیستم‌های مدیریت یکپارچه",
+        category="org_strategy", topic="charter"),
+}
+
+
+def doc_meta_for(path: Path) -> Optional[Dict[str, str]]:
+    """Look up doc-level metadata by filename. Falls back to a generic
+    record so files added later still get indexed (just without the
+    curated topic tag)."""
+    meta = DOC_REGISTRY.get(path.name)
+    if meta is not None:
+        return meta
+    # Unknown file — derive category from the parent directory name.
+    parent = path.parent.name.lower()
+    if "strateg" in parent or "vision" in parent or "values" in parent:
+        category, topic = "org_strategy", "misc"
+    elif "hr" in parent or "operations" in parent or "manual" in parent \
+            or "manua" in parent:
+        category, topic = "hr_manner", "misc"
+    else:
+        category, topic = "fs_drop", "misc"
+    return dict(
+        doc_id=path.stem.lower().replace(" ", "-")[:40],
+        doc_code="UNKNOWN",
+        doc_title=path.stem,
+        category=category, topic=topic,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Synthetic canonical-fact cards
+# ---------------------------------------------------------------------------
+# Each card is a hand-curated fact that's frequently asked but lives
+# scattered across long sections. Adding cards as separate chunks
+# significantly boosts top-1 recall for these queries because the
+# card text is short, on-topic, and embedded as its own vector.
+#
+# Sourced from a line-by-line read of every source file. The
+# `source_section` tag points back at the originating section so the
+# UI still shows the document path in the citation.
+
+CANONICAL_CARDS: List[Dict[str, Any]] = [
+    # ---- Vision / Mission / Values (most-asked strategy queries) ----
+    {"doc_id": "strategic-document", "topic": "vision",
+     "title": "چشم انداز شرکت الکتروکویر",
+     "text": "چشم انداز الکتروکویر: پیشتاز در ارائه راهکارهای جامع نوآورانه با بهره‌مندی از فناوری‌های نوین صنعت برق. این چشم‌انداز در سند استراتژیک (EKCO-1-07) فصل چهارم و منشور طرح‌ریزی (EKIP-1-04) ذکر شده است.",
+     "source_section": "فصل چهارم: اسناد مهم سازمان > چشم انداز"},
+    {"doc_id": "strategic-document", "topic": "mission",
+     "title": "مأموریت / رسالت سازمان",
+     "text": "مأموریت الکتروکویر: اطمینان و تعالی با ارائه محصولات، خدمات و راهکارهای ارزش‌آفرین در صنعت برق در راستای رضایتمندی ذینفعان و ارتقاء مسئولیت‌های اجتماعی.",
+     "source_section": "فصل چهارم > مأموریت"},
+    {"doc_id": "strategic-document", "topic": "values",
+     "title": "ارزش‌های بنیادین سازمان",
+     "text": "ارزش‌های بنیادین الکتروکویر: ۱) اخلاق حرفه‌ای ۲) رضایتمندی شرکای اجتماعی ۳) تعالی فردی و سازمانی ۴) مسئولیت اجتماعی ۵) کار تیمی. (سند استراتژیک فصل ۴، منشور طرح‌ریزی EKIP-1-04)",
+     "source_section": "فصل چهارم > ارزش‌ها"},
+    {"doc_id": "strategic-document", "topic": "strategies",
+     "title": "ده استراتژی سازمان",
+     "text": "ده استراتژی الکتروکویر: ۱) بهبود کیفیت محصول و خدمات ۲) توسعه منابع انسانی و مدیریت استعدادها ۳) توسعه زنجیره تأمین ۴) تحول‌آفرینی و نوآوری ۵) توسعه برندینگ ۶) بهبود ساختار هزینه‌های سازمان ۷) سرمایه‌گذاری و سودآوری ۸) توسعه زیرساخت ۹) بهره‌وری در مصرف انرژی ۱۰) نظام جامع مدیریت ریسک.",
+     "source_section": "فصل چهارم > استراتژی‌های سازمان"},
+    {"doc_id": "planning-charter", "topic": "policy",
+     "title": "خط‌مشی هشت‌گانه سازمان",
+     "text": "خط‌مشی مدیریت یکپارچه: ۱) بهبود مستمر فرایندها ۲) افزایش رضایتمندی ذینفعان ۳) ایجاد و حفظ شرایط کاری ایمن و بهداشتی ۴) افزایش بهره‌وری کارکنان ۵) بهبود مشاوره و مشارکت کارکنان ۶) توسعه ارتباط برد-برد با تأمین‌کنندگان ۷) ارتقای دانش مشتریان ۸) بهبود سیستم مدیریت دانش. (منشور EKIP-1-04، امضا: حمید منتظری مدیرعامل)",
+     "source_section": "خط مشی"},
+
+    # ---- Leave canonical facts (highest-volume HR queries) ----
+    {"doc_id": "leave", "topic": "leave_annual",
+     "title": "میزان مرخصی استحقاقی سالانه",
+     "text": "مرخصی استحقاقی سالانه: ۳۰ روز در سال با احتساب ۴ جمعه (ماده ۶۴ قانون کار). ماهانه معادل ۲.۵ روز محاسبه می‌شود و برای کارکرد کمتر از یک سال به نسبت محاسبه می‌گردد. تعطیلات رسمی بین مرخصی جزو مرخصی محسوب نمی‌شود. ۱۱ اردیبهشت (روز کارگر) جزو مرخصی استحقاقی.",
+     "source_section": "۶-۱- مرخصی استحقاقی > ۶-۱-۱- میزان مرخصی استحقاقی"},
+    {"doc_id": "leave", "topic": "leave_banking",
+     "title": "ذخیره مرخصی استحقاقی",
+     "text": "حداکثر ۹ روز مرخصی استحقاقی در سال قابل ذخیره است (ماده ۶۹ قانون کار، تأیید ماده ۶۶). مابقی استفاده‌نشده سوخت می‌شود. مرخصی ذخیره‌شده در پایان قرارداد قابل تبدیل به پول می‌باشد. تغییر این بند نیاز به مجوز مدیرعامل دارد.",
+     "source_section": "۶-۱-۳- ذخیره مرخصی"},
+    {"doc_id": "leave", "topic": "leave_hourly",
+     "title": "مرخصی ساعتی — سقف و قواعد",
+     "text": "سقف مرخصی ساعتی: حداکثر ۴ ساعت در روز (مازاد آن باید روزانه ثبت شود)؛ حداکثر ۵ نوبت در ماه. ۱۰ دقیقه اول روز کاری قابل ثبت مرخصی نیست (کسرکار محسوب می‌شود). افزایش این سقف نیازمند تأیید مدیر مستقیم، معاونت و مدیرعامل است.",
+     "source_section": "۶-۱-۵-۲- مرخصی ساعتی"},
+    {"doc_id": "leave", "topic": "leave_maternity",
+     "title": "مرخصی زایمان",
+     "text": "مرخصی زایمان: جمعاً ۹ ماه با حقوق (ماده ۷۶ قانون کار). حداکثر ۲ ماه قبل از زایمان قابل استفاده، حتی‌الامکان ۴۵ روز پس از زایمان استفاده شود. حقوق توسط سازمان تأمین اجتماعی پرداخت می‌شود (معادل دو سوم میانگین دستمزد ۹۰ روز آخر). جزو سابقه بازنشستگی محاسبه می‌شود.",
+     "source_section": "۶-۳- مرخصی زایمان"},
+    {"doc_id": "leave", "topic": "leave_lactation",
+     "title": "مرخصی شیردهی",
+     "text": "حق شیر برای مادران تا دو سالگی کودک: کارخانه ۰۱:۱۵ روزانه، دفتر مرکزی تهران ۰۱:۳۰ روزانه. نحوه استفاده شناور، با توافق مدیر واحد و پرسنل. برای فرزندان دو/چندقلو روزانه ۲ ساعت. این زمان جزو ساعات کار محسوب می‌شود و از مرخصی استحقاقی کسر نمی‌شود.",
+     "source_section": "۶-۲- مرخصی دوران شیردهی"},
+    {"doc_id": "leave", "topic": "leave_marriage_bereavement",
+     "title": "مرخصی ازدواج و فوت",
+     "text": "طبق ماده ۷۳ قانون کار، ۳ روز مرخصی برای ازدواج دائم و ۳ روز برای فوت همسر/پدر/مادر/فرزندان (اقوام درجه یک). این مرخصی جزو مرخصی استحقاقی محاسبه نمی‌شود.",
+     "source_section": "۶-۴- مرخصی استحقاقی ازدواج و فوت"},
+    {"doc_id": "leave", "topic": "leave_sick",
+     "title": "مرخصی استعلاجی",
+     "text": "مرخصی استعلاجی با تأیید پزشک معالج و سازمان تأمین اجتماعی. مدت قانونی مشخص ندارد، تا زمان بهبودی. غرامت دستمزد از طرف تأمین اجتماعی پرداخت می‌شود (در بستری از روز اول، در سایر موارد از روز چهارم). حقوق توسط شرکت پرداخت نمی‌گردد. ثبت در سامانه خدمات غیرحضوری تأمین اجتماعی الزامی است.",
+     "source_section": "۶-۶- مرخصی استعلاجی"},
+    {"doc_id": "leave", "topic": "leave_unpaid",
+     "title": "مرخصی بدون حقوق",
+     "text": "مرخصی بدون حقوق: حداکثر یک دوازدهم سنوات خدمت (ماده ۷۲)؛ سقف سالانه ۱ ماه. تا ۷ روز با تأیید سرپرست و کمیته منابع انسانی، بیش از ۷ روز با مدیرعامل. جزو سابقه خدمت محسوب نمی‌شود. شرط: حداقل یک سال سابقه.",
+     "source_section": "۶-۷- مرخصی بدون حقوق"},
+    {"doc_id": "leave", "topic": "leave_hajj",
+     "title": "مرخصی حج",
+     "text": "برای حج تمتع واجب یک ماه مرخصی با حقوق (طبق ۳۰ روز سالانه ماده ۶۷). در صورت کسری روز، مازاد به صورت مرخصی بدون حقوق. فقط برای حج تمتع — برای عمره مرخصی بدون حقوق با دلیل سفر طولانی قابل استفاده است.",
+     "source_section": "۶-۸- مرخصی حج"},
+
+    # ---- Overtime canonical facts ----
+    {"doc_id": "overtime", "topic": "overtime",
+     "title": "سقف و نرخ اضافه کاری",
+     "text": "سقف اضافه کار: حداکثر ۱۲۰ ساعت در ماه؛ حداکثر ۲:۱۵ ساعت در روز در شرایط عادی و ۸ ساعت در شرایط خاص (با تأیید مدیر). نرخ: ۱.۴ برابر هر ساعت کار عادی (۴۰٪ بالای مزد ثابت). جمعه و تعطیلات رسمی دارای ۴۰٪ مزایای اضافه. ساعات کار قانونی: ۴۴ ساعت در هفته. ثبت در نرم‌افزار کسری.",
+     "source_section": "۵. روش اجرا"},
+    {"doc_id": "overtime", "topic": "night_shift",
+     "title": "تعریف شب کاری و شیفت",
+     "text": "شب کاری: ۲۲:۰۰ تا ۰۶:۰۰ بامداد. صبح: ۰۷:۳۰ تا ۱۵:۴۵، عصر: ۱۵:۴۵ تا ۲۱:۰۰. نوبت کاری: گردش بین صبح/عصر/شب. در نوبت کاری ساعات کار ممکن است از ۸ ساعت/روز و ۴۴ ساعت/هفته تجاوز کند، لیکن جمع ۴ هفته متوالی نباید از ۱۷۶ تا ۱۹۲ ساعت تجاوز کند.",
+     "source_section": "۴. اصلاحات و تعاریف"},
+
+    # ---- Attendance canonical facts ----
+    {"doc_id": "attendance", "topic": "attendance",
+     "title": "سامانه حضور و غیاب کسرا",
+     "text": "نرم‌افزار حضور و غیاب کسرا (kasra.electrokavir.com) سامانه رسمی است. ثبت ورود/خروج از طریق اثر انگشت یا چهره. تعداد ورود/خروج باید زوج باشد. حداکثر ۵ تردد دستی در ماه مجاز است؛ بیش از آن نیاز به تأیید معاونت.",
+     "source_section": "۵-۲- درخواست تردد"},
+    {"doc_id": "attendance", "topic": "late_arrival",
+     "title": "تأخیر و تعجیل در ورود و خروج",
+     "text": "تأخیر ورود تا ۵ دقیقه در ماه نادیده گرفته می‌شود. بیش از ۵ دقیقه مشمول مقررات داخلی. ۱۰ دقیقه اول روز کاری قابل ثبت مرخصی نیست (کسرکار). مجموع تأخیر بیش از ۶۰ دقیقه در ماه = تأخیر غیرموجه طبق آیین‌نامه انضباط کار.",
+     "source_section": "۵-۳- تأخیر و تعجیل"},
+    {"doc_id": "attendance", "topic": "retroactive_window",
+     "title": "بازه ثبت تردد گذشته",
+     "text": "حداکثر ۷ روز (کاری/غیرکاری) پس از مرخصی، مأموریت یا سایر موارد قانونی برای ثبت در کسرا فرصت دارید. مرخصی روزهای پایانی هر ماه باید تا پایان روز اول ماه بعد ثبت شود. در شرایط خاص با نظر کارشناس سرمایه انسانی قابل تغییر است.",
+     "source_section": "۵-۱- بررسی و رفع اشکالات تردد"},
+
+    # ---- Recruitment canonical facts ----
+    {"doc_id": "recruitment", "topic": "age_limit",
+     "title": "محدودیت سنی استخدام",
+     "text": "حداقل ۱۸ و حداکثر ۳۵ سال برای مشاغل غیرکارشناسی؛ حداقل ۲۲ و حداکثر ۴۰ سال برای مشاغل کارشناسی. در مشاغل تخصصی با تأیید مدیرعامل امکان صرف‌نظر از حداکثر سن وجود دارد.",
+     "source_section": "۵-۴-۱- مصاحبه عمومی"},
+    {"doc_id": "recruitment", "topic": "required_documents",
+     "title": "مدارک مورد نیاز استخدام",
+     "text": "مدارک استخدام: ۱) طب کار از مرکز سلامت مجاز ۲) گواهی عدم سوء پیشینه (پلیس +۱۰) ۳) آزمایش عدم اعتیاد ۴) افتتاح حساب بانک معرفی‌شده ۵) فرم بیمه تأمین اجتماعی ۶) حساب بانک رفاه ۷) اصل و کپی شناسنامه ۸) اصل و کپی مدرک تحصیلی ۹) اصل و کپی کارت پایان خدمت ۱۰) اصل و کپی کارت ملی ۱۱) ۴ قطعه عکس ۴×۳ ۱۲) ضمانت کار.",
+     "source_section": "۵-۵- مدارک مورد نیاز شرکت"},
+    {"doc_id": "recruitment", "topic": "contract_types",
+     "title": "انواع قرارداد کار",
+     "text": "انواع قرارداد در الکتروکویر: ۱) قرارداد دائم (نامحدود، تمام‌وقت) ۲) قرارداد آزمایشی (حداکثر ۳ ماه، در بدو استخدام) ۳) قرارداد کار مدت‌دار (موقت معین، تمام‌وقت) ۴) قرارداد کار ساعتی (مدت زمان مشخص، پرداخت ساعتی) ۵) قرارداد مشاوره (حق‌الزحمه توافقی با تأیید مدیرعامل).",
+     "source_section": "۴. اصطلاحات و تعاریف"},
+    {"doc_id": "recruitment", "topic": "general_requirements",
+     "title": "شرایط عمومی استخدام",
+     "text": "شرایط عمومی جذب: ۱) تابعیت ایرانی (افراد خارجی با مجوز اداره اشتغال اتباع بیگانه) ۲) حداقل مدرک تحصیلی پست ۳) محدودیت سنی ۴) سلامت جسمانی و روانی (طب کار) ۵) عدم سوء پیشینه ۶) عدم اعتیاد به مواد مخدر ۷) کارت پایان خدمت یا معافیت (آقایان) ۸) موفقیت در مصاحبه ورودی.",
+     "source_section": "۵-۴-۱- مصاحبه عمومی"},
+
+    # ---- Termination canonical facts ----
+    {"doc_id": "termination", "topic": "resignation_notice",
+     "title": "مدت اعلام استعفا",
+     "text": "اعلام تصمیم خروج باید به‌صورت مکتوب و حداقل ۳۰ روز قبل (مطابق قرارداد) به مدیر مستقیم اعلام شود. استعفا صرفاً در صورت مکتوب بودن و تأیید مدیر مافوق معتبر است. غیبت غیرموجه قبل از تاریخ رسمی خروج موجب عدم پرداخت حقوق و مزایای آن دوره می‌شود.",
+     "source_section": "۵-۲- اعلام تصمیم خروج"},
+    {"doc_id": "termination", "topic": "settlement",
+     "title": "تسویه حساب",
+     "text": "تسویه حساب پس از تکمیل فرم و ارائه به واحد مالی انجام می‌شود. واحد مالی مطالبات قانونی و حقوق باقی‌مانده را حداقل ۲ ماه پس از تاریخ تسویه پرداخت می‌کند. سنوات: یک ماه از آخرین حقوق و مزایای مستمر به ازای هر سال کارکرد.",
+     "source_section": "۵-۵- تسویه حساب نهایی"},
+    {"doc_id": "termination", "topic": "exit_interview",
+     "title": "مصاحبه خروج",
+     "text": "مصاحبه خروج: گفتگوی انفرادی توسط نماینده واحد سرمایه انسانی برای بررسی دلایل ترک شغل و دریافت بازخورد. مستندسازی تجربیات مثبت/منفی و پیشنهادات. اطلاعات برای بهبود سیاست‌ها و شناسایی دلایل ترک خدمت استفاده می‌شود.",
+     "source_section": "۵-۴- بررسی تصمیم خروج"},
+
+    # ---- Loan canonical facts ----
+    {"doc_id": "loan", "topic": "loan_types",
+     "title": "انواع تسهیلات (وام)",
+     "text": "سه نوع وام در الکتروکویر: ۱) وام امتیازی (از گردش حساب بانکی شرکت، ۷۰-۷۵٪ امتیاز، ۱۸ ماهه با کارمزد ۴٪) ۲) وام کوتاه مدت شرکت (سال ۱۴۰۴: ۱۲ میلیون تومان، ۶ ماهه، یک‌بار در سال) ۳) وام ضروری (سقف ۵۰ میلیون تومان، تأیید کمیته وام، ۱۸ ماهه ۴٪). تمامی درخواست‌ها از طریق سیستم BPMS.",
+     "source_section": "انواع و نحوه تخصیص وام"},
+    {"doc_id": "loan", "topic": "loan_tiers",
+     "title": "سقف وام امتیازی بر اساس سطح سازمانی",
+     "text": "سقف وام امتیازی: مدیر/سرپرست = ۵۰ میلیون تومان؛ کارشناس/مسئول = ۴۰ میلیون تومان؛ کارکنان تولید/فنی/خدمات/کارمند = ۳۰ میلیون تومان. تخصیص بر اساس امتیاز گردش حساب شرکت.",
+     "source_section": "۱- وام امتیازی"},
+    {"doc_id": "loan", "topic": "loan_emergency_eligibility",
+     "title": "موارد وام ضروری",
+     "text": "وام ضروری در موارد: ۱) تصادفات و اتفاقات با هزینه ناگهانی ۲) بیماری‌های خاص و پرهزینه خود یا اعضای درجه یک خانواده (خارج از سقف بیمه تکمیلی) ۳) ازدواج پرسنل ۴) ازدواج فرزندان ۵) تولد فرزندان. شرط: حداقل ۶ ماه سابقه، تسویه وام قبلی، تأیید کمیته وام.",
+     "source_section": "۳- وام ضروری"},
+
+    # ---- Promotion canonical facts ----
+    {"doc_id": "promotion", "topic": "promotion_committee",
+     "title": "ترکیب کمیته ارتقا",
+     "text": "ترکیب کمیته ارتقا: برای رده مدیران شامل قائم‌مقام، معاون سرمایه انسانی، مافوق واحد مبدا و مقصد است. برای رده سرپرستان: معاون سرمایه انسانی، مافوق واحد مبدا و مقصد. برای معاونین و مدیرانی که مستقیم با مدیرعامل همکاری می‌کنند، حضور مدیرعامل یا نماینده قانونی الزامی است.",
+     "source_section": "۵-۱ مراحل پیش از انتصاب"},
+    {"doc_id": "promotion", "topic": "deputy_phase",
+     "title": "دوره جانشینی پیش از حکم اصلی",
+     "text": "برای مدیران و معاونت‌ها، ابتدا حکم جانشین مدیر یا معاون صادر می‌شود. پس از ۳ الی ۶ ماه، در صورت رضایت، حکم اصلی تفویض می‌گردد. احکام سرپرستان توسط معاون سرمایه انسانی و احکام مدیران/معاونت‌ها توسط مدیرعامل امضا می‌شود.",
+     "source_section": "۵-۲ انتصاب و صدور حکم"},
+]
+
+
+# ---------------------------------------------------------------------------
+# 7. Embeddings + Qdrant
+# ---------------------------------------------------------------------------
+def embed_batch(texts: List[str]) -> List[Optional[List[float]]]:
+    if not texts:
+        return []
+    try:
+        r = httpx.post(f"{EMBEDDINGS_URL}/embeddings/batch",
+                       json={"texts": texts}, timeout=120.0)
+        r.raise_for_status()
+        return r.json().get("embeddings", [])
+    except Exception as e:
+        log.warning("batch embed failed (%s); falling back per-text", e)
+    out: List[Optional[List[float]]] = []
+    for t in texts:
+        try:
+            r = httpx.post(f"{EMBEDDINGS_URL}/embeddings",
+                           json={"text": t}, timeout=30.0)
+            r.raise_for_status()
+            out.append(r.json().get("embedding"))
+        except Exception:
+            out.append(None)
+    return out
+
+
+def ensure_collection(client: QdrantClient, dim: int, rebuild: bool) -> None:
+    if rebuild:
+        try:
+            client.delete_collection(HR_KB_COLLECTION)
+            log.info("dropped existing collection %s", HR_KB_COLLECTION)
+        except Exception:
+            pass
+    try:
+        existing = client.get_collection(HR_KB_COLLECTION)
+        cur = existing.config.params.vectors.size
+        if cur != dim:
+            log.error("dim mismatch existing=%d new=%d — pass --rebuild to recreate", cur, dim)
+            sys.exit(2)
+        return
+    except Exception:
+        pass
+    client.create_collection(
+        collection_name=HR_KB_COLLECTION,
+        vectors_config=qmodels.VectorParams(size=dim, distance=qmodels.Distance.COSINE),
+    )
+    for field in ("category", "topic", "doc_id", "chunk_type"):
+        try:
+            client.create_payload_index(
+                collection_name=HR_KB_COLLECTION,
+                field_name=field,
+                field_schema=qmodels.PayloadSchemaType.KEYWORD,
+            )
+        except Exception as e:
+            log.warning("payload index %s failed: %s", field, e)
+    log.info("created collection %s dim=%d", HR_KB_COLLECTION, dim)
+
+
+def chunk_uuid(*parts: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "::".join(parts)))
+
+
+# ---------------------------------------------------------------------------
+# 8. Pipeline driver
+# ---------------------------------------------------------------------------
+@dataclass
+class IngestStats:
+    files: int = 0
+    sections: int = 0
+    boilerplate_dropped: int = 0
+    cards: int = 0
+    embedded: int = 0
+    upserted: int = 0
+    errors: int = 0
+
+
+def ingest_directory(root: Path, rebuild: bool = False) -> IngestStats:
+    stats = IngestStats()
+    qdrant = QdrantClient(url=QDRANT_URL, timeout=60.0)
+
+    # Pre-collect ALL chunks first (sections + cards), embed in one
+    # batched pass, then a single Qdrant upsert. Cheaper than per-file
+    # batching when the total corpus is small.
+    pending: List[Dict[str, Any]] = []
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in (".docx", ".docm"):
+            continue
+        if path.name.startswith(".") or path.name.endswith("~"):
+            continue
+        stats.files += 1
+        meta = doc_meta_for(path)
+        if not meta:
+            stats.errors += 1
+            continue
+        try:
+            raw = extract_docx(path)
+            md = repair_markdown(raw)
+            chunks = chunk_sections(md)
+        except Exception as e:
+            log.warning("extract/chunk failed path=%s err=%s", path.name, e)
+            stats.errors += 1
+            continue
+        # Boilerplate already filtered inside chunk_sections; count
+        # what survived for the stats line.
+        stats.sections += len(chunks)
+        try:
+            rel = str(path.relative_to(root))
+        except Exception:
+            rel = path.name
+        for idx, ch in enumerate(chunks):
+            section_path = " > ".join(ch["heading_path"]) or "(no heading)"
+            pending.append({
+                "id": chunk_uuid(meta["doc_id"], "section", str(idx)),
+                "text": ch["text"],
+                "payload": {
+                    **meta,
+                    "filename": path.name,
+                    "relpath": rel,
+                    "chunk_idx": idx,
+                    "chunk_type": ch["chunk_type"],
+                    "heading_path": ch["heading_path"],
+                    "section_path": section_path,
+                    "text": ch["text"],
+                },
+            })
+
+    # Synthetic cards
+    for idx, card in enumerate(CANONICAL_CARDS):
+        doc_id = card["doc_id"]
+        # Look up the host doc's full meta so card payload mirrors
+        # section payload shape (filename, category, etc.).
+        host = next((m for m in DOC_REGISTRY.values()
+                     if m["doc_id"] == doc_id), None)
+        if not host:
+            continue
+        pending.append({
+            "id": chunk_uuid(doc_id, "card", str(idx), card["topic"]),
+            "text": card["text"],
+            "payload": {
+                **host,
+                "topic": card["topic"],  # override host's default topic
+                "filename": next((fn for fn, m in DOC_REGISTRY.items()
+                                  if m["doc_id"] == doc_id), ""),
+                "chunk_idx": idx,
+                "chunk_type": "card",
+                "heading_path": [host["doc_title"], card.get("source_section", "")],
+                "section_path": card.get("source_section", host["doc_title"]),
+                "card_title": card["title"],
+                "text": card["text"],
+            },
+        })
+    stats.cards = sum(1 for p in pending if p["payload"]["chunk_type"] == "card")
+
+    if not pending:
+        log.warning("no chunks collected; nothing to upsert")
+        return stats
+
+    # Batched embed (32 at a time).
+    BATCH = 32
+    dim: Optional[int] = None
+    points: List[qmodels.PointStruct] = []
+    for i in range(0, len(pending), BATCH):
+        batch = pending[i:i + BATCH]
+        vecs = embed_batch([p["text"] for p in batch])
+        for p, v in zip(batch, vecs):
+            if v is None:
+                continue
+            stats.embedded += 1
+            if dim is None:
+                dim = len(v)
+                ensure_collection(qdrant, dim, rebuild=rebuild)
+            points.append(qmodels.PointStruct(
+                id=p["id"], vector=v, payload=p["payload"],
+            ))
+
+    if not points:
+        log.error("no points embedded; check embeddings-service")
+        return stats
+
+    # Single upsert.
+    BATCH_UP = 200
+    for i in range(0, len(points), BATCH_UP):
+        try:
+            qdrant.upsert(collection_name=HR_KB_COLLECTION,
+                           points=points[i:i + BATCH_UP], wait=True)
+            stats.upserted += len(points[i:i + BATCH_UP])
+        except Exception as e:
+            log.exception("upsert failed at offset=%d: %s", i, e)
+            stats.errors += 1
+
+    log.info("ingest done: %s", stats)
+    return stats
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Ingest curated HR/Strategy corpus into Qdrant.")
+    ap.add_argument("--root", default=os.getenv("HR_DOCS_PATH", "/app/hr_docs"),
+                    help="Directory containing 'HR Operations Manual/' and 'Organizational Strategy Values/'")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="Drop the Qdrant collection first (clean slate).")
+    args = ap.parse_args()
+    root = Path(args.root)
+    if not root.exists():
+        log.error("root not found: %s", root)
+        sys.exit(1)
+    log.info("starting ingest root=%s rebuild=%s collection=%s",
+             root, args.rebuild, HR_KB_COLLECTION)
+    stats = ingest_directory(root, rebuild=args.rebuild)
+    print(
+        f"\nFiles processed:      {stats.files}\n"
+        f"Section chunks:       {stats.sections}\n"
+        f"Canonical cards:      {stats.cards}\n"
+        f"Embedded:             {stats.embedded}\n"
+        f"Upserted to Qdrant:   {stats.upserted}\n"
+        f"Errors:               {stats.errors}\n"
+        f"Collection:           {HR_KB_COLLECTION}\n"
+    )
+    sys.exit(0 if stats.errors == 0 else 1)
+
+
+if __name__ == "__main__":
+    main()

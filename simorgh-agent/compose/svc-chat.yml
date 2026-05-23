@@ -23,6 +23,11 @@ services:
       - REDIS_CACHE_DB=2
       # Qdrant
       - QDRANT_URL=http://qdrant:6333
+      # Embeddings + HR KB (for the general-chat HR direct-RAG path)
+      - EMBEDDINGS_URL=${EMBEDDINGS_URL:-http://embeddings-service:8031}
+      - HR_KB_COLLECTION=${HR_KB_COLLECTION:-hr_general_kb}
+      - HR_LLM_MODEL=${HR_LLM_MODEL:-gpt-oss-20b}
+      - HR_RELEVANCE_THRESHOLD=${HR_RELEVANCE_THRESHOLD:-0.30}
       # Neo4j (optional)
       - NEO4J_URI=${NEO4J_URI:-}
       - NEO4J_USER=${NEO4J_USER:-}
