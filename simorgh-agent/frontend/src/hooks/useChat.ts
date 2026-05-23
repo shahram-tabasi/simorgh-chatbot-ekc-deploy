@@ -263,6 +263,42 @@ export function useChat(
           }),
           signal: abortControllerRef.current?.signal,
         });
+        // 425 Too Early: project-init is still indexing this project
+        // (Phase 3 of auto-exploration). Render a friendly inline
+        // message that surfaces the current step so the user knows
+        // what's happening, instead of a generic "HTTP 425" error
+        // toast. The user can retry once init reports done.
+        if (response.status === 425) {
+          let progressText = 'Indexing project files…';
+          try {
+            const errBody = await response.json();
+            const p = errBody?.detail?.progress;
+            if (p?.current_step) {
+              const completed = p.completed_count ?? p.completed_steps?.length ?? 0;
+              const total = p.total_expected ?? 0;
+              progressText = total
+                ? `Indexing project — currently: ${p.current_step} (${completed}/${total})`
+                : `Indexing project — currently: ${p.current_step}`;
+            }
+          } catch {
+            // body wasn't JSON; keep the default progressText
+          }
+          setIsTyping(false);
+          setMessages(prev => [...prev, {
+            id: `system-${Date.now()}`,
+            content:
+              `🔄 ${progressText}\n\n` +
+              'Your project is still being set up. ' +
+              'This usually takes under a minute for small repos; ' +
+              'large ones with many documents can take a few minutes ' +
+              'while we extract and index the content. Please try ' +
+              'your question again shortly.',
+            role: 'assistant',
+            timestamp: new Date(),
+            metadata: { initBlocked: true } as any,
+          }]);
+          return;
+        }
         if (!response.ok) {
           throw new Error(`HTTP ${response.status} from project-agent`);
         }

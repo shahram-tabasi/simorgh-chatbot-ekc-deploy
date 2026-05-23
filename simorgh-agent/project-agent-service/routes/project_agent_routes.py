@@ -87,6 +87,113 @@ router = APIRouter(prefix="/api/v2/agent", tags=["Project Agent"])
 
 
 # ---------------------------------------------------------------------------
+# Init-status precheck — block /message until project-init finishes.
+# ---------------------------------------------------------------------------
+# Phase 3 of the auto-exploration rollout. project-init runs the clone,
+# artifact extraction, search-index, TPMS pull, etc. in the background
+# after POST /projects returns; until the indexer step finishes the
+# planner's search_context tool can't actually find anything in this
+# project, so any answer it produces is at best a live-GitLab guess and
+# at worst the silent "I don't know what's in your project" we saw
+# during Phase 1 development. Block chat until the init reports
+# completed/failed; surface the live progress so the UI can show what
+# step is in flight rather than just spinning.
+# ---------------------------------------------------------------------------
+INIT_BLOCKING_STATES = {"pending", "running"}
+
+
+async def _check_init_ready(project_id: str) -> Optional[Dict[str, Any]]:
+    """Return None if the project is ready for chat (init completed,
+    failed, or no record at all — fail-open for legacy projects that
+    were inited before this code shipped); return the live status dict
+    otherwise. The dict has the same shape /status/by_project returns:
+    {init_id, project_id, status, started_at, current_step, steps, ...}.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(
+                f"{PROJECT_INIT_URL}/status/by_project/{project_id}"
+            )
+    except httpx.HTTPError as e:
+        # project-init unreachable: don't gate chat on it, just log.
+        # Better to risk an empty-index answer than to lock the user
+        # out when the auxiliary service is down.
+        logger.warning("init-status lookup failed for %s: %s", project_id, e)
+        return None
+
+    if r.status_code == 404:
+        # No init record — assume an earlier successful run that the
+        # in-memory _init_status doesn't remember (project-init was
+        # restarted). Don't block.
+        return None
+    if r.status_code != 200:
+        logger.warning("init-status returned %d for %s", r.status_code, project_id)
+        return None
+
+    status = r.json()
+    if (status.get("status") or "").lower() in INIT_BLOCKING_STATES:
+        return status
+    return None
+
+
+def _init_progress_payload(status: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact, UI-friendly shape derived from the project-init status.
+
+    The full status payload includes per-step records and timestamps the
+    UI doesn't need on every poll. Keep this lightweight; the wizard /
+    chat overlay only needs to render "<current step> (<n>/<total>
+    completed)" and a list of completed step names for the progress bar.
+    """
+    steps = status.get("steps") or []
+    completed = [s for s in steps if (s.get("status") or "").lower() == "ok"]
+    failed    = [s for s in steps if (s.get("status") or "").lower() == "error"]
+    # The orchestrator's step order is fixed (start_container,
+    # clone_user_repo, extract_artifacts, index_for_search, pull_tpms,
+    # pull_techserver, clone_ekc, ensure_uploads_dir, kick_explorer).
+    # Some are conditional but the expected count for the typical
+    # gitlab-backed flow is 9; fall back to the running count if the
+    # caller picked a non-standard source mix.
+    total_expected = max(len(steps), 5)
+    return {
+        "status": status.get("status"),
+        "current_step": status.get("current_step"),
+        "completed_steps": [s.get("step") for s in completed],
+        "failed_steps": [
+            {"step": s.get("step"), "error": s.get("error")}
+            for s in failed
+        ],
+        "completed_count": len(completed),
+        "total_expected": total_expected,
+        "init_id": status.get("init_id"),
+        "started_at": status.get("started_at"),
+    }
+
+
+@router.get("/projects/{project_id}/init-status")
+async def get_project_init_status(
+    project_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Proxy the project-init status so the chat UI can poll without
+    needing a direct route to project-init (which isn't authed for
+    end users). Returns the compact progress shape used by the 425
+    response below, plus a `ready: bool` so the UI knows when to
+    stop polling and re-enable the input.
+    """
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    status = await _check_init_ready(project_id)
+    if status is None:
+        return {"ready": True}
+    return {"ready": False, "progress": _init_progress_payload(status)}
+
+
+# ---------------------------------------------------------------------------
 # Restrictions file — admin / dev free-text instructions that the agent
 # treats as hard constraints on every final response. Mounted as a
 # host-managed volume; same role gate as project creation for now.
@@ -765,6 +872,20 @@ async def send_message(
     if project["owner_id"] != current_user:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Block chat while project-init is still indexing — see
+    # _check_init_ready comment block above for the rationale.
+    init_status = await _check_init_ready(project_id)
+    if init_status is not None:
+        raise HTTPException(
+            status_code=425,  # Too Early
+            detail={
+                "code": "init_in_progress",
+                "message": "Project initialization is still in progress. "
+                           "Please wait for indexing to complete.",
+                "progress": _init_progress_payload(init_status),
+            },
+        )
+
     try:
         result = await agent.handle_input(
             project_id=project_id,
@@ -842,6 +963,19 @@ async def send_message_stream(
         raise HTTPException(status_code=404, detail="Project not found")
     if project["owner_id"] != current_user:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # Block stream while project-init is still indexing (Phase 3).
+    init_status = await _check_init_ready(project_id)
+    if init_status is not None:
+        raise HTTPException(
+            status_code=425,
+            detail={
+                "code": "init_in_progress",
+                "message": "Project initialization is still in progress. "
+                           "Please wait for indexing to complete.",
+                "progress": _init_progress_payload(init_status),
+            },
+        )
 
     async def event_generator():
         progress_queue = asyncio.Queue()

@@ -848,6 +848,29 @@ def get_status(init_id: str):
     return _init_status[init_id]
 
 
+@app.get("/status/by_project/{project_id}")
+def get_status_by_project(project_id: str):
+    """Return the MOST RECENT init status for this project, regardless
+    of which init_id triggered it.
+
+    Used by project-agent's chat-block precheck — the chat layer keys
+    on project_id (the durable identifier), not on the opaque init_id
+    we only return at create time. Returns 404 if no init has ever
+    been recorded for this project_id in the current process lifetime
+    (which the caller treats as "fail open": assume an earlier
+    successful init from a prior process, do not block chat).
+    """
+    matches = [
+        s for s in _init_status.values()
+        if s.get("project_id") == project_id
+    ]
+    if not matches:
+        raise HTTPException(status_code=404,
+                            detail="no init recorded for project_id")
+    matches.sort(key=lambda s: s.get("started_at") or "", reverse=True)
+    return matches[0]
+
+
 # ---------------------------------------------------------------------------
 # MCP
 # ---------------------------------------------------------------------------
