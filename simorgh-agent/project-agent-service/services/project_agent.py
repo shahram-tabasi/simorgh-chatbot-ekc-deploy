@@ -522,6 +522,19 @@ class ProjectManagerAgent:
                         "path": tool_input.get("path", ""),
                         "ref": tool_input.get("ref", "main"),
                     })
+                elif tool in ("read_artifact_mcp", "read_artifact"):
+                    # Type-aware read — returns markdown for PDFs / Office /
+                    # images via the .simorgh/extracted cache or the
+                    # doc-processor on demand. The CoT's hot path; without
+                    # this REST equivalent, a disconnected MCP session
+                    # turns every "summarise this file" plan into a silent
+                    # no-op (the read step is skipped, the llm step gets
+                    # no context and apologises about not having the text).
+                    r = await c.get(f"{base}/artifact", params={
+                        "project": project,
+                        "path": tool_input.get("path", ""),
+                        "ref": tool_input.get("ref", "main"),
+                    })
                 elif tool == "list_branches_mcp":
                     r = await c.get(f"{base}/branches", params={
                         "project": project, "per_page": 100,
@@ -566,16 +579,29 @@ class ProjectManagerAgent:
 
         # The planner sometimes prefixes the tool name with the MCP
         # server, e.g. "gitlab_mcp.get_project_tree". The tool registry
-        # is keyed by the bare name. Strip the prefix if the dotted form
-        # doesn't match but the suffix does.
-        if (
-            isinstance(tool, str) and "." in tool
-            and self.mcp_manager
-            and not self.mcp_manager.has_tool(tool)
-        ):
-            bare = tool.rsplit(".", 1)[-1]
-            if self.mcp_manager.has_tool(bare):
-                tool = bare
+        # is keyed by the bare name. Strip the prefix when it matches a
+        # known MCP server.
+        #
+        # This MUST work even when the MCP manager is disconnected —
+        # otherwise the moment one MCP call drops, every subsequent
+        # dotted-prefix tool fails the strip check (has_tool returns
+        # False on a disconnected manager), so mcp_match=False, REST
+        # fallback is never invoked (it's gated on mcp_match=True), and
+        # the read step silently no-ops while the next LLM step happily
+        # tries to summarise empty context.
+        _KNOWN_MCP_PREFIXES = (
+            "gitlab_mcp.", "context_search.", "runtime_broker.",
+            "tpms_context_agent.", "tpms_fetcher.", "project_init.",
+            "project_analysis.", "command_gen.", "file_export.",
+            "eplan_bridge.", "specification_agent.", "hr_kb.",
+            "org_data.", "eplan_sql.", "documents_rag.", "graph_rag.",
+            "search.",
+        )
+        if isinstance(tool, str):
+            for prefix in _KNOWN_MCP_PREFIXES:
+                if tool.startswith(prefix):
+                    tool = tool[len(prefix):]
+                    break
 
         # Normalize tool_input: LLM may return a string instead of dict
         if isinstance(raw_input, str) and raw_input:
@@ -776,6 +802,20 @@ class ProjectManagerAgent:
                 rest_fallback = await self._try_gitlab_rest(tool, tool_input)
                 if rest_fallback is not None:
                     return rest_fallback
+        elif tool in {
+            "get_project_tree", "read_file_mcp", "read_artifact_mcp",
+            "read_artifact", "list_branches_mcp", "list_projects_mcp",
+            "search_blobs",
+        }:
+            # MCP not connected (or this tool not registered) but the
+            # gitlab-mcp REST equivalent exists. Hit it directly instead
+            # of dropping into the default no-op handler — without this,
+            # any disconnect of the MCP transport silently turns every
+            # "read this file then summarise" plan into a no-op read
+            # followed by an llm step that has no document content.
+            rest_fallback = await self._try_gitlab_rest(tool, tool_input)
+            if rest_fallback is not None:
+                return rest_fallback
 
         # Direct execution for core tools + HTTP fallback for microservice tools
         if tool == "llm" or task_type in ("generation", "analysis", "review"):
