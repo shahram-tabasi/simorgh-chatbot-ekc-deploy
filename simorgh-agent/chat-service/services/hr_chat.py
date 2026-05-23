@@ -57,9 +57,12 @@ HR_LLM_MODEL      = os.getenv("HR_LLM_MODEL", "gpt-oss-20b")
 RETRIEVAL_K     = int(os.getenv("HR_RETRIEVAL_K", "8"))
 GROUNDING_K     = int(os.getenv("HR_GROUNDING_K", "5"))
 # Cosine score below which we treat the query as out-of-corpus.
-# all-MiniLM-L6-v2 with multilingual content: 0.30 is roughly
-# "vaguely related"; below that the hits are noise.
-RELEVANCE_THRESHOLD = float(os.getenv("HR_RELEVANCE_THRESHOLD", "0.30"))
+# Lowered from 0.30 → 0.15 after operator-reported false refusals on
+# obvious queries. Multilingual sentence-transformer models tend to
+# produce lower absolute scores than English-only ones; 0.15 still
+# rejects pure noise but lets in soft matches that gpt-oss can rule
+# on. Override via HR_RELEVANCE_THRESHOLD if you need it stricter.
+RELEVANCE_THRESHOLD = float(os.getenv("HR_RELEVANCE_THRESHOLD", "0.15"))
 # Per-chunk character cap injected into the prompt (so a single 1800-
 # char window section doesn't blow the context window).
 PROMPT_CHUNK_CHAR_CAP = int(os.getenv("HR_PROMPT_CHUNK_CHARS", "1200"))
@@ -123,6 +126,10 @@ async def retrieve(query: str, top_k: int = RETRIEVAL_K,
                     category: Optional[str] = None) -> List[Dict[str, Any]]:
     vec = await _embed(query)
     if vec is None:
+        log.error("hr_chat retrieve: EMBED RETURNED NONE for q=%r url=%s "
+                  "→ refusal path will fire. Check embeddings-service "
+                  "reachability and EMBEDDINGS_URL env.",
+                  query[:80], EMBEDDINGS_URL)
         return []
     qfilter = None
     if category:
@@ -136,8 +143,15 @@ async def retrieve(query: str, top_k: int = RETRIEVAL_K,
             query_filter=qfilter, with_payload=True,
         )
     except Exception as e:
-        log.warning("hr_chat qdrant search failed: %s", e)
+        log.error("hr_chat retrieve: QDRANT SEARCH FAILED collection=%s "
+                  "url=%s err=%s → refusal path will fire.",
+                  HR_KB_COLLECTION, QDRANT_URL, e)
         return []
+    log.info("hr_chat retrieve: q=%r hits=%d top_score=%.4f category=%s "
+             "embed_dim=%d collection=%s",
+             query[:80], len(hits),
+             float(hits[0].score) if hits else 0.0,
+             category or "(any)", len(vec), HR_KB_COLLECTION)
     bias = _category_bias(query)
     out: List[Dict[str, Any]] = []
     for h in hits:

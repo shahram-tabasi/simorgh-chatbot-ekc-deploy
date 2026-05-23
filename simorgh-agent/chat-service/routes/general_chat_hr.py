@@ -32,7 +32,17 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from services.hr_chat import stream_hr_answer
+from services.hr_chat import (
+    stream_hr_answer,
+    retrieve as hr_retrieve,
+    _embed as hr_embed,
+    EMBEDDINGS_URL as HR_EMBEDDINGS_URL,
+    QDRANT_URL as HR_QDRANT_URL,
+    HR_KB_COLLECTION,
+    RELEVANCE_THRESHOLD,
+    LLM_GATEWAY_URL as HR_LLM_GATEWAY_URL,
+    HR_LLM_MODEL,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v2/general-chat/hr", tags=["HR General Chat"])
@@ -100,3 +110,57 @@ async def hr_stream(req: HrStreamRequest):
 async def health():
     """Quick reachability check; doesn't probe Qdrant/embeddings."""
     return {"status": "ok", "service": "general-chat-hr"}
+
+
+@router.get("/debug")
+async def debug(q: str, category: Optional[str] = None, top_k: int = 5):
+    """Diagnostic endpoint — runs the retrieval pipeline WITHOUT the
+    LLM call and returns the raw scores + payload so you can tell why
+    a query is or isn't matching. Auth-free on purpose so you can
+    probe it from the deploy host with `docker exec`.
+
+    Returns a structured response:
+
+        {
+          "config":   {EMBEDDINGS_URL, QDRANT_URL, collection,
+                       threshold, llm_gateway, model},
+          "embed":    {ok: bool, dim: int, error?: str},
+          "hits":     [{score, doc_title, section_path, ...}, ...],
+          "decision": "answer" | "refuse",
+          "reason":   <human-readable>
+        }
+    """
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="q is required")
+    config = {
+        "EMBEDDINGS_URL": HR_EMBEDDINGS_URL,
+        "QDRANT_URL": HR_QDRANT_URL,
+        "collection": HR_KB_COLLECTION,
+        "threshold": RELEVANCE_THRESHOLD,
+        "llm_gateway": HR_LLM_GATEWAY_URL,
+        "llm_model": HR_LLM_MODEL,
+    }
+    vec = await hr_embed(q)
+    if vec is None:
+        return {
+            "config": config,
+            "embed": {"ok": False, "dim": 0,
+                       "error": "embeddings-service unreachable or returned empty"},
+            "hits": [],
+            "decision": "refuse",
+            "reason": "embed_failed",
+        }
+    hits = await hr_retrieve(q, top_k=top_k, category=category)
+    top = max((h["raw_score"] for h in hits), default=0.0)
+    return {
+        "config": config,
+        "embed": {"ok": True, "dim": len(vec)},
+        "hits": hits,
+        "top_score": top,
+        "decision": "answer" if (hits and top >= RELEVANCE_THRESHOLD) else "refuse",
+        "reason": (
+            "no_hits" if not hits else
+            "below_threshold" if top < RELEVANCE_THRESHOLD else
+            "ok"
+        ),
+    }
