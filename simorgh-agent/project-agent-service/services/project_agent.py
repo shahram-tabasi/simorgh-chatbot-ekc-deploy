@@ -40,6 +40,78 @@ from services.ekc_knowledge_service import EKCKnowledgeService, get_ekc_knowledg
 logger = logging.getLogger(__name__)
 
 
+def _format_tool_output_for_synth(tool_or_title: str, output: Any) -> str:
+    """Compact common tool result shapes before they hit the synth prompt.
+
+    Raw JSON dumps are 5-10× more verbose than the user-relevant
+    payload — for ``get_project_tree`` especially, every file becomes
+    a ~150-char ``{"id":"...","name":"...","type":"blob","path":"...","mode":"..."}``
+    object, so a flat per-output cap chops the listing at ~25 files
+    and the synthesizer dutifully reports "tool output was truncated".
+
+    Shape-aware compaction keeps the per-output budget meaningful:
+      • tree-shaped results  → newline-separated paths (with ``/``
+        suffix for directories), preserving order.
+      • everything else      → str(output) (the caller still applies
+        a tail truncation as a final guard).
+    """
+    if output is None:
+        return ""
+    if isinstance(output, str):
+        body = output
+        # MCP and the REST fallback both wrap results in JSON strings;
+        # unwrap once so we can shape-detect the inner payload.
+        s = body.strip()
+        if (s.startswith("{") and s.endswith("}")) or (
+            s.startswith("[") and s.endswith("]")
+        ):
+            try:
+                parsed = json.loads(s)
+            except Exception:
+                return body
+            output = parsed
+        else:
+            return body
+
+    # Tree shape: {"project": ..., "ref": ..., "entries": [{...}]}
+    if isinstance(output, dict) and isinstance(output.get("entries"), list):
+        entries = output["entries"]
+        lines = []
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            path = e.get("path") or e.get("name") or ""
+            if not path:
+                continue
+            if e.get("type") == "tree":
+                path = path.rstrip("/") + "/"
+            lines.append(path)
+        header_bits = []
+        if output.get("ref"):
+            header_bits.append(f"ref={output['ref']}")
+        if output.get("path"):
+            header_bits.append(f"under={output['path']}")
+        header_bits.append(f"count={len(lines)}")
+        header = "(" + ", ".join(header_bits) + ")\n"
+        return header + "\n".join(lines)
+
+    # read_artifact / read_file shape — return the content verbatim.
+    if isinstance(output, dict) and "content" in output:
+        meta = []
+        for k in ("path", "ref", "via", "artifact_class"):
+            v = output.get(k)
+            if v:
+                meta.append(f"{k}={v}")
+        prefix = "(" + ", ".join(meta) + ")\n" if meta else ""
+        return prefix + str(output.get("content") or "")
+
+    # Default: JSON-stringify with utf-8 so Persian / Arabic survive.
+    try:
+        return json.dumps(output, ensure_ascii=False)
+    except Exception:
+        return str(output)
+
+
 class ProjectManagerAgent:
     """
     Autonomous project manager agent.
@@ -370,11 +442,25 @@ class ProjectManagerAgent:
                 if task.get("task_type") in ("generation", "analysis"):
                     final_response = result.get("output", "")
 
+                # Keep BOTH the full output (so the synthesizer can
+                # reason over it / compact tree-shaped results into a
+                # path list) and a short preview (used for progress
+                # notifications and the bullet-fallback at the end of
+                # the chain when LLM synthesis fails). The previous
+                # version stored only `output[:500]`, which silently
+                # capped every get_project_tree result at ~2-3 files
+                # before the synthesizer ever ran.
+                full_output = result.get("output", "")
                 results.append({
                     "task_id": task_id,
                     "title": task["title"],
+                    "tool_used": task.get("tool_used"),
                     "status": "completed",
-                    "output": result.get("output", "")[:500],
+                    "output": full_output,
+                    "output_preview": (
+                        full_output[:500] if isinstance(full_output, str)
+                        else str(full_output)[:500]
+                    ),
                 })
 
                 # Per-task auto-commit. We commit after every task that may
@@ -455,14 +541,17 @@ class ProjectManagerAgent:
                     "Tool results from the plan:",
                 ]
                 for r in completed:
-                    out = r.get("output", "")
-                    if not isinstance(out, str):
-                        try:
-                            import json as _json
-                            out = _json.dumps(out, ensure_ascii=False)
-                        except Exception:
-                            out = str(out)
-                    synth_parts.append(f"\n## {r['title']}\n{out[:4000]}")
+                    out = _format_tool_output_for_synth(
+                        r.get("tool_used") or r.get("title", ""),
+                        r.get("output", ""),
+                    )
+                    # 24000 chars ≈ 6k tokens. With other prompt overhead
+                    # this leaves ~8k tokens for the model to write the
+                    # answer inside the 16k vLLM max_model_len. Tighter
+                    # caps silently dropped tree entries past the first
+                    # ~25 files and triggered the "tool output was
+                    # truncated" footnote in user-facing answers.
+                    synth_parts.append(f"\n## {r['title']}\n{out[:24000]}")
                 synth_parts.append(
                     "\n\nWrite a concise, natural-language answer for the "
                     "user using ONLY the tool results above. Use markdown "
@@ -487,7 +576,10 @@ class ProjectManagerAgent:
                 if completed:
                     parts.append(f"Completed {len(completed)} task(s):")
                     for r in completed:
-                        output_preview = r.get("output", "")[:150]
+                        output_preview = (
+                            r.get("output_preview")
+                            or (str(r.get("output", ""))[:150])
+                        )
                         parts.append(f"- {r['title']}: {output_preview}")
                 if failed:
                     parts.append(f"\nFailed {len(failed)} task(s):")
