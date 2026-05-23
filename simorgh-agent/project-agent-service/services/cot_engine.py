@@ -385,7 +385,7 @@ TOOL CATALOG (CORE)
                passing `project_id=<this>`. Default k=8 is fine; bump
                to 15-20 if you need broader recall before the read
                step picks the file to load fully.
-    OUTPUT   : list of hits with {path, score, body excerpt, source}.
+    OUTPUT   : list of hits with {{path, score, body excerpt, source}}.
                Use the `path` from the top hits as input to
                read_artifact_mcp.
     DO NOT   : use for cross-project standards (use
@@ -452,8 +452,8 @@ TOOL CATALOG (CORE)
                conceptual questions; the regex is a precision tool,
                not a recall tool. Don't omit project_id — without it
                you scan across every project.
-    OUTPUT   : {hits: [{path, score, match, context, chunk_id, ...}],
-                scanned, took_ms, error}. Hand the `path` of the top
+    OUTPUT   : {{hits: [{{path, score, match, context, chunk_id, ...}}],
+                scanned, took_ms, error}}. Hand the `path` of the top
                hit to read_artifact_mcp if synthesis needs the full
                file. `error` is set (not raised) for invalid regex /
                ES errors — react by retrying with a simpler pattern
@@ -482,7 +482,7 @@ TOOL CATALOG (CORE)
                know the seed names (from a prior search_context hit
                or the user's own phrasing); else the tool derives
                seeds from `query` substrings.
-    OUTPUT   : list of {id, score, title, label, properties, hops}
+    OUTPUT   : list of {{id, score, title, label, properties, hops}}
                hits — pull `properties.path` for Document vertices,
                `properties.name` for Entity vertices.
     DO NOT   : use as a fuzzy retrieval substitute; for paraphrase
