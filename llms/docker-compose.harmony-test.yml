@@ -30,12 +30,22 @@ services:
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models:ro
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface
       # Pre-populated openai_harmony vocab cache (~2 MB tiktoken file).
-      # openai_harmony's Rust HTTP client doesn't honor HTTP_PROXY env
-      # the way Python's httpx does, so we pre-download once on the host
-      # via a python:3.12-slim sidecar and mount the result here. Use a
-      # dedicated mount path (not /root/.cache) to avoid colliding with
-      # the huggingface mount above.
-      - ./harmony_cache:/opt/harmony_cache
+      # openai_harmony's Rust binding uses tiktoken-rs, which hardcodes
+      # /tmp/tiktoken-rs-cache and ignores XDG_CACHE_HOME. We pre-fetch
+      # once on the host through xray and mount that exact path.
+      #
+      # Generated with:
+      #   mkdir -p ./harmony_cache && sudo chmod 777 ./harmony_cache
+      #   docker run --rm --network=host \
+      #     -e HTTPS_PROXY=http://127.0.0.1:10809 \
+      #     -v $(pwd)/harmony_cache:/tmp/tiktoken-rs-cache \
+      #     python:3.12-slim bash -c '
+      #       pip install --quiet --no-cache-dir openai-harmony &&
+      #       python -c "from openai_harmony import load_harmony_encoding,
+      #       HarmonyEncodingName;
+      #       load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)"
+      #     '
+      - ./harmony_cache:/tmp/tiktoken-rs-cache
     environment:
       - PYTHONUNBUFFERED=1
       - HF_TOKEN=${HF_TOKEN:-}
@@ -54,9 +64,6 @@ services:
       - https_proxy=http://172.17.0.1:10809
       - NO_PROXY=localhost,127.0.0.1,::1,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
       - no_proxy=localhost,127.0.0.1,::1,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
-      # Point openai_harmony's tiktoken cache at the pre-populated mount.
-      # Rust's `dirs::cache_dir()` respects $XDG_CACHE_HOME on Linux.
-      - XDG_CACHE_HOME=/opt/harmony_cache
     # vLLM's serve mode with the Harmony tool-call parser. The
     # --enable-auto-tool-choice flag wires Harmony's `<|tool_calls|>`
     # output channel into the OpenAI-shape `message.tool_calls`.
