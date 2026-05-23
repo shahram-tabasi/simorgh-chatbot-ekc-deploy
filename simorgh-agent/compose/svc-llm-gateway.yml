@@ -25,6 +25,23 @@ services:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
 
+      # The docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (Xray)
+      # so containers can reach the public internet for things like
+      # api.openai.com. Local LAN destinations (192.168.1.61 / .62 for
+      # the LLM + VLM boxes) MUST bypass it — Xray 503s on RFC1918 dst.
+      # httpx (gateway's HTTP client) and busybox-wget do NOT honor CIDR
+      # in NO_PROXY, so set explicit values: blank HTTP_PROXY entirely
+      # (we don't actually need the proxy for anything the gateway does
+      # — OPENAI_API_KEY is unset by default and api.openai.com calls
+      # go through the agent stack's online routing) and wildcard
+      # NO_PROXY so nothing accidentally tunnels.
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
+
       # Online mode: OpenAI
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
