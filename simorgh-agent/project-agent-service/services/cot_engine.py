@@ -745,24 +745,43 @@ class COTEngine:
     async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call the LLM service for COT analysis.
 
-        Routing precedence (post-Harmony-migration):
-          1. ``LLM_GATEWAY_URL`` + tools=[submit_plan] — preferred.
-             gpt-oss-20b on .61 (vLLM serve mode with the openai
-             tool-call parser) emits a Harmony tool_call to
-             ``submit_plan(plan=...)``; we extract the plan JSON
-             from ``tool_calls[0].function.arguments``. This is
-             what the harmony-test container proved works correctly:
-             multi-step plans with the right tools, in ~1 second.
-          2. ``COT_LLM_BASE_URL`` — typically Qwen2.5-VL-7B on .62.
-             Kept as a fallback so the planner still works if the
-             local LLM box is down or if its Harmony surface
-             regresses.
-          3. ``LLM_GATEWAY_URL`` + guided_json — legacy gateway
-             path. Produces degenerate plans for gpt-oss; kept only
-             as a last resort.
+        Routing precedence:
+          1. ``LLM_GATEWAY_URL`` + guided_json — PRIMARY. vLLM's
+             outlines / xgrammar backend constrains generation to the
+             COT_PLAN_SCHEMA at decode time, so the response is
+             guaranteed parseable JSON with the right field names.
+             Confirmed working on gpt-oss-20b@.61 (finish_reason=stop,
+             ~1s, correct shape).
+          2. ``LLM_GATEWAY_URL`` + tools=[submit_plan] (Harmony) —
+             SECONDARY. vLLM on .61 launches with
+             ``--tool-call-parser openai`` but NO guided-decoding
+             backend on the tool-call channel, so the inner
+             ``arguments`` JSON is unconstrained. gpt-oss-20b
+             routinely truncates or hallucinates field names there;
+             ``_parse_llm_response`` then silently substitutes a
+             "Direct response" stub and the user sees a polite "I
+             don't know" apology. Keep this only as a fallback in
+             case guided_json is unavailable on a future build.
+          3. ``COT_LLM_BASE_URL`` — Qwen2.5-VL-7B on .62. Kept so
+             the planner still works if the LLM gateway is wedged.
           4. ``self.llm_service`` — generic legacy path.
+
+        Set ``COT_PLANNER_PRIMARY=harmony`` to opt the old order back
+        in for A/B testing.
         """
         gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
+        primary = os.getenv("COT_PLANNER_PRIMARY", "guided_json").strip().lower()
+
+        if gateway_url and primary != "harmony":
+            try:
+                return await self._call_llm_gateway_structured(gateway_url, messages)
+            except Exception as e:
+                logger.warning(
+                    "CoT planner via gateway guided_json (%s) failed: %s; "
+                    "falling back to Harmony tool-calls",
+                    gateway_url, e,
+                )
+
         if gateway_url:
             try:
                 return await self._call_llm_harmony_tools(gateway_url, messages)
@@ -783,17 +802,7 @@ class COTEngine:
             except Exception as e:
                 logger.warning(
                     f"CoT planner via {cot_base_url} failed: {e}; "
-                    "falling back to gateway guided_json"
-                )
-
-        if gateway_url:
-            try:
-                return await self._call_llm_gateway_structured(gateway_url, messages)
-            except Exception as e:
-                logger.warning(
-                    "CoT planner via gateway guided_json (%s) failed: %s; "
-                    "falling back to default llm_service",
-                    gateway_url, e,
+                    "falling back to default llm_service"
                 )
 
         try:
@@ -871,16 +880,35 @@ class COTEngine:
 
         tool_calls = body.get("tool_calls") or []
         if not tool_calls:
-            # gpt-oss didn't tool-call — possibly the gateway is on an
-            # old version that strips them, or the model returned plain
-            # text. Surface whatever content came back; _parse_llm_response
-            # will JSON-extract or fall back to a direct response.
-            return body.get("response") or ""
+            # gpt-oss didn't tool-call — model returned prose despite
+            # tool_choice forcing. Raise so _call_llm tries the next
+            # path instead of handing prose to the JSON parser, which
+            # would silently materialise the "Direct response" stub.
+            raise RuntimeError(
+                "harmony: tool_calls empty, "
+                f"finish={body.get('finish_reason')}, "
+                f"response[:200]={(body.get('response') or '')[:200]!r}"
+            )
 
-        # tool_calls[0].function.arguments IS the plan JSON (as a string).
-        # Return it directly; _parse_llm_response handles JSON decode.
         args = tool_calls[0].get("function", {}).get("arguments") or ""
-        return args if isinstance(args, str) else json.dumps(args)
+        args_str = args if isinstance(args, str) else json.dumps(args)
+        # Sanity-check that the arguments are parseable JSON BEFORE
+        # returning. vLLM's openai tool-call parser doesn't enforce
+        # COT_PLAN_SCHEMA at decode time, so gpt-oss-20b regularly
+        # truncates the arguments mid-object — finish_reason still
+        # says "tool_calls" but the JSON is missing its closing brace.
+        # Raising here lets _call_llm fall through to guided_json /
+        # the VLM planner; swallowing it would surface as the
+        # "Direct response" silent fallback.
+        try:
+            json.loads(args_str)
+        except json.JSONDecodeError as je:
+            raise RuntimeError(
+                f"harmony: tool_call arguments not JSON ({je}); "
+                f"finish={body.get('finish_reason')}, "
+                f"args_len={len(args_str)}, args[:300]={args_str[:300]!r}"
+            ) from je
+        return args_str
 
     async def _call_llm_openai_compat(
         self, messages: List[Dict[str, str]], *, base_url: str, model: str
@@ -953,7 +981,7 @@ class COTEngine:
 
         try:
             data = json.loads(json_str)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as je_outer:
             # Default to a fallback plan so `data` is always bound, even if
             # neither the json_str parse nor the find-the-braces fallback
             # below succeed.
@@ -973,11 +1001,22 @@ class COTEngine:
             # Try to find JSON object in the response
             start = response.find("{")
             end = response.rfind("}") + 1
+            recovered = False
             if start >= 0 and end > start:
                 try:
                     data = json.loads(response[start:end])
+                    recovered = True
                 except json.JSONDecodeError:
-                    logger.warning("Failed to parse COT LLM response as JSON")
+                    pass
+            if not recovered:
+                # Log the raw response so post-hoc debugging doesn't
+                # require enabling DEBUG and re-triggering the bug.
+                # Truncate to 2000 chars to keep log volume sane.
+                logger.warning(
+                    "COT LLM response not JSON-parseable (outer=%s), "
+                    "raw[:2000]=%r",
+                    je_outer, response[:2000],
+                )
 
         steps = []
         # Map step titles → numbers so we can coerce Qwen-style
