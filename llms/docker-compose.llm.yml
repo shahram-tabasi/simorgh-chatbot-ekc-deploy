@@ -84,8 +84,14 @@ services:
       - "9000"
       - "--tensor-parallel-size"
       - "1"
+      # Harmony tool-call path expands the CoT system prompt + COT_PLAN_SCHEMA
+      # into ~13k tokens once the chat template wraps it. 8192 was rejecting
+      # those requests with "Input length (13121) exceeds model's maximum
+      # context length (8192)" and falling back to the VLM. 16384 gives
+      # headroom without ballooning KV-cache VRAM (gpt-oss-20b supports 32k
+      # natively but we don't need it on a 24GB A30).
       - "--max-model-len"
-      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - "${VLLM_MAX_MODEL_LEN:-16384}"
       - "--gpu-memory-utilization"
       - "${VLLM_GPU_UTIL:-0.85}"
       - "--enable-auto-tool-choice"
