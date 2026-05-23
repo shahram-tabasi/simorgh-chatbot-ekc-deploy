@@ -180,13 +180,30 @@ A. KNOWN FILE
 
 B. CONTENT-IN-REPO  (the user asks ABOUT content, not BY filename)
    Trigger: "what does the spec say about earthing", "summarise our
-            voltage strategy", "find the section about VTs"
-   Plan:    gitlab_mcp.search_blobs(query, project)  ← server-side text
-            ┃ AND / OR (if results thin and content_search available)
-            ┃ context_search.search_context(query, scope=project)
+            voltage strategy", "find the section about VTs",
+            "اجزای X را توضیح بده", "بخش مربوط به Y کجاست"
+   Plan:    context_search.search_context(query, project_id=<this>) ← PRIMARY
+            ┃ AND (when keyword precision matters)
+            ┃ gitlab_mcp.search_blobs(query, project)
             → gitlab_mcp.read_artifact_mcp(project, path=<top hit>)
             → llm.synthesize
    2–4 steps. Run the two searches IN PARALLEL when used together.
+
+   NOTE   : project-init bulk-indexes every cloned file (source text +
+            extracted markdown sidecars for PDF/docx/image artifacts)
+            into the `simorgh-content` Elasticsearch index at session
+            startup, scoped by project_id. So search_context is the
+            FAST PATH for content questions — it's BM25 + kNN over
+            content the planner already has, no live GitLab roundtrip.
+            search_blobs (server-side GitLab grep) is still useful
+            for exact-string / regex-shaped matches the embedding
+            model would miss. read_artifact_mcp comes LAST to load
+            the full file once you know which one to read.
+
+   DO NOT : skip the search step and read N files speculatively. A
+            10-file repo lets you get away with it; a 200-file repo
+            does not, and the planner's only retrieval signal then
+            is the filename, which is the weakest one.
 
 C. PROJECT FACTS  (structured records about THIS project)
    Trigger: "how many panels", "what's the voltage", "who's the customer",
@@ -312,14 +329,56 @@ TOOL CATALOG (CORE)
                before filtering child tables.
     DO NOT   : dump whole tables to disk. Query on demand.
 
-- context_search.search_context(query, project?, top_k?)
+- context_search.search_context(query, project_id?, k?)
     PURPOSE  : hybrid BM25+kNN across ALL indexed simorgh content —
-               extracted markdown, COT traces, chat snippets, EKC.
-    USE WHEN : ladder B (content-in-repo), as a fuzzy complement to
-               search_blobs.
+               cloned project files (auto-indexed at project-init
+               time, source text + PDF/docx/image markdown sidecars,
+               chunked at ~2000 chars), TPMS rows, tech-kb, COT
+               traces, chat snippets, EKC.
+    USE WHEN : ladder B PRIMARY tool. Filter to this project by
+               passing `project_id=<this>`. Default k=8 is fine; bump
+               to 15-20 if you need broader recall before the read
+               step picks the file to load fully.
+    OUTPUT   : list of hits with {path, score, body excerpt, source}.
+               Use the `path` from the top hits as input to
+               read_artifact_mcp.
     DO NOT   : use for cross-project standards (use
                search_technical_knowledge) or aggregate questions (use
                aggregate_field).
+
+- documents_rag.search_project_documents(user_id, query, project_oenum?, limit?)
+    PURPOSE  : semantic search across user-UPLOADED documents stored
+               in this project's Qdrant collection. Distinct from
+               search_context (cloned-repo content): this index covers
+               files the user dropped through the upload UI, not files
+               from the GitLab clone. Use when the question is about
+               an upload that wouldn't be in the repo (RFQ PDFs the
+               user pasted into the chat, supplier datasheets, etc.).
+    USE WHEN : user references "the PDF I uploaded", "the spec they
+               sent", or any document obviously not part of the
+               cloned project tree.
+    DO NOT   : use as a substitute for search_context — uploads and
+               repo files live in different indices.
+
+- documents_rag.retrieve_chunks(user_id, query, project_oenum?, top_k?)
+    PURPOSE  : like search_project_documents but returns larger
+               surrounding context windows around each hit. Use for
+               long-form answers where you want the synthesiser to
+               see neighbouring paragraphs, not just the one chunk
+               that matched.
+
+- project_explorer.get_exploration(project_id)
+    PURPOSE  : read the pre-computed project map written to Redis by
+               project-explorer at session startup — file tree,
+               language stats, entry-point heuristics, README probe,
+               docker / CI presence.
+    USE WHEN : "what kind of project is this", "what's the tech
+               stack", "show me the layout", "is this Python or
+               Node", and as a CHEAP first step before any retrieval
+               so the planner knows roughly what shape the repo is.
+    DO NOT   : call get_project_tree just to count files — the
+               explorer already has language stats and an entry-point
+               list, faster than re-listing.
 
 - context_search.search_past_cot(query)
     PURPOSE  : ladder G — recall how the agent has solved similar

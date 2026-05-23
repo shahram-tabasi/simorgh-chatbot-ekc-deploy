@@ -432,6 +432,203 @@ async def _extract_artifacts(
     }
 
 
+async def _index_for_search(
+    client: httpx.AsyncClient, project_id: str,
+    *, repo: str | None, ref: str | None,
+) -> dict:
+    """Bulk-index cloned project files into context-search's Elasticsearch
+    ``simorgh-content`` index so the planner's ``search_context`` tool
+    can do BM25 + kNN over them.
+
+    Phase 1 of the auto-exploration pipeline. Without this step, the
+    only way to reach project content is a live GitLab read via
+    ``read_artifact_mcp`` (one file at a time, no relevance ranking) —
+    which is why "what does the doc say about X" questions were
+    routinely missing or guessing.
+
+    Strategy:
+      • Enumerate every file under /work/gitlab (skip .git, .simorgh
+        artifacts skipped here because we re-discover them as
+        extracted/<path>.md sidecars below).
+      • For each file: prefer ``.simorgh/extracted/<path>.md`` if it
+        exists (PDFs, docx, images already became markdown at
+        _extract_artifacts time); otherwise read the source bytes if
+        the file is small text.
+      • Chunk into ~2000-char windows with 200-char overlap so the
+        embedding model (768-dim, ~512-token context) gets coherent
+        passages rather than full documents that would be truncated.
+      • POST batches of 25 ContentDoc rows to /index/content/bulk.
+        Server-side embeds title+body via the embeddings service.
+
+    Best-effort: one failing file does NOT fail project init. The
+    planner can still fall back to read_artifact_mcp for whatever
+    isn't indexed.
+    """
+    paths = await _list_workspace_files(client, project_id, "/work/gitlab")
+    if not paths:
+        return {"skipped": True, "reason": "no files under /work/gitlab"}
+
+    # Build the path -> extracted-sidecar map ONCE so we can prefer the
+    # markdown sidecar when one exists. The extracted dir is a sibling
+    # of /work/gitlab (write_file in runtime-broker resolves paths
+    # against /work directly, so .simorgh/extracted/gitlab/X.md lives
+    # at /work/.simorgh/extracted/gitlab/X.md — not inside the cloned
+    # repo). _list_workspace_files also explicitly skips .simorgh/*,
+    # so we do a one-off find here.
+    extracted_paths: list[str] = []
+    try:
+        r = await _exec(
+            client, project_id,
+            "set -e\n"
+            f"D=/work/{shlex.quote(EXTRACTED_DIR)}\n"
+            'if [ -d "$D" ]; then cd /work && find '
+            f"{shlex.quote(EXTRACTED_DIR)} -type f -name '*.md' -size -50M; fi\n",
+            timeout_sec=60,
+        )
+        out = (r.get("stdout") or "").strip()
+        extracted_paths = [line for line in out.splitlines() if line.strip()]
+    except Exception as e:
+        log.warning("extracted_listing_failed", project_id=project_id, error=str(e))
+    # Sidecar layout: ".simorgh/extracted/<source>.md".
+    # _list_workspace_files returns the source as "<source>" (the
+    # /work/-relative path of the original file, e.g. "gitlab/spec.pdf").
+    # So strip the leading EXTRACTED_DIR + '/' and the trailing '.md'
+    # to recover the source-path key.
+    _ext_prefix = EXTRACTED_DIR + "/"
+    extracted_index = {
+        p[len(_ext_prefix):-len(".md")]: p
+        for p in extracted_paths
+        if p.startswith(_ext_prefix) and p.endswith(".md")
+    }
+
+    headers = _broker_headers()
+    batch: list[dict] = []
+    indexed_chunks = 0
+    indexed_files = 0
+    skipped_binary = 0
+    errors: list[dict] = []
+
+    async def _flush() -> None:
+        nonlocal batch, indexed_chunks, errors
+        if not batch:
+            return
+        try:
+            r = await client.post(
+                f"{CONTEXT_SEARCH_URL}/index/content/bulk",
+                json=batch, timeout=120.0,
+            )
+            r.raise_for_status()
+            indexed_chunks += int((r.json() or {}).get("indexed", 0))
+        except Exception as e:
+            errors.append({"batch_size": len(batch), "error": str(e)[:200]})
+        batch = []
+
+    for source_path in paths:
+        # source_path looks like "gitlab/path/inside/repo.ext".
+        rel = source_path[len("gitlab/"):] if source_path.startswith("gitlab/") else source_path
+
+        # Prefer the extracted markdown sidecar (PDF/docx/image already
+        # turned into markdown) over the binary source. For native text
+        # files (md, rst, txt, code) the source itself is what we want.
+        sidecar = extracted_index.get(source_path)
+        read_target = sidecar or source_path
+        try:
+            r = await client.get(
+                f"{RUNTIME_BROKER_URL}/sessions/{project_id}/read_file",
+                params={"path": read_target}, headers=headers, timeout=60.0,
+            )
+            if r.status_code != 200:
+                errors.append({"path": source_path, "reason": f"read {r.status_code}"})
+                continue
+            body = r.json()
+        except Exception as e:
+            errors.append({"path": source_path, "reason": f"read exc {e}"[:200]})
+            continue
+
+        encoding = body.get("encoding", "utf-8")
+        if encoding != "utf-8":
+            # Binary file with no extracted sidecar — nothing useful to
+            # embed. Tracked separately so the report distinguishes
+            # "couldn't extract" from "wasn't text".
+            skipped_binary += 1
+            continue
+
+        content = body.get("content", "") or ""
+        if not content.strip():
+            continue
+
+        for chunk_idx, chunk in enumerate(_chunk_text(content, size=2000, overlap=200)):
+            batch.append({
+                "source": "gitlab",
+                "project_id": project_id,
+                "repo": repo,
+                "ref": ref,
+                # rel is the source path; sidecars are an extraction
+                # detail the planner doesn't need to know about.
+                "path": rel,
+                "title": rel.rsplit("/", 1)[-1],
+                "body": chunk,
+                "tags": ["project_file"] + (
+                    ["extracted"] if sidecar else ["native_text"]
+                ),
+                # Deterministic id so re-running init upserts instead
+                # of duplicating. Keying on (project_id, path, chunk)
+                # is enough; ref changes mean a new init anyway.
+                "id": f"{project_id}::{rel}::{chunk_idx}",
+            })
+            if len(batch) >= 25:
+                await _flush()
+
+        indexed_files += 1
+
+    await _flush()
+
+    log.info("index_for_search_done", project_id=project_id,
+             scanned=len(paths), indexed_files=indexed_files,
+             indexed_chunks=indexed_chunks,
+             skipped_binary=skipped_binary, errors=len(errors))
+    return {
+        "scanned": len(paths),
+        "indexed_files": indexed_files,
+        "indexed_chunks": indexed_chunks,
+        "skipped_binary": skipped_binary,
+        "errors": errors[:10],
+    }
+
+
+def _chunk_text(text: str, *, size: int, overlap: int) -> list[str]:
+    """Split text into overlapping windows. Tries to break on a
+    paragraph or sentence boundary inside the last ~10% of the window
+    so chunks don't end mid-word; falls back to a hard cut if no
+    boundary is in range."""
+    if size <= 0:
+        return [text] if text else []
+    if len(text) <= size:
+        return [text]
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        end = min(i + size, n)
+        if end < n:
+            # Look back up to 25% of the chunk for a natural break.
+            # Tight windows (≤10%) silently fall through to hard cuts
+            # for documents with sparse paragraph boundaries — common
+            # in extracted Persian/Arabic markdown where one cell of a
+            # table spans 1.5k characters before the next \n\n.
+            search_from = max(i + int(size * 0.75), i + 1)
+            for sep in ("\n\n", ". ", "\n", " "):
+                cut = text.rfind(sep, search_from, end)
+                if cut != -1:
+                    end = cut + len(sep)
+                    break
+        out.append(text[i:end])
+        if end >= n:
+            break
+        i = max(end - overlap, i + 1)
+    return out
+
+
 async def _clone_ekc(client: httpx.AsyncClient, project_id: str) -> dict:
     """Clone ekc-technical-knowledge into /work/ekc-knowledge as a read-only
     snapshot. No remote configured for write — it is consult-only."""
@@ -536,6 +733,30 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
                                  failures=res.get("failures", []))
                 except Exception as e:
                     _record("extract_artifacts", "error", error=str(e))
+
+            # 2.6 Bulk-index project files into context-search so the
+            #     planner's search_context tool actually has something
+            #     to find for "what does the doc say about X" queries.
+            #     Runs only after a successful clone — there's nothing
+            #     to index otherwise. Best-effort: indexing failures
+            #     don't block init, the planner can still fall back to
+            #     live GitLab reads via read_artifact_mcp.
+            if cloned_ok:
+                s["current_step"] = "index_for_search"
+                try:
+                    res = await _index_for_search(
+                        client, req.project_id,
+                        repo=req.gitlab_repo_path, ref=base_ref,
+                    )
+                    _record("index_for_search", "ok", **{
+                        k: v for k, v in res.items() if k != "errors"
+                    })
+                    if res.get("errors"):
+                        log.info("index_for_search_errors",
+                                 project_id=req.project_id,
+                                 errors=res.get("errors", []))
+                except Exception as e:
+                    _record("index_for_search", "error", error=str(e))
 
             # 3. Optional: TPMS data.
             tpms_oe = req.sources.techserver_oenum or req.oenum
