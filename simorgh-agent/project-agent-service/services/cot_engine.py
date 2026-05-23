@@ -586,28 +586,22 @@ class COTEngine:
     async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call the LLM service for COT analysis.
 
-        Routing precedence:
-          1. ``LLM_GATEWAY_URL`` (preferred) — POST /generate with
-             ``force_backend=text`` + ``guided_json=COT_PLAN_SCHEMA`` so
-             gpt-oss-20b on .61 emits schema-valid JSON via grammar
-             constraint (priority-1 work). Fast AND reliable; no
-             reason to fall back to the 7B VLM for structured output.
-          2. ``COT_LLM_BASE_URL`` (legacy) — pre-grammar fallback that
-             routed the planner to Qwen2.5-VL-7B because gpt-oss
-             without grammar produced unreliable JSON. Kept so an
-             operator can override per-env without code changes.
+        Routing precedence (after extensive live testing):
+          1. ``COT_LLM_BASE_URL`` — typically Qwen2.5-VL-7B on .62 via
+             ``http://nginx/api/vlm/v1``. Despite being smaller than
+             gpt-oss-20b, the VLM is an instruction-tuned model that
+             actually follows multi-step tool-use plans. gpt-oss is a
+             base model and reliably picks the laziest valid plan
+             (single "Direct response" step) even with explicit
+             planning guidance in the system prompt — grammar
+             constraint guarantees JSON validity, not JSON quality.
+          2. ``LLM_GATEWAY_URL`` — gpt-oss + grammar (priority-1
+             path). Useful when the VLM is down OR for cases where
+             the schema constraint matters more than plan quality
+             (e.g. commit-message synthesis). Kept as the
+             fallback so chats keep moving when .62 is unavailable.
           3. ``self.llm_service`` — generic legacy path.
         """
-        gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
-        if gateway_url:
-            try:
-                return await self._call_llm_gateway_structured(gateway_url, messages)
-            except Exception as e:
-                logger.warning(
-                    "CoT planner via gateway (%s) failed: %s; falling back",
-                    gateway_url, e,
-                )
-
         cot_base_url = os.getenv("COT_LLM_BASE_URL", "").strip()
         if cot_base_url:
             try:
@@ -618,7 +612,18 @@ class COTEngine:
             except Exception as e:
                 logger.warning(
                     f"CoT planner via {cot_base_url} failed: {e}; "
-                    "falling back to default llm_service"
+                    "falling back to llm-gateway"
+                )
+
+        gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
+        if gateway_url:
+            try:
+                return await self._call_llm_gateway_structured(gateway_url, messages)
+            except Exception as e:
+                logger.warning(
+                    "CoT planner via gateway (%s) failed: %s; "
+                    "falling back to default llm_service",
+                    gateway_url, e,
                 )
 
         try:

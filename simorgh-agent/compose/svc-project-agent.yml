@@ -46,15 +46,18 @@ services:
       - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
       - LLM_GATEWAY_URL=http://llm-gateway:8030
       # CoT planner endpoint. Priority order in cot_engine._call_llm:
-      #   1. LLM_GATEWAY_URL (above) → gpt-oss-20b on .61 with
-      #      grammar-constrained JSON. Fast AND reliable.
-      #   2. COT_LLM_BASE_URL → legacy VLM-7B route (kept as opt-in
-      #      override for ops; empty by default).
+      #   1. COT_LLM_BASE_URL → VLM-7B on .62 (instruction-tuned;
+      #      actually follows multi-step plans). Default ON because
+      #      live testing showed gpt-oss-20b base model produces
+      #      "Direct response" minimal plans even with explicit
+      #      tool-use guidance — grammar gives valid JSON but not
+      #      smart JSON.
+      #   2. LLM_GATEWAY_URL → gpt-oss-20b on .61 with grammar
+      #      constraint. Fallback when the VLM is down. Useful for
+      #      strictly-structured calls (commit message synthesis,
+      #      entity extraction) where schema validity dominates.
       #   3. self.llm_service legacy path.
-      #
-      # Set COT_LLM_BASE_URL=http://nginx/api/vlm/v1 in .env only if
-      # the gateway / gpt-oss is unavailable and you need a fallback.
-      - COT_LLM_BASE_URL=${COT_LLM_BASE_URL:-}
+      - COT_LLM_BASE_URL=${COT_LLM_BASE_URL:-http://nginx/api/vlm/v1}
       - COT_LLM_MODEL=${COT_LLM_MODEL:-qwen2.5-vl-7b}
       - COT_LLM_MAX_TOKENS=${COT_LLM_MAX_TOKENS:-2048}
       # 2026-05 enterprise migration: code exec → runtime-broker (ephemeral
