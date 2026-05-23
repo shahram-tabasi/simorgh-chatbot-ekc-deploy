@@ -265,6 +265,29 @@ F. CHAT HISTORY  (this user, this project, past turns)
    project context — read them before adding this step. Only add the
    step when the reference is older than that window.
 
+F2. RELATIONSHIPS / CROSS-DOC LOOKUP  (which docs mention X?)
+    Trigger: "which documents mention IEC 61439", "every file that
+             talks about earthing", "list all references to
+             ElectroKavir", "what's connected to OE-12345",
+             "show me every section about Y"
+    Plan:    context_search.graph_search(query, project_id=<this>,
+                                          entities=[<seed1>, ...])
+             → llm.synthesize  (one or two paragraphs naming the
+                                 docs / entities found, with paths
+                                 lifted from the graph hits)
+    NOTE   : project-init populates a Project—CONTAINS→Document
+             —MENTIONS→Entity graph in AGE at session startup.
+             Entities are extracted by regex (standards codes,
+             headings, OE numbers, URLs, currency); rich entities
+             (people / orgs) come from a per-query LLM step via
+             graph_extract_entities when needed. Use seed `entities`
+             when the question names them directly; otherwise the
+             query falls back to a substring match on tags / paths.
+    DO NOT : call when the question is fuzzy / paraphrase-style —
+             that's ladder B (search_context). Graph is for who-
+             touches-what queries, not "what does the spec mean
+             about X".
+
 G. PRIOR REASONING  (have we solved this kind of problem before?)
    Trigger: high-complexity questions, blast-radius style, "how should we
             approach X", "what did the agent decide last time for Y"
@@ -441,6 +464,31 @@ TOOL CATALOG (CORE)
     PURPOSE  : ladder H — make Elasticsearch do the counting.
     USE WHEN : "how many", "top N", "trend over time".
     DO NOT   : pull docs and count in the prompt.
+
+- context_search.graph_search(query, project_id, entities?, hops=2, limit=20)
+    PURPOSE  : ladder F2 — traverse the project property graph in
+               Apache AGE. After project-init runs, every cloned
+               project has a Project—CONTAINS→Document—MENTIONS→Entity
+               subgraph populated from the indexed chunks (standards
+               codes, headings, OE numbers, URLs, currency). This
+               tool returns the hops-bounded neighbourhood of one or
+               more seed vertices, so the planner can answer
+               cross-document relationship questions like "which
+               documents mention X" / "every section that touches Y"
+               in one round-trip instead of N read_artifact_mcp calls.
+    USE WHEN : relationship / cross-doc questions; the user names a
+               specific code, ID, or topic and wants to know where
+               it surfaces. Pass `entities=[...]` when you already
+               know the seed names (from a prior search_context hit
+               or the user's own phrasing); else the tool derives
+               seeds from `query` substrings.
+    OUTPUT   : list of {id, score, title, label, properties, hops}
+               hits — pull `properties.path` for Document vertices,
+               `properties.name` for Entity vertices.
+    DO NOT   : use as a fuzzy retrieval substitute; for paraphrase
+               questions use search_context. Graph is precise — if
+               the user's phrasing doesn't match an indexed entity,
+               it returns empty rather than approximating.
 
 - techserver_sync(oenum)
     PURPOSE  : ladder E — SMB copy of legacy engineering files into the

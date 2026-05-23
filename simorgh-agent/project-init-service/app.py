@@ -741,6 +741,7 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
             #     to index otherwise. Best-effort: indexing failures
             #     don't block init, the planner can still fall back to
             #     live GitLab reads via read_artifact_mcp.
+            indexed_ok = False
             if cloned_ok:
                 s["current_step"] = "index_for_search"
                 try:
@@ -751,12 +752,43 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
                     _record("index_for_search", "ok", **{
                         k: v for k, v in res.items() if k != "errors"
                     })
+                    indexed_ok = (res.get("indexed_files", 0) > 0)
                     if res.get("errors"):
                         log.info("index_for_search_errors",
                                  project_id=req.project_id,
                                  errors=res.get("errors", []))
                 except Exception as e:
                     _record("index_for_search", "error", error=str(e))
+
+            # 2.7 Populate the AGE property graph. Walks the freshly-
+            #     indexed chunks, regex-extracts standards codes /
+            #     headings / oenums / urls / currency, writes
+            #     Project—CONTAINS→Document—MENTIONS→Entity nodes so
+            #     the planner's graph_search returns real hits for
+            #     relationship questions ("every doc that mentions
+            #     IEC 61439-2"). No-op when AGE_DSN unset, so
+            #     deployments without postgres_age stay unaffected.
+            if indexed_ok:
+                s["current_step"] = "populate_graph"
+                try:
+                    r = await client.post(
+                        f"{CONTEXT_SEARCH_URL}/populate/project/{req.project_id}",
+                        params={"project_name": req.project_name or "",
+                                "oenum": req.oenum or ""},
+                        timeout=600.0,
+                    )
+                    r.raise_for_status()
+                    body = r.json()
+                    if body.get("skipped_reason"):
+                        _record("populate_graph", "skipped",
+                                reason=body["skipped_reason"])
+                    else:
+                        _record("populate_graph", "ok", **{
+                            k: v for k, v in body.items()
+                            if k not in ("project_id", "skipped_reason")
+                        })
+                except Exception as e:
+                    _record("populate_graph", "error", error=str(e))
 
             # 3. Optional: TPMS data.
             tpms_oe = req.sources.techserver_oenum or req.oenum

@@ -1044,6 +1044,264 @@ def _age():
     return _age_client
 
 
+# ---------------------------------------------------------------------------
+# Phase 4 — project graph populator
+# ---------------------------------------------------------------------------
+# Walks every chunk we indexed in Phase 1, regex-extracts entities
+# (standards codes, headings, OE numbers, currency mentions, URLs / emails),
+# and writes a small property graph into AGE:
+#
+#   (:Project {project_id, name?})
+#     -[:CONTAINS]-> (:Document {project_id, path, title})
+#                       -[:MENTIONS {count}]-> (:Entity {key, name, type})
+#
+# `key` is type:::normalised_name so the same entity surfaces consistently
+# across documents — "IEC 61439-2", "iec61439-2", "IEC-61439-2" all merge
+# onto one vertex of type=standard.
+#
+# Regex-only on purpose: LLM-based entity extraction (the richer second
+# pass) goes through `graph_extract_entities` per-query, NOT at populate
+# time, so we stay within seconds for a hundred-file repo and within
+# dollars for any repo. The result is enough to make graph_search return
+# real hits for "what mentions IEC X?" / "every doc that talks about Y"
+# questions instead of the empty list it returns today.
+
+
+_HEADING_RX = re.compile(r"^\s{0,3}#{1,6}\s+(.{2,160})$", re.MULTILINE)
+
+
+def _entity_patterns() -> list[tuple[str, re.Pattern[str], object]]:
+    """Return (entity_type, compiled_pattern, normaliser) triples.
+
+    `normaliser` is either a callable str -> str or None (use the raw
+    match). Each pattern is run with re.IGNORECASE; multiline state is
+    not needed because we scan chunk bodies, not full files.
+    """
+    def _spaceless_upper(s: str) -> str:
+        return re.sub(r"\s+", "", s).upper()
+
+    return [
+        ("standard", re.compile(r"\bIEC[\s\-]?\d{4,5}(?:[\s\-]\d+)?\b", re.IGNORECASE),
+         _spaceless_upper),
+        ("standard", re.compile(r"\bISO[\s\-]?\d{4,5}(?:[\s\-]\d+)?\b", re.IGNORECASE),
+         _spaceless_upper),
+        ("standard", re.compile(r"\bIEEE[\s\-]?\d{2,4}(?:[\s\-]\d+)?\b", re.IGNORECASE),
+         _spaceless_upper),
+        ("oenum", re.compile(r"\bOE[\s\-]?\d{3,7}\b", re.IGNORECASE),
+         _spaceless_upper),
+        # Persian-friendly URL / email (ASCII parts).
+        ("url",   re.compile(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+", 0), None),
+        ("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", 0), None),
+        # Money / currency markers, EN + FA. Captures one symbol.
+        ("currency", re.compile(r"\b\d[\d,]*\s*(?:USD|EUR|GBP|تومان|ریال|﷼)\b", re.IGNORECASE),
+         None),
+    ]
+
+
+def _extract_entities_from_chunk(body: str) -> dict[tuple[str, str], dict[str, str]]:
+    """Run every pattern over a chunk body. Returns
+    {(type, normalised_key): {name, type, key}} deduplicated within a
+    single chunk so MENTIONS edges carry a meaningful per-document
+    count instead of per-mention noise.
+    """
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    for etype, rx, norm in _entity_patterns():
+        for m in rx.finditer(body):
+            raw = m.group(0).strip()
+            key = norm(raw) if norm else raw
+            if not key:
+                continue
+            out[(etype, key)] = {"type": etype, "key": f"{etype}:::{key}",
+                                 "name": raw}
+
+    # Markdown headings double as topics — useful for "which document
+    # has the section on Y" questions.
+    for m in _HEADING_RX.finditer(body):
+        title = m.group(1).strip()
+        if 2 <= len(title) <= 160:
+            key = re.sub(r"\s+", " ", title).lower()
+            out[("heading", key)] = {"type": "heading",
+                                     "key": f"heading:::{key}",
+                                     "name": title}
+    return out
+
+
+def _scroll_project_chunks(project_id: str,
+                            page_size: int = 200) -> list[dict[str, Any]]:
+    """Pull every indexed chunk for one project. ES `from_size` paging
+    is cheap up to ~10k docs; beyond that we'd switch to PIT + search_after,
+    but typical project sizes are well under that ceiling."""
+    chunks: list[dict[str, Any]] = []
+    from_offset = 0
+    while True:
+        body = {
+            "query": {"bool": {"filter": [
+                {"term": {"project_id": project_id}},
+            ]}},
+            "size": page_size,
+            "from": from_offset,
+            "_source": ["path", "title", "body", "ref", "repo", "source"],
+            "sort": [{"path.keyword": {"order": "asc",
+                                       "unmapped_type": "keyword"}},
+                     "_doc"],
+        }
+        r = es().search(index="simorgh-content", body=body)
+        page = r["hits"]["hits"]
+        if not page:
+            break
+        chunks.extend(page)
+        if len(page) < page_size:
+            break
+        from_offset += page_size
+        # Hard safety cap: don't scroll past 10k chunks; AGE writes
+        # become the bottleneck long before that anyway.
+        if from_offset >= 10_000:
+            log.warning("populate_graph_cap_hit",
+                        project_id=project_id, cap=10_000)
+            break
+    return chunks
+
+
+class PopulateGraphResponse(BaseModel):
+    project_id: str
+    documents: int
+    entities: int
+    mentions: int
+    chunks_scanned: int
+    skipped_reason: str | None = None
+    took_ms: int
+
+
+@app.post("/populate/project/{project_id}", response_model=PopulateGraphResponse)
+async def populate_project_graph(project_id: str, project_name: str = "",
+                                  oenum: str = ""):
+    """Regex-extract entities from every indexed chunk under
+    ``project_id`` and write a Document/Entity/MENTIONS graph into AGE.
+
+    Idempotent — re-running upserts. Safe to call after every
+    re-index; the (project_id, path) and (type, key) compound keys
+    keep duplicates from accumulating.
+
+    No-op (with a `skipped_reason`) when AGE isn't configured, so
+    project-init can call this unconditionally without needing to
+    branch on whether the AGE infra is up.
+    """
+    started = perf_counter()
+    client = _age()
+    if client is None:
+        return PopulateGraphResponse(
+            project_id=project_id, documents=0, entities=0,
+            mentions=0, chunks_scanned=0,
+            skipped_reason="AGE not configured (AGE_DSN unset)",
+            took_ms=int((perf_counter() - started) * 1000),
+        )
+
+    chunks = await asyncio.to_thread(_scroll_project_chunks, project_id)
+
+    # Aggregate per (path) and (entity_key) before writing — avoids
+    # one upsert per chunk per entity which would balloon AGE roundtrips.
+    docs: dict[str, dict[str, str]] = {}  # path -> {title, ref, repo, source}
+    entities: dict[str, dict[str, str]] = {}  # full_key -> {type, name}
+    mentions: dict[tuple[str, str], int] = {}  # (path, full_key) -> count
+
+    for h in chunks:
+        src = h.get("_source", {})
+        path = src.get("path")
+        if not path:
+            continue
+        if path not in docs:
+            docs[path] = {
+                "title": src.get("title") or path.rsplit("/", 1)[-1],
+                "ref":   src.get("ref") or "",
+                "repo":  src.get("repo") or "",
+                "source": src.get("source") or "gitlab",
+            }
+        body = src.get("body") or ""
+        if not body:
+            continue
+        per_chunk = _extract_entities_from_chunk(body)
+        for _, ent in per_chunk.items():
+            full_key = ent["key"]
+            entities.setdefault(full_key, {"type": ent["type"], "name": ent["name"]})
+            mentions[(path, full_key)] = mentions.get((path, full_key), 0) + 1
+
+    # Project node first.
+    try:
+        await asyncio.to_thread(
+            client.upsert_node, "Project", "project_id", project_id,
+            {"project_id": project_id, "name": project_name or "",
+             "oenum": oenum or ""},
+        )
+    except Exception as e:
+        log.warning("age_upsert_project_failed",
+                    project_id=project_id, error=str(e))
+
+    # Documents + CONTAINS edges. Document key is (project_id, path)
+    # combined into one string so AGE's MERGE-on-single-prop applies.
+    for path, meta in docs.items():
+        doc_key = f"{project_id}::{path}"
+        try:
+            await asyncio.to_thread(
+                client.upsert_node, "Document", "doc_key", doc_key,
+                {"doc_key": doc_key, "project_id": project_id,
+                 "path": path, **meta},
+            )
+            await asyncio.to_thread(
+                client.upsert_edge,
+                "Project", "project_id", project_id,
+                "Document", "doc_key", doc_key,
+                "CONTAINS",
+            )
+        except Exception as e:
+            log.warning("age_upsert_document_failed",
+                        project_id=project_id, path=path, error=str(e))
+
+    # Entities + MENTIONS edges.
+    for full_key, meta in entities.items():
+        try:
+            await asyncio.to_thread(
+                client.upsert_node, "Entity", "entity_key", full_key,
+                {"entity_key": full_key, **meta},
+            )
+        except Exception as e:
+            log.warning("age_upsert_entity_failed",
+                        key=full_key, error=str(e))
+
+    for (path, full_key), count in mentions.items():
+        doc_key = f"{project_id}::{path}"
+        try:
+            await asyncio.to_thread(
+                client.upsert_edge,
+                "Document", "doc_key", doc_key,
+                "Entity", "entity_key", full_key,
+                "MENTIONS", {"count": count},
+            )
+        except Exception as e:
+            log.warning("age_upsert_mention_failed",
+                        path=path, key=full_key, error=str(e))
+
+    return PopulateGraphResponse(
+        project_id=project_id,
+        documents=len(docs),
+        entities=len(entities),
+        mentions=len(mentions),
+        chunks_scanned=len(chunks),
+        took_ms=int((perf_counter() - started) * 1000),
+    )
+
+
+@mcp.tool()
+async def populate_project_graph_tool(project_id: str, project_name: str = "",
+                                       oenum: str = "") -> dict:
+    """Force a re-population of the project's AGE graph. Normally fired
+    automatically by project-init after the chunk indexer; expose it as
+    an MCP tool so the planner can also trigger a rebuild if it notices
+    the graph went stale (rare; only useful for long-lived sessions
+    where files were added after the original init)."""
+    r = await populate_project_graph(project_id, project_name, oenum)
+    return r.model_dump()
+
+
 @mcp.tool()
 async def bm25_search(query: str, project_id: str = "", oenum: str = "",
                       k: int = 8) -> dict:
