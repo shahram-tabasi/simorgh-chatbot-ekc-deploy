@@ -32,10 +32,21 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - HF_TOKEN=${HF_TOKEN:-}
-      # Make sure vLLM doesn't try to phone home through xray —
-      # gpt-oss-20b is already on local disk.
+      # gpt-oss-20b weights are already on disk — but vLLM 0.21 + the
+      # openai_harmony Python lib downloads its tiktoken BPE vocab on
+      # first init. Keep HF model loading offline (we have the weights),
+      # but let openai_harmony reach the CDN through the host's xray:
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
+      # Route outbound HTTP through xray on the docker bridge gateway.
+      # NO_PROXY excludes RFC1918 + service names so internal traffic
+      # stays direct.
+      - HTTP_PROXY=http://172.17.0.1:10809
+      - HTTPS_PROXY=http://172.17.0.1:10809
+      - http_proxy=http://172.17.0.1:10809
+      - https_proxy=http://172.17.0.1:10809
+      - NO_PROXY=localhost,127.0.0.1,::1,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
+      - no_proxy=localhost,127.0.0.1,::1,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
     # vLLM's serve mode with the Harmony tool-call parser. The
     # --enable-auto-tool-choice flag wires Harmony's `<|tool_calls|>`
     # output channel into the OpenAI-shape `message.tool_calls`.
