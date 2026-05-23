@@ -27,6 +27,23 @@ services:
       - DOC_PROCESSOR_URL=${DOC_PROCESSOR_URL:-http://doc-processor:8000}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+      # Docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (xray) into
+      # every container. python-gitlab uses requests, which honours that env
+      # var and tunnels every call to http://gitlab/... through xray. Xray
+      # treats docker-internal DNS inconsistently (sometimes bypasses,
+      # sometimes tries to forward the connect upstream) which produces an
+      # intermittent "cannot list repos sometimes" symptom: list_projects /
+      # user-projects randomly time out or 5xx. We don't need a proxy for
+      # anything gitlab-mcp does — it only talks to the in-cluster gitlab
+      # container — so wipe the proxy env entirely. requests doesn't honour
+      # CIDR in NO_PROXY (only hostnames / suffixes), but with HTTP_PROXY
+      # blank the variable is moot.
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
     deploy:
       resources:
         limits:
