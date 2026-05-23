@@ -589,6 +589,190 @@ class ProjectManagerAgent:
 
         return results, final_response
 
+    async def _maybe_fuzzy_retry_read(
+        self, tool: str, tool_input: dict, result: Any,
+    ) -> Optional[dict]:
+        """When a read_artifact / read_file call returns 404-ish or empty,
+        try ONCE more with a fuzzy-matched path from the actual project
+        tree. Returns the retried result, or None if no useful retry
+        happened (caller keeps the original result).
+
+        Rationale. The planner LLM often passes a path that doesn't
+        exactly match what's in GitLab — drops a file extension,
+        strips a leading dot, normalises Persian letters that look
+        identical but encode differently (ك vs ک, ي vs ی). The user's
+        question already implies the answer is in some file; refusing
+        with "couldn't locate" when the file is right there but one
+        character off is a poor experience. So: when the read came
+        back empty, we list the tree (cheap, cached server-side),
+        score every entry's path against the planner-supplied path
+        using a substring + character-set match, and retry with the
+        best scorer if it's clearly above the noise floor.
+
+        Bounded: max ONE retry per dispatch — no recursive ladders,
+        no per-result spinning.
+        """
+        requested = (tool_input.get("path") or "").strip()
+        if not requested or requested in ("/", "*", ""):
+            return None
+        if not self._read_returned_nothing(result):
+            return None
+
+        project = tool_input.get("project") or tool_input.get("project_id")
+        if not project:
+            return None
+
+        try:
+            tree = await self._try_gitlab_rest(
+                "get_project_tree",
+                {"project": project, "ref": tool_input.get("ref") or "main",
+                 "recursive": True},
+            )
+        except Exception as e:
+            logger.warning("fuzzy-retry tree fetch failed: %s", e)
+            return None
+        if not tree:
+            return None
+
+        # `tree` from _try_gitlab_rest is {"output": <json-string>, ...}.
+        # Parse out the entries list.
+        try:
+            import json as _json
+            tree_body = tree.get("output") if isinstance(tree, dict) else None
+            tree_data = _json.loads(tree_body) if isinstance(tree_body, str) else tree
+            entries = (tree_data or {}).get("entries", [])
+        except Exception:
+            return None
+        candidate_paths = [
+            e.get("path") for e in entries
+            if isinstance(e, dict)
+            and (e.get("type") in (None, "blob"))
+            and e.get("path")
+        ]
+        if not candidate_paths:
+            return None
+
+        best = self._best_fuzzy_match(requested, candidate_paths)
+        if not best or best == requested:
+            # No useful retry to make.
+            return None
+
+        logger.info(
+            "dispatch: fuzzy-retrying %s: requested path=%r → matched=%r",
+            tool, requested, best,
+        )
+        retry_input = dict(tool_input)
+        retry_input["path"] = best
+        try:
+            return await self.mcp_manager.call_tool(tool, {
+                k: v for k, v in retry_input.items()
+                if not k.startswith("_") and k != "project_id"
+            })
+        except Exception:
+            # MCP path failed for the retry too — try REST.
+            return await self._try_gitlab_rest(tool, retry_input)
+
+    @staticmethod
+    def _read_returned_nothing(result: Any) -> bool:
+        """True when the result of a read tool indicates 404 / empty
+        content (the kinds of return shapes our two transports use)."""
+        if result is None:
+            return True
+        if isinstance(result, dict):
+            output = result.get("output", "")
+            if isinstance(output, str):
+                if not output.strip():
+                    return True
+                s = output.strip()
+                if (s.startswith("{") and s.endswith("}")) or \
+                   (s.startswith("[") and s.endswith("]")):
+                    import json as _json
+                    try:
+                        parsed = _json.loads(s)
+                    except Exception:
+                        return False
+                    if isinstance(parsed, dict):
+                        # gitlab-mcp returns {"content": "...", ...} on
+                        # success; missing or empty content == 404-ish.
+                        content = parsed.get("content")
+                        if content in (None, ""):
+                            return True
+                        # Some error shapes use {"error": "..."} or
+                        # {"detail": "..."} — treat as failure.
+                        if parsed.get("error") or parsed.get("detail"):
+                            return True
+            # MCP path returns the raw inner dict; same check.
+            content = result.get("content")
+            if content in (None, "") and "error" not in result:
+                # No content key at all means non-read shape; only
+                # flag empty when an explicit empty content was set.
+                return "content" in result
+        return False
+
+    @staticmethod
+    def _best_fuzzy_match(
+        requested: str, candidates: list[str],
+    ) -> Optional[str]:
+        """Pick the best-scoring candidate for the requested path.
+
+        Heuristic, NOT semantic — we only need to recover from the
+        planner dropping an extension or a prefix:
+          • Exact match wins immediately.
+          • Otherwise score = (substring containment * 100) +
+                              (longest common subsequence ratio * 50)
+                              − (length-difference penalty).
+          • Prefer the SHORTEST winning path (deepest specificity).
+        Returns None if no candidate scores meaningfully above the
+        noise floor (avoids picking a wildly-unrelated file).
+        """
+        if not candidates:
+            return None
+        req = requested.strip()
+        for c in candidates:
+            if c == req:
+                return c
+
+        # Normalise Persian/Arabic letter variants that the planner LLM
+        # sometimes substitutes ("ك" Arabic kaf ↔ "ک" Persian kaf;
+        # "ي" Arabic ya  ↔ "ی" Persian ya).
+        def _norm(s: str) -> str:
+            return (s.replace("ك", "ک").replace("ي", "ی")
+                     .replace("‌", "").lower())
+        req_n = _norm(req)
+
+        def _score(c: str) -> tuple[int, int]:
+            c_n = _norm(c)
+            base = 0
+            if req_n in c_n:
+                base += 100
+            elif c_n in req_n:
+                base += 60
+            # Cheap LCS-ratio approximation: count matching tokens
+            # (split on common separators), normalised by max length.
+            import re as _re
+            req_tok = set(t for t in _re.split(r"[\s/._-]+", req_n) if t)
+            c_tok = set(t for t in _re.split(r"[\s/._-]+", c_n) if t)
+            if req_tok and c_tok:
+                overlap = len(req_tok & c_tok)
+                base += int(50 * overlap / max(len(req_tok), len(c_tok)))
+            # Length penalty: prefer paths whose length is close to
+            # the requested length when overlap is similar (avoids
+            # matching "README.md" for a request like "spec").
+            base -= min(20, abs(len(c) - len(req)) // 4)
+            # Tie-break: shorter wins (more specific).
+            return (base, -len(c))
+
+        scored = sorted(((s, c) for c, s in
+                         ((c, _score(c)) for c in candidates)), reverse=True)
+        if not scored:
+            return None
+        top_score, top_path = scored[0]
+        # Demand a meaningful margin over a "no overlap" baseline so
+        # we don't substitute an unrelated file.
+        if top_score[0] < 40:
+            return None
+        return top_path
+
     async def _try_gitlab_rest(self, tool: str, tool_input: dict):
         """Fallback path for gitlab_mcp tools when the streamable-HTTP
         transport misbehaves. gitlab-mcp exposes equivalent REST routes
@@ -916,7 +1100,18 @@ class ProjectManagerAgent:
                     k: v for k, v in tool_input.items()
                     if not k.startswith("_") and k != "project_id"
                 }
-                return await self.mcp_manager.call_tool(tool, mcp_input)
+                result = await self.mcp_manager.call_tool(tool, mcp_input)
+                # When a read returned empty / 404, try once more with
+                # a fuzzy-matched path from the actual project tree.
+                # See _maybe_fuzzy_retry_read for the rationale.
+                if tool in ("read_artifact_mcp", "read_artifact",
+                            "read_file_mcp"):
+                    retried = await self._maybe_fuzzy_retry_read(
+                        tool, mcp_input, result,
+                    )
+                    if retried is not None:
+                        return retried
+                return result
             except Exception as e:
                 logger.warning(f"MCP call failed for {tool}, falling back to HTTP: {e}")
                 # gitlab-mcp also exposes REST endpoints that work fine
@@ -924,6 +1119,13 @@ class ProjectManagerAgent:
                 # those directly before giving up.
                 rest_fallback = await self._try_gitlab_rest(tool, tool_input)
                 if rest_fallback is not None:
+                    if tool in ("read_artifact_mcp", "read_artifact",
+                                "read_file_mcp"):
+                        retried = await self._maybe_fuzzy_retry_read(
+                            tool, tool_input, rest_fallback,
+                        )
+                        if retried is not None:
+                            return retried
                     return rest_fallback
         elif tool in {
             "get_project_tree", "read_file_mcp", "read_artifact_mcp",

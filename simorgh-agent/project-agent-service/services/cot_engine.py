@@ -172,11 +172,24 @@ For every request, pick the LOWEST applicable rung first. Combine rungs
 only when the question actually needs them.
 
 A. KNOWN FILE
-   Trigger: user named a file ("analyse spec.pdf", "what's in README.md")
-   Plan:    gitlab_mcp.get_project_tree (confirm path)
-            → gitlab_mcp.read_artifact_mcp(project, path)
+   Trigger: user named a file ("analyse spec.pdf", "what's in README.md",
+            "اجزا_مقاصد_آرمانی را توضیح بده", "summarise the strategy doc")
+   Plan:    gitlab_mcp.get_project_tree(project)        ← MANDATORY first
+            → gitlab_mcp.read_artifact_mcp(project, path=<EXACT path from tree>)
             → llm.synthesize
-   1–3 steps. Done.
+   ALWAYS 3 steps when a filename or partial filename is involved.
+   Do NOT skip the tree step "to save time". Real repos have:
+     • partial filenames that need expansion (".docx", ".md.docx")
+     • unusual prefixes the user dropped (".md", ".simorgh.")
+     • language variants (Persian/Arabic letters that look identical
+       but encode differently — ك vs ک, ي vs ی)
+     • path components the user forgot (a deeply-nested folder)
+   In every case the tree step is what tells you the canonical path.
+   When a user-quoted name does NOT exactly equal any tree entry,
+   pick the entry whose path string contains the user's quote as a
+   substring; if multiple match, prefer the shortest path. NEVER
+   pass the user's quote verbatim to read_artifact_mcp — that loses
+   the discovery step's whole point.
 
 B. CONTENT-IN-REPO  (the user asks ABOUT content, not BY filename)
    Trigger: "what does the spec say about earthing", "summarise our
