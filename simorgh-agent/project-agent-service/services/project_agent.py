@@ -773,6 +773,65 @@ class ProjectManagerAgent:
             return None
         return top_path
 
+    async def _not_found_payload(
+        self, tool: str, tool_input: dict,
+    ) -> dict:
+        """Structured 'file not found' result. Returned only when both
+        the MCP read and the REST fallback failed AND the fuzzy
+        matcher couldn't find a close enough candidate in the project
+        tree. The synth step reads `output` like any other tool
+        result, so the user-facing message becomes a clear "tried X,
+        no match; available files are: ..." instead of an empty LLM
+        apology.
+        """
+        requested = (tool_input.get("path") or "").strip()
+        # Best-effort tree fetch for the suggestion list. If even
+        # this fails we degrade gracefully — the synth just sees
+        # the bare "not found" line.
+        sample_paths: list[str] = []
+        try:
+            tree = await self._try_gitlab_rest(
+                "get_project_tree",
+                {"project": tool_input.get("project")
+                            or tool_input.get("project_id"),
+                 "ref": tool_input.get("ref") or "main",
+                 "recursive": True},
+            )
+            if isinstance(tree, dict):
+                import json as _json
+                body = tree.get("output")
+                if isinstance(body, str):
+                    tree_data = _json.loads(body)
+                    entries = tree_data.get("entries", []) or []
+                    sample_paths = [
+                        e["path"] for e in entries
+                        if isinstance(e, dict)
+                        and e.get("type") in (None, "blob")
+                        and e.get("path")
+                    ][:50]
+        except Exception:
+            pass
+
+        msg_lines = [
+            f"{tool} could not locate the requested path "
+            f"({requested!r}). The fuzzy matcher also could not find a "
+            "close enough candidate in the project tree.",
+        ]
+        if sample_paths:
+            msg_lines.append("")
+            msg_lines.append("Available files in this project:")
+            for p in sample_paths:
+                msg_lines.append(f"  - {p}")
+        return {
+            "output": "\n".join(msg_lines),
+            "metadata": {
+                "via": "dispatcher_not_found",
+                "tool": tool,
+                "requested_path": requested,
+                "candidate_count": len(sample_paths),
+            },
+        }
+
     async def _try_gitlab_rest(self, tool: str, tool_input: dict):
         """Fallback path for gitlab_mcp tools when the streamable-HTTP
         transport misbehaves. gitlab-mcp exposes equivalent REST routes
@@ -1081,8 +1140,19 @@ class ProjectManagerAgent:
                     },
                 }
 
-        # Try MCP first for microservice tools (dynamic routing)
+        # Try MCP first for microservice tools (dynamic routing). Both
+        # transport failures (MCP exception, REST 404) and successful-
+        # but-empty responses (we got a 200 with `{"content": ""}`)
+        # funnel into the same recovery path: for read_artifact /
+        # read_file tools we fuzzy-match the planner's path against
+        # the actual project tree and retry once with the matched
+        # path. The structure below threads BOTH the "we got something
+        # back" and "we got None back" branches into that recovery so
+        # a 404 doesn't silently drop the read.
+        is_read_tool = tool in ("read_artifact_mcp", "read_artifact",
+                                "read_file_mcp")
         if has_mcp_tool:
+            initial_result: Any = None
             try:
                 # Strip dispatcher-internal keys before crossing the MCP
                 # boundary. gitlab-mcp tools are typed as e.g.
@@ -1100,33 +1170,38 @@ class ProjectManagerAgent:
                     k: v for k, v in tool_input.items()
                     if not k.startswith("_") and k != "project_id"
                 }
-                result = await self.mcp_manager.call_tool(tool, mcp_input)
-                # When a read returned empty / 404, try once more with
-                # a fuzzy-matched path from the actual project tree.
-                # See _maybe_fuzzy_retry_read for the rationale.
-                if tool in ("read_artifact_mcp", "read_artifact",
-                            "read_file_mcp"):
-                    retried = await self._maybe_fuzzy_retry_read(
-                        tool, mcp_input, result,
-                    )
-                    if retried is not None:
-                        return retried
-                return result
+                initial_result = await self.mcp_manager.call_tool(tool, mcp_input)
             except Exception as e:
                 logger.warning(f"MCP call failed for {tool}, falling back to HTTP: {e}")
                 # gitlab-mcp also exposes REST endpoints that work fine
                 # when the streamable-HTTP transport is misbehaving. Try
                 # those directly before giving up.
-                rest_fallback = await self._try_gitlab_rest(tool, tool_input)
-                if rest_fallback is not None:
-                    if tool in ("read_artifact_mcp", "read_artifact",
-                                "read_file_mcp"):
-                        retried = await self._maybe_fuzzy_retry_read(
-                            tool, tool_input, rest_fallback,
-                        )
-                        if retried is not None:
-                            return retried
-                    return rest_fallback
+                initial_result = await self._try_gitlab_rest(tool, tool_input)
+
+            if is_read_tool and (
+                initial_result is None
+                or self._read_returned_nothing(initial_result)
+            ):
+                # Both paths failed or returned empty content — the
+                # planner-supplied path almost certainly doesn't match
+                # any real file. Fuzzy-retry against the tree before
+                # surrendering.
+                retried = await self._maybe_fuzzy_retry_read(
+                    tool, tool_input, initial_result,
+                )
+                if retried is not None:
+                    return retried
+                # No fuzzy match either. Synthesise a structured
+                # "file not found" payload so the downstream synth
+                # step has SOMETHING to summarise — better than
+                # falling through to a content-less LLM call that
+                # produces "I don't have the text" and looks like
+                # the agent broke. Includes the tree paths the
+                # planner can offer the user as alternatives.
+                return await self._not_found_payload(tool, tool_input)
+
+            if initial_result is not None:
+                return initial_result
         elif tool in {
             "get_project_tree", "read_file_mcp", "read_artifact_mcp",
             "read_artifact", "list_branches_mcp", "list_projects_mcp",
@@ -1139,6 +1214,16 @@ class ProjectManagerAgent:
             # "read this file then summarise" plan into a no-op read
             # followed by an llm step that has no document content.
             rest_fallback = await self._try_gitlab_rest(tool, tool_input)
+            if is_read_tool and (
+                rest_fallback is None
+                or self._read_returned_nothing(rest_fallback)
+            ):
+                retried = await self._maybe_fuzzy_retry_read(
+                    tool, tool_input, rest_fallback,
+                )
+                if retried is not None:
+                    return retried
+                return await self._not_found_payload(tool, tool_input)
             if rest_fallback is not None:
                 return rest_fallback
 
