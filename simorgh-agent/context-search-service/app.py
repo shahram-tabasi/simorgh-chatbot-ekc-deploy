@@ -29,7 +29,9 @@ MCP tools (preferred surface for the COT agent):
 """
 import asyncio
 import os
+import re
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any, Literal
 
 import httpx
@@ -115,6 +117,50 @@ class SearchHit(BaseModel):
 class SearchResponse(BaseModel):
     hits: list[SearchHit]
     took_ms: int
+
+
+class RegexRequest(BaseModel):
+    """Planner-emitted regex search.
+
+    The planner (Ladder B precise-match path) generates a regex from the
+    user's intent and asks for matching passages from the auto-indexed
+    project chunks. We optionally use a `query_text` to first narrow the
+    candidate pool via BM25 + kNN — cheaper than scanning every chunk
+    in the repo on every query — then run Python ``re`` over each
+    candidate's body.
+    """
+    pattern: str = Field(..., min_length=1, max_length=512)
+    project_id: str | None = None
+    oenum: str | None = None
+    sources: list[str] | None = None
+    # Optional semantic narrowing. When provided, we run search_context
+    # first to rank candidates and only regex-scan the top max_scan.
+    # When omitted, we regex-scan up to max_scan chunks under the
+    # project_id filter, ordered by path (deterministic).
+    query_text: str | None = None
+    max_matches: int = Field(20, ge=1, le=100)
+    max_scan: int = Field(300, ge=1, le=2000)
+    context_chars: int = Field(200, ge=0, le=2000)
+    case_insensitive: bool = True
+    multiline: bool = True
+
+
+class RegexMatch(BaseModel):
+    path: str | None = None
+    title: str | None = None
+    source: str
+    score: float | None = None
+    match: str
+    context: str
+    chunk_id: str
+
+
+class RegexResponse(BaseModel):
+    hits: list[RegexMatch]
+    scanned: int
+    pattern: str
+    took_ms: int
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +362,129 @@ async def search_content(req: SearchRequest):
                       {"source", "title", "path", "repo"}},
         ))
     return SearchResponse(hits=hits, took_ms=r["took"])
+
+
+@app.post("/search/regex", response_model=RegexResponse)
+async def search_regex(req: RegexRequest):
+    """Run a precise regex over the auto-indexed project chunks.
+
+    Two-stage to keep CPU bounded:
+      1. ES retrieval narrows the candidate set to <= max_scan chunks,
+         either by relevance (when `query_text` is provided) or by a
+         straight filter (when not).
+      2. Python `re` matches each candidate body; up to `max_matches`
+         matches are returned with `context_chars` of surrounding
+         text.
+
+    Always returns 200 — pattern errors / regex exceptions are surfaced
+    via the `error` field so the planner can fall back to
+    search_context without paying for an HTTP-level retry."""
+    started = perf_counter()
+
+    flags = 0
+    if req.case_insensitive: flags |= re.IGNORECASE
+    if req.multiline:        flags |= re.MULTILINE
+    try:
+        pattern = re.compile(req.pattern, flags)
+    except re.error as e:
+        return RegexResponse(hits=[], scanned=0, pattern=req.pattern,
+                             took_ms=int((perf_counter() - started) * 1000),
+                             error=f"invalid regex: {e}")
+
+    filter_clauses: list[dict] = []
+    if req.project_id: filter_clauses.append({"term": {"project_id": req.project_id}})
+    if req.oenum:      filter_clauses.append({"term": {"oenum": req.oenum}})
+    if req.sources:    filter_clauses.append({"terms": {"source": req.sources}})
+
+    es_body: dict[str, Any]
+    if req.query_text:
+        # Semantic narrowing — BM25 on title+body, optional kNN.
+        es_body = {
+            "query": {"bool": {
+                "must":   [{"multi_match": {
+                    "query": req.query_text,
+                    "fields": ["title^2", "body"],
+                    "type": "best_fields",
+                }}],
+                "filter": filter_clauses,
+            }},
+            "size": req.max_scan,
+            "_source": ["source", "project_id", "oenum", "repo", "ref",
+                        "path", "title", "body", "tags"],
+        }
+        vec = await _embed(req.query_text)
+        if vec is not None:
+            es_body["knn"] = {
+                "field": "embedding",
+                "query_vector": vec,
+                "k": req.max_scan,
+                "num_candidates": max(req.max_scan * 2, 200),
+                "filter": filter_clauses,
+            }
+    else:
+        # No semantic ranking — straight filtered scan, deterministic
+        # order so repeated runs hit the same chunks. ES warns about
+        # deep scrolls past 10k; max_scan caps us at 2000 so we're
+        # well below.
+        es_body = {
+            "query": {"bool": {"filter": filter_clauses or [{"match_all": {}}]}}
+                     if filter_clauses else {"match_all": {}},
+            "size": req.max_scan,
+            "_source": ["source", "project_id", "oenum", "repo", "ref",
+                        "path", "title", "body", "tags"],
+            "sort": [{"path.keyword": {"order": "asc",
+                                       "unmapped_type": "keyword"}},
+                     "_doc"],
+        }
+
+    try:
+        r = es().search(index="simorgh-content", body=es_body)
+    except Exception as e:
+        return RegexResponse(hits=[], scanned=0, pattern=req.pattern,
+                             took_ms=int((perf_counter() - started) * 1000),
+                             error=f"es: {e}")
+
+    matches: list[RegexMatch] = []
+    scanned = 0
+    for h in r["hits"]["hits"]:
+        if len(matches) >= req.max_matches:
+            break
+        scanned += 1
+        src = h.get("_source", {})
+        body = src.get("body") or ""
+        if not body:
+            continue
+        # Bound per-chunk CPU. Each chunk is already ~2000 chars from
+        # the indexer; cap at 20k as belt-and-braces in case an
+        # external indexer wrote something huge.
+        scan_target = body if len(body) <= 20000 else body[:20000]
+        try:
+            for m in pattern.finditer(scan_target):
+                if len(matches) >= req.max_matches:
+                    break
+                s, e = m.start(), m.end()
+                ctx_s = max(0, s - req.context_chars)
+                ctx_e = min(len(scan_target), e + req.context_chars)
+                matches.append(RegexMatch(
+                    path=src.get("path"),
+                    title=src.get("title"),
+                    source=src.get("source", "unknown"),
+                    score=float(h.get("_score") or 0.0),
+                    match=scan_target[s:e],
+                    context=scan_target[ctx_s:ctx_e],
+                    chunk_id=h["_id"],
+                ))
+        except Exception as e:
+            # finditer can blow up on catastrophic backtracking; log and
+            # continue with the next chunk so the rest still returns.
+            log.warning("regex_finditer_failed",
+                        pattern=req.pattern[:120], error=str(e))
+            continue
+
+    return RegexResponse(
+        hits=matches, scanned=scanned, pattern=req.pattern,
+        took_ms=int((perf_counter() - started) * 1000),
+    )
 
 
 @app.post("/search/logs")
@@ -649,6 +818,78 @@ async def search_context(query: str, project_id: str = "", oenum: str = "", k: i
     req = SearchRequest(query=query, project_id=project_id or None,
                         oenum=oenum or None, k=k)
     return (await search_content(req)).model_dump()
+
+
+@mcp.tool()
+async def regex_search_project(
+    pattern: str,
+    project_id: str = "",
+    query_text: str = "",
+    max_matches: int = 20,
+    max_scan: int = 300,
+    context_chars: int = 200,
+    case_insensitive: bool = True,
+    multiline: bool = True,
+) -> dict:
+    """Precise-match retrieval. Run a Python regex over the project's
+    auto-indexed chunks and return matching passages with surrounding
+    context. The planner generates `pattern` from the user's intent.
+
+    When to use this over search_context:
+      - The user mentions a code, ID, or fixed phrase you want EXACTLY:
+        OE numbers, IEC clause numbers ("IEC 61439-2"), part numbers,
+        a Persian heading you saw in get_project_tree.
+      - You need disjunction / case-insensitivity that a BM25 query
+        can't express cleanly: "(transformer|reactor)\\s+ratio".
+      - search_context returned high-scoring hits but you need to pull
+        the SPECIFIC sentence / cell that mentions X for citation.
+
+    When NOT to use:
+      - Fuzzy / conceptual queries ("what does the spec think about
+        earthing best practices") — use search_context.
+      - The corpus isn't indexed yet (no scan target). The planner
+        should always have run search_context once before reaching for
+        regex; if that returned no project hits, regex won't help.
+
+    Args:
+      pattern: Python re-syntax. Keep < 512 chars. Be careful with
+        catastrophic backtracking shapes like (.+)+ or (a|a)*; the
+        server caps per-chunk scan length but won't rescue a truly
+        pathological pattern.
+      project_id: REQUIRED in normal use. Without it you'll scan
+        every indexed chunk across all projects, which is slow and
+        leaks data across project boundaries.
+      query_text: Optional semantic narrowing. If you have a fuzzy
+        topic the regex is trying to nail down, pass it here — the
+        scan only walks the top max_scan BM25+kNN candidates instead
+        of an arbitrary slice. Doubles the precision of the result
+        set with no extra planner steps.
+      max_matches: Hard cap on returned matches (1-100). Default 20
+        is enough for citation-style answers.
+      max_scan: Hard cap on chunks examined (1-2000). Default 300
+        bounds CPU at ~1s for typical 2kB chunks.
+      context_chars: Chars before/after each match in the `context`
+        field. Bigger = better synthesis input, smaller = less noise.
+
+    Returns:
+      {hits: [{path, title, source, score, match, context, chunk_id}],
+       scanned: <int>, pattern: <echoed>, took_ms: <int>,
+       error: <str|null>}
+      `error` is set (not raised) when the pattern doesn't compile
+      or ES is unreachable — surfaces as a usable signal in the
+      next planner step instead of an exception.
+    """
+    req = RegexRequest(
+        pattern=pattern,
+        project_id=project_id or None,
+        query_text=query_text or None,
+        max_matches=max_matches,
+        max_scan=max_scan,
+        context_chars=context_chars,
+        case_insensitive=case_insensitive,
+        multiline=multiline,
+    )
+    return (await search_regex(req)).model_dump()
 
 
 @mcp.tool()

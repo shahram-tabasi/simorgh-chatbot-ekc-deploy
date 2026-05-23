@@ -185,9 +185,32 @@ B. CONTENT-IN-REPO  (the user asks ABOUT content, not BY filename)
    Plan:    context_search.search_context(query, project_id=<this>) ← PRIMARY
             ┃ AND (when keyword precision matters)
             ┃ gitlab_mcp.search_blobs(query, project)
+            ┃ AND (when an exact phrase / code / heading matters)
+            ┃ context_search.regex_search_project(
+            ┃     pattern=<re you wrote>,
+            ┃     project_id=<this>, query_text=<topic>)
             → gitlab_mcp.read_artifact_mcp(project, path=<top hit>)
             → llm.synthesize
-   2–4 steps. Run the two searches IN PARALLEL when used together.
+   2–4 steps. Run the search variants IN PARALLEL when used together.
+
+   Which retrieval mode to pick:
+   • semantic (search_context)    — fuzzy topics, paraphrase tolerant.
+                                    DEFAULT. Always run this at minimum.
+   • keyword  (search_blobs)      — GitLab-side text grep. Cheap and
+                                    exact for single words. No relevance
+                                    ranking beyond GitLab's; better than
+                                    semantic when you want to find
+                                    every occurrence of a literal term.
+   • regex    (regex_search_project) — write a Python re-syntax pattern
+                                    when the user asks about an exact
+                                    code / clause / heading / phrase
+                                    you saw earlier in get_project_tree
+                                    or in a previous search hit, or
+                                    when you need disjunction the BM25
+                                    query can't express. Pair with
+                                    query_text=<topic> to scan only
+                                    the top candidates, not the whole
+                                    project.
 
    NOTE   : project-init bulk-indexes every cloned file (source text +
             extracted markdown sidecars for PDF/docx/image artifacts)
@@ -384,6 +407,34 @@ TOOL CATALOG (CORE)
     PURPOSE  : ladder G — recall how the agent has solved similar
                problems before.
     USE WHEN : complex / high-stakes asks; "blast radius" style.
+
+- context_search.regex_search_project(pattern, project_id, query_text?,
+                                       max_matches=20, max_scan=300,
+                                       context_chars=200)
+    PURPOSE  : precise-match retrieval over the auto-indexed project
+               chunks. You write the regex; the server compiles with
+               IGNORECASE + MULTILINE by default, narrows candidates
+               via BM25 + kNN when `query_text` is provided, and
+               returns matching passages with surrounding context.
+    USE WHEN : ladder B precision step — user asked about an exact
+               code / clause / heading / phrase, OR you need
+               disjunction the BM25 query can't express, OR you saw
+               a candidate term in get_project_tree / a prior search
+               hit and want to nail the exact section that mentions
+               it. Examples:
+                 pattern=r"IEC\s*61439[-\s]*2"  (standard code)
+                 pattern=r"اجزاء?\s*مقصد\s*آرمانی"  (Persian heading)
+                 pattern=r"(transformer|reactor)\s+ratio"  (disjunction)
+    DO NOT   : use as a substitute for search_context for fuzzy
+               conceptual questions; the regex is a precision tool,
+               not a recall tool. Don't omit project_id — without it
+               you scan across every project.
+    OUTPUT   : {hits: [{path, score, match, context, chunk_id, ...}],
+                scanned, took_ms, error}. Hand the `path` of the top
+               hit to read_artifact_mcp if synthesis needs the full
+               file. `error` is set (not raised) for invalid regex /
+               ES errors — react by retrying with a simpler pattern
+               or falling through to search_context.
 
 - context_search.aggregate_field(index, group_by, filter_query?)
 - context_search.time_series_query(index, metric, ...)
