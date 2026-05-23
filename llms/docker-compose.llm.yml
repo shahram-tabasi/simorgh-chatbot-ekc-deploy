@@ -125,7 +125,12 @@ services:
   # documents-rag / etc.) without touching their code.
   # ---------------------------------------------------------------------------
   ai_adapter:
-    build: ./ai_adapter
+    build:
+      context: ./ai_adapter
+      # The host .61 routes outbound through xray on 127.0.0.1:10809.
+      # Without host network, BuildKit's sandbox can't reach the proxy
+      # and pip install fails with "Cannot connect to proxy."
+      network: host
     image: simorgh-llm-ai-adapter:local
     container_name: ai_adapter
     depends_on:
