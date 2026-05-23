@@ -651,6 +651,34 @@ class ProjectMemoryService:
         # 1. Project info (PostgreSQL)
         try:
             context["project"] = await self.get_project(project_id)
+            # Flatten the project row's hot fields to the top of the
+            # context dict — cot_engine.analyze reads them as
+            # project_context.get("name") / get("sources_enabled") /
+            # get("gitlab_repo_path") / etc., NOT
+            # project_context["project"]["name"]. Without this the
+            # planner sees "Project: Unknown", sources_enabled={},
+            # and never plans gitlab_mcp calls even though the repo
+            # row is fully populated.
+            if context["project"]:
+                pr = context["project"]
+                # sources_enabled is stored as JSONB — already a dict
+                # from get_project; normalise None to empty dict.
+                se = pr.get("sources_enabled") or {}
+                if isinstance(se, str):
+                    try:
+                        import json as _json
+                        se = _json.loads(se)
+                    except Exception:
+                        se = {}
+                for key in (
+                    "name", "description", "status", "tpms_oenum",
+                    "gitlab_repo_path", "gitlab_repo_url",
+                    "gitlab_base_branch", "simorgh_branch",
+                    "exploration_status",
+                ):
+                    if context.get(key) is None and pr.get(key) is not None:
+                        context[key] = pr[key]
+                context["sources_enabled"] = se
         except Exception as e:
             logger.warning(f"Failed to get project info: {e}")
 
