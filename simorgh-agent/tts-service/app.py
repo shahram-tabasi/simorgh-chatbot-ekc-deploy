@@ -39,6 +39,19 @@ DEFAULT_LANGUAGE = os.getenv("TTS_LANGUAGE", "en")
 CACHE_DIR = Path(os.getenv("TTS_CACHE_DIR", "/app/cache"))
 MAX_CACHE_SIZE_MB = int(os.getenv("TTS_MAX_CACHE_MB", "500"))
 MAX_TEXT_LENGTH = int(os.getenv("TTS_MAX_TEXT_LENGTH", "5000"))
+# edge-tts opens a WSS to speech.platform.bing.com. aiohttp's WS client
+# does NOT honour HTTP_PROXY env vars, so on hosts without direct outbound
+# (e.g. .68 → xray on 172.17.0.1:10809) the connection dies with a DNS
+# resolution error. Pass the proxy URL explicitly via Communicate(proxy=).
+# Prefer an explicit TTS_PROXY override, fall back to HTTPS_PROXY/HTTP_PROXY.
+TTS_PROXY = (
+    os.getenv("TTS_PROXY")
+    or os.getenv("HTTPS_PROXY")
+    or os.getenv("https_proxy")
+    or os.getenv("HTTP_PROXY")
+    or os.getenv("http_proxy")
+    or None
+)
 
 # Ensure cache directory exists
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -153,6 +166,7 @@ async def health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "default_voice": DEFAULT_VOICE,
         "cache_dir": str(CACHE_DIR),
+        "proxy_configured": bool(TTS_PROXY),
     }
 
 
@@ -201,6 +215,7 @@ async def synthesize(request: SynthesizeRequest):
             voice=voice,
             rate=rate,
             volume=volume,
+            proxy=TTS_PROXY,
         )
 
         # Collect audio data

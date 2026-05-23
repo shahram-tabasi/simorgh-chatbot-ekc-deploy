@@ -25,6 +25,14 @@ services:
       - TTS_VOICE=${TTS_VOICE:-en-US-AriaNeural}
       - TTS_LANGUAGE=${TTS_LANGUAGE:-en}
       - TTS_MAX_CACHE_MB=${TTS_MAX_CACHE_MB:-500}
+      # edge-tts opens a WSS to speech.platform.bing.com — needs outbound
+      # internet. .68 has none directly; the host xray proxy at
+      # 172.17.0.1:10809 is the only way out. aiohttp's WS client does NOT
+      # honour HTTP_PROXY env vars on its own, so we pass the proxy URL
+      # explicitly into edge_tts.Communicate(proxy=...) inside app.py and
+      # read it from TTS_PROXY here. Override per-host if your xray binds
+      # somewhere else.
+      - TTS_PROXY=${TTS_PROXY:-http://172.17.0.1:10809}
 
 networks:
   app_net:
