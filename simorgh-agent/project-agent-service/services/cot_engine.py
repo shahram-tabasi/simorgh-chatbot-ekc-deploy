@@ -586,22 +586,34 @@ class COTEngine:
     async def _call_llm(self, messages: List[Dict[str, str]]) -> str:
         """Call the LLM service for COT analysis.
 
-        Routing precedence (after extensive live testing):
-          1. ``COT_LLM_BASE_URL`` — typically Qwen2.5-VL-7B on .62 via
-             ``http://nginx/api/vlm/v1``. Despite being smaller than
-             gpt-oss-20b, the VLM is an instruction-tuned model that
-             actually follows multi-step tool-use plans. gpt-oss is a
-             base model and reliably picks the laziest valid plan
-             (single "Direct response" step) even with explicit
-             planning guidance in the system prompt — grammar
-             constraint guarantees JSON validity, not JSON quality.
-          2. ``LLM_GATEWAY_URL`` — gpt-oss + grammar (priority-1
-             path). Useful when the VLM is down OR for cases where
-             the schema constraint matters more than plan quality
-             (e.g. commit-message synthesis). Kept as the
-             fallback so chats keep moving when .62 is unavailable.
-          3. ``self.llm_service`` — generic legacy path.
+        Routing precedence (post-Harmony-migration):
+          1. ``LLM_GATEWAY_URL`` + tools=[submit_plan] — preferred.
+             gpt-oss-20b on .61 (vLLM serve mode with the openai
+             tool-call parser) emits a Harmony tool_call to
+             ``submit_plan(plan=...)``; we extract the plan JSON
+             from ``tool_calls[0].function.arguments``. This is
+             what the harmony-test container proved works correctly:
+             multi-step plans with the right tools, in ~1 second.
+          2. ``COT_LLM_BASE_URL`` — typically Qwen2.5-VL-7B on .62.
+             Kept as a fallback so the planner still works if the
+             local LLM box is down or if its Harmony surface
+             regresses.
+          3. ``LLM_GATEWAY_URL`` + guided_json — legacy gateway
+             path. Produces degenerate plans for gpt-oss; kept only
+             as a last resort.
+          4. ``self.llm_service`` — generic legacy path.
         """
+        gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
+        if gateway_url:
+            try:
+                return await self._call_llm_harmony_tools(gateway_url, messages)
+            except Exception as e:
+                logger.warning(
+                    "CoT planner via Harmony tools (%s) failed: %s; "
+                    "falling back to VLM planner",
+                    gateway_url, e,
+                )
+
         cot_base_url = os.getenv("COT_LLM_BASE_URL", "").strip()
         if cot_base_url:
             try:
@@ -612,16 +624,15 @@ class COTEngine:
             except Exception as e:
                 logger.warning(
                     f"CoT planner via {cot_base_url} failed: {e}; "
-                    "falling back to llm-gateway"
+                    "falling back to gateway guided_json"
                 )
 
-        gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
         if gateway_url:
             try:
                 return await self._call_llm_gateway_structured(gateway_url, messages)
             except Exception as e:
                 logger.warning(
-                    "CoT planner via gateway (%s) failed: %s; "
+                    "CoT planner via gateway guided_json (%s) failed: %s; "
                     "falling back to default llm_service",
                     gateway_url, e,
                 )
@@ -644,6 +655,73 @@ class COTEngine:
         except Exception as e:
             logger.error(f"LLM call failed in COT engine: {e}")
             raise
+
+    async def _call_llm_harmony_tools(
+        self, gateway_url: str, messages: List[Dict[str, str]],
+    ) -> str:
+        """Plan via Harmony tool calling on gpt-oss-20b.
+
+        Routes through llm-gateway to the LLM box's vLLM serve, which
+        runs with `--tool-call-parser openai` so the model emits
+        Harmony-native tool_calls in the response. We define a single
+        `submit_plan` tool whose `parameters` schema IS the
+        ``COT_PLAN_SCHEMA``; the model fills it in one shot.
+
+        Output: the JSON-encoded plan, returned as a string so the
+        existing ``_parse_llm_response`` keeps working unchanged.
+        """
+        import httpx
+        timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
+
+        submit_plan_tool = {
+            "type": "function",
+            "function": {
+                "name": "submit_plan",
+                "description": (
+                    "Submit your chain-of-thought plan as a JSON object "
+                    "with `reasoning` (one paragraph explaining the "
+                    "approach) and `steps` (an array of concrete task "
+                    "steps, each with step_number, title, description, "
+                    "task_type, tool_needed, tool_input, depends_on, "
+                    "and optionally priority and estimated_duration). "
+                    "Call this tool exactly once with the complete plan."
+                ),
+                "parameters": COT_PLAN_SCHEMA,
+            },
+        }
+
+        payload = {
+            "messages":      messages,
+            "mode":          "offline",
+            "force_backend": "text",
+            "temperature":   0.3,
+            "max_tokens":    int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
+            "tools":         [submit_plan_tool],
+            # Force the model to call submit_plan rather than producing
+            # free-form text. vLLM's openai parser honours this.
+            "tool_choice":   {
+                "type": "function",
+                "function": {"name": "submit_plan"},
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(f"{gateway_url}/generate", json=payload)
+            r.raise_for_status()
+            body = r.json()
+
+        tool_calls = body.get("tool_calls") or []
+        if not tool_calls:
+            # gpt-oss didn't tool-call — possibly the gateway is on an
+            # old version that strips them, or the model returned plain
+            # text. Surface whatever content came back; _parse_llm_response
+            # will JSON-extract or fall back to a direct response.
+            return body.get("response") or ""
+
+        # tool_calls[0].function.arguments IS the plan JSON (as a string).
+        # Return it directly; _parse_llm_response handles JSON decode.
+        args = tool_calls[0].get("function", {}).get("arguments") or ""
+        return args if isinstance(args, str) else json.dumps(args)
 
     async def _call_llm_openai_compat(
         self, messages: List[Dict[str, str]], *, base_url: str, model: str

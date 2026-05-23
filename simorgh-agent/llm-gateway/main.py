@@ -127,6 +127,13 @@ class GenerateRequest(BaseModel):
     force_backend: Optional[str] = Field(
         None, description='"text" | "vlm" | None  (offline only)',
     )
+    # OpenAI-compatible tool calling. The local LLM (gpt-oss-20b via
+    # vLLM serve, post-Harmony migration) supports `tools=[...]` with
+    # native Harmony parsing. Setting these emits proper
+    # `message.tool_calls` in the response — strictly better than
+    # `extra={"guided_json": ...}` which produces degenerate plans.
+    tools:       Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
     # Carried through to OpenAI / vllm but not interpreted here.
     # Use this to pass guided_json / guided_regex / response_format etc.
     extra: Optional[Dict[str, Any]] = None
@@ -202,6 +209,8 @@ def _build_payload(
     max_tokens: Optional[int],
     extra: Optional[Dict[str, Any]],
     stream: bool,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "model":       model,
@@ -211,6 +220,10 @@ def _build_payload(
     }
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
+    if tools:
+        body["tools"] = tools
+    if tool_choice is not None:
+        body["tool_choice"] = tool_choice
     if extra:
         body.update(extra)
     return body
@@ -320,7 +333,11 @@ async def _do_chat_completion(
     choice = (body.get("choices") or [{}])[0]
     msg    = choice.get("message", {}) or {}
     return {
-        "response":      msg.get("content", ""),
+        "response":      msg.get("content") or "",
+        # Surface tool_calls verbatim so the caller can drive a tool-
+        # using agent loop (or extract a plan from
+        # tool_calls[0].function.arguments, as the CoT planner does).
+        "tool_calls":    msg.get("tool_calls") or [],
         "model":         body.get("model"),
         "finish_reason": choice.get("finish_reason"),
         "usage":         body.get("usage", {}),
@@ -340,6 +357,7 @@ async def generate(req: GenerateRequest) -> Dict[str, Any]:
         msgs, model=req.model or primary_model,
         temperature=req.temperature, max_tokens=req.max_tokens,
         extra=req.extra, stream=False,
+        tools=req.tools, tool_choice=req.tool_choice,
     )
 
     try:
@@ -443,6 +461,7 @@ async def generate_stream(req: GenerateRequest):
         msgs, model=req.model or model,
         temperature=req.temperature, max_tokens=req.max_tokens,
         extra=req.extra, stream=True,
+        tools=req.tools, tool_choice=req.tool_choice,
     )
     _stats[backend_kind] = _stats.get(backend_kind, 0) + 1
     if backend_kind.startswith("offline"):

@@ -1,95 +1,105 @@
 # =============================================================================
 # LLM SERVER — 192.168.1.61 (NVIDIA A30 24 GB × 1)
 # =============================================================================
-# Runs the bespoke Python service in `ai/` (Unsloth + vLLM 0.12.0). This
-# is the same loader that worked on this box before the brief
-# vllm/vllm-openai detour — it can fit `unsloth/gpt-oss-20b-16bit`
-# (~40 GB BF16) on a single A30 24 GB by streaming layers from disk on
-# demand. The off-the-shelf vllm/vllm-openai image cannot do this; it
-# pins all weights in VRAM at startup, so it OOMs on a 24 GB card with
-# the 16-bit form.
+# Stack architecture (post-Harmony migration):
 #
-# The service exposes an OpenAI-compatible API on port 80 (nginx) →
-# ai_service container :9000. The legacy `/generate-stream` endpoint
-# is also still served for backward compatibility, but llm-gateway and
-# every other client uses the OpenAI-compatible surface.
+#   nginx :80
+#     ├── /generate-stream → ai_adapter :9100 (FastAPI translator)
+#     │                          └── calls ai_service /v1/chat/completions
+#     └── everything else  → ai_service :9000 (vLLM serve)
 #
-# Endpoints (OpenAI-compatible):
-#   POST /v1/chat/completions      (streaming via "stream": true)
-#   POST /v1/completions
-#   GET  /v1/models
-#   GET  /health
-#   POST /generate-stream          (legacy, deprecated)
+# ai_service runs vLLM's native OpenAI server with the openai_harmony
+# tool-call parser, so `tools=[...]` requests get parsed into proper
+# `message.tool_calls` responses (Harmony's native channel). This is
+# what makes gpt-oss-20b a viable planner — guided_json was forcing
+# the model into a worst-case minimum-effort JSON which produced
+# 1-step "Direct response" degenerate plans.
 #
-# The companion VLM box on .62 still uses vllm/vllm-openai:latest
-# directly — see docker-compose.vlm.yml. AWQ-INT4 7B fits comfortably
-# on one A30, so the upstream image is fine there.
+# ai_adapter is a tiny (~50 MB, no GPU) FastAPI sidecar that keeps the
+# seven legacy callers of /generate-stream working without touching
+# their code. It translates the legacy {system_prompt, user_prompt,
+# thinking_level, stream} body into an OpenAI /v1/chat/completions
+# request and streams the response back in the legacy SSE shape.
+#
+# The previous custom ai_service (bespoke FastAPI + Unsloth + vLLM
+# library mode) is no longer used. Its code stays in ai/ for
+# reference / rollback. To roll back, swap the ai_service image
+# back to simorgh-llm-ai-service:local and revert the command.
+#
+# Endpoints (post-migration):
+#   POST /v1/chat/completions     (vLLM serve, supports tools=)
+#   POST /v1/completions          (vLLM serve)
+#   GET  /v1/models               (vLLM serve)
+#   GET  /health                  (vLLM serve)
+#   POST /generate-stream         (ai_adapter, legacy-shape SSE)
+#
+# The companion VLM box on .62 still uses vllm/vllm-openai directly
+# (see docker-compose.vlm.yml). With gpt-oss-20b now able to plan
+# correctly via Harmony, the VLM is no longer needed in the CoT
+# planner path — it can be repurposed for actual vision workloads
+# or retired entirely.
 # =============================================================================
 
 services:
-  # -------------------------------------------------------------------------
-  # Model initializer — pre-downloads gpt-oss-20b 16-bit before the main
-  # service starts. Runs once and exits. Idempotent: if the cache already
-  # has the model it just verifies and returns.
-  # -------------------------------------------------------------------------
-  model_initializer:
-    build: ./initializer
-    image: simorgh-llm-model-initializer:local
-    container_name: model_initializer
-    volumes:
-      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models
-    environment:
-      - PYTHONUNBUFFERED=1
-      - HF_TOKEN=${HF_TOKEN:-}
-    networks:
-      - ai_net
-    restart: "no"
-
-  # -------------------------------------------------------------------------
-  # AI service — Unsloth FastLanguageModel + vLLM, FastAPI front. This is
-  # the Python service from `ai/`. It loads `unsloth/gpt-oss-20b-16bit` by
-  # default (override via LLM_MODEL_PATH).
-  # -------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # AI service — vLLM OpenAI server with native Harmony tool calling.
+  # Replaces the bespoke Unsloth+vLLM-library service; we proved in the
+  # harmony-test side-by-side that vLLM serve handles gpt-oss-20b tool
+  # calls correctly with --tool-call-parser openai.
+  # ---------------------------------------------------------------------------
   ai_service:
-    build: ./ai
-    image: simorgh-llm-ai-service:local
+    image: vllm/vllm-openai:v0.21.0
     container_name: ai_service
-    depends_on:
-      model_initializer:
-        condition: service_completed_successfully
-    environment:
-      - PYTHONUNBUFFERED=1
-      - CUDA_VISIBLE_DEVICES=0
-
-      # Model path inside the container (resolves under /models). The
-      # initializer drops the 16-bit weights at this exact path.
-      - MODEL_PATH=${LLM_MODEL_PATH:-/models/unsloth-gpt-oss-20b-16bit}
-      - HF_TOKEN=${HF_TOKEN:-}
-
-      # LangChain tooling exposed by the agent. Off by default for the
-      # gateway-only deployment; chat tools live in simorgh-agent now.
-      - ENABLE_SEARCH_TOOL=${ENABLE_SEARCH_TOOL:-false}
-      - ENABLE_PYTHON_REPL=${ENABLE_PYTHON_REPL:-false}
-      - ENABLE_SIEMENS_API=${ENABLE_SIEMENS_API:-false}
-      - AGENT_VERBOSE=${AGENT_VERBOSE:-false}
-
-      # Optional: Self-hosted search API
-      - SEARCH_API_URL=${SEARCH_API_URL:-}
-      - SEARCH_API_KEY=${SEARCH_API_KEY:-}
-
-      # Siemens Developer API (only if ENABLE_SIEMENS_API=true)
-      - SIEMENS_API_KEY=${SIEMENS_API_KEY:-}
-
-      # Python REPL guardrails (only if ENABLE_PYTHON_REPL=true)
-      - PYTHON_REPL_TIMEOUT=10
-      - PYTHON_REPL_SANDBOX=true
     expose:
       - "9000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HF_TOKEN=${HF_TOKEN:-}
+      # gpt-oss-20b weights are already on disk; no re-validate against HF.
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      # openai_harmony's Rust HTTP client doesn't honor HTTP_PROXY env
+      # vars the way Python httpx does, so the harmony vocab is pre-
+      # downloaded to ./harmony_cache and mounted at the exact path
+      # tiktoken-rs hardcodes (/tmp/tiktoken-rs-cache).
+      # Pre-download recipe (run once on first deploy):
+      #   mkdir -p ./harmony_cache && sudo chmod 777 ./harmony_cache
+      #   docker run --rm --network=host \
+      #     -e HTTPS_PROXY=http://127.0.0.1:10809 \
+      #     -v $(pwd)/harmony_cache:/tmp/tiktoken-rs-cache \
+      #     python:3.12-slim bash -c '
+      #       pip install --quiet --no-cache-dir openai-harmony &&
+      #       python -c "from openai_harmony import load_harmony_encoding,
+      #       HarmonyEncodingName;
+      #       load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)"
+      #     '
+    command:
+      - "--model"
+      - "/models/unsloth-gpt-oss-20b-16bit"
+      - "--served-model-name"
+      - "gpt-oss-20b"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "9000"
+      - "--tensor-parallel-size"
+      - "1"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_UTIL:-0.85}"
+      - "--enable-auto-tool-choice"
+      - "--tool-call-parser"
+      - "openai"
+      - "--enable-prefix-caching"
+      - "--trust-remote-code"
     volumes:
-      # Read-only model cache — initializer is the only writer.
+      # Read-only model cache.
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models:ro
-      # HF cache (writable so vLLM/Unsloth can drop tokenizer metadata).
-      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface/hub
+      # HF cache (writable so vLLM can drop tokenizer metadata).
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface
+      # Pre-downloaded harmony vocab at the path tiktoken-rs expects.
+      - ./harmony_cache:/tmp/tiktoken-rs-cache
     networks:
       - ai_net
     deploy:
@@ -100,24 +110,56 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9000/health | grep -q 'healthy' || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      # Cold model load via Unsloth streaming is ~2.5 min. 4 min covers the
-      # warm case; first cold HF download can take 15+ min — bump if needed.
-      start_period: 240s
+      # vLLM cold start = model load (60-180s on warm disk cache).
+      start_period: 300s
     restart: unless-stopped
 
-  # -------------------------------------------------------------------------
-  # nginx — IP-allowlist + SSE-friendly proxy in front of ai_service:9000.
-  # Mounts llm.conf (LLM-side upstream); the VLM box uses default.conf.
-  # -------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Adapter — translates legacy /generate-stream → /v1/chat/completions.
+  # No GPU. Tiny image. Keeps the seven existing callers of the legacy
+  # endpoint working (llm_async_client.py in chat / project-agent /
+  # documents-rag / etc.) without touching their code.
+  # ---------------------------------------------------------------------------
+  ai_adapter:
+    build: ./ai_adapter
+    image: simorgh-llm-ai-adapter:local
+    container_name: ai_adapter
+    depends_on:
+      ai_service:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+      - UPSTREAM_URL=http://ai_service:9000
+      - UPSTREAM_MODEL=${LOCAL_LLM_MODEL_TEXT:-gpt-oss-20b}
+      - TIMEOUT_SEC=1800
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    expose:
+      - "9100"
+    networks:
+      - ai_net
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9100/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # nginx — IP-allowlist + SSE-friendly proxy. Routes /generate-stream
+  # to ai_adapter; everything else to ai_service (vLLM serve).
+  # ---------------------------------------------------------------------------
   nginx:
     image: nginx:alpine
     container_name: ai_nginx
     depends_on:
       ai_service:
+        condition: service_healthy
+      ai_adapter:
         condition: service_healthy
     ports:
       - "80:80"
@@ -130,10 +172,10 @@ services:
       - ai_net
     restart: unless-stopped
 
-  # -------------------------------------------------------------------------
-  # GPU monitor — watches ai_service GPU memory + idle time, restarts if
-  # it hangs. Same image as the VLM box; just retargets the container.
-  # -------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # GPU monitor — watches ai_service GPU memory + idle time, restarts
+  # if it hangs.
+  # ---------------------------------------------------------------------------
   gpu_monitor:
     build: ./gpu_monitor
     image: simorgh-llm-gpu-monitor:local
