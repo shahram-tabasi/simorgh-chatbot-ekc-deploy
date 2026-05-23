@@ -900,7 +900,23 @@ class ProjectManagerAgent:
         # Try MCP first for microservice tools (dynamic routing)
         if has_mcp_tool:
             try:
-                return await self.mcp_manager.call_tool(tool, tool_input)
+                # Strip dispatcher-internal keys before crossing the MCP
+                # boundary. gitlab-mcp tools are typed as e.g.
+                # read_artifact_mcp(project, path, ref=...) — strict
+                # pydantic, no **kwargs — so dispatcher-side bookkeeping
+                # like `project_id` (we already pass `project`) and
+                # `_previous_results` (multi-step chain context for the
+                # LLM, not for tools) trips MCP argument validation
+                # with HTTP 400 "Bad Request". The chain then sits
+                # silently because the failure surfaces below the
+                # task-loop's error path. Same convention all MCP
+                # callers should follow; centralised here as the
+                # last hop before call_tool.
+                mcp_input = {
+                    k: v for k, v in tool_input.items()
+                    if not k.startswith("_") and k != "project_id"
+                }
+                return await self.mcp_manager.call_tool(tool, mcp_input)
             except Exception as e:
                 logger.warning(f"MCP call failed for {tool}, falling back to HTTP: {e}")
                 # gitlab-mcp also exposes REST endpoints that work fine
