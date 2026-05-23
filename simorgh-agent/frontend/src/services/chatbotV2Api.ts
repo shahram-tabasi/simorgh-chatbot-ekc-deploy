@@ -271,6 +271,120 @@ export const sendMessageV2Stream = async (
   }
 };
 
+// =============================================================================
+// HR / Strategy direct-RAG streaming (general chat, modern users only)
+// =============================================================================
+// Bypasses the planner + MCP. SSE; one JSON object per data line:
+//   {"meta":    {"hits": [...], "top_score": 0.61, "threshold": 0.3}}
+//   {"chunk":   "..."}
+//   {"refusal": "..."}
+//   {"done":    {"reason":"ok"}}
+//   {"error":   "..."}
+// The endpoint is at /api/v2/general-chat/hr/stream and enforces a
+// modern-user UUID gate (legacy/anon → 403).
+
+export interface HrCitation {
+  n: number;
+  doc_id?: string;
+  doc_title?: string;
+  doc_code?: string;
+  filename?: string;
+  section_path?: string;
+  category?: string;
+  topic?: string;
+  chunk_type?: string;
+  score?: number;
+}
+
+export interface HrStreamHandlers {
+  onMeta?: (meta: { hits: HrCitation[]; top_score: number; threshold: number }) => void;
+  onChunk: (delta: string) => void;
+  onRefusal?: (text: string) => void;
+  onDone?: (info: { reason: string; top_score?: number }) => void;
+  onError?: (err: Error) => void;
+}
+
+const HR_BASE = `${API_BASE_URL}/api/v2/general-chat/hr`;
+
+export const sendMessageHrStream = async (
+  userId: string,
+  query: string,
+  handlers: HrStreamHandlers,
+  category?: 'hr_manner' | 'org_strategy'
+): Promise<void> => {
+  const token = getAuthToken();
+  const body = { user_id: userId, query, ...(category ? { category } : {}) };
+
+  try {
+    const response = await fetch(`${HR_BASE}/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      // Forward 403/4xx as a typed error so the hook can route the
+      // user to a re-login or surface "feature not available".
+      const detail = await response.text().catch(() => '');
+      throw new Error(`HTTP ${response.status}: ${detail.slice(0, 200)}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by a blank line. Parse anything we
+      // have ending in \n\n; carry the rest forward in buf.
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!frame.startsWith('data:')) continue;
+        const json = frame.slice(5).trim();
+        if (!json) continue;
+        let evt: any;
+        try {
+          evt = JSON.parse(json);
+        } catch {
+          // Best-effort: swallow malformed frames rather than aborting
+          // the stream.
+          continue;
+        }
+        if ('meta' in evt) handlers.onMeta?.(evt.meta);
+        else if ('chunk' in evt) handlers.onChunk(evt.chunk);
+        else if ('refusal' in evt) handlers.onRefusal?.(evt.refusal);
+        else if ('done' in evt) handlers.onDone?.(evt.done);
+        else if ('error' in evt) {
+          // Stream-level error: surface and stop reading.
+          handlers.onError?.(new Error(evt.error));
+          return;
+        }
+      }
+    }
+    // Flush trailing buffer if any (no final \n\n).
+    if (buf.startsWith('data:')) {
+      const json = buf.slice(5).trim();
+      if (json) {
+        try {
+          const evt = JSON.parse(json);
+          if ('chunk' in evt) handlers.onChunk(evt.chunk);
+        } catch {/* ignore */}
+      }
+    }
+  } catch (err) {
+    handlers.onError?.(err as Error);
+  }
+};
+
 /**
  * Get chat history
  */
@@ -528,6 +642,7 @@ export default {
   // Messaging
   sendMessageV2,
   sendMessageV2Stream,
+  sendMessageHrStream,
   getChatHistory,
 
   // Documents

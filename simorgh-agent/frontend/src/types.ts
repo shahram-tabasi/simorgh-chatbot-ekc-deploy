@@ -137,6 +137,28 @@ export interface MessageMetadata {
   processingSteps?: ProcessingStep[];
   // Agent task stream (Claude Code-style)
   agentPlan?: AgentPlan;
+  // HR / Strategy direct-RAG path (general chat, modern users):
+  //   citations: top-K grounded passages the LLM was given, rendered
+  //     as numbered badges under the assistant bubble.
+  //   top_score:  best raw similarity score; lets the UI surface
+  //     "low confidence" hints if we ever wire one up.
+  //   refusal: true when retrieval was below threshold and the user
+  //     got the topic-suggestion fallback; suppresses citation badges
+  //     since there's nothing to cite.
+  citations?: Array<{
+    n: number;
+    doc_id?: string;
+    doc_title?: string;
+    doc_code?: string;
+    filename?: string;
+    section_path?: string;
+    category?: string;
+    topic?: string;
+    chunk_type?: string;
+    score?: number;
+  }>;
+  top_score?: number;
+  refusal?: boolean;
 }
 
 export interface ProcessingStep {

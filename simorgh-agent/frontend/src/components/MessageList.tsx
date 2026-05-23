@@ -526,6 +526,46 @@ export function MessageList({
                     {message.content}
                   </p>
                 )}
+                {/* HR/Strategy citation badges — one per source the
+                    grounded LLM was given. The endpoint emits these
+                    in the SSE meta frame; useSessionChat attaches
+                    them to message.metadata.citations. Shown under
+                    the assistant bubble, RTL-friendly. */}
+                {message.role === 'assistant'
+                  && !message.metadata?.refusal
+                  && Array.isArray((message.metadata as any)?.citations)
+                  && (message.metadata as any).citations.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5" dir={textDir}>
+                    {((message.metadata as any).citations as Array<{
+                      n: number;
+                      doc_title?: string;
+                      filename?: string;
+                      section_path?: string;
+                      doc_code?: string;
+                      category?: string;
+                      score?: number;
+                    }>).map((c) => {
+                      const title = c.doc_title || c.filename || 'منبع';
+                      const section = c.section_path && c.section_path !== title
+                        ? ` ❯ ${c.section_path}` : '';
+                      const tone = c.category === 'org_strategy'
+                        ? 'bg-purple-500/10 text-purple-300 border-purple-400/30'
+                        : 'bg-emerald-500/10 text-emerald-300 border-emerald-400/30';
+                      return (
+                        <span
+                          key={`${message.id}-cite-${c.n}`}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] border ${tone}`}
+                          title={c.doc_code ? `${title} (${c.doc_code})` : title}
+                        >
+                          <span className="opacity-70">[{c.n}]</span>
+                          <span className="truncate max-w-[260px]">
+                            {title}{section}
+                          </span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* AI Message Controls */}
