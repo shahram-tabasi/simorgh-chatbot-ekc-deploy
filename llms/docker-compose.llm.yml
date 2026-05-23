@@ -142,6 +142,18 @@ services:
       - UPSTREAM_MODEL=${LOCAL_LLM_MODEL_TEXT:-gpt-oss-20b}
       - TIMEOUT_SEC=1800
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (xray)
+      # into every container so they can reach the internet. The adapter
+      # only ever talks to ai_service over the docker network, so the
+      # proxy isn't just unneeded — it actively breaks every call
+      # ("httpx.ConnectError: All connection attempts failed"). Wipe
+      # the proxy env entirely.
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
     expose:
       - "9100"
     networks:
