@@ -651,51 +651,95 @@ class ProjectManagerAgent:
         #   - passes the friendly project name ("aws-t01")
         # Whenever the value isn't shaped like a GitLab path or numeric
         # id, replace it with the project's stored gitlab_repo_path.
-        if (
-            isinstance(tool_input, dict)
-            and self.mcp_manager
-            and self.mcp_manager.is_connected
-        ):
-            server_name = self.mcp_manager.tools.get(tool)
-            if server_name == "gitlab_mcp":
-                proj_arg = tool_input.get("project") or tool_input.get("project_id")
-                # Acceptable shapes for gitlab-mcp:
-                #   "group/path"           — most common
-                #   "group/sub/path"       — nested groups
-                #   "123"                  — numeric GitLab project id
-                looks_like_path = (
-                    isinstance(proj_arg, str) and "/" in proj_arg
-                )
-                looks_like_numeric_id = (
-                    isinstance(proj_arg, str) and proj_arg.isdigit()
-                )
-                needs_substitution = not (looks_like_path or looks_like_numeric_id)
-                if needs_substitution:
-                    try:
-                        meta = await self.memory.get_project(str(project_id))
-                    except Exception:
-                        meta = None
-                    repo_path = (meta or {}).get("gitlab_repo_path")
-                    if repo_path:
-                        if proj_arg and proj_arg != repo_path:
-                            logger.info(
-                                "gitlab_mcp: substituting project arg %r -> %r "
-                                "(project_id=%s)",
-                                proj_arg, repo_path, project_id,
-                            )
-                        tool_input["project"] = repo_path
-                        tool_input.pop("project_id", None)
+        #
+        # IMPORTANT: this canonicalization must run whether or not the
+        # MCP transport is currently connected, because the REST
+        # fallback in _try_gitlab_rest also calls gitlab-mcp and needs
+        # the exact same `project`/`ref` shape. Identify gitlab-mcp
+        # tools from a static list (mcp_manager.tools is empty when
+        # MCP is disconnected, so the old `tools.get(tool)` lookup
+        # silently skipped this whole block and the REST fallback then
+        # 404'd on the chatbot UUID).
+        _GITLAB_MCP_TOOLS = {
+            "get_project_tree", "read_file_mcp", "read_artifact_mcp",
+            "read_artifact", "list_branches_mcp", "list_projects_mcp",
+            "list_user_projects_mcp", "search_blobs",
+            "search_technical_knowledge", "create_branch_mcp",
+            "commit_file_mcp", "open_mr_mcp", "merge_mr_mcp",
+        }
+        if isinstance(tool_input, dict) and tool in _GITLAB_MCP_TOOLS:
+            # The planner sometimes uses `branch` (intuitive) instead of
+            # the gitlab-mcp parameter name `ref`. Alias before any of
+            # the ref-aware logic below runs.
+            if "branch" in tool_input and "ref" not in tool_input:
+                tool_input["ref"] = tool_input.pop("branch")
+            proj_arg = tool_input.get("project") or tool_input.get("project_id")
+            # Acceptable shapes for gitlab-mcp:
+            #   "group/path"           — most common
+            #   "group/sub/path"       — nested groups
+            #   "123"                  — numeric GitLab project id
+            looks_like_path = (
+                isinstance(proj_arg, str) and "/" in proj_arg
+            )
+            looks_like_numeric_id = (
+                isinstance(proj_arg, str) and proj_arg.isdigit()
+            )
+            needs_substitution = not (looks_like_path or looks_like_numeric_id)
+            if needs_substitution:
+                try:
+                    meta = await self.memory.get_project(str(project_id))
+                except Exception:
+                    meta = None
+                repo_path = (meta or {}).get("gitlab_repo_path")
+                if repo_path:
+                    if proj_arg and proj_arg != repo_path:
+                        logger.info(
+                            "gitlab_mcp: substituting project arg %r -> %r "
+                            "(project_id=%s)",
+                            proj_arg, repo_path, project_id,
+                        )
+                    tool_input["project"] = repo_path
+                    tool_input.pop("project_id", None)
 
-                # Default ref to the project's *base* branch when the
-                # planner omitted one. Important: prefer the base branch
-                # (always exists on origin) over simorgh_branch — the
-                # simorgh working branch may not have been pushed yet
-                # if the deploy key wasn't granted at clone time, which
-                # would make every read fail with "404 Commit Not Found".
-                # Reads should target the user's canonical state, not
-                # the agent's in-flight workspace.
-                base_branch = None
-                if not tool_input.get("ref"):
+            # Default ref to the project's *base* branch when the
+            # planner omitted one. Important: prefer the base branch
+            # (always exists on origin) over simorgh_branch — the
+            # simorgh working branch may not have been pushed yet
+            # if the deploy key wasn't granted at clone time, which
+            # would make every read fail with "404 Commit Not Found".
+            # Reads should target the user's canonical state, not
+            # the agent's in-flight workspace.
+            base_branch = None
+            if not tool_input.get("ref"):
+                try:
+                    meta = locals().get("meta") or await self.memory.get_project(
+                        str(project_id)
+                    )
+                except Exception:
+                    meta = None
+                base_branch = (meta or {}).get("gitlab_base_branch") or "main"
+                tool_input["ref"] = base_branch
+
+            # Hard override: if the planner explicitly passed a
+            # simorgh/* working branch, force the base branch for
+            # READ-side calls. Working branches frequently don't
+            # exist on origin (push deferred) and produce
+            # "404 Commit Not Found"; the user's intent on a read
+            # is always "what's in my repo on the canonical branch".
+            # Write/commit tools (commit_file, create_branch,
+            # merge_mr) keep whatever ref the planner picked.
+            read_only_tools = {
+                "get_project_tree", "read_file_mcp", "read_artifact_mcp",
+                "search_blobs", "search_technical_knowledge",
+                "list_branches_mcp", "list_projects_mcp",
+            }
+            cur_ref = tool_input.get("ref")
+            if (
+                tool in read_only_tools
+                and isinstance(cur_ref, str)
+                and cur_ref.startswith("simorgh/")
+            ):
+                if base_branch is None:
                     try:
                         meta = locals().get("meta") or await self.memory.get_project(
                             str(project_id)
@@ -703,42 +747,13 @@ class ProjectManagerAgent:
                     except Exception:
                         meta = None
                     base_branch = (meta or {}).get("gitlab_base_branch") or "main"
-                    tool_input["ref"] = base_branch
-
-                # Hard override: if the planner explicitly passed a
-                # simorgh/* working branch, force the base branch for
-                # READ-side calls. Working branches frequently don't
-                # exist on origin (push deferred) and produce
-                # "404 Commit Not Found"; the user's intent on a read
-                # is always "what's in my repo on the canonical branch".
-                # Write/commit tools (commit_file, create_branch,
-                # merge_mr) keep whatever ref the planner picked.
-                read_only_tools = {
-                    "get_project_tree", "read_file_mcp", "read_artifact_mcp",
-                    "search_blobs", "search_technical_knowledge",
-                    "list_branches_mcp", "list_projects_mcp",
-                }
-                cur_ref = tool_input.get("ref")
-                if (
-                    tool in read_only_tools
-                    and isinstance(cur_ref, str)
-                    and cur_ref.startswith("simorgh/")
-                ):
-                    if base_branch is None:
-                        try:
-                            meta = locals().get("meta") or await self.memory.get_project(
-                                str(project_id)
-                            )
-                        except Exception:
-                            meta = None
-                        base_branch = (meta or {}).get("gitlab_base_branch") or "main"
-                    logger.info(
-                        "gitlab_mcp: overriding read ref %r -> %r for %s "
-                        "(simorgh working branches aren't reliably pushed "
-                        "to origin)",
-                        cur_ref, base_branch, tool,
-                    )
-                    tool_input["ref"] = base_branch
+                logger.info(
+                    "gitlab_mcp: overriding read ref %r -> %r for %s "
+                    "(simorgh working branches aren't reliably pushed "
+                    "to origin)",
+                    cur_ref, base_branch, tool,
+                )
+                tool_input["ref"] = base_branch
 
         # Inject previous results into context (3000 char limit per result)
         if prev_results:
