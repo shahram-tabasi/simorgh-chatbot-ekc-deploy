@@ -246,10 +246,40 @@ class ProjectManagerAgent:
         # change in every function signature.
         if llm_mode is not None:
             _llm_mode_var.set(llm_mode)
+
+        # Phase 2: master CoT router. Builds a PlanContext from
+        # what we know about the request, picks a CotPlan via the
+        # heuristic router, and installs it in the cot_router
+        # contextvar so cot_engine can pick it up at message-build
+        # time. The plan's grounding is gathered now (async) so
+        # cot_engine doesn't pay the I/O cost when it renders.
+        try:
+            from services.cot_router import route as cot_route, set_active_plan
+            from services.cot_plans import PlanContext
+            plan_ctx = PlanContext(
+                user_input=user_input,
+                project_id=project_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                has_selected_repo=False,         # Phase 3 wires this
+                selected_repos=[],
+                has_upload=bool(document_id or document_filename),
+                upload_filenames=[document_filename] if document_filename else [],
+                upload_size_chars=0,
+                input_modality="text",           # Phase 3 wires voice detection
+            )
+            chosen_plan = cot_route(plan_ctx)
+            set_active_plan(chosen_plan)
+            self._active_plan_ctx = plan_ctx     # cot_engine reads via getattr
+        except Exception as e:
+            logger.warning("cot_router setup failed (continuing with no plan): %s", e)
+            chosen_plan = None
+
         logger.info(
             f"Agent handling input: project={project_id}, "
             f"channel={channel.value}, input_len={len(user_input)}, "
-            f"llm_mode={llm_mode or 'default'}"
+            f"llm_mode={llm_mode or 'default'}, "
+            f"cot_plan={chosen_plan.name if chosen_plan else 'none'}"
         )
 
         # 1. Store the incoming message

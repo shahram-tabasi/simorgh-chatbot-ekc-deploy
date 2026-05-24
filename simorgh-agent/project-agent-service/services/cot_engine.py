@@ -864,9 +864,57 @@ class COTEngine:
                 f"{system_prompt}"
             )
 
+        # Phase 2: active CoT plan integration. The router installed a
+        # plan in the cot_router contextvar at handle_input time;
+        # apply its system-prompt addendum and gather its grounding
+        # bundle here. None = old code path (no addendum, no
+        # grounding) so internal/background callers that bypassed
+        # handle_input continue to work.
+        plan_addendum = ""
+        plan_grounding_text = ""
+        try:
+            from services.cot_router import active_plan
+            from services.cot_plans import PlanContext
+            plan = active_plan()
+            if plan is not None:
+                plan_addendum = plan.system_prompt_addendum(
+                    # cot_engine doesn't have the full PlanContext,
+                    # so build a minimal one from what `request` and
+                    # `project` carry. Plans that need richer ctx
+                    # will pick up their data via service singletons
+                    # (e.g. knowledge_repo_service.retrieve which
+                    # already has its own state).
+                    PlanContext(
+                        user_input=request.user_input,
+                        project_id=str(project.get("id", "")) if project else "",
+                    )
+                ) or ""
+                grounding = await plan.gather_grounding(
+                    PlanContext(
+                        user_input=request.user_input,
+                        project_id=str(project.get("id", "")) if project else "",
+                    )
+                )
+                rendered = grounding.render() if grounding else ""
+                if rendered:
+                    plan_grounding_text = (
+                        "\n\n# KNOWLEDGE GROUNDING (always-on technical knowledge "
+                        "passages — consider these BEFORE running search tools; "
+                        "they often already answer the question):\n" + rendered
+                    )
+        except Exception as e:
+            logger.warning("cot plan integration failed (continuing without): %s", e)
+
+        if plan_addendum:
+            system_prompt = system_prompt + plan_addendum
+
+        user_msg = (
+            f"Project Context:\n{context_str}{plan_grounding_text}"
+            f"\n\nUser Request:\n{request.user_input}"
+        )
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Project Context:\n{context_str}\n\nUser Request:\n{request.user_input}"}
+            {"role": "user", "content": user_msg}
         ]
 
         try:
