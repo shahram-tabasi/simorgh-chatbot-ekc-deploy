@@ -78,25 +78,54 @@ async def _persist_pair(chat_id: str, user_id: str, user_msg: str,
                          assistant_msg: str, citations: list,
                          refusal: bool = False) -> None:
     """Best-effort save of the user message + assistant response to the
-    chat-history store. Called after the SSE stream completes. Without
-    this, every general-chat reply was lost the moment the user
-    navigated away — useChat read messages from generalChats which is
-    populated by /api/chats/{id} on selectChat, and nothing was ever
-    written there for HR direct-RAG replies."""
+    chat-history store. Called after the SSE stream completes.
+
+    CRITICAL: writes to Redis (not Postgres). The previous version of
+    this function used unified_memory_service.store_conversation_pair
+    which only writes to PostgreSQL via message_persistence.
+    /api/chats/{id} (backend/main.py:1245) reads from Redis via
+    redis.get_chat_history → key chat:history:{chat_id}. So even
+    though the messages WERE being saved, the sidebar's chat-load
+    couldn't see them and the conversation appeared to vanish on
+    chat-switch.
+
+    Direct Redis write via redis_service.cache_chat_message matches
+    what the legacy /api/chat/stream did before HR direct-RAG existed."""
     try:
-        from services.unified_memory_service import get_unified_memory_service
-        memory = get_unified_memory_service()
-        await memory.store_conversation_pair(
-            chat_id=chat_id,
-            user_id=user_id,
-            user_message=user_msg,
-            assistant_response=assistant_msg,
-            metadata={
+        from services.redis_service import get_redis_service
+        from datetime import datetime, timezone
+        import uuid as _uuid
+        redis = get_redis_service()
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        user_message_payload = {
+            "message_id": str(_uuid.uuid4()),
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "role": "user",
+            "content": user_msg,
+            "timestamp": now_iso,
+            "metadata": {"source": "hr_direct_rag"},
+        }
+        assistant_message_payload = {
+            "message_id": str(_uuid.uuid4()),
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "role": "assistant",
+            "content": assistant_msg,
+            "timestamp": now_iso,
+            "metadata": {
                 "source": "hr_direct_rag",
                 "citations": citations,
                 "refusal": refusal,
             },
-        )
+        }
+        redis.cache_chat_message(chat_id, user_message_payload)
+        redis.cache_chat_message(chat_id, assistant_message_payload)
+        log.info("hr_stream: persisted pair to Redis chat=%s "
+                  "(content_lens user=%d assistant=%d, citations=%d)",
+                  chat_id, len(user_msg), len(assistant_msg),
+                  len(citations or []))
     except Exception as e:
         # Persistence is best-effort. A failure here only means the
         # user loses scrollback on chat-switch — the live stream

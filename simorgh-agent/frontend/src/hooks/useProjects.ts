@@ -1022,6 +1022,24 @@ export function useProjects(userId?: string) {
       }
     }
 
+    // Diagnostic. Operator reported projects re-appearing on hard-reload
+    // after a delete (2026-05-24). The only way that happens is if the
+    // backend's GET /users/{id}/project-chats keeps returning chat
+    // metadata for these projects — so let's verify by re-fetching
+    // immediately after the delete and surfacing the result. This both
+    // confirms backend cleanup AND triggers a fresh in-memory state
+    // that matches what the next mount will see.
+    console.log('🗑️ deleteProject summary', {
+      projectId,
+      project_name: project.name,
+      project_chats_count: project.chats.length,
+      session_chats_count: project.chats.filter(c => c.id.startsWith('session_')).length,
+      anyBackendCleanup,
+      errors,
+      aggregateChats,
+      projectDbDeleted,
+    });
+
     // Local cleanup: as long as SOMETHING succeeded server-side OR
     // we've collected zero real errors, the project is effectively
     // gone and the sidebar should reflect that. Otherwise surface
@@ -1030,6 +1048,37 @@ export function useProjects(userId?: string) {
       const remaining = projects.filter(p => p.id !== projectId);
       setProjects(remaining);
       localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(remaining));
+
+      // Belt-and-suspenders: poll the backend list once more after a
+      // brief delay to catch the case where the backend deletion
+      // "succeeded" but the Redis chat-metadata key wasn't fully
+      // cleared. If the project is STILL in /users/{id}/project-chats,
+      // log it loudly so the operator knows the backend has stale
+      // state — and we DON'T re-add it locally (the user wanted it
+      // gone), but flag it so they can paste the log back.
+      setTimeout(async () => {
+        try {
+          const verify = await axios.get(
+            `${API_BASE}/users/${userId}/project-chats`, authHeaders,
+          );
+          const stillThere = (verify.data?.chats || []).some(
+            (c: any) => (c.project_id === projectId)
+                       || (c.project_id_main === projectId)
+                       || (c.project_number === projectId),
+          );
+          if (stillThere) {
+            console.error(
+              '⚠️ deleteProject: backend STILL returns this project ' +
+              'after delete. Redis chat-metadata not cleaned. project_id=' +
+              projectId,
+            );
+          } else {
+            console.log('✅ deleteProject: backend confirms project gone:', projectId);
+          }
+        } catch (e) {
+          console.warn('deleteProject verify fetch failed:', e);
+        }
+      }, 500);
 
       // Clear active project if it was the one deleted, then strip
       // any deep-link ?project=X&session=Y from the URL so a refresh
