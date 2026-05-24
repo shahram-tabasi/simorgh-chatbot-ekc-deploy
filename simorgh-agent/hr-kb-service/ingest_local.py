@@ -6,8 +6,8 @@ Replaces the generic `index_file()` path with one that knows what the
 EKC HR docs and strategy documents actually look like. Based on a
 line-by-line review of every file in `Human Capital/`:
 
-  HR Operations Manual/ (8 docx)
-    * اضافه_کاری                       — Overtime (EKWI-AD-005-01)
+  HR Operations Manual/ (8 docs — markdown after the docx→md migration)
+    * اضافه کاری                       — Overtime (EKWI-AD-005-01)
     * دستورالعمل_انتصاب_و_ارتقا          — Appointment & Promotion (EKWI-AD-009-00)
     * دستورالعمل_تردد__افراد_کالا_و_..   — Comprehensive Access Control (EKWIAD00900)
     * دستورالعمل_تردد_و_حضور_و_غیاب      — Attendance (EKWI-AD-001-07)
@@ -16,17 +16,21 @@ line-by-line review of every file in `Human Capital/`:
     * دستورالعمل_مرخصی                  — Leave (EKWI-AD-006-01) — 12 leaf leave-types
     * وام                              — Loans (RE-AD-008-00)
 
-  Organizational Strategy Values/ (4 docx)
-    * mdاجزا_مقاصد_آرمانی               — Aspirational Goals (RE-HM-007-00)
+  Organizational Strategy Values/ (4 docs — markdown)
+    * اجزا_مقاصد_آرمانی                — Aspirational Goals (RE-HM-007-00)
     * استراتژی_ها___اهداف_و_برنامه_های   — Strategies, Goals & Programs (EKFR-HM-001-05)
     * سند_استراتژیک                    — Strategic Document (EKCO-1-07), 4 chapters
     * منشور_طرح_ریزی                   — Planning Charter (EKIP-1-04)
 
 Shape of the pipeline:
 
-  1. python-docx → faithful text dump (paragraphs + tables) preserving
-     soft line breaks (<w:br/>) — without these the original authors'
-     markdown notation gets glued into one paragraph.
+  1. Extraction
+     * `.md` / `.markdown` — read the file verbatim (Persian-aware UTF-8).
+       Many of the converted markdown files have the entire document
+       collapsed onto a single line because the doc→md converter glued
+       paragraphs together. The next pass repairs that.
+     * `.docx` / `.docm` (legacy) — python-docx faithful text dump
+       (paragraphs + tables) preserving soft line breaks (<w:br/>).
   2. Inline-markdown repair: every #/##/### heading marker that lives
      inside the dumped text gets a newline prepended so the chunker
      can detect it. Same for table-row boundaries (`| ... | |`).
@@ -70,7 +74,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import httpx
-import docx
+try:
+    import docx  # python-docx — only needed for the legacy .docx path
+except Exception:  # pragma: no cover — markdown corpus doesn't need it
+    docx = None  # type: ignore
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
@@ -117,10 +124,24 @@ def _cell_text(cell) -> str:
             .replace("|", "\\|").strip())
 
 
+def extract_md(fp: Path) -> str:
+    """Read a markdown file verbatim. The doc→md converter sometimes
+    collapses the whole document into a single line; `repair_markdown`
+    re-inserts newlines before heading markers and table-row boundaries
+    so the structural chunker can do its job."""
+    # Try utf-8 first, fall back to utf-8-sig (BOM) if needed.
+    try:
+        return fp.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return fp.read_text(encoding="utf-8-sig", errors="replace")
+
+
 def extract_docx(fp: Path) -> str:
     """Walk body elements in order so paragraph/table interleaving is
     preserved. Returns markdown-flavoured text ready for the repair
     pass."""
+    if docx is None:
+        raise RuntimeError("python-docx is not installed; cannot read .docx")
     d = docx.Document(str(fp))
     parts: List[str] = []
     body = d.element.body
@@ -202,14 +223,37 @@ _BOILERPLATE_RE = re.compile("|".join(_BOILERPLATE_PATTERNS))
 
 def is_boilerplate(text: str) -> bool:
     """True if a chunk is mostly boilerplate (signature/disclaimer/ISO
-    references). Drops chunks that are 90%+ boilerplate by length."""
+    references). Drops chunks where the union of matched boilerplate
+    regions covers ≥ 35% of the chunk.
+
+    Previously this used `findall` and summed `len(h)`; with capture
+    groups in the patterns `findall` returns tuples, so `isinstance(h,
+    str)` was False for nearly every hit and the function silently
+    returned False. Now we use `finditer` and measure full match
+    spans, so the title-page block (which is purely metadata table +
+    signature + disclaimer wrapped under the document's H1) is
+    correctly identified and dropped.
+    """
     if not text or len(text) < 30:
         return True
-    hits = _BOILERPLATE_RE.findall(text)
-    if not hits:
+    spans: List[Tuple[int, int]] = []
+    for pat in _BOILERPLATE_PATTERNS:
+        for m in re.finditer(pat, text):
+            spans.append((m.start(), m.end()))
+    if not spans:
         return False
-    boilerplate_chars = sum(len(h) if isinstance(h, str) else 0 for h in hits)
-    return boilerplate_chars > len(text) * 0.5
+    # Merge overlapping spans so overlapping patterns aren't double-counted.
+    spans.sort()
+    merged_chars = 0
+    cur_s, cur_e = spans[0]
+    for s, e in spans[1:]:
+        if s <= cur_e:
+            cur_e = max(cur_e, e)
+        else:
+            merged_chars += cur_e - cur_s
+            cur_s, cur_e = s, e
+    merged_chars += cur_e - cur_s
+    return merged_chars > len(text) * 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +420,61 @@ def _trim_heading(s: str, max_chars: int = 120) -> str:
 # doc_id is a human-readable slug we can use in citations and logs.
 # topic is a finer-grained facet used by the chat layer's filter UI.
 
+# Keys are matched case-insensitively against `path.name`; both the
+# current `.md` corpus and the legacy `.docx` corpus are accepted so a
+# half-migrated tree still ingests cleanly.
 DOC_REGISTRY: Dict[str, Dict[str, str]] = {
+    # ---- HR Operations Manual (.md) ----
+    "اضافه کاری.md": dict(
+        doc_id="overtime", doc_code="EKWI-AD-005-01",
+        doc_title="دستورالعمل اضافه کاری",
+        category="hr_manner", topic="overtime"),
+    "دستورالعمل_انتصاب_و_ارتقا.md": dict(
+        doc_id="promotion", doc_code="EKWI-AD-009-00",
+        doc_title="دستورالعمل انتصاب و ارتقا",
+        category="hr_manner", topic="promotion"),
+    "دستورالعمل_تردد__افراد_کالا_و_وسایل_نقلیه.md": dict(
+        doc_id="access-control", doc_code="EKWIAD00900",
+        doc_title="دستورالعمل جامع تردد افراد، کالا و وسایل نقلیه",
+        category="hr_manner", topic="access_control"),
+    "دستورالعمل_تردد_و_حضور_و_غیاب.md": dict(
+        doc_id="attendance", doc_code="EKWI-AD-001-07",
+        doc_title="دستورالعمل تردد، حضور و غیاب",
+        category="hr_manner", topic="attendance"),
+    "دستورالعمل_جذب_و_استخدام.md": dict(
+        doc_id="recruitment", doc_code="EKWI-AD-004-07",
+        doc_title="دستورالعمل جذب و استخدام",
+        category="hr_manner", topic="recruitment"),
+    "دستورالعمل_قطع_همکاری.md": dict(
+        doc_id="termination", doc_code="EKWI-AD-008-00",
+        doc_title="دستورالعمل قطع همکاری",
+        category="hr_manner", topic="termination"),
+    "دستورالعمل_مرخصی.md": dict(
+        doc_id="leave", doc_code="EKWI-AD-006-01",
+        doc_title="دستورالعمل مرخصی",
+        category="hr_manner", topic="leave"),
+    "وام.md": dict(
+        doc_id="loan", doc_code="RE-AD-008-00",
+        doc_title="اعطای تسهیلات (وام)",
+        category="hr_manner", topic="loan"),
+    # ---- Organizational Strategy Values (.md) ----
+    "اجزا_مقاصد_آرمانی.md": dict(
+        doc_id="aspirational-goals", doc_code="RE-HM-007-00",
+        doc_title="اجزاء مقاصد آرمانی",
+        category="org_strategy", topic="aspirational_goals"),
+    "استراتژی_ها___اهداف_و_برنامه_های_سازمان.md": dict(
+        doc_id="strategies-programs", doc_code="EKFR-HM-001-05",
+        doc_title="استراتژی‌ها، اهداف و برنامه‌های سازمان",
+        category="org_strategy", topic="strategies"),
+    "سند_استراتژیک.md": dict(
+        doc_id="strategic-document", doc_code="EKCO-1-07",
+        doc_title="سند استراتژیک",
+        category="org_strategy", topic="strategy"),
+    "منشور_طرح_ریزی.md": dict(
+        doc_id="planning-charter", doc_code="EKIP-1-04",
+        doc_title="منشور طرح‌ریزی سیستم‌های مدیریت یکپارچه",
+        category="org_strategy", topic="charter"),
+    # ---- Legacy .docx aliases (kept so a half-migrated tree works) ----
     "اضافه_کاری.MD.docx": dict(
         doc_id="overtime", doc_code="EKWI-AD-005-01",
         doc_title="دستورالعمل اضافه کاری",
@@ -717,7 +815,8 @@ def ingest_directory(root: Path, rebuild: bool = False) -> IngestStats:
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
-        if path.suffix.lower() not in (".docx", ".docm"):
+        suffix = path.suffix.lower()
+        if suffix not in (".md", ".markdown", ".docx", ".docm"):
             continue
         if path.name.startswith(".") or path.name.endswith("~"):
             continue
@@ -727,7 +826,10 @@ def ingest_directory(root: Path, rebuild: bool = False) -> IngestStats:
             stats.errors += 1
             continue
         try:
-            raw = extract_docx(path)
+            if suffix in (".md", ".markdown"):
+                raw = extract_md(path)
+            else:
+                raw = extract_docx(path)
             md = repair_markdown(raw)
             chunks = chunk_sections(md)
         except Exception as e:
