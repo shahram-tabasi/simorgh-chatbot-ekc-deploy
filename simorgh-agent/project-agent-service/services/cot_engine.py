@@ -604,7 +604,7 @@ PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
    EVERY preceding step MUST use a real retrieval tool — get_project_tree,
    read_artifact_mcp, search_context, search_blobs, memory_query,
    tpms_*, etc. NEVER write a step like
-       {"title": "Find X", "tool_needed": "llm", "task_type": "generation"}
+       {{"title": "Find X", "tool_needed": "llm", "task_type": "generation"}}
    "Find / read / extract / fetch / locate / look up" steps require a
    TOOL CALL, not LLM thinking. The model has NO web/file access from
    inside an `llm` task — it can only stare at the previous step's
