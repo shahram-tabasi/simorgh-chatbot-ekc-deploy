@@ -287,7 +287,7 @@ export function ChatArea({
                 quotaExceeded={quotaExceeded}
                 uploadsAllowed={isProjectChat}
                 header={chatInputHeader}
-                modelLabel={headerContext?.model ?? null}
+                modelLabel="Simorgh AI"
                 tokenUsage={tokenUsage}
               />
             </div>
@@ -333,7 +333,7 @@ export function ChatArea({
                 quotaExceeded={quotaExceeded}
                 uploadsAllowed={isProjectChat}
                 header={chatInputHeader}
-                modelLabel={headerContext?.model ?? null}
+                modelLabel="Simorgh AI"
                 tokenUsage={tokenUsage}
               />
             </div>

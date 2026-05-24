@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { PanelLeftIcon, PanelRightIcon, SparklesIcon, PlusIcon, SearchIcon } from 'lucide-react';
+import { PanelLeftIcon, PanelRightIcon, SparklesIcon, PlusIcon } from 'lucide-react';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -10,7 +10,6 @@ interface SidebarProps {
   className?: string;
   onNewProject?: () => void;
   onNewGeneralChat?: () => void;
-  onSearchClick?: () => void;
 }
 
 export function Sidebar({
@@ -84,19 +83,48 @@ export function Sidebar({
               <div
                 className="flex items-center justify-between px-4 pt-3 pb-2"
               >
-                {/* Simorgh Logo - only on right sidebar, hidden on mobile */}
+                {/* Brand mark — bird + "Simorgh Code" graphical
+                    wordmark. The wordmark used to be the text_simorgh
+                    raster but operator wanted an SVG that explicitly
+                    says "Simorgh Code", so it's now an inline SVG
+                    here. No asset file to ship; gradient + font
+                    matches the app's blue→violet theme. */}
                 {side === 'right' && !isMobile && (
-                  <div className="flex items-left gap-0">
+                  <div className="flex items-center gap-1">
                     <img
                       src={`${import.meta.env.BASE_URL}simorgh.svg`}
                       alt="Simorgh"
                       className="w-14 h-14"
                     />
-                    <img
-                      src={`${import.meta.env.BASE_URL}text_simorgh.svg`}
-                      alt="Simorgh"
-                      className="h-14 mt-3"
-                    />
+                    <svg
+                      viewBox="0 0 210 44"
+                      role="img"
+                      aria-label="Simorgh Code"
+                      className="h-12"
+                    >
+                      <defs>
+                        <linearGradient id="simorghCodeBrand" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%"   stopColor="#60a5fa" />
+                          <stop offset="100%" stopColor="#a78bfa" />
+                        </linearGradient>
+                      </defs>
+                      <text
+                        x="0" y="30"
+                        fontFamily="'Inter', system-ui, sans-serif"
+                        fontWeight={700}
+                        fontSize={26}
+                        fill="url(#simorghCodeBrand)"
+                        letterSpacing="0.5"
+                      >Simorgh</text>
+                      <text
+                        x="120" y="30"
+                        fontFamily="'JetBrains Mono', 'Fira Code', monospace"
+                        fontWeight={500}
+                        fontSize={22}
+                        fill="#cbd5e1"
+                        letterSpacing="0.5"
+                      >Code</text>
+                    </svg>
                   </div>
                 )}
 
@@ -172,16 +200,11 @@ export function Sidebar({
               )}
             </>
           )}
-
-
-          {/* Search Icon */}
-          <button
-            onClick={onToggle}
-            className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg group"
-            title="Search History"
-          >
-            <SearchIcon className="w-5 h-5 text-blue-400 group-hover:text-blue-300" />
-          </button>
+          {/* The dedicated Search/History affordance was redundant
+              with the sidebar toggle (both did onToggle) and added
+              UI noise on every screen. Removed per operator request.
+              The full chat history list still opens via the chevron
+              edge-toggle button below. */}
         </div>
       )}
     </>
