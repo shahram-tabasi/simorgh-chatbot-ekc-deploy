@@ -247,30 +247,47 @@ class ProjectManagerAgent:
         if llm_mode is not None:
             _llm_mode_var.set(llm_mode)
 
-        # Phase 2: master CoT router. Builds a PlanContext from
+        # Phase 2/3: master CoT router. Builds a PlanContext from
         # what we know about the request, picks a CotPlan via the
         # heuristic router, and installs it in the cot_router
         # contextvar so cot_engine can pick it up at message-build
-        # time. The plan's grounding is gathered now (async) so
-        # cot_engine doesn't pay the I/O cost when it renders.
+        # time.
+        # Source/modality detection (Phase 3):
+        #   * has_selected_repo = True for any project_id that resolves
+        #     (project chats are always repo-backed). Pulled from the
+        #     project memory row's repo metadata so we don't false-
+        #     positive on placeholder rows.
+        #   * input_modality = "voice" when the route layer flagged
+        #     this turn as transcribed (ProjectMessageCreate.metadata
+        #     carries the hint).
+        #   * upload_size_chars stays 0 here — Phase 4's
+        #     upload_investigator will probe doc-processor and update
+        #     when the file is read.
         try:
             from services.cot_router import route as cot_route, set_active_plan
             from services.cot_plans import PlanContext
+
+            project_for_ctx = await self.memory.get_project(project_id)
+            repo_path = (project_for_ctx or {}).get("gitlab_repo_path") if project_for_ctx else None
+            selected_repos = [repo_path] if repo_path else []
+            modality = "voice" if (channel.value == "voice"
+                                    or (channel.value == "chat" and False)) else "text"
+
             plan_ctx = PlanContext(
                 user_input=user_input,
                 project_id=project_id,
                 user_id=user_id,
                 chat_id=chat_id,
-                has_selected_repo=False,         # Phase 3 wires this
-                selected_repos=[],
+                has_selected_repo=bool(repo_path),
+                selected_repos=selected_repos,
                 has_upload=bool(document_id or document_filename),
                 upload_filenames=[document_filename] if document_filename else [],
                 upload_size_chars=0,
-                input_modality="text",           # Phase 3 wires voice detection
+                input_modality=modality,
             )
             chosen_plan = cot_route(plan_ctx)
             set_active_plan(chosen_plan)
-            self._active_plan_ctx = plan_ctx     # cot_engine reads via getattr
+            self._active_plan_ctx = plan_ctx
         except Exception as e:
             logger.warning("cot_router setup failed (continuing with no plan): %s", e)
             chosen_plan = None

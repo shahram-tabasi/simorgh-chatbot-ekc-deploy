@@ -20,13 +20,25 @@ import contextvars
 import logging
 from typing import Optional
 
-from .cot_plans import CotPlan, DefaultPlan, PlanContext
+from .cot_plans import (
+    CotPlan, PlanContext,
+    DefaultPlan,
+    KnowledgeOnlyPlan, SingleRepoPlan, MultiRepoPlan,
+    UploadDeepPlan, RepoPlusUploadPlan, VoiceFirstPlan,
+)
 
 log = logging.getLogger(__name__)
 
 # Plan instances are stateless — one shared instance per class is
-# enough and saves an allocation per request.
-_DEFAULT_PLAN = DefaultPlan()
+# enough and saves an allocation per request. ALL plans live here;
+# router just picks which one to return.
+_DEFAULT_PLAN          = DefaultPlan()
+_KNOWLEDGE_ONLY_PLAN   = KnowledgeOnlyPlan()
+_SINGLE_REPO_PLAN      = SingleRepoPlan()
+_MULTI_REPO_PLAN       = MultiRepoPlan()
+_UPLOAD_DEEP_PLAN      = UploadDeepPlan()
+_REPO_PLUS_UPLOAD_PLAN = RepoPlusUploadPlan()
+_VOICE_FIRST_PLAN      = VoiceFirstPlan()
 
 # Active plan for the current asyncio task. handle_input installs
 # this once per request via set_active_plan(); cot_engine reads it
@@ -41,24 +53,36 @@ def route(ctx: PlanContext) -> CotPlan:
     """Heuristic router. Returns the plan that best matches the
     request's source / upload / modality signature.
 
-    Phase 2 returns DefaultPlan unconditionally — keeps existing
-    behaviour stable while the integration scaffolding lands.
-    Phase 3 fills in the per-source dispatch:
+    Dispatch order matters — earlier branches win on ambiguity:
 
-        if ctx.has_upload and not ctx.has_selected_repo:
-            return UploadDeepPlan() if ctx.upload_size_chars > 200_000
-                   else UploadInlinePlan()
-        if ctx.has_upload and ctx.has_selected_repo:
-            return RepoPlusUploadPlan()
-        if len(ctx.selected_repos) > 1:
-            return MultiRepoPlan()
-        if ctx.has_selected_repo:
-            return SingleRepoPlan()
-        if ctx.input_modality == "voice":
-            return VoiceFirstPlan()
-        return KnowledgeOnlyPlan()
+      1. UPLOAD beats everything else (the user just attached fresh
+         information; ignoring it would be embarrassing).
+         - upload + repo → RepoPlusUpload (cross-reference posture)
+         - upload alone  → UploadDeep      (investigative posture)
+      2. REPOS rank by count.
+         - multi-repo  → MultiRepo
+         - single-repo → SingleRepo
+      3. VOICE modality with no source → VoiceFirst (conversational
+         tone overlay on knowledge-only grounding).
+      4. EVERYTHING ELSE → KnowledgeOnly (the pure ask-the-KB case).
+
+    DefaultPlan stays as the defensive last-resort in case future
+    PlanContext fields slip past all five branches.
     """
-    chosen = _DEFAULT_PLAN
+    if ctx.has_upload and ctx.has_selected_repo:
+        chosen: CotPlan = _REPO_PLUS_UPLOAD_PLAN
+    elif ctx.has_upload:
+        chosen = _UPLOAD_DEEP_PLAN
+    elif len(ctx.selected_repos) > 1:
+        chosen = _MULTI_REPO_PLAN
+    elif ctx.has_selected_repo:
+        chosen = _SINGLE_REPO_PLAN
+    elif ctx.input_modality == "voice":
+        chosen = _VOICE_FIRST_PLAN
+    elif not ctx.has_upload and not ctx.has_selected_repo:
+        chosen = _KNOWLEDGE_ONLY_PLAN
+    else:
+        chosen = _DEFAULT_PLAN
     log.info(
         "cot_router: picked plan=%s "
         "(sources=%d, upload=%s, upload_chars=%d, modality=%s)",
