@@ -599,6 +599,19 @@ PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
 4. The LAST step is the synthesis (tool=llm, task_type=generation), and
    its `depends_on` MUST include every retrieval step whose output it
    relies on. The synthesizer reads only what you list.
+   --------------------------------------------------------------------
+   HARD: ONLY the LAST step may have task_type=generation / tool=llm.
+   EVERY preceding step MUST use a real retrieval tool — get_project_tree,
+   read_artifact_mcp, search_context, search_blobs, memory_query,
+   tpms_*, etc. NEVER write a step like
+       {"title": "Find X", "tool_needed": "llm", "task_type": "generation"}
+   "Find / read / extract / fetch / locate / look up" steps require a
+   TOOL CALL, not LLM thinking. The model has NO web/file access from
+   inside an `llm` task — it can only stare at the previous step's
+   output. A plan where every step is task_type=generation produces
+   the answer "I don't have access to that information"; that is a
+   PLANNER bug, not a content gap. Use the retrieval ladder above.
+   --------------------------------------------------------------------
 5. NEVER plan write / commit / shell / push steps for a question. Only
    when the user EXPLICITLY asked for a change.
 6. If a retrieval step returns empty, the NEXT step is to retry with a
@@ -1122,6 +1135,74 @@ class COTEngine:
 
             # Parse LLM response
             analysis = self._parse_llm_response(response, chain_id, request)
+
+            # PLAN VALIDATION + ONE-SHOT REFLECTIVE REPROMPT.
+            # Operator-observed failure: gpt-oss-20b sometimes emits a
+            # plan where every step is task_type=generation / tool=llm
+            # (e.g. "Find OENUM", "Read OENUM file", "Extract OENUM
+            # value"), which the dispatcher routes to _execute_llm_task
+            # — pure LLM thinking with NO retrieval. The model then
+            # produces "I don't have access to that information"
+            # because it has no actual tool output to read.
+            #
+            # Best practice (multi-agent validation papers): catch the
+            # bad plan before execution and re-prompt ONCE with the
+            # validation error fed back to the planner. We don't loop
+            # forever — one corrective turn is enough; if it still
+            # fails, run the (likely-broken) plan rather than burn
+            # more model time.
+            issues = self._validate_plan(analysis)
+            if issues:
+                logger.warning(
+                    "COT plan validation: %d issue(s) — reprompting once: %s",
+                    len(issues), "; ".join(issues),
+                )
+                corrective = (
+                    "\n\n# PLAN REJECTED — fix and resubmit\n"
+                    "Your previous plan violated these HARD rules:\n  - "
+                    + "\n  - ".join(issues)
+                    + "\nResubmit a corrected plan. Reminder: only the "
+                    "LAST step may be task_type=generation / tool=llm; "
+                    "every earlier step MUST call a real retrieval tool "
+                    "(get_project_tree, read_artifact_mcp, search_context, "
+                    "search_blobs, memory_query). Steps named 'Find / Read / "
+                    "Extract / Fetch / Locate / Look up' REQUIRE a tool call, "
+                    "not LLM thinking."
+                )
+                retry_messages = [
+                    {"role": "system", "content": system_prompt + corrective},
+                    {"role": "user", "content": user_msg},
+                ]
+                try:
+                    response2 = await self._call_llm(retry_messages)
+                    analysis2 = self._parse_llm_response(response2, chain_id, request)
+                    issues2 = self._validate_plan(analysis2)
+                    if not issues2:
+                        logger.info(
+                            "COT plan validation: retry produced a clean plan "
+                            "(%d steps)", len(analysis2.steps),
+                        )
+                        analysis = analysis2
+                    else:
+                        # Pick whichever attempt has fewer issues.
+                        if len(issues2) < len(issues):
+                            logger.warning(
+                                "COT plan validation: retry still has issues "
+                                "(%s) but improved; using retry plan",
+                                "; ".join(issues2),
+                            )
+                            analysis = analysis2
+                        else:
+                            logger.warning(
+                                "COT plan validation: retry did not improve "
+                                "(%s); using original plan", "; ".join(issues2),
+                            )
+                except Exception as e:
+                    logger.warning(
+                        "COT plan validation: retry call failed (%s); "
+                        "using original plan", e,
+                    )
+
             logger.info(
                 f"COT analysis complete: chain={chain_id}, "
                 f"steps={len(analysis.steps)}, project={request.project_id}"
@@ -1537,6 +1618,75 @@ class COTEngine:
             total_steps=len(steps),
             estimated_total_duration=data.get("estimated_total_duration"),
         )
+
+    def _validate_plan(self, analysis: "COTAnalysis") -> List[str]:
+        """Catch the no-tool-call plan pattern before execution.
+
+        Returns a list of human-readable issues. Empty list = OK.
+
+        Rules (HARD — enforced by retry-with-feedback):
+          R1. Only the LAST step may be task_type=generation/analysis/review
+              with tool=llm. Earlier "thinking" steps mean retrieval was
+              skipped.
+          R2. A plan with >1 step but ZERO retrieval-tool steps is broken
+              — the synth step has nothing to read.
+          R3. Step titles starting with action verbs that imply retrieval
+              ("find", "read", "extract", "fetch", "locate", "look up",
+              "search", "list", "get") MUST use a real tool, not llm.
+
+        Single-step plans are exempt — a single llm step is the
+        legitimate "I don't need tools, just answer" shape.
+        """
+        issues: List[str] = []
+        steps = list(getattr(analysis, "steps", []) or [])
+        n = len(steps)
+        if n <= 1:
+            return issues
+
+        def _is_llm_synth(step) -> bool:
+            tool = (getattr(step, "tool_needed", "") or "").lower()
+            tt = getattr(step, "task_type", None)
+            tt_val = getattr(tt, "value", tt)
+            tt_str = str(tt_val or "").lower()
+            return tool == "llm" or tt_str in {"generation", "analysis", "review"}
+
+        # R1: every non-last step must be a real tool call.
+        bad_thinking = []
+        for s in steps[:-1]:
+            if _is_llm_synth(s):
+                bad_thinking.append(
+                    f"step {s.step_number} '{s.title}' is "
+                    f"tool=llm/task_type=generation — only the LAST step "
+                    f"may be synthesis"
+                )
+        issues.extend(bad_thinking)
+
+        # R2: at least one retrieval step.
+        retrieval_count = sum(1 for s in steps if not _is_llm_synth(s))
+        if retrieval_count == 0:
+            issues.append(
+                f"plan has {n} steps but ZERO retrieval-tool calls — every "
+                "step is llm thinking; the synthesizer will have no real "
+                "data to read"
+            )
+
+        # R3: action-verb titles must be real tool calls.
+        _RETRIEVAL_VERBS = (
+            "find ", "read ", "extract ", "fetch ", "locate ", "look up ",
+            "lookup ", "search ", "list ", "get ", "load ", "open ",
+            "discover ", "identify ", "retrieve ",
+        )
+        for s in steps:
+            title = (getattr(s, "title", "") or "").strip().lower()
+            if _is_llm_synth(s) and any(title.startswith(v) for v in _RETRIEVAL_VERBS):
+                issues.append(
+                    f"step {s.step_number} '{s.title}' implies retrieval "
+                    f"(verb '{title.split()[0]}') but uses tool=llm — must "
+                    f"call a real tool (get_project_tree, read_artifact_mcp, "
+                    f"search_context, search_blobs, memory_query)"
+                )
+
+        return issues
 
     def _generate_simple_plan(self, request: COTRequest) -> str:
         """Generate a simple plan without LLM (fallback)."""

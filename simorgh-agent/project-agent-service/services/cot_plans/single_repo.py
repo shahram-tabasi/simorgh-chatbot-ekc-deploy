@@ -34,6 +34,13 @@ class SingleRepoPlan(CotPlan):
             "If read_artifact_mcp returns empty / 404, do NOT give up — the dispatcher "
             "fuzzy-retries automatically, but if it still fails, report which path was "
             "tried and what the tree actually contains.\n"
+            "TASK-TYPE RULE (HARD): the tree / read / search steps MUST use "
+            "task_type=query and the matching tool_needed (get_project_tree, "
+            "read_artifact_mcp, search_context, search_blobs). ONLY step 4 — the "
+            "synthesis — may use task_type=generation and tool_needed=llm. NEVER emit "
+            "an llm-only plan like [Find file → Read file → Extract content → Synthesise]; "
+            "those are all retrieval verbs that need REAL tool calls. An llm task can "
+            "only stare at previous-step output — it cannot read files or query GitLab.\n"
             "The KNOWLEDGE GROUNDING block below may already supply technical-standard "
             "context that complements the repo content — quote both when relevant."
         )
