@@ -224,22 +224,68 @@ class MCPManager:
             })
         return result
 
-    def get_tools_for_cot(self) -> str:
+    def get_tools_for_cot(self, *, compact: bool = True) -> str:
         """
         Get tool descriptions formatted for the COT system prompt.
         This enables dynamic tool discovery - the COT engine sees
         whatever tools are actually available from connected MCP servers.
+
+        Two formats:
+          compact=True  (DEFAULT):
+            `- name: description. Input keys: a, b, c (required: a)`
+            ~80-150 chars per line. With 67 connected tools this is
+            ~8K chars total — fits comfortably under gpt-oss-20b's
+            16K context after the rest of the system prompt + the
+            user message.
+
+          compact=False:
+            `- name: description. Input: {full JSON schema}`
+            ~300-600 chars per line. Useful for diagnostics or for
+            larger-context models, but causes "Input length exceeds
+            model's maximum context length" errors on 16K-context
+            gpt-oss when the project also has rich grounding.
+
+        Operator hit the 16K cap with the old verbose format
+        (2026-05-24): planner kept 502'ing and falling back to VLM.
+        Switched to compact by default; pass compact=False only
+        when schema details are genuinely needed.
         """
         lines = []
         for tool in self.tool_schemas.values():
-            props = {}
-            if hasattr(tool, 'inputSchema') and tool.inputSchema:
-                props = tool.inputSchema.get("properties", {})
-            schema_str = json.dumps(props) if props else "{}"
-            lines.append(
-                f"- {tool.name}: {tool.description or 'No description'}. "
-                f"Input: {schema_str}"
-            )
+            desc = tool.description or "No description"
+            if compact:
+                props = {}
+                required = []
+                if hasattr(tool, "inputSchema") and tool.inputSchema:
+                    props = tool.inputSchema.get("properties", {}) or {}
+                    required = tool.inputSchema.get("required", []) or []
+                if props:
+                    keys = list(props.keys())
+                    keys_str = ", ".join(keys[:12])
+                    if len(keys) > 12:
+                        keys_str += ", …"
+                    if required:
+                        req_in_view = [k for k in required if k in keys[:12]]
+                        if req_in_view:
+                            input_part = (
+                                f"Input keys: {keys_str} "
+                                f"(required: {', '.join(req_in_view)})"
+                            )
+                        else:
+                            input_part = f"Input keys: {keys_str}"
+                    else:
+                        input_part = f"Input keys: {keys_str}"
+                else:
+                    input_part = "Input: {}"
+                lines.append(f"- {tool.name}: {desc}. {input_part}")
+            else:
+                props = {}
+                if hasattr(tool, "inputSchema") and tool.inputSchema:
+                    props = tool.inputSchema.get("properties", {})
+                schema_str = json.dumps(props) if props else "{}"
+                lines.append(
+                    f"- {tool.name}: {desc}. Input: {schema_str}"
+                )
         return "\n".join(lines)
 
     def has_tool(self, tool_name: str) -> bool:

@@ -960,21 +960,24 @@ class COTEngine:
             f"\n\nUser Request:\n{request.user_input}"
         )
 
-        # Hard safety cap. gpt-oss-20b has a 16,384-token max_model_len;
-        # operator hit 17,669 tokens before the plan_grounding_text and
-        # context_str trims landed. Estimate at ~3.5 chars/token; cap
-        # the COMBINED system + user message at ~48K chars (≈ 13.7K
-        # tokens) leaving ~2.5K tokens of headroom for the planner's
-        # response. If we'd blow past it, drop grounding first (it's
-        # the most expendable layer; the planner still has tools to
-        # fetch repo context), then trim context_str's tail.
-        BUDGET_CHARS = int(os.getenv("COT_PROMPT_BUDGET_CHARS", "48000"))
+        # Hard safety cap. gpt-oss-20b has a 16,384-token max_model_len
+        # which is a HARD limit on input+output. With max_tokens=4096
+        # for the planner's reply, the input budget is 16384 - 4096 =
+        # 12,288 tokens ≈ 43,000 chars (at ~3.5 chars/token).
+        # Operator hit Input length (17669) — 2K tokens over even
+        # after our previous trims because the bloat was in the
+        # system prompt, not the grounding (the COT_SYSTEM_PROMPT is
+        # 27K chars on its own, plus a dynamic MCP-tool list that
+        # used to be another ~30K with full JSON schemas — now
+        # compacted to ~10K via mcp_manager.get_tools_for_cot
+        # default). New cap reflects the real input budget.
+        BUDGET_CHARS = int(os.getenv("COT_PROMPT_BUDGET_CHARS", "42000"))
         total = len(system_prompt) + len(user_msg)
         if total > BUDGET_CHARS:
             over = total - BUDGET_CHARS
             logger.warning(
                 "cot prompt over budget by %d chars (total=%d, limit=%d); "
-                "trimming grounding+context to fit",
+                "trimming to fit",
                 over, total, BUDGET_CHARS,
             )
             # Trim 1: drop the KNOWLEDGE GROUNDING block entirely.
@@ -987,13 +990,50 @@ class COTEngine:
             # of project context are usually the most relevant; lop
             # off the HEAD (older / static guardrails) first.
             if over > 0 and context_str in user_msg:
-                cut = min(len(context_str), over + 500)  # extra slack
+                cut = min(len(context_str), over + 500)
                 user_msg = user_msg.replace(
                     f"Project Context:\n{context_str}",
                     f"Project Context:\n[... {cut} chars trimmed for token budget ...]"
                     + context_str[cut:],
                 )
                 logger.warning("  trimmed project context head (-%d chars)", cut)
+                over -= cut
+            # Trim 3: if still over, rebuild the system prompt with
+            # an ultra-compact MCP-tool list — just "- name: desc",
+            # no input keys at all. The planner still knows tools
+            # exist; arg schemas land via tool-call validation at
+            # dispatch time. Saves ~3-5K chars on a 19-server deploy.
+            if over > 0 and self.mcp_manager and getattr(self.mcp_manager, "is_connected", False):
+                try:
+                    skinny = "\n".join(
+                        f"- {t.name}: {(t.description or 'No description').split('.')[0]}"
+                        for t in self.mcp_manager.tool_schemas.values()
+                    )
+                    skinny_block = (
+                        "You also have access to these microservice tools "
+                        "(via MCP):\n" + skinny
+                    )
+                    if mcp_tools in system_prompt:
+                        delta = len(mcp_tools) - len(skinny_block)
+                        if delta > 0:
+                            system_prompt = system_prompt.replace(mcp_tools, skinny_block)
+                            over -= delta
+                            logger.warning(
+                                "  swapped mcp_tools to ultra-compact (-%d chars)",
+                                delta,
+                            )
+                except Exception as e:
+                    logger.warning("  mcp_tools skinny-swap failed: %s", e)
+            # Final report — if still over, the planner request WILL
+            # still fail. Worth surfacing distinctly so the operator
+            # knows to investigate further.
+            if over > 0:
+                logger.error(
+                    "cot prompt STILL over budget after all trims; "
+                    "remaining over=%d chars. Planner call will likely "
+                    "fail with 'Input length exceeds model's maximum "
+                    "context length'.", over,
+                )
 
         messages = [
             {"role": "system", "content": system_prompt},
