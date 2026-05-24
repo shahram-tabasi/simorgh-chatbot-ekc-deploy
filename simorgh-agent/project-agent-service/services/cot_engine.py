@@ -97,7 +97,8 @@ def _read_restrictions() -> str:
 
 
 def _looks_truncated(s: str) -> bool:
-    """True when the LLM's JSON output looks cut off mid-token.
+    """True when the LLM's JSON output looks cut off mid-token OR
+    came back empty.
 
     Cheap heuristic: gpt-oss-20b with guided_json sometimes hits the
     max_tokens cap before closing the outer object. We can spot this
@@ -106,12 +107,16 @@ def _looks_truncated(s: str) -> bool:
     or `]`; a truncated one usually ends inside a string or with
     open brackets outstanding.
 
+    Operator-observed (2026-05-24): vLLM also returns a literally
+    empty body when the input is at the edge of max_model_len and
+    guided_json decoding hits the context wall before emitting any
+    output token. The retry-with-bigger-budget path should kick in
+    for this too, so empty/whitespace-only is treated as truncated.
+
     Used to drive the retry-with-more-tokens path in
-    _call_gateway_with_retry. Conservative: returns False (no retry)
-    when the response is empty or obviously not JSON, so the caller
-    falls through to the existing parse-and-recover path."""
-    if not s:
-        return False
+    _call_gateway_with_retry."""
+    if not s or not s.strip():
+        return True
     txt = s.strip()
     if not txt.startswith("{") and not txt.startswith("["):
         return False

@@ -1103,7 +1103,34 @@ class ProjectManagerAgent:
             looks_like_numeric_id = (
                 isinstance(proj_arg, str) and proj_arg.isdigit()
             )
-            needs_substitution = not (looks_like_path or looks_like_numeric_id)
+            # Operator-observed planner failure mode (2026-05-24): the
+            # planner copy-pastes placeholder strings out of the system
+            # prompt or LLM training corpus instead of substituting the
+            # real project path. "group/repo" passes the simple "/" check
+            # but gitlab-mcp 404s on it. Detect these explicitly and
+            # treat as needs_substitution. Set is open — add more if new
+            # ones appear in logs.
+            _PLACEHOLDER_PATHS = {
+                "group/repo", "group/project", "group/path",
+                "org/repo", "org/project",
+                "user/repo", "user/project", "username/repository",
+                "owner/repo", "owner/project",
+                "namespace/project", "namespace/repo",
+                "your-org/your-repo", "your-group/your-repo",
+                "example/example", "example/repo", "example/project",
+                "team/myrepo", "my-org/my-repo",
+            }
+            is_placeholder = (
+                isinstance(proj_arg, str) and (
+                    proj_arg.lower() in _PLACEHOLDER_PATHS
+                    # template syntax (e.g. "<group>/<repo>", "{org}/{repo}")
+                    or "<" in proj_arg or ">" in proj_arg
+                    or "{" in proj_arg or "}" in proj_arg
+                )
+            )
+            needs_substitution = is_placeholder or not (
+                looks_like_path or looks_like_numeric_id
+            )
             if needs_substitution:
                 try:
                     meta = await self.memory.get_project(str(project_id))
