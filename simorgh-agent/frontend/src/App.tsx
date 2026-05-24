@@ -133,6 +133,22 @@ function MainChat() {
 
   const [editingMessage, setEditingMessage] = React.useState<Message | null>(null);
 
+  // Broad "stream still alive" flag for project-chat sidebar status.
+  // useChat flips isTyping false at first event but CoT can stream
+  // for tens of seconds after. Project status icon and ChatInput Stop
+  // both need to stay live for the whole duration — same derivation
+  // as ChatArea.isActivelyGenerating but lifted to App so ProjectTree
+  // can react too.
+  const isActivelyStreaming = React.useMemo(() => {
+    if (isTyping) return true;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== 'assistant') continue;
+      return Boolean((m.metadata as any)?.streaming);
+    }
+    return false;
+  }, [isTyping, messages]);
+
   // Load AI mode on mount and listen for changes
   // Modern users are forced to online mode (offline is legacy-only)
   React.useEffect(() => {
@@ -392,7 +408,8 @@ function MainChat() {
               activeProjectId={activeProjectId}
               activeChatId={activeChatId}
               showGeneralChats={user && isLegacyUser(user) ? false : showGeneralChats}
-              isStreaming={isTyping}
+              isStreaming={isActivelyStreaming}
+              streamingProjectId={isActivelyStreaming ? activeProjectId : null}
               onToggleProject={toggleProject}
               onToggleGeneralChats={toggleGeneralChats}
               onSelectChat={handleSelectChat}

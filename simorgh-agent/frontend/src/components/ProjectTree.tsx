@@ -56,6 +56,12 @@ interface ProjectTreeProps {
   // Whether the active chat is currently streaming a response. Drives the
   // "Running" status pill on that single row.
   isStreaming?: boolean;
+  /** Project UUID whose chat is actively streaming. Used to force the
+   * BUSY variant on its status dot — the backend only flips BUSY when
+   * there's an explicit project_tasks row in pending/in_progress, but
+   * plain chat-driven CoT never creates a task, so without this the
+   * dot stayed blue/gray even during long answers. */
+  streamingProjectId?: string | null;
   onToggleProject: (projectId: string) => void;
   onToggleGeneralChats: () => void;
   onSelectChat: (projectId: string | null, chatId: string) => void;
@@ -76,6 +82,7 @@ export function ProjectTree({
   activeChatId,
   showGeneralChats,
   isStreaming = false,
+  streamingProjectId = null,
   onToggleProject,
   onToggleGeneralChats,
   onSelectChat,
@@ -354,9 +361,14 @@ export function ProjectTree({
                       (red alert), error (red alert), idle (hollow
                       gray circle). Replaces the generic Folder icon
                       per operator request — status is the more useful
-                      visual signal here. */}
+                      visual signal here. forceBusy makes plain CoT
+                      streams (which don't create project_tasks rows)
+                      register as busy too. */}
                   <span className="mt-0.5 flex-shrink-0">
-                    <ProjectStatusIcon status={project.runtimeStatus} />
+                    <ProjectStatusIcon
+                      status={project.runtimeStatus}
+                      forceBusy={streamingProjectId === project.id}
+                    />
                   </span>
                   <button
                     onClick={() => onToggleProject(project.id)}
