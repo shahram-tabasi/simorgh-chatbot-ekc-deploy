@@ -95,6 +95,51 @@ def _read_restrictions() -> str:
     _restrictions_cache["content"] = content
     return content
 
+
+def _looks_truncated(s: str) -> bool:
+    """True when the LLM's JSON output looks cut off mid-token.
+
+    Cheap heuristic: gpt-oss-20b with guided_json sometimes hits the
+    max_tokens cap before closing the outer object. We can spot this
+    without a full json.loads — count braces/brackets and check that
+    the string actually ends. A real well-formed JSON ends with `}`
+    or `]`; a truncated one usually ends inside a string or with
+    open brackets outstanding.
+
+    Used to drive the retry-with-more-tokens path in
+    _call_gateway_with_retry. Conservative: returns False (no retry)
+    when the response is empty or obviously not JSON, so the caller
+    falls through to the existing parse-and-recover path."""
+    if not s:
+        return False
+    txt = s.strip()
+    if not txt.startswith("{") and not txt.startswith("["):
+        return False
+    if not (txt.endswith("}") or txt.endswith("]")):
+        return True
+    # Walk the string tracking string-state + bracket depth.
+    in_string = False
+    escape = False
+    depth = 0
+    for ch in txt:
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+    return in_string or depth != 0
+
+
 # System prompt for COT analysis
 # JSON Schema for the COT plan. Passed to llm-gateway as guided_json so
 # gpt-oss-20b's output is constrained to a valid plan at decode time —
@@ -635,6 +680,13 @@ For each step, specify:
 8. priority (1-10; higher runs sooner among independent steps)
 9. estimated_duration (string with unit, e.g. "10s")
 
+TOKEN BUDGET — keep `reasoning` under ~120 words and `description`
+fields under ~30 words. The whole JSON object MUST fit in ~3000
+tokens; verbose reasoning gets the plan cut off mid-step and the
+file-read tasks silently disappear, which is the most common cause
+of "I don't have the document" replies. Be terse — the agent is
+reading your plan, not your essay.
+
 Respond with ONLY valid JSON in this exact format:
 {{
     "reasoning": "Your routing decision: which ladder rung(s) you picked and why",
@@ -1077,7 +1129,7 @@ class COTEngine:
             "mode":          "offline",
             "force_backend": "text",
             "temperature":   0.3,
-            "max_tokens":    int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
+            "max_tokens":    int(os.getenv("COT_LLM_MAX_TOKENS", "4096")),
             "tools":         [submit_plan_tool],
             # Force the model to call submit_plan rather than producing
             # free-form text. vLLM's openai parser honours this.
@@ -1141,7 +1193,7 @@ class COTEngine:
             "model": model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
+            "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "4096")),
             "stream": False,
         }
         async with httpx.AsyncClient(timeout=120) as c:
@@ -1158,40 +1210,69 @@ class COTEngine:
         time so the response is guaranteed-parseable JSON — no
         retries, no markdown-fence stripping. Runs on .61 (faster
         than the 7B VLM) without sacrificing structured-output
-        reliability."""
+        reliability.
+
+        Retries ONCE on apparent truncation: if the returned JSON
+        doesn't close cleanly (unterminated string / missing ]/}),
+        we re-issue with 2× max_tokens. Operator saw repeated cases
+        where 2048 tokens were enough for reasoning + step 1 but
+        cut step 2 in half, dropping the plan to 1-step and losing
+        the file-read task entirely (2026-05-24)."""
+        return await self._call_gateway_with_retry(
+            gateway_url, messages,
+            initial_tokens=int(os.getenv("COT_LLM_MAX_TOKENS", "4096")),
+            retry_multiplier=2,
+        )
+
+    async def _call_gateway_with_retry(
+        self, gateway_url: str, messages: List[Dict[str, str]],
+        initial_tokens: int, retry_multiplier: int,
+    ) -> str:
         import httpx
         timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
-        # vLLM 0.6+ rejects guided_json + response_format together with
-        # 400 — they're treated as mutually exclusive structured-output
-        # specs. guided_json is the stricter of the two (decode-time
-        # schema enforcement), so keep it and drop response_format.
-        # Was 502'ing every planner call in production; operator hit
-        # this on 2026-05-24 with simple curl probes confirming the
-        # bare /generate works but the structured-output payload 400s.
-        payload = {
-            "messages": messages,
-            "mode": "offline",
-            "force_backend": "text",
-            "temperature": 0.3,
-            "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
-            "extra": {
-                "guided_json": COT_PLAN_SCHEMA,
-            },
-        }
-        async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.post(f"{gateway_url}/generate", json=payload)
-            if r.status_code != 200:
-                # Surface the upstream body so the operator can see
-                # WHY vLLM rejected the payload (was just "502 Bad
-                # Gateway" before — useless for debugging).
-                snippet = (r.text or "")[:600]
-                logger.error(
-                    "guided_json planner: gateway %s returned %d; body=%s",
-                    gateway_url, r.status_code, snippet,
+
+        async def _attempt(max_tokens: int) -> str:
+            payload = {
+                "messages": messages,
+                "mode": "offline",
+                "force_backend": "text",
+                "temperature": 0.3,
+                "max_tokens": max_tokens,
+                "extra": {"guided_json": COT_PLAN_SCHEMA},
+            }
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(f"{gateway_url}/generate", json=payload)
+                if r.status_code != 200:
+                    snippet = (r.text or "")[:600]
+                    logger.error(
+                        "guided_json planner: gateway %s returned %d; body=%s",
+                        gateway_url, r.status_code, snippet,
+                    )
+                    r.raise_for_status()
+                body = r.json()
+            return body.get("response", "") or ""
+
+        first = await _attempt(initial_tokens)
+        if _looks_truncated(first):
+            bumped = initial_tokens * retry_multiplier
+            logger.warning(
+                "guided_json planner: first attempt looked truncated at "
+                "%d tokens; retrying with %d",
+                initial_tokens, bumped,
+            )
+            try:
+                second = await _attempt(bumped)
+                # Use the longer attempt only if it actually closes cleanly;
+                # if it ALSO truncates, return the first so the parser at
+                # least sees some valid prefix.
+                if not _looks_truncated(second):
+                    return second
+            except Exception as e:
+                logger.warning(
+                    "guided_json planner: retry at %d tokens failed: %s; "
+                    "falling back to first attempt", bumped, e,
                 )
-                r.raise_for_status()
-            body = r.json()
-        return body.get("response", "") or ""
+        return first
 
     def _parse_llm_response(
         self, response: str, chain_id: uuid.UUID, request: COTRequest
