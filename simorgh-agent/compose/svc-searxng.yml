@@ -1,0 +1,44 @@
+# =============================================================================
+# SEARXNG - privacy metasearch (replaces search-service's DuckDuckGo wrapper)
+# Internal port 8080. NOT FULLY OFFLINE — requires outbound HTTPS.
+#
+# Activation:
+#   1. Edit searxng/settings.yml — set a real secret_key (any random string).
+#   2. Uncomment the master include for this file AND comment svc-search.yml.
+#   3. Repoint clients (chat-service, project-agent-service) to
+#        http://searxng:8080/search?q=<query>&format=json
+#      instead of the legacy http://search-service:8020/web_search call.
+#      The old search-service exposed MCP web_search; this swap drops MCP
+#      and uses plain HTTP/JSON — adjust the few callers accordingly.
+#
+# CAVEAT: SearXNG calls google.com / bing.com / wikipedia.org etc. directly.
+# If your deployment is fully air-gapped, DO NOT enable this — disable web
+# search at the application layer (CoT planner will skip the rung).
+# =============================================================================
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    expose:
+      - "8080"
+    volumes:
+      - ../searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-CHANGE-ME-via-env-or-settings-yml}
+      - UWSGI_WORKERS=4
+      - UWSGI_THREADS=4
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

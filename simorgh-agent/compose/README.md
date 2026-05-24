@@ -31,6 +31,7 @@ everything onto .68. The `.69` shell host is gone.
 | `infra-neo4j.yml` | `neo4j` | ❌ | knowledge graph (legacy GraphRAG) |
 | `infra-cocoindex-db.yml` | `cocoindex_db` | ❌ | pgvector DB for CocoIndex |
 | `infra-cocoindex.yml` | `cocoindex` | ❌ | CocoIndex pipeline (needs cocoindex-db) |
+| `infra-rabbitmq.yml` | `rabbitmq` | ❌ | Message broker — OPT-IN. See file header for "when to enable"; try Redis Streams / pg LISTEN/NOTIFY first |
 
 ### Core app
 | File | Service | Notes |
@@ -47,6 +48,11 @@ All on the `simorgh_app_net` network. AI / chain-of-thought talks to them via
 |---|---|---|---|
 | `svc-doc-processor.yml` | `doc-processor` | 8000 | REST (internal) |
 | `svc-docling.yml` | `docling-serve` | 5001 | REST (internal) — opt-in offline PDF→MD via IBM Docling |
+| `svc-whisper.yml` | `whisper-server` | 8000 | REST (internal) — opt-in offline Persian STT (faster-whisper) |
+| `svc-openedai-speech.yml` | `openedai-speech` | 8000 | REST (internal) — opt-in offline Persian TTS (Piper) |
+| `svc-tei.yml` | `tei` | 80 | REST (internal) — opt-in HuggingFace Text Embeddings Inference |
+| `svc-litellm.yml` | `litellm` | 4000 | REST (internal) — opt-in OpenAI-compat LLM gateway via LiteLLM |
+| `svc-searxng.yml` | `searxng` | 8080 | REST (internal) — opt-in privacy metasearch (NOT offline) |
 | `svc-stt.yml` | `stt-service` | 8001 | REST |
 | `svc-tts.yml` | `tts-service` | 8002 | REST |
 | `svc-search.yml` | `search-service` | 8020 | MCP + REST |

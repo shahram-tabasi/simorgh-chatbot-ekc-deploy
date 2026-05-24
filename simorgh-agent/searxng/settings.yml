@@ -1,0 +1,65 @@
+# =============================================================================
+# SearXNG settings — privacy-respecting metasearch (replaces search-service)
+# =============================================================================
+# Aggregates 70+ search backends without forwarding your IP/queries. JSON API
+# enabled for programmatic use (the chat-service / project-agent can call it
+# exactly like the old DuckDuckGo-wrapper).
+#
+# CAVEAT — NOT FULLY OFFLINE: SearXNG queries external search engines on your
+# behalf. It needs OUTBOUND internet (HTTPS to google.com, bing.com,
+# duckduckgo.com, wikipedia.org, etc.). For a fully air-gapped deployment,
+# don't enable this service — disable web search at the application layer
+# instead.
+
+use_default_settings: true
+
+general:
+  instance_name: "Simorgh internal search"
+  contact_url: false
+  enable_metrics: false      # no telemetry
+
+server:
+  secret_key: "CHANGE-ME-set-SEARXNG_SECRET-in-compose-env"
+  limiter: false             # we're internal-network only — no abuse risk
+  image_proxy: true
+  default_http_headers:
+    X-Content-Type-Options: nosniff
+    X-Robots-Tag: noindex, nofollow
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "fa"         # Persian results first; clients can override per-query
+  formats:
+    - html
+    - json                   # REQUIRED for programmatic use by chat-service
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+
+ui:
+  default_theme: simple
+  static_use_hash: true
+
+# Curate which backends to use. Defaults enable too many; keep the ones with
+# decent Persian + English coverage and good rate limits.
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: wikidata
+    disabled: false
+  - name: github
+    disabled: false
+  - name: stackoverflow
+    disabled: false
+  - name: arxiv
+    disabled: true           # rare for industrial-spec queries
+  - name: pubmed
+    disabled: true
+  - name: yahoo
+    disabled: true           # often blocks

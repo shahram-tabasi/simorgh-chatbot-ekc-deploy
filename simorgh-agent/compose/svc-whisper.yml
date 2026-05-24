@@ -1,0 +1,52 @@
+# =============================================================================
+# FASTER-WHISPER SERVER - offline Persian STT (OpenAI /v1/audio compatible)
+# Internal port 8000. Drop-in for stt-service.
+#
+# Activation:
+#   1. Build the offline image (see whisper/Dockerfile).
+#   2. Uncomment the master include for this file AND comment out svc-stt.yml.
+#   3. Repoint STT_URL in chat-service / project-agent-service:
+#        old: http://stt-service:8001
+#        new: http://whisper-server:8000
+#   4. Most clients calling POST /v1/audio/transcriptions work unchanged.
+# =============================================================================
+services:
+  whisper-server:
+    image: simorgh-whisper:offline
+    build:
+      context: ../whisper
+      dockerfile: Dockerfile
+      args:
+        WHISPER_MODEL: MohammadGholizadeh/whisper-large-v3-persian-common-voice-17
+    container_name: whisper-server
+    expose:
+      - "8000"
+    environment:
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - WHISPER_DEFAULT_LANGUAGE=fa
+      - WHISPER_COMPUTE_TYPE=int8
+      - WHISPER_MODEL=MohammadGholizadeh/whisper-large-v3-persian-common-voice-17
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s     # first-run CTranslate2 conversion takes a moment
+    restart: unless-stopped
+    # GPU passthrough — uncomment if .68 has an NVIDIA GPU and CUDA runtime.
+    # Switch the build base image to fedirz/faster-whisper-server:latest-cuda.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

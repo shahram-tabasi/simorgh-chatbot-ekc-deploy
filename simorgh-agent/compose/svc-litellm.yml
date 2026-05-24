@@ -1,0 +1,53 @@
+# =============================================================================
+# LITELLM PROXY - OpenAI-compatible gateway in front of vLLM (.61, .62)
+# Internal port 4000. Drop-in for llm-gateway.
+#
+# Activation:
+#   1. Edit litellm/config.yaml to match your vLLM endpoints.
+#   2. Uncomment the master include for this file.
+#   3. Repoint LLM_GATEWAY_URL in svc-project-agent.yml / svc-chat.yml
+#      from http://llm-gateway:8030 to http://litellm:4000
+#      (LiteLLM exposes /v1/chat/completions natively, but the
+#      /api/llm/generate-stream legacy endpoint your code uses is
+#      llm-gateway-specific — see notes at the bottom.)
+#
+# CAVEAT — llm-gateway has Simorgh-specific routes:
+#   - /api/llm/generate-stream  (SSE shim)
+#   - /api/llm/route             (custom mode routing: online vs offline vs voice)
+#   - /api/llm/forms             (Simorgh-specific form-mode)
+# LiteLLM does NOT speak these. Two migration paths:
+#   (a) Move client code to call /v1/chat/completions directly (clean, recommended)
+#   (b) Keep llm-gateway as a THIN shim that just forwards /v1/chat/completions
+#       to LiteLLM and translates the legacy routes (1 day of work, no client
+#       changes needed). Pick (b) if you have many clients on the legacy paths.
+# =============================================================================
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: litellm
+    expose:
+      - "4000"
+    command:
+      - "--config=/app/config.yaml"
+      - "--port=4000"
+      - "--num_workers=2"
+    volumes:
+      - ../litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      - LITELLM_TELEMETRY=False     # offline-safe: no phone-home
+      # - LITELLM_MASTER_KEY=...     # set if you want /v1 endpoints auth-gated
+      # - DATABASE_URL=...           # set if you want spend tracking via Postgres
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:4000/health/liveliness || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

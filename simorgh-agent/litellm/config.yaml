@@ -1,0 +1,60 @@
+# =============================================================================
+# LiteLLM Proxy config — OpenAI-compatible gateway in front of your vLLMs
+# =============================================================================
+# Replaces llm-gateway's custom routing code with battle-tested LiteLLM.
+# All your existing client code (chat-service, project-agent-service, etc.)
+# can keep using /v1/chat/completions and /v1/completions — LiteLLM speaks
+# OpenAI natively.
+#
+# Hardware topology (from compose/README.md):
+#   - 192.168.1.61 → gpt-oss-20b on vLLM (LLM endpoint #1)
+#   - 192.168.1.62 → qwen2.5-vl-7b on vLLM (LLM endpoint #2)
+#
+# Update model_list[].litellm_params.api_base values when those move.
+# =============================================================================
+
+model_list:
+  # Primary: gpt-oss-20b on .61 — used for CoT planner + project-agent synth
+  - model_name: gpt-oss-20b
+    litellm_params:
+      model: openai/gpt-oss-20b
+      api_base: http://192.168.1.61:8000/v1
+      api_key: dummy-required-by-openai-sdk
+      timeout: 180
+      max_retries: 1
+
+  # Vision-capable backup: qwen2.5-vl-7b on .62 — used for image/PDF understanding
+  - model_name: qwen2.5-vl-7b
+    litellm_params:
+      model: openai/qwen2.5-vl-7b
+      api_base: http://192.168.1.62:8000/v1
+      api_key: dummy-required-by-openai-sdk
+      timeout: 180
+      max_retries: 1
+
+  # Alias that legacy clients use — both backends present, LiteLLM rotates.
+  - model_name: simorgh-default
+    litellm_params:
+      model: openai/gpt-oss-20b
+      api_base: http://192.168.1.61:8000/v1
+      api_key: dummy
+
+router_settings:
+  routing_strategy: simple-shuffle   # round-robin across replicas of same model
+  num_retries: 1
+  timeout: 180
+
+litellm_settings:
+  drop_params: true                  # silently drop unsupported params (e.g. seed
+                                     # on a backend that doesn't honour it) instead
+                                     # of failing the request
+  set_verbose: false
+  telemetry: false                   # do NOT phone home — required for offline ops
+  request_timeout: 180
+
+general_settings:
+  # No master key here — set LITELLM_MASTER_KEY in compose env if you want
+  # /v1 endpoints authenticated. Leave unset to keep parity with your current
+  # llm-gateway behaviour (network-isolated, no auth).
+  background_health_checks: true
+  health_check_interval: 60

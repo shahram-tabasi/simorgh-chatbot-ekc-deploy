@@ -1,0 +1,85 @@
+# =============================================================================
+# RABBITMQ - message broker (OPT-IN, see "When to enable" below)
+# AMQP 5672 + management UI 15672. Internal-only by default.
+# =============================================================================
+#
+# WHEN TO ENABLE
+# --------------
+# Simorgh today is fundamentally synchronous (HTTP request/response + SSE
+# for chat streaming). You DO NOT need RabbitMQ for that. Adding it pays
+# off when you start hitting one of these patterns:
+#
+#   ✓ Doc-processor async ingestion — uploads taking >30s should not block
+#     the HTTP request. Enqueue → return 202 → worker processes → notify.
+#   ✓ Knowledge-repo background refresh — currently a polling loop in
+#     knowledge_repo_service. Cleaner as a scheduled job → queue → worker.
+#   ✓ Email-triggered project actions (mail-bridge) — fan-out from one
+#     incoming email to multiple project agents.
+#   ✓ TPMS / techserver sync jobs — periodic, can fail, need retry semantics.
+#   ✓ Fan-out: when multiple services need to react to the same event
+#     (e.g. "project created" → init + analysis + indexing + notification).
+#
+# WHEN IT'S OVERKILL
+# ------------------
+#   ✗ Sub-second request/response flows (chat → CoT → answer) — HTTP is
+#     simpler, lower latency, easier to debug.
+#   ✗ Already-synchronous chains where you NEED the result inline.
+#   ✗ Small teams without DevOps capacity for queue monitoring / DLQs /
+#     dead-letter handling / poison-message recovery.
+#
+# CHEAPER ALTERNATIVES TO CONSIDER FIRST
+# ---------------------------------------
+#   - Redis Streams: you ALREADY run Redis. For lightweight pub/sub +
+#     short-lived events, this beats adding a new infrastructure piece.
+#   - Postgres LISTEN/NOTIFY: also already deployed. Good for "fire an
+#     event after a DB transaction commits" semantics — guaranteed by
+#     ACID, no extra moving parts.
+#
+# Recommendation: stick with Redis Streams + LISTEN/NOTIFY for the first
+# few async use-cases. Adopt RabbitMQ ONLY when you have ≥3 distinct
+# producers/consumers and need complex routing (topic exchanges,
+# headers exchanges) or guaranteed delivery semantics that Redis can't
+# match.
+#
+# Build/activation:
+#   1. Set RABBITMQ_DEFAULT_USER / RABBITMQ_DEFAULT_PASS in .env.
+#   2. Uncomment the include in docker-compose.yml.
+#   3. Wire clients via the `rabbitmq` hostname on simorgh_app_net.
+# =============================================================================
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq
+    expose:
+      - "5672"     # AMQP
+      - "15672"    # Management UI / HTTP API
+    # Uncomment to expose the management UI on the host for debugging:
+    # ports:
+    #   - "127.0.0.1:15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-simorgh}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:-changeme-via-env}
+      - RABBITMQ_DEFAULT_VHOST=/simorgh
+      # Disable anonymous access just in case the container ever leaks.
+      - RABBITMQ_LOOPBACK_USERS=
+    volumes:
+      - simorgh_rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  simorgh_rabbitmq_data:
+    name: simorgh_rabbitmq_data
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

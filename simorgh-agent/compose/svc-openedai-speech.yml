@@ -1,0 +1,44 @@
+# =============================================================================
+# OPENEDAI-SPEECH - OpenAI /v1/audio/speech compatible TTS (Piper + XTTS backends)
+# Internal port 8000. Drop-in for tts-service.
+#
+# Uses Piper (fast, Persian-tuned, offline) by default; can also serve Coqui
+# XTTSv2 for higher-quality voices when configured. Voices are mounted from
+# ../tts/voices/ (read-only) and must be pre-downloaded — see tts/voices/README.md.
+#
+# Activation:
+#   1. Download voices into ../tts/voices/ (see that README).
+#   2. Uncomment the master include AND comment out svc-tts.yml.
+#   3. Repoint TTS_URL in chat-service / project-agent-service:
+#        old: http://tts-service:8002
+#        new: http://openedai-speech:8000
+#   4. Clients calling POST /v1/audio/speech with {"voice": "alloy", ...}
+#      work unchanged — voice_to_speaker.yaml maps that to Persian Piper.
+# =============================================================================
+services:
+  openedai-speech:
+    image: ghcr.io/matatonic/openedai-speech-min:latest
+    container_name: openedai-speech
+    expose:
+      - "8000"
+    volumes:
+      - ../tts/voices:/app/voices:ro
+      - ../tts/config/voice_to_speaker.yaml:/app/config/voice_to_speaker.yaml:ro
+    environment:
+      - PRELOAD_MODEL=voices/fa_IR-amir-medium.onnx
+      - TTS_HOME=/app/voices
+      - HF_HUB_OFFLINE=1
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

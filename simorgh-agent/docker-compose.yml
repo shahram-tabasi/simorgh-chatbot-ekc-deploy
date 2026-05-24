@@ -36,6 +36,11 @@ include:
   #                                   # still depend on graph-rag-service)
   # - compose/infra-cocoindex-db.yml  # pgvector DB for CocoIndex
   # - compose/infra-cocoindex.yml     # CocoIndex pipeline (needs cocoindex-db)
+  # - compose/infra-rabbitmq.yml      # Message broker. OPT-IN — see file header
+  #                                   # for "when to enable" / "when overkill".
+  #                                   # Try Redis Streams or pg LISTEN/NOTIFY
+  #                                   # first; adopt this only for ≥3 producers
+  #                                   # /consumers with complex routing needs.
 
   # ---- Core app -------------------------------------------------------------
   - compose/core-backend.yml
@@ -51,6 +56,24 @@ include:
   #                                       # Then uncomment + set USE_DOCLING=1 in
   #                                       # doc-processor to start using it.
   - compose/svc-stt.yml
+  # ---- OPT-IN: standard-image replacements for hand-rolled wrappers --------
+  # Each pre-bakes its model into the image so runtime is fully offline.
+  # Build the offline image once on a connected host, then uncomment.
+  # See each file's header for the exact build/activation steps.
+  # - compose/svc-whisper.yml             # Persian STT (faster-whisper-server)
+  #                                       # → replaces svc-stt.yml (Persian Whisper baked in)
+  # - compose/svc-openedai-speech.yml     # Persian TTS (Piper via openedai-speech)
+  #                                       # → replaces svc-tts.yml (download voices first;
+  #                                       #   see tts/voices/README.md)
+  # - compose/svc-tei.yml                 # Embeddings via HuggingFace TEI
+  #                                       # → replaces svc-embeddings.yml (3-10× throughput;
+  #                                       #   keeps all-MiniLM-L6-v2 for Qdrant compat)
+  # - compose/svc-litellm.yml             # LLM gateway via LiteLLM Proxy
+  #                                       # → replaces svc-llm-gateway.yml (edit
+  #                                       #   litellm/config.yaml for your vLLM endpoints)
+  # - compose/svc-searxng.yml             # Web metasearch via SearXNG
+  #                                       # → replaces svc-search.yml. NOT OFFLINE —
+  #                                       #   needs outbound HTTPS to google/bing/etc.
   - compose/svc-tts.yml
   - compose/svc-search.yml
   - compose/svc-tpms-fetcher.yml

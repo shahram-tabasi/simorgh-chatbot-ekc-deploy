@@ -1,0 +1,47 @@
+# =============================================================================
+# TEI — HuggingFace Text Embeddings Inference (offline, OpenAI-compatible)
+# Internal port 80. Drop-in for embeddings-service.
+#
+# To switch existing services from embeddings-service to TEI:
+#   1. Build the offline image once on a connected host (see tei/Dockerfile).
+#   2. Uncomment the master include for this file.
+#   3. Update EMBEDDINGS_URL env in svc-chat.yml / svc-project-agent.yml /
+#      svc-documents-rag.yml / svc-hr-kb.yml from
+#        http://embeddings-service:8031
+#      to
+#        http://tei:80
+#      (TEI exposes /embed AND /v1/embeddings — most callers will work
+#      unchanged with the OpenAI-style /v1/embeddings endpoint.)
+# =============================================================================
+services:
+  tei:
+    image: simorgh-tei:offline
+    build:
+      context: ../tei
+      dockerfile: Dockerfile
+      args:
+        EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+    container_name: tei
+    expose:
+      - "80"
+    command:
+      - "--model-id=/data/models--sentence-transformers--all-MiniLM-L6-v2"
+      - "--port=80"
+    environment:
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/data
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:80/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
