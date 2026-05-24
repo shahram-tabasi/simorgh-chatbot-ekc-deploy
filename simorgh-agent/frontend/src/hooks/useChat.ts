@@ -581,6 +581,11 @@ export function useChat(
           // Wire the abort controller signal so the Stop button in
           // ChatInput actually halts the SSE stream from gpt-oss.
           abortControllerRef.current?.signal,
+          // chatId so the backend can persist the conversation pair.
+          // Without this, general-chat history vanished on chat-switch
+          // because the HR direct-RAG path never wrote to the chat
+          // history store. Operator reported the symptom 2026-05-24.
+          chatId,
         );
       } finally {
         setIsTyping(false);

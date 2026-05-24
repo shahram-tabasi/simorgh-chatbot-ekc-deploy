@@ -316,10 +316,20 @@ export const sendMessageHrStream = async (
    * this so the Stop button (ChatInput) actually halts gpt-oss
    * generation; without it the stream just kept running server-side
    * even after the user clicked Stop. */
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** Optional chat_id — when provided, the backend persists the
+   * user/assistant message pair to the chat-history store after the
+   * stream completes. Without it, navigating away from the chat
+   * loses the reply. */
+  chatId?: string | null
 ): Promise<void> => {
   const token = getAuthToken();
-  const body = { user_id: userId, query, ...(category ? { category } : {}) };
+  const body = {
+    user_id: userId,
+    query,
+    ...(category ? { category } : {}),
+    ...(chatId ? { chat_id: chatId } : {}),
+  };
 
   try {
     const response = await fetch(`${HR_BASE}/stream`, {

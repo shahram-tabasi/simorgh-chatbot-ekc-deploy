@@ -66,6 +66,42 @@ class HrStreamRequest(BaseModel):
         description='Optional facet filter: "hr_manner" or "org_strategy". '
                     'Omit to search both corpora.',
     )
+    chat_id: Optional[str] = Field(
+        None,
+        description="The general-chat id this turn belongs to. Required to "
+                    "persist the message pair so it survives chat-switch "
+                    "navigation. Omit only for one-shot probes.",
+    )
+
+
+async def _persist_pair(chat_id: str, user_id: str, user_msg: str,
+                         assistant_msg: str, citations: list,
+                         refusal: bool = False) -> None:
+    """Best-effort save of the user message + assistant response to the
+    chat-history store. Called after the SSE stream completes. Without
+    this, every general-chat reply was lost the moment the user
+    navigated away — useChat read messages from generalChats which is
+    populated by /api/chats/{id} on selectChat, and nothing was ever
+    written there for HR direct-RAG replies."""
+    try:
+        from services.unified_memory_service import get_unified_memory_service
+        memory = get_unified_memory_service()
+        await memory.store_conversation_pair(
+            chat_id=chat_id,
+            user_id=user_id,
+            user_message=user_msg,
+            assistant_response=assistant_msg,
+            metadata={
+                "source": "hr_direct_rag",
+                "citations": citations,
+                "refusal": refusal,
+            },
+        )
+    except Exception as e:
+        # Persistence is best-effort. A failure here only means the
+        # user loses scrollback on chat-switch — the live stream
+        # already played, so the current turn is intact.
+        log.warning("hr_stream: persist_pair failed for chat=%s: %s", chat_id, e)
 
 
 @router.post("/stream")
@@ -84,15 +120,42 @@ async def hr_stream(req: HrStreamRequest):
         raise HTTPException(status_code=400, detail="invalid category")
 
     async def event_stream():
-        # Use 'try' so any exception below still emits a clean error
-        # frame instead of half-closing the SSE stream.
+        # Accumulate the streamed response + metadata so we can save
+        # the message pair AFTER the stream completes. The user
+        # already saw the chunks live; persistence is what makes the
+        # conversation survive a chat-switch (which was the
+        # operator's "chat history disappears on general chats"
+        # report — every turn vanished because the HR path never
+        # wrote to the chat history store).
+        accumulated = []
+        citations: list = []
+        was_refusal = False
         try:
             async for kind, data in stream_hr_answer(req.query, req.category):
+                if kind == "chunk":
+                    accumulated.append(str(data or ""))
+                elif kind == "meta":
+                    citations = (data or {}).get("hits") or []
+                elif kind == "refusal":
+                    was_refusal = True
+                    accumulated.append(str(data or ""))
                 frame = {kind: data}
                 yield f"data: {json.dumps(frame, ensure_ascii=False)}\n\n"
         except Exception as e:
             log.exception("hr_stream pipeline crashed")
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+        # Persist after the stream is fully emitted to the client.
+        # Avoids blocking the streaming with a slow Redis/postgres
+        # write; the user sees the answer immediately and we save
+        # in the trailing tail of the response.
+        full_assistant = "".join(accumulated).strip()
+        if req.chat_id and full_assistant:
+            await _persist_pair(
+                chat_id=req.chat_id, user_id=req.user_id,
+                user_msg=req.query, assistant_msg=full_assistant,
+                citations=citations, refusal=was_refusal,
+            )
 
     return StreamingResponse(
         event_stream(),
