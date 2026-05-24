@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { PanelLeftIcon, PanelRightIcon, SparklesIcon, PlusIcon, SearchIcon } from 'lucide-react';
+import { PanelLeftIcon, PanelRightIcon, SparklesIcon, PlusIcon } from 'lucide-react';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -10,7 +10,6 @@ interface SidebarProps {
   className?: string;
   onNewProject?: () => void;
   onNewGeneralChat?: () => void;
-  onSearchClick?: () => void;
 }
 
 export function Sidebar({
@@ -84,19 +83,34 @@ export function Sidebar({
               <div
                 className="flex items-center justify-between px-4 pt-3 pb-2"
               >
-                {/* Simorgh Logo - only on right sidebar, hidden on mobile */}
+                {/* Brand mark — bird + "Simorgh Code" wordmark.
+                    Typography deliberately matches Claude Code's
+                    layout (operator reference): heavy weight + size
+                    on the product noun ("Simorgh"), lighter +
+                    smaller on the qualifier ("Code"), tight tracking.
+                    Real DOM text (not inline SVG) so it inherits the
+                    app's font stack and looks crisp on hi-dpi. */}
                 {side === 'right' && !isMobile && (
-                  <div className="flex items-left gap-0">
+                  <div className="flex items-center gap-2.5">
                     <img
                       src={`${import.meta.env.BASE_URL}simorgh.svg`}
-                      alt="Simorgh"
-                      className="w-14 h-14"
+                      alt=""
+                      className="w-12 h-12 flex-shrink-0"
                     />
-                    <img
-                      src={`${import.meta.env.BASE_URL}text_simorgh.svg`}
-                      alt="Simorgh"
-                      className="h-14 mt-3"
-                    />
+                    <div className="flex items-baseline gap-1.5 leading-none">
+                      <span
+                        className="text-[28px] font-bold tracking-tight bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent"
+                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}
+                      >
+                        Simorgh
+                      </span>
+                      <span
+                        className="text-[22px] font-normal text-slate-200/90 tracking-tight"
+                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}
+                      >
+                        Code
+                      </span>
+                    </div>
                   </div>
                 )}
 
@@ -172,16 +186,11 @@ export function Sidebar({
               )}
             </>
           )}
-
-
-          {/* Search Icon */}
-          <button
-            onClick={onToggle}
-            className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg group"
-            title="Search History"
-          >
-            <SearchIcon className="w-5 h-5 text-blue-400 group-hover:text-blue-300" />
-          </button>
+          {/* The dedicated Search/History affordance was redundant
+              with the sidebar toggle (both did onToggle) and added
+              UI noise on every screen. Removed per operator request.
+              The full chat history list still opens via the chevron
+              edge-toggle button below. */}
         </div>
       )}
     </>

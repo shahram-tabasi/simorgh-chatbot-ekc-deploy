@@ -336,8 +336,10 @@ async def delete_session(session_token: str,
     rows for the parent project, and tears down the runtime-broker container.
     Remote git history on GitLab is preserved."""
     pool = await _db()
+    # Pull project meta along with session — we need tpms_oenum to
+    # drop the per-project Qdrant collection + Neo4j subgraph below.
     row = await pool.fetchrow(
-        "SELECT s.project_id, p.owner_id "
+        "SELECT s.project_id, p.owner_id, p.tpms_oenum, p.gitlab_repo_path "
         "FROM project_chat_sessions s "
         "JOIN projects p ON p.id = s.project_id "
         "WHERE s.session_token = $1", session_token,
@@ -349,6 +351,7 @@ async def delete_session(session_token: str,
         raise HTTPException(status_code=403, detail="not your session")
 
     project_id = str(row["project_id"])
+    project_oenum = row["tpms_oenum"]
 
     # 1. Tear down container (best-effort; we proceed even if it fails).
     container_result = await destroy_session_container(project_id)
@@ -373,11 +376,49 @@ async def delete_session(session_token: str,
         async with conn.transaction():
             await conn.execute("DELETE FROM projects WHERE id = $1::uuid", project_id)
 
+    # 2b. Drop any per-upload ephemeral Qdrant collections this
+    #     session may have created via upload_investigator (Phase 4).
+    #     Naming convention: upload_id = f"{chat_id}::{filename}",
+    #     collection = "upload_" + sha1(upload_id)[:16]. We don't
+    #     know which uploads this session touched without a sidecar
+    #     table; the periodic-cleanup script handles the long tail.
+    #     This hook fires only if upload_investigator is importable
+    #     in project-agent — chat-service can't import it directly,
+    #     so the actual prune is left to the periodic sweep. Logged
+    #     here so operators have a hook point in the future.
+    logger.info("session_delete: per-upload collections (if any) "
+                "will be reclaimed by the periodic upload_* sweep")
+
+    # 3. Drop the per-project Qdrant collection + Neo4j subgraph +
+    #    per-project Postgres DB. Previous version only handled the
+    #    main Postgres cascade above — operator reported that delete
+    #    "didn't really clean the backend". The legacy delete at
+    #    backend/main.py:1543 already did this; mirror that coverage
+    #    here for the modern session path.
+    project_db_details: dict[str, Any] = {}
+    if project_oenum:
+        try:
+            from services.project_database_manager import get_project_database_manager
+            db_manager = get_project_database_manager()
+            if db_manager.check_project_db_exists(project_oenum):
+                project_db_details = db_manager.delete_project(project_oenum)
+                logger.info("per-project DBs deleted oenum=%s details=%s",
+                            project_oenum, project_db_details)
+            else:
+                project_db_details = {"skipped": "no per-project DB"}
+        except Exception as e:
+            logger.warning("per-project DB cleanup failed oenum=%s err=%s",
+                            project_oenum, e)
+            project_db_details = {"error": str(e)}
+    else:
+        project_db_details = {"skipped": "project has no tpms_oenum"}
+
     return {
         "deleted": True,
         "session_token": session_token,
         "project_id": project_id,
         "container": container_result,
+        "project_db": project_db_details,
     }
 
 

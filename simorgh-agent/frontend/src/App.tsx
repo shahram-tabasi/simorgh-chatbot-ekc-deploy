@@ -53,7 +53,7 @@ function MainChat() {
   const [activeSpecTasks, setActiveSpecTasks] = React.useState<string[]>([]);
   const [notifications, setNotifications] = React.useState<ToastNotification[]>([]);
   const [settingsPanelOpen, setSettingsPanelOpen] = React.useState(false);
-  const [currentAiMode, setCurrentAiMode] = React.useState<'online' | 'offline'>('online');
+  const [currentAiMode, setCurrentAiMode] = React.useState<'online' | 'offline'>('offline');
 
   // Derive a unified userId that works for both legacy (TPMS) and modern (email/Google) users
   // Modern users: use user.id (UUID from PostgreSQL) which matches JWT "sub" claim
@@ -133,29 +133,41 @@ function MainChat() {
 
   const [editingMessage, setEditingMessage] = React.useState<Message | null>(null);
 
+  // Broad "stream still alive" flag for project-chat sidebar status.
+  // useChat flips isTyping false at first event but CoT can stream
+  // for tens of seconds after. Project status icon and ChatInput Stop
+  // both need to stay live for the whole duration — same derivation
+  // as ChatArea.isActivelyGenerating but lifted to App so ProjectTree
+  // can react too.
+  const isActivelyStreaming = React.useMemo(() => {
+    if (isTyping) return true;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== 'assistant') continue;
+      return Boolean((m.metadata as any)?.streaming);
+    }
+    return false;
+  }, [isTyping, messages]);
+
   // Load AI mode on mount and listen for changes
   // Modern users are forced to online mode (offline is legacy-only)
+  // LLM mode: default OFFLINE for everyone (general chat always
+  // uses the local gpt-oss-20b via hr_chat.py; this setting controls
+  // project chat only). Previous version forced modern users to
+  // 'online' on every mount — that pre-dated the HR direct-RAG path
+  // and was the reason the operator's online/offline toggle had no
+  // effect ("always work via offline"). Removed.
   React.useEffect(() => {
-    if (isModernTier) {
-      setCurrentAiMode('online');
-      localStorage.setItem('llm_mode', 'online');
-      return;
-    }
-
     const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
-    if (savedMode) {
-      setCurrentAiMode(savedMode);
-    }
+    setCurrentAiMode(savedMode ?? 'offline');
 
     const handleModeChange = (e: Event) => {
       const customEvent = e as CustomEvent<'online' | 'offline'>;
-      if (isModernTier && customEvent.detail === 'offline') return; // Block for modern
       setCurrentAiMode(customEvent.detail);
     };
-
     window.addEventListener('llm-mode-changed', handleModeChange);
     return () => window.removeEventListener('llm-mode-changed', handleModeChange);
-  }, [isModernTier]);
+  }, []);
 
   // Handle back button for settings panel on mobile
   React.useEffect(() => {
@@ -257,6 +269,32 @@ function MainChat() {
       } catch {}
     }
   }, [selectChat, ensureSessionChat]);
+
+  // Initial-mount header bootstrap. The /users/{id}/project-chats
+  // endpoint returns chat rows without per-chat repo context, so when
+  // the app boots straight onto a project chat (refresh, deep link, or
+  // wizard creation) the header bar above the chat input has no
+  // repo/branch/diff to render — it only appeared after the operator
+  // clicked a chat in the sidebar, which fires selectChat() and pulls
+  // the session message ctx. This effect runs that fetch once per
+  // (project, chat) the first time we land on it without repo data,
+  // so the header renders on initial mount too.
+  const headerBootstrapRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!activeProjectId || !activeChatId) return;
+    // Wait until activeProject is actually loaded into the projects
+    // array. If we fire selectChat() before this, the setProjects
+    // callback inside it can't find the row to update and the repo
+    // data is silently dropped — the original bug the operator
+    // hit ("only shows after switch chats").
+    if (!activeProject) return;
+    if (activeProject.repoPath || activeProject.workingBranch) return;
+    const key = `${activeProjectId}::${activeChatId}`;
+    if (headerBootstrapRef.current === key) return;
+    headerBootstrapRef.current = key;
+    selectChat(activeProjectId, activeChatId);
+  }, [activeProjectId, activeChatId, activeProject,
+      activeProject?.repoPath, activeProject?.workingBranch, selectChat]);
 
   // Handle chat selection from history - close left sidebar on mobile
   const handleSelectChatFromHistory = React.useCallback((projectId: string | null, chatId: string) => {
@@ -366,7 +404,8 @@ function MainChat() {
               activeProjectId={activeProjectId}
               activeChatId={activeChatId}
               showGeneralChats={user && isLegacyUser(user) ? false : showGeneralChats}
-              isStreaming={isTyping}
+              isStreaming={isActivelyStreaming}
+              streamingProjectId={isActivelyStreaming ? activeProjectId : null}
               onToggleProject={toggleProject}
               onToggleGeneralChats={toggleGeneralChats}
               onSelectChat={handleSelectChat}
@@ -405,6 +444,7 @@ function MainChat() {
               </div>
             )}
             <ChatArea
+              activeChatId={activeChatId}
               messages={messages}
               isTyping={isTyping}
               onSendMessage={handleSendMessage}
@@ -445,6 +485,11 @@ function MainChat() {
         <SettingsPanel
           externalOpen={settingsPanelOpen}
           onExternalClose={() => setSettingsPanelOpen(false)}
+          // General chat hard-pins to local Simorgh AI server-side
+          // (hr_chat.py); disable the Online tile in the picker when
+          // a general chat is active so the setting can't suggest
+          // otherwise.
+          isGeneralChatActive={!!activeChatId && activeProjectId === null}
         />
 
         {/* New per-project container wizard (legacy + modern, both flows). */}

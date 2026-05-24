@@ -24,6 +24,8 @@ import chatbotV2Api, {
   getChatHistory,
   sendMessageV2,
   sendMessageV2Stream,
+  sendMessageHrStream,
+  HrCitation,
   uploadDocumentV2,
   updateSessionStage,
   getAvailableTools,
@@ -469,6 +471,98 @@ export const useSessionChat = (
 
       setMessages((prev) => [...prev, streamingMessage]);
 
+      // ---- General-chat fast path: HR / Strategy direct-RAG ----
+      // Goes straight to gpt-oss-20b on .61 via llm-gateway. No planner,
+      // no MCP, no online LLM. Hard-refusal renders as the assistant
+      // message text (no "Error:" prefix); citations come up via the
+      // SSE `meta` frame ahead of the first chunk and get attached to
+      // the assistant message metadata for the bubble's footer.
+      if (activeSession.chatType === 'general') {
+        try {
+          await sendMessageHrStream(
+            userId,
+            content,
+            {
+              onMeta: (meta) => {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === streamingMessageId
+                      ? {
+                          ...m,
+                          metadata: {
+                            ...(m.metadata as Record<string, unknown> | undefined),
+                            citations: meta.hits as HrCitation[],
+                            top_score: meta.top_score,
+                          },
+                        }
+                      : m
+                  )
+                );
+              },
+              onChunk: (chunk) => {
+                streamedContent += chunk;
+                onChunk(chunk);
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === streamingMessageId
+                      ? { ...m, content: streamedContent }
+                      : m
+                  )
+                );
+              },
+              onRefusal: (text) => {
+                // Refusal IS the answer for out-of-corpus queries —
+                // surface it as the message body, not an error.
+                streamedContent = text;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === streamingMessageId
+                      ? {
+                          ...m,
+                          content: text,
+                          metadata: {
+                            ...(m.metadata as Record<string, unknown> | undefined),
+                            refusal: true,
+                          },
+                        }
+                      : m
+                  )
+                );
+              },
+              onDone: () => {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === streamingMessageId
+                      ? { ...m, isStreaming: false }
+                      : m
+                  )
+                );
+              },
+              onError: (err) => {
+                setError(err.message);
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === streamingMessageId
+                      ? {
+                          ...m,
+                          content: `Error: ${err.message}`,
+                          isStreaming: false,
+                          metadata: { error: true },
+                        }
+                      : m
+                  )
+                );
+              },
+            }
+          );
+        } finally {
+          setIsSending(false);
+          setIsStreaming(false);
+        }
+        return;
+      }
+
+      // ---- Project chat: existing planner + MCP path ----
       try {
         await sendMessageV2Stream(
           activeSession.id,

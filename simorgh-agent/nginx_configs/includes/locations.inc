@@ -221,6 +221,26 @@ location /api/v2/chat/ {
     proxy_read_timeout 600s;
 }
 
+# General-chat HR/Strategy direct-RAG endpoint (chat-service:8034).
+# Streams from gpt-oss-20b on .61 via llm-gateway. Modern-user only.
+# Buffering off + 600s read timeout so SSE tokens reach the browser
+# immediately and a slow first-token doesn't trip the proxy timeout.
+location /api/v2/general-chat/ {
+    limit_req zone=api_limit burst=30 nodelay;
+    proxy_pass http://chat_service;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    add_header X-Accel-Buffering "no" always;
+    proxy_connect_timeout 60s;
+    proxy_read_timeout 600s;
+}
+
 # Project chat sessions (chat-service:8034) — new deep-link surface added
 # in migration 004. Routes: POST/GET/DELETE /api/v2/chatbot/project/...
 location /api/v2/chatbot/ {

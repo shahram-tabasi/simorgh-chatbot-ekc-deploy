@@ -1,7 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import {
-  Folder,
   MessageSquare,
   ChevronDown,
   ChevronRight,
@@ -14,6 +13,7 @@ import { Project, Chat } from '../types';
 import ContextMenu from './ContextMenu';
 import RenameModal from './RenameModal';
 import { Tooltip } from './Tooltip';
+import { ProjectStatusIcon } from './ProjectStatusIcon';
 
 type StatusFilter = 'active' | 'archived' | 'all';
 
@@ -56,6 +56,12 @@ interface ProjectTreeProps {
   // Whether the active chat is currently streaming a response. Drives the
   // "Running" status pill on that single row.
   isStreaming?: boolean;
+  /** Project UUID whose chat is actively streaming. Used to force the
+   * BUSY variant on its status dot — the backend only flips BUSY when
+   * there's an explicit project_tasks row in pending/in_progress, but
+   * plain chat-driven CoT never creates a task, so without this the
+   * dot stayed blue/gray even during long answers. */
+  streamingProjectId?: string | null;
   onToggleProject: (projectId: string) => void;
   onToggleGeneralChats: () => void;
   onSelectChat: (projectId: string | null, chatId: string) => void;
@@ -76,6 +82,7 @@ export function ProjectTree({
   activeChatId,
   showGeneralChats,
   isStreaming = false,
+  streamingProjectId = null,
   onToggleProject,
   onToggleGeneralChats,
   onSelectChat,
@@ -347,7 +354,22 @@ export function ProjectTree({
                       <ChevronRight className="w-3.5 h-3.5" />
                     )}
                   </button>
-                  <Folder className="w-4 h-4 mt-0.5 text-sky-300/80 flex-shrink-0" />
+                  {/* Status dot/icon — variants from ProjectStatusIcon:
+                      busy (animated loader), paused (blue dot), pushed
+                      (green branch), merged (green merge), created
+                      (violet branch), stopped (gray dot), conflict
+                      (red alert), error (red alert), idle (hollow
+                      gray circle). Replaces the generic Folder icon
+                      per operator request — status is the more useful
+                      visual signal here. forceBusy makes plain CoT
+                      streams (which don't create project_tasks rows)
+                      register as busy too. */}
+                  <span className="mt-0.5 flex-shrink-0">
+                    <ProjectStatusIcon
+                      status={project.runtimeStatus}
+                      forceBusy={streamingProjectId === project.id}
+                    />
+                  </span>
                   <button
                     onClick={() => onToggleProject(project.id)}
                     className="flex-1 min-w-0 text-left"

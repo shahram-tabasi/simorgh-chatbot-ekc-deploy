@@ -156,17 +156,32 @@ export function useProjects(userId?: string) {
         const backendProjectChats = projectChatsResponse.data.chats || [];
         console.log(`✅ Loaded ${backendProjectChats.length} project chats from backend`);
 
-        // Group chats by project
+        // Group chats by project. CRITICAL: key on the per-workspace
+        // UUID, NOT on project_number. The backend mirror at
+        // chat-service/routes/project_chat_session.py:82-84 sets
+        //   project_number = tpms_oenum || gitlab_repo_path || project_id
+        // so two distinct workspaces cloned from the same gitlab repo
+        // get the SAME project_number value. Keying on it collapses
+        // them into one folder with commingled chats — the bug the
+        // operator hit when creating two projects from the same repo.
+        // The real workspace UUID lives at chat.project_id (the field
+        // the backend actually writes). project_id_main is checked
+        // first as a defensive fallback in case some older
+        // mirror-write used that field name.
         const projectsMap = new Map<string, any>();
 
         for (const chat of backendProjectChats) {
-          const projectId = chat.project_number || chat.project_id_main;
-          const projectName = chat.project_name || `Project ${projectId}`;
+          const projectId = chat.project_id || chat.project_id_main || chat.project_number;
+          const projectName = chat.project_name || `Project ${chat.project_number || projectId}`;
 
           if (!projectsMap.has(projectId)) {
             projectsMap.set(projectId, {
               id: projectId,
               name: projectName,
+              // Keep project_number around as a display-only field (it's
+              // the human-readable OE) so the sidebar can show e.g.
+              // "test-ap05" while internally tracking by UUID.
+              oeNumber: chat.project_number ?? null,
               chats: [],
               createdAt: new Date(chat.created_at),
               isExpanded: false,
@@ -930,48 +945,144 @@ export function useProjects(userId?: string) {
       return;
     }
 
+    const token = localStorage.getItem('simorgh_token');
+    if (!token) {
+      console.error('❌ No auth token found');
+      showError('Authentication Required', 'Please log in again.');
+      return;
+    }
+    const authHeaders = { headers: { Authorization: `Bearer ${token}` } };
+
+    // Previous version had three failure modes the operator hit:
+    //   1) Only the first session_<...> chat was cascade-deleted;
+    //      projects with multiple sessions left orphan messages.
+    //   2) Any error (including 404 "already gone") aborted before
+    //      local cleanup, leaving the project stuck in the sidebar.
+    //   3) Projects with BOTH a wizard session AND legacy OENUM
+    //      chats only got one path attempted, not both.
+    // Fix: best-effort sweep of every backend deletion path; treat
+    // 404 as success ("already gone"); only block local cleanup if
+    // EVERY path failed for a real reason.
+    const errors: string[] = [];
+    let anyBackendCleanup = false;
+    let aggregateChats = 0;
+    let aggregateNeo4j = 0;
+    let projectDbDeleted = false;
+
+    // (a) Cascade each session token. Each one drops its own project
+    //     + sessions + messages + tasks + documents + git_commits +
+    //     containers + volumes server-side; doing all of them
+    //     guarantees nothing is left behind even if a project has
+    //     multiple wizard sessions.
+    const sessionChats = project.chats.filter(c => c.id.startsWith('session_'));
+    for (const sc of sessionChats) {
+      try {
+        const r = await axios.delete(
+          `${API_BASE}/v2/chatbot/project/sessions/${sc.id}`,
+          authHeaders,
+        );
+        anyBackendCleanup = true;
+        aggregateChats   += r.data?.deleted_chat_count  ?? 0;
+        aggregateNeo4j   += r.data?.deleted_neo4j_nodes ?? 0;
+        projectDbDeleted ||= !!r.data?.project_db_deleted;
+        console.log('🗑️ session cascade ok:', sc.id, r.data);
+      } catch (e: any) {
+        const status = e?.response?.status;
+        if (status === 404) {
+          // Already gone — treat as success for local cleanup.
+          anyBackendCleanup = true;
+          console.log('🗑️ session already gone (404):', sc.id);
+        } else {
+          errors.push(`session ${sc.id.slice(0, 12)}…: ${e?.message || e}`);
+          console.error('❌ session delete failed:', sc.id, e);
+        }
+      }
+    }
+
+    // (b) Legacy per-project sweep — covers OENUM-only projects AND
+    //     stragglers in projects that ALSO had wizard sessions.
     try {
-      const token = localStorage.getItem('simorgh_token');
-      if (!token) {
-        console.error('❌ No auth token found');
-        showError('Authentication Required', 'Please log in again.');
-        return;
-      }
-
-      // 2026-05 enterprise migration: wizard projects use session tokens.
-      // DELETE /api/v2/chatbot/project/sessions/{token} cascades to the
-      // whole project (drops project + all sessions + messages + tasks +
-      // documents + git_commits + containers + volumes).
-      const sessionChat = project.chats.find(c => c.id.startsWith('session_'));
-      let response;
-      if (sessionChat) {
-        console.log('🗑️ Cascading delete via session:', sessionChat.id);
-        response = await axios.delete(
-          `${API_BASE}/v2/chatbot/project/sessions/${sessionChat.id}`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
+      const r = await axios.delete(
+        `${API_BASE}/projects/${projectId}/chats`,
+        authHeaders,
+      );
+      anyBackendCleanup = true;
+      aggregateChats += r.data?.deleted_chat_count ?? 0;
+      console.log('🗑️ legacy sweep ok:', projectId, r.data);
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 404) {
+        // No legacy chats — expected for modern-only projects.
+        console.log('🗑️ no legacy chats for project (404, OK):', projectId);
       } else {
-        // Legacy projects (OENUM-based) still use the old per-chat sweep.
-        console.log('🗑️ Deleting all chats for legacy project:', projectId);
-        response = await axios.delete(
-          `${API_BASE}/projects/${projectId}/chats`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
+        // Don't treat this as a hard failure when sessions already
+        // succeeded — many wizard projects have no legacy chats and
+        // the endpoint can 500 on empty.
+        console.warn('legacy sweep error (non-fatal):', e?.message);
       }
+    }
 
-      console.log(`✅ Backend deletion result:`, response.data);
+    // Diagnostic. Operator reported projects re-appearing on hard-reload
+    // after a delete (2026-05-24). The only way that happens is if the
+    // backend's GET /users/{id}/project-chats keeps returning chat
+    // metadata for these projects — so let's verify by re-fetching
+    // immediately after the delete and surfacing the result. This both
+    // confirms backend cleanup AND triggers a fresh in-memory state
+    // that matches what the next mount will see.
+    console.log('🗑️ deleteProject summary', {
+      projectId,
+      project_name: project.name,
+      project_chats_count: project.chats.length,
+      session_chats_count: project.chats.filter(c => c.id.startsWith('session_')).length,
+      anyBackendCleanup,
+      errors,
+      aggregateChats,
+      projectDbDeleted,
+    });
 
-      // Remove from local state
-      const updatedProjects = projects.filter(p => p.id !== projectId);
-      setProjects(updatedProjects);
+    // Local cleanup: as long as SOMETHING succeeded server-side OR
+    // we've collected zero real errors, the project is effectively
+    // gone and the sidebar should reflect that. Otherwise surface
+    // the error and KEEP the project so the user can retry.
+    if (anyBackendCleanup || errors.length === 0) {
+      const remaining = projects.filter(p => p.id !== projectId);
+      setProjects(remaining);
+      localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(remaining));
 
-      // Update localStorage to persist deletion
-      localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(updatedProjects));
+      // Belt-and-suspenders: poll the backend list once more after a
+      // brief delay to catch the case where the backend deletion
+      // "succeeded" but the Redis chat-metadata key wasn't fully
+      // cleared. If the project is STILL in /users/{id}/project-chats,
+      // log it loudly so the operator knows the backend has stale
+      // state — and we DON'T re-add it locally (the user wanted it
+      // gone), but flag it so they can paste the log back.
+      setTimeout(async () => {
+        try {
+          const verify = await axios.get(
+            `${API_BASE}/users/${userId}/project-chats`, authHeaders,
+          );
+          const stillThere = (verify.data?.chats || []).some(
+            (c: any) => (c.project_id === projectId)
+                       || (c.project_id_main === projectId)
+                       || (c.project_number === projectId),
+          );
+          if (stillThere) {
+            console.error(
+              '⚠️ deleteProject: backend STILL returns this project ' +
+              'after delete. Redis chat-metadata not cleaned. project_id=' +
+              projectId,
+            );
+          } else {
+            console.log('✅ deleteProject: backend confirms project gone:', projectId);
+          }
+        } catch (e) {
+          console.warn('deleteProject verify fetch failed:', e);
+        }
+      }, 500);
 
-      // Clear active project if it was deleted, AND strip any deep-link
-      // ?project=X&session=Y from the URL so a refresh doesn't try to
-      // re-open the just-deleted session (the "page sticks after delete"
-      // bug).
+      // Clear active project if it was the one deleted, then strip
+      // any deep-link ?project=X&session=Y from the URL so a refresh
+      // doesn't try to re-open the just-deleted session.
       if (activeProjectId === projectId) {
         setActiveChatId(null);
         setActiveProjectId(null);
@@ -982,43 +1093,25 @@ export function useProjects(userId?: string) {
           window.history.replaceState({}, '', window.location.pathname);
         }
       } catch {}
-      try {
-        sessionStorage.removeItem('simorgh_pending_session');
-      } catch {}
+      try { sessionStorage.removeItem('simorgh_pending_session'); } catch {}
 
-      const deletedChatCount = response.data.deleted_chat_count || 0;
-      const deletedNeo4jNodes = response.data.deleted_neo4j_nodes || 0;
-      const neo4jDeleted = response.data.neo4j_deleted || false;
-      const projectDbDeleted = response.data.project_db_deleted || false;
-      const projectDbDetails = response.data.project_db_details || {};
-
-      console.log(`✅ Project deleted: ${projectId} (${deletedChatCount} chats, ${deletedNeo4jNodes} Neo4j nodes, DB: ${projectDbDeleted})`);
-
-      // Show detailed deletion summary
-      let summaryMessage = `Project "${project.name}" has been completely deleted!\n\n`;
-      summaryMessage += `📊 Deletion Summary:\n`;
-      summaryMessage += `• Redis: ${deletedChatCount} chat(s) removed\n`;
-      summaryMessage += `• Neo4j: ${deletedNeo4jNodes} node(s) removed\n`;
-
-      if (projectDbDeleted) {
-        summaryMessage += `• PostgreSQL: Database deleted\n`;
-        summaryMessage += `• Qdrant: Collection deleted\n`;
-      } else if (projectDbDetails.message) {
-        summaryMessage += `• Project DB: ${projectDbDetails.message}\n`;
+      let summary = `Project "${project.name}" deleted.\n\n`;
+      summary += `📊 Cleanup:\n`;
+      summary += `• ${aggregateChats} chat(s) removed\n`;
+      summary += `• ${aggregateNeo4j} graph node(s) removed\n`;
+      summary += `• PostgreSQL: ${projectDbDeleted ? 'database deleted' : 'no per-project DB'}\n`;
+      if (errors.length > 0) {
+        summary += `\n⚠️ Partial cleanup — some backend paths failed:\n${errors.join('\n')}`;
+        showInfo('Project Deleted (Partial)', summary);
+      } else {
+        showInfo('Project Deleted', summary);
       }
-
-      if (!neo4jDeleted) {
-        summaryMessage += `\n⚠️ Note: Project was not found in Neo4j database.`;
-      }
-
-      showInfo('Project Deleted', summaryMessage);
-
-    } catch (error: any) {
-      console.error('❌ Failed to delete project from backend:', error);
-
-      // Show error to user
-      const errorMessage = error.response?.data?.detail || 'Failed to delete project from backend';
-      showError('Delete Failed', `${errorMessage}\n\nThe project was not deleted.`);
+    } else {
+      showError(
+        'Delete Failed',
+        `Could not remove the project from the backend:\n\n${errors.join('\n')}\n\n` +
+        `The project is still in the sidebar — try again or contact support.`,
+      );
     }
   };
 

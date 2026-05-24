@@ -82,6 +82,10 @@ interface ChatAreaProps {
   isProjectChat?: boolean; // NEW: Indicates if this is a project-specific chat
   quotaExceeded?: boolean;
   headerContext?: ChatHeaderContext | null;
+  /** The currently selected chat's id. Used to suppress the welcome-
+   * screen flash when switching between existing chats whose history
+   * is still loading asynchronously. */
+  activeChatId?: string | null;
 }
 
 function ChatHeaderChip({ ctx }: { ctx: ChatHeaderContext }) {
@@ -184,12 +188,33 @@ export function ChatArea({
   isProjectChat = false,
   quotaExceeded = false,
   headerContext = null,
+  activeChatId = null,
 }: ChatAreaProps) {
   const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
-  // Track chatting state: starts as false (idle), becomes true after first message send
+  // True after the user has sent a message in this chat. Kept for the
+  // existing handleSend path (transitions from idle → chat on first
+  // send) — no longer used to gate the welcome screen.
   const [isChatting, setIsChatting] = React.useState(false);
 
-  const isIdle = messages.length === 0 && !isChatting;
+  // Lock in chatting view on any chat switch where messages exist or
+  // are about to. Used to clear the welcome state when navigating
+  // from no-chat into a chat with history.
+  React.useEffect(() => {
+    if (messages.length > 0) {
+      setIsChatting(true);
+    }
+  }, [messages.length]);
+
+  // Welcome screen is shown ONLY when there is NO chat selected at
+  // all. The previous design also showed it briefly during chat
+  // switches (while history was loading) by way of an
+  // isAwaitingHistory window with a 1.5s timeout — but on slow
+  // networks the timeout expired before the chat detail GET returned,
+  // making the welcome screen blast over the user's actual chat
+  // history. The new rule: if there's an activeChatId, there's a
+  // chat — render the message list (possibly empty briefly) with
+  // the chat input at the bottom. Never flash welcome.
+  const isIdle = !activeChatId;
 
   // Live diff stats for the chat-input header's +N -M chips.
   const diffStats = useProjectDiffStats(headerContext?.projectId ?? null);
@@ -208,6 +233,23 @@ export function ChatArea({
     }
     return null;
   }, [messages]);
+
+  // "Actively generating" = either we're waiting for the first
+  // response chunk (isTyping) OR a stream is still feeding the last
+  // assistant message (metadata.streaming). useChat flips isTyping
+  // to false as soon as the first agent_plan event arrives, but
+  // project-chat CoT keeps streaming for tens of seconds after
+  // that. The Stop button + CoT timer both need to stay live for
+  // the whole duration, so derive the broader flag here.
+  const isActivelyGenerating = React.useMemo(() => {
+    if (isTyping) return true;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== 'assistant') continue;
+      return Boolean((m.metadata as any)?.streaming);
+    }
+    return false;
+  }, [isTyping, messages]);
 
   // Build the props for ChatInput's status row. Reused by the two
   // ChatInput call sites below (idle + chatting modes).
@@ -248,12 +290,11 @@ export function ChatArea({
     onSendMessage(content, files);
   }, [isIdle, onSendMessage]);
 
-  // Reset to idle when messages are cleared
-  React.useEffect(() => {
-    if (messages.length === 0) {
-      setIsChatting(false);
-    }
-  }, [messages.length]);
+  // (Removed: the previous auto-reset to idle when messages.length === 0
+  // fired during every chat switch — the messages prop is briefly []
+  // while the new chat's history is fetching, which flashed the welcome
+  // screen on every switch. Resetting now happens via the chat-switch
+  // effect above with an isAwaitingHistory guard.)
 
   return (
     <div className="flex-1 flex flex-col h-full relative overflow-hidden w-full max-w-full min-w-0">
@@ -280,14 +321,15 @@ export function ChatArea({
                 onSend={handleSend}
                 onCancel={onCancelGeneration}
                 disabled={disabled || isTyping}
-                isGenerating={isTyping}
+                isGenerating={isActivelyGenerating}
                 editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
                 promptToInsert={promptToInsert}
                 centered={true}
                 quotaExceeded={quotaExceeded}
                 uploadsAllowed={isProjectChat}
                 header={chatInputHeader}
-                modelLabel={headerContext?.model ?? null}
+                modelLabel="Simorgh AI"
+                showCotTimer={isProjectChat}
                 tokenUsage={tokenUsage}
               />
             </div>
@@ -326,14 +368,15 @@ export function ChatArea({
                 onSend={handleSend}
                 onCancel={onCancelGeneration}
                 disabled={disabled || isTyping}
-                isGenerating={isTyping}
+                isGenerating={isActivelyGenerating}
                 editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
                 promptToInsert={promptToInsert}
                 centered={false}
                 quotaExceeded={quotaExceeded}
                 uploadsAllowed={isProjectChat}
                 header={chatInputHeader}
-                modelLabel={headerContext?.model ?? null}
+                modelLabel="Simorgh AI"
+                showCotTimer={isProjectChat}
                 tokenUsage={tokenUsage}
               />
             </div>

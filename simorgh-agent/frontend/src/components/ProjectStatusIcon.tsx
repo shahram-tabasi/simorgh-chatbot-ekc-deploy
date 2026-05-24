@@ -132,14 +132,24 @@ export interface ProjectStatusIconProps {
    * the row in its own Tooltip. */
   title?: string;
   className?: string;
+  /** Force the BUSY variant regardless of `status`. The backend's
+   * BUSY derivation requires both container-running AND
+   * active_task_count > 0 (an explicit project_tasks row). Plain
+   * chat-driven CoT streams don't create tasks, so the backend
+   * sees RUNNING but not BUSY and the dot stays blue / gray even
+   * during a 30-second answer. The client knows the stream is
+   * live (useChat.isActivelyGenerating); pass that down as this
+   * prop on the active project's row to make the icon match. */
+  forceBusy?: boolean;
 }
 
 export function ProjectStatusIcon({
   status,
   title,
   className,
+  forceBusy = false,
 }: ProjectStatusIconProps) {
-  const variant = pickVariant(status);
+  const variant: Variant = forceBusy ? 'busy' : pickVariant(status);
   const spec = VARIANTS[variant];
   const tooltip = title ?? spec.title;
   const extra = className ? ` ${className}` : '';

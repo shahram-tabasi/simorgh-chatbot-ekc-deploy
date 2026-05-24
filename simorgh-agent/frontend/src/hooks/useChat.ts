@@ -3,9 +3,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Message, UploadedFile, AgentPlan, AgentTaskGroup, AgentSubtask } from '../types';
 import axios from 'axios';
+import { sendMessageHrStream } from '../services/chatbotV2Api';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const API_V2_CHAT = `${API_BASE}/v2/chat`;
+
+// UUID-shaped user_id means a modern (postgres_auth) user; only modern
+// users are eligible for the HR/Strategy direct-RAG fast path. Legacy
+// TPMS users (EMPUSERNAME strings) keep the old flow.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isModernUser = (id?: string) => !!id && UUID_RE.test(id);
 
 export interface ChatOptions {
   llmMode?: 'online' | 'offline' | null; // null = use default
@@ -46,10 +54,14 @@ export function useChat(
         setLlmMode(savedMode);
         console.log('Loaded LLM mode from storage:', savedMode);
       } else {
-        // اگر هیچی نبود یا مقدار اشتباه بود → پیش‌فرض رو بذار online
-        setLlmMode('online');
-        localStorage.setItem('llm_mode', 'online');
-        console.log('Set default LLM mode: online');
+        // Default offline — general chat always uses the local gpt-oss
+        // path (hr_chat.py force_backend='text'); project chats now
+        // honour this setting too. Previously defaulted to online,
+        // which made the toggle have no effect since modern users were
+        // also force-locked back to online elsewhere.
+        setLlmMode('offline');
+        localStorage.setItem('llm_mode', 'offline');
+        console.log('Set default LLM mode: offline');
       }
     };
 
@@ -260,6 +272,12 @@ export function useChat(
             content,
             channel: 'chat',
             chat_id: chatId,
+            // Honour the user's mode choice from SettingsPanel.
+            // Default offline (local Simorgh AI on .61/.62); 'online'
+            // uses the configured OpenAI/Anthropic API. The backend
+            // accepts this on ProjectMessageCreate and falls back to
+            // local if the requested online provider isn't configured.
+            llm_mode: llmMode || 'offline',
           }),
           signal: abortControllerRef.current?.signal,
         });
@@ -366,6 +384,34 @@ export function useChat(
             }
           } else if (curEvent === 'ping') {
             // keepalive — ignore
+          } else if (curEvent === 'cot_plan_chosen') {
+            // Phase 5: master router announced which CoT plan it
+            // picked. Stamp it on the streaming assistant message so
+            // MessageList can paint a chip ("plan: single_repo")
+            // above the bubble.
+            if (!messageAdded) {
+              messageAdded = true;
+              setIsTyping(false);
+              setMessages(prev => [...prev, {
+                id: aiMessageId,
+                content: '',
+                role: 'assistant',
+                timestamp: new Date(),
+                metadata: {
+                  streaming: true,
+                  cotPlan: payload?.plan,
+                  cotPlanSignals: payload?.signals,
+                },
+              }]);
+            } else {
+              setMessages(prev => prev.map(m => m.id === aiMessageId
+                ? { ...m, metadata: {
+                    ...(m.metadata || {}),
+                    cotPlan: payload?.plan,
+                    cotPlanSignals: payload?.signals,
+                  } }
+                : m));
+            }
           } else {
             // progress / step / anything-else → surface as an agent step
             const step = (payload && typeof payload === 'object' && payload.title)
@@ -430,6 +476,121 @@ export function useChat(
         setMessages(prev => [...prev, errMsg]);
         return;
       }
+    }
+
+    // General chat for modern (UUID) users: route to the HR/Strategy
+    // direct-RAG path. No planner, no MCP, no OpenAI — straight to
+    // gpt-oss-20b on .61 via llm-gateway. The legacy /api/chat/stream
+    // fallback below still applies to legacy TPMS users.
+    if (isModernUser(userId) && !projectNumber) {
+      try {
+        await sendMessageHrStream(
+          userId!,
+          content,
+          {
+            onMeta: (meta) => {
+              // Citations arrive BEFORE the first token. Stamp them on
+              // a (still-empty) assistant message so the bubble renders
+              // source badges while gpt-oss is generating.
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: '',
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: {
+                    streaming: true,
+                    citations: meta.hits as any,
+                    top_score: meta.top_score,
+                  },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, metadata: {
+                      ...(m.metadata || {}),
+                      citations: meta.hits as any,
+                      top_score: meta.top_score,
+                    }}
+                  : m));
+              }
+            },
+            onChunk: (delta) => {
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: delta,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { streaming: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: (m.content || '') + delta }
+                  : m));
+              }
+            },
+            onRefusal: (text) => {
+              // Out-of-corpus query — refusal IS the assistant message;
+              // suppress citation badges (no sources backed this) and
+              // do NOT mark as error (otherwise the bubble turns red).
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: text,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { refusal: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: text, metadata: { ...(m.metadata||{}), refusal: true, citations: undefined } }
+                  : m));
+              }
+            },
+            onDone: () => {
+              setMessages(prev => prev.map(m => m.id === aiMessageId
+                ? { ...m, metadata: { ...(m.metadata||{}), streaming: false } }
+                : m));
+            },
+            onError: (err) => {
+              console.error('hr_chat stream failed:', err);
+              setIsTyping(false);
+              if (!messageAdded) {
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: `Error: ${err.message}`,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { error: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: `Error: ${err.message}`,
+                      metadata: { ...(m.metadata||{}), error: true, streaming: false } }
+                  : m));
+              }
+            },
+          },
+          undefined,
+          // Wire the abort controller signal so the Stop button in
+          // ChatInput actually halts the SSE stream from gpt-oss.
+          abortControllerRef.current?.signal,
+          // chatId so the backend can persist the conversation pair.
+          // Without this, general-chat history vanished on chat-switch
+          // because the HR direct-RAG path never wrote to the chat
+          // history store. Operator reported the symptom 2026-05-24.
+          chatId,
+        );
+      } finally {
+        setIsTyping(false);
+      }
+      return;
     }
 
     try {

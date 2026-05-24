@@ -61,4 +61,10 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: ${HR_DOCS_HOST_PATH:-/home/ubuntu/hr-docs}
+      # Curated HR/strategy corpus lives in the repo at Human Capital/
+      # (committed in 646e56d, name-corrected in 3f86db4). Override
+      # HR_DOCS_HOST_PATH in .env if you keep the docs elsewhere on
+      # the host (e.g. an SMB mount the HR manager writes to). The
+      # default below assumes the standard .68 deploy layout
+      # /home/ubuntu/simorgh-chatbot-ekc-deploy/Human Capital.
+      device: ${HR_DOCS_HOST_PATH:-/home/ubuntu/simorgh-chatbot-ekc-deploy/Human Capital}

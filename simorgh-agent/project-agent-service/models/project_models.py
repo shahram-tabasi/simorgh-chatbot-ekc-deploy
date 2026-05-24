@@ -391,6 +391,16 @@ class ProjectMessageCreate(BaseModel):
     document_id: Optional[UUID] = None
     document_filename: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    # Per-request LLM mode override (defaults to "offline" = local
+    # Simorgh AI on .61). Frontend SettingsPanel writes this from the
+    # user's choice; agent code falls back to local if "online" is
+    # requested but the configured online provider isn't reachable.
+    llm_mode: Optional[str] = Field(
+        default="offline",
+        description="'online' (use configured cloud API) or 'offline' "
+                    "(local gpt-oss-20b on .61). Falls back to local "
+                    "if online provider isn't configured.",
+    )
 
 
 class ProjectMessageResponse(BaseModel):

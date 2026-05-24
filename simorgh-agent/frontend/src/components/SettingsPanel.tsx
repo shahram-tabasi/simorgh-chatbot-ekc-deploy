@@ -43,9 +43,18 @@ const themes: Array<{ id: ThemeType; name: string; icon: any; gradient: string }
 interface SettingsPanelProps {
   externalOpen?: boolean;
   onExternalClose?: () => void;
+  /** When true (the active chat is a general/HR session) the Online
+   * AI tile in the AI-Mode picker is disabled — general chat is
+   * hard-pinned to local Simorgh AI by hr_chat.py force_backend='text',
+   * so allowing Online to be picked would be misleading. */
+  isGeneralChatActive?: boolean;
 }
 
-export default function SettingsPanel({ externalOpen = false, onExternalClose }: SettingsPanelProps = {}) {
+export default function SettingsPanel({
+  externalOpen = false,
+  onExternalClose,
+  isGeneralChatActive = false,
+}: SettingsPanelProps = {}) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [langOpen, setLangOpen] = React.useState(false);
   const [aiMode, setAiMode] = React.useState<'online' | 'offline'>('online');
@@ -74,21 +83,17 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
     setIsOpen(externalOpen);
   }, [externalOpen]);
 
-  // Load AI mode from localStorage on mount (modern users forced to online)
+  // Load AI mode from localStorage on mount. Used to force online for
+  // modern users; that pre-dated the HR direct-RAG path. Now both
+  // tiers can pick either mode for project chats. General chats
+  // always use Local regardless of this setting (hr_chat.py forces
+  // offline_text backend) — the panel's helper text explains this.
   React.useEffect(() => {
-    if (isModern) {
-      setAiMode('online');
-      return;
-    }
     const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
-    if (savedMode) {
-      setAiMode(savedMode);
-    }
-  }, [isModern]);
+    setAiMode(savedMode ?? 'offline');  // Default to offline now.
+  }, []);
 
-  // Handle AI mode change - modern users are locked to online
   const handleAiModeChange = (mode: 'online' | 'offline') => {
-    if (mode === 'offline' && isModern) return;
     setAiMode(mode);
     localStorage.setItem('llm_mode', mode);
     window.dispatchEvent(new CustomEvent('llm-mode-changed', { detail: mode }));
@@ -217,47 +222,78 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                   </div>
                 </div>
 
-                {/* AI Mode */}
+                {/* AI Mode — applies to PROJECT chats only. General
+                    chats always use Simorgh AI (the HR direct-RAG path
+                    hard-pins offline). The Online tile sets the
+                    project-chat per-request mode to "online"; the
+                    backend routes to the configured cloud API. Local
+                    is the default (and the only useful setting for
+                    general chat). */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">AI Mode</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">AI Mode</h3>
+                  <p className="text-[11px] text-gray-500 mb-4 leading-relaxed">
+                    General chat always uses <span className="text-violet-300">Simorgh AI</span>.
+                    This setting controls <span className="text-sky-300">project chat</span> only.
+                  </p>
                   <div className="space-y-3">
+                    {/* In general chat the effective mode is ALWAYS
+                        offline (hr_chat.py force-pins it), so override
+                        the visual selection regardless of saved
+                        preference. Saved preference (aiMode) is
+                        preserved in localStorage for when the user
+                        switches back to a project chat. */}
+                    {(() => {
+                      const effectiveMode = isGeneralChatActive ? 'offline' : aiMode;
+                      return (
+                        <>
                     <button
                       onClick={() => handleAiModeChange('online')}
+                      disabled={isGeneralChatActive}
+                      title={isGeneralChatActive
+                        ? "Online AI is project-chat only — general chat always uses Simorgh AI"
+                        : undefined}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        aiMode === 'online'
-                          ? 'border-blue-500 bg-blue-500/10'
-                          : 'border-white/10 hover:border-white/30'
+                        isGeneralChatActive
+                          ? 'border-white/5 opacity-40 cursor-not-allowed'
+                          : effectiveMode === 'online'
+                            ? 'border-blue-500 bg-blue-500/10'
+                            : 'border-white/10 hover:border-white/30'
                       }`}
                     >
-                      <Wifi className="w-6 h-6 text-blue-400" />
+                      {isGeneralChatActive
+                        ? <Lock className="w-6 h-6 text-gray-500" />
+                        : <Wifi className="w-6 h-6 text-blue-400" />}
                       <div className="text-left">
                         <div className="text-white font-medium">Online AI</div>
-                        <div className="text-xs text-gray-400">Cloud • GPT-4 • Grok</div>
+                        <div className="text-xs text-gray-400">
+                          {isGeneralChatActive
+                            ? 'Disabled in general chat (project chat only)'
+                            : 'Configured cloud API · project chat only'}
+                        </div>
                       </div>
                     </button>
                     <button
                       onClick={() => handleAiModeChange('offline')}
-                      disabled={isModern}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        isModern
-                          ? 'border-white/5 opacity-50 cursor-not-allowed'
-                          : aiMode === 'offline'
-                            ? 'border-purple-500 bg-purple-500/10'
-                            : 'border-white/10 hover:border-white/30'
+                        effectiveMode === 'offline'
+                          ? 'border-violet-500 bg-violet-500/10'
+                          : 'border-white/10 hover:border-white/30'
                       }`}
                     >
-                      {isModern ? (
-                        <Lock className="w-6 h-6 text-gray-500" />
-                      ) : (
-                        <WifiOff className="w-6 h-6 text-purple-400" />
-                      )}
+                      <WifiOff className="w-6 h-6 text-violet-400" />
                       <div className="text-left">
-                        <div className="text-white font-medium">Local AI</div>
-                        <div className="text-xs text-gray-400">
-                          {isModern ? 'Available for local network users' : 'On-premise • 192.168.1.61/62 • Private'}
+                        <div className="text-white font-medium">
+                          Simorgh AI
+                          <span className="text-[10px] text-violet-300/80 font-normal ml-1">
+                            {isGeneralChatActive ? '(active)' : '(default)'}
+                          </span>
                         </div>
+                        <div className="text-xs text-gray-400">LLM + VLM</div>
                       </div>
                     </button>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 

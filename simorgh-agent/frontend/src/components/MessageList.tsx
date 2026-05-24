@@ -480,8 +480,17 @@ export function MessageList({
             className={`flex gap-2 sm:gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {message.role === 'assistant' && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
-                <SparklesIcon className="w-4 h-4 text-white" />
+              <div className="flex-shrink-0 w-11 h-11 rounded-full bg-white/10 overflow-hidden flex items-center justify-center">
+                <img
+                  src={`${import.meta.env.BASE_URL}simorgh.svg`}
+                  alt="Simorgh"
+                  className="w-full h-full"
+                  style={{
+                    objectFit: 'cover',
+                    transform: 'scale(1.15)',
+                    filter: 'brightness(0) invert(1)',
+                  }}
+                />
               </div>
             )}
 
@@ -507,6 +516,41 @@ export function MessageList({
                     ))}
                   </div>
                 )}
+                {/* Phase 5 — CoT plan chip. Surfaces the master
+                    router's per-turn decision. Color-coded by plan
+                    family so the operator can spot at a glance which
+                    strategy each reply used. */}
+                {message.role === 'assistant' && message.metadata?.cotPlan && (
+                  <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-mono">
+                    <span
+                      className={
+                        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ' +
+                        (message.metadata.cotPlan === 'upload_deep'
+                          ? 'bg-amber-500/10 text-amber-300 border-amber-400/30'
+                          : message.metadata.cotPlan === 'repo_plus_upload'
+                          ? 'bg-orange-500/10 text-orange-300 border-orange-400/30'
+                          : message.metadata.cotPlan === 'multi_repo'
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-400/30'
+                          : message.metadata.cotPlan === 'single_repo'
+                          ? 'bg-sky-500/10 text-sky-300 border-sky-400/30'
+                          : message.metadata.cotPlan === 'knowledge_only'
+                          ? 'bg-violet-500/10 text-violet-300 border-violet-400/30'
+                          : message.metadata.cotPlan === 'voice_first'
+                          ? 'bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-400/30'
+                          : 'bg-white/5 text-gray-300 border-white/15')
+                      }
+                      title={
+                        'CoT plan picked by the master router' +
+                        (message.metadata.cotPlanSignals
+                          ? ` — signals: ${JSON.stringify(message.metadata.cotPlanSignals)}`
+                          : '')
+                      }
+                    >
+                      <span className="opacity-60">plan:</span>
+                      <span>{message.metadata.cotPlan}</span>
+                    </span>
+                  </div>
+                )}
                 {/* Agent Task Stream (Claude Code-style task display) */}
                 {message.role === 'assistant' && message.metadata?.agentPlan && (
                   <AgentTaskStream
@@ -525,6 +569,46 @@ export function MessageList({
                   <p className="text-sm leading-relaxed whitespace-pre-wrap break-words" dir={textDir}>
                     {message.content}
                   </p>
+                )}
+                {/* HR/Strategy citation badges — one per source the
+                    grounded LLM was given. The endpoint emits these
+                    in the SSE meta frame; useSessionChat attaches
+                    them to message.metadata.citations. Shown under
+                    the assistant bubble, RTL-friendly. */}
+                {message.role === 'assistant'
+                  && !message.metadata?.refusal
+                  && Array.isArray((message.metadata as any)?.citations)
+                  && (message.metadata as any).citations.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5" dir={textDir}>
+                    {((message.metadata as any).citations as Array<{
+                      n: number;
+                      doc_title?: string;
+                      filename?: string;
+                      section_path?: string;
+                      doc_code?: string;
+                      category?: string;
+                      score?: number;
+                    }>).map((c) => {
+                      const title = c.doc_title || c.filename || 'منبع';
+                      const section = c.section_path && c.section_path !== title
+                        ? ` ❯ ${c.section_path}` : '';
+                      const tone = c.category === 'org_strategy'
+                        ? 'bg-purple-500/10 text-purple-300 border-purple-400/30'
+                        : 'bg-emerald-500/10 text-emerald-300 border-emerald-400/30';
+                      return (
+                        <span
+                          key={`${message.id}-cite-${c.n}`}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] border ${tone}`}
+                          title={c.doc_code ? `${title} (${c.doc_code})` : title}
+                        >
+                          <span className="opacity-70">[{c.n}]</span>
+                          <span className="truncate max-w-[260px]">
+                            {title}{section}
+                          </span>
+                        </span>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
 

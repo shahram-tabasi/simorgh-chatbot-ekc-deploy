@@ -95,6 +95,56 @@ def _read_restrictions() -> str:
     _restrictions_cache["content"] = content
     return content
 
+
+def _looks_truncated(s: str) -> bool:
+    """True when the LLM's JSON output looks cut off mid-token OR
+    came back empty.
+
+    Cheap heuristic: gpt-oss-20b with guided_json sometimes hits the
+    max_tokens cap before closing the outer object. We can spot this
+    without a full json.loads — count braces/brackets and check that
+    the string actually ends. A real well-formed JSON ends with `}`
+    or `]`; a truncated one usually ends inside a string or with
+    open brackets outstanding.
+
+    Operator-observed (2026-05-24): vLLM also returns a literally
+    empty body when the input is at the edge of max_model_len and
+    guided_json decoding hits the context wall before emitting any
+    output token. The retry-with-bigger-budget path should kick in
+    for this too, so empty/whitespace-only is treated as truncated.
+
+    Used to drive the retry-with-more-tokens path in
+    _call_gateway_with_retry."""
+    if not s or not s.strip():
+        return True
+    txt = s.strip()
+    if not txt.startswith("{") and not txt.startswith("["):
+        return False
+    if not (txt.endswith("}") or txt.endswith("]")):
+        return True
+    # Walk the string tracking string-state + bracket depth.
+    in_string = False
+    escape = False
+    depth = 0
+    for ch in txt:
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+    return in_string or depth != 0
+
+
 # System prompt for COT analysis
 # JSON Schema for the COT plan. Passed to llm-gateway as guided_json so
 # gpt-oss-20b's output is constrained to a valid plan at decode time —
@@ -549,6 +599,19 @@ PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
 4. The LAST step is the synthesis (tool=llm, task_type=generation), and
    its `depends_on` MUST include every retrieval step whose output it
    relies on. The synthesizer reads only what you list.
+   --------------------------------------------------------------------
+   HARD: ONLY the LAST step may have task_type=generation / tool=llm.
+   EVERY preceding step MUST use a real retrieval tool — get_project_tree,
+   read_artifact_mcp, search_context, search_blobs, memory_query,
+   tpms_*, etc. NEVER write a step like
+       {"title": "Find X", "tool_needed": "llm", "task_type": "generation"}
+   "Find / read / extract / fetch / locate / look up" steps require a
+   TOOL CALL, not LLM thinking. The model has NO web/file access from
+   inside an `llm` task — it can only stare at the previous step's
+   output. A plan where every step is task_type=generation produces
+   the answer "I don't have access to that information"; that is a
+   PLANNER bug, not a content gap. Use the retrieval ladder above.
+   --------------------------------------------------------------------
 5. NEVER plan write / commit / shell / push steps for a question. Only
    when the user EXPLICITLY asked for a change.
 6. If a retrieval step returns empty, the NEXT step is to retry with a
@@ -634,6 +697,13 @@ For each step, specify:
                reads)
 8. priority (1-10; higher runs sooner among independent steps)
 9. estimated_duration (string with unit, e.g. "10s")
+
+TOKEN BUDGET — keep `reasoning` under ~120 words and `description`
+fields under ~30 words. The whole JSON object MUST fit in ~3000
+tokens; verbose reasoning gets the plan cut off mid-step and the
+file-read tasks silently disappear, which is the most common cause
+of "I don't have the document" replies. Be terse — the agent is
+reading your plan, not your essay.
 
 Respond with ONLY valid JSON in this exact format:
 {{
@@ -750,10 +820,73 @@ class COTEngine:
         # sources_enabled blocks have appended their guardrails. Joining
         # it here would silently drop those guardrails from the prompt.
 
-        # Build dynamic tool list from MCP or use fallback
+        # Early lookup of sources_enabled — both the tool-catalog
+        # filter below AND the later guardrail block need it. (The
+        # later block REASSIGNS this to the same value so behaviour is
+        # unchanged for that code path.)
+        sources_enabled = (
+            project_context.get("sources_enabled")
+            or (project_context.get("project") or {}).get("sources_enabled")
+            or {}
+        )
+
+        # Build dynamic tool list from MCP or use fallback. PER-QUERY
+        # SELECTION + CAPABILITY-AWARE EXCLUSION:
+        #
+        # 1. Score tools by token-overlap with the user query, return
+        #    top_n + always-include core. (Anthropic Tool Search Tool
+        #    pattern — 49→74% MCP-eval improvement.)
+        # 2. Detect missing project capabilities and exclude tool
+        #    families that can only fail:
+        #      • No tpms_oenum → exclude tpms_*, get_project_context,
+        #        get_holidays / get_company_directory etc. (the TPMS-
+        #        keyed org tools). Operator hit a wizard repo-only
+        #        project where the planner picked tpms_fetch and the
+        #        whole chain failed with "Project <oenum> not found
+        #        in TPMS" / "required oenum field missing".
+        proj_meta = (project_context.get("project") or {}) or project_context
+        has_tpms = bool(
+            proj_meta.get("tpms_oenum")
+            or project_context.get("tpms_oenum")
+            or sources_enabled.get("tpms")
+        )
+        exclude_prefixes: list[str] = []
+        if not has_tpms:
+            exclude_prefixes.extend([
+                "tpms_",       # tpms_fetch, tpms_get_text, tpms_context_*
+                "get_project_context",  # tpms_context_agent's
+                "get_holidays",
+                "get_company_directory",
+                "get_employee",
+                "lookup_employee",
+                "list_departments",
+                "get_hiring_periods",
+                "get_corporate_loan",
+                "get_employee_attendance",
+            ])
+
         if self.mcp_manager and self.mcp_manager.is_connected:
-            mcp_tool_lines = self.mcp_manager.get_tools_for_cot()
+            mcp_tool_lines = self.mcp_manager.get_tools_for_cot(
+                query=request.user_input,
+                top_n=int(os.getenv("COT_MCP_TOPN", "15")),
+                exclude_prefixes=exclude_prefixes or None,
+            )
             mcp_tools = f"You also have access to these microservice tools (via MCP):\n{mcp_tool_lines}"
+            if not has_tpms:
+                # Even though the tools are excluded from the catalog,
+                # gpt-oss-20b sometimes hallucinates tool calls based
+                # on training data. A short explicit hint here cuts
+                # those off — pure prompt engineering, no runtime cost.
+                mcp_tools += (
+                    "\n# IMPORTANT: this project has NO TPMS OENUM. "
+                    "DO NOT plan steps against tpms_* tools or "
+                    "TPMS-keyed org-data lookups — they will fail "
+                    "with 'Project <oenum> not found in TPMS'. Use "
+                    "gitlab_mcp.* tools (get_project_tree, "
+                    "read_artifact_mcp, search_blobs) plus "
+                    "context_search.search_context for ALL content "
+                    "questions about this project."
+                )
         else:
             mcp_tools = _FALLBACK_MCP_TOOLS
 
@@ -864,9 +997,132 @@ class COTEngine:
                 f"{system_prompt}"
             )
 
+        # Phase 2: active CoT plan integration. The router installed a
+        # plan in the cot_router contextvar at handle_input time;
+        # apply its system-prompt addendum and gather its grounding
+        # bundle here. None = old code path (no addendum, no
+        # grounding) so internal/background callers that bypassed
+        # handle_input continue to work.
+        plan_addendum = ""
+        plan_grounding_text = ""
+        try:
+            from services.cot_router import active_plan
+            from services.cot_plans import PlanContext
+            plan = active_plan()
+            if plan is not None:
+                # Build the minimal PlanContext cot_engine can supply.
+                # The richer PlanContext that handle_input built isn't
+                # passed down explicitly; plans that need more data
+                # pick it up via service singletons (e.g.
+                # knowledge_repo_service.retrieve already has its
+                # own state). request.project_id is the only field
+                # we can pull here without restructuring.
+                plan_ctx = PlanContext(
+                    user_input=request.user_input,
+                    project_id=getattr(request, "project_id", "") or "",
+                )
+                plan_addendum = plan.system_prompt_addendum(plan_ctx) or ""
+                grounding = await plan.gather_grounding(plan_ctx)
+                rendered = grounding.render() if grounding else ""
+                if rendered:
+                    plan_grounding_text = (
+                        "\n\n# KNOWLEDGE GROUNDING (always-on technical knowledge "
+                        "passages — consider these BEFORE running search tools; "
+                        "they often already answer the question):\n" + rendered
+                    )
+        except Exception as e:
+            logger.warning("cot plan integration failed (continuing without): %s", e)
+
+        if plan_addendum:
+            system_prompt = system_prompt + plan_addendum
+
+        user_msg = (
+            f"Project Context:\n{context_str}{plan_grounding_text}"
+            f"\n\nUser Request:\n{request.user_input}"
+        )
+
+        # Hard safety cap. gpt-oss-20b has a 16,384-token max_model_len
+        # which is a HARD limit on input+output. With max_tokens=4096
+        # for the planner's reply, the input budget is 16384 - 4096 =
+        # 12,288 tokens. Empirical chars-per-token on the planner's
+        # actual prompts (English instructions + Persian user input +
+        # mixed-language project context + JSON-schema-ish tool list)
+        # is ≈ 4.1 — measured from a prior operator log where 72,643
+        # chars came back as 17,669 tokens. So 12,288 × 4.1 ≈ 50,400
+        # chars. Cap at 49,000 to leave a small margin.
+        BUDGET_CHARS = int(os.getenv("COT_PROMPT_BUDGET_CHARS", "49000"))
+        total = len(system_prompt) + len(user_msg)
+        if total > BUDGET_CHARS:
+            over = total - BUDGET_CHARS
+            logger.warning(
+                "cot prompt over budget by %d chars (total=%d, limit=%d); "
+                "trimming to fit",
+                over, total, BUDGET_CHARS,
+            )
+            # Trim 1: drop the KNOWLEDGE GROUNDING block entirely.
+            if plan_grounding_text and over > 0:
+                saved = len(plan_grounding_text)
+                user_msg = user_msg.replace(plan_grounding_text, "")
+                over -= saved
+                logger.warning("  dropped grounding (-%d chars)", saved)
+            # Trim 2: tail-truncate context_str. The most recent rows
+            # of project context are usually the most relevant; lop
+            # off the HEAD (older / static guardrails) first.
+            if over > 0 and context_str in user_msg:
+                cut = min(len(context_str), over + 500)
+                user_msg = user_msg.replace(
+                    f"Project Context:\n{context_str}",
+                    f"Project Context:\n[... {cut} chars trimmed for token budget ...]"
+                    + context_str[cut:],
+                )
+                logger.warning("  trimmed project context head (-%d chars)", cut)
+                over -= cut
+            # Trim 3: if still over, rebuild the system prompt with
+            # an ultra-compact MCP-tool list — just "- name: desc",
+            # no input keys at all. The planner still knows tools
+            # exist; arg schemas land via tool-call validation at
+            # dispatch time. Saves ~3-5K chars on a 19-server deploy.
+            if over > 0 and self.mcp_manager and getattr(self.mcp_manager, "is_connected", False):
+                try:
+                    skinny = "\n".join(
+                        f"- {t.name}: {(t.description or 'No description').split('.')[0]}"
+                        for t in self.mcp_manager.tool_schemas.values()
+                    )
+                    skinny_block = (
+                        "You also have access to these microservice tools "
+                        "(via MCP):\n" + skinny
+                    )
+                    if mcp_tools in system_prompt:
+                        delta = len(mcp_tools) - len(skinny_block)
+                        if delta > 0:
+                            system_prompt = system_prompt.replace(mcp_tools, skinny_block)
+                            over -= delta
+                            logger.warning(
+                                "  swapped mcp_tools to ultra-compact (-%d chars)",
+                                delta,
+                            )
+                except Exception as e:
+                    logger.warning("  mcp_tools skinny-swap failed: %s", e)
+            # Final report. The 4.1 chars/token estimate gives the
+            # planner some tolerance — being a few thousand chars over
+            # the budget often still tokenises within the 12K input
+            # limit (operator observed 3933-char overage that still
+            # returned 200 OK). Only WARN here; the actual planner
+            # call will surface a real error via the gateway logger
+            # if it does fail.
+            if over > 4000:
+                logger.warning(
+                    "cot prompt STILL over budget after all trims; "
+                    "remaining over=%d chars. The 4.1 chars/token "
+                    "estimate has some slack, but if the planner "
+                    "returns 400 'Input length exceeds…' next, "
+                    "consider lowering COT_PROMPT_BUDGET_CHARS or "
+                    "COT_MCP_TOPN.", over,
+                )
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Project Context:\n{context_str}\n\nUser Request:\n{request.user_input}"}
+            {"role": "user", "content": user_msg}
         ]
 
         try:
@@ -879,6 +1135,74 @@ class COTEngine:
 
             # Parse LLM response
             analysis = self._parse_llm_response(response, chain_id, request)
+
+            # PLAN VALIDATION + ONE-SHOT REFLECTIVE REPROMPT.
+            # Operator-observed failure: gpt-oss-20b sometimes emits a
+            # plan where every step is task_type=generation / tool=llm
+            # (e.g. "Find OENUM", "Read OENUM file", "Extract OENUM
+            # value"), which the dispatcher routes to _execute_llm_task
+            # — pure LLM thinking with NO retrieval. The model then
+            # produces "I don't have access to that information"
+            # because it has no actual tool output to read.
+            #
+            # Best practice (multi-agent validation papers): catch the
+            # bad plan before execution and re-prompt ONCE with the
+            # validation error fed back to the planner. We don't loop
+            # forever — one corrective turn is enough; if it still
+            # fails, run the (likely-broken) plan rather than burn
+            # more model time.
+            issues = self._validate_plan(analysis)
+            if issues:
+                logger.warning(
+                    "COT plan validation: %d issue(s) — reprompting once: %s",
+                    len(issues), "; ".join(issues),
+                )
+                corrective = (
+                    "\n\n# PLAN REJECTED — fix and resubmit\n"
+                    "Your previous plan violated these HARD rules:\n  - "
+                    + "\n  - ".join(issues)
+                    + "\nResubmit a corrected plan. Reminder: only the "
+                    "LAST step may be task_type=generation / tool=llm; "
+                    "every earlier step MUST call a real retrieval tool "
+                    "(get_project_tree, read_artifact_mcp, search_context, "
+                    "search_blobs, memory_query). Steps named 'Find / Read / "
+                    "Extract / Fetch / Locate / Look up' REQUIRE a tool call, "
+                    "not LLM thinking."
+                )
+                retry_messages = [
+                    {"role": "system", "content": system_prompt + corrective},
+                    {"role": "user", "content": user_msg},
+                ]
+                try:
+                    response2 = await self._call_llm(retry_messages)
+                    analysis2 = self._parse_llm_response(response2, chain_id, request)
+                    issues2 = self._validate_plan(analysis2)
+                    if not issues2:
+                        logger.info(
+                            "COT plan validation: retry produced a clean plan "
+                            "(%d steps)", len(analysis2.steps),
+                        )
+                        analysis = analysis2
+                    else:
+                        # Pick whichever attempt has fewer issues.
+                        if len(issues2) < len(issues):
+                            logger.warning(
+                                "COT plan validation: retry still has issues "
+                                "(%s) but improved; using retry plan",
+                                "; ".join(issues2),
+                            )
+                            analysis = analysis2
+                        else:
+                            logger.warning(
+                                "COT plan validation: retry did not improve "
+                                "(%s); using original plan", "; ".join(issues2),
+                            )
+                except Exception as e:
+                    logger.warning(
+                        "COT plan validation: retry call failed (%s); "
+                        "using original plan", e,
+                    )
+
             logger.info(
                 f"COT analysis complete: chain={chain_id}, "
                 f"steps={len(analysis.steps)}, project={request.project_id}"
@@ -1034,7 +1358,7 @@ class COTEngine:
             "mode":          "offline",
             "force_backend": "text",
             "temperature":   0.3,
-            "max_tokens":    int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
+            "max_tokens":    int(os.getenv("COT_LLM_MAX_TOKENS", "4096")),
             "tools":         [submit_plan_tool],
             # Force the model to call submit_plan rather than producing
             # free-form text. vLLM's openai parser honours this.
@@ -1046,7 +1370,13 @@ class COTEngine:
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(f"{gateway_url}/generate", json=payload)
-            r.raise_for_status()
+            if r.status_code != 200:
+                snippet = (r.text or "")[:600]
+                logger.error(
+                    "harmony planner: gateway %s returned %d; body=%s",
+                    gateway_url, r.status_code, snippet,
+                )
+                r.raise_for_status()
             body = r.json()
 
         tool_calls = body.get("tool_calls") or []
@@ -1092,7 +1422,7 @@ class COTEngine:
             "model": model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
+            "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "4096")),
             "stream": False,
         }
         async with httpx.AsyncClient(timeout=120) as c:
@@ -1109,25 +1439,69 @@ class COTEngine:
         time so the response is guaranteed-parseable JSON — no
         retries, no markdown-fence stripping. Runs on .61 (faster
         than the 7B VLM) without sacrificing structured-output
-        reliability."""
+        reliability.
+
+        Retries ONCE on apparent truncation: if the returned JSON
+        doesn't close cleanly (unterminated string / missing ]/}),
+        we re-issue with 2× max_tokens. Operator saw repeated cases
+        where 2048 tokens were enough for reasoning + step 1 but
+        cut step 2 in half, dropping the plan to 1-step and losing
+        the file-read task entirely (2026-05-24)."""
+        return await self._call_gateway_with_retry(
+            gateway_url, messages,
+            initial_tokens=int(os.getenv("COT_LLM_MAX_TOKENS", "4096")),
+            retry_multiplier=2,
+        )
+
+    async def _call_gateway_with_retry(
+        self, gateway_url: str, messages: List[Dict[str, str]],
+        initial_tokens: int, retry_multiplier: int,
+    ) -> str:
         import httpx
         timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
-        payload = {
-            "messages": messages,
-            "mode": "offline",
-            "force_backend": "text",
-            "temperature": 0.3,
-            "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
-            "extra": {
-                "guided_json": COT_PLAN_SCHEMA,
-                "response_format": {"type": "json_object"},
-            },
-        }
-        async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.post(f"{gateway_url}/generate", json=payload)
-            r.raise_for_status()
-            body = r.json()
-        return body.get("response", "") or ""
+
+        async def _attempt(max_tokens: int) -> str:
+            payload = {
+                "messages": messages,
+                "mode": "offline",
+                "force_backend": "text",
+                "temperature": 0.3,
+                "max_tokens": max_tokens,
+                "extra": {"guided_json": COT_PLAN_SCHEMA},
+            }
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(f"{gateway_url}/generate", json=payload)
+                if r.status_code != 200:
+                    snippet = (r.text or "")[:600]
+                    logger.error(
+                        "guided_json planner: gateway %s returned %d; body=%s",
+                        gateway_url, r.status_code, snippet,
+                    )
+                    r.raise_for_status()
+                body = r.json()
+            return body.get("response", "") or ""
+
+        first = await _attempt(initial_tokens)
+        if _looks_truncated(first):
+            bumped = initial_tokens * retry_multiplier
+            logger.warning(
+                "guided_json planner: first attempt looked truncated at "
+                "%d tokens; retrying with %d",
+                initial_tokens, bumped,
+            )
+            try:
+                second = await _attempt(bumped)
+                # Use the longer attempt only if it actually closes cleanly;
+                # if it ALSO truncates, return the first so the parser at
+                # least sees some valid prefix.
+                if not _looks_truncated(second):
+                    return second
+            except Exception as e:
+                logger.warning(
+                    "guided_json planner: retry at %d tokens failed: %s; "
+                    "falling back to first attempt", bumped, e,
+                )
+        return first
 
     def _parse_llm_response(
         self, response: str, chain_id: uuid.UUID, request: COTRequest
@@ -1244,6 +1618,75 @@ class COTEngine:
             total_steps=len(steps),
             estimated_total_duration=data.get("estimated_total_duration"),
         )
+
+    def _validate_plan(self, analysis: "COTAnalysis") -> List[str]:
+        """Catch the no-tool-call plan pattern before execution.
+
+        Returns a list of human-readable issues. Empty list = OK.
+
+        Rules (HARD — enforced by retry-with-feedback):
+          R1. Only the LAST step may be task_type=generation/analysis/review
+              with tool=llm. Earlier "thinking" steps mean retrieval was
+              skipped.
+          R2. A plan with >1 step but ZERO retrieval-tool steps is broken
+              — the synth step has nothing to read.
+          R3. Step titles starting with action verbs that imply retrieval
+              ("find", "read", "extract", "fetch", "locate", "look up",
+              "search", "list", "get") MUST use a real tool, not llm.
+
+        Single-step plans are exempt — a single llm step is the
+        legitimate "I don't need tools, just answer" shape.
+        """
+        issues: List[str] = []
+        steps = list(getattr(analysis, "steps", []) or [])
+        n = len(steps)
+        if n <= 1:
+            return issues
+
+        def _is_llm_synth(step) -> bool:
+            tool = (getattr(step, "tool_needed", "") or "").lower()
+            tt = getattr(step, "task_type", None)
+            tt_val = getattr(tt, "value", tt)
+            tt_str = str(tt_val or "").lower()
+            return tool == "llm" or tt_str in {"generation", "analysis", "review"}
+
+        # R1: every non-last step must be a real tool call.
+        bad_thinking = []
+        for s in steps[:-1]:
+            if _is_llm_synth(s):
+                bad_thinking.append(
+                    f"step {s.step_number} '{s.title}' is "
+                    f"tool=llm/task_type=generation — only the LAST step "
+                    f"may be synthesis"
+                )
+        issues.extend(bad_thinking)
+
+        # R2: at least one retrieval step.
+        retrieval_count = sum(1 for s in steps if not _is_llm_synth(s))
+        if retrieval_count == 0:
+            issues.append(
+                f"plan has {n} steps but ZERO retrieval-tool calls — every "
+                "step is llm thinking; the synthesizer will have no real "
+                "data to read"
+            )
+
+        # R3: action-verb titles must be real tool calls.
+        _RETRIEVAL_VERBS = (
+            "find ", "read ", "extract ", "fetch ", "locate ", "look up ",
+            "lookup ", "search ", "list ", "get ", "load ", "open ",
+            "discover ", "identify ", "retrieve ",
+        )
+        for s in steps:
+            title = (getattr(s, "title", "") or "").strip().lower()
+            if _is_llm_synth(s) and any(title.startswith(v) for v in _RETRIEVAL_VERBS):
+                issues.append(
+                    f"step {s.step_number} '{s.title}' implies retrieval "
+                    f"(verb '{title.split()[0]}') but uses tool=llm — must "
+                    f"call a real tool (get_project_tree, read_artifact_mcp, "
+                    f"search_context, search_blobs, memory_query)"
+                )
+
+        return issues
 
     def _generate_simple_plan(self, request: COTRequest) -> str:
         """Generate a simple plan without LLM (fallback)."""

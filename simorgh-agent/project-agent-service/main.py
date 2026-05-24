@@ -69,8 +69,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("MCP connect failed (continuing without remote tools): %s", e)
 
+    # Always-on knowledge-repo grounding layer. Background asyncio task
+    # that does an initial reindex + periodic refresh of the configured
+    # GitLab knowledge repo. No-ops if KNOWLEDGE_REPO_PROJECT is unset
+    # in env, so unconfigured deploys don't fail.
+    try:
+        from services.knowledge_repo_service import start_background_refresh
+        start_background_refresh()
+    except Exception as e:
+        logger.warning("knowledge-repo background refresh failed to start: %s", e)
+
     logger.info("project-agent-service ready")
     yield
+    try:
+        from services.knowledge_repo_service import stop_background_refresh
+        stop_background_refresh()
+    except Exception:
+        pass
     logger.info("project-agent-service shutting down")
 
 
@@ -91,6 +106,24 @@ app.include_router(project_agent_router)
 @app.get("/health")
 def health():
     return {"status": "healthy", "service": "project-agent-service"}
+
+
+# ---------------------------------------------------------------------------
+# Knowledge-repo admin surface — status + on-demand reindex. No auth gate
+# so they can be hit via `docker exec project-agent-service curl ...` from
+# the deploy host. Production scenarios that need this exposed publicly
+# should add an admin auth dependency.
+# ---------------------------------------------------------------------------
+@app.get("/api/v2/agent/knowledge/status")
+def knowledge_status():
+    from services.knowledge_repo_service import status
+    return status()
+
+
+@app.post("/api/v2/agent/knowledge/reindex")
+async def knowledge_reindex():
+    from services.knowledge_repo_service import reindex_now
+    return await reindex_now()
 
 
 # ---------------------------------------------------------------------------

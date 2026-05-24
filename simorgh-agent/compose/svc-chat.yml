@@ -23,6 +23,20 @@ services:
       - REDIS_CACHE_DB=2
       # Qdrant
       - QDRANT_URL=http://qdrant:6333
+      # Embeddings + HR KB (for the general-chat HR direct-RAG path).
+      # HARDCODED — not ${EMBEDDINGS_URL:-...} — because chat-service
+      # MUST hit the same embeddings container that hr-kb-service used
+      # at index time, otherwise the query vectors come from a
+      # different model and similarity scores collapse to ~0. The
+      # repo's .env was overriding this to http://embeddings:8037
+      # (an unrelated/legacy host) which silently broke retrieval.
+      # Same reason hr-kb-service's compose hardcodes it.
+      - EMBEDDINGS_URL=http://embeddings-service:8031
+      - HR_KB_COLLECTION=${HR_KB_COLLECTION:-hr_general_kb}
+      - HR_LLM_MODEL=${HR_LLM_MODEL:-gpt-oss-20b}
+      # 0.15 matches the lowered Python default in hr_chat.py
+      # (see commit f68db39).
+      - HR_RELEVANCE_THRESHOLD=${HR_RELEVANCE_THRESHOLD:-0.15}
       # Neo4j (optional)
       - NEO4J_URI=${NEO4J_URI:-}
       - NEO4J_USER=${NEO4J_USER:-}

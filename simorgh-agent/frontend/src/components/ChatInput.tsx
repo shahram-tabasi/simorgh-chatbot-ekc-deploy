@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  SendIcon, PaperclipIcon, MicIcon, StopCircleIcon,
+  PaperclipIcon, MicIcon, StopCircleIcon,
   FileTextIcon, XIcon, LoaderIcon, Loader2Icon,
   FolderGitIcon, GitBranchIcon, GitPullRequestIcon,
 } from 'lucide-react';
@@ -45,6 +45,46 @@ interface ChatInputProps {
   modelLabel?: string | null;
   /** Token-budget telemetry from the last assistant reply. */
   tokenUsage?: { used?: number | null; total?: number | null } | null;
+  /** Show the chain-of-thought elapsed timer next to the model badge.
+   * Used by project chats where CoT can run for tens of seconds and
+   * the user wants visible feedback that work is in progress. */
+  showCotTimer?: boolean;
+}
+
+/** Tiny "1.2s … 24s" timer that ticks while CoT is running, with a
+ * small simorgh bird next to it. Mounted only while isGenerating is
+ * true so it doesn't clutter the input when idle. */
+function CotTimer() {
+  const startRef = React.useRef<number>(Date.now());
+  const [elapsedMs, setElapsedMs] = React.useState(0);
+  React.useEffect(() => {
+    startRef.current = Date.now();
+    const id = window.setInterval(() => {
+      setElapsedMs(Date.now() - startRef.current);
+    }, 200);
+    return () => window.clearInterval(id);
+  }, []);
+  const seconds = elapsedMs / 1000;
+  const display =
+    seconds < 10
+      ? `${seconds.toFixed(1)}s`
+      : seconds < 60
+      ? `${Math.round(seconds)}s`
+      : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  return (
+    <span
+      className="flex items-center gap-1 text-[11px] text-sky-300/90 font-mono"
+      title="Chain-of-thought elapsed time"
+    >
+      <img
+        src={`${import.meta.env.BASE_URL}simorgh.svg`}
+        alt=""
+        className="w-3.5 h-3.5 opacity-80"
+        style={{ filter: 'drop-shadow(0 0 4px rgba(56,189,248,0.4))' }}
+      />
+      {display}
+    </span>
+  );
 }
 
 function buildGitlabUrl(repoPath: string, suffix = ''): string {
@@ -137,6 +177,7 @@ export function ChatInput({
   header = null,
   modelLabel = null,
   tokenUsage = null,
+  showCotTimer = false,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -427,8 +468,11 @@ export function ChatInput({
         {/* Top bar — repo / branch / +N -M / Create PR. */}
         {header && <ChatInputHeaderBar header={header} />}
 
-        {/* Text input row */}
-        <div className="flex items-center min-h-[40px] md:min-h-[44px]">
+        {/* Text input row. Subtle ↵ hint sits at the right edge,
+            matching the Claude Code composer — reinforces that Enter
+            is the send action (no big visible button). The hint
+            brightens when the textarea has content. */}
+        <div className="relative flex items-center min-h-[40px] md:min-h-[44px]">
           <textarea
             ref={textareaRef}
             value={message}
@@ -442,9 +486,23 @@ export function ChatInput({
             placeholder={disabled ? "Please create or select a project and chat to start messaging..." : "Ask Simorgh anything..."}
             disabled={disabled}
             rows={1}
-            className="w-full px-3 md:px-4 py-2 md:py-3 rounded-xl bg-transparent text-white text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed overflow-y-auto max-h-[120px] sm:max-h-[200px] leading-normal"
+            className="w-full pl-3 md:pl-4 pr-10 md:pr-12 py-2 md:py-3 rounded-xl bg-transparent text-white text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed overflow-y-auto max-h-[120px] sm:max-h-[200px] leading-normal"
             style={{ minHeight: '40px' }}
           />
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
+            title="Send (Enter)"
+            className={`absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-1 rounded text-[14px] leading-none font-mono transition-colors ${
+              message.trim().length > 0
+                ? 'text-sky-300 hover:text-sky-200 hover:bg-sky-500/10'
+                : 'text-gray-600 hover:text-gray-400 cursor-default'
+            }`}
+            aria-label="Send"
+          >
+            ↵
+          </button>
         </div>
 
         {/* Bottom toolbar — small attach/mic on the left, model badge
@@ -499,36 +557,41 @@ export function ChatInput({
             )}
           </button>
 
-          {/* Right side: model badge + token ring + send/stop. */}
-          <div className="ml-auto flex items-center gap-2">
-            {(modelLabel || tokenUsage) && (
-              <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
-                {modelLabel && <span className="truncate max-w-[160px]">{modelLabel}</span>}
-                {tokenUsage && (
-                  <TokenUsageRing
-                    used={tokenUsage.used ?? null}
-                    total={tokenUsage.total ?? null}
-                  />
-                )}
-              </span>
+          {/* Right side: matches Claude Code reference exactly — no
+              prominent send button, just the model label + a small
+              activity spinner. Send happens via Enter key (handled
+              by the textarea above); Stop replaces the spinner with
+              a small red square button only when actively generating.
+              The whole row is text-sized, not button-sized, so the
+              composer reads as "status + meta" not "primary action". */}
+          <div className="ml-auto flex items-center gap-2 text-[12px] text-gray-400">
+            {isGenerating && showCotTimer && <CotTimer />}
+            {tokenUsage && (
+              <TokenUsageRing
+                used={tokenUsage.used ?? null}
+                total={tokenUsage.total ?? null}
+              />
             )}
-
+            {modelLabel && (
+              <span className="truncate max-w-[160px]">{modelLabel}</span>
+            )}
             {isGenerating ? (
               <button
                 onClick={onCancel}
-                className="p-2 rounded-xl bg-red-500 hover:bg-red-600 transition-all flex-shrink-0"
+                className="p-1 rounded-md hover:bg-red-500/15 transition-colors flex-shrink-0"
                 title="Stop generating"
               >
-                <StopCircleIcon className="w-4 h-4 text-white" />
+                <StopCircleIcon className="w-4 h-4 text-red-400" />
               </button>
             ) : (
-              <button
-                onClick={handleSend}
-                disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
-                className="p-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
-              >
-                <SendIcon className="w-4 h-4 text-white" />
-              </button>
+              <Loader2Icon
+                className={`w-3.5 h-3.5 text-gray-500 ${
+                  /* idle dim spinner like Claude — turns active blue when
+                     the user has unsent text in the textarea, hinting
+                     "press Enter to send". */
+                  message.trim().length > 0 ? 'text-sky-300 animate-pulse' : 'opacity-40'
+                }`}
+              />
             )}
           </div>
         </div>

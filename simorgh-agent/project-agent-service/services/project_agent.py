@@ -14,12 +14,24 @@ Workflow:
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
+
+# Per-request LLM mode override threaded from the route layer
+# (ProjectMessageCreate.llm_mode) down to _execute_llm_task without
+# having to add the parameter to every function in the call chain
+# (handle_input → _execute_task_chain → _execute_single_task →
+# _execute_llm_task). ContextVar is asyncio-task-scoped so
+# concurrent requests don't trample each other. None = use the
+# llm_service default (whatever its env-configured mode is).
+_llm_mode_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_project_agent_llm_mode", default=None,
+)
 
 from models.project_models import (
     COTRequest, COTAnalysis, TaskStatus, TaskType, TaskTrigger,
@@ -218,6 +230,7 @@ class ProjectManagerAgent:
         email_subject: str = None,
         auto_execute: bool = True,
         stream: bool = True,
+        llm_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Handle any input to the project.
@@ -226,10 +239,81 @@ class ProjectManagerAgent:
         Returns:
             Dict with response, tasks created, and execution results
         """
+        # Install the per-request mode into the contextvar so any
+        # async_generate call deeper in the chain
+        # (_execute_task_chain → _execute_single_task →
+        # _execute_llm_task) can pick it up without a parameter
+        # change in every function signature.
+        if llm_mode is not None:
+            _llm_mode_var.set(llm_mode)
+
+        # Phase 2/3: master CoT router. Builds a PlanContext from
+        # what we know about the request, picks a CotPlan via the
+        # heuristic router, and installs it in the cot_router
+        # contextvar so cot_engine can pick it up at message-build
+        # time.
+        # Source/modality detection (Phase 3):
+        #   * has_selected_repo = True for any project_id that resolves
+        #     (project chats are always repo-backed). Pulled from the
+        #     project memory row's repo metadata so we don't false-
+        #     positive on placeholder rows.
+        #   * input_modality = "voice" when the route layer flagged
+        #     this turn as transcribed (ProjectMessageCreate.metadata
+        #     carries the hint).
+        #   * upload_size_chars stays 0 here — Phase 4's
+        #     upload_investigator will probe doc-processor and update
+        #     when the file is read.
+        try:
+            from services.cot_router import route as cot_route, set_active_plan
+            from services.cot_plans import PlanContext
+
+            project_for_ctx = await self.memory.get_project(project_id)
+            repo_path = (project_for_ctx or {}).get("gitlab_repo_path") if project_for_ctx else None
+            selected_repos = [repo_path] if repo_path else []
+            modality = "voice" if (channel.value == "voice"
+                                    or (channel.value == "chat" and False)) else "text"
+
+            plan_ctx = PlanContext(
+                user_input=user_input,
+                project_id=project_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                has_selected_repo=bool(repo_path),
+                selected_repos=selected_repos,
+                has_upload=bool(document_id or document_filename),
+                upload_filenames=[document_filename] if document_filename else [],
+                upload_size_chars=0,
+                input_modality=modality,
+            )
+            chosen_plan = cot_route(plan_ctx)
+            set_active_plan(chosen_plan)
+            self._active_plan_ctx = plan_ctx
+        except Exception as e:
+            logger.warning("cot_router setup failed (continuing with no plan): %s", e)
+            chosen_plan = None
+
         logger.info(
             f"Agent handling input: project={project_id}, "
-            f"channel={channel.value}, input_len={len(user_input)}"
+            f"channel={channel.value}, input_len={len(user_input)}, "
+            f"llm_mode={llm_mode or 'default'}, "
+            f"cot_plan={chosen_plan.name if chosen_plan else 'none'}"
         )
+        # Phase 5: surface the chosen plan to the UI as the FIRST SSE
+        # event so the chat bubble can paint a plan chip ("plan:
+        # single_repo") before the planner even starts thinking.
+        # Goes through the same progress-callback mechanism as the
+        # rest of the streaming events.
+        if chosen_plan is not None:
+            await self._notify_progress(project_id, "cot_plan_chosen", {
+                "plan": chosen_plan.name,
+                "signals": {
+                    "has_selected_repo": getattr(plan_ctx, "has_selected_repo", False),
+                    "selected_repos_count": len(getattr(plan_ctx, "selected_repos", [])),
+                    "has_upload": getattr(plan_ctx, "has_upload", False),
+                    "upload_size_chars": getattr(plan_ctx, "upload_size_chars", 0),
+                    "input_modality": getattr(plan_ctx, "input_modality", "text"),
+                },
+            })
 
         # 1. Store the incoming message
         await self.memory.store_message(
@@ -1019,7 +1103,34 @@ class ProjectManagerAgent:
             looks_like_numeric_id = (
                 isinstance(proj_arg, str) and proj_arg.isdigit()
             )
-            needs_substitution = not (looks_like_path or looks_like_numeric_id)
+            # Operator-observed planner failure mode (2026-05-24): the
+            # planner copy-pastes placeholder strings out of the system
+            # prompt or LLM training corpus instead of substituting the
+            # real project path. "group/repo" passes the simple "/" check
+            # but gitlab-mcp 404s on it. Detect these explicitly and
+            # treat as needs_substitution. Set is open — add more if new
+            # ones appear in logs.
+            _PLACEHOLDER_PATHS = {
+                "group/repo", "group/project", "group/path",
+                "org/repo", "org/project",
+                "user/repo", "user/project", "username/repository",
+                "owner/repo", "owner/project",
+                "namespace/project", "namespace/repo",
+                "your-org/your-repo", "your-group/your-repo",
+                "example/example", "example/repo", "example/project",
+                "team/myrepo", "my-org/my-repo",
+            }
+            is_placeholder = (
+                isinstance(proj_arg, str) and (
+                    proj_arg.lower() in _PLACEHOLDER_PATHS
+                    # template syntax (e.g. "<group>/<repo>", "{org}/{repo}")
+                    or "<" in proj_arg or ">" in proj_arg
+                    or "{" in proj_arg or "}" in proj_arg
+                )
+            )
+            needs_substitution = is_placeholder or not (
+                looks_like_path or looks_like_numeric_id
+            )
             if needs_substitution:
                 try:
                     meta = await self.memory.get_project(str(project_id))
@@ -1101,9 +1212,22 @@ class ProjectManagerAgent:
             and self.mcp_manager.is_connected
             and self.mcp_manager.has_tool(tool)
         )
+        # Operator hit recurring "Project Not Found" failures on
+        # follow-up turns where the planner picked tools NOT in
+        # _GITLAB_MCP_TOOLS (so the project-arg canonicalisation
+        # didn't run and the wrong identifier propagated). Surface
+        # the actual project value being passed so we can trace
+        # which tool/arg shape needs canonicalisation added.
+        proj_dbg = "?"
+        if isinstance(tool_input, dict):
+            proj_dbg = (tool_input.get("project")
+                        or tool_input.get("project_id")
+                        or tool_input.get("repo")
+                        or tool_input.get("repository")
+                        or "(none)")
         logger.info(
             f"dispatch: tool={tool!r} type={task_type!r} "
-            f"mcp_match={has_mcp_tool} "
+            f"mcp_match={has_mcp_tool} project_arg={proj_dbg!r} "
             f"input_keys={list(tool_input.keys()) if isinstance(tool_input, dict) else None}"
         )
 
@@ -1310,14 +1434,19 @@ class ProjectManagerAgent:
         ]
 
         try:
+            # Per-request mode override installed by handle_input via
+            # the _llm_mode_var ContextVar. None = use llm_service's
+            # configured default.
+            requested_mode = _llm_mode_var.get()
             if hasattr(self.llm_service, 'async_generate'):
                 result = await self.llm_service.async_generate(
                     messages=messages,
                     user_id=f"agent_{project_id}",
+                    mode=requested_mode,
                 )
                 response = result.get('response', '') if isinstance(result, dict) else str(result)
             else:
-                result = self.llm_service.generate(messages=messages)
+                result = self.llm_service.generate(messages=messages, mode=requested_mode)
                 response = result.get('response', '') if isinstance(result, dict) else str(result)
 
             return {
