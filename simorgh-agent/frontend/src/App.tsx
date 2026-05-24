@@ -405,6 +405,7 @@ function MainChat() {
               </div>
             )}
             <ChatArea
+              activeChatId={activeChatId}
               messages={messages}
               isTyping={isTyping}
               onSendMessage={handleSendMessage}

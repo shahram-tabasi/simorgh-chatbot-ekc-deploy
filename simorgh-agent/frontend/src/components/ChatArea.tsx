@@ -82,6 +82,10 @@ interface ChatAreaProps {
   isProjectChat?: boolean; // NEW: Indicates if this is a project-specific chat
   quotaExceeded?: boolean;
   headerContext?: ChatHeaderContext | null;
+  /** The currently selected chat's id. Used to suppress the welcome-
+   * screen flash when switching between existing chats whose history
+   * is still loading asynchronously. */
+  activeChatId?: string | null;
 }
 
 function ChatHeaderChip({ ctx }: { ctx: ChatHeaderContext }) {
@@ -184,12 +188,45 @@ export function ChatArea({
   isProjectChat = false,
   quotaExceeded = false,
   headerContext = null,
+  activeChatId = null,
 }: ChatAreaProps) {
   const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
-  // Track chatting state: starts as false (idle), becomes true after first message send
+  // True after the user has sent a message in this chat.
   const [isChatting, setIsChatting] = React.useState(false);
+  // True for ~1.5s after switching chats — gives the async history
+  // load a window to populate `messages` before we'd otherwise flash
+  // the welcome screen. Without this, every chat switch briefly
+  // showed welcome because the messages prop is [] until useProjects
+  // finishes its GET /chats/{id} fetch.
+  const [isAwaitingHistory, setIsAwaitingHistory] = React.useState(false);
+  const chatSwitchRef = React.useRef<string | null>(activeChatId);
 
-  const isIdle = messages.length === 0 && !isChatting;
+  React.useEffect(() => {
+    if (chatSwitchRef.current !== activeChatId) {
+      chatSwitchRef.current = activeChatId;
+      // New chat selected — assume it might have history and wait.
+      if (activeChatId) setIsAwaitingHistory(true);
+    }
+  }, [activeChatId]);
+
+  // History arrived. End the waiting window and lock in chatting view.
+  React.useEffect(() => {
+    if (messages.length > 0) {
+      setIsAwaitingHistory(false);
+      setIsChatting(true);
+    }
+  }, [messages.length]);
+
+  // Fallback timeout — if the chat is genuinely empty (brand-new
+  // chat with no messages), drop the waiting flag after 1.5s so the
+  // welcome screen can render naturally.
+  React.useEffect(() => {
+    if (!isAwaitingHistory) return;
+    const t = setTimeout(() => setIsAwaitingHistory(false), 1500);
+    return () => clearTimeout(t);
+  }, [isAwaitingHistory]);
+
+  const isIdle = messages.length === 0 && !isChatting && !isAwaitingHistory;
 
   // Live diff stats for the chat-input header's +N -M chips.
   const diffStats = useProjectDiffStats(headerContext?.projectId ?? null);
@@ -248,12 +285,11 @@ export function ChatArea({
     onSendMessage(content, files);
   }, [isIdle, onSendMessage]);
 
-  // Reset to idle when messages are cleared
-  React.useEffect(() => {
-    if (messages.length === 0) {
-      setIsChatting(false);
-    }
-  }, [messages.length]);
+  // (Removed: the previous auto-reset to idle when messages.length === 0
+  // fired during every chat switch — the messages prop is briefly []
+  // while the new chat's history is fetching, which flashed the welcome
+  // screen on every switch. Resetting now happens via the chat-switch
+  // effect above with an isAwaitingHistory guard.)
 
   return (
     <div className="flex-1 flex flex-col h-full relative overflow-hidden w-full max-w-full min-w-0">
