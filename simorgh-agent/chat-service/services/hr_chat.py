@@ -265,7 +265,11 @@ async def _stream_llm(messages: List[Dict[str, str]]) -> AsyncIterator[str]:
     payload = {
         "messages": messages,
         "mode": "offline",          # bypass online routing
-        "force_backend": "offline_text",
+        # llm-gateway accepts force_backend in {"text", "vlm"}. "text"
+        # resolves to LOCAL_LLM_URL_TEXT (gpt-oss-20b on 192.168.1.61
+        # by default). Earlier draft used "offline_text" — that's the
+        # gateway's INTERNAL backend_kind name, not the public input.
+        "force_backend": "text",
         "model": HR_LLM_MODEL,
         "temperature": 0.2,         # grounded answers, low creativity
         "max_tokens": 800,
