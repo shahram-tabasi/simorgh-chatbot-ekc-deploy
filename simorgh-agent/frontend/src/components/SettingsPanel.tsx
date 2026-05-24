@@ -43,9 +43,18 @@ const themes: Array<{ id: ThemeType; name: string; icon: any; gradient: string }
 interface SettingsPanelProps {
   externalOpen?: boolean;
   onExternalClose?: () => void;
+  /** When true (the active chat is a general/HR session) the Online
+   * AI tile in the AI-Mode picker is disabled — general chat is
+   * hard-pinned to local Simorgh AI by hr_chat.py force_backend='text',
+   * so allowing Online to be picked would be misleading. */
+  isGeneralChatActive?: boolean;
 }
 
-export default function SettingsPanel({ externalOpen = false, onExternalClose }: SettingsPanelProps = {}) {
+export default function SettingsPanel({
+  externalOpen = false,
+  onExternalClose,
+  isGeneralChatActive = false,
+}: SettingsPanelProps = {}) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [langOpen, setLangOpen] = React.useState(false);
   const [aiMode, setAiMode] = React.useState<'online' | 'offline'>('online');
@@ -227,24 +236,46 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                     This setting controls <span className="text-sky-300">project chat</span> only.
                   </p>
                   <div className="space-y-3">
+                    {/* In general chat the effective mode is ALWAYS
+                        offline (hr_chat.py force-pins it), so override
+                        the visual selection regardless of saved
+                        preference. Saved preference (aiMode) is
+                        preserved in localStorage for when the user
+                        switches back to a project chat. */}
+                    {(() => {
+                      const effectiveMode = isGeneralChatActive ? 'offline' : aiMode;
+                      return (
+                        <>
                     <button
                       onClick={() => handleAiModeChange('online')}
+                      disabled={isGeneralChatActive}
+                      title={isGeneralChatActive
+                        ? "Online AI is project-chat only — general chat always uses Simorgh AI"
+                        : undefined}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        aiMode === 'online'
-                          ? 'border-blue-500 bg-blue-500/10'
-                          : 'border-white/10 hover:border-white/30'
+                        isGeneralChatActive
+                          ? 'border-white/5 opacity-40 cursor-not-allowed'
+                          : effectiveMode === 'online'
+                            ? 'border-blue-500 bg-blue-500/10'
+                            : 'border-white/10 hover:border-white/30'
                       }`}
                     >
-                      <Wifi className="w-6 h-6 text-blue-400" />
+                      {isGeneralChatActive
+                        ? <Lock className="w-6 h-6 text-gray-500" />
+                        : <Wifi className="w-6 h-6 text-blue-400" />}
                       <div className="text-left">
                         <div className="text-white font-medium">Online AI</div>
-                        <div className="text-xs text-gray-400">Configured cloud API · project chat only</div>
+                        <div className="text-xs text-gray-400">
+                          {isGeneralChatActive
+                            ? 'Disabled in general chat (project chat only)'
+                            : 'Configured cloud API · project chat only'}
+                        </div>
                       </div>
                     </button>
                     <button
                       onClick={() => handleAiModeChange('offline')}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        aiMode === 'offline'
+                        effectiveMode === 'offline'
                           ? 'border-violet-500 bg-violet-500/10'
                           : 'border-white/10 hover:border-white/30'
                       }`}
@@ -253,11 +284,16 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                       <div className="text-left">
                         <div className="text-white font-medium">
                           Simorgh AI
-                          <span className="text-[10px] text-violet-300/80 font-normal ml-1">(default)</span>
+                          <span className="text-[10px] text-violet-300/80 font-normal ml-1">
+                            {isGeneralChatActive ? '(active)' : '(default)'}
+                          </span>
                         </div>
                         <div className="text-xs text-gray-400">LLM + VLM</div>
                       </div>
                     </button>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 

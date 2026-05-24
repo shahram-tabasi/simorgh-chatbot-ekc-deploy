@@ -485,6 +485,11 @@ function MainChat() {
         <SettingsPanel
           externalOpen={settingsPanelOpen}
           onExternalClose={() => setSettingsPanelOpen(false)}
+          // General chat hard-pins to local Simorgh AI server-side
+          // (hr_chat.py); disable the Online tile in the picker when
+          // a general chat is active so the setting can't suggest
+          // otherwise.
+          isGeneralChatActive={!!activeChatId && activeProjectId === null}
         />
 
         {/* New per-project container wizard (legacy + modern, both flows). */}
