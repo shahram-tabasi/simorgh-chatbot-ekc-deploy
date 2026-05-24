@@ -156,17 +156,27 @@ export function useProjects(userId?: string) {
         const backendProjectChats = projectChatsResponse.data.chats || [];
         console.log(`✅ Loaded ${backendProjectChats.length} project chats from backend`);
 
-        // Group chats by project
+        // Group chats by project. CRITICAL: key on project_id_main
+        // (the per-workspace UUID), NOT project_number. project_number
+        // is the SOURCE OE / TPMS identifier and is shared across all
+        // workspaces branched from the same source. Keying on it was
+        // collapsing multiple distinct workspaces into one folder with
+        // all chats commingled — the "project still collapsed in each
+        // other" bug from the operator's punch list.
         const projectsMap = new Map<string, any>();
 
         for (const chat of backendProjectChats) {
-          const projectId = chat.project_number || chat.project_id_main;
-          const projectName = chat.project_name || `Project ${projectId}`;
+          const projectId = chat.project_id_main || chat.project_number;
+          const projectName = chat.project_name || `Project ${chat.project_number || projectId}`;
 
           if (!projectsMap.has(projectId)) {
             projectsMap.set(projectId, {
               id: projectId,
               name: projectName,
+              // Keep project_number around as a display-only field (it's
+              // the human-readable OE) so the sidebar can show e.g.
+              // "test-ap05" while internally tracking by UUID.
+              oeNumber: chat.project_number ?? null,
               chats: [],
               createdAt: new Date(chat.created_at),
               isExpanded: false,

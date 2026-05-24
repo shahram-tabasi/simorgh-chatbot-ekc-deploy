@@ -83,48 +83,34 @@ export function Sidebar({
               <div
                 className="flex items-center justify-between px-4 pt-3 pb-2"
               >
-                {/* Brand mark — bird + "Simorgh Code" graphical
-                    wordmark. The wordmark used to be the text_simorgh
-                    raster but operator wanted an SVG that explicitly
-                    says "Simorgh Code", so it's now an inline SVG
-                    here. No asset file to ship; gradient + font
-                    matches the app's blue→violet theme. */}
+                {/* Brand mark — bird + "Simorgh Code" wordmark.
+                    Typography deliberately matches Claude Code's
+                    layout (operator reference): heavy weight + size
+                    on the product noun ("Simorgh"), lighter +
+                    smaller on the qualifier ("Code"), tight tracking.
+                    Real DOM text (not inline SVG) so it inherits the
+                    app's font stack and looks crisp on hi-dpi. */}
                 {side === 'right' && !isMobile && (
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2.5">
                     <img
                       src={`${import.meta.env.BASE_URL}simorgh.svg`}
-                      alt="Simorgh"
-                      className="w-14 h-14"
+                      alt=""
+                      className="w-12 h-12 flex-shrink-0"
                     />
-                    <svg
-                      viewBox="0 0 210 44"
-                      role="img"
-                      aria-label="Simorgh Code"
-                      className="h-12"
-                    >
-                      <defs>
-                        <linearGradient id="simorghCodeBrand" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <stop offset="0%"   stopColor="#60a5fa" />
-                          <stop offset="100%" stopColor="#a78bfa" />
-                        </linearGradient>
-                      </defs>
-                      <text
-                        x="0" y="30"
-                        fontFamily="'Inter', system-ui, sans-serif"
-                        fontWeight={700}
-                        fontSize={26}
-                        fill="url(#simorghCodeBrand)"
-                        letterSpacing="0.5"
-                      >Simorgh</text>
-                      <text
-                        x="120" y="30"
-                        fontFamily="'JetBrains Mono', 'Fira Code', monospace"
-                        fontWeight={500}
-                        fontSize={22}
-                        fill="#cbd5e1"
-                        letterSpacing="0.5"
-                      >Code</text>
-                    </svg>
+                    <div className="flex items-baseline gap-1.5 leading-none">
+                      <span
+                        className="text-[28px] font-bold tracking-tight bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent"
+                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}
+                      >
+                        Simorgh
+                      </span>
+                      <span
+                        className="text-[22px] font-normal text-slate-200/90 tracking-tight"
+                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}
+                      >
+                        Code
+                      </span>
+                    </div>
                   </div>
                 )}
 

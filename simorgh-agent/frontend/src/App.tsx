@@ -258,6 +258,26 @@ function MainChat() {
     }
   }, [selectChat, ensureSessionChat]);
 
+  // Initial-mount header bootstrap. The /users/{id}/project-chats
+  // endpoint returns chat rows without per-chat repo context, so when
+  // the app boots straight onto a project chat (refresh, deep link, or
+  // wizard creation) the header bar above the chat input has no
+  // repo/branch/diff to render — it only appeared after the operator
+  // clicked a chat in the sidebar, which fires selectChat() and pulls
+  // the session message ctx. This effect runs that fetch once per
+  // (project, chat) the first time we land on it without repo data,
+  // so the header renders on initial mount too.
+  const headerBootstrapRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!activeProjectId || !activeChatId) return;
+    if (activeProject?.repoPath || activeProject?.workingBranch) return;
+    const key = `${activeProjectId}::${activeChatId}`;
+    if (headerBootstrapRef.current === key) return;
+    headerBootstrapRef.current = key;
+    selectChat(activeProjectId, activeChatId);
+  }, [activeProjectId, activeChatId, activeProject?.repoPath,
+      activeProject?.workingBranch, selectChat]);
+
   // Handle chat selection from history - close left sidebar on mobile
   const handleSelectChatFromHistory = React.useCallback((projectId: string | null, chatId: string) => {
     selectChat(projectId, chatId);

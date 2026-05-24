@@ -246,6 +246,23 @@ export function ChatArea({
     return null;
   }, [messages]);
 
+  // "Actively generating" = either we're waiting for the first
+  // response chunk (isTyping) OR a stream is still feeding the last
+  // assistant message (metadata.streaming). useChat flips isTyping
+  // to false as soon as the first agent_plan event arrives, but
+  // project-chat CoT keeps streaming for tens of seconds after
+  // that. The Stop button + CoT timer both need to stay live for
+  // the whole duration, so derive the broader flag here.
+  const isActivelyGenerating = React.useMemo(() => {
+    if (isTyping) return true;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== 'assistant') continue;
+      return Boolean((m.metadata as any)?.streaming);
+    }
+    return false;
+  }, [isTyping, messages]);
+
   // Build the props for ChatInput's status row. Reused by the two
   // ChatInput call sites below (idle + chatting modes).
   const chatInputHeader = headerContext && (headerContext.repoPath || headerContext.workingBranch)
@@ -316,7 +333,7 @@ export function ChatArea({
                 onSend={handleSend}
                 onCancel={onCancelGeneration}
                 disabled={disabled || isTyping}
-                isGenerating={isTyping}
+                isGenerating={isActivelyGenerating}
                 editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
                 promptToInsert={promptToInsert}
                 centered={true}
@@ -363,7 +380,7 @@ export function ChatArea({
                 onSend={handleSend}
                 onCancel={onCancelGeneration}
                 disabled={disabled || isTyping}
-                isGenerating={isTyping}
+                isGenerating={isActivelyGenerating}
                 editMessage={editingMessage ? { content: editingMessage.content, files: editingMessage.files } : null}
                 promptToInsert={promptToInsert}
                 centered={false}

@@ -1,7 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import {
-  Folder,
   MessageSquare,
   ChevronDown,
   ChevronRight,
@@ -14,6 +13,7 @@ import { Project, Chat } from '../types';
 import ContextMenu from './ContextMenu';
 import RenameModal from './RenameModal';
 import { Tooltip } from './Tooltip';
+import { ProjectStatusIcon } from './ProjectStatusIcon';
 
 type StatusFilter = 'active' | 'archived' | 'all';
 
@@ -347,7 +347,17 @@ export function ProjectTree({
                       <ChevronRight className="w-3.5 h-3.5" />
                     )}
                   </button>
-                  <Folder className="w-4 h-4 mt-0.5 text-sky-300/80 flex-shrink-0" />
+                  {/* Status dot/icon — variants from ProjectStatusIcon:
+                      busy (animated loader), paused (blue dot), pushed
+                      (green branch), merged (green merge), created
+                      (violet branch), stopped (gray dot), conflict
+                      (red alert), error (red alert), idle (hollow
+                      gray circle). Replaces the generic Folder icon
+                      per operator request — status is the more useful
+                      visual signal here. */}
+                  <span className="mt-0.5 flex-shrink-0">
+                    <ProjectStatusIcon status={project.runtimeStatus} />
+                  </span>
                   <button
                     onClick={() => onToggleProject(project.id)}
                     className="flex-1 min-w-0 text-left"
