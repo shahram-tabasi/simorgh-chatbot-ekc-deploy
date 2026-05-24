@@ -877,24 +877,19 @@ class COTEngine:
             from services.cot_plans import PlanContext
             plan = active_plan()
             if plan is not None:
-                plan_addendum = plan.system_prompt_addendum(
-                    # cot_engine doesn't have the full PlanContext,
-                    # so build a minimal one from what `request` and
-                    # `project` carry. Plans that need richer ctx
-                    # will pick up their data via service singletons
-                    # (e.g. knowledge_repo_service.retrieve which
-                    # already has its own state).
-                    PlanContext(
-                        user_input=request.user_input,
-                        project_id=str(project.get("id", "")) if project else "",
-                    )
-                ) or ""
-                grounding = await plan.gather_grounding(
-                    PlanContext(
-                        user_input=request.user_input,
-                        project_id=str(project.get("id", "")) if project else "",
-                    )
+                # Build the minimal PlanContext cot_engine can supply.
+                # The richer PlanContext that handle_input built isn't
+                # passed down explicitly; plans that need more data
+                # pick it up via service singletons (e.g.
+                # knowledge_repo_service.retrieve already has its
+                # own state). request.project_id is the only field
+                # we can pull here without restructuring.
+                plan_ctx = PlanContext(
+                    user_input=request.user_input,
+                    project_id=getattr(request, "project_id", "") or "",
                 )
+                plan_addendum = plan.system_prompt_addendum(plan_ctx) or ""
+                grounding = await plan.gather_grounding(plan_ctx)
                 rendered = grounding.render() if grounding else ""
                 if rendered:
                     plan_grounding_text = (
