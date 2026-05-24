@@ -52,10 +52,14 @@ LLM_GATEWAY_URL   = os.getenv("LLM_GATEWAY_URL", "http://llm-gateway:8030")
 HR_KB_COLLECTION  = os.getenv("HR_KB_COLLECTION", "hr_general_kb")
 HR_LLM_MODEL      = os.getenv("HR_LLM_MODEL", "gpt-oss-20b")
 
-# Top-K retrieved from Qdrant. A bit high because we re-rank by
-# blending score with a category-affinity bias before truncating.
-RETRIEVAL_K     = int(os.getenv("HR_RETRIEVAL_K", "12"))
-GROUNDING_K     = int(os.getenv("HR_GROUNDING_K", "8"))
+# Top-K retrieved from Qdrant. Wide net (15) so the re-ranker has
+# room to surface a high-value card that lost the raw-cosine race
+# to a short shallow heading. We then trim to GROUNDING_K=10 for the
+# actual prompt — enough room for a summary card + the 2-3 leaf
+# sections it cites + a few neighbour topics, without blowing the
+# context.
+RETRIEVAL_K     = int(os.getenv("HR_RETRIEVAL_K", "15"))
+GROUNDING_K     = int(os.getenv("HR_GROUNDING_K", "10"))
 # Cosine score below which we treat the query as out-of-corpus.
 # Lowered from 0.30 → 0.15 after operator-reported false refusals on
 # obvious queries. Multilingual sentence-transformer models tend to
@@ -127,6 +131,27 @@ def _category_bias(query: str) -> Dict[str, float]:
     return bias
 
 
+# Chunk-type re-ranking bias. Hand-curated "card" chunks always beat
+# shallow section intros on enumeration questions: a 200-char
+# "5. انواع مرخصی در قانون کار" intro that names 3 categories used to
+# outrank the 2 KB `leave_all_types` card that lists all 12, because
+# the heading contained the literal query phrase. +0.10 for cards is
+# enough to flip that order without overriding genuinely strong leaf
+# matches (a top section often scores 0.55-0.65, a top card 0.50-0.60
+# pre-bias). +0.05 for explicit "summary" / "all_types" topics gives
+# the magnet cards one extra nudge on list-everything queries.
+_CHUNK_TYPE_BOOST = {"card": 0.10, "section": 0.0, "window": 0.0}
+_SUMMARY_TOPIC_RE = re.compile(r"summary|all_types|all_summary", re.IGNORECASE)
+
+
+def _chunk_bias(payload: Dict[str, Any]) -> float:
+    boost = _CHUNK_TYPE_BOOST.get(payload.get("chunk_type") or "", 0.0)
+    topic = payload.get("topic") or ""
+    if _SUMMARY_TOPIC_RE.search(topic):
+        boost += 0.05
+    return boost
+
+
 async def retrieve(query: str, top_k: int = RETRIEVAL_K,
                     category: Optional[str] = None) -> List[Dict[str, Any]]:
     vec = await _embed(query)
@@ -164,7 +189,7 @@ async def retrieve(query: str, top_k: int = RETRIEVAL_K,
         cat = payload.get("category", "")
         raw = float(h.score)
         out.append({
-            "score": raw + bias.get(cat, 0.0),
+            "score": raw + bias.get(cat, 0.0) + _chunk_bias(payload),
             "raw_score": raw,
             "text": payload.get("text", ""),
             "doc_id": payload.get("doc_id"),
