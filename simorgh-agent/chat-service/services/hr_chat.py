@@ -54,8 +54,8 @@ HR_LLM_MODEL      = os.getenv("HR_LLM_MODEL", "gpt-oss-20b")
 
 # Top-K retrieved from Qdrant. A bit high because we re-rank by
 # blending score with a category-affinity bias before truncating.
-RETRIEVAL_K     = int(os.getenv("HR_RETRIEVAL_K", "10"))
-GROUNDING_K     = int(os.getenv("HR_GROUNDING_K", "7"))
+RETRIEVAL_K     = int(os.getenv("HR_RETRIEVAL_K", "12"))
+GROUNDING_K     = int(os.getenv("HR_GROUNDING_K", "8"))
 # Cosine score below which we treat the query as out-of-corpus.
 # Lowered from 0.30 → 0.15 after operator-reported false refusals on
 # obvious queries. Multilingual sentence-transformer models tend to
@@ -63,9 +63,14 @@ GROUNDING_K     = int(os.getenv("HR_GROUNDING_K", "7"))
 # rejects pure noise but lets in soft matches that gpt-oss can rule
 # on. Override via HR_RELEVANCE_THRESHOLD if you need it stricter.
 RELEVANCE_THRESHOLD = float(os.getenv("HR_RELEVANCE_THRESHOLD", "0.15"))
-# Per-chunk character cap injected into the prompt (so a single 1800-
-# char window section doesn't blow the context window).
-PROMPT_CHUNK_CHAR_CAP = int(os.getenv("HR_PROMPT_CHUNK_CHARS", "1200"))
+# Per-chunk character cap injected into the prompt. Bumped from 1200
+# to 2400 so the new comprehensive summary cards (e.g. leave_all_types
+# at ~1500 chars, recruitment_summary at ~1800, access_summary at
+# ~2100) reach the LLM intact. Previously the cap was silently
+# truncating the most authoritative cards mid-list, which was the
+# direct cause of "the bot only listed 2 out of 12 leave types"
+# bug reports.
+PROMPT_CHUNK_CHAR_CAP = int(os.getenv("HR_PROMPT_CHUNK_CHARS", "2400"))
 
 
 _qdrant: Optional[QdrantClient] = None
@@ -309,10 +314,16 @@ async def _stream_llm(messages: List[Dict[str, str]]) -> AsyncIterator[str]:
         # gateway's INTERNAL backend_kind name, not the public input.
         "force_backend": "text",
         "model": HR_LLM_MODEL,
-        # 0.3 — slight uplift from 0.2 so Persian prose flows
-        # naturally without becoming creative. Still grounded to the
-        # supplied passages by the strict system prompt.
-        "temperature": float(os.getenv("HR_LLM_TEMPERATURE", "0.3")),
+        # 0.1 — deterministic answers. Operators reported "different
+        # answer each time per user/turn" on identical questions,
+        # which was confusing employees. At 0.1 the model picks the
+        # most-likely token at each step; combined with the strict
+        # system prompt and the comprehensive summary cards, this
+        # gives the same canonical answer every run. Persian prose
+        # still flows naturally because the grounding passages are
+        # already well-formed Persian (we're paraphrasing, not
+        # composing).
+        "temperature": float(os.getenv("HR_LLM_TEMPERATURE", "0.1")),
         # 2500 — bumped from 800. The new prompt asks for a multi-
         # section explanation (direct answer + legal basis + numbers
         # + conditions + procedure + related notes); 800 was getting
