@@ -14,12 +14,24 @@ Workflow:
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
+
+# Per-request LLM mode override threaded from the route layer
+# (ProjectMessageCreate.llm_mode) down to _execute_llm_task without
+# having to add the parameter to every function in the call chain
+# (handle_input → _execute_task_chain → _execute_single_task →
+# _execute_llm_task). ContextVar is asyncio-task-scoped so
+# concurrent requests don't trample each other. None = use the
+# llm_service default (whatever its env-configured mode is).
+_llm_mode_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_project_agent_llm_mode", default=None,
+)
 
 from models.project_models import (
     COTRequest, COTAnalysis, TaskStatus, TaskType, TaskTrigger,
@@ -227,9 +239,17 @@ class ProjectManagerAgent:
         Returns:
             Dict with response, tasks created, and execution results
         """
+        # Install the per-request mode into the contextvar so any
+        # async_generate call deeper in the chain
+        # (_execute_task_chain → _execute_single_task →
+        # _execute_llm_task) can pick it up without a parameter
+        # change in every function signature.
+        if llm_mode is not None:
+            _llm_mode_var.set(llm_mode)
         logger.info(
             f"Agent handling input: project={project_id}, "
-            f"channel={channel.value}, input_len={len(user_input)}"
+            f"channel={channel.value}, input_len={len(user_input)}, "
+            f"llm_mode={llm_mode or 'default'}"
         )
 
         # 1. Store the incoming message
@@ -1311,15 +1331,19 @@ class ProjectManagerAgent:
         ]
 
         try:
+            # Per-request mode override installed by handle_input via
+            # the _llm_mode_var ContextVar. None = use llm_service's
+            # configured default.
+            requested_mode = _llm_mode_var.get()
             if hasattr(self.llm_service, 'async_generate'):
                 result = await self.llm_service.async_generate(
                     messages=messages,
                     user_id=f"agent_{project_id}",
-                    mode=llm_mode,
+                    mode=requested_mode,
                 )
                 response = result.get('response', '') if isinstance(result, dict) else str(result)
             else:
-                result = self.llm_service.generate(messages=messages, mode=llm_mode)
+                result = self.llm_service.generate(messages=messages, mode=requested_mode)
                 response = result.get('response', '') if isinstance(result, dict) else str(result)
 
             return {
