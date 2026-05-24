@@ -218,6 +218,7 @@ class ProjectManagerAgent:
         email_subject: str = None,
         auto_execute: bool = True,
         stream: bool = True,
+        llm_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Handle any input to the project.
@@ -1314,10 +1315,11 @@ class ProjectManagerAgent:
                 result = await self.llm_service.async_generate(
                     messages=messages,
                     user_id=f"agent_{project_id}",
+                    mode=llm_mode,
                 )
                 response = result.get('response', '') if isinstance(result, dict) else str(result)
             else:
-                result = self.llm_service.generate(messages=messages)
+                result = self.llm_service.generate(messages=messages, mode=llm_mode)
                 response = result.get('response', '') if isinstance(result, dict) else str(result)
 
             return {

@@ -213,16 +213,17 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                   </div>
                 </div>
 
-                {/* AI Mode — applies to PROJECT chats. General chats
-                    always route through the HR direct-RAG path on the
-                    local gpt-oss model regardless of this setting, so
-                    Online is greyed out when described against general
-                    chat (the helper text below makes this explicit).
-                    Project chats honour whichever mode is selected. */}
+                {/* AI Mode — applies to PROJECT chats only. General
+                    chats always use Simorgh AI (the HR direct-RAG path
+                    hard-pins offline). The Online tile sets the
+                    project-chat per-request mode to "online"; the
+                    backend routes to the configured cloud API. Local
+                    is the default (and the only useful setting for
+                    general chat). */}
                 <div>
                   <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">AI Mode</h3>
                   <p className="text-[11px] text-gray-500 mb-4 leading-relaxed">
-                    General chat always uses <span className="text-violet-300">Local AI</span> (gpt-oss on 192.168.1.61).
+                    General chat always uses <span className="text-violet-300">Simorgh AI</span>.
                     This setting controls <span className="text-sky-300">project chat</span> only.
                   </p>
                   <div className="space-y-3">
@@ -237,7 +238,7 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                       <Wifi className="w-6 h-6 text-blue-400" />
                       <div className="text-left">
                         <div className="text-white font-medium">Online AI</div>
-                        <div className="text-xs text-gray-400">Cloud • GPT-4 / Claude (project chat only)</div>
+                        <div className="text-xs text-gray-400">Configured cloud API · project chat only</div>
                       </div>
                     </button>
                     <button
@@ -250,10 +251,11 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                     >
                       <WifiOff className="w-6 h-6 text-violet-400" />
                       <div className="text-left">
-                        <div className="text-white font-medium">Local AI <span className="text-[10px] text-violet-300/80 font-normal ml-1">(default)</span></div>
-                        <div className="text-xs text-gray-400">
-                          On-premise • 192.168.1.61 (gpt-oss-20b) / 192.168.1.62 (VLM)
+                        <div className="text-white font-medium">
+                          Simorgh AI
+                          <span className="text-[10px] text-violet-300/80 font-normal ml-1">(default)</span>
                         </div>
+                        <div className="text-xs text-gray-400">LLM + VLM</div>
                       </div>
                     </button>
                   </div>

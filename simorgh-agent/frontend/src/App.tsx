@@ -53,7 +53,7 @@ function MainChat() {
   const [activeSpecTasks, setActiveSpecTasks] = React.useState<string[]>([]);
   const [notifications, setNotifications] = React.useState<ToastNotification[]>([]);
   const [settingsPanelOpen, setSettingsPanelOpen] = React.useState(false);
-  const [currentAiMode, setCurrentAiMode] = React.useState<'online' | 'offline'>('online');
+  const [currentAiMode, setCurrentAiMode] = React.useState<'online' | 'offline'>('offline');
 
   // Derive a unified userId that works for both legacy (TPMS) and modern (email/Google) users
   // Modern users: use user.id (UUID from PostgreSQL) which matches JWT "sub" claim
@@ -151,27 +151,23 @@ function MainChat() {
 
   // Load AI mode on mount and listen for changes
   // Modern users are forced to online mode (offline is legacy-only)
+  // LLM mode: default OFFLINE for everyone (general chat always
+  // uses the local gpt-oss-20b via hr_chat.py; this setting controls
+  // project chat only). Previous version forced modern users to
+  // 'online' on every mount — that pre-dated the HR direct-RAG path
+  // and was the reason the operator's online/offline toggle had no
+  // effect ("always work via offline"). Removed.
   React.useEffect(() => {
-    if (isModernTier) {
-      setCurrentAiMode('online');
-      localStorage.setItem('llm_mode', 'online');
-      return;
-    }
-
     const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
-    if (savedMode) {
-      setCurrentAiMode(savedMode);
-    }
+    setCurrentAiMode(savedMode ?? 'offline');
 
     const handleModeChange = (e: Event) => {
       const customEvent = e as CustomEvent<'online' | 'offline'>;
-      if (isModernTier && customEvent.detail === 'offline') return; // Block for modern
       setCurrentAiMode(customEvent.detail);
     };
-
     window.addEventListener('llm-mode-changed', handleModeChange);
     return () => window.removeEventListener('llm-mode-changed', handleModeChange);
-  }, [isModernTier]);
+  }, []);
 
   // Handle back button for settings panel on mobile
   React.useEffect(() => {

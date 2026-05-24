@@ -1002,6 +1002,10 @@ async def send_message_stream(
                     email_from=data.email_from,
                     email_subject=data.email_subject,
                     auto_execute=True,
+                    # Per-request mode from SettingsPanel. Defaults to
+                    # "offline" via the Pydantic model so any old client
+                    # that doesn't send the field still gets local AI.
+                    llm_mode=data.llm_mode,
                 )
             except Exception as e:
                 # The SSE consumer only sees str(e); log the full traceback
@@ -1765,18 +1769,16 @@ async def get_llm_mode(
     project_id: str,
     current_user: str = Depends(get_current_user),
 ):
-    """Get the LLM mode for a project. Modern users always get 'online'."""
+    """Get the LLM mode for a project. Both modern and legacy users
+    can choose. Default is local — set via per-request llm_mode on
+    the message/stream endpoint, or via this PATCH for project-level
+    default."""
     memory = get_project_memory_service()
     project = await memory.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-
-    is_legacy = _is_legacy_user(current_user)
-    if not is_legacy:
-        return {"mode": "online", "locked": True, "reason": "Modern users use online AI only"}
-
     return {
-        "mode": project.get("agent_model", "gpt-4o"),
+        "mode": project.get("agent_model", "local"),
         "locked": False,
         "options": ["gpt-4o", "local"],
     }
@@ -1788,24 +1790,17 @@ async def set_llm_mode(
     mode: str = Form(...),
     current_user: str = Depends(get_current_user),
 ):
-    """Set the LLM mode for a project. Only legacy users can switch."""
-    is_legacy = _is_legacy_user(current_user)
-    if not is_legacy:
-        raise HTTPException(
-            status_code=403,
-            detail="Modern users cannot change LLM mode. Online AI is always used."
-        )
-
+    """Set the LLM mode for a project. Unlocked for all users — the
+    modern-only restriction predated the local Simorgh AI path being
+    a first-class option."""
     memory = get_project_memory_service()
     project = await memory.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if project["owner_id"] != current_user:
         raise HTTPException(status_code=403, detail="Access denied")
-
     if mode not in ("gpt-4o", "local"):
         raise HTTPException(status_code=400, detail="Mode must be 'gpt-4o' or 'local'")
-
     await memory.update_project(project_id, agent_model=mode)
     return {"status": "updated", "mode": mode}
 

@@ -54,10 +54,14 @@ export function useChat(
         setLlmMode(savedMode);
         console.log('Loaded LLM mode from storage:', savedMode);
       } else {
-        // اگر هیچی نبود یا مقدار اشتباه بود → پیش‌فرض رو بذار online
-        setLlmMode('online');
-        localStorage.setItem('llm_mode', 'online');
-        console.log('Set default LLM mode: online');
+        // Default offline — general chat always uses the local gpt-oss
+        // path (hr_chat.py force_backend='text'); project chats now
+        // honour this setting too. Previously defaulted to online,
+        // which made the toggle have no effect since modern users were
+        // also force-locked back to online elsewhere.
+        setLlmMode('offline');
+        localStorage.setItem('llm_mode', 'offline');
+        console.log('Set default LLM mode: offline');
       }
     };
 
@@ -268,6 +272,12 @@ export function useChat(
             content,
             channel: 'chat',
             chat_id: chatId,
+            // Honour the user's mode choice from SettingsPanel.
+            // Default offline (local Simorgh AI on .61/.62); 'online'
+            // uses the configured OpenAI/Anthropic API. The backend
+            // accepts this on ProjectMessageCreate and falls back to
+            // local if the requested online provider isn't configured.
+            llm_mode: llmMode || 'offline',
           }),
           signal: abortControllerRef.current?.signal,
         });
