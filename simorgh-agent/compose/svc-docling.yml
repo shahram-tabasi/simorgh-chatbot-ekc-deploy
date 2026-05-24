@@ -1,0 +1,48 @@
+# =============================================================================
+# DOCLING-SERVE - IBM document-intelligence (PDF/DOCX/PPTX/HTML → Markdown)
+# Port 5001 (internal). Fully OFFLINE: models pre-baked into the image at
+# build time, runtime has no internet egress.
+#
+# Used by: doc-processor (DOCLING_URL=http://docling-serve:5001) when
+# USE_DOCLING=1 — falls back to pdfplumber+EasyOCR otherwise.
+#
+# Build the offline image once on an internet-connected host:
+#   docker build -t simorgh-docling:offline -f docling/Dockerfile docling/
+# Then redeploy.
+# =============================================================================
+services:
+  docling-serve:
+    image: simorgh-docling:offline
+    build:
+      context: ../docling
+      dockerfile: Dockerfile
+    container_name: docling-serve
+    expose:
+      - "5001"
+    environment:
+      - DOCLING_SERVE_ARTIFACTS_PATH=/opt/docling-models
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/opt/docling-models/hf-cache
+      - DOCLING_SERVE_ENABLE_UI=0
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:5001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+    # Belt-and-braces network lockdown for fully air-gapped operation:
+    # uncomment to forbid any outbound DNS/HTTP. The image is already
+    # offline-by-construction; this is just defence-in-depth for paranoid
+    # operators. Keep commented during the first deploy so model-cache
+    # warm-up (transformers may still touch ~/.cache/huggingface even
+    # with HF_HUB_OFFLINE=1 on first import) doesn't trip.
+    # network_mode: "none"
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

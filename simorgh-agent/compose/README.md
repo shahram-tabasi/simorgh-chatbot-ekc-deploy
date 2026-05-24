@@ -46,6 +46,7 @@ All on the `simorgh_app_net` network. AI / chain-of-thought talks to them via
 | File | Service | Port | Protocol |
 |---|---|---|---|
 | `svc-doc-processor.yml` | `doc-processor` | 8000 | REST (internal) |
+| `svc-docling.yml` | `docling-serve` | 5001 | REST (internal) — opt-in offline PDF→MD via IBM Docling |
 | `svc-stt.yml` | `stt-service` | 8001 | REST |
 | `svc-tts.yml` | `tts-service` | 8002 | REST |
 | `svc-search.yml` | `search-service` | 8020 | MCP + REST |

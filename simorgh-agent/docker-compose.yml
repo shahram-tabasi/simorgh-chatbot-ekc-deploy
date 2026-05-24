@@ -44,6 +44,12 @@ include:
 
   # ---- Microservices (REST + MCP) -------------------------------------------
   - compose/svc-doc-processor.yml
+  # - compose/svc-docling.yml             # OPT-IN: offline PDF→MD via IBM Docling.
+  #                                       # Build once on a connected host:
+  #                                       #   docker build -t simorgh-docling:offline \
+  #                                       #     -f docling/Dockerfile docling/
+  #                                       # Then uncomment + set USE_DOCLING=1 in
+  #                                       # doc-processor to start using it.
   - compose/svc-stt.yml
   - compose/svc-tts.yml
   - compose/svc-search.yml
