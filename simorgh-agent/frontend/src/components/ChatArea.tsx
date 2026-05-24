@@ -191,42 +191,30 @@ export function ChatArea({
   activeChatId = null,
 }: ChatAreaProps) {
   const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
-  // True after the user has sent a message in this chat.
+  // True after the user has sent a message in this chat. Kept for the
+  // existing handleSend path (transitions from idle → chat on first
+  // send) — no longer used to gate the welcome screen.
   const [isChatting, setIsChatting] = React.useState(false);
-  // True for ~1.5s after switching chats — gives the async history
-  // load a window to populate `messages` before we'd otherwise flash
-  // the welcome screen. Without this, every chat switch briefly
-  // showed welcome because the messages prop is [] until useProjects
-  // finishes its GET /chats/{id} fetch.
-  const [isAwaitingHistory, setIsAwaitingHistory] = React.useState(false);
-  const chatSwitchRef = React.useRef<string | null>(activeChatId);
 
-  React.useEffect(() => {
-    if (chatSwitchRef.current !== activeChatId) {
-      chatSwitchRef.current = activeChatId;
-      // New chat selected — assume it might have history and wait.
-      if (activeChatId) setIsAwaitingHistory(true);
-    }
-  }, [activeChatId]);
-
-  // History arrived. End the waiting window and lock in chatting view.
+  // Lock in chatting view on any chat switch where messages exist or
+  // are about to. Used to clear the welcome state when navigating
+  // from no-chat into a chat with history.
   React.useEffect(() => {
     if (messages.length > 0) {
-      setIsAwaitingHistory(false);
       setIsChatting(true);
     }
   }, [messages.length]);
 
-  // Fallback timeout — if the chat is genuinely empty (brand-new
-  // chat with no messages), drop the waiting flag after 1.5s so the
-  // welcome screen can render naturally.
-  React.useEffect(() => {
-    if (!isAwaitingHistory) return;
-    const t = setTimeout(() => setIsAwaitingHistory(false), 1500);
-    return () => clearTimeout(t);
-  }, [isAwaitingHistory]);
-
-  const isIdle = messages.length === 0 && !isChatting && !isAwaitingHistory;
+  // Welcome screen is shown ONLY when there is NO chat selected at
+  // all. The previous design also showed it briefly during chat
+  // switches (while history was loading) by way of an
+  // isAwaitingHistory window with a 1.5s timeout — but on slow
+  // networks the timeout expired before the chat detail GET returned,
+  // making the welcome screen blast over the user's actual chat
+  // history. The new rule: if there's an activeChatId, there's a
+  // chat — render the message list (possibly empty briefly) with
+  // the chat input at the bottom. Never flash welcome.
+  const isIdle = !activeChatId;
 
   // Live diff stats for the chat-input header's +N -M chips.
   const diffStats = useProjectDiffStats(headerContext?.projectId ?? null);
