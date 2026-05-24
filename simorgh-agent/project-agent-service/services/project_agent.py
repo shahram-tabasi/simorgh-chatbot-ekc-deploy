@@ -519,7 +519,14 @@ class ProjectManagerAgent:
                     result_metadata=result.get("metadata", {}),
                 )
 
-                # Accumulate context for next tasks
+                # Accumulate context for next tasks. Stamp the task's
+                # tool + title into metadata so downstream LLM synth
+                # steps can label "Step 4 ← read_artifact_mcp: …"
+                # instead of seeing anonymous "Step 4 result: …".
+                _meta = dict(result.get("metadata") or {})
+                _meta.setdefault("tool", task.get("tool_used") or "")
+                _meta.setdefault("title", task.get("title") or "")
+                result["metadata"] = _meta
                 accumulated_context[task["sort_order"]] = result
 
                 # Track the last generation result as the final response
@@ -1201,11 +1208,27 @@ class ProjectManagerAgent:
                 )
                 tool_input["ref"] = base_branch
 
-        # Inject previous results into context (3000 char limit per result)
+        # Inject previous results into context (3000 char limit per result).
+        # Operator hit: planner's synth step said "no CT info found" even
+        # though step 4 (read_artifact_mcp) returned a 1861-char markdown
+        # containing every CT spec. Root cause: the synth saw 3 empty
+        # search results and 1 anonymous "Step 4 result: …" with no clue
+        # which step was the authoritative file read, so it hedged.
+        # Carry the producing tool + title alongside each output so the
+        # synth in _execute_llm_task can label and filter them.
         if prev_results:
-            tool_input["_previous_results"] = {
-                k: v.get("output", "")[:3000] for k, v in prev_results.items()
-            }
+            labelled: Dict[str, Any] = {}
+            for k, v in prev_results.items():
+                if not isinstance(v, dict):
+                    labelled[k] = {"output": str(v)[:3000]}
+                    continue
+                meta = v.get("metadata") or {}
+                labelled[k] = {
+                    "output": (v.get("output", "") or "")[:3000],
+                    "tool": meta.get("tool") or meta.get("via") or "",
+                    "title": meta.get("title") or "",
+                }
+            tool_input["_previous_results"] = labelled
 
         has_mcp_tool = (
             self.mcp_manager
@@ -1419,17 +1442,80 @@ class ProjectManagerAgent:
         if semantic_ctx:
             context_parts.append(f"Document content from semantic search:\n{semantic_ctx}")
 
-        # Include other previous step results
+        # Include other previous step results. _previous_results is now
+        # {step_num: {"output": str, "tool": str, "title": str}} (see
+        # _execute_single_task labelling block) — render each with the
+        # producing tool so the synth can tell "step 4 = read_artifact"
+        # from "step 2 = search_context (empty)". Empty / trivial
+        # outputs are SKIPPED entirely; otherwise the synth weights
+        # them as "no data found" and hedges the answer even when a
+        # later step returned the goods.
+        kept = 0
+        skipped = 0
         if prev:
             for k, v in prev.items():
-                context_parts.append(f"Step {k} result: {v}")
+                if isinstance(v, dict):
+                    out = (v.get("output") or "").strip()
+                    tool_name = v.get("tool") or ""
+                    title = v.get("title") or ""
+                else:
+                    out = str(v).strip()
+                    tool_name = ""
+                    title = ""
+                if not out or len(out) < 20:
+                    skipped += 1
+                    continue
+                label_parts = [f"Step {k}"]
+                if tool_name:
+                    label_parts.append(f"tool={tool_name}")
+                if title:
+                    label_parts.append(f"title={title!r}")
+                header = " | ".join(label_parts)
+                context_parts.append(f"=== {header} ===\n{out}")
+                kept += 1
 
         if context_parts:
             context = "\n\n".join(context_parts)
-            prompt = f"Context:\n{context}\n\nTask: {prompt}"
+            prompt = f"Retrieved context:\n{context}\n\nUser question: {prompt}"
 
+        # Synth system prompt — anti-hedging.
+        # gpt-oss-20b is hedge-happy: on a single-repo plan it sees
+        # several empty search hits + one file read with the content,
+        # then concludes "no information available". Explicit rules
+        # below stop that: trust non-empty retrievals, quote specifics,
+        # never claim "not found" when a labelled retrieval CONTAINS
+        # the asked-about terms.
+        synth_system = (
+            "You are the Simorgh synthesizer. Your job is to answer the "
+            "user's question using the RETRIEVED CONTEXT below.\n\n"
+            "HARD RULES:\n"
+            "1. If any retrieval block above contains content relevant to "
+            "the question, USE IT. Quote specifics: numbers, classes, "
+            "standards (e.g. IEC 60044), tolerances, ratings.\n"
+            "2. Empty retrieval blocks were ALREADY filtered out before "
+            "you saw them. EVERY block in 'Retrieved context' contains "
+            "real content — do not dismiss any of them.\n"
+            "3. If a `read_artifact*` or `read_file*` block exists, treat "
+            "it as AUTHORITATIVE — it's the literal file content. A "
+            "search_context / search_blobs block that came back without "
+            "hits does NOT mean the data is absent; the file-read block "
+            "is the ground truth.\n"
+            "4. NEVER reply 'I couldn't find any X' / 'no X-specific "
+            "details were present' when an X-related term appears in any "
+            "retrieval block. Quote the block.\n"
+            "5. When citing, name the source file/path so the user can "
+            "verify.\n"
+            "Be concise but specific."
+        )
+        if kept == 0 and skipped == 0:
+            # No prior retrieval at all — degrade to the generic
+            # assistant role (e.g. simple "rephrase this" task).
+            synth_system = (
+                "You are a project assistant. Answer concisely and "
+                "accurately."
+            )
         messages = [
-            {"role": "system", "content": "You are a project assistant. Answer concisely and accurately based on the available context. Use the document content provided to give specific, detailed answers."},
+            {"role": "system", "content": synth_system},
             {"role": "user", "content": prompt},
         ]
 
