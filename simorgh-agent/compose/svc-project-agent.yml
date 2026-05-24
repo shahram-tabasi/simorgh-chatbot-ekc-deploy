@@ -67,6 +67,16 @@ services:
       - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
       - GITLAB_PROJECTS_GROUP=${GITLAB_PROJECTS_GROUP:-simorgh-projects}
       - GITLAB_TECH_KB_REPO=${GITLAB_TECH_KB_REPO:-simorgh-knowledge/technical-knowledge}
+      # Always-on knowledge-repo grounding layer (knowledge_repo_service).
+      # GITLAB_TECH_KB_REPO above tells it WHICH repo to mirror; the
+      # next two govern HOW. EMBEDDINGS_URL is HARDCODED here — same
+      # rationale as chat-service: .env may set it to a legacy host
+      # like http://embeddings:8037 for context-search, which would
+      # silently break the knowledge query/embed step.
+      - EMBEDDINGS_URL=http://embeddings-service:8031
+      - KNOWLEDGE_REPO_BRANCH=${KNOWLEDGE_REPO_BRANCH:-main}
+      - KNOWLEDGE_REPO_COLLECTION=${KNOWLEDGE_REPO_COLLECTION:-technical_knowledge_kb}
+      - KNOWLEDGE_REPO_REFRESH_HOURS=${KNOWLEDGE_REPO_REFRESH_HOURS:-24}
       - AGENT_TOKEN=${AGENT_TOKEN:-}
       # Mail bridge to Mailcow (replaces mail-gateway + project-mail).
       - MAIL_BRIDGE_URL=http://mail-bridge:8051
