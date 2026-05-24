@@ -376,6 +376,19 @@ async def delete_session(session_token: str,
         async with conn.transaction():
             await conn.execute("DELETE FROM projects WHERE id = $1::uuid", project_id)
 
+    # 2b. Drop any per-upload ephemeral Qdrant collections this
+    #     session may have created via upload_investigator (Phase 4).
+    #     Naming convention: upload_id = f"{chat_id}::{filename}",
+    #     collection = "upload_" + sha1(upload_id)[:16]. We don't
+    #     know which uploads this session touched without a sidecar
+    #     table; the periodic-cleanup script handles the long tail.
+    #     This hook fires only if upload_investigator is importable
+    #     in project-agent — chat-service can't import it directly,
+    #     so the actual prune is left to the periodic sweep. Logged
+    #     here so operators have a hook point in the future.
+    logger.info("session_delete: per-upload collections (if any) "
+                "will be reclaimed by the periodic upload_* sweep")
+
     # 3. Drop the per-project Qdrant collection + Neo4j subgraph +
     #    per-project Postgres DB. Previous version only handled the
     #    main Postgres cascade above — operator reported that delete

@@ -41,6 +41,7 @@ class RepoPlusUploadPlan(CotPlan):
 
     async def gather_grounding(self, ctx: PlanContext) -> PlanGrounding:
         g = PlanGrounding()
+        # 1. Always-on knowledge layer.
         try:
             from services.knowledge_repo_service import retrieve as kb_retrieve
             hits = await kb_retrieve(ctx.user_input, top_k=4)
@@ -55,6 +56,34 @@ class RepoPlusUploadPlan(CotPlan):
                 score=h.get("score"),
                 origin="knowledge_repo",
             )
-        # Phase 4 upload chunks will be appended here once the
-        # upload_investigator pipeline lands.
+
+        # 2. Upload investigation — same pattern as UploadDeepPlan.
+        #    The planner still does repo-side retrieval via its
+        #    search_context / search_blobs tasks; we only pre-fetch
+        #    the upload-side chunks here so cross-reference has
+        #    something to compare against from frame one.
+        if ctx.upload_filenames and ctx.chat_id:
+            try:
+                from services.upload_investigator import investigate
+                upload_id = f"{ctx.chat_id}::{ctx.upload_filenames[0]}"
+                result = await investigate(
+                    upload_id=upload_id,
+                    question=ctx.user_input,
+                    upload_size_chars=ctx.upload_size_chars,
+                    filename=ctx.upload_filenames[0],
+                )
+                log.info("repo_plus_upload: method=%s chunks=%d leaves=%d upload=%s",
+                          result.method, result.chunk_count,
+                          result.leaves_kept, upload_id)
+                for b in result.blocks:
+                    g.add(
+                        text=b.get("text") or "",
+                        source=b.get("source") or "upload",
+                        section=b.get("section"),
+                        score=b.get("score"),
+                        origin="upload",
+                    )
+            except Exception as e:
+                log.warning("repo_plus_upload: investigate failed: %s", e)
+
         return g

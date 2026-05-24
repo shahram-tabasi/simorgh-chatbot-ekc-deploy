@@ -71,20 +71,27 @@ class UploadDeepPlan(CotPlan):
         )
 
     async def gather_grounding(self, ctx: PlanContext) -> PlanGrounding:
-        """Phase 3: knowledge layer + (Phase 4) upload chunks via
-        upload_investigator. For now, just the knowledge layer +
-        a structural note about the upload until Phase 4 lands."""
+        """Knowledge layer + upload investigation. The investigator
+        decides inline vs MapReduce based on ctx.upload_size_chars
+        vs MAPREDUCE_THRESHOLD_CHARS and returns PlanGrounding-shape
+        blocks. We need the upload payload (markdown or raw bytes)
+        to actually investigate — `ctx` carries filenames but not
+        content; we rely on the upload_id convention (chat_id +
+        first filename hash) and on the caller having already
+        called upload_investigator.ensure_indexed when the upload
+        was attached. If neither is true, gracefully degrades to
+        knowledge-only grounding and the planner will read the
+        upload via doc-processor at task-execution time."""
         g = PlanGrounding()
-        # Phase 4 hook — when upload_investigator is wired, populate
-        # `g` here with leaf-summaries / map-reduced sections of the
-        # uploaded document targeted at ctx.user_input.
+
+        # 1. Always-on knowledge layer.
         try:
             from services.knowledge_repo_service import retrieve as kb_retrieve
-            hits = await kb_retrieve(ctx.user_input, top_k=5)
+            kb_hits = await kb_retrieve(ctx.user_input, top_k=4)
         except Exception as e:
             log.warning("upload_deep plan: knowledge retrieve failed: %s", e)
-            hits = []
-        for h in hits:
+            kb_hits = []
+        for h in kb_hits:
             g.add(
                 text=h.get("text") or "",
                 source=h.get("source_file") or "knowledge_repo",
@@ -92,4 +99,37 @@ class UploadDeepPlan(CotPlan):
                 score=h.get("score"),
                 origin="knowledge_repo",
             )
+
+        # 2. Upload investigation — requires the upload to already
+        #    be indexed (the upload_attach hook calls ensure_indexed
+        #    once at attach time; we just retrieve here). If the
+        #    cache miss happens (very first turn after a service
+        #    restart), the planner will pick up the upload via
+        #    doc-processor on the read step.
+        if ctx.upload_filenames and ctx.chat_id:
+            try:
+                from services.upload_investigator import (
+                    investigate, MAPREDUCE_THRESHOLD,
+                )
+                upload_id = f"{ctx.chat_id}::{ctx.upload_filenames[0]}"
+                result = await investigate(
+                    upload_id=upload_id,
+                    question=ctx.user_input,
+                    upload_size_chars=ctx.upload_size_chars,
+                    filename=ctx.upload_filenames[0],
+                )
+                log.info("upload_deep: method=%s chunks=%d leaves=%d upload=%s",
+                          result.method, result.chunk_count,
+                          result.leaves_kept, upload_id)
+                for b in result.blocks:
+                    g.add(
+                        text=b.get("text") or "",
+                        source=b.get("source") or "upload",
+                        section=b.get("section"),
+                        score=b.get("score"),
+                        origin="upload",
+                    )
+            except Exception as e:
+                log.warning("upload_deep: investigate failed: %s", e)
+
         return g
