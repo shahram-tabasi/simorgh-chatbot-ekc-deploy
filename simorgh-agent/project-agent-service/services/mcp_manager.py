@@ -440,7 +440,30 @@ class MCPManager:
                 if rest is not None:
                     return rest
                 raise
-            await self._connect_server(server_name, cfg)
+            # Wrap the reconnect with a timeout. The startup `connect_all`
+            # path wraps `_connect_server` in `asyncio.wait_for`, but the
+            # recovery path here did NOT — and the streamable-HTTP SSE
+            # handshake CAN hang indefinitely (operator observed a turn
+            # stuck for >8 minutes when this happened). When it does,
+            # skip MCP entirely and try REST so the turn at least
+            # finishes deterministically.
+            reconnect_timeout = float(
+                os.getenv("MCP_RECONNECT_TIMEOUT_SEC", "10")
+            )
+            try:
+                await asyncio.wait_for(
+                    self._connect_server(server_name, cfg),
+                    timeout=reconnect_timeout,
+                )
+            except (asyncio.TimeoutError, Exception) as e_rec:
+                logger.warning(
+                    f"MCP reconnect of {server_name} failed/timed out "
+                    f"({type(e_rec).__name__}: {e_rec}); trying REST fallback"
+                )
+                rest = await self._rest_fallback(server_name, tool_name, clean_args)
+                if rest is not None:
+                    return rest
+                raise
             session = self.sessions.get(server_name)
             if session is None:
                 rest = await self._rest_fallback(server_name, tool_name, clean_args)
