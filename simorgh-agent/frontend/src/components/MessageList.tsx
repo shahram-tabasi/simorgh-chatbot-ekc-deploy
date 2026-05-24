@@ -480,12 +480,16 @@ export function MessageList({
             className={`flex gap-2 sm:gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {message.role === 'assistant' && (
-              <div className="flex-shrink-0 w-11 h-11 rounded-full bg-white/10 flex items-center justify-center p-1.5">
+              <div className="flex-shrink-0 w-11 h-11 rounded-full bg-white/10 overflow-hidden flex items-center justify-center">
                 <img
                   src={`${import.meta.env.BASE_URL}simorgh.svg`}
                   alt="Simorgh"
-                  className="w-full h-full object-contain"
-                  style={{ filter: 'brightness(0) invert(1)' }}
+                  className="w-full h-full"
+                  style={{
+                    objectFit: 'cover',
+                    transform: 'scale(1.15)',
+                    filter: 'brightness(0) invert(1)',
+                  }}
                 />
               </div>
             )}

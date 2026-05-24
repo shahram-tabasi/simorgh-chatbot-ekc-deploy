@@ -1089,7 +1089,13 @@ class COTEngine:
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(f"{gateway_url}/generate", json=payload)
-            r.raise_for_status()
+            if r.status_code != 200:
+                snippet = (r.text or "")[:600]
+                logger.error(
+                    "harmony planner: gateway %s returned %d; body=%s",
+                    gateway_url, r.status_code, snippet,
+                )
+                r.raise_for_status()
             body = r.json()
 
         tool_calls = body.get("tool_calls") or []
@@ -1174,7 +1180,16 @@ class COTEngine:
         }
         async with httpx.AsyncClient(timeout=timeout) as c:
             r = await c.post(f"{gateway_url}/generate", json=payload)
-            r.raise_for_status()
+            if r.status_code != 200:
+                # Surface the upstream body so the operator can see
+                # WHY vLLM rejected the payload (was just "502 Bad
+                # Gateway" before — useless for debugging).
+                snippet = (r.text or "")[:600]
+                logger.error(
+                    "guided_json planner: gateway %s returned %d; body=%s",
+                    gateway_url, r.status_code, snippet,
+                )
+                r.raise_for_status()
             body = r.json()
         return body.get("response", "") or ""
 
