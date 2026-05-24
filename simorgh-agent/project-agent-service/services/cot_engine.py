@@ -1155,6 +1155,13 @@ class COTEngine:
         reliability."""
         import httpx
         timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
+        # vLLM 0.6+ rejects guided_json + response_format together with
+        # 400 — they're treated as mutually exclusive structured-output
+        # specs. guided_json is the stricter of the two (decode-time
+        # schema enforcement), so keep it and drop response_format.
+        # Was 502'ing every planner call in production; operator hit
+        # this on 2026-05-24 with simple curl probes confirming the
+        # bare /generate works but the structured-output payload 400s.
         payload = {
             "messages": messages,
             "mode": "offline",
@@ -1163,7 +1170,6 @@ class COTEngine:
             "max_tokens": int(os.getenv("COT_LLM_MAX_TOKENS", "2048")),
             "extra": {
                 "guided_json": COT_PLAN_SCHEMA,
-                "response_format": {"type": "json_object"},
             },
         }
         async with httpx.AsyncClient(timeout=timeout) as c:
