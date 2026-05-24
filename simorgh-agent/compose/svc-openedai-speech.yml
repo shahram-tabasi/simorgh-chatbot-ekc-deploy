@@ -20,7 +20,7 @@ services:
     image: ghcr.io/matatonic/openedai-speech-min:latest
     container_name: openedai-speech
     expose:
-      - "8000"
+      - "8002"             # legacy TTS port — see alias below
     volumes:
       - ../tts/voices:/app/voices:ro
       - ../tts/config/voice_to_speaker.yaml:/app/config/voice_to_speaker.yaml:ro
@@ -28,10 +28,16 @@ services:
       - PRELOAD_MODEL=voices/fa_IR-amir-medium.onnx
       - TTS_HOME=/app/voices
       - HF_HUB_OFFLINE=1
+      - UVICORN_PORT=8002     # listen on legacy port so the alias works
     networks:
-      - app_net
+      app_net:
+        # Drop-in for tts-service: clients keep hitting
+        # http://tts-service:8002 and Docker DNS resolves here.
+        # Stop the old tts-service first.
+        aliases:
+          - tts-service
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/v1/models || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8002/v1/models || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

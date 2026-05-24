@@ -20,17 +20,23 @@ services:
         WHISPER_MODEL: MohammadGholizadeh/whisper-large-v3-persian-common-voice-17
     container_name: whisper-server
     expose:
-      - "8000"
+      - "8001"             # legacy STT port — see alias below
     environment:
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
       - WHISPER_DEFAULT_LANGUAGE=fa
       - WHISPER_COMPUTE_TYPE=int8
       - WHISPER_MODEL=MohammadGholizadeh/whisper-large-v3-persian-common-voice-17
+      - UVICORN_PORT=8001     # listen on legacy port so the alias works
     networks:
-      - app_net
+      app_net:
+        # Drop-in for stt-service: clients keep hitting
+        # http://stt-service:8001 and Docker DNS resolves here.
+        # Stop the old stt-service first.
+        aliases:
+          - stt-service
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8001/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

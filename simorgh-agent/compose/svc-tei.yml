@@ -24,17 +24,26 @@ services:
     container_name: tei
     expose:
       - "80"
+      - "8031"             # legacy port — see network alias below
     command:
       - "--model-id=/data/models--sentence-transformers--all-MiniLM-L6-v2"
-      - "--port=80"
+      - "--port=8031"       # listen on the OLD embeddings-service port so
+                            # the alias below works with hardcoded clients
     environment:
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
       - HF_HOME=/data
     networks:
-      - app_net
+      app_net:
+        # Drop-in for embeddings-service: clients keep hitting
+        # http://embeddings-service:8031 and Docker DNS resolves
+        # to this container. Stop the old `embeddings-service`
+        # first (docker compose stop embeddings-service) — Docker
+        # refuses to bind two containers to the same alias.
+        aliases:
+          - embeddings-service
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:80/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8031/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
