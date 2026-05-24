@@ -310,7 +310,13 @@ export const sendMessageHrStream = async (
   userId: string,
   query: string,
   handlers: HrStreamHandlers,
-  category?: 'hr_manner' | 'org_strategy'
+  category?: 'hr_manner' | 'org_strategy',
+  /** Optional AbortSignal — when fired, the SSE connection drops and
+   * the reader exits cleanly. Wire useChat's abortControllerRef into
+   * this so the Stop button (ChatInput) actually halts gpt-oss
+   * generation; without it the stream just kept running server-side
+   * even after the user clicked Stop. */
+  signal?: AbortSignal
 ): Promise<void> => {
   const token = getAuthToken();
   const body = { user_id: userId, query, ...(category ? { category } : {}) };
@@ -323,6 +329,7 @@ export const sendMessageHrStream = async (
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -380,7 +387,14 @@ export const sendMessageHrStream = async (
         } catch {/* ignore */}
       }
     }
-  } catch (err) {
+  } catch (err: any) {
+    // User-initiated abort (Stop button) — treat as clean completion,
+    // not an error. Without this the chat bubble would flip to red
+    // "Error: AbortError" after the user clicks Stop.
+    if (err?.name === 'AbortError') {
+      handlers.onDone?.({ reason: 'aborted' } as any);
+      return;
+    }
     handlers.onError?.(err as Error);
   }
 };

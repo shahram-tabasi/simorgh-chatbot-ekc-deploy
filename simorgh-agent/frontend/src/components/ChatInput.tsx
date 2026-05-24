@@ -45,6 +45,46 @@ interface ChatInputProps {
   modelLabel?: string | null;
   /** Token-budget telemetry from the last assistant reply. */
   tokenUsage?: { used?: number | null; total?: number | null } | null;
+  /** Show the chain-of-thought elapsed timer next to the model badge.
+   * Used by project chats where CoT can run for tens of seconds and
+   * the user wants visible feedback that work is in progress. */
+  showCotTimer?: boolean;
+}
+
+/** Tiny "1.2s … 24s" timer that ticks while CoT is running, with a
+ * small simorgh bird next to it. Mounted only while isGenerating is
+ * true so it doesn't clutter the input when idle. */
+function CotTimer() {
+  const startRef = React.useRef<number>(Date.now());
+  const [elapsedMs, setElapsedMs] = React.useState(0);
+  React.useEffect(() => {
+    startRef.current = Date.now();
+    const id = window.setInterval(() => {
+      setElapsedMs(Date.now() - startRef.current);
+    }, 200);
+    return () => window.clearInterval(id);
+  }, []);
+  const seconds = elapsedMs / 1000;
+  const display =
+    seconds < 10
+      ? `${seconds.toFixed(1)}s`
+      : seconds < 60
+      ? `${Math.round(seconds)}s`
+      : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  return (
+    <span
+      className="flex items-center gap-1 text-[11px] text-sky-300/90 font-mono"
+      title="Chain-of-thought elapsed time"
+    >
+      <img
+        src={`${import.meta.env.BASE_URL}simorgh.svg`}
+        alt=""
+        className="w-3.5 h-3.5 opacity-80"
+        style={{ filter: 'drop-shadow(0 0 4px rgba(56,189,248,0.4))' }}
+      />
+      {display}
+    </span>
+  );
 }
 
 function buildGitlabUrl(repoPath: string, suffix = ''): string {
@@ -137,6 +177,7 @@ export function ChatInput({
   header = null,
   modelLabel = null,
   tokenUsage = null,
+  showCotTimer = false,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -499,8 +540,13 @@ export function ChatInput({
             )}
           </button>
 
-          {/* Right side: model badge + token ring + send/stop. */}
+          {/* Right side: model badge + cot timer + token ring + send/stop. */}
           <div className="ml-auto flex items-center gap-2">
+            {/* CoT timer — only mounts while generating AND the parent
+                opts in via showCotTimer (project chats turn this on,
+                general chats leave it off because the HR direct-RAG
+                path completes in under a second). */}
+            {isGenerating && showCotTimer && <CotTimer />}
             {(modelLabel || tokenUsage) && (
               <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
                 {modelLabel && <span className="truncate max-w-[160px]">{modelLabel}</span>}

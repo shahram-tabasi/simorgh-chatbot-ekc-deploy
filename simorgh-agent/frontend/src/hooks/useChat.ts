@@ -539,6 +539,10 @@ export function useChat(
               }
             },
           },
+          undefined,
+          // Wire the abort controller signal so the Stop button in
+          // ChatInput actually halts the SSE stream from gpt-oss.
+          abortControllerRef.current?.signal,
         );
       } finally {
         setIsTyping(false);

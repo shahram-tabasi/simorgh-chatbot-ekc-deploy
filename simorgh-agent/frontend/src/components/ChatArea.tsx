@@ -324,6 +324,7 @@ export function ChatArea({
                 uploadsAllowed={isProjectChat}
                 header={chatInputHeader}
                 modelLabel="Simorgh AI"
+                showCotTimer={isProjectChat}
                 tokenUsage={tokenUsage}
               />
             </div>
@@ -370,6 +371,7 @@ export function ChatArea({
                 uploadsAllowed={isProjectChat}
                 header={chatInputHeader}
                 modelLabel="Simorgh AI"
+                showCotTimer={isProjectChat}
                 tokenUsage={tokenUsage}
               />
             </div>
