@@ -270,13 +270,19 @@ function MainChat() {
   const headerBootstrapRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (!activeProjectId || !activeChatId) return;
-    if (activeProject?.repoPath || activeProject?.workingBranch) return;
+    // Wait until activeProject is actually loaded into the projects
+    // array. If we fire selectChat() before this, the setProjects
+    // callback inside it can't find the row to update and the repo
+    // data is silently dropped — the original bug the operator
+    // hit ("only shows after switch chats").
+    if (!activeProject) return;
+    if (activeProject.repoPath || activeProject.workingBranch) return;
     const key = `${activeProjectId}::${activeChatId}`;
     if (headerBootstrapRef.current === key) return;
     headerBootstrapRef.current = key;
     selectChat(activeProjectId, activeChatId);
-  }, [activeProjectId, activeChatId, activeProject?.repoPath,
-      activeProject?.workingBranch, selectChat]);
+  }, [activeProjectId, activeChatId, activeProject,
+      activeProject?.repoPath, activeProject?.workingBranch, selectChat]);
 
   // Handle chat selection from history - close left sidebar on mobile
   const handleSelectChatFromHistory = React.useCallback((projectId: string | null, chatId: string) => {

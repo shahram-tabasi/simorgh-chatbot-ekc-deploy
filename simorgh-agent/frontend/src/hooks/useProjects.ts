@@ -156,17 +156,22 @@ export function useProjects(userId?: string) {
         const backendProjectChats = projectChatsResponse.data.chats || [];
         console.log(`✅ Loaded ${backendProjectChats.length} project chats from backend`);
 
-        // Group chats by project. CRITICAL: key on project_id_main
-        // (the per-workspace UUID), NOT project_number. project_number
-        // is the SOURCE OE / TPMS identifier and is shared across all
-        // workspaces branched from the same source. Keying on it was
-        // collapsing multiple distinct workspaces into one folder with
-        // all chats commingled — the "project still collapsed in each
-        // other" bug from the operator's punch list.
+        // Group chats by project. CRITICAL: key on the per-workspace
+        // UUID, NOT on project_number. The backend mirror at
+        // chat-service/routes/project_chat_session.py:82-84 sets
+        //   project_number = tpms_oenum || gitlab_repo_path || project_id
+        // so two distinct workspaces cloned from the same gitlab repo
+        // get the SAME project_number value. Keying on it collapses
+        // them into one folder with commingled chats — the bug the
+        // operator hit when creating two projects from the same repo.
+        // The real workspace UUID lives at chat.project_id (the field
+        // the backend actually writes). project_id_main is checked
+        // first as a defensive fallback in case some older
+        // mirror-write used that field name.
         const projectsMap = new Map<string, any>();
 
         for (const chat of backendProjectChats) {
-          const projectId = chat.project_id_main || chat.project_number;
+          const projectId = chat.project_id || chat.project_id_main || chat.project_number;
           const projectName = chat.project_name || `Project ${chat.project_number || projectId}`;
 
           if (!projectsMap.has(projectId)) {

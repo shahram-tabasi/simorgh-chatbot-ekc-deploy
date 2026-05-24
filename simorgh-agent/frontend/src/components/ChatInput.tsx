@@ -540,15 +540,36 @@ export function ChatInput({
             )}
           </button>
 
-          {/* Right side: model badge + cot timer + token ring + send/stop. */}
-          <div className="ml-auto flex items-center gap-2">
-            {/* CoT timer — only mounts while generating AND the parent
-                opts in via showCotTimer (project chats turn this on,
-                general chats leave it off because the HR direct-RAG
-                path completes in under a second). */}
-            {isGenerating && showCotTimer && <CotTimer />}
-            {(modelLabel || tokenUsage) && (
+          {/* Right side: send/stop on top, model + timer + tokens below.
+              Operator request — make the send button the dominant
+              right-side affordance rather than just a sibling of the
+              model label. Stacking vertically and putting send first
+              gives it visual priority while keeping all the status
+              metadata visible underneath. */}
+          <div className="ml-auto flex flex-col items-end gap-1.5">
+            {isGenerating ? (
+              <button
+                onClick={onCancel}
+                className="p-2.5 rounded-xl bg-red-500 hover:bg-red-600 transition-all flex-shrink-0 shadow-lg shadow-red-500/20"
+                title="Stop generating"
+              >
+                <StopCircleIcon className="w-5 h-5 text-white" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
+                className="p-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0 shadow-lg shadow-violet-500/20"
+                title="Send"
+              >
+                <SendIcon className="w-5 h-5 text-white" />
+              </button>
+            )}
+            {/* Status row under the send button — CoT timer (project
+                chats only) + model label + token ring. */}
+            {(isGenerating && showCotTimer) || modelLabel || tokenUsage ? (
               <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                {isGenerating && showCotTimer && <CotTimer />}
                 {modelLabel && <span className="truncate max-w-[160px]">{modelLabel}</span>}
                 {tokenUsage && (
                   <TokenUsageRing
@@ -557,25 +578,7 @@ export function ChatInput({
                   />
                 )}
               </span>
-            )}
-
-            {isGenerating ? (
-              <button
-                onClick={onCancel}
-                className="p-2 rounded-xl bg-red-500 hover:bg-red-600 transition-all flex-shrink-0"
-                title="Stop generating"
-              >
-                <StopCircleIcon className="w-4 h-4 text-white" />
-              </button>
-            ) : (
-              <button
-                onClick={handleSend}
-                disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
-                className="p-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex-shrink-0"
-              >
-                <SendIcon className="w-4 h-4 text-white" />
-              </button>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
