@@ -698,12 +698,18 @@ For each step, specify:
 8. priority (1-10; higher runs sooner among independent steps)
 9. estimated_duration (string with unit, e.g. "10s")
 
-TOKEN BUDGET — keep `reasoning` under ~120 words and `description`
-fields under ~30 words. The whole JSON object MUST fit in ~3000
-tokens; verbose reasoning gets the plan cut off mid-step and the
-file-read tasks silently disappear, which is the most common cause
-of "I don't have the document" replies. Be terse — the agent is
-reading your plan, not your essay.
+TOKEN BUDGET — STRICT.
+  • `reasoning`            ≤  40 words (1-2 sentences naming the rung)
+  • each `description`     ≤  15 words (one verb-phrase, no rationale)
+  • each `title`           ≤   6 words
+  • whole plan             ≤   5 steps unless absolutely necessary
+  • total JSON             ≤ 1500 tokens (gpt-oss-20b's 4096-token cap
+                                          on the planner reply runs out
+                                          mid-step when this is exceeded
+                                          and the WHOLE plan is lost)
+Be terse — the agent reads your plan, not your essay. Repeating the
+user's question in the reasoning is a waste; assume the executor
+knows the context.
 
 Respond with ONLY valid JSON in this exact format:
 {{
@@ -1527,41 +1533,48 @@ class COTEngine:
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as je_outer:
-            # Default to a fallback plan so `data` is always bound, even if
-            # neither the json_str parse nor the find-the-braces fallback
-            # below succeed.
-            data = {
-                "reasoning": "Failed to parse structured plan. Falling back to direct response.",
-                "steps": [{
-                    "step_number": 1,
-                    "title": "Direct response",
-                    "description": "Respond directly using LLM",
-                    "task_type": "generation",
-                    "tool_needed": "llm",
-                    "tool_input": {"prompt": request.user_input},
-                    "depends_on": [],
-                    "priority": 5,
-                }]
-            }
-            # Try to find JSON object in the response
+            # Truncated/malformed JSON. Try in order:
+            #   1. Find the outermost {...} braces and reparse.
+            #   2. Salvage complete step objects from a partial steps[]
+            #      array (gpt-oss-20b truncates mid-step regularly when
+            #      the plan is long — the steps BEFORE the truncation
+            #      are usually fine).
+            #   3. Plan-aware fallback: build a sensible retrieval plan
+            #      based on the active CoT plan (single_repo gets a
+            #      tree→search→read→synth plan instead of the old
+            #      "Direct response" stub that hallucinated answers).
+            data = None
+            # (1) outer brace reparse
             start = response.find("{")
             end = response.rfind("}") + 1
-            recovered = False
             if start >= 0 and end > start:
                 try:
                     data = json.loads(response[start:end])
-                    recovered = True
                 except json.JSONDecodeError:
                     pass
-            if not recovered:
-                # Log the raw response so post-hoc debugging doesn't
-                # require enabling DEBUG and re-triggering the bug.
-                # Truncate to 2000 chars to keep log volume sane.
+            # (2) salvage complete step objects
+            if data is None or not data.get("steps"):
+                salvaged = self._salvage_partial_steps(response)
+                if salvaged:
+                    logger.warning(
+                        "COT plan parse: salvaged %d complete step(s) "
+                        "from truncated JSON", len(salvaged),
+                    )
+                    data = {
+                        "reasoning": (
+                            "Plan JSON was truncated; recovered the steps "
+                            "that parsed cleanly."
+                        ),
+                        "steps": salvaged,
+                    }
+            # (3) plan-aware fallback
+            if data is None or not data.get("steps"):
                 logger.warning(
                     "COT LLM response not JSON-parseable (outer=%s), "
                     "raw[:2000]=%r",
                     je_outer, response[:2000],
                 )
+                data = self._fallback_plan_for_active(request)
 
         steps = []
         # Map step titles → numbers so we can coerce Qwen-style
@@ -1687,6 +1700,162 @@ class COTEngine:
                 )
 
         return issues
+
+    def _salvage_partial_steps(self, response: str) -> List[Dict[str, Any]]:
+        """Pull complete step objects out of a truncated planner reply.
+
+        gpt-oss-20b often emits valid JSON for the first N steps and then
+        gets cut off mid-step N+1. The complete steps BEFORE the cut are
+        usable — extract them by brace-balancing inside the steps array.
+        """
+        # Locate the steps array opener.
+        steps_at = response.find('"steps"')
+        if steps_at < 0:
+            return []
+        # Find the '[' that opens the array.
+        lbracket = response.find("[", steps_at)
+        if lbracket < 0:
+            return []
+        # Walk forward, brace-balancing each {...} object.
+        i = lbracket + 1
+        n = len(response)
+        salvaged: List[Dict[str, Any]] = []
+        while i < n:
+            # Skip whitespace and commas.
+            while i < n and response[i] in " \t\r\n,":
+                i += 1
+            if i >= n or response[i] == "]":
+                break
+            if response[i] != "{":
+                break
+            # Find the matching closing brace, tracking strings.
+            depth = 0
+            j = i
+            in_str = False
+            esc = False
+            while j < n:
+                ch = response[j]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            j += 1
+                            break
+                j += 1
+            if depth != 0:
+                # Unbalanced — this object is the truncated one. Stop.
+                break
+            chunk = response[i:j]
+            try:
+                obj = json.loads(chunk)
+                if isinstance(obj, dict) and obj.get("title"):
+                    salvaged.append(obj)
+            except json.JSONDecodeError:
+                break
+            i = j
+        return salvaged
+
+    def _fallback_plan_for_active(self, request: COTRequest) -> Dict[str, Any]:
+        """Hardcoded retrieval plan when the LLM plan parse fails entirely.
+
+        Without this, the fallback was a single ``llm.generation`` step
+        that hallucinated answers from training data (operator hit this
+        on "CT characteristics" — got a generic table from the LLM's
+        prior knowledge instead of the project's PDF). When a CoT plan
+        is active, build a real retrieval template instead.
+        """
+        plan_name = ""
+        try:
+            from services.cot_router import active_plan
+            plan = active_plan()
+            if plan is not None:
+                plan_name = getattr(plan, "name", "") or ""
+        except Exception:
+            pass
+
+        q = request.user_input
+
+        if plan_name in {"single_repo", "repo_plus_upload"}:
+            return {
+                "reasoning": (
+                    "Planner output was unparseable; using deterministic "
+                    f"{plan_name} retrieval template."
+                ),
+                "steps": [
+                    {"step_number": 1, "title": "List repository files",
+                     "description": "Get the project tree to locate relevant files.",
+                     "task_type": "query", "tool_needed": "get_project_tree",
+                     "tool_input": {"project": "<repo>", "recursive": True},
+                     "depends_on": [], "priority": 9},
+                    {"step_number": 2, "title": "Semantic search",
+                     "description": "Semantic search across project content.",
+                     "task_type": "query", "tool_needed": "search_context",
+                     "tool_input": {"query": q, "project_id": request.project_id},
+                     "depends_on": [], "priority": 8},
+                    {"step_number": 3, "title": "Keyword grep",
+                     "description": "GitLab blob grep for literal terms.",
+                     "task_type": "query", "tool_needed": "search_blobs",
+                     "tool_input": {"query": q, "project": "<repo>"},
+                     "depends_on": [], "priority": 7},
+                    {"step_number": 4, "title": "Read top hit",
+                     "description": "Read the file most likely to answer the question.",
+                     "task_type": "query", "tool_needed": "read_artifact_mcp",
+                     "tool_input": {"project": "<repo>", "path": ""},
+                     "depends_on": [1, 2, 3], "priority": 6},
+                    {"step_number": 5, "title": "Synthesize answer",
+                     "description": "Combine retrieved context into the final answer.",
+                     "task_type": "generation", "tool_needed": "llm",
+                     "tool_input": {"prompt": q, "use_context": True},
+                     "depends_on": [1, 2, 3, 4], "priority": 5},
+                ],
+            }
+
+        if plan_name == "knowledge_only":
+            return {
+                "reasoning": "Planner unparseable; falling back to knowledge-only template.",
+                "steps": [
+                    {"step_number": 1, "title": "Search technical knowledge",
+                     "description": "Search the EKC technical knowledge base.",
+                     "task_type": "query", "tool_needed": "search_technical_knowledge",
+                     "tool_input": {"query": q},
+                     "depends_on": [], "priority": 8},
+                    {"step_number": 2, "title": "Synthesize answer",
+                     "description": "Combine knowledge hits into the final answer.",
+                     "task_type": "generation", "tool_needed": "llm",
+                     "tool_input": {"prompt": q, "use_context": True},
+                     "depends_on": [1], "priority": 5},
+                ],
+            }
+
+        # Last resort — no active plan, no template. Don't hallucinate;
+        # at least tell the user the plan failed.
+        return {
+            "reasoning": "Plan generation failed and no retrieval template was available.",
+            "steps": [{
+                "step_number": 1, "title": "Plan generation failed",
+                "description": (
+                    "I couldn't generate a structured plan for this request. "
+                    "Please try rephrasing, or break the question into smaller parts."
+                ),
+                "task_type": "generation", "tool_needed": "llm",
+                "tool_input": {"prompt": (
+                    "Reply to the user honestly that the planner failed to "
+                    "produce a structured plan; do not invent an answer."
+                )},
+                "depends_on": [], "priority": 5,
+            }],
+        }
 
     def _generate_simple_plan(self, request: COTRequest) -> str:
         """Generate a simple plan without LLM (fallback)."""
