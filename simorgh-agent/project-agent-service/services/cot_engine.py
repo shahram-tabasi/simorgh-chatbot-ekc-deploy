@@ -975,15 +975,13 @@ class COTEngine:
         # Hard safety cap. gpt-oss-20b has a 16,384-token max_model_len
         # which is a HARD limit on input+output. With max_tokens=4096
         # for the planner's reply, the input budget is 16384 - 4096 =
-        # 12,288 tokens ≈ 43,000 chars (at ~3.5 chars/token).
-        # Operator hit Input length (17669) — 2K tokens over even
-        # after our previous trims because the bloat was in the
-        # system prompt, not the grounding (the COT_SYSTEM_PROMPT is
-        # 27K chars on its own, plus a dynamic MCP-tool list that
-        # used to be another ~30K with full JSON schemas — now
-        # compacted to ~10K via mcp_manager.get_tools_for_cot
-        # default). New cap reflects the real input budget.
-        BUDGET_CHARS = int(os.getenv("COT_PROMPT_BUDGET_CHARS", "42000"))
+        # 12,288 tokens. Empirical chars-per-token on the planner's
+        # actual prompts (English instructions + Persian user input +
+        # mixed-language project context + JSON-schema-ish tool list)
+        # is ≈ 4.1 — measured from a prior operator log where 72,643
+        # chars came back as 17,669 tokens. So 12,288 × 4.1 ≈ 50,400
+        # chars. Cap at 49,000 to leave a small margin.
+        BUDGET_CHARS = int(os.getenv("COT_PROMPT_BUDGET_CHARS", "49000"))
         total = len(system_prompt) + len(user_msg)
         if total > BUDGET_CHARS:
             over = total - BUDGET_CHARS
@@ -1036,15 +1034,21 @@ class COTEngine:
                             )
                 except Exception as e:
                     logger.warning("  mcp_tools skinny-swap failed: %s", e)
-            # Final report — if still over, the planner request WILL
-            # still fail. Worth surfacing distinctly so the operator
-            # knows to investigate further.
-            if over > 0:
-                logger.error(
+            # Final report. The 4.1 chars/token estimate gives the
+            # planner some tolerance — being a few thousand chars over
+            # the budget often still tokenises within the 12K input
+            # limit (operator observed 3933-char overage that still
+            # returned 200 OK). Only WARN here; the actual planner
+            # call will surface a real error via the gateway logger
+            # if it does fail.
+            if over > 4000:
+                logger.warning(
                     "cot prompt STILL over budget after all trims; "
-                    "remaining over=%d chars. Planner call will likely "
-                    "fail with 'Input length exceeds model's maximum "
-                    "context length'.", over,
+                    "remaining over=%d chars. The 4.1 chars/token "
+                    "estimate has some slack, but if the planner "
+                    "returns 400 'Input length exceeds…' next, "
+                    "consider lowering COT_PROMPT_BUDGET_CHARS or "
+                    "COT_MCP_TOPN.", over,
                 )
 
         messages = [

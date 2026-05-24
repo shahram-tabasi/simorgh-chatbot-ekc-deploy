@@ -1185,9 +1185,22 @@ class ProjectManagerAgent:
             and self.mcp_manager.is_connected
             and self.mcp_manager.has_tool(tool)
         )
+        # Operator hit recurring "Project Not Found" failures on
+        # follow-up turns where the planner picked tools NOT in
+        # _GITLAB_MCP_TOOLS (so the project-arg canonicalisation
+        # didn't run and the wrong identifier propagated). Surface
+        # the actual project value being passed so we can trace
+        # which tool/arg shape needs canonicalisation added.
+        proj_dbg = "?"
+        if isinstance(tool_input, dict):
+            proj_dbg = (tool_input.get("project")
+                        or tool_input.get("project_id")
+                        or tool_input.get("repo")
+                        or tool_input.get("repository")
+                        or "(none)")
         logger.info(
             f"dispatch: tool={tool!r} type={task_type!r} "
-            f"mcp_match={has_mcp_tool} "
+            f"mcp_match={has_mcp_tool} project_arg={proj_dbg!r} "
             f"input_keys={list(tool_input.keys()) if isinstance(tool_input, dict) else None}"
         )
 
