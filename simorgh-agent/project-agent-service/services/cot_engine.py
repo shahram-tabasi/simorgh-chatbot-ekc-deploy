@@ -807,22 +807,73 @@ class COTEngine:
         # sources_enabled blocks have appended their guardrails. Joining
         # it here would silently drop those guardrails from the prompt.
 
+        # Early lookup of sources_enabled — both the tool-catalog
+        # filter below AND the later guardrail block need it. (The
+        # later block REASSIGNS this to the same value so behaviour is
+        # unchanged for that code path.)
+        sources_enabled = (
+            project_context.get("sources_enabled")
+            or (project_context.get("project") or {}).get("sources_enabled")
+            or {}
+        )
+
         # Build dynamic tool list from MCP or use fallback. PER-QUERY
-        # SELECTION: pass the user's request to mcp_manager so it can
-        # score tools by relevance and return only the top-N + always-
-        # include core set. 67 tools × ~150 chars/tool = ~10K chars
-        # static, which alone consumes ~30% of gpt-oss-20b's input
-        # budget; top_n=15 brings it down to ~3K chars. Per 2026
-        # research (Anthropic's Tool Search Tool, OpenAI's
-        # ToolSearchTool) selecting top-K relevant tools also IMPROVES
-        # planner accuracy — fewer tools = fewer decision-paralysis
-        # paths to consider.
+        # SELECTION + CAPABILITY-AWARE EXCLUSION:
+        #
+        # 1. Score tools by token-overlap with the user query, return
+        #    top_n + always-include core. (Anthropic Tool Search Tool
+        #    pattern — 49→74% MCP-eval improvement.)
+        # 2. Detect missing project capabilities and exclude tool
+        #    families that can only fail:
+        #      • No tpms_oenum → exclude tpms_*, get_project_context,
+        #        get_holidays / get_company_directory etc. (the TPMS-
+        #        keyed org tools). Operator hit a wizard repo-only
+        #        project where the planner picked tpms_fetch and the
+        #        whole chain failed with "Project <oenum> not found
+        #        in TPMS" / "required oenum field missing".
+        proj_meta = (project_context.get("project") or {}) or project_context
+        has_tpms = bool(
+            proj_meta.get("tpms_oenum")
+            or project_context.get("tpms_oenum")
+            or sources_enabled.get("tpms")
+        )
+        exclude_prefixes: list[str] = []
+        if not has_tpms:
+            exclude_prefixes.extend([
+                "tpms_",       # tpms_fetch, tpms_get_text, tpms_context_*
+                "get_project_context",  # tpms_context_agent's
+                "get_holidays",
+                "get_company_directory",
+                "get_employee",
+                "lookup_employee",
+                "list_departments",
+                "get_hiring_periods",
+                "get_corporate_loan",
+                "get_employee_attendance",
+            ])
+
         if self.mcp_manager and self.mcp_manager.is_connected:
             mcp_tool_lines = self.mcp_manager.get_tools_for_cot(
                 query=request.user_input,
                 top_n=int(os.getenv("COT_MCP_TOPN", "15")),
+                exclude_prefixes=exclude_prefixes or None,
             )
             mcp_tools = f"You also have access to these microservice tools (via MCP):\n{mcp_tool_lines}"
+            if not has_tpms:
+                # Even though the tools are excluded from the catalog,
+                # gpt-oss-20b sometimes hallucinates tool calls based
+                # on training data. A short explicit hint here cuts
+                # those off — pure prompt engineering, no runtime cost.
+                mcp_tools += (
+                    "\n# IMPORTANT: this project has NO TPMS OENUM. "
+                    "DO NOT plan steps against tpms_* tools or "
+                    "TPMS-keyed org-data lookups — they will fail "
+                    "with 'Project <oenum> not found in TPMS'. Use "
+                    "gitlab_mcp.* tools (get_project_tree, "
+                    "read_artifact_mcp, search_blobs) plus "
+                    "context_search.search_context for ALL content "
+                    "questions about this project."
+                )
         else:
             mcp_tools = _FALLBACK_MCP_TOOLS
 

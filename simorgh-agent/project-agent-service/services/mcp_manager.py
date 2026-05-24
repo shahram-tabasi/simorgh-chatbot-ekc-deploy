@@ -245,6 +245,7 @@ class MCPManager:
         query: Optional[str] = None,
         top_n: Optional[int] = None,
         always_include: Optional[List[str]] = None,
+        exclude_prefixes: Optional[List[str]] = None,
     ) -> str:
         """
         Get tool descriptions formatted for the COT system prompt.
@@ -294,6 +295,18 @@ class MCPManager:
             ]
 
         all_tools = list(self.tool_schemas.values())
+
+        # Exclude entire tool families up-front (e.g. exclude_prefixes=["tpms"]
+        # for repo-backed projects that have no TPMS OENUM — the planner
+        # otherwise picks tpms_fetch / tpms_get_text and gets "Project
+        # <oenum> not found in TPMS" on every call). This filter runs
+        # BEFORE scoring so excluded tools can't even win a relevance
+        # slot.
+        if exclude_prefixes:
+            all_tools = [
+                t for t in all_tools
+                if not any(t.name.startswith(p) for p in exclude_prefixes)
+            ]
 
         # Score + select.
         if query and top_n is not None and top_n < len(all_tools):
