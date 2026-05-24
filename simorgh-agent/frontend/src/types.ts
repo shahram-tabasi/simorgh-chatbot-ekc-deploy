@@ -159,6 +159,19 @@ export interface MessageMetadata {
   }>;
   top_score?: number;
   refusal?: boolean;
+  // Project-chat CoT routing telemetry (Phase 5). Emitted by the
+  // backend's `cot_plan_chosen` SSE event before the planner runs.
+  // MessageList renders cotPlan as a small chip above the bubble so
+  // operators can see at a glance which specialized plan the master
+  // router picked for this turn.
+  cotPlan?: string;
+  cotPlanSignals?: {
+    has_selected_repo?: boolean;
+    selected_repos_count?: number;
+    has_upload?: boolean;
+    upload_size_chars?: number;
+    input_modality?: string;
+  };
 }
 
 export interface ProcessingStep {

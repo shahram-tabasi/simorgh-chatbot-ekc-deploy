@@ -298,6 +298,22 @@ class ProjectManagerAgent:
             f"llm_mode={llm_mode or 'default'}, "
             f"cot_plan={chosen_plan.name if chosen_plan else 'none'}"
         )
+        # Phase 5: surface the chosen plan to the UI as the FIRST SSE
+        # event so the chat bubble can paint a plan chip ("plan:
+        # single_repo") before the planner even starts thinking.
+        # Goes through the same progress-callback mechanism as the
+        # rest of the streaming events.
+        if chosen_plan is not None:
+            await self._notify_progress(project_id, "cot_plan_chosen", {
+                "plan": chosen_plan.name,
+                "signals": {
+                    "has_selected_repo": getattr(plan_ctx, "has_selected_repo", False),
+                    "selected_repos_count": len(getattr(plan_ctx, "selected_repos", [])),
+                    "has_upload": getattr(plan_ctx, "has_upload", False),
+                    "upload_size_chars": getattr(plan_ctx, "upload_size_chars", 0),
+                    "input_modality": getattr(plan_ctx, "input_modality", "text"),
+                },
+            })
 
         # 1. Store the incoming message
         await self.memory.store_message(

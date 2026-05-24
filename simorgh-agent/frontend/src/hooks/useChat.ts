@@ -384,6 +384,34 @@ export function useChat(
             }
           } else if (curEvent === 'ping') {
             // keepalive — ignore
+          } else if (curEvent === 'cot_plan_chosen') {
+            // Phase 5: master router announced which CoT plan it
+            // picked. Stamp it on the streaming assistant message so
+            // MessageList can paint a chip ("plan: single_repo")
+            // above the bubble.
+            if (!messageAdded) {
+              messageAdded = true;
+              setIsTyping(false);
+              setMessages(prev => [...prev, {
+                id: aiMessageId,
+                content: '',
+                role: 'assistant',
+                timestamp: new Date(),
+                metadata: {
+                  streaming: true,
+                  cotPlan: payload?.plan,
+                  cotPlanSignals: payload?.signals,
+                },
+              }]);
+            } else {
+              setMessages(prev => prev.map(m => m.id === aiMessageId
+                ? { ...m, metadata: {
+                    ...(m.metadata || {}),
+                    cotPlan: payload?.plan,
+                    cotPlanSignals: payload?.signals,
+                  } }
+                : m));
+            }
           } else {
             // progress / step / anything-else → surface as an agent step
             const step = (payload && typeof payload === 'object' && payload.title)
