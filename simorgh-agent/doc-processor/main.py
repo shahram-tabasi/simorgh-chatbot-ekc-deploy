@@ -28,6 +28,28 @@ from PIL import Image, ImageEnhance
 import numpy as np
 import aiofiles
 from docx import Document
+import httpx
+import logging
+
+logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------
+# Docling feature flag
+# ------------------------------------------------------------------
+# When USE_DOCLING=1 and DOCLING_URL is reachable, route PDF/DOCX/PPTX
+# extraction to docling-serve (IBM's document-intelligence stack — much
+# better at preserving heading order, table cells, and body text inside
+# bordered text boxes — see compose/svc-docling.yml).
+#
+# On ANY failure (HTTP error, timeout, malformed JSON, empty result) we
+# silently fall back to the existing pdfplumber+EasyOCR pipeline so a
+# bad docling deployment can never take the service offline. The fallback
+# is logged at WARNING level so operators can spot a degraded docling
+# without flipping the flag.
+USE_DOCLING = os.getenv("USE_DOCLING", "0").lower() in ("1", "true", "yes")
+DOCLING_URL = os.getenv("DOCLING_URL", "http://docling-serve:5001").rstrip("/")
+DOCLING_TIMEOUT_SEC = float(os.getenv("DOCLING_TIMEOUT_SEC", "180"))
+DOCLING_FORMATS = {".pdf", ".docx", ".pptx", ".html", ".md"}  # docling's strong suite
 
 # ------------------------------------------------------------------
 # FastAPI App Configuration
@@ -131,8 +153,64 @@ class UniversalDocumentProcessor:
         text = re.sub(r'([0-9]+)\s*[Hh]z', r'\1Hz', text)
         return re.sub(r'\s+', ' ', text).strip()
 
+    async def _try_docling(self, file_path: Path) -> str | None:
+        """Send a file to docling-serve and return its markdown.
+
+        Returns the markdown string on success, None on ANY failure
+        (network, timeout, non-2xx, empty result). The caller falls
+        back to the local pipeline on None — never raises.
+        """
+        if not USE_DOCLING:
+            return None
+        try:
+            import base64
+            data = file_path.read_bytes()
+            b64 = base64.b64encode(data).decode("ascii")
+            payload = {
+                "sources": [{
+                    "kind": "file",
+                    "base64_string": b64,
+                    "filename": file_path.name,
+                }],
+                "to_formats": ["md"],
+            }
+            async with httpx.AsyncClient(timeout=DOCLING_TIMEOUT_SEC) as c:
+                r = await c.post(f"{DOCLING_URL}/v1/convert/source", json=payload)
+            if r.status_code != 200:
+                logger.warning(
+                    "docling: %s returned HTTP %s (body[:200]=%r); "
+                    "falling back to local pipeline",
+                    file_path.name, r.status_code, r.text[:200],
+                )
+                return None
+            j = r.json()
+            # Response shape: {"document": {"md_content": "..."}, ...}
+            md = (j.get("document") or {}).get("md_content") or ""
+            if not md.strip():
+                logger.warning(
+                    "docling: %s returned empty markdown; falling back",
+                    file_path.name,
+                )
+                return None
+            logger.info(
+                "docling: extracted %s → %d chars markdown", file_path.name, len(md),
+            )
+            return md
+        except Exception as e:
+            logger.warning(
+                "docling: %s failed (%s: %s); falling back to local pipeline",
+                file_path.name, type(e).__name__, e,
+            )
+            return None
+
     async def process_pdf(self, file_path: Path) -> str:
-        """Process PDF using pdfplumber for text and tables, with OCR fallback for scanned pages"""
+        """Process PDF. Prefers docling-serve when USE_DOCLING=1; otherwise
+        (or on docling failure) uses pdfplumber for text + tables with
+        EasyOCR fallback for scanned pages."""
+        docling_md = await self._try_docling(file_path)
+        if docling_md is not None:
+            return docling_md
+        # ---- Legacy pdfplumber pipeline (original behaviour) -----------
         parts = []
         pages_needing_ocr = []
 
@@ -256,7 +334,12 @@ class UniversalDocumentProcessor:
         return '\n\n'.join(texts) if texts else "*No text detected*"
 
     async def process_word(self, file_path: Path) -> str:
-        """Process Word document"""
+        """Process Word document. Prefers docling-serve when enabled —
+        much better at heading hierarchy + nested tables than python-docx."""
+        docling_md = await self._try_docling(file_path)
+        if docling_md is not None:
+            return docling_md
+        # ---- Legacy python-docx pipeline (original behaviour) ----------
         doc = Document(file_path)
         parts = []
         for para in doc.paragraphs:
@@ -382,7 +465,11 @@ async def health():
     return {
         "status": "healthy",
         "service": "doc-processor",
-        "version": "1.2.0"
+        "version": "1.2.0",
+        "docling": {
+            "enabled": USE_DOCLING,
+            "url": DOCLING_URL if USE_DOCLING else None,
+        },
     }
 
 

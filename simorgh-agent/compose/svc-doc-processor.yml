@@ -23,6 +23,14 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+      # Set USE_DOCLING=1 (and uncomment svc-docling.yml in docker-compose.yml)
+      # to route PDF/DOCX extraction through docling-serve. On any failure
+      # (network, timeout, empty result) doc-processor silently falls back
+      # to the local pdfplumber+EasyOCR / python-docx pipeline — flipping
+      # this flag cannot break uploads.
+      - USE_DOCLING=${USE_DOCLING:-0}
+      - DOCLING_URL=${DOCLING_URL:-http://docling-serve:5001}
+      - DOCLING_TIMEOUT_SEC=${DOCLING_TIMEOUT_SEC:-180}
 
 networks:
   app_net:
