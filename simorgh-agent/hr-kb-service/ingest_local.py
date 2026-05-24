@@ -218,6 +218,32 @@ def is_boilerplate(text: str) -> bool:
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 
 
+# Section headings whose content is universal boilerplate across all HR
+# ops files — same "applies to all employees" / "ISO 9001 references" /
+# "document identity" wording in every doc. These chunks were hijacking
+# top-K retrieval on unrelated queries (a query like "چشم انداز شرکت"
+# was returning "دامنه کاربرد" sections because they share the word
+# "شرکت"). Drop them at ingest time — citations point at the real
+# answer-bearing sections instead.
+_NOISE_HEADING_PATTERNS = (
+    r"^\d+\.?\s*دامنه\s*کاربرد\b",          # "1. دامنه کاربرد"
+    r"^\d+\.?\s*مراجع\s*الزامی\b",          # "3. مراجع الزامی" — ISO list
+    r"^شناسنامه\s*سند\b",                   # "شناسنامه سند" — doc metadata
+    r"^امضاهای?\s*تصویب\b",                 # "امضاهای تصویب" — signatures
+    r"^قوانین\s*توزیع\s*و\s*اعتبار",        # document-control disclaimer
+    r"^\d+\.?\s*مستندات\s*(مربوطه|مرتبط)\b", # "7. مستندات مربوطه" — forms list
+)
+_NOISE_HEADING_RE = re.compile("|".join(_NOISE_HEADING_PATTERNS))
+
+
+def _is_noise_heading(text: str) -> bool:
+    """True if a section heading marks universal boilerplate that
+    should not be indexed."""
+    if not text:
+        return False
+    return bool(_NOISE_HEADING_RE.search(text.strip()))
+
+
 def _split_long(body: str) -> List[str]:
     n = len(body)
     if n <= CHUNK_CHAR_SIZE:
@@ -242,19 +268,45 @@ def _split_long(body: str) -> List[str]:
 
 def chunk_sections(markdown: str) -> List[Dict[str, Any]]:
     """Walk the markdown, emit one chunk per leaf section with full
-    heading_path. Long sections get window-split with overlap."""
+    heading_path. Long sections get window-split with overlap.
+
+    Critical detail for these docx files: the authors typed everything
+    into one Word paragraph, so after the markdown-repair pass the
+    heading line still carries the section body glued onto it. The
+    walker keeps BOTH the trimmed displayable heading AND the full
+    original line. When a section's accumulated body is empty (because
+    the body was all in the heading line), we synthesize the body from
+    the tail of that full heading text instead of discarding the
+    section. Without this, jose-vc-stuck-in-paragraph files like
+    جذب و استخدام collapsed from 17 sections to 1.
+    """
     if not markdown:
         return []
     lines = markdown.split("\n")
     sections: List[Dict[str, Any]] = []
-    stack: List[Tuple[int, str]] = []  # (level, heading)
+    # Each stack entry tracks (level, displayable, full_text) so we
+    # can synthesize body from the heading when needed.
+    stack: List[Tuple[int, str, str]] = []
     buf: List[str] = []
+    cur_full_heading: str = ""
 
     def flush():
         body = "\n".join(buf).strip()
+        if not stack and not body:
+            return
+        # If the section body is short/empty but the current leaf
+        # heading carried lots of trailing body (e.g.
+        # "2. دامنه کاربرد این دستورالعمل کلیه کارکنان…"), use the
+        # post-trim tail as the searchable body.
+        if (not body or len(body) < 30) and stack:
+            full = stack[-1][2]
+            trimmed = stack[-1][1]
+            tail = full[len(trimmed):].lstrip(" :.،؛-—") if len(full) > len(trimmed) else ""
+            if tail:
+                body = (tail + ("\n\n" + body if body else "")).strip()
         if body:
             sections.append({
-                "heading_path": [h for _, h in stack],
+                "heading_path": [disp for _, disp, _ in stack],
                 "body": body,
             })
         buf.clear()
@@ -264,14 +316,12 @@ def chunk_sections(markdown: str) -> List[Dict[str, Any]]:
         if m:
             flush()
             level = len(m.group(1))
-            text = m.group(2).strip()
-            # Heading text often has body content trailing it (because
-            # the source docx glued them together). Truncate at the
-            # first natural break so heading_path stays readable.
-            text = _trim_heading(text)
+            full = m.group(2).strip()
+            display = _trim_heading(full)
             while stack and stack[-1][0] >= level:
                 stack.pop()
-            stack.append((level, text))
+            stack.append((level, display, full))
+            cur_full_heading = full
             continue
         buf.append(ln)
     flush()
@@ -280,6 +330,13 @@ def chunk_sections(markdown: str) -> List[Dict[str, Any]]:
     for sec in sections:
         body = sec["body"]
         if is_boilerplate(body):
+            continue
+        # Skip whole sections whose innermost heading is universal
+        # boilerplate (scope / refs / doc-id / signatures / forms-
+        # list). These are near-identical across files and were
+        # poisoning top-K retrieval on unrelated queries.
+        leaf_heading = sec["heading_path"][-1] if sec["heading_path"] else ""
+        if _is_noise_heading(leaf_heading):
             continue
         windows = _split_long(body)
         for w in windows:
@@ -409,26 +466,49 @@ def doc_meta_for(path: Path) -> Optional[Dict[str, str]]:
 
 CANONICAL_CARDS: List[Dict[str, Any]] = [
     # ---- Vision / Mission / Values (most-asked strategy queries) ----
+    # Every text intentionally repeats alias keywords (شرکت / سازمان /
+    # الکتروکویر) up front so embedding matches on the natural way a
+    # user phrases the question — "چشم انداز شرکت", "vision of the
+    # company", "ماموریت سازمان". Multilingual sentence-transformers
+    # reward verbatim term overlap heavily.
     {"doc_id": "strategic-document", "topic": "vision",
-     "title": "چشم انداز شرکت الکتروکویر",
-     "text": "چشم انداز الکتروکویر: پیشتاز در ارائه راهکارهای جامع نوآورانه با بهره‌مندی از فناوری‌های نوین صنعت برق. این چشم‌انداز در سند استراتژیک (EKCO-1-07) فصل چهارم و منشور طرح‌ریزی (EKIP-1-04) ذکر شده است.",
+     "title": "چشم انداز شرکت / سازمان / الکتروکویر",
+     "text": "چشم انداز شرکت الکتروکویر (سازمان): پیشتاز در ارائه راهکارهای جامع نوآورانه با بهره‌مندی از فناوری‌های نوین صنعت برق. چشم‌انداز ۱۴۰۸ شرکت همچنین شامل رهبری بازار داخلی تابلو برق، ورود به بازارهای جدید (الکتروموتور، درایو، اینورتر خورشیدی)، ورود به بورس اوراق بهادار، و استقرار ساختار هولدینگ است. مرجع: سند استراتژیک (EKCO-1-07) فصل چهارم؛ منشور طرح‌ریزی (EKIP-1-04) به امضای مدیرعامل حمید منتظری.",
      "source_section": "فصل چهارم: اسناد مهم سازمان > چشم انداز"},
     {"doc_id": "strategic-document", "topic": "mission",
-     "title": "مأموریت / رسالت سازمان",
-     "text": "مأموریت الکتروکویر: اطمینان و تعالی با ارائه محصولات، خدمات و راهکارهای ارزش‌آفرین در صنعت برق در راستای رضایتمندی ذینفعان و ارتقاء مسئولیت‌های اجتماعی.",
+     "title": "مأموریت / رسالت شرکت / سازمان",
+     "text": "مأموریت (رسالت) شرکت الکتروکویر (سازمان): اطمینان و تعالی با ارائه محصولات، خدمات و راهکارهای ارزش‌آفرین در صنعت برق در راستای رضایتمندی ذینفعان و ارتقاء مسئولیت‌های اجتماعی. مرجع: سند استراتژیک (EKCO-1-07) فصل چهارم.",
      "source_section": "فصل چهارم > مأموریت"},
     {"doc_id": "strategic-document", "topic": "values",
-     "title": "ارزش‌های بنیادین سازمان",
-     "text": "ارزش‌های بنیادین الکتروکویر: ۱) اخلاق حرفه‌ای ۲) رضایتمندی شرکای اجتماعی ۳) تعالی فردی و سازمانی ۴) مسئولیت اجتماعی ۵) کار تیمی. (سند استراتژیک فصل ۴، منشور طرح‌ریزی EKIP-1-04)",
+     "title": "ارزش‌های بنیادین شرکت / سازمان",
+     "text": "ارزش‌های بنیادین شرکت الکتروکویر (سازمان): ۱) اخلاق حرفه‌ای ۲) رضایتمندی شرکای اجتماعی ۳) تعالی فردی و سازمانی ۴) مسئولیت اجتماعی ۵) کار تیمی. مرجع: سند استراتژیک (EKCO-1-07) فصل چهارم؛ منشور طرح‌ریزی (EKIP-1-04).",
      "source_section": "فصل چهارم > ارزش‌ها"},
     {"doc_id": "strategic-document", "topic": "strategies",
-     "title": "ده استراتژی سازمان",
-     "text": "ده استراتژی الکتروکویر: ۱) بهبود کیفیت محصول و خدمات ۲) توسعه منابع انسانی و مدیریت استعدادها ۳) توسعه زنجیره تأمین ۴) تحول‌آفرینی و نوآوری ۵) توسعه برندینگ ۶) بهبود ساختار هزینه‌های سازمان ۷) سرمایه‌گذاری و سودآوری ۸) توسعه زیرساخت ۹) بهره‌وری در مصرف انرژی ۱۰) نظام جامع مدیریت ریسک.",
+     "title": "ده استراتژی شرکت / سازمان",
+     "text": "ده استراتژی شرکت الکتروکویر (سازمان): ۱) بهبود کیفیت محصول و خدمات ۲) توسعه منابع انسانی و مدیریت استعدادها ۳) توسعه زنجیره تأمین ۴) تحول‌آفرینی و نوآوری ۵) توسعه برندینگ ۶) بهبود ساختار هزینه‌های سازمان ۷) سرمایه‌گذاری و سودآوری ۸) توسعه زیرساخت ۹) بهره‌وری در مصرف انرژی ۱۰) نظام جامع مدیریت ریسک. مرجع: سند استراتژیک (EKCO-1-07) فصل چهارم.",
      "source_section": "فصل چهارم > استراتژی‌های سازمان"},
     {"doc_id": "planning-charter", "topic": "policy",
-     "title": "خط‌مشی هشت‌گانه سازمان",
-     "text": "خط‌مشی مدیریت یکپارچه: ۱) بهبود مستمر فرایندها ۲) افزایش رضایتمندی ذینفعان ۳) ایجاد و حفظ شرایط کاری ایمن و بهداشتی ۴) افزایش بهره‌وری کارکنان ۵) بهبود مشاوره و مشارکت کارکنان ۶) توسعه ارتباط برد-برد با تأمین‌کنندگان ۷) ارتقای دانش مشتریان ۸) بهبود سیستم مدیریت دانش. (منشور EKIP-1-04، امضا: حمید منتظری مدیرعامل)",
+     "title": "خط‌مشی هشت‌گانه شرکت / سازمان",
+     "text": "خط‌مشی مدیریت یکپارچه شرکت الکتروکویر (سازمان): ۱) بهبود مستمر فرایندها ۲) افزایش رضایتمندی ذینفعان ۳) ایجاد و حفظ شرایط کاری ایمن و بهداشتی ۴) افزایش بهره‌وری کارکنان ۵) بهبود مشاوره و مشارکت کارکنان ۶) توسعه ارتباط برد-برد با تأمین‌کنندگان ۷) ارتقای دانش مشتریان ۸) بهبود سیستم مدیریت دانش. مرجع: منشور طرح‌ریزی (EKIP-1-04) به امضای مدیرعامل حمید منتظری.",
      "source_section": "خط مشی"},
+    {"doc_id": "aspirational-goals", "topic": "aspirational_goals_summary",
+     "title": "مقاصد آرمانی شرکت / سازمان",
+     "text": "مقاصد آرمانی شرکت الکتروکویر (سازمان) از ۱۰ مؤلفه تشکیل شده است (سند RE-HM-007-00): "
+              "۱) **نقش در توسعه** — تبدیل شدن به Solution provider، ورود به بازارهای جدید و نوظهور، ورود به بورس، دیجیتال‌سازی نسل ۴، حرکت به سمت هولدینگ. "
+              "۲) **محصولات** — طراحی محصولات جدید درایو (فرکانس کانورتر)، الکتروموتور، اینورترهای خورشیدی، محصولات دانش‌بنیان (باسداکت، تابلو کوره، تابلو ژنراتور)، خدمات پس از فروش. "
+              "۳) **ذی‌نفعان** — ارتقاء کارکنان از طریق ارتباط با دانشگاه، پیاده‌سازی استاندارد امنیت اطلاعات ISO 27001. "
+              "۴) **رشد، رقابت و سودآوری** — رشد سالانه فروش، افزایش حاشیه سود، تمرکز بر مشتریان کلیدی (نفت/گاز/نیرو)، بهبود زنجیره تأمین. "
+              "۵) **ویژگی ممتاز** — جوایز ملی، محصولات جانبی و تکمیلی، همکاری با زیمنس. "
+              "۶) **تکنولوژی** — اجرای تحول دیجیتال نسل ۴، یکپارچه‌سازی و امنیت اطلاعات بر اساس ISO 27001، توسعه R&D. "
+              "۷) **ارزش‌ها** — شفافیت، رضایت مشتری، مسئولیت اجتماعی، کیفیت، انعطاف‌پذیری، ارتقای کارکنان، ارزش‌آفرینی از طریق مشاوره. "
+              "۸) **مسئولیت اجتماعی** — تعهد مدیریت به بهینه‌سازی مصرف انرژی و پسماند. "
+              "۹) **دیدگاه نسبت به کارکنان** — جانشین‌پروری، ارزیابی عملکرد، مصاحبه خروج، افزایش بهره‌وری نیروی انسانی. "
+              "۱۰) **چشم‌انداز** — رهبر بازار داخلی تابلو برق، بازیگر منطقه‌ای، ورود به حوزه‌های نو (الکتروموتور، درایو، اینورتر خورشیدی)، بورس، ساختار هولدینگ.",
+     "source_section": "بخش اول: جدول مؤلفه‌های مقصد آرمانی"},
+    {"doc_id": "planning-charter", "topic": "vision_1408",
+     "title": "چشم‌انداز ۱۴۰۸ شرکت الکتروکویر",
+     "text": "چشم‌انداز ۱۴۰۸ شرکت الکتروکویر (سازمان): پیشتاز در ارائه راهکارهای جامع نوآورانه با بهره‌مندی از فناوری‌های نوین صنعت برق، با تأکید بر مدیریت اطمینان و تعالی با ارائه محصولات، خدمات و راهکارهای ارزش‌آفرین در صنعت برق، در راستای رضایتمندی ذی‌نفعان و ارتقاء مسئولیت‌های اجتماعی. مرجع: منشور طرح‌ریزی (EKIP-1-04).",
+     "source_section": "چشم‌انداز الکتروکویر ۱۴۰۸"},
 
     # ---- Leave canonical facts (highest-volume HR queries) ----
     {"doc_id": "leave", "topic": "leave_annual",
