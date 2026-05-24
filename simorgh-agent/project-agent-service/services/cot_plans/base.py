@@ -86,17 +86,21 @@ class PlanGrounding:
     def is_empty(self) -> bool:
         return not self.blocks
 
-    def render(self, max_chars: int = 6000) -> str:
+    def render(self, max_chars: int = 2200) -> str:
         """Render as a labelled context block for the user message.
-        Truncates per-block at PROMPT_CHUNK_CHAR_CAP-equivalent and
-        the whole bundle at max_chars so a single bloated plan can't
-        blow the context window. Returns "" when empty so callers
-        can skip the section entirely."""
+        Defaults sized to keep us comfortably under gpt-oss-20b's
+        16384-token context (~12K chars header + 4K plans + ~3K
+        grounding + ~1K user message). Operator hit a 17669-token
+        prompt with the previous 6000-char default. Truncates per-
+        block at PROMPT_CHUNK_CHAR_CAP-equivalent and the whole
+        bundle at max_chars so a single bloated plan can't blow the
+        context window. Returns "" when empty so callers can skip
+        the section entirely."""
         if not self.blocks:
             return ""
         lines: List[str] = []
         total = 0
-        per_block_cap = 1200
+        per_block_cap = 450    # was 1200 — tight enough for 4-5 blocks
         for i, b in enumerate(self.blocks, start=1):
             text = (b.get("text") or "")
             if len(text) > per_block_cap:

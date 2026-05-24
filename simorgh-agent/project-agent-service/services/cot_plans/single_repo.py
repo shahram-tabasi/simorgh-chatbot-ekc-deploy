@@ -48,7 +48,7 @@ class SingleRepoPlan(CotPlan):
         g = PlanGrounding()
         try:
             from services.knowledge_repo_service import retrieve as kb_retrieve
-            hits = await kb_retrieve(ctx.user_input, top_k=4)
+            hits = await kb_retrieve(ctx.user_input, top_k=2)
         except Exception as e:
             log.warning("single_repo plan: knowledge retrieve failed: %s", e)
             hits = []

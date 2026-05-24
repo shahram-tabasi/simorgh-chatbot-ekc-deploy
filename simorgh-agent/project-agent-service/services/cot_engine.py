@@ -959,6 +959,42 @@ class COTEngine:
             f"Project Context:\n{context_str}{plan_grounding_text}"
             f"\n\nUser Request:\n{request.user_input}"
         )
+
+        # Hard safety cap. gpt-oss-20b has a 16,384-token max_model_len;
+        # operator hit 17,669 tokens before the plan_grounding_text and
+        # context_str trims landed. Estimate at ~3.5 chars/token; cap
+        # the COMBINED system + user message at ~48K chars (≈ 13.7K
+        # tokens) leaving ~2.5K tokens of headroom for the planner's
+        # response. If we'd blow past it, drop grounding first (it's
+        # the most expendable layer; the planner still has tools to
+        # fetch repo context), then trim context_str's tail.
+        BUDGET_CHARS = int(os.getenv("COT_PROMPT_BUDGET_CHARS", "48000"))
+        total = len(system_prompt) + len(user_msg)
+        if total > BUDGET_CHARS:
+            over = total - BUDGET_CHARS
+            logger.warning(
+                "cot prompt over budget by %d chars (total=%d, limit=%d); "
+                "trimming grounding+context to fit",
+                over, total, BUDGET_CHARS,
+            )
+            # Trim 1: drop the KNOWLEDGE GROUNDING block entirely.
+            if plan_grounding_text and over > 0:
+                saved = len(plan_grounding_text)
+                user_msg = user_msg.replace(plan_grounding_text, "")
+                over -= saved
+                logger.warning("  dropped grounding (-%d chars)", saved)
+            # Trim 2: tail-truncate context_str. The most recent rows
+            # of project context are usually the most relevant; lop
+            # off the HEAD (older / static guardrails) first.
+            if over > 0 and context_str in user_msg:
+                cut = min(len(context_str), over + 500)  # extra slack
+                user_msg = user_msg.replace(
+                    f"Project Context:\n{context_str}",
+                    f"Project Context:\n[... {cut} chars trimmed for token budget ...]"
+                    + context_str[cut:],
+                )
+                logger.warning("  trimmed project context head (-%d chars)", cut)
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg}

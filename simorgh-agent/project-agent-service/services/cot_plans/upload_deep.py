@@ -87,7 +87,7 @@ class UploadDeepPlan(CotPlan):
         # 1. Always-on knowledge layer.
         try:
             from services.knowledge_repo_service import retrieve as kb_retrieve
-            kb_hits = await kb_retrieve(ctx.user_input, top_k=4)
+            kb_hits = await kb_retrieve(ctx.user_input, top_k=2)
         except Exception as e:
             log.warning("upload_deep plan: knowledge retrieve failed: %s", e)
             kb_hits = []
