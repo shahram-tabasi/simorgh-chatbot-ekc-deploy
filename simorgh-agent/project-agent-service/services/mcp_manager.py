@@ -24,10 +24,25 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Optional, Dict, List, Any
 from contextlib import AsyncExitStack
 
 import httpx
+
+# Stopwords scrubbed from the user query before tool-name overlap
+# scoring. Just the cheap English filler — nothing fancy. Reduces
+# false-positive matches like "the" matching every tool description.
+_STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "of", "in", "on", "at",
+    "to", "for", "with", "by", "from", "this", "that", "these", "those",
+    "i", "me", "my", "we", "us", "our", "you", "your", "he", "she", "it",
+    "be", "as", "or", "and", "but", "not", "no", "yes", "what", "which",
+    "who", "whose", "where", "when", "why", "how", "do", "does", "did",
+    "can", "could", "would", "should", "shall", "will", "may", "might",
+    "have", "has", "had", "tell", "show", "give", "find", "get", "list",
+    "please", "thanks", "thank", "specification", "specifications",
+}
 from mcp import ClientSession
 try:
     from mcp.client.streamable_http import streamablehttp_client
@@ -224,34 +239,85 @@ class MCPManager:
             })
         return result
 
-    def get_tools_for_cot(self, *, compact: bool = True) -> str:
+    def get_tools_for_cot(
+        self, *,
+        compact: bool = True,
+        query: Optional[str] = None,
+        top_n: Optional[int] = None,
+        always_include: Optional[List[str]] = None,
+    ) -> str:
         """
         Get tool descriptions formatted for the COT system prompt.
-        This enables dynamic tool discovery - the COT engine sees
-        whatever tools are actually available from connected MCP servers.
 
-        Two formats:
-          compact=True  (DEFAULT):
-            `- name: description. Input keys: a, b, c (required: a)`
-            ~80-150 chars per line. With 67 connected tools this is
-            ~8K chars total — fits comfortably under gpt-oss-20b's
-            16K context after the rest of the system prompt + the
-            user message.
+        Two-axis filtering (per 2026 best practices — Anthropic Tool
+        Search Tool / OpenAI ToolSearchTool / "rule of thumb: ≤15
+        tools at a time"):
 
-          compact=False:
-            `- name: description. Input: {full JSON schema}`
-            ~300-600 chars per line. Useful for diagnostics or for
-            larger-context models, but causes "Input length exceeds
-            model's maximum context length" errors on 16K-context
-            gpt-oss when the project also has rich grounding.
+          format:
+            compact=True  (DEFAULT) — `- name: desc. Input keys: …`
+            compact=False           — `- name: desc. Input: {schema}`
 
-        Operator hit the 16K cap with the old verbose format
-        (2026-05-24): planner kept 502'ing and falling back to VLM.
-        Switched to compact by default; pass compact=False only
-        when schema details are genuinely needed.
+          selection:
+            query=None             — return every connected tool
+            query=<user input>     — score tools by token overlap with
+                                      the query against each tool's
+                                      name + description, return the
+                                      top_n highest scorers PLUS the
+                                      always_include set. Score is a
+                                      cheap bag-of-words count so no
+                                      embedding round-trip is needed
+                                      on the planner hot path.
+
+        always_include is the small set of tools the planner ALWAYS
+        needs for the common retrieval ladder (project tree walk,
+        read artifact, search context, llm synth). Without them the
+        scoring can drop critical infrastructure tools when the user
+        query is about a domain topic that doesn't lexically match
+        the tool names.
+
+        Operator hit gpt-oss-20b's 16K context limit (2026-05-24)
+        with all 67 tools in the prompt; top_n=15 + always-include
+        brings it down to ~3-4K chars and the planner accuracy goes
+        up too (validated by Anthropic's 49%→74% MCP-eval jump
+        when they shipped Tool Search Tool).
         """
+        # Default always-include — the planner's bread and butter.
+        if always_include is None:
+            always_include = [
+                "get_project_tree",
+                "read_artifact_mcp", "read_file_mcp",
+                "search_context", "search_blobs",
+                "llm",
+                "session_read_file_tool", "session_read_artifact_tool",
+                "session_write_file_tool",
+                "graph_query",
+            ]
+
+        all_tools = list(self.tool_schemas.values())
+
+        # Score + select.
+        if query and top_n is not None and top_n < len(all_tools):
+            query_words = {w for w in re.findall(r"[a-z0-9_]{2,}", query.lower())
+                           if w not in _STOPWORDS}
+            scored: List[tuple[int, Any]] = []
+            for tool in all_tools:
+                text = f"{tool.name} {tool.description or ''}".lower()
+                # Substring match per word (cheap, no tokeniser needed).
+                score = sum(1 for w in query_words if w in text)
+                scored.append((score, tool))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            chosen_names = set(always_include)
+            for score, tool in scored:
+                if len(chosen_names) >= top_n + len(always_include):
+                    break
+                chosen_names.add(tool.name)
+            selected = [t for t in all_tools if t.name in chosen_names]
+        else:
+            selected = all_tools
+
+        # Format.
         lines = []
-        for tool in self.tool_schemas.values():
+        for tool in selected:
             desc = tool.description or "No description"
             if compact:
                 props = {}
@@ -286,6 +352,17 @@ class MCPManager:
                 lines.append(
                     f"- {tool.name}: {desc}. Input: {schema_str}"
                 )
+
+        # Hint at the bottom so the planner knows other tools exist
+        # if the selected ones don't fit the task.
+        omitted = len(all_tools) - len(selected)
+        if omitted > 0:
+            lines.append(
+                f"# {omitted} additional tools omitted by relevance "
+                f"filter — if you need a capability not shown, re-phrase "
+                f"the request so the right tool surfaces, or fall back "
+                f"to llm.synthesize with a direct answer."
+            )
         return "\n".join(lines)
 
     def has_tool(self, tool_name: str) -> bool:

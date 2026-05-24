@@ -802,9 +802,21 @@ class COTEngine:
         # sources_enabled blocks have appended their guardrails. Joining
         # it here would silently drop those guardrails from the prompt.
 
-        # Build dynamic tool list from MCP or use fallback
+        # Build dynamic tool list from MCP or use fallback. PER-QUERY
+        # SELECTION: pass the user's request to mcp_manager so it can
+        # score tools by relevance and return only the top-N + always-
+        # include core set. 67 tools × ~150 chars/tool = ~10K chars
+        # static, which alone consumes ~30% of gpt-oss-20b's input
+        # budget; top_n=15 brings it down to ~3K chars. Per 2026
+        # research (Anthropic's Tool Search Tool, OpenAI's
+        # ToolSearchTool) selecting top-K relevant tools also IMPROVES
+        # planner accuracy — fewer tools = fewer decision-paralysis
+        # paths to consider.
         if self.mcp_manager and self.mcp_manager.is_connected:
-            mcp_tool_lines = self.mcp_manager.get_tools_for_cot()
+            mcp_tool_lines = self.mcp_manager.get_tools_for_cot(
+                query=request.user_input,
+                top_n=int(os.getenv("COT_MCP_TOPN", "15")),
+            )
             mcp_tools = f"You also have access to these microservice tools (via MCP):\n{mcp_tool_lines}"
         else:
             mcp_tools = _FALLBACK_MCP_TOOLS
