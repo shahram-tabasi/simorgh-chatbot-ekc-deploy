@@ -470,15 +470,33 @@ async def _background_loop() -> None:
 
 
 def start_background_refresh() -> None:
-    """Mount the background task. Idempotent — calling twice is a no-op."""
+    """Mount the background task. Idempotent — calling twice is a no-op.
+    Always logs the effective config at INFO so operators can see at a
+    glance whether the service is wired up (the legacy ekc_knowledge_
+    service emits separate "index not found" warnings that look related
+    but aren't — those are filesystem-based and unrelated to this
+    GitLab-mirroring service)."""
     global _refresh_task
+    if not KNOWLEDGE_REPO_PROJECT:
+        log.warning(
+            "knowledge_repo: NOT CONFIGURED — GITLAB_TECH_KB_REPO and "
+            "KNOWLEDGE_REPO_PROJECT are both empty. Background loop will "
+            "no-op. Set GITLAB_TECH_KB_REPO=<group>/<repo> in .env to "
+            "enable the always-on knowledge grounding layer."
+        )
+    else:
+        log.info(
+            "knowledge_repo: CONFIGURED project=%s branch=%s "
+            "collection=%s refresh_every_hours=%.1f embeddings=%s qdrant=%s",
+            KNOWLEDGE_REPO_PROJECT, KNOWLEDGE_REPO_BRANCH,
+            KNOWLEDGE_REPO_COLLECTION, KNOWLEDGE_REPO_REFRESH_HOURS,
+            EMBEDDINGS_URL, QDRANT_URL,
+        )
     if _refresh_task is not None and not _refresh_task.done():
         return
     _refresh_task = asyncio.create_task(_background_loop(),
                                          name="knowledge_repo_refresh")
-    log.info("knowledge background refresh started "
-             "interval=%.1fh project=%s",
-             KNOWLEDGE_REPO_REFRESH_HOURS, KNOWLEDGE_REPO_PROJECT or "(unset)")
+    log.info("knowledge_repo: background refresh task started")
 
 
 def stop_background_refresh() -> None:
