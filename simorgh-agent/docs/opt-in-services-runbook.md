@@ -140,55 +140,144 @@ docker compose up -d --force-recreate llm-gateway
 
 Pattern A: `doc-processor` keeps running; only when `USE_DOCLING=1` does
 it call the docling-serve container, with **silent fallback** to the
-pdfplumber+EasyOCR pipeline on any failure. Image is fully offline at
-runtime (models baked at build time).
+pdfplumber+EasyOCR pipeline on any failure.
 
-**Build the offline image (one-time, on `.68` which has Xray internet,
-or on any host with HuggingFace reachable):**
+Two ways to get the ~1.5 GB document-AI bundle (layout-heron,
+tableformer, code-equation, easyocr) onto `.68`:
+
+* **Phase 2a — recommended on .68**: download on a GitHub runner, ship
+  a tarball. The in-image build (`docling-tools models download`
+  inside `docker build`) stalls on the larger model weights through
+  Xray; the GH runner has fast direct HF access.
+* **Phase 2b — only where HF is fast/direct**: original build path that
+  bakes models into the image.
+
+Both end up populating the `simorgh_docling_models` docker volume that
+`svc-docling.yml` mounts at `/opt/docling-models`.
+
+### Phase 2a — fetch models via GitHub Actions (recommended)
+
+**On GitHub:**
+
+1. Repo → **Actions** → **Download Docling models**.
+2. *Run workflow*. Inputs:
+   * `docling_image_tag`: `latest` (default).
+   * `parts`: `1` if the host can scp ~1.5 GB in one shot; `2`+ to
+     stay under the 5 GB/day proxy cap (each part is its own
+     artifact, downloadable on different days).
+3. Wait ~10 min. Final log step prints the exact `gh run download`
+   + `scp` + extract commands tailored to your run-id and split.
+
+**On any internet-connected workstation:**
+
 ```bash
-# Inside simorgh-agent/:
-docker build -t simorgh-docling:offline -f docling/Dockerfile docling/
-# ~1.5 GB of ds4sd/docling-models downloaded into the image during build.
-# Takes ~10–20 min depending on Xray throughput.
+# Single piece:
+gh run download <RUN_ID> -R shahram-tabasi/simorgh-chatbot-ekc-deploy \
+    -n docling-models
+sha256sum -c docling-models.tar.gz.sha256
 
-# Verify the image exists:
+# OR split into N parts (download each on a different day):
+for i in $(seq 1 N); do
+  gh run download <RUN_ID> -R shahram-tabasi/simorgh-chatbot-ekc-deploy \
+      -n docling-models-part-${i}ofN
+done
+chmod +x REASSEMBLE.sh && ./REASSEMBLE.sh   # → docling-models.tar.gz
+```
+
+**Transfer + extract on `.68`:**
+
+```bash
+scp docling-models.tar.gz ubuntu@192.168.1.68:/tmp/
+
+# (now on .68)
+docker volume create simorgh_docling_models
+docker run --rm \
+  -v simorgh_docling_models:/dst \
+  -v /tmp:/src:ro \
+  alpine sh -c '
+    tar xzf /src/docling-models.tar.gz -C /dst &&
+    chown -R 1001:0 /dst &&
+    chmod -R g+rwX /dst &&
+    du -sh /dst
+  '
+# expect: ~1.5G   /dst
+
+# Tag the upstream image as `simorgh-docling:offline` so the compose
+# `image:` resolves without rebuilding:
+docker pull quay.io/docling-project/docling-serve-cpu:latest  # if needed
+docker tag quay.io/docling-project/docling-serve-cpu:latest simorgh-docling:offline
+```
+
+Skip phase 2b — jump to phase 2c.
+
+### Phase 2b — build models into the image (where HF is fast)
+
+The original path. Models get baked into the image at build time, then
+copied into the (initially empty) named volume on first start. Don't
+use this on .68 — `docling-tools models download` will stall on the
+larger files through Xray.
+
+```bash
+docker build -t simorgh-docling:offline -f docling/Dockerfile docling/
 docker images simorgh-docling:offline
 ```
 
-**Activate:**
+### Phase 2c — activate Docling
+
 ```bash
-# 1. Uncomment the include in simorgh-agent/docker-compose.yml:
+cd ~/simorgh-chatbot-ekc-deploy/simorgh-agent
+
+# 1. Uncomment the include in docker-compose.yml:
 sed -i 's|^  # - compose/svc-docling.yml|  - compose/svc-docling.yml|' docker-compose.yml
-grep -n svc-docling docker-compose.yml   # confirm it's uncommented
+grep -n 'compose/svc-docling.yml' docker-compose.yml
+# expect a line WITHOUT a leading '#'
 
-# 2. Add the flag:
-echo 'USE_DOCLING=1' >> .env
+# 2. Add the flag to .env:
+grep -q '^USE_DOCLING=' .env 2>/dev/null && \
+  sed -i 's/^USE_DOCLING=.*/USE_DOCLING=1/' .env || \
+  echo 'USE_DOCLING=1' >> .env
+grep USE_DOCLING .env
 
-# 3. Start docling-serve and recreate doc-processor with the new env:
+# 3. Start docling-serve:
 docker compose up -d docling-serve
+
+# 4. Wait for healthy (first-boot model load ~60s):
+until docker ps --filter name=^docling-serve$ --format '{{.Status}}' | grep -q '(healthy)'; do
+  echo "still starting: $(docker ps --filter name=^docling-serve$ --format '{{.Status}}')"
+  sleep 5
+done
+echo "OK — docling-serve healthy"
+
+# 5. Recreate doc-processor with the new env:
 docker compose up -d --force-recreate doc-processor
+until docker ps --filter name=^doc-processor$ --format '{{.Status}}' | grep -q '(healthy)'; do
+  sleep 3
+done
+echo "OK — doc-processor healthy"
 ```
 
-**Verify:**
+### Phase 2d — verify
+
 ```bash
-# docling-serve is up:
-docker ps --filter name=^docling-serve$ --format '{{.Status}}'
+# A. doc-processor sees the flag and the upstream:
+docker exec doc-processor env | grep -E 'USE_DOCLING|DOCLING_URL'
 
-# Re-upload a known PDF via the app or via doc-processor directly. The
-# pipeline tag in the resulting markdown should change from "pdfplumber"
-# to "docling" (depending on how doc-processor surfaces it):
-curl -s http://localhost:85/api/v2/documents/health  # or whichever lists pipeline
+# B. doc-processor can reach docling-serve over the app network:
+docker exec doc-processor wget -qO- http://docling-serve:5001/health
 
-# Tail logs for one upload — expect "docling_extract_ok" instead of fallback:
-docker logs -f doc-processor 2>&1 | grep -iE 'docling|fallback'
+# C. Models actually present in the volume:
+docker exec docling-serve ls -la /opt/docling-models | head -10
+
+# D. Tail logs during a real upload — look for docling, NOT pdfplumber:
+docker logs -f doc-processor 2>&1 | grep -iE 'docling|pdfplumber|fallback|extract'
 ```
 
-**Rollback:**
+**Rollback (instant):**
 ```bash
 sed -i 's/^USE_DOCLING=.*/USE_DOCLING=0/' .env
 docker compose up -d --force-recreate doc-processor
-docker compose stop docling-serve         # optional — saves RAM
-# Permanently disable: re-comment the include line.
+# pdfplumber+EasyOCR fallback re-engages immediately.
+docker compose stop docling-serve   # optional — saves RAM
 ```
 
 ---
