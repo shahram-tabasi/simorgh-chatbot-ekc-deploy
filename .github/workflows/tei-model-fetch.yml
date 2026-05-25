@@ -1,15 +1,12 @@
 name: Download TEI embeddings model
 
-# Downloads a HuggingFace embeddings model in the cache layout TEI
-# expects at /data, packages it as a tarball artifact. Sidesteps the
-# Xray HF stalls that brick `docker build` on the .68 host.
+# Downloads a HuggingFace embeddings model into the cache layout TEI
+# expects under /data, packages it as a tarball artifact. Sidesteps
+# the Xray HF stalls that brick `docker build` on .68.
 #
-# After download, extract on .68:
-#   docker volume create simorgh_tei_models
-#   docker run --rm -v simorgh_tei_models:/dst -v /tmp:/src:ro alpine \
-#       sh -c 'tar xzf /src/tei-model.tar.gz -C /dst && du -sh /dst'
-#   docker tag ghcr.io/huggingface/text-embeddings-inference:cpu-latest \
-#              simorgh-tei:offline
+# Uses the runner's native Python — the upstream TEI image is Rust
+# and doesn't have huggingface_hub importable from its python3 (which
+# is what the first version of this workflow tripped on).
 
 on:
   workflow_dispatch:
@@ -18,10 +15,6 @@ on:
         description: "HF repo id (must match Qdrant collection dim — default is the legacy 384-dim model)"
         type: string
         default: "sentence-transformers/all-MiniLM-L6-v2"
-      tei_base_tag:
-        description: "TEI base image tag used to source python+hub deps"
-        type: string
-        default: "cpu-latest"
       parts:
         description: "Split tarball into N artifacts (default 1; the 384-dim model is ~80 MB)"
         type: choice
@@ -36,37 +29,52 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Download model into TEI cache layout
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install --quiet "huggingface_hub==0.24.6"
+
+      - name: Download model in TEI cache layout
         env:
-          IMG: ghcr.io/huggingface/text-embeddings-inference:${{ inputs.tei_base_tag }}
           MODEL: ${{ inputs.embedding_model }}
+          # Disable hf_transfer / xet — TEI loads via plain snapshot
+          # files, not blobs.
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+          HF_HUB_DISABLE_XET: "1"
         run: |
           set -eu
           mkdir -p data
-          # Run inside the upstream TEI image so the python environment
-          # matches what the runtime container expects byte-for-byte. The
-          # snapshot_download call mirrors tei/Dockerfile exactly.
-          docker run --rm \
-            -v "$PWD/data:/data" \
-            --user 0 \
-            -e MODEL="$MODEL" \
-            --entrypoint python3 \
-            "$IMG" \
-            -c "import os; from huggingface_hub import snapshot_download; \
-                snapshot_download(repo_id=os.environ['MODEL'], \
-                                  cache_dir='/data', \
-                                  local_dir_use_symlinks=False)"
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          path = snapshot_download(
+              repo_id=os.environ["MODEL"],
+              cache_dir="data",
+              local_dir_use_symlinks=False,
+          )
+          print(f"Downloaded to: {path}")
+          PY
           echo "----- downloaded tree -----"
-          find data -maxdepth 3 -printf '%y %p\n'
+          find data -maxdepth 4 -printf '%y %p\n'
           du -sh data
+
+      - name: Compute model dirname (for install instructions)
+        id: dirname
+        env:
+          MODEL: ${{ inputs.embedding_model }}
+        run: |
+          # HF rewrites "owner/repo" to "models--owner--repo" in its cache.
+          DIRNAME="models--$(echo "$MODEL" | sed 's|/|--|')"
+          echo "dirname=$DIRNAME" >> "$GITHUB_OUTPUT"
+          ls data | grep -F "$DIRNAME" || (echo "::error::expected $DIRNAME in data/" && exit 1)
 
       - name: Pack tarball
         id: pack
         run: |
           set -eu
-          # Archive contents of data/ with no leading dir so extracting
-          # into a volume mounted at /data lands files at the path TEI's
-          # --model-id flag references.
           OUT="tei-model.tar.gz"
           tar -C data -czf "$OUT" .
           ls -lh "$OUT"
@@ -153,39 +161,26 @@ jobs:
       - name: Install instructions
         env:
           MODEL: ${{ inputs.embedding_model }}
-          TAG: ${{ inputs.tei_base_tag }}
+          DIRNAME: ${{ steps.dirname.outputs.dirname }}
         run: |
-          # Compute the cache subdir name (HF rewrites "owner/repo" to
-          # "models--owner--repo") for the --model-id flag.
-          FLAG="/data/models--$(echo "$MODEL" | tr '/' '-' | sed 's/^/--/' | sed 's/--/models--/')"
-          # ^ the above isn't quite right — recompute cleanly:
-          SAFE=$(echo "$MODEL" | tr '/' '__')   # owner__repo
-          DIRNAME="models--$(echo "$MODEL" | sed 's|/|--|')"
           cat <<EOF
           ============================================================
-          Artifact: tei-model   (model=${MODEL}, base=${TAG})
+          Artifact: tei-model   (model=${MODEL})
           ============================================================
-          # 1. Download + verify:
-          gh run download \$RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
-              -n tei-model     # (or per-part if split)
+          gh run download \$RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy -n tei-model
           sha256sum -c tei-model.tar.gz.sha256
-
-          # 2. Transfer to .68:
           scp tei-model.tar.gz ubuntu@192.168.1.68:/tmp/
 
-          # 3. Create volume + extract:
           docker volume create simorgh_tei_models
-          docker run --rm \\
-              -v simorgh_tei_models:/dst -v /tmp:/src:ro alpine \\
-              sh -c 'tar xzf /src/tei-model.tar.gz -C /dst && du -sh /dst && ls /dst'
-          # expect: a directory ${DIRNAME}/ inside /dst
+          docker run --rm -v simorgh_tei_models:/dst -v /tmp:/src:ro alpine \\
+              sh -c 'tar xzf /src/tei-model.tar.gz -C /dst && ls /dst && du -sh /dst'
+          # expect: /dst contains directory ${DIRNAME}/
 
-          # 4. Tag the upstream TEI image so compose resolves:
-          docker pull ghcr.io/huggingface/text-embeddings-inference:${TAG}
-          docker tag ghcr.io/huggingface/text-embeddings-inference:${TAG} simorgh-tei:offline
+          docker pull ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+          docker tag ghcr.io/huggingface/text-embeddings-inference:cpu-latest simorgh-tei:offline
 
-          # 5. Verify the --model-id flag in compose/svc-tei.yml still
-          #    matches the dirname above (${DIRNAME}). If you picked a
-          #    DIFFERENT embedding_model, update the flag accordingly.
+          # The compose --model-id flag points at /data/${DIRNAME}.
+          # If you chose a non-default embedding_model, update
+          # compose/svc-tei.yml's command list accordingly.
           ============================================================
           EOF

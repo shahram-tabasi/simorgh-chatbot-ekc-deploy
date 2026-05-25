@@ -1,9 +1,16 @@
-name: Download Whisper model (faster-whisper cache)
+name: Download Whisper model (CTranslate2 / int8)
 
-# Downloads a Whisper model AND runs the CTranslate2 int8 conversion on a
-# GitHub-hosted runner, packages the resulting HF_HOME cache as a tarball
-# artifact. This is the big one — ~3 GB for the Persian-tuned large-v3.
-# The runner does the heavy lifting so .68's Xray link doesn't have to.
+# Downloads a Whisper model from HuggingFace, converts it to CTranslate2
+# format (the format faster-whisper actually loads at runtime), and
+# ships the converted binaries as a tarball. Done on a GitHub runner so
+# .68's Xray link doesn't have to.
+#
+# Why convert here, not at runtime: the Persian-tuned models are
+# PyTorch-format HF repos, NOT pre-converted CT2 models. faster-whisper
+# can autoconvert, but it needs `transformers` + a working torch
+# environment and re-converts on every container start (~30s wasted per
+# restart). Doing it once on a runner ships pure CT2 binaries that
+# faster-whisper loads directly from a local path.
 #
 # After download, extract on .68:
 #   docker volume create simorgh_whisper_cache
@@ -18,11 +25,15 @@ on:
         description: "HF repo id for the Whisper model"
         type: string
         default: "MohammadGholizadeh/whisper-large-v3-persian-common-voice-17"
-      compute_type:
-        description: "faster-whisper compute type (drives CT2 conversion + cache layout)"
+      quantization:
+        description: "CTranslate2 quantization (drives the converted output)"
         type: choice
         default: "int8"
         options: ["int8", "int8_float16", "float16", "float32"]
+      output_dirname:
+        description: "Output subdir name inside the volume (also goes into WHISPER_MODEL env)"
+        type: string
+        default: "whisper-large-v3-persian"
       parts:
         description: "Split tarball into N artifacts (3 GB model → default 2 for 5 GB/day proxy cap)"
         type: choice
@@ -39,48 +50,62 @@ jobs:
     steps:
       - name: Free disk space on runner
         run: |
-          # ubuntu-latest has ~14 GB free by default; we need ~5 GB for the
-          # model + tarball. Trim the obvious bulk just to be safe.
           sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h /
 
-      - name: Download + convert Whisper model
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install converter deps
+        run: |
+          # ct2-transformers-converter ships with ctranslate2 and needs
+          # transformers + torch to load the source weights. Pin
+          # versions to ones known to work together; the unpinned
+          # combo occasionally pulls a transformers release that
+          # breaks ctranslate2's loader.
+          pip install --quiet \
+            "ctranslate2==4.4.0" \
+            "transformers==4.44.2" \
+            "torch==2.4.1" \
+            "huggingface_hub==0.24.6" \
+            "sentencepiece"
+
+      - name: Convert HF model to CT2 (int8)
         env:
-          IMG: fedirz/faster-whisper-server:latest-cpu
           MODEL: ${{ inputs.whisper_model }}
-          COMPUTE: ${{ inputs.compute_type }}
+          QUANT: ${{ inputs.quantization }}
+          OUTDIR: ${{ inputs.output_dirname }}
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+          HF_HUB_DISABLE_XET: "1"
         run: |
           set -eu
-          mkdir -p hf-cache
-          # Run inside the upstream faster-whisper-server image so the
-          # exact same WhisperModel() call as the Dockerfile produces a
-          # byte-compatible HF_HOME tree. The model + CTranslate2
-          # conversion happen here, on the runner.
-          docker run --rm \
-            -v "$PWD/hf-cache:/root/.cache/huggingface" \
-            --user 0 \
-            -e HF_HOME=/root/.cache/huggingface \
-            -e MODEL="$MODEL" \
-            -e COMPUTE="$COMPUTE" \
-            --entrypoint python3 \
-            "$IMG" \
-            -c "import os; from faster_whisper import WhisperModel; \
-                WhisperModel(os.environ['MODEL'], device='cpu', compute_type=os.environ['COMPUTE']); \
-                print('OK — download + conversion complete')"
-          echo "----- cache tree -----"
-          find hf-cache -maxdepth 4 -printf '%y %p\n' | head -60
-          du -sh hf-cache
+          mkdir -p out
+          # The converter downloads the source weights via huggingface_hub
+          # into the default HF cache, then writes the CT2 binaries to
+          # --output_dir. We --copy_files the tokenizer + preprocessor
+          # configs so the runtime container has everything it needs
+          # without re-touching HuggingFace.
+          ct2-transformers-converter \
+              --model "$MODEL" \
+              --output_dir "out/$OUTDIR" \
+              --copy_files tokenizer.json preprocessor_config.json \
+              --quantization "$QUANT" \
+              --force
+          echo "----- converted model -----"
+          ls -lh "out/$OUTDIR"
+          du -sh "out/$OUTDIR"
 
       - name: Pack tarball
         id: pack
         run: |
           set -eu
           OUT="whisper-model.tar.gz"
-          # gzip -1 — the model is mostly incompressible (already int8
-          # quantized weights), and -1 vs -6 saves ~30s of CPU on the
-          # runner with negligible size difference.
-          tar -C hf-cache -czf "$OUT" --options gzip:compression-level=1 . \
-            2>/dev/null || tar -C hf-cache -czf "$OUT" .
+          # gzip -1 — CT2 weights are already quantized; -6 vs -1 saves
+          # almost nothing and burns runner CPU.
+          tar -C out -czf "$OUT" --options gzip:compression-level=1 . \
+            2>/dev/null || tar -C out -czf "$OUT" .
           ls -lh "$OUT"
           sha256sum "$OUT" | tee "$OUT.sha256"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
@@ -202,22 +227,31 @@ jobs:
       - name: Install instructions
         env:
           MODEL: ${{ inputs.whisper_model }}
-          COMPUTE: ${{ inputs.compute_type }}
+          QUANT: ${{ inputs.quantization }}
+          OUTDIR: ${{ inputs.output_dirname }}
           PARTS: ${{ inputs.parts }}
           SPLIT: ${{ steps.split.outputs.split }}
         run: |
           if [ "$SPLIT" != "true" ]; then
             cat <<EOF
           ============================================================
-          Artifact: whisper-model   (${MODEL}, compute=${COMPUTE})
+          Artifact: whisper-model   (${MODEL}, quant=${QUANT})
           ============================================================
           gh run download \$RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy -n whisper-model
           sha256sum -c whisper-model.tar.gz.sha256
           scp whisper-model.tar.gz ubuntu@192.168.1.68:/tmp/
+
           docker volume create simorgh_whisper_cache
           docker run --rm -v simorgh_whisper_cache:/dst -v /tmp:/src:ro alpine \\
-              sh -c 'tar xzf /src/whisper-model.tar.gz -C /dst && du -sh /dst'
+              sh -c 'tar xzf /src/whisper-model.tar.gz -C /dst && du -sh /dst && ls /dst'
+          # expect: /dst contains directory ${OUTDIR}/ with model.bin etc.
+
+          docker pull fedirz/faster-whisper-server:latest-cpu
           docker tag fedirz/faster-whisper-server:latest-cpu simorgh-whisper:offline
+
+          # The compose env WHISPER_MODEL must be a LOCAL PATH pointing
+          # into the volume, NOT an HF repo id. Confirm svc-whisper.yml
+          # has:  WHISPER_MODEL=/models/${OUTDIR}
           ============================================================
           EOF
             exit 0
@@ -232,9 +266,12 @@ jobs:
           done
           chmod +x REASSEMBLE.sh && ./REASSEMBLE.sh
           scp whisper-model.tar.gz ubuntu@192.168.1.68:/tmp/
+
           ssh ubuntu@192.168.1.68 'docker volume create simorgh_whisper_cache && \\
               docker run --rm -v simorgh_whisper_cache:/dst -v /tmp:/src:ro alpine \\
                 sh -c "tar xzf /src/whisper-model.tar.gz -C /dst && du -sh /dst" && \\
+              docker pull fedirz/faster-whisper-server:latest-cpu && \\
               docker tag fedirz/faster-whisper-server:latest-cpu simorgh-whisper:offline'
+          # Then confirm compose/svc-whisper.yml has  WHISPER_MODEL=/models/${OUTDIR}
           ============================================================
           EOF

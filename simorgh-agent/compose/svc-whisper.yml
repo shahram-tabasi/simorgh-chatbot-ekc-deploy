@@ -3,12 +3,16 @@
 # Internal port 8000. Drop-in for stt-service.
 #
 # Activation:
-#   1. Build the offline image (see whisper/Dockerfile).
-#   2. Uncomment the master include for this file AND comment out svc-stt.yml.
-#   3. Repoint STT_URL in chat-service / project-agent-service:
-#        old: http://stt-service:8001
-#        new: http://whisper-server:8000
-#   4. Most clients calling POST /v1/audio/transcriptions work unchanged.
+#   1. Pre-populate the `simorgh_whisper_cache` volume via the
+#      `whisper-model-fetch` GH workflow. The workflow does the
+#      HF→CTranslate2 int8 conversion on a runner and ships pure CT2
+#      binaries — the in-image build path stalls on .68's Xray link
+#      AND requires runtime conversion (slow start-up).
+#   2. Tag the upstream image as simorgh-whisper:offline:
+#        docker tag fedirz/faster-whisper-server:latest-cpu simorgh-whisper:offline
+#   3. Uncomment the master include for this file AND comment out svc-stt.yml.
+#   4. Stop the old stt-service first (alias collision), then start
+#      whisper-server.
 # =============================================================================
 services:
   whisper-server:
@@ -26,15 +30,18 @@ services:
       - TRANSFORMERS_OFFLINE=1
       - WHISPER_DEFAULT_LANGUAGE=fa
       - WHISPER_COMPUTE_TYPE=int8
-      - WHISPER_MODEL=MohammadGholizadeh/whisper-large-v3-persian-common-voice-17
+      # WHISPER_MODEL is a LOCAL PATH (not an HF repo id) — points at
+      # the CT2-converted model that the workflow extracts into the
+      # volume. Keep this in sync with `output_dirname` input on the
+      # workflow (default: whisper-large-v3-persian).
+      - WHISPER_MODEL=/models/whisper-large-v3-persian
       - UVICORN_PORT=8001     # listen on legacy port so the alias works
-      - HF_HOME=/root/.cache/huggingface
     volumes:
-      # Persistent home for the ~3 GB Whisper model + CTranslate2 cache.
-      # Pre-populated by the `whisper-model-fetch` workflow (recommended
-      # on .68 — Xray almost certainly stalls on the in-build HF
-      # download) OR auto-filled from the baked image on first mount.
-      - whisper_cache:/root/.cache/huggingface
+      # Persistent home for the CT2-converted Whisper model. The
+      # workflow extracts whisper-model.tar.gz into this volume, which
+      # produces /models/<output_dirname>/ containing model.bin and
+      # the tokenizer/preprocessor configs faster-whisper needs.
+      - whisper_cache:/models
     networks:
       app_net:
         # Drop-in for stt-service: clients keep hitting
@@ -47,7 +54,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s     # first-run CTranslate2 conversion takes a moment
+      start_period: 60s      # CT2 load from local path is fast (~5–15s)
     restart: unless-stopped
     # GPU passthrough — uncomment if .68 has an NVIDIA GPU and CUDA runtime.
     # Switch the build base image to fedirz/faster-whisper-server:latest-cuda.
