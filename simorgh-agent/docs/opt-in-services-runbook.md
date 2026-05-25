@@ -298,7 +298,7 @@ in CoT instead.
 # 1. Generate a real secret_key (any random string works for an internal
 #    instance; this just signs the session cookie):
 SECRET=$(openssl rand -hex 32)
-echo "SEARXNG_SECRET=${SEARXNG_SECRET}" >> .env
+echo "SEARXNG_SECRET=${SECRET}" >> .env
 # OR edit searxng/settings.yml line 'secret_key:' directly.
 
 # 2. Uncomment the include:

@@ -1,0 +1,88 @@
+name: Download Piper voices (TTS)
+
+# Downloads Piper .onnx voice models on a GitHub runner, ships as a
+# small tarball. Voice files go into simorgh-agent/tts/voices/ on .68
+# (bind-mounted read-only into openedai-speech).
+#
+# Default is the Persian voice required by openedai-speech compose
+# (PRELOAD_MODEL=voices/fa_IR-amir-medium.onnx).
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_english:
+        description: "Also fetch an English voice (en_US-amy-medium) for fallback"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fetch voice files
+        env:
+          INCLUDE_EN: ${{ inputs.include_english }}
+        run: |
+          set -eu
+          mkdir -p voices
+          cd voices
+
+          # Persian — required by the compose PRELOAD_MODEL env.
+          # Models live in karim23657/Persian-Piper-Model-gyro on HF.
+          curl -fL --retry 3 -o fa_IR-amir-medium.onnx \
+            https://huggingface.co/karim23657/Persian-Piper-Model-gyro/resolve/main/fa_IR-amir-medium.onnx
+          curl -fL --retry 3 -o fa_IR-amir-medium.onnx.json \
+            https://huggingface.co/karim23657/Persian-Piper-Model-gyro/resolve/main/fa_IR-amir-medium.onnx.json
+
+          if [ "$INCLUDE_EN" = "true" ]; then
+            curl -fL --retry 3 -o en_US-amy-medium.onnx \
+              https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx
+            curl -fL --retry 3 -o en_US-amy-medium.onnx.json \
+              https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
+          fi
+
+          ls -lh
+          du -sh .
+
+      - name: Pack tarball
+        run: |
+          set -eu
+          tar -C voices -czf piper-voices.tar.gz .
+          ls -lh piper-voices.tar.gz
+          sha256sum piper-voices.tar.gz | tee piper-voices.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: piper-voices
+          path: |
+            piper-voices.tar.gz
+            piper-voices.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      - name: Install instructions
+        run: |
+          cat <<'EOF'
+          ============================================================
+          Artifact: piper-voices
+          ============================================================
+          # 1. Download + verify:
+          gh run download $RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy -n piper-voices
+          sha256sum -c piper-voices.tar.gz.sha256
+
+          # 2. Transfer to .68 and extract directly into the bind-mount source:
+          scp piper-voices.tar.gz ubuntu@192.168.1.68:/tmp/
+          ssh ubuntu@192.168.1.68 '
+            cd ~/simorgh-chatbot-ekc-deploy/simorgh-agent/tts/voices &&
+            tar xzf /tmp/piper-voices.tar.gz &&
+            ls -lh
+          '
+          # The openedai-speech compose bind-mounts ../tts/voices read-only,
+          # so the container picks up these files on next start.
+          ============================================================
+          EOF

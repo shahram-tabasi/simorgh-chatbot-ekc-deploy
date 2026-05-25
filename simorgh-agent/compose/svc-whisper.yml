@@ -28,6 +28,13 @@ services:
       - WHISPER_COMPUTE_TYPE=int8
       - WHISPER_MODEL=MohammadGholizadeh/whisper-large-v3-persian-common-voice-17
       - UVICORN_PORT=8001     # listen on legacy port so the alias works
+      - HF_HOME=/root/.cache/huggingface
+    volumes:
+      # Persistent home for the ~3 GB Whisper model + CTranslate2 cache.
+      # Pre-populated by the `whisper-model-fetch` workflow (recommended
+      # on .68 — Xray almost certainly stalls on the in-build HF
+      # download) OR auto-filled from the baked image on first mount.
+      - whisper_cache:/root/.cache/huggingface
     networks:
       app_net:
         # Drop-in for stt-service: clients keep hitting
@@ -56,3 +63,8 @@ networks:
   app_net:
     name: simorgh_app_net
     driver: bridge
+
+volumes:
+  whisper_cache:
+    name: simorgh_whisper_cache
+    external: true

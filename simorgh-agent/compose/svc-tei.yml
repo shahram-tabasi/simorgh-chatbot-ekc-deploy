@@ -33,6 +33,12 @@ services:
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
       - HF_HOME=/data
+    volumes:
+      # Persistent home for the embeddings-model cache. Pre-populated
+      # by the `tei-model-fetch` workflow (recommended on .68 — Xray
+      # tends to stall on the in-build HF download) OR auto-filled from
+      # the baked image's /data on first mount where HF egress is fast.
+      - tei_models:/data
     networks:
       app_net:
         # Drop-in for embeddings-service: clients keep hitting
@@ -54,3 +60,11 @@ networks:
   app_net:
     name: simorgh_app_net
     driver: bridge
+
+volumes:
+  tei_models:
+    # External-style name: created out-of-band via `docker volume create
+    # simorgh_tei_models` and pre-populated by the workflow. Set to
+    # external: true so `docker compose` doesn't warn about reusing it.
+    name: simorgh_tei_models
+    external: true

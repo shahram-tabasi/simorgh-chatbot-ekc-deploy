@@ -75,8 +75,8 @@ networks:
 
 volumes:
   docling_models:
-    # External-style fixed name so the workflow's pre-populate step
-    # (which targets `simorgh_docling_models`) lands here. Keep this
-    # in sync with the install instructions in docling-models-fetch.yml.
+    # Created out-of-band via `docker volume create simorgh_docling_models`
+    # and pre-populated by the docling-models-fetch workflow. `external: true`
+    # silences the compose warning about reusing a non-Compose-created volume.
     name: simorgh_docling_models
-    driver: local
+    external: true
