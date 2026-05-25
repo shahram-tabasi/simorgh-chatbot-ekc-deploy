@@ -44,6 +44,24 @@ services:
       - LITELLM_TELEMETRY=False     # offline-safe: no phone-home
       # - LITELLM_MASTER_KEY=...     # set if you want /v1 endpoints auth-gated
       # - DATABASE_URL=...           # set if you want spend tracking via Postgres
+
+      # The docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (Xray)
+      # so containers can reach the public internet. LAN destinations
+      # (.61 / .62 — the vLLM boxes we proxy to) MUST bypass it: Xray 503s
+      # on RFC1918 dst. httpx (litellm's HTTP client) and the openai SDK
+      # do NOT honor CIDR in NO_PROXY, so blank HTTP_PROXY entirely and
+      # wildcard NO_PROXY so nothing accidentally tunnels.
+      #
+      # Without these, /v1/chat/completions returns 503 from inside the
+      # container even though the host can curl http://192.168.1.61/v1/...
+      # directly. /health/readiness will show all endpoints unhealthy.
+      # (Reproduced May 2026 — symptom: B says 503, E says 200.)
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
     networks:
       - app_net
     healthcheck:
