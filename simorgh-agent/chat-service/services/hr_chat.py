@@ -61,12 +61,14 @@ HR_LLM_MODEL      = os.getenv("HR_LLM_MODEL", "gpt-oss-20b")
 RETRIEVAL_K     = int(os.getenv("HR_RETRIEVAL_K", "15"))
 GROUNDING_K     = int(os.getenv("HR_GROUNDING_K", "10"))
 # Cosine score below which we treat the query as out-of-corpus.
-# Lowered from 0.30 → 0.15 after operator-reported false refusals on
-# obvious queries. Multilingual sentence-transformer models tend to
-# produce lower absolute scores than English-only ones; 0.15 still
-# rejects pure noise but lets in soft matches that gpt-oss can rule
-# on. Override via HR_RELEVANCE_THRESHOLD if you need it stricter.
-RELEVANCE_THRESHOLD = float(os.getenv("HR_RELEVANCE_THRESHOLD", "0.15"))
+# 0.20 — slightly stricter than the previous 0.15. Combined with the
+# intent router (which injects a priority card at score=0.99 when
+# the query matches a known canonical pattern), this means:
+#   • Intent-routed queries never refuse (priority card is 0.99).
+#   • Cosine-only queries need a real semantic match at ≥0.20 raw,
+#     otherwise refuse instead of letting the LLM hallucinate.
+# Override via HR_RELEVANCE_THRESHOLD.
+RELEVANCE_THRESHOLD = float(os.getenv("HR_RELEVANCE_THRESHOLD", "0.20"))
 # Per-chunk character cap injected into the prompt. Bumped from 1200
 # to 2400 so the new comprehensive summary cards (e.g. leave_all_types
 # at ~1500 chars, recruitment_summary at ~1800, access_summary at
@@ -170,91 +172,283 @@ def _chunk_bias(payload: Dict[str, Any]) -> float:
 #
 # Order matters within a single route — first topic listed becomes
 # the top-1 citation in the prompt.
+# Regex helpers — Persian writers freely mix half-spaces, ZWNJ, full
+# spaces, and Arabic/Persian "y" (ی / ي). `_S` matches any of them
+# zero-or-more times so a single pattern catches every variant.
+_S = r"[\s‌‏ ]*"   # whitespace + ZWNJ + RTL + nbsp
+_Y = r"[يی]"                       # Arabic ya & Persian ya
+_A = r"[آا]"                       # alef variants
+
+
+def _p(s: str) -> str:
+    """Compact-pattern helper: writes a regex with __ standing in for
+    flexible whitespace so the patterns below stay readable."""
+    return s.replace(" ", _S).replace("ی", _Y).replace("ا", _A)
+
+
 _INTENT_ROUTES: List[Tuple[re.Pattern, List[str]]] = [
-    # Leave-type enumeration queries
-    (re.compile(r"(انواع|لیست|فهرست|چه\s*نوع|نوع\s*ها[یي]|kinds?|types?)\s*مرخصی"
-                r"|مرخصی\s*چه\s*(نوع|انواع)", re.IGNORECASE),
+    # ────────────────────────────────────────────────────────────
+    # LEAVE — 4-tier hierarchical structure per EKWI-AD-006-01:
+    #   1. مرخصی استحقاقی (with sub-types: روزانه، ساعتی، مجوز خروج،
+    #      شیردهی، زایمان، ازدواج و فوت، تشویقی)
+    #   2. مرخصی استعلاجی
+    #   3. مرخصی بدون حقوق (with sub-type: تحصیلی)
+    #   4. مرخصی حج
+    # ────────────────────────────────────────────────────────────
+    # Enumeration "what leave types exist?" — broadest match first.
+    # Persian: انواع / لیست / فهرست / تمام / همه / کلیه + plural/ZWNJ
+    # variants of "نوع". English: kinds of leave, leave types,
+    # what leaves are available, list all leaves.
+    (re.compile(_p(r"(انواع|لیست|فهرست|تمام|همه|کلیه)"
+                   r"[\s‌]*مرخصی"
+                   r"|(چه|چی|کدام)"
+                   r"[\s‌]*(نوع|نوعی|نوع‌ها|نوع ها|نوع‌های|نوع های)?"
+                   r"[\s‌]*مرخصی"
+                   r"|مرخصی"
+                   r"[\s‌]*(چه|چی|انواعش|چه نوع|چه چیز|چی هست)"
+                   r"|ساختار[\s‌]*مرخصی"
+                   r"|(kinds?|types?|all kinds?|list|what)"
+                   r"[\s‌]*(of[\s‌]*)?leaves?"
+                   r"|leaves?[\s‌]*(types?|available|allowed)"),
+                re.IGNORECASE),
      ["leave_all_types", "anchor_leave_types"]),
-    # Leave durations
-    (re.compile(r"(چند\s*روز|سقف|مدت)\s*مرخصی\s*(استحقاقی|سالانه)"
-                r"|مرخصی\s*(استحقاقی|سالانه)\s*(چقدر|چند)", re.IGNORECASE),
+
+    # Annual / استحقاقی durations
+    (re.compile(_p(r"(چند روز|سقف|مدت|میزان|چقدر|چه قدر|تعداد روز)"
+                   r"[\s‌]*مرخصی[\s‌]*(استحقاقی|سالانه|سالیانه)"
+                   r"|مرخصی[\s‌]*(استحقاقی|سالانه|سالیانه)"
+                   r"[\s‌]*(چقدر|چه قدر|چند|چه میزان|سقف|مدت|"
+                   r"چند روز|تعداد)"
+                   r"|annual[\s‌]*leave"), re.IGNORECASE),
      ["anchor_leave_days", "leave_annual", "leave_all_types"]),
-    (re.compile(r"مرخصی\s*زایمان|maternity", re.IGNORECASE),
-     ["anchor_maternity_days", "leave_maternity"]),
-    (re.compile(r"مرخصی\s*(شیر\s*ده[یي]|شیردهی)|lactation", re.IGNORECASE),
-     ["leave_lactation"]),
-    (re.compile(r"مرخصی\s*ساعتی", re.IGNORECASE),
-     ["leave_hourly"]),
-    (re.compile(r"مرخصی\s*(استعلاجی|بیماری)|sick\s*leave", re.IGNORECASE),
-     ["leave_sick"]),
-    (re.compile(r"مرخصی\s*بدون\s*حقوق|unpaid\s*leave", re.IGNORECASE),
-     ["leave_unpaid"]),
-    (re.compile(r"مرخصی\s*(تحصیلی|آموزشی)", re.IGNORECASE),
-     ["leave_study"]),
-    (re.compile(r"مرخصی\s*حج", re.IGNORECASE),
-     ["leave_hajj"]),
-    (re.compile(r"ذخیره\s*مرخصی|بازخرید\s*مرخصی", re.IGNORECASE),
-     ["leave_buyback", "leave_banking"]),
-    # Overtime
-    (re.compile(r"(انواع|قواعد|سقف|نرخ|مقررات)\s*اضافه\s*کاری"
-                r"|اضافه\s*کاری\s*(چقدر|چند|چگونه|چیست)|overtime", re.IGNORECASE),
+
+    # Storage / ذخیره / buyback
+    (re.compile(_p(r"(ذخیره|انباشت|انباشته|ذخیره‌سازی)"
+                   r"[\s‌]*مرخصی"
+                   r"|بازخرید[\s‌]*مرخصی"
+                   r"|مرخصی[\s‌]*(منفی|انباشته|ذخیره)"
+                   r"|leave[\s‌]*(banking|carry|buyback)"), re.IGNORECASE),
+     ["leave_buyback", "leave_banking", "leave_all_types"]),
+
+    # Maternity / زایمان
+    (re.compile(_p(r"(مرخصی[\s‌]*)?زایمان"
+                   r"|maternity[\s‌]*leave?"
+                   r"|بعد از زایمان|قبل از زایمان"), re.IGNORECASE),
+     ["anchor_maternity_days", "leave_maternity", "leave_all_types"]),
+
+    # Lactation / شیردهی
+    (re.compile(_p(r"(مرخصی[\s‌]*)?(شیردهی|شیر ده|شیر دادن|حق شیر)"
+                   r"|lactation|breast[\s‌]*feed"), re.IGNORECASE),
+     ["leave_lactation", "leave_all_types"]),
+
+    # Hourly / ساعتی — sub-type of استحقاقی
+    (re.compile(_p(r"مرخصی[\s‌]*ساعتی"
+                   r"|ساعتی[\s‌]*مرخصی"
+                   r"|hourly[\s‌]*leave?"), re.IGNORECASE),
+     ["leave_hourly", "leave_all_types"]),
+
+    # Daily / روزانه — sub-type of استحقاقی
+    (re.compile(_p(r"مرخصی[\s‌]*روزانه"
+                   r"|daily[\s‌]*leave?"), re.IGNORECASE),
+     ["leave_daily_calculation", "leave_all_types"]),
+
+    # Exit permit / مجوز خروج — sub-type of استحقاقی
+    (re.compile(_p(r"مجوز[\s‌]*خروج"
+                   r"|exit[\s‌]*permit"), re.IGNORECASE),
+     ["leave_exit_permit", "leave_all_types"]),
+
+    # Marriage / ازدواج
+    (re.compile(_p(r"مرخصی[\s‌]*(ازدواج|عروسی|نکاح)"
+                   r"|ازدواج[\s‌]*(و فوت|دائم)"
+                   r"|marriage[\s‌]*leave?"), re.IGNORECASE),
+     ["leave_marriage_bereavement", "leave_all_types"]),
+
+    # Bereavement / فوت
+    (re.compile(_p(r"مرخصی[\s‌]*(فوت|عزا|تدفین)"
+                   r"|فوت[\s‌]*(پدر|مادر|همسر|فرزند)"
+                   r"|bereavement|funeral"), re.IGNORECASE),
+     ["leave_marriage_bereavement", "leave_all_types"]),
+
+    # Incentive / تشویقی — sub-type of استحقاقی
+    (re.compile(_p(r"مرخصی[\s‌]*(تشویقی|آموزشی|ترغیبی)"
+                   r"|incentive[\s‌]*leave?"), re.IGNORECASE),
+     ["leave_incentive", "leave_all_types"]),
+
+    # Sick / استعلاجی
+    (re.compile(_p(r"مرخصی[\s‌]*(استعلاجی|پزشکی|بیماری)"
+                   r"|بیماری[\s‌]*و[\s‌]*مرخصی"
+                   r"|sick[\s‌]*leave?"), re.IGNORECASE),
+     ["leave_sick", "leave_sick_to_annual_conversion", "leave_all_types"]),
+
+    # Unpaid / بدون حقوق
+    (re.compile(_p(r"مرخصی[\s‌]*بدون[\s‌]*حقوق"
+                   r"|بدون[\s‌]*حقوق[\s‌]*مرخصی"
+                   r"|unpaid[\s‌]*leave?"), re.IGNORECASE),
+     ["leave_unpaid", "leave_all_types"]),
+
+    # Study / تحصیلی — sub-type of بدون حقوق
+    (re.compile(_p(r"مرخصی[\s‌]*تحصیلی"
+                   r"|تحصیلی[\s‌]*مرخصی"
+                   r"|study[\s‌]*leave?"), re.IGNORECASE),
+     ["leave_study", "leave_all_types"]),
+
+    # Hajj / حج
+    (re.compile(_p(r"مرخصی[\s‌]*(حج|عمره)"
+                   r"|حج[\s‌]*(تمتع|واجب)"
+                   r"|hajj[\s‌]*leave?|umrah"), re.IGNORECASE),
+     ["leave_hajj", "leave_all_types"]),
+
+    # Registration / how to register a leave
+    (re.compile(_p(r"(ثبت|درخواست|گرفتن|چگونه|چطور|روش)"
+                   r"[\s‌]*مرخصی"
+                   r"|کسرا[\s‌]*مرخصی"
+                   r"|سامانه[\s‌]*مرخصی"), re.IGNORECASE),
+     ["leave_registration", "leave_all_types"]),
+
+    # ────────────────────────────────────────────────────────────
+    # OVERTIME
+    # ────────────────────────────────────────────────────────────
+    (re.compile(_p(r"(انواع|قواعد|سقف|حداکثر|نرخ|مقررات|قوانین|"
+                   r"شرایط|چقدر|چه قدر|چگونه|چطور)"
+                   r"[\s‌]*(اضافه[\s‌]*کاری|اضافه‌کاری)"
+                   r"|(اضافه[\s‌]*کاری|اضافه‌کاری)"
+                   r"[\s‌]*(چقدر|چند|چگونه|چیست|چی هست|سقف|نرخ)"
+                   r"|overtime|extra[\s‌]*hours?"), re.IGNORECASE),
      ["overtime_summary", "anchor_overtime_cap", "overtime"]),
-    # Attendance
-    (re.compile(r"(کسرا|سامانه\s*حضور|حضور\s*و\s*غیاب|attendance)", re.IGNORECASE),
+    (re.compile(_p(r"(شب[\s‌]*کاری|نوبت[\s‌]*کاری|"
+                   r"شیفت|night[\s‌]*shift)"), re.IGNORECASE),
+     ["night_shift", "overtime_summary"]),
+
+    # ────────────────────────────────────────────────────────────
+    # ATTENDANCE
+    # ────────────────────────────────────────────────────────────
+    (re.compile(_p(r"(کسرا|kasra|electrokavir\.com"
+                   r"|سامانه[\s‌]*حضور"
+                   r"|حضور[\s‌]*و[\s‌]*غیاب"
+                   r"|نرم[\s‌]*افزار[\s‌]*حضور"
+                   r"|نرم‌افزار[\s‌]*حضور"
+                   r"|attendance[\s‌]*system)"), re.IGNORECASE),
      ["attendance_summary", "anchor_attendance_system", "attendance"]),
-    (re.compile(r"تأخیر|تاخیر|دیر\s*آمدن", re.IGNORECASE),
+    (re.compile(_p(r"(تأخیر|تاخیر|دیر[\s‌]*آمدن|دیر[\s‌]*رسیدن"
+                   r"|late[\s‌]*arrival)"), re.IGNORECASE),
      ["late_arrival", "attendance_summary"]),
-    # Recruitment
-    (re.compile(r"(فرآیند|روند|مراحل|چگونگی)\s*(جذب|استخدام)"
-                r"|استخدام\s*(چگونه|چطور)|recruitment|hiring", re.IGNORECASE),
+    (re.compile(_p(r"(تردد[\s‌]*گذشته|بازه[\s‌]*ثبت"
+                   r"|retroactive)"), re.IGNORECASE),
+     ["retroactive_window", "attendance_summary"]),
+
+    # ────────────────────────────────────────────────────────────
+    # RECRUITMENT / HIRING
+    # ────────────────────────────────────────────────────────────
+    (re.compile(_p(r"(فرآیند|روند|مراحل|نحوه|چگونگی|چگونه|چطور)"
+                   r"[\s‌]*(جذب|استخدام)"
+                   r"|استخدام[\s‌]*(چگونه|چطور|چیست|چی هست)"
+                   r"|recruitment|hiring[\s‌]*process"), re.IGNORECASE),
      ["recruitment_summary"]),
-    (re.compile(r"شرایط\s*سنی|محدودیت\s*سنی|سن\s*استخدام", re.IGNORECASE),
-     ["anchor_age_limit", "age_limit"]),
-    (re.compile(r"مدارک\s*(استخدام|مورد\s*نیاز)", re.IGNORECASE),
-     ["anchor_recruitment_docs", "required_documents"]),
-    (re.compile(r"انواع\s*قرارداد|قرارداد\s*های\s*کار", re.IGNORECASE),
-     ["contract_types"]),
-    # Termination
-    (re.compile(r"(استعفا|قطع\s*همکاری|خروج\s*از\s*شرکت|ترک\s*خدمت|resignation)"
-                r"|(فرآیند|روند|مراحل)\s*خروج", re.IGNORECASE),
+    (re.compile(_p(r"(شرایط[\s‌]*سنی|محدودیت[\s‌]*سن"
+                   r"|سن[\s‌]*استخدام"
+                   r"|age[\s‌]*limit)"), re.IGNORECASE),
+     ["anchor_age_limit", "age_limit", "recruitment_summary"]),
+    (re.compile(_p(r"مدارک[\s‌]*(استخدام|مورد[\s‌]*نیاز)"
+                   r"|چه[\s‌]*مدارک"
+                   r"|required[\s‌]*documents?"), re.IGNORECASE),
+     ["anchor_recruitment_docs", "required_documents", "recruitment_summary"]),
+    (re.compile(_p(r"(انواع|نوع|اقسام)[\s‌]*قرارداد"
+                   r"|قرارداد[\s‌]*(کار|های[\s‌]*کار)"
+                   r"|contract[\s‌]*types?"), re.IGNORECASE),
+     ["contract_types", "recruitment_summary"]),
+    (re.compile(_p(r"(شرایط[\s‌]*عمومی|عمومی[\s‌]*استخدام"
+                   r"|general[\s‌]*requirements?)"), re.IGNORECASE),
+     ["general_requirements", "recruitment_summary"]),
+
+    # ────────────────────────────────────────────────────────────
+    # TERMINATION / RESIGNATION
+    # ────────────────────────────────────────────────────────────
+    (re.compile(_p(r"(استعفا|استعفاء|قطع[\s‌]*همکاری"
+                   r"|خروج[\s‌]*از[\s‌]*شرکت"
+                   r"|ترک[\s‌]*خدمت|ترک[\s‌]*کار"
+                   r"|resignation|termination)"
+                   r"|(فرآیند|روند|مراحل|نحوه)"
+                   r"[\s‌]*خروج"), re.IGNORECASE),
      ["termination_summary", "anchor_resignation_notice", "resignation_notice"]),
-    (re.compile(r"تسویه\s*حساب|settlement", re.IGNORECASE),
+    (re.compile(_p(r"(تسویه|تسویه[\s‌]*حساب|settlement"
+                   r"|پایان[\s‌]*همکاری[\s‌]*مالی)"), re.IGNORECASE),
      ["settlement", "termination_summary"]),
-    (re.compile(r"مصاحبه\s*خروج|exit\s*interview", re.IGNORECASE),
-     ["exit_interview"]),
-    # Loan
-    (re.compile(r"(انواع|لیست|فهرست)\s*(وام|تسهیلات)"
-                r"|وام\s*چه\s*(نوع|انواع)|loan", re.IGNORECASE),
+    (re.compile(_p(r"(مصاحبه[\s‌]*خروج"
+                   r"|exit[\s‌]*interview)"), re.IGNORECASE),
+     ["exit_interview", "termination_summary"]),
+
+    # ────────────────────────────────────────────────────────────
+    # LOAN
+    # ────────────────────────────────────────────────────────────
+    (re.compile(_p(r"(انواع|لیست|فهرست|چه[\s‌]*نوع|نوع‌های"
+                   r"|all[\s‌]*kinds?|types?)"
+                   r"[\s‌]*(وام|تسهیلات)"
+                   r"|(وام|تسهیلات)[\s‌]*(چه|چی|چه نوع|انواعش)"
+                   r"|loan[\s‌]*types?"), re.IGNORECASE),
      ["loan_summary", "anchor_loan_types", "loan_types"]),
-    (re.compile(r"سقف\s*وام|مبلغ\s*وام", re.IGNORECASE),
+    (re.compile(_p(r"(سقف|حداکثر|مبلغ|چقدر)[\s‌]*وام"
+                   r"|loan[\s‌]*(amount|tier|cap)"), re.IGNORECASE),
      ["loan_tiers", "loan_summary"]),
-    (re.compile(r"وام\s*ضروری", re.IGNORECASE),
+    (re.compile(_p(r"وام[\s‌]*(ضروری|اضطراری|بیماری|تصادف)"
+                   r"|emergency[\s‌]*loan"), re.IGNORECASE),
      ["loan_emergency_eligibility", "loan_summary"]),
-    # Promotion
-    (re.compile(r"(انتصاب|ارتقا|ارتقاء)|promotion", re.IGNORECASE),
+    (re.compile(_p(r"وام[\s‌]*(امتیازی|بانکی)"), re.IGNORECASE),
+     ["loan_summary", "loan_tiers"]),
+
+    # ────────────────────────────────────────────────────────────
+    # PROMOTION
+    # ────────────────────────────────────────────────────────────
+    (re.compile(_p(r"(انتصاب|ارتقا|ارتقاء|ارتقای)"
+                   r"|(فرآیند|روند|مراحل)[\s‌]*(انتصاب|ارتقا)"
+                   r"|promotion|appointment"), re.IGNORECASE),
      ["promotion_summary", "anchor_promotion_phase", "promotion_committee"]),
-    # Access control
-    (re.compile(r"(تردد|حراست|نگهبان[یي]?|ورود\s*و\s*خروج)|access\s*control", re.IGNORECASE),
+    (re.compile(_p(r"(کمیته[\s‌]*ارتقا"
+                   r"|promotion[\s‌]*committee)"), re.IGNORECASE),
+     ["promotion_committee", "promotion_summary"]),
+    (re.compile(_p(r"(جانشین[\s‌]*پرور|جانشین"
+                   r"|deputy|succession)"), re.IGNORECASE),
+     ["deputy_phase", "promotion_summary"]),
+
+    # ────────────────────────────────────────────────────────────
+    # ACCESS CONTROL
+    # ────────────────────────────────────────────────────────────
+    (re.compile(_p(r"(تردد|حراست|نگهبانی|نگهبان"
+                   r"|ورود[\s‌]*و[\s‌]*خروج"
+                   r"|access[\s‌]*control|security[\s‌]*gate)"),
+                re.IGNORECASE),
      ["access_summary"]),
-    (re.compile(r"(ساعات?\s*غیر\s*اداری|تعطیلات|اضافه\s*کاری\s*شب)", re.IGNORECASE),
-     ["anchor_off_hours_request", "access_off_hours"]),
-    (re.compile(r"(انبار|بسته\s*بندی|برگه\s*خروج)", re.IGNORECASE),
-     ["access_warehouse_timing"]),
-    (re.compile(r"مهمان|بازدید|کارآموز", re.IGNORECASE),
-     ["access_visitors"]),
-    # Strategy / vision / mission / values
-    (re.compile(r"چشم\s*انداز|چشم‌انداز|vision", re.IGNORECASE),
+    (re.compile(_p(r"(ساعات?[\s‌]*غیر[\s‌]*اداری"
+                   r"|غیراداری|ساعات[\s‌]*غیر[\s‌]*اداری"
+                   r"|ساعات[\s‌]*شب|تعطیلات[\s‌]*حضور"
+                   r"|off[\s‌]*hours?)"), re.IGNORECASE),
+     ["anchor_off_hours_request", "access_off_hours", "access_summary"]),
+    (re.compile(_p(r"(انبار|بسته[\s‌]*بندی|بسته‌بندی"
+                   r"|برگه[\s‌]*خروج|warehouse)"), re.IGNORECASE),
+     ["access_warehouse_timing", "access_summary"]),
+    (re.compile(_p(r"(مهمان|بازدید|کارآموز|visitor|guest|intern)"),
+                re.IGNORECASE),
+     ["access_visitors", "access_summary"]),
+
+    # ────────────────────────────────────────────────────────────
+    # STRATEGY / VISION / MISSION / VALUES / POLICY / GOALS
+    # ────────────────────────────────────────────────────────────
+    (re.compile(_p(r"(چشم[\s‌]*انداز|چشم‌انداز|vision)"), re.IGNORECASE),
      ["vision", "anchor_vision", "vision_1408"]),
-    (re.compile(r"(مأموریت|ماموریت|رسالت)|mission", re.IGNORECASE),
+    (re.compile(_p(r"(مأموریت|ماموریت|رسالت|mission)"), re.IGNORECASE),
      ["mission", "anchor_mission"]),
-    (re.compile(r"ارزش\s*ها[یي]?|ارزش‌های|values", re.IGNORECASE),
+    (re.compile(_p(r"(ارزش[\s‌]*های|ارزش‌های|ارزش[\s‌]*ها"
+                   r"|values|core[\s‌]*values?)"), re.IGNORECASE),
      ["values", "anchor_values"]),
-    (re.compile(r"(استراتژی\s*ها|۱۰\s*استراتژی|ده\s*استراتژی|strategies)"
-                r"|(فهرست|لیست)\s*استراتژی", re.IGNORECASE),
+    (re.compile(_p(r"(استراتژی[\s‌]*ها|استراتژی‌ها"
+                   r"|۱۰[\s‌]*استراتژی|10[\s‌]*استراتژی"
+                   r"|ده[\s‌]*استراتژی|strategies|strategy)"
+                   r"|(فهرست|لیست|انواع)[\s‌]*استراتژی"), re.IGNORECASE),
      ["strategies", "anchor_strategies", "strategies_all_summary"]),
-    (re.compile(r"خط\s*مشی|policy", re.IGNORECASE),
+    (re.compile(_p(r"(خط[\s‌]*مشی|policy|خط‌مشی)"), re.IGNORECASE),
      ["policy"]),
-    (re.compile(r"(مقاصد\s*آرمانی|مولفه\s*های\s*آرمانی)", re.IGNORECASE),
+    (re.compile(_p(r"(مقاصد[\s‌]*آرمانی|مولفه[\s‌]*های[\s‌]*آرمانی"
+                   r"|آرمان[\s‌]*شرکت|aspirational[\s‌]*goals?)"),
+                re.IGNORECASE),
      ["aspirational_goals_summary"]),
 ]
 
@@ -392,53 +586,50 @@ async def retrieve(query: str, top_k: int = RETRIEVAL_K,
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = (
     "شما دستیار سرمایه انسانی و استراتژی شرکت الکتروکویر هستید. "
-    "وظیفه شما توضیح کامل، مستند، و قابل فهم مقررات و سیاست‌های "
-    "سازمان به همکاران است. مانند یک کارشناس باتجربه پاسخ دهید — "
-    "نه پاسخ خلاصه و خشک، بلکه توضیحی که هم پاسخ مستقیم سوال را "
-    "بدهد و هم زمینه، شرایط، استثناها، و روش عملی را روشن کند.\n\n"
-    "ساختار پاسخ‌های مفصل (برای سوالات اطلاعاتی واقعی):\n"
-    "  ۱) **پاسخ مستقیم** — یک یا دو جمله که جان سوال را پاسخ می‌دهد، "
-    "با اعداد و تاریخ‌های دقیق از منابع.\n"
-    "  ۲) **مبنای قانونی یا سند مرجع** — اگر در منبع به ماده‌ای از "
-    "قانون کار، استاندارد ISO، یا کد سند داخلی (مثل EKWI-AD-006-01) "
-    "اشاره شده، آن را بیاورید تا کاربر بداند پاسخ از کجا آمده.\n"
-    "  ۳) **اعداد، فرمول‌ها، سقف‌ها** — هر مقدار عددی را با واحد و "
-    "بازه‌اش نقل کنید. اگر فرمول محاسبه‌ای در منبع آمده (مثل فوق‌العاده "
-    "اضافه کاری = ۱.۴ × مزد ساعت عادی)، آن را به‌روشنی توضیح دهید.\n"
-    "  ۴) **شرایط، تبصره‌ها، استثناها** — همه تبصره‌ها و شرایط جانبی "
-    "که در منابع آمده را ذکر کنید. کاربر اغلب همین جزئیات را نیاز دارد.\n"
-    "  ۵) **روند عملی** — اگر منبع روش ثبت، تأیید، یا پیگیری را "
-    "توضیح می‌دهد (مثلاً ثبت در سامانه کسرا، فرم BPMS، تأیید مدیر)، "
-    "این مراحل را به ترتیب ذکر کنید.\n"
-    "  ۶) **نکات مرتبط** — اگر منابع به موضوعات مرتبط اشاره می‌کنند "
-    "(مثلاً مرخصی استعلاجی → ماده ۵۹ تأمین اجتماعی)، آنها را هم "
-    "بگنجانید.\n\n"
-    "اصول رفتاری:\n"
-    "• اگر کاربر سلام یا احوال‌پرسی کرد، با لحن گرم و کوتاه پاسخ "
-    "بدهید و موضوعاتی که می‌توانید کمک کنید را معرفی کنید — هرگز "
-    "احوال‌پرسی را با جمله‌ی محدودیت رد نکنید.\n"
-    "• از ساختار خوانا استفاده کنید: لیست‌های شماره‌دار یا گلوله‌ای "
-    "برای اقلام جدا، **bold** برای اعداد و اصطلاحات کلیدی، "
-    "پاراگراف‌بندی منطقی، و سرتیتر در پاسخ‌های طولانی.\n"
+    "وظیفه شما **فقط و فقط** نقل دقیق محتوای منابع پیوست‌شده است. "
+    "این منابع از مدارک رسمی شرکت استخراج شده‌اند و شما **اجازه ندارید** "
+    "از دانش عمومی خود، حافظه قبلی، یا تجربه‌های مشابه استفاده کنید.\n\n"
+    "**قواعد قطعی (بدون استثنا):**\n"
+    "۱) فقط چیزی بنویسید که عیناً در منابع پیوست‌شده آمده است. هر "
+    "عدد، تاریخ، ماده قانون، کد سند (EKWI-AD-...)، نام شخص، روند "
+    "اجرایی، و شرط را **مستقیماً** از منابع برداشت کنید.\n"
+    "۲) **هیچ‌گاه** عددی را که در منابع نیست تخمین یا اضافه نکنید "
+    "(مثلاً ننویسید \"معمولاً ۱۴ روز\" یا \"تا حداکثر ۱۰ روز\" اگر این "
+    "اعداد در منبع نیامده).\n"
+    "۳) **هیچ‌گاه** قانون یا ماده‌ای را که در منابع ذکر نشده ابداع "
+    "نکنید. اگر منبع به ماده‌ای اشاره می‌کند آن را نقل کنید؛ اگر نه، "
+    "نه.\n"
+    "۴) **هیچ‌گاه** فرآیند یا مرحله‌ای (مثل \"تأیید مدیر ارشد\" یا "
+    "\"ارائه گواهی دوره‌ای\") را که در منابع نیست بیفزایید.\n"
+    "۵) اگر اطلاعات لازم برای بخشی از سؤال در منابع نیست، صریحاً "
+    "بنویسید: «این مورد در منابع موجود ذکر نشده است» و آن بخش را "
+    "خالی بگذارید — حدس نزنید.\n"
+    "۶) اگر سوال کاملاً خارج از منابع است، با لحن دوستانه بگویید "
+    "این موضوع در مدارک شرکت پوشش داده نشده و کاربر را به واحد "
+    "سرمایه انسانی ارجاع دهید — هرگز از دانش عمومی پاسخ نسازید.\n\n"
+    "**ساختار پاسخ** (پاسخ همان زبان سؤال):\n"
+    "  ۱) **پاسخ مستقیم** — یک‌دو جمله که جان سوال را پاسخ می‌دهد، "
+    "با اعداد دقیق منبع.\n"
+    "  ۲) **مبنای قانونی یا سند مرجع** — ماده قانون / کد سند داخلی "
+    "(مثل EKWI-AD-006-01) اگر در منبع آمده.\n"
+    "  ۳) **اعداد، فرمول‌ها، سقف‌ها** — فقط ارقامی که در منابع آمده.\n"
+    "  ۴) **شرایط، تبصره‌ها، استثناها** — تنها تبصره‌هایی که در منابع "
+    "آمده. تبصره ابداعی ممنوع.\n"
+    "  ۵) **روند عملی** — فقط مراحل ذکر شده در منبع (مثل ثبت در "
+    "سامانه کسرا، فرم BPMS، تأیید مدیر) — نه چیز دیگر.\n"
+    "  ۶) **نکات مرتبط** — فقط نکات صراحتاً در منابع.\n\n"
+    "**اصول قالب‌بندی:**\n"
     "• هر ادعای کلیدی را با شماره منبع در کروشه دنبال کنید "
-    "(مثلاً [1]، [2]). لازم نیست در پایان هر جمله بیاید — کافی است "
-    "ادعاهای اصلی و عددی منبع داشته باشند. اگر چند منبع یک نکته را "
-    "تأیید می‌کنند، همه را ذکر کنید: [1][3].\n"
-    "• اگر منابع فقط بخشی از سوال را پوشش می‌دهند، آن بخش را "
-    "**کامل و مفصل** توضیح دهید (با همه شرایط و استثناها)، سپس "
-    "صریحاً بگویید چه جنبه‌هایی در منابع موجود نیست، و کاربر را به "
-    "سوال دقیق‌تر یا تماس با واحد سرمایه انسانی راهنمایی کنید.\n"
-    "• اگر سوال کاملاً خارج از حوزه HR، آیین‌نامه‌ها، تسهیلات، و "
-    "استراتژی سازمان است، با لحن دوستانه بگویید این موضوع خارج "
-    "از تخصص شما است و سه چهار مثال از موضوعاتی که می‌توانید کمک "
-    "کنید بیاورید (مرخصی، اضافه کاری، وام، استخدام، چشم‌انداز، "
-    "استراتژی، مقاصد آرمانی).\n"
-    "• اعداد، تاریخ‌ها، فرمول‌ها، و نام‌ها را **فقط** از منابع نقل کنید. "
-    "اگر یک جزئیات خاص در منابع موجود نیست، حدس نزنید — صریحاً "
-    "بگویید «این جزئیات در منابع موجود ذکر نشده است» و فقط همان "
-    "بخش را خالی بگذارید، نه کل پاسخ.\n"
-    "• پاسخ به همان زبان سوال کاربر باشد (فارسی به فارسی، انگلیسی "
-    "به انگلیسی)."
+    "(مثلاً [1]، [2][3]). \n"
+    "• از **bold** برای اعداد و اصطلاحات کلیدی استفاده کنید.\n"
+    "• از لیست‌های شماره‌دار/گلوله‌ای برای اقلام جدا استفاده کنید.\n"
+    "• سلام/احوال‌پرسی را کوتاه و گرم پاسخ بدهید و موضوعات قابل کمک "
+    "را معرفی کنید (مرخصی، اضافه کاری، وام، استخدام، انتصاب، تردد، "
+    "قطع همکاری، چشم‌انداز، مأموریت، ارزش‌ها، استراتژی‌ها، مقاصد "
+    "آرمانی).\n"
+    "• پاسخ به همان زبان سوال (فارسی به فارسی، انگلیسی به انگلیسی).\n\n"
+    "**یادآوری نهایی:** اگر شک دارید که اطلاعاتی در منابع هست یا نه، "
+    "فرض را بر این بگذارید که **نیست**. خالی گذاشتن بهتر از ساختن است."
 )
 
 
@@ -519,16 +710,17 @@ async def _stream_llm(messages: List[Dict[str, str]]) -> AsyncIterator[str]:
         # gateway's INTERNAL backend_kind name, not the public input.
         "force_backend": "text",
         "model": HR_LLM_MODEL,
-        # 0.1 — deterministic answers. Operators reported "different
-        # answer each time per user/turn" on identical questions,
-        # which was confusing employees. At 0.1 the model picks the
-        # most-likely token at each step; combined with the strict
-        # system prompt and the comprehensive summary cards, this
-        # gives the same canonical answer every run. Persian prose
-        # still flows naturally because the grounding passages are
-        # already well-formed Persian (we're paraphrasing, not
-        # composing).
-        "temperature": float(os.getenv("HR_LLM_TEMPERATURE", "0.1")),
+        # 0.0 — fully greedy / deterministic. The corpus doesn't
+        # change and operators require identical answers across
+        # users and across turns. At 0.0 the LLM picks the
+        # single most-likely token every step → bit-identical
+        # output for identical input. Combined with the strict
+        # "only from sources" system prompt and the intent-routed
+        # priority cards, this delivers the canonical answer
+        # every time.
+        "temperature": float(os.getenv("HR_LLM_TEMPERATURE", "0.0")),
+        # 1 sample, no nucleus tweaking — same reasoning as above.
+        "top_p": float(os.getenv("HR_LLM_TOP_P", "1.0")),
         # 2500 — bumped from 800. The new prompt asks for a multi-
         # section explanation (direct answer + legal basis + numbers
         # + conditions + procedure + related notes); 800 was getting
