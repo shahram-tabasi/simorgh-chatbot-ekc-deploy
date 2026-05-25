@@ -1,25 +1,30 @@
 # =============================================================================
 # LITELLM PROXY - OpenAI-compatible gateway in front of vLLM (.61, .62)
-# Internal port 4000. Drop-in for llm-gateway.
+# Internal port 4000.
+#
+# Now consumed via the llm-gateway shim (USE_LITELLM=1, see
+# svc-llm-gateway.yml). Clients keep talking to llm-gateway's existing
+# /generate, /generate/stream, /embeddings routes; llm-gateway rewrites
+# the upstream transport to point here. No client-code changes needed.
 #
 # Activation:
-#   1. Edit litellm/config.yaml to match your vLLM endpoints.
+#   1. Edit litellm/config.yaml — model_list[].api_base must match your
+#      vLLM endpoints on .61 / .62. Default config already points at
+#      192.168.1.61:8000 and 192.168.1.62:8000.
 #   2. Uncomment the master include for this file.
-#   3. Repoint LLM_GATEWAY_URL in svc-project-agent.yml / svc-chat.yml
-#      from http://llm-gateway:8030 to http://litellm:4000
-#      (LiteLLM exposes /v1/chat/completions natively, but the
-#      /api/llm/generate-stream legacy endpoint your code uses is
-#      llm-gateway-specific — see notes at the bottom.)
+#   3. Set USE_LITELLM=1 in .env (or shell) so llm-gateway routes here.
+#   4. docker compose up -d litellm llm-gateway
+#   5. Verify: curl http://<host>/api/llm-gateway/health | jq .litellm
+#              curl http://<host>/api/llm-gateway/health/deep | jq .checks.litellm
 #
-# CAVEAT — llm-gateway has Simorgh-specific routes:
-#   - /api/llm/generate-stream  (SSE shim)
-#   - /api/llm/route             (custom mode routing: online vs offline vs voice)
-#   - /api/llm/forms             (Simorgh-specific form-mode)
-# LiteLLM does NOT speak these. Two migration paths:
-#   (a) Move client code to call /v1/chat/completions directly (clean, recommended)
-#   (b) Keep llm-gateway as a THIN shim that just forwards /v1/chat/completions
-#       to LiteLLM and translates the legacy routes (1 day of work, no client
-#       changes needed). Pick (b) if you have many clients on the legacy paths.
+# Roll back instantly:
+#   USE_LITELLM=0 docker compose up -d llm-gateway
+#
+# (Direct-path migration — clients calling LiteLLM at /v1/chat/completions
+# bypassing llm-gateway — is still possible if you want to retire
+# llm-gateway entirely. Not the default path: the shim keeps all the
+# Simorgh-specific routing logic (mode/auto, vision sniffing, /stats,
+# /generate/stream protocol) intact.)
 # =============================================================================
 services:
   litellm:

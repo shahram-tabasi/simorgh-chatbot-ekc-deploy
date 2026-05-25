@@ -68,6 +68,22 @@ services:
       # Hard-cap upstream timeout (gen can run minutes for 20B).
       - LLM_GATEWAY_TIMEOUT_SEC=${LLM_GATEWAY_TIMEOUT_SEC:-1800}
 
+      # ---- LiteLLM shim (Pattern C, opt-in) ---------------------------
+      # When USE_LITELLM=1, the gateway routes every backend
+      # (online/offline_text/offline_vlm) through LiteLLM instead of
+      # going direct to OpenAI / 192.168.1.61 / 192.168.1.62. Model
+      # selection + vision sniffing + auto-fallback all stay in the
+      # gateway; only the transport changes. LiteLLM's model_list
+      # (litellm/config.yaml) must list gpt-4o / gpt-oss-20b /
+      # qwen2.5-vl-7b under those exact names. Activate with:
+      #   1. Uncomment compose/svc-litellm.yml in master include.
+      #   2. Set USE_LITELLM=1 in .env (or shell).
+      #   3. docker compose up -d litellm llm-gateway
+      # Roll back: USE_LITELLM=0; docker compose up -d llm-gateway
+      - USE_LITELLM=${USE_LITELLM:-0}
+      - LITELLM_URL=${LITELLM_URL:-http://litellm:4000}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
+
       # Live settings — admin-service hot-reloads these every 30 s, falling
       # back to the env values above when unreachable. SETTINGS_INTERNAL_TOKEN
       # must match the one configured on admin-service.

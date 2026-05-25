@@ -79,6 +79,16 @@ def _local_llm_model_vlm() -> str: return _cfg("LOCAL_LLM_MODEL_VLM",  "qwen2.5-
 def _local_llm_api_key()   -> str: return _cfg("LOCAL_LLM_API_KEY")
 def _default_llm_mode()    -> str: return _cfg("DEFAULT_LLM_MODE", "online").lower()
 
+# --- LiteLLM shim (opt-in, see svc-litellm.yml + litellm/config.yaml) ---
+# When USE_LITELLM=1, every backend's base_url is rewritten to LITELLM_URL.
+# Model names stay the same — litellm/config.yaml's model_list uses the
+# identical names already used by this gateway (gpt-oss-20b, qwen2.5-vl-7b,
+# gpt-4o). _resolve_backend() preserves all mode + vision logic; only the
+# transport changes. Default off; flipping cannot break production.
+def _use_litellm()       -> bool: return _cfg("USE_LITELLM", "0").lower() in ("1", "true", "yes", "on")
+def _litellm_url()       -> str:  return _cfg_url("LITELLM_URL", "http://litellm:4000")
+def _litellm_master_key()-> str:  return _cfg("LITELLM_MASTER_KEY")
+
 
 def _timeout_sec() -> float:
     try: return float(_cfg("LLM_GATEWAY_TIMEOUT_SEC", "1800"))
@@ -181,6 +191,28 @@ def _resolve_backend(
     if effective_mode not in {"online", "offline", "auto"}:
         raise HTTPException(status_code=400, detail=f"unknown mode: {mode!r}")
 
+    # LiteLLM shim: rewrite transport, preserve mode + vision selection.
+    # litellm/config.yaml routes by model_name, so we keep the existing
+    # model names (gpt-4o / gpt-oss-20b / qwen2.5-vl-7b) and only swap
+    # the base_url + api_key. The kind labels stay identical so /stats
+    # counters and the "auto" online→offline fallback in /generate keep
+    # working unchanged.
+    if _use_litellm():
+        url = _litellm_url()
+        key = _litellm_master_key() or None
+        if effective_mode == "online":
+            return ("online", url, _openai_model(), key)
+        fb = (force_backend or "").lower() or None
+        if fb == "text":
+            return ("offline_text", url, _local_llm_model_text(), key)
+        if fb == "vlm":
+            return ("offline_vlm", url, _local_llm_model_vlm(), key)
+        if fb is not None:
+            raise HTTPException(status_code=400, detail=f"unknown force_backend: {force_backend!r}")
+        if _has_image(messages):
+            return ("offline_vlm", url, _local_llm_model_vlm(), key)
+        return ("offline_text", url, _local_llm_model_text(), key)
+
     if effective_mode == "online":
         key = _openai_api_key()
         if not key:
@@ -248,6 +280,10 @@ def health() -> Dict[str, Any]:
         "default_mode": _default_llm_mode(),
         "local_text_url": _local_llm_url_text(),
         "local_vlm_url":  _local_llm_url_vlm(),
+        "litellm": {
+            "enabled": _use_litellm(),
+            "url":     _litellm_url() if _use_litellm() else None,
+        },
     }
 
 
@@ -299,6 +335,18 @@ async def health_deep() -> Dict[str, Any]:
         except Exception as e:
             out["checks"]["offline_vlm"] = {"ok": False, "error": str(e)[:200],
                                              "url": vlm_url}
+
+        # LiteLLM shim (only meaningful when USE_LITELLM=1).
+        if _use_litellm():
+            lurl = _litellm_url()
+            try:
+                r = await c.get(f"{lurl}/health/liveliness")
+                out["checks"]["litellm"] = {"ok": r.status_code == 200,
+                                             "status": r.status_code,
+                                             "url": lurl}
+            except Exception as e:
+                out["checks"]["litellm"] = {"ok": False, "error": str(e)[:200],
+                                             "url": lurl}
 
     out["status"] = "healthy" if any(c.get("ok") for c in out["checks"].values()) else "unhealthy"
     return out
@@ -509,17 +557,39 @@ async def generate_async(req: AsyncGenerateRequest) -> Dict[str, Any]:
 @app.post("/embeddings")
 async def embeddings(req: EmbeddingRequest) -> Dict[str, Any]:
     """
-    Embeddings via OpenAI's /v1/embeddings endpoint (online mode only —
-    vllm-openai by default doesn't serve embeddings; flip with
-    --task=embedding on a separate model if you ever need offline).
+    Embeddings via /v1/embeddings.
+
+    Direct mode (USE_LITELLM=0): online → OpenAI only. vllm-openai by
+    default doesn't serve embeddings; for offline embeddings use
+    embeddings-service:8031 (sentence-transformers) directly.
+
+    LiteLLM mode (USE_LITELLM=1): POST to LiteLLM with the requested model.
+    LiteLLM's model_list decides whether that's OpenAI or a local backend.
     """
+    model = req.model or _openai_embed_model()
+
+    if _use_litellm():
+        base = _litellm_url()
+        key = _litellm_master_key() or None
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.post(
+                f"{base}/embeddings",
+                json={"model": model, "input": req.text},
+                headers=_auth_headers(key),
+            )
+        if r.status_code != 200:
+            raise HTTPException(status_code=502,
+                                detail=f"litellm embeddings: {r.status_code} {r.text[:200]}")
+        body = r.json()
+        vec = (body.get("data") or [{}])[0].get("embedding") or []
+        return {"embedding": vec, "dim": len(vec), "model": body.get("model", model)}
+
     key = _openai_api_key()
     if not key:
         raise HTTPException(status_code=503,
                             detail="OPENAI_API_KEY not set; offline embeddings "
                                    "not configured. Use embeddings-service:8031 "
                                    "(sentence-transformers) instead.")
-    model = req.model or _openai_embed_model()
     async with httpx.AsyncClient(timeout=60.0) as c:
         r = await c.post(
             f"{_openai_base_url()}/embeddings",
