@@ -22,9 +22,9 @@ on:
   workflow_dispatch:
     inputs:
       whisper_model:
-        description: "HF repo id for the Whisper model"
+        description: "HF repo id for the Whisper model (default: vhdm/whisper-large-fa-v1; the Mohammad Gholizadeh repo from the original runbook is 401-gated/removed as of May 2026)"
         type: string
-        default: "MohammadGholizadeh/whisper-large-v3-persian-common-voice-17"
+        default: "vhdm/whisper-large-fa-v1"
       quantization:
         description: "CTranslate2 quantization (drives the converted output)"
         type: choice
@@ -33,11 +33,11 @@ on:
       output_dirname:
         description: "Output subdir name inside the volume (also goes into WHISPER_MODEL env)"
         type: string
-        default: "whisper-large-v3-persian"
+        default: "whisper-large-fa"
       parts:
-        description: "Split tarball into N artifacts (3 GB model → default 2 for 5 GB/day proxy cap)"
+        description: "Split tarball into N artifacts (~1.5 GB model → 1 is fine; raise for tighter daily-bandwidth caps)"
         type: choice
-        default: "2"
+        default: "1"
         options: ["1", "2", "3", "4", "6", "8"]
 
 permissions:
@@ -79,6 +79,10 @@ jobs:
           OUTDIR: ${{ inputs.output_dirname }}
           HF_HUB_ENABLE_HF_TRANSFER: "0"
           HF_HUB_DISABLE_XET: "1"
+          # huggingface_hub reads HF_TOKEN automatically. Set the
+          # `HF_TOKEN` repo secret to access gated/private models —
+          # ignored if the repo is public, costs nothing to leave on.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -eu
           mkdir -p out

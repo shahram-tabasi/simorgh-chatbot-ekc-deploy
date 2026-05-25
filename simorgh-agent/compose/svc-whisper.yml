@@ -33,8 +33,9 @@ services:
       # WHISPER_MODEL is a LOCAL PATH (not an HF repo id) — points at
       # the CT2-converted model that the workflow extracts into the
       # volume. Keep this in sync with `output_dirname` input on the
-      # workflow (default: whisper-large-v3-persian).
-      - WHISPER_MODEL=/models/whisper-large-v3-persian
+      # workflow (default: whisper-large-fa, since the previously
+      # documented MohammadGholizadeh repo went 401 May 2026).
+      - WHISPER_MODEL=/models/whisper-large-fa
       - UVICORN_PORT=8001     # listen on legacy port so the alias works
     volumes:
       # Persistent home for the CT2-converted Whisper model. The

@@ -44,6 +44,9 @@ jobs:
           # files, not blobs.
           HF_HUB_ENABLE_HF_TRANSFER: "0"
           HF_HUB_DISABLE_XET: "1"
+          # Set HF_TOKEN repo secret to fetch gated/private embedding
+          # models. Ignored for public repos.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -eu
           mkdir -p data
