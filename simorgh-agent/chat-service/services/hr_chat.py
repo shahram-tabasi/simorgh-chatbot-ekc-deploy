@@ -213,14 +213,32 @@ _INTENT_ROUTES: List[Tuple[re.Pattern, List[str]]] = [
                 re.IGNORECASE),
      ["leave_all_types", "anchor_leave_types"]),
 
-    # Annual / استحقاقی durations
+    # Annual / استحقاقی — explanation queries get the comprehensive
+    # overview card first (which itself lists the 7 sub-types so the
+    # user can drill down with follow-up questions). Duration-specific
+    # queries get the focused day-count anchor first.
+    (re.compile(_p(r"(توضیح|توضیحی|تشریح|شرح|درباره|راجع به|چیست|چی هست|"
+                   r"چه چیزی|عبارتست|معرفی|بگو|اطلاعات)"
+                   r"[\s‌]*(در باره)?"
+                   r"[\s‌]*مرخصی[\s‌]*(استحقاقی|سالانه|سالیانه)"
+                   r"|مرخصی[\s‌]*(استحقاقی|سالانه|سالیانه)"
+                   r"[\s‌]*(چیست|چی هست|توضیح|چیه|عبارت است|معرفی|"
+                   r"چه چیزی|شامل|دارد|دارای|زیرنوع)"
+                   r"|annual[\s‌]*leave[\s‌]*(overview|explanation|what)"
+                   r"|what[\s‌]*is[\s‌]*annual"), re.IGNORECASE),
+     ["leave_estehghaghi_overview", "anchor_estehghaghi", "leave_all_types"]),
     (re.compile(_p(r"(چند روز|سقف|مدت|میزان|چقدر|چه قدر|تعداد روز)"
                    r"[\s‌]*مرخصی[\s‌]*(استحقاقی|سالانه|سالیانه)"
                    r"|مرخصی[\s‌]*(استحقاقی|سالانه|سالیانه)"
                    r"[\s‌]*(چقدر|چه قدر|چند|چه میزان|سقف|مدت|"
                    r"چند روز|تعداد)"
                    r"|annual[\s‌]*leave"), re.IGNORECASE),
-     ["anchor_leave_days", "leave_annual", "leave_all_types"]),
+     ["anchor_leave_days", "leave_annual", "leave_estehghaghi_overview"]),
+    # Bare mention "مرخصی استحقاقی" without explicit question →
+    # treat as explanation request.
+    (re.compile(_p(r"^[\s‌]*مرخصی[\s‌]*(استحقاقی|سالانه|سالیانه)"
+                   r"[\s‌]*$"), re.IGNORECASE),
+     ["leave_estehghaghi_overview", "anchor_estehghaghi"]),
 
     # Storage / ذخیره / buyback
     (re.compile(_p(r"(ذخیره|انباشت|انباشته|ذخیره‌سازی)"
@@ -280,11 +298,24 @@ _INTENT_ROUTES: List[Tuple[re.Pattern, List[str]]] = [
                    r"|sick[\s‌]*leave?"), re.IGNORECASE),
      ["leave_sick", "leave_sick_to_annual_conversion", "leave_all_types"]),
 
-    # Unpaid / بدون حقوق
+    # Unpaid / بدون حقوق — explanation requests get the overview
+    # (which lists تحصیلی sub-type for follow-up); bare mentions
+    # also get the overview.
+    (re.compile(_p(r"(توضیح|توضیحی|تشریح|شرح|درباره|چیست|چی هست|"
+                   r"معرفی|اطلاعات|بگو|راجع به|چه چیزی)"
+                   r"[\s‌]*(در باره)?"
+                   r"[\s‌]*مرخصی[\s‌]*بدون[\s‌]*حقوق"
+                   r"|مرخصی[\s‌]*بدون[\s‌]*حقوق"
+                   r"[\s‌]*(چیست|چی هست|توضیح|چیه|معرفی|چه چیز|"
+                   r"شامل|دارای|زیرنوع)"
+                   r"|^[\s‌]*مرخصی[\s‌]*بدون[\s‌]*حقوق[\s‌]*$"
+                   r"|unpaid[\s‌]*leave[\s‌]*(overview|explanation|what)"
+                   r"|what[\s‌]*is[\s‌]*unpaid"), re.IGNORECASE),
+     ["leave_unpaid_overview", "leave_unpaid", "leave_all_types"]),
     (re.compile(_p(r"مرخصی[\s‌]*بدون[\s‌]*حقوق"
                    r"|بدون[\s‌]*حقوق[\s‌]*مرخصی"
                    r"|unpaid[\s‌]*leave?"), re.IGNORECASE),
-     ["leave_unpaid", "leave_all_types"]),
+     ["leave_unpaid", "leave_unpaid_overview", "leave_all_types"]),
 
     # Study / تحصیلی — sub-type of بدون حقوق
     (re.compile(_p(r"مرخصی[\s‌]*تحصیلی"
@@ -628,6 +659,11 @@ SYSTEM_PROMPT = (
     "قطع همکاری، چشم‌انداز، مأموریت، ارزش‌ها، استراتژی‌ها، مقاصد "
     "آرمانی).\n"
     "• پاسخ به همان زبان سوال (فارسی به فارسی، انگلیسی به انگلیسی).\n\n"
+    "**نکته ناوبری:** اگر منبع یک عنوان کلی است که شامل چند زیرنوع است "
+    "(مثل «مرخصی استحقاقی» که شامل ۷ زیرنوع، یا «مرخصی بدون حقوق» که "
+    "شامل تحصیلی است)، در پایان پاسخ صریحاً به کاربر بگویید که برای "
+    "جزئیات هر زیرنوع می‌تواند همان نام را به‌تنهایی بپرسد. این کاربر "
+    "را به سؤال بعدی هدایت می‌کند.\n\n"
     "**یادآوری نهایی:** اگر شک دارید که اطلاعاتی در منابع هست یا نه، "
     "فرض را بر این بگذارید که **نیست**. خالی گذاشتن بهتر از ساختن است."
 )
