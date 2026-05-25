@@ -9,8 +9,10 @@
 #
 # Activation:
 #   1. Edit litellm/config.yaml — model_list[].api_base must match your
-#      vLLM endpoints on .61 / .62. Default config already points at
-#      192.168.1.61:8000 and 192.168.1.62:8000.
+#      vLLM endpoints on .61 / .62. Default config points at
+#      http://192.168.1.61/v1 and http://192.168.1.62/v1 (each box's nginx
+#      on :80 fronts the vLLM container; never point at :8000/:9000
+#      directly — those are container-internal ports).
 #   2. Uncomment the master include for this file.
 #   3. Set USE_LITELLM=1 in .env (or shell) so llm-gateway routes here.
 #   4. docker compose up -d litellm llm-gateway
@@ -45,7 +47,18 @@ services:
     networks:
       - app_net
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:4000/health/liveliness || exit 1"]
+      # NOTE: ghcr.io/berriai/litellm:main-stable is python-slim based and
+      # does NOT ship curl or wget. Use python's urllib instead — it's
+      # guaranteed present. Using curl here was the cause of the spurious
+      # "unhealthy" state observed in May 2026 (the proxy itself was always
+      # serving /health/liveliness:200; only the healthcheck binary was
+      # missing). Exec form so no shell-escape gymnastics; urlopen raises
+      # → python exits non-zero → docker marks unhealthy.
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)"
       interval: 30s
       timeout: 10s
       retries: 3
