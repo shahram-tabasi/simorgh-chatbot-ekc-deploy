@@ -86,18 +86,57 @@ jobs:
         run: |
           set -eu
           mkdir -p out
-          # The converter downloads the source weights via huggingface_hub
-          # into the default HF cache, then writes the CT2 binaries to
-          # --output_dir. We --copy_files the tokenizer + preprocessor
-          # configs so the runtime container has everything it needs
-          # without re-touching HuggingFace.
+
+          # Step 1: convert. Don't pass --copy_files here — different
+          # Whisper repos ship different tokenizer file sets (some have
+          # tokenizer.json, some only the slow-tokenizer files), so
+          # listing a fixed set would fail on whichever happens to be
+          # absent. We copy the aux files in step 3 once we know what's
+          # actually in the source.
           ct2-transformers-converter \
               --model "$MODEL" \
               --output_dir "out/$OUTDIR" \
-              --copy_files tokenizer.json preprocessor_config.json \
               --quantization "$QUANT" \
               --force
-          echo "----- converted model -----"
+
+          # Step 2: download the source repo's aux files into staging.
+          # Exclude the big weight files — we already converted those.
+          mkdir -p src
+          huggingface-cli download "$MODEL" \
+              --local-dir "src/$OUTDIR" \
+              --local-dir-use-symlinks False \
+              --exclude "*.bin" "*.safetensors" "*.h5" "*.msgpack" "*.onnx"
+
+          # Step 3: copy whichever tokenizer/preprocessor files the
+          # source actually has into the CT2 output. faster-whisper's
+          # runtime will pick up whatever's there. We deliberately do
+          # NOT copy the HF-format config.json — the converter already
+          # wrote a CT2-specific config.json that must win.
+          AUX_FILES=(
+            tokenizer.json
+            vocab.json
+            tokenizer_config.json
+            special_tokens_map.json
+            merges.txt
+            preprocessor_config.json
+            generation_config.json
+            normalizer.json
+            added_tokens.json
+          )
+          copied=0
+          for f in "${AUX_FILES[@]}"; do
+            if [ -f "src/$OUTDIR/$f" ]; then
+              cp "src/$OUTDIR/$f" "out/$OUTDIR/"
+              echo "  copied $f"
+              copied=$((copied + 1))
+            fi
+          done
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::No tokenizer/preprocessor files copied — source repo is missing all expected aux files."
+            exit 1
+          fi
+
+          echo "----- final CT2 model directory -----"
           ls -lh "out/$OUTDIR"
           du -sh "out/$OUTDIR"
 
