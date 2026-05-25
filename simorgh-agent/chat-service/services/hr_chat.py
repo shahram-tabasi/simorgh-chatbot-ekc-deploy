@@ -152,6 +152,162 @@ def _chunk_bias(payload: Dict[str, Any]) -> float:
     return boost
 
 
+# ---------------------------------------------------------------------------
+# Intent router — deterministic top-1 for well-known enumeration queries
+# ---------------------------------------------------------------------------
+# Even with a +0.10 chunk_type boost and +0.05 summary-topic boost,
+# multilingual sentence transformers sometimes still rank a short
+# section heading above a 2 KB summary card if the heading contains
+# the exact query phrase verbatim. For high-frequency canonical
+# queries this is unacceptable — operators report the same wrong
+# answer ("only 2 of 12 leave types") on every retry.
+#
+# Each route fires when the query matches its regex; the named topics
+# are then fetched DIRECTLY from Qdrant via topic-filter and inserted
+# at the top of the results with score=0.99. Embedding-driven hits
+# fill the remaining slots, so leaf-section evidence still reaches
+# the LLM.
+#
+# Order matters within a single route — first topic listed becomes
+# the top-1 citation in the prompt.
+_INTENT_ROUTES: List[Tuple[re.Pattern, List[str]]] = [
+    # Leave-type enumeration queries
+    (re.compile(r"(انواع|لیست|فهرست|چه\s*نوع|نوع\s*ها[یي]|kinds?|types?)\s*مرخصی"
+                r"|مرخصی\s*چه\s*(نوع|انواع)", re.IGNORECASE),
+     ["leave_all_types", "anchor_leave_types"]),
+    # Leave durations
+    (re.compile(r"(چند\s*روز|سقف|مدت)\s*مرخصی\s*(استحقاقی|سالانه)"
+                r"|مرخصی\s*(استحقاقی|سالانه)\s*(چقدر|چند)", re.IGNORECASE),
+     ["anchor_leave_days", "leave_annual", "leave_all_types"]),
+    (re.compile(r"مرخصی\s*زایمان|maternity", re.IGNORECASE),
+     ["anchor_maternity_days", "leave_maternity"]),
+    (re.compile(r"مرخصی\s*(شیر\s*ده[یي]|شیردهی)|lactation", re.IGNORECASE),
+     ["leave_lactation"]),
+    (re.compile(r"مرخصی\s*ساعتی", re.IGNORECASE),
+     ["leave_hourly"]),
+    (re.compile(r"مرخصی\s*(استعلاجی|بیماری)|sick\s*leave", re.IGNORECASE),
+     ["leave_sick"]),
+    (re.compile(r"مرخصی\s*بدون\s*حقوق|unpaid\s*leave", re.IGNORECASE),
+     ["leave_unpaid"]),
+    (re.compile(r"مرخصی\s*(تحصیلی|آموزشی)", re.IGNORECASE),
+     ["leave_study"]),
+    (re.compile(r"مرخصی\s*حج", re.IGNORECASE),
+     ["leave_hajj"]),
+    (re.compile(r"ذخیره\s*مرخصی|بازخرید\s*مرخصی", re.IGNORECASE),
+     ["leave_buyback", "leave_banking"]),
+    # Overtime
+    (re.compile(r"(انواع|قواعد|سقف|نرخ|مقررات)\s*اضافه\s*کاری"
+                r"|اضافه\s*کاری\s*(چقدر|چند|چگونه|چیست)|overtime", re.IGNORECASE),
+     ["overtime_summary", "anchor_overtime_cap", "overtime"]),
+    # Attendance
+    (re.compile(r"(کسرا|سامانه\s*حضور|حضور\s*و\s*غیاب|attendance)", re.IGNORECASE),
+     ["attendance_summary", "anchor_attendance_system", "attendance"]),
+    (re.compile(r"تأخیر|تاخیر|دیر\s*آمدن", re.IGNORECASE),
+     ["late_arrival", "attendance_summary"]),
+    # Recruitment
+    (re.compile(r"(فرآیند|روند|مراحل|چگونگی)\s*(جذب|استخدام)"
+                r"|استخدام\s*(چگونه|چطور)|recruitment|hiring", re.IGNORECASE),
+     ["recruitment_summary"]),
+    (re.compile(r"شرایط\s*سنی|محدودیت\s*سنی|سن\s*استخدام", re.IGNORECASE),
+     ["anchor_age_limit", "age_limit"]),
+    (re.compile(r"مدارک\s*(استخدام|مورد\s*نیاز)", re.IGNORECASE),
+     ["anchor_recruitment_docs", "required_documents"]),
+    (re.compile(r"انواع\s*قرارداد|قرارداد\s*های\s*کار", re.IGNORECASE),
+     ["contract_types"]),
+    # Termination
+    (re.compile(r"(استعفا|قطع\s*همکاری|خروج\s*از\s*شرکت|ترک\s*خدمت|resignation)"
+                r"|(فرآیند|روند|مراحل)\s*خروج", re.IGNORECASE),
+     ["termination_summary", "anchor_resignation_notice", "resignation_notice"]),
+    (re.compile(r"تسویه\s*حساب|settlement", re.IGNORECASE),
+     ["settlement", "termination_summary"]),
+    (re.compile(r"مصاحبه\s*خروج|exit\s*interview", re.IGNORECASE),
+     ["exit_interview"]),
+    # Loan
+    (re.compile(r"(انواع|لیست|فهرست)\s*(وام|تسهیلات)"
+                r"|وام\s*چه\s*(نوع|انواع)|loan", re.IGNORECASE),
+     ["loan_summary", "anchor_loan_types", "loan_types"]),
+    (re.compile(r"سقف\s*وام|مبلغ\s*وام", re.IGNORECASE),
+     ["loan_tiers", "loan_summary"]),
+    (re.compile(r"وام\s*ضروری", re.IGNORECASE),
+     ["loan_emergency_eligibility", "loan_summary"]),
+    # Promotion
+    (re.compile(r"(انتصاب|ارتقا|ارتقاء)|promotion", re.IGNORECASE),
+     ["promotion_summary", "anchor_promotion_phase", "promotion_committee"]),
+    # Access control
+    (re.compile(r"(تردد|حراست|نگهبان[یي]?|ورود\s*و\s*خروج)|access\s*control", re.IGNORECASE),
+     ["access_summary"]),
+    (re.compile(r"(ساعات?\s*غیر\s*اداری|تعطیلات|اضافه\s*کاری\s*شب)", re.IGNORECASE),
+     ["anchor_off_hours_request", "access_off_hours"]),
+    (re.compile(r"(انبار|بسته\s*بندی|برگه\s*خروج)", re.IGNORECASE),
+     ["access_warehouse_timing"]),
+    (re.compile(r"مهمان|بازدید|کارآموز", re.IGNORECASE),
+     ["access_visitors"]),
+    # Strategy / vision / mission / values
+    (re.compile(r"چشم\s*انداز|چشم‌انداز|vision", re.IGNORECASE),
+     ["vision", "anchor_vision", "vision_1408"]),
+    (re.compile(r"(مأموریت|ماموریت|رسالت)|mission", re.IGNORECASE),
+     ["mission", "anchor_mission"]),
+    (re.compile(r"ارزش\s*ها[یي]?|ارزش‌های|values", re.IGNORECASE),
+     ["values", "anchor_values"]),
+    (re.compile(r"(استراتژی\s*ها|۱۰\s*استراتژی|ده\s*استراتژی|strategies)"
+                r"|(فهرست|لیست)\s*استراتژی", re.IGNORECASE),
+     ["strategies", "anchor_strategies", "strategies_all_summary"]),
+    (re.compile(r"خط\s*مشی|policy", re.IGNORECASE),
+     ["policy"]),
+    (re.compile(r"(مقاصد\s*آرمانی|مولفه\s*های\s*آرمانی)", re.IGNORECASE),
+     ["aspirational_goals_summary"]),
+]
+
+
+def _route_topics_for(query: str) -> List[str]:
+    """Return the ordered list of priority topics for this query, or []
+    if no intent route matches. Matches are exclusive — first route
+    wins so a query like 'مرخصی زایمان' triggers the maternity route,
+    not the generic 'انواع مرخصی' route."""
+    for pat, topics in _INTENT_ROUTES:
+        if pat.search(query):
+            return topics
+    return []
+
+
+def _fetch_topic_card(topic: str) -> Optional[Dict[str, Any]]:
+    """Pull the canonical card payload for a topic directly from
+    Qdrant, bypassing the cosine-similarity search. Returns the same
+    shape as a normal retrieve() row so the rest of the pipeline
+    treats it identically."""
+    try:
+        records, _ = _qdrant_client().scroll(
+            collection_name=HR_KB_COLLECTION,
+            scroll_filter=qmodels.Filter(must=[
+                qmodels.FieldCondition(key="topic",
+                                       match=qmodels.MatchValue(value=topic)),
+                qmodels.FieldCondition(key="chunk_type",
+                                       match=qmodels.MatchValue(value="card")),
+            ]),
+            with_payload=True, limit=1,
+        )
+    except Exception as e:
+        log.warning("hr_chat _fetch_topic_card(%s) failed: %s", topic, e)
+        return None
+    if not records:
+        return None
+    payload = records[0].payload or {}
+    return {
+        "score": 0.99,            # priority-injected; sits above all
+        "raw_score": 0.99,        # cosine-driven results
+        "text": payload.get("text", ""),
+        "doc_id": payload.get("doc_id"),
+        "doc_title": payload.get("doc_title"),
+        "doc_code": payload.get("doc_code"),
+        "filename": payload.get("filename"),
+        "category": payload.get("category", ""),
+        "topic": payload.get("topic"),
+        "section_path": payload.get("section_path"),
+        "chunk_type": payload.get("chunk_type"),
+        "card_title": payload.get("card_title"),
+    }
+
+
 async def retrieve(query: str, top_k: int = RETRIEVAL_K,
                     category: Optional[str] = None) -> List[Dict[str, Any]]:
     vec = await _embed(query)
@@ -204,6 +360,30 @@ async def retrieve(query: str, top_k: int = RETRIEVAL_K,
         })
     # Re-sort by biased score and stable on raw as tiebreaker.
     out.sort(key=lambda x: (x["score"], x["raw_score"]), reverse=True)
+
+    # Intent-routed top-1 injection. If the query matches a known
+    # enumeration pattern, fetch the priority cards directly from
+    # Qdrant by topic-filter and prepend them. This bypasses cosine
+    # similarity entirely for the priority slots, guaranteeing the
+    # canonical answer reaches the LLM regardless of how the
+    # multilingual embedder ranks competing shallow sections.
+    priority_topics = _route_topics_for(query)
+    if priority_topics:
+        injected: List[Dict[str, Any]] = []
+        injected_topics: set = set()
+        for t in priority_topics:
+            card = _fetch_topic_card(t)
+            if card and card["topic"] not in injected_topics:
+                injected.append(card)
+                injected_topics.add(card["topic"])
+        if injected:
+            # Drop dupes that would also appear in cosine results.
+            seen = {c["topic"] for c in injected if c.get("topic")}
+            tail = [r for r in out if r.get("topic") not in seen]
+            out = injected + tail
+            log.info("hr_chat intent route: q=%r injected=%s",
+                     query[:60], [c["topic"] for c in injected])
+
     return out
 
 
