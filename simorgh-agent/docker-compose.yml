@@ -68,9 +68,10 @@ include:
   # - compose/svc-tei.yml                 # Embeddings via HuggingFace TEI
   #                                       # → replaces svc-embeddings.yml (3-10× throughput;
   #                                       #   keeps all-MiniLM-L6-v2 for Qdrant compat)
-  # - compose/svc-litellm.yml             # LLM gateway via LiteLLM Proxy
-  #                                       # → replaces svc-llm-gateway.yml (edit
-  #                                       #   litellm/config.yaml for your vLLM endpoints)
+  # - compose/svc-litellm.yml             # LiteLLM proxy (runs alongside llm-gateway)
+  #                                       # → llm-gateway becomes a thin shim with
+  #                                       #   USE_LITELLM=1. Edit litellm/config.yaml
+  #                                       #   for your vLLM endpoints, then uncomment.
   # - compose/svc-searxng.yml             # Web metasearch via SearXNG
   #                                       # → replaces svc-search.yml. NOT OFFLINE —
   #                                       #   needs outbound HTTPS to google/bing/etc.
