@@ -30,6 +30,39 @@ app.add_middleware(
 app.include_router(quota_router)
 
 
+@app.on_event("startup")
+async def _bootstrap_services() -> None:
+    """Wire the tier_service singleton. Without this,
+    `get_tier_service()` returns None and the GET /me route
+    falls through to `return QuotaStatusResponse()` — the
+    pydantic defaults — which means questions_used_today=0
+    and questions_limit=20 regardless of what the
+    user_daily_usage table actually contains.
+
+    May 2026 operator report: "quota immediately resets".
+    chat-service was correctly INCREMENTING the daily-usage row
+    (logs showed `quota incremented … new daily count=2`) but
+    the frontend kept seeing 0/20 because tier-quota-service —
+    a separate process serving the GET — never wired the
+    singleton and returned defaults.
+    """
+    from database.postgres_connection import PostgresConnection
+    from services.user_tier_service import init_tier_service
+
+    db = PostgresConnection()
+    try:
+        await db.init_async_pool()
+    except Exception as e:
+        logger.error("tier-quota-service: postgres pool init failed: %s", e)
+        return
+
+    try:
+        init_tier_service(db)
+        logger.info("tier-quota-service: tier_service initialised")
+    except Exception as e:
+        logger.error("tier-quota-service: init_tier_service failed: %s", e)
+
+
 @app.get("/health")
 def health():
     return {"status": "healthy", "service": "tier-quota-service"}

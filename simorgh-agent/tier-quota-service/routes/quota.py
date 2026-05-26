@@ -28,7 +28,19 @@ async def get_my_quota(current_user: dict = Depends(get_current_user)):
     """
     tier_service = get_tier_service()
     if not tier_service:
-        # Service not initialized - return defaults
+        # Service not initialized - return defaults.
+        # WARNING (not debug) because the symptom is silent: the
+        # frontend renders "0 used today / 20 limit" forever, the
+        # operator thinks the user has zero usage. May 2026: this
+        # was silent for a full day until the bug-day investigation
+        # turned it up. main.py should call init_tier_service at
+        # startup; if you see this log line, that bootstrap didn't
+        # fire.
+        logger.warning(
+            "/api/v2/quota/me: tier_service is None — returning defaults. "
+            "init_tier_service was not called at startup; the quota ring will "
+            "appear stuck at 0 used / 20 limit until that's fixed."
+        )
         return QuotaStatusResponse()
 
     user_id = current_user["id"]
