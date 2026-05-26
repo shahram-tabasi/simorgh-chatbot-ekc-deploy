@@ -186,6 +186,27 @@ async def hr_stream(req: HrStreamRequest):
                 citations=citations, refusal=was_refusal,
             )
 
+        # Record the question against the modern user's daily quota.
+        # The chatbot_v2 (project-chat) route already does this via
+        # _increment_modern_usage; general-chat-HR was missed when
+        # the path was forked from the legacy stream handler, so the
+        # quota ring stayed at "full" forever in the sidebar (issue
+        # #3, May 2026). Done after persistence + after the stream
+        # so a transient quota-service failure can't 5xx the SSE
+        # response; worst case is the count is off by one.
+        if not was_refusal:
+            try:
+                from services.user_tier_service import get_tier_service
+                from uuid import UUID as _UUID
+                tier_service = get_tier_service()
+                if tier_service:
+                    await tier_service.increment_usage(_UUID(req.user_id))
+            except Exception as e:
+                log.warning(
+                    "hr_stream: failed to increment quota for user=%s: %s",
+                    req.user_id, e,
+                )
+
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",

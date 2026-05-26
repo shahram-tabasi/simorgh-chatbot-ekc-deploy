@@ -1,7 +1,7 @@
 // src/utils/autolinkUrls.ts
 //
 // Pre-process a markdown source string so any bare URL gets
-// wrapped as a proper markdown link [url](url). Runs BEFORE
+// wrapped as a proper markdown autolink `<URL>`. Runs BEFORE
 // react-markdown parses, so the resulting links flow through the
 // normal renderer (sanitiser, target="_blank" override in
 // MarkdownRenderer.tsx, etc.) and become clickable.
@@ -16,54 +16,114 @@
 //   • URLs immediately followed by sentence-ending punctuation
 //     (`.`, `,`, `;`) — GFM eats the punctuation INTO the URL
 //     and the rendered link 404s.
+//   • Bare EKC company hostnames (bpms.electrokavir.com etc.)
+//     that have no scheme and aren't `www.`-prefixed.
+//   • LAN IPv4 references (192.168.x.x, 10.x.x.x, …).
 //
 // This pass is line-by-line; fenced code blocks are skipped so
 // URLs inside ``` blocks stay literal. Existing markdown link
 // syntax `[text](url)` is preserved unchanged.
 //
-// Operator request, May 2026: "in general chat any where of ai
-// response have a url it be active url means when click url it
-// open in new tab".
+// Scheme normalisation (May 2026 operator feedback): the EKC
+// deployment mixes HTTP and HTTPS hosts — confirmed from the
+// landing page in host-nginx-config/landing/index.html:
+//
+//   https://simorghai.electrokavir.com/...        (main app)
+//   http://bpms.electrokavir.com/                  (BPMS)
+//   http://kasra.electrokavir.com/lego.web/...     (Kasra HR)
+//   http://hr.electrokavir.com/employee/...        (HR)
+//   http://192.168.0.150                            (LAN host)
+//
+// So a single default scheme is wrong. We use a host-scheme map
+// (derived from the landing page) and override whatever the LLM
+// emitted to match — emitting `https://kasra.electrokavir.com`
+// would otherwise initiate a TLS handshake against a plain-HTTP
+// server and the click would open a blank tab.
 
-const URL_RE = /(\bhttps?:\/\/[^\s<>"')\]]+|\bwww\.[a-z0-9\-]+(?:\.[a-z0-9\-]+)+[^\s<>"')\]]*)/gi;
+// =============================================================
+// Host → preferred scheme. Source: host-nginx-config/landing/.
+// =============================================================
+const HOST_SCHEME_MAP: Record<string, 'http' | 'https'> = {
+  // Main app — TLS terminated by the front nginx.
+  'simorghai.electrokavir.com': 'https',
+  // Internal services — plain HTTP per landing page.
+  'bpms.electrokavir.com': 'http',
+  'kasra.electrokavir.com': 'http',
+  'kesra.electrokavir.com': 'http', // common Persian transliteration
+  'hr.electrokavir.com': 'http',
+};
+
+const LAN_IP_RE_TEST =
+  /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/;
+
+function canonicalSchemeForHost(host: string): 'http' | 'https' | null {
+  const lc = host.toLowerCase();
+  if (HOST_SCHEME_MAP[lc]) return HOST_SCHEME_MAP[lc];
+  if (LAN_IP_RE_TEST.test(host)) return 'http';
+  return null; // unknown host — caller decides
+}
+
+// =============================================================
+// URL token detector.
+//   1. `https?://...`        (any scheme'd URL)
+//   2. `www.foo.bar/...`     (www. host, no scheme)
+//   3. `<host>.electrokavir.com/...`  (EKC subdomain, no scheme)
+//   4. LAN IPv4 with optional port + path
+// =============================================================
+const URL_RE = new RegExp(
+  [
+    // 1
+    '\\bhttps?:\\/\\/[^\\s<>"\\\')\\]]+',
+    // 2
+    '\\bwww\\.[a-z0-9\\-]+(?:\\.[a-z0-9\\-]+)+[^\\s<>"\\\')\\]]*',
+    // 3 — bare EKC company host. Subdomain optional; we add a path
+    //     part as anything-not-whitespace so query strings come along.
+    '\\b(?:[a-z0-9\\-]+\\.)*electrokavir\\.com(?:\\/[^\\s<>"\\\')\\]]*)?',
+    // 4 — LAN IPv4 (any in 10/172.16-31/192.168) with optional :port + /path
+    '\\b(?:10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|172\\.(?:1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3})(?::\\d{1,5})?(?:\\/[^\\s<>"\\\')\\]]*)?',
+  ].join('|'),
+  'gi',
+);
 
 const TRAILING_PUNCT_RE = /[,.;:!?،؛؟]+$/;
 // Persian comma U+060C, Persian semicolon U+061B, Persian
 // question mark U+061F included so we don't swallow them into
 // hrefs.
 
-/**
- * Wrap bare URLs in a single line as markdown links, preserving
- * any existing [text](url) constructs.
- *
- * Output form depends on whether the URL already has a scheme:
- *
- *   • https://… / http://…  →  wrapped with angle brackets
- *     (`<URL>`), the standard CommonMark autolink form. Crucial:
- *     GFM's `autolinkLiteral` then treats the result as a single
- *     atomic link and won't reparse the inner text. Wrapping
- *     with `[URL](URL)` instead causes a double-link nesting
- *     (`<a><a>...</a></a>`) — browsers handle that
- *     inconsistently and one common failure mode is the outer
- *     href being dropped, so clicking opens an `about:blank`
- *     tab. That was the May-2026 "creates link but opens blank
- *     page" regression.
- *
- *   • www.…  (no scheme)  →  wrapped as `[text](http://text)`
- *     so the resulting <a> has a usable absolute href. The
- *     scheme defaults to **http** — operator note May 2026:
- *     "for general chat all sites are http, not https". The
- *     EKC deployment's internal hosts (Kesra, document
- *     portal, etc.) are reached over plain http; auto-
- *     upgrading them to https would have the browser hit
- *     a TLS handshake against a server that doesn't speak
- *     it, which is what manifested as "links open a blank
- *     page" on click. URLs that the AI explicitly writes
- *     with `https://` are preserved as-is by the branch
- *     above — so this default doesn't downgrade anything
- *     the model intentionally typed.
- */
-const DEFAULT_SCHEME_FOR_SCHEMELESS = 'http';
+interface UrlParts {
+  scheme: string | null;
+  host: string;
+  rest: string; // port + path + query + fragment
+}
+
+function parseUrlParts(raw: string): UrlParts {
+  let scheme: string | null = null;
+  let work = raw;
+  const m = work.match(/^(https?):\/\//i);
+  if (m) {
+    scheme = m[1].toLowerCase();
+    work = work.slice(m[0].length);
+  }
+  // work is now host[:port][/path?query#frag]
+  const slashIdx = work.indexOf('/');
+  if (slashIdx === -1) {
+    const portIdx = work.indexOf(':');
+    if (portIdx === -1) {
+      return { scheme, host: work, rest: '' };
+    }
+    return { scheme, host: work.slice(0, portIdx), rest: work.slice(portIdx) };
+  }
+  const hostPort = work.slice(0, slashIdx);
+  const portIdx = hostPort.indexOf(':');
+  if (portIdx === -1) {
+    return { scheme, host: hostPort, rest: work.slice(slashIdx) };
+  }
+  return {
+    scheme,
+    host: hostPort.slice(0, portIdx),
+    rest: hostPort.slice(portIdx) + work.slice(slashIdx),
+  };
+}
 
 function linkifyPlainSegment(seg: string): string {
   return seg.replace(URL_RE, (match) => {
@@ -72,12 +132,22 @@ function linkifyPlainSegment(seg: string): string {
     // outside the link so clicking the URL doesn't 404.
     const trimmed = match.replace(TRAILING_PUNCT_RE, '');
     const tail = match.slice(trimmed.length);
-    if (/^https?:\/\//i.test(trimmed)) {
-      return `<${trimmed}>${tail}`;
-    }
-    // www.… case — prepend the default scheme to the href, keep
-    // the visible text as the user typed it.
-    return `[${trimmed}](${DEFAULT_SCHEME_FOR_SCHEMELESS}://${trimmed})${tail}`;
+    const { scheme, host, rest } = parseUrlParts(trimmed);
+
+    // Scheme priority:
+    //   1. If the host has a canonical scheme in our map → use it
+    //      (overrides whatever the LLM emitted, since wrong scheme
+    //      = TLS handshake against plain-HTTP server = blank tab).
+    //   2. Else, preserve the LLM's scheme if it was set.
+    //   3. Else, fall back to http — matches the landing page's
+    //      default for non-simorghai EKC hosts.
+    const canonical = canonicalSchemeForHost(host);
+    const finalScheme = canonical || scheme || 'http';
+
+    // CommonMark autolink form: `<URL>` is parsed as a single
+    // atomic link, GFM won't reparse the inner text → fixes the
+    // double-anchor blank-page bug (see commit ca7ec9e).
+    return `<${finalScheme}://${host}${rest}>${tail}`;
   });
 }
 

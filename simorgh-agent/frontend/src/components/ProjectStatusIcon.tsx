@@ -154,13 +154,31 @@ export function ProjectStatusIcon({
   const tooltip = title ?? spec.title;
   const extra = className ? ` ${className}` : '';
 
+  // Diagnostic data-attrs (May 2026 — operator reports "always
+  // gray dot and a spinner when AI worked" instead of the
+  // documented multi-colour vocabulary). These don't change
+  // rendering; they surface the raw status in DevTools (inspect
+  // the dot → data-container / data-branch attributes) so we can
+  // tell whether the backend's runtime/batch endpoint is
+  // returning rich data or everything is defaulting to
+  // absent/none. If you see data-container="absent"
+  // data-branch="none" for a project that should be active, the
+  // runtime broker probe is failing — investigate
+  // RUNTIME_BROKER_URL + the broker container, not this file.
+  const diag = {
+    'data-status-variant': variant,
+    'data-container': status?.container ?? 'unset',
+    'data-branch': status?.branch ?? 'unset',
+    ...(forceBusy ? { 'data-force-busy': 'true' } : {}),
+  };
+
   if (spec.asDot || !spec.Icon) {
     return (
       <span
         aria-label={tooltip}
         title={tooltip}
         className={`inline-block flex-shrink-0${extra} ${spec.className}`}
-        data-status-variant={variant}
+        {...diag}
       />
     );
   }
@@ -171,7 +189,7 @@ export function ProjectStatusIcon({
       aria-label={tooltip}
       title={tooltip}
       className={`inline-flex flex-shrink-0 items-center justify-center${extra}`}
-      data-status-variant={variant}
+      {...diag}
     >
       <Icon className={spec.className} />
     </span>
