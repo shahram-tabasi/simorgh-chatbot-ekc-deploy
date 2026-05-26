@@ -182,32 +182,34 @@ async def lookup(
     if vec is None:
         return None
 
-    # Category filter: cached entries are stored with their
-    # category — a leave-types question under hr_manner should
-    # NOT match a strategy question even if the wording is
-    # similar. Compare exactly (including None == None).
-    must = [
-        qmodels.FieldCondition(
-            key="category",
-            match=qmodels.MatchValue(value=category) if category else qmodels.MatchValue(value=""),
-        )
-    ] if category is not None else [
-        qmodels.IsEmptyCondition(is_empty=qmodels.PayloadField(key="category"))
-    ]
-
+    # Category filtering removed (May 2026 — the first cache run
+    # against identical text returned MISS instead of HIT. Most
+    # likely cause: Qdrant's IsEmpty / MatchValue interaction with
+    # payloads where `category: None` was stored — null vs missing
+    # is fiddly across Qdrant releases. Trade-off: a question
+    # cached under category=hr_manner can now serve a request that
+    # came in with category=None or org_strategy, IF cosine ≥ 0.95.
+    # In practice the answer text for the same wording is the same
+    # because hr_chat retrieves from a single union'd HR/strategy
+    # corpus; category was only a soft retrieval bias. Worst case:
+    # a slightly-off-domain answer on a near-duplicate question —
+    # the dislike path removes it.)
     try:
         results = _qdrant().search(
             collection_name=CACHE_COLLECTION,
             query_vector=vec,
             limit=5,
             score_threshold=SIMILARITY_THRESHOLD,
-            query_filter=qmodels.Filter(must=must),
         )
     except Exception as e:
         log.warning("general_chat_cache: search failed: %s", e)
         return None
 
     if not results:
+        log.info(
+            "general_chat_cache: MISS for q=%r category=%r (no hits ≥ %.2f)",
+            question[:80], category, SIMILARITY_THRESHOLD,
+        )
         return None
 
     # Among matches above the threshold, prefer the entry with
@@ -223,6 +225,14 @@ async def lookup(
     )
     top = results[0]
     payload = top.payload or {}
+    log.info(
+        "general_chat_cache: HIT id=%s cosine=%.4f like_score=%d "
+        "stored_q=%r incoming_q=%r",
+        str(top.id), float(top.score),
+        int(payload.get("like_score", 0)),
+        (payload.get("question") or "")[:80],
+        question[:80],
+    )
     return {
         "entry_id": str(top.id),
         "cosine": float(top.score),
@@ -245,11 +255,20 @@ async def write(
     (so the caller can echo it in SSE meta for later like/dislike),
     None on failure."""
     if not _ensure_collection():
+        log.warning("general_chat_cache: write SKIPPED — collection not ready")
         return None
     if not (question and question.strip() and answer and answer.strip()):
+        log.warning(
+            "general_chat_cache: write SKIPPED — empty input (qlen=%d alen=%d)",
+            len(question or ""), len(answer or ""),
+        )
         return None
     vec = await _embed(question.strip())
     if vec is None:
+        log.warning(
+            "general_chat_cache: write SKIPPED — embed returned None for q=%r",
+            question[:80],
+        )
         return None
     point_id = str(uuid4())
     payload = {

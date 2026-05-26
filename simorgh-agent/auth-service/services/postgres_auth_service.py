@@ -828,17 +828,33 @@ class PostgresAuthService:
             param_count += 1
 
         if preferences_data is not None:
-            # Postgres JSONB concat (||) is a SHALLOW top-level
-            # merge: keys present in the patch replace those keys
-            # in the existing object; sibling keys are preserved.
-            # That's exactly the semantic we want — a PATCH on
-            # `pinned_messages` overwrites the full pin map but
-            # leaves `theme_extras` or any future sibling alone.
+            # JSONB shallow-merge with the existing column. Two
+            # things going on in this SQL fragment that bit us
+            # in production (May 2026 — PATCH was 500'ing):
+            #
+            #  (a) The `||` operator wants both sides to be jsonb.
+            #      Cast the parameter explicitly with `::jsonb` so
+            #      asyncpg passes the value as text and Postgres
+            #      parses it server-side. (asyncpg's default jsonb
+            #      handling is "text in / text out" — no codec
+            #      registered in this codebase. Passing a Python
+            #      dict directly would need `set_type_codec`.)
+            #
+            #  (b) `COALESCE(..., '{}'::jsonb)` handles the case
+            #      where the row's preferences_data is NULL (an
+            #      older user record from before the column was
+            #      back-filled). Without it, `NULL || x` evaluates
+            #      to NULL and the merge silently drops.
+            #
+            # Also pass json.dumps with ensure_ascii=False so Persian
+            # snippet text in pinned_messages survives the round-trip
+            # as UTF-8 rather than \uXXXX escapes (cosmetic, but the
+            # default would have been ugly).
             import json as _json
             updates.append(
                 f"preferences_data = COALESCE(preferences_data, '{{}}'::jsonb) || ${param_count}::jsonb"
             )
-            values.append(_json.dumps(preferences_data))
+            values.append(_json.dumps(preferences_data, ensure_ascii=False))
             param_count += 1
 
         if not updates:
@@ -856,7 +872,15 @@ class PostgresAuthService:
             result = await self.db.execute_one_async(query, *values)
             return dict(result) if result else None
         except Exception as e:
-            logger.error(f"Error updating preferences: {e}")
+            # Log the exact SQL + value type info so the operator
+            # can pin down JSONB-cast / encoding bugs from one log
+            # line (previously this swallowed the error and the
+            # route returned a featureless 500).
+            logger.error(
+                "Error updating preferences: %s  | query=%r  | param_types=%s",
+                e, query,
+                [type(v).__name__ for v in values],
+            )
             return None
 
     # =========================================================================
