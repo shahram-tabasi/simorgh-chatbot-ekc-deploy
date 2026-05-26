@@ -51,24 +51,28 @@ export default function GeneralWelcome({ onPromptClick, onPromptDoubleClick }: G
         برای شروع روی یکی از موضوعات زیر کلیک کنید
       </p>
 
-      {/* Suggested prompts — wrap into rows, single click sends. */}
-      <div className="w-full max-w-2xl mx-auto px-2" dir="rtl">
-        <div className="flex flex-wrap justify-center gap-2 sm:gap-2.5 pb-2">
+      {/* Suggested prompts — single horizontal row, swipe/scroll to
+          reveal extras (matches the original layout the operator
+          wanted preserved). On the desktop the mouse wheel scrolls
+          the row sideways; on touch devices it pans. */}
+      <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider box-border" dir="rtl">
+        <div className="inline-flex gap-1.5 sm:gap-2 px-2 pb-2 pr-8">
           {suggestedPrompts.map((item, i) => (
             <button
               key={i}
-              // Single click sends the prompt straight to the chat — falls
-              // back to insert-only when the parent didn't wire a sender.
+              // Single click sends the prompt straight to the chat —
+              // falls back to insert-only when the parent didn't wire
+              // a sender.
               onClick={() => (onPromptDoubleClick ?? onPromptClick)(item.prompt)}
-              className="group rounded-full border transition-all px-3 py-1.5 sm:px-4 sm:py-2 flex items-center gap-2 flex-shrink-0
-                         bg-white/5 hover:bg-white/10 border-white/10 hover:border-blue-400/40
-                         cursor-pointer hover:shadow-lg hover:shadow-blue-500/10"
+              className="group rounded-xl sm:rounded-2xl border transition-all px-2.5 py-1.5 sm:px-4 sm:py-2.5 flex items-center gap-1.5 sm:gap-2.5 flex-shrink-0
+                         bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20
+                         cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20"
               style={{ animation: `fadeInUp 0.4s ease-out ${0.4 + i * 0.08}s backwards` }}
             >
-              <span className="text-base sm:text-lg">{item.emoji}</span>
-              <span className="text-xs sm:text-sm font-medium text-white whitespace-nowrap">
+              <div className="text-base sm:text-xl">{item.emoji}</div>
+              <div className="text-[11px] sm:text-xs font-medium text-white whitespace-nowrap">
                 {item.title}
-              </span>
+              </div>
             </button>
           ))}
         </div>

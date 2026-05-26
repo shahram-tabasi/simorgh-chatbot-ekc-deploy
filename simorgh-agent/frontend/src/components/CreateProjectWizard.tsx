@@ -68,6 +68,44 @@ const emptySources = (): Sources => ({
   upload: true,
 });
 
+/** Map a raw backend / network error to a friendly Persian message.
+ *  Falls back to a generic line so we never surface backend jargon
+ *  (e.g. `role_category 'None' is not permitted ...`) to the user. */
+function humanizeProjectError(e: any): string {
+  const detail: string =
+    (e?.response?.data?.detail && String(e.response.data.detail)) ||
+    (e?.message && String(e.message)) ||
+    '';
+  const status: number | undefined = e?.response?.status;
+  const lower = detail.toLowerCase();
+
+  // Permission / role gate (the exact case shown to the operator).
+  if (
+    lower.includes('role_category') ||
+    lower.includes('not permitted') ||
+    lower.includes('expert_technical') ||
+    status === 403
+  ) {
+    return 'حساب شما اجازه ساخت پروژه را ندارد. ساخت پروژه فقط برای کارشناسان فنی فعال است — لطفاً با مدیر سیستم تماس بگیرید.';
+  }
+  if (status === 401) {
+    return 'نشست شما منقضی شده است. لطفاً دوباره وارد شوید.';
+  }
+  if (status === 409 || lower.includes('already exists') || lower.includes('duplicate')) {
+    return 'پروژه‌ای با همین نام از قبل وجود دارد. لطفاً نام دیگری انتخاب کنید.';
+  }
+  if (status === 400 || lower.includes('invalid') || lower.includes('required')) {
+    return 'اطلاعات وارد شده کامل یا معتبر نیست. لطفاً فیلدها را بررسی و دوباره تلاش کنید.';
+  }
+  if (status === 404 || lower.includes('not found')) {
+    return 'منبع درخواست‌شده پیدا نشد. اگر مخزن گیت‌لب انتخاب کرده‌اید، توکن و دسترسی را بررسی کنید.';
+  }
+  if (status === 502 || status === 503 || status === 504 || lower.includes('timeout') || lower.includes('network')) {
+    return 'ارتباط با سرور برقرار نشد. لطفاً چند لحظه دیگر دوباره تلاش کنید.';
+  }
+  return 'متأسفانه ساخت پروژه با خطا مواجه شد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.';
+}
+
 export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Props) {
   const { user } = useAuth();
   const isLegacy = user ? isLegacyUser(user) : false;
@@ -128,10 +166,10 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
       });
       setRepos(r.data || []);
       if ((r.data || []).length === 0) {
-        setReposError('No repositories found for this GitLab token.');
+        setReposError('هیچ مخزنی برای این توکن گیت‌لب پیدا نشد.');
       }
     } catch (e: any) {
-      setReposError(e.response?.data?.detail || 'Failed to list repositories.');
+      setReposError(humanizeProjectError(e));
       // Pull access instructions to show the user how to grant access.
       try {
         const r2 = await axios.get(`${API_BASE}/gitlab/access-instructions`);
@@ -226,7 +264,7 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
       onCreated(projectId, sess.data.session_token, sess.data.deep_link);
       handleClose();
     } catch (e: any) {
-      setError(e.response?.data?.detail || e.message || 'Failed to create project.');
+      setError(humanizeProjectError(e));
     } finally {
       setSubmitting(false);
     }
@@ -422,9 +460,12 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
             )}
 
             {error && (
-              <div className="flex items-start gap-2 px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl">
+              <div
+                className="flex items-start gap-2 px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl"
+                dir="rtl"
+              >
                 <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
-                <p className="text-sm text-red-300">{error}</p>
+                <p className="text-sm text-red-200 leading-6">{error}</p>
               </div>
             )}
 
