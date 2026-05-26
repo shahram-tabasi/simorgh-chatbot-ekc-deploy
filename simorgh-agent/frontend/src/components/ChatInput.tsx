@@ -46,6 +46,16 @@ interface ChatInputProps {
   modelLabel?: string | null;
   /** Token-budget telemetry from the last assistant reply. */
   tokenUsage?: { used?: number | null; total?: number | null } | null;
+  /** Small slot rendered just right of `modelLabel` in the footer
+      row. App.tsx drops a QuotaIndicator here so the per-day
+      remaining-questions ring sits next to "Simorgh AI" instead of
+      in the sidebar header (issue #2 follow-up, May 2026 — operator
+      wanted the ring at the point of action). When present, it
+      replaces the idle Loader2Icon spinner for the not-generating
+      state; the active "stop generating" button still shows during
+      streaming, and the typing-pulse spinner falls back when no
+      quotaIndicator is supplied (legacy users / SSR). */
+  quotaIndicator?: React.ReactNode;
   /** Show the chain-of-thought elapsed timer next to the model badge.
    * Used by project chats where CoT can run for tens of seconds and
    * the user wants visible feedback that work is in progress. */
@@ -179,6 +189,7 @@ export function ChatInput({
   modelLabel = null,
   tokenUsage = null,
   showCotTimer = false,
+  quotaIndicator = null,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -589,6 +600,14 @@ export function ChatInput({
               >
                 <StopCircleIcon className="w-4 h-4 text-red-400" />
               </button>
+            ) : quotaIndicator ? (
+              // Modern users: the quota ring lives here (next to
+              // "Simorgh AI") and opens upward into a popover with
+              // remaining/used/reset details. Replaces the idle
+              // typing-pulse spinner for these users — the
+              // "have-unsent-text" affordance trades down to the
+              // ring's static state, which is acceptable.
+              quotaIndicator
             ) : (
               <Loader2Icon
                 className={`w-3.5 h-3.5 text-gray-500 ${

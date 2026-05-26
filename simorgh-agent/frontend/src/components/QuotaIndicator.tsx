@@ -33,6 +33,11 @@ interface Props {
   resetsAt?: string;
   /** Hide ring fill / upgrade link for admin / max tiers. */
   unlimited?: boolean;
+  /** Where the popover opens relative to the ring. `'bottom'` is
+      the default for the sidebar-header layout. The chat-input
+      footer at the bottom of the screen passes `'top'` so the
+      popover doesn't clip below the viewport. */
+  placement?: 'top' | 'bottom';
 }
 
 function stageStrokeClass(ratio: number): string {
@@ -73,6 +78,7 @@ export function QuotaIndicator({
   tier,
   resetsAt,
   unlimited = false,
+  placement = 'bottom',
 }: Props) {
   const { t } = useLanguage();
   const [open, setOpen] = useState(false);
@@ -155,13 +161,17 @@ export function QuotaIndicator({
         </span>
       </button>
 
-      {/* Popover — shows on click. Positioned just below the ring,
-          right-anchored so it doesn't push past the sidebar edge. */}
+      {/* Popover — opens above OR below the ring based on `placement`.
+          The chat-input footer at the bottom of the viewport passes
+          'top' so the popover doesn't clip below the screen edge.
+          Right-anchored either way so wide sidebars / wide composers
+          don't push it off-screen on the right. */}
       {open && (
         <div
-          className="absolute top-full right-0 mt-2 z-50 w-64
-                     rounded-lg border border-white/10 bg-slate-900/95
-                     backdrop-blur shadow-2xl p-3 text-[12px] text-gray-200"
+          className={`absolute right-0 z-50 w-64
+                      rounded-lg border border-white/10 bg-slate-900/95
+                      backdrop-blur shadow-2xl p-3 text-[12px] text-gray-200
+                      ${placement === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'}`}
         >
           <div className="flex items-baseline justify-between mb-2">
             <span className="text-[13px] font-semibold text-white">

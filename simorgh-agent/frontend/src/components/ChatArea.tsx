@@ -87,6 +87,12 @@ interface ChatAreaProps {
    * screen flash when switching between existing chats whose history
    * is still loading asynchronously. */
   activeChatId?: string | null;
+  /** Wired-up QuotaIndicator forwarded to ChatInput so the per-day
+   * remaining-questions ring shows next to the "Simorgh AI" label
+   * in the composer footer. App.tsx supplies this for modern users
+   * (it wraps useQuota); legacy/unlimited users pass undefined and
+   * ChatInput falls back to its idle typing-pulse spinner. */
+  quotaIndicator?: React.ReactNode;
 }
 
 function ChatHeaderChip({ ctx }: { ctx: ChatHeaderContext }) {
@@ -190,6 +196,7 @@ export function ChatArea({
   quotaExceeded = false,
   headerContext = null,
   activeChatId = null,
+  quotaIndicator = null,
 }: ChatAreaProps) {
   const [promptToInsert, setPromptToInsert] = React.useState<string | null>(null);
   // True after the user has sent a message in this chat. Kept for the
@@ -352,6 +359,7 @@ export function ChatArea({
                 modelLabel="Simorgh AI"
                 showCotTimer={isProjectChat}
                 tokenUsage={tokenUsage}
+                quotaIndicator={quotaIndicator}
               />
             </div>
           </div>
@@ -400,6 +408,7 @@ export function ChatArea({
                 modelLabel="Simorgh AI"
                 showCotTimer={isProjectChat}
                 tokenUsage={tokenUsage}
+                quotaIndicator={quotaIndicator}
               />
             </div>
           </div>

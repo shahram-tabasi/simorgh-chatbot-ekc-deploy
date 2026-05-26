@@ -456,25 +456,11 @@ function MainChat() {
             onNewProject={canCreateProjects ? handleCreateProject : undefined}
             // Legacy users get project-only chat: hide the "new general chat" entry point.
             onNewGeneralChat={user && isLegacyUser(user) ? undefined : handleCreateGeneralChat}
-            // The chunky "Free Tier 20/20 — Upgrade plan →" tile used
-            // to live INSIDE the sidebar body (above ProjectTree).
-            // Issue #2 (May 2026): operator wanted it gone from there
-            // and replaced by a compact ring in the header that fills
-            // as tokens are consumed and opens a popover on click.
-            // We pass the new QuotaIndicator into the header slot
-            // instead of rendering it as a body row.
-            headerExtra={
-              isModernTier ? (
-                <QuotaIndicator
-                  used={quota.questions_used_today}
-                  total={quota.questions_limit}
-                  remaining={quota.questions_remaining}
-                  tier={quota.user_role}
-                  resetsAt={quota.resets_at}
-                  unlimited={quota.user_role === 'admin' || quota.user_role === 'max'}
-                />
-              ) : null
-            }
+            // Quota lives in the ChatInput footer (next to "Simorgh
+            // AI") since the May-2026 follow-up — see the
+            // quotaIndicator prop passed to <ChatArea> below.
+            // headerExtra remains a sidebar extension point but is
+            // unused here.
           >
             <ProjectTree
               projects={displayProjects}
@@ -536,6 +522,25 @@ function MainChat() {
               disabled={!activeChatId}
               isProjectChat={activeProjectId !== null}
               quotaExceeded={quotaExceeded}
+              // Quota ring next to "Simorgh AI" in the composer
+              // footer (issue #2 follow-up, May 2026). Only rendered
+              // for modern users; legacy users fall through to the
+              // idle typing-pulse spinner. `placement='top'` because
+              // the composer sits at the bottom of the viewport and
+              // a downward popover would clip below the screen.
+              quotaIndicator={
+                isModernTier ? (
+                  <QuotaIndicator
+                    used={quota.questions_used_today}
+                    total={quota.questions_limit}
+                    remaining={quota.questions_remaining}
+                    tier={quota.user_role}
+                    resetsAt={quota.resets_at}
+                    unlimited={quota.user_role === 'admin' || quota.user_role === 'max'}
+                    placement="top"
+                  />
+                ) : null
+              }
               headerContext={
                 activeProject
                   ? {
