@@ -339,7 +339,29 @@ export function ProjectTree({
             </div>
           ) : (
             <div className="space-y-1">
-            {realProjects.map((project) => {
+            {realProjects
+              // Hide projects that have no chats matching the current
+              // filter — otherwise "Archived" shows a forest of empty
+              // project rows (none of their chats archived), and
+              // "Active" hides brand-new projects that just don't have
+              // chats yet. Rules:
+              //   • all      → show every project
+              //   • active   → show projects with ≥1 active chat,
+              //                AND projects with no chats at all
+              //                (treat empty as active-by-default)
+              //   • archived → show only projects with ≥1 archived chat
+              .filter(project => {
+                if (statusFilter === 'all') return true;
+                if (project.chats.length === 0) {
+                  return statusFilter === 'active';
+                }
+                return project.chats.some(c =>
+                  statusFilter === 'archived'
+                    ? c.archived === true
+                    : c.archived !== true
+                );
+              })
+              .map((project) => {
               const isActive = activeProjectId === project.id;
               const repo = project.repoPath;
               const branch = project.workingBranch || project.baseBranch;
