@@ -51,7 +51,12 @@ services:
         aliases:
           - stt-service
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8001/health || exit 1"]
+      # The fedirz/faster-whisper-server image ships neither curl nor
+      # wget, so the obvious `curl -sf .../health` form makes the
+      # healthcheck exit 127 forever. The container still serves
+      # traffic — only the health verdict is wrong. Probe via the
+      # one HTTP-capable tool the image DOES have: python3 + urllib.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).read()"]
       interval: 30s
       timeout: 10s
       retries: 3
