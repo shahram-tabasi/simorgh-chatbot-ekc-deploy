@@ -177,6 +177,17 @@ async def hr_stream(req: HrStreamRequest):
         # the entry id for later like/dislike binding via message
         # metadata.
         cache_entry_id: Optional[str] = None
+        # Captured `done` event data — held back from the wire
+        # until ALL backend housekeeping (cache write, persistence,
+        # quota increment) finishes. The frontend's onDone
+        # callback is the signal it uses to refresh the quota
+        # ring; if we yielded `done` mid-stream the way the inner
+        # generator emits it, the ring would re-fetch BEFORE the
+        # backend's increment_usage call landed and snap back to
+        # the pre-increment count (operator's "quota still not
+        # work" report, May 2026). Yielded as the very last frame
+        # below.
+        done_payload: Optional[dict] = None
 
         # ── Cache short-circuit ────────────────────────────────────
         # Before paying the embedding+retrieval+LLM cost, ask the
@@ -218,7 +229,9 @@ async def hr_stream(req: HrStreamRequest):
             # gratification this way — feels faster than the LLM.
             accumulated.append(cached_answer)
             yield f"data: {json.dumps({'chunk': cached_answer}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'done': {'reason': 'cache_hit'}}, ensure_ascii=False)}\n\n"
+            # Capture `done` for the unified bottom-of-function emit;
+            # don't yield it here.
+            done_payload = {"reason": "cache_hit"}
             # Telemetry — fire and forget.
             try:
                 await cache.bump_hit(cache_entry_id)
@@ -235,6 +248,12 @@ async def hr_stream(req: HrStreamRequest):
                     elif kind == "refusal":
                         was_refusal = True
                         accumulated.append(str(data or ""))
+                    elif kind == "done":
+                        # Hold the `done` event back until housekeeping
+                        # (cache write, persistence, quota increment)
+                        # completes. See done_payload comment above.
+                        done_payload = data
+                        continue
                     frame = {kind: data}
                     yield f"data: {json.dumps(frame, ensure_ascii=False)}\n\n"
             except Exception as e:
@@ -295,13 +314,10 @@ async def hr_stream(req: HrStreamRequest):
             )
 
         # Record the question against the modern user's daily quota.
-        # The chatbot_v2 (project-chat) route already does this via
-        # _increment_modern_usage; general-chat-HR was missed when
-        # the path was forked from the legacy stream handler, so the
-        # quota ring stayed at "full" forever in the sidebar (issue
-        # #3, May 2026). Done after persistence + after the stream
-        # so a transient quota-service failure can't 5xx the SSE
-        # response; worst case is the count is off by one.
+        # Runs BEFORE the final `done` SSE frame so the frontend's
+        # onDone-triggered fetchQuota sees the incremented count
+        # immediately (the original 800ms-timer fetch was racing
+        # this call and snapping the optimistic decrement back).
         if not was_refusal:
             try:
                 from services.user_tier_service import get_tier_service
@@ -314,6 +330,14 @@ async def hr_stream(req: HrStreamRequest):
                     "hr_stream: failed to increment quota for user=%s: %s",
                     req.user_id, e,
                 )
+
+        # Finally, emit the held-back `done` frame. By the time the
+        # client sees this, cache.write + persist_pair +
+        # increment_usage have all completed. The frontend uses this
+        # event to trigger a fresh /api/v2/quota/me fetch and the
+        # ring updates correctly.
+        if done_payload is not None:
+            yield f"data: {json.dumps({'done': done_payload}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),

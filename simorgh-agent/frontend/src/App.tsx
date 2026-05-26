@@ -383,20 +383,22 @@ function MainChat() {
       setEditingMessage(null);
     } else {
       sendMessage(content, files);
-      // Update the quota ring — optimistic local decrement gives the
-      // sidebar's QuotaIndicator an immediate visual response, then
-      // fetchQuota syncs against server truth a moment later. Without
-      // this the ring stayed empty until a full page refresh
-      // (reported May 2026 as part of issue #2: "until know token
-      // consume no applied"). Only modern users have a quota.
+      // Optimistic local decrement so the ring nudges down the
+      // moment the user sends. Server reconciliation happens
+      // automatically when the stream completes — useQuota
+      // listens for the `simorgh-message-streamed` CustomEvent
+      // that useChat dispatches in onDone, fetches
+      // /api/v2/quota/me, and corrects the local count to the
+      // server truth. The previous 800ms-timer reconciliation
+      // raced the backend's increment (HR direct-RAG can take
+      // 5-30s for long answers) and snapped the optimistic
+      // decrement back to the pre-increment count — operator
+      // report May 2026: "quota still not work".
       if (isModernTier) {
         decrementLocal();
-        // Defer server refresh slightly so the backend has time to
-        // record the consumption before we re-fetch.
-        setTimeout(() => { fetchQuota(); }, 800);
       }
     }
-  }, [editingMessage, editMessage, sendMessage, isModernTier, decrementLocal, fetchQuota]);
+  }, [editingMessage, editMessage, sendMessage, isModernTier, decrementLocal]);
 
   // هدر ثابت + پروژه‌ها
   const displayProjects = [

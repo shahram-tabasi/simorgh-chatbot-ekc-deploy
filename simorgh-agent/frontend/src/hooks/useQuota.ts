@@ -80,6 +80,19 @@ export function useQuota() {
     }
   }, []);
 
+  // Listen for stream-completion events from useChat. The
+  // backend's general_chat_hr now yields its `done` SSE frame
+  // AFTER incrementing the user's daily-quota counter, so we
+  // can fetch the authoritative remaining count the moment the
+  // stream finishes — no racy setTimeout, no polling. See the
+  // matching dispatchEvent in useChat.ts onDone handler.
+  useEffect(() => {
+    if (!isModern) return;
+    const onStreamed = () => { fetchQuota(); };
+    window.addEventListener('simorgh-message-streamed', onStreamed);
+    return () => window.removeEventListener('simorgh-message-streamed', onStreamed);
+  }, [isModern, fetchQuota]);
+
   // Fetch quota on auth change
   useEffect(() => {
     if (isModern) {

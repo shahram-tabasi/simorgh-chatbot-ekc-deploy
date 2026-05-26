@@ -580,6 +580,17 @@ export function useChat(
               setMessages(prev => prev.map(m => m.id === aiMessageId
                 ? { ...m, metadata: { ...(m.metadata||{}), streaming: false } }
                 : m));
+              // Quota sync (May 2026 — operator's "quota still not
+              // work" report). The backend now yields the `done`
+              // frame AFTER cache.write + persist + increment_usage
+              // all finish, so by the time we see this event the
+              // server-side count is up to date. Dispatch a global
+              // event for useQuota to listen on; that hook fetches
+              // /api/v2/quota/me and re-renders the ring with the
+              // authoritative count. Cross-hook coupling via
+              // CustomEvent is cleaner than threading a callback
+              // through sendMessage → useChat → useQuota.
+              window.dispatchEvent(new CustomEvent('simorgh-message-streamed'));
             },
             onError: (err) => {
               console.error('hr_chat stream failed:', err);
