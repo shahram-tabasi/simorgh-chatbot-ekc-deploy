@@ -773,6 +773,41 @@ class PostgresAuthService:
             logger.error(f"Error updating profile: {e}")
             return None
 
+    def _coerce_preferences_row(self, row: dict) -> dict:
+        """asyncpg returns JSONB columns as RAW JSON STRINGS by
+        default (no codec is registered in this codebase). The
+        pydantic UserPreferencesResponse expects
+        `preferences_data: dict`, so the route's
+        `UserPreferencesResponse(**prefs)` blows up with a
+        validation error if we hand it a str (May 2026 production
+        bug — GET 500 on every call from any modern user, and the
+        same fault on the PATCH return path too).
+
+        This helper parses the JSONB column to a Python dict before
+        returning so all callers can spread the row directly into
+        the pydantic model.
+        """
+        out = dict(row)
+        pd = out.get("preferences_data")
+        if isinstance(pd, str):
+            if pd:
+                import json as _json
+                try:
+                    out["preferences_data"] = _json.loads(pd)
+                except Exception as parse_err:
+                    logger.warning(
+                        "_coerce_preferences_row: failed to parse "
+                        "preferences_data JSON: %s (raw=%r); "
+                        "defaulting to empty dict",
+                        parse_err, pd[:200],
+                    )
+                    out["preferences_data"] = {}
+            else:
+                out["preferences_data"] = {}
+        elif pd is None:
+            out["preferences_data"] = {}
+        return out
+
     async def get_user_preferences(self, user_id: UUID) -> Optional[dict]:
         """Get user preferences."""
         query = """
@@ -782,7 +817,7 @@ class PostgresAuthService:
         """
         try:
             result = await self.db.execute_one_async(query, user_id)
-            return dict(result) if result else None
+            return self._coerce_preferences_row(result) if result else None
         except Exception as e:
             logger.error(f"Error getting preferences: {e}")
             return None
@@ -870,7 +905,10 @@ class PostgresAuthService:
 
         try:
             result = await self.db.execute_one_async(query, *values)
-            return dict(result) if result else None
+            # Same JSONB-as-str coercion as the GET path —
+            # otherwise UserPreferencesResponse(**updated_prefs)
+            # 500s with the same pydantic validation error.
+            return self._coerce_preferences_row(result) if result else None
         except Exception as e:
             # Log the exact SQL + value type info so the operator
             # can pin down JSONB-cast / encoding bugs from one log
