@@ -14,6 +14,7 @@ import ContextMenu from './ContextMenu';
 import RenameModal from './RenameModal';
 import { Tooltip } from './Tooltip';
 import { ProjectStatusIcon } from './ProjectStatusIcon';
+import { useLanguage } from '../context/LanguageContext';
 
 type StatusFilter = 'active' | 'archived' | 'all';
 
@@ -97,6 +98,7 @@ export function ProjectTree({
   const [statusFilter, setStatusFilter] = React.useState<StatusFilter>('active');
   const [showPageModal, setShowPageModal] = React.useState(false);
   const [selectedProjectId, setSelectedProjectId] = React.useState<string | null>(null);
+  const { t } = useLanguage();
 
   // Context menu state for chats
   const [contextMenu, setContextMenu] = React.useState<{
@@ -236,7 +238,7 @@ export function ProjectTree({
           className="w-full flex items-center gap-2 px-3 py-2 rounded-md bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 hover:border-white/20 text-gray-100 text-sm font-medium transition"
         >
           <Plus className="w-4 h-4 text-gray-300" />
-          New project
+          {t('newProject')}
         </button>
       </div>
 
@@ -252,7 +254,7 @@ export function ProjectTree({
                 : 'bg-transparent border-white/[0.06] text-gray-500 hover:text-gray-300 hover:border-white/15'
             }`}
           >
-            {f[0].toUpperCase() + f.slice(1)}
+            {t(f)}
           </button>
         ))}
       </div>
@@ -272,12 +274,12 @@ export function ProjectTree({
                 <ChevronRight className="w-3.5 h-3.5" />
               )}
               <Sparkles className="w-3.5 h-3.5" />
-              <span>General</span>
+              <span>{t('general')}</span>
             </button>
             <button
               onClick={onCreateGeneralChat}
               className="p-1.5 hover:bg-white/10 rounded text-gray-400 hover:text-gray-200 transition"
-              title="New general chat"
+              title={t('newGeneralChat')}
             >
               <Plus className="w-4 h-4" />
             </button>
@@ -320,12 +322,12 @@ export function ProjectTree({
         {/* Projects Section */}
         <div>
           <div className="px-2 mb-1 text-[13px] font-semibold text-gray-400 uppercase tracking-wider">
-            Projects
+            {t('projects')}
           </div>
 
           {realProjects.length === 0 ? (
             <div className="px-3 py-8 text-center text-gray-500 text-sm">
-              No projects yet. Tap <span className="text-gray-300">+ New project</span> to start.
+              {t('noProjectsYet')}
             </div>
           ) : (
             <div className="space-y-1">

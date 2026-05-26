@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { GitBranchIcon, FolderGitIcon, CpuIcon, FileDiffIcon, ExternalLinkIcon } from 'lucide-react';
 import WelcomeScreen from './WelcomeScreen';
 import GeneralWelcome from './GeneralWelcome';
+import { useAuth, isLegacyUser } from '../context/AuthContext';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
 import { Message, UploadedFile } from '../types';
@@ -195,6 +196,8 @@ export function ChatArea({
   // existing handleSend path (transitions from idle → chat on first
   // send) — no longer used to gate the welcome screen.
   const [isChatting, setIsChatting] = React.useState(false);
+  const { user } = useAuth();
+  const legacy = user ? isLegacyUser(user) : false;
 
   // Lock in chatting view on any chat switch where messages exist or
   // are about to. Used to clear the welcome state when navigating
@@ -308,8 +311,19 @@ export function ChatArea({
           off-screen, making the page look frozen. */}
       {isIdle && (
         <div className="flex-1 overflow-y-auto overflow-x-hidden w-full min-w-0">
-          <div className="min-h-full w-full max-w-3xl mx-auto flex flex-col items-center justify-center px-2 sm:px-4 md:px-8 lg:px-20 py-4 min-w-0">
-            {isProjectChat ? (
+          {/* On desktop (lg+) the welcome anchors near the top with
+              padding (lg:justify-start lg:pt-12) and the column is
+              wider (lg:max-w-5xl) per operator request — keeps the
+              prompts above the fold instead of pushing them into the
+              vertical middle of a 1080p screen. On mobile the
+              previous "center vertically" behavior is preserved. */}
+          <div className="min-h-full w-full max-w-3xl lg:max-w-5xl mx-auto flex flex-col items-center justify-center lg:justify-start px-2 sm:px-4 md:px-8 lg:px-12 py-4 lg:pt-12 min-w-0">
+            {/* Legacy/TPMS operators are electrical engineers using
+                project chats — they should see the English electrical
+                WelcomeScreen (Short Circuit, Transformer Ratings, …)
+                even on the no-project idle screen. Modern (HR) users
+                see the Persian HR prompts in GeneralWelcome. */}
+            {isProjectChat || legacy ? (
               <WelcomeScreen
                 onHide={() => {}}
                 onPromptClick={handlePromptClick}
@@ -370,7 +384,7 @@ export function ChatArea({
             className="w-full flex-shrink-0 flex justify-center pb-4 sm:pb-6 md:pb-8 border-t border-transparent backdrop-blur-xl"
             style={{ paddingBottom: `max(1rem, calc(1rem + env(safe-area-inset-bottom)))` }}
           >
-            <div className="w-full px-2 sm:px-4 max-w-4xl">
+            <div className="w-full px-2 sm:px-4 max-w-4xl lg:max-w-5xl">
               <ChatInput
                 onSend={handleSend}
                 onCancel={onCancelGeneration}

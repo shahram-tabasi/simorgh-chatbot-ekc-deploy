@@ -24,6 +24,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { showWarning } from '../utils/alerts';
 import { useAuth, isModernUser, isLegacyUser } from '../context/AuthContext';
 import { useTheme, ThemeType } from '../context/ThemeContext';
+import AvatarPicker, { loadStoredAvatar, presetAvatarUrl } from './AvatarPicker';
 
 const languages = [
   { code: 'en', name: 'English', flag: '🇺🇸' },
@@ -58,8 +59,10 @@ export default function SettingsPanel({
   const [isOpen, setIsOpen] = React.useState(false);
   const [langOpen, setLangOpen] = React.useState(false);
   const [aiMode, setAiMode] = React.useState<'online' | 'offline'>('online');
+  const [avatarPickerOpen, setAvatarPickerOpen] = React.useState(false);
+  const [avatarRev, setAvatarRev] = React.useState(0);  // re-render after pick
 
-  const { language, setLanguage } = useLanguage();
+  const { language, setLanguage, t } = useLanguage();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const { theme, setTheme, notificationsEnabled, setNotificationsEnabled } = useTheme();
@@ -77,6 +80,28 @@ export default function SettingsPanel({
     : isLegacyUser(user) ? 'Enterprise • Local Network'
     : 'Guest'
     : 'Guest';
+
+  // Stable identity for the avatar's per-user localStorage key. Modern
+  // users get their UUID; legacy/TPMS users get EMPUSERNAME (their
+  // JWT sub claim). Avoid using displayName — it can change between
+  // sessions and would orphan saved avatars.
+  const avatarUserId = user
+    ? isModernUser(user)
+      ? (user.id as string)
+      : isLegacyUser(user)
+        ? user.EMPUSERNAME
+        : null
+    : null;
+  const avatarInitial = (displayName?.trim() || 'U').charAt(0).toUpperCase();
+
+  // Re-render the avatar img when AvatarPicker (or any other mount)
+  // broadcasts a new selection — bumps the React key so cached <img>
+  // src values invalidate even when the URL hasn't changed.
+  React.useEffect(() => {
+    const onChange = () => setAvatarRev((n) => n + 1);
+    window.addEventListener('simorgh-avatar-changed', onChange);
+    return () => window.removeEventListener('simorgh-avatar-changed', onChange);
+  }, []);
 
   // Sync with external control (both open and close)
   React.useEffect(() => {
@@ -144,7 +169,7 @@ export default function SettingsPanel({
                 <div className="flex items-center justify-between">
                   <h2 className="text-2xl font-bold text-white flex items-center gap-3">
                     <Palette className="w-8 h-8 text-purple-400" />
-                    Settings
+                    {t('settings')}
                   </h2>
                   <button
                     onClick={handleClose}
@@ -154,16 +179,36 @@ export default function SettingsPanel({
                   </button>
                 </div>
 
-                {/* یوزر */}
+                {/* User card. Avatar is fully offline — either one of
+                    eight built-in initial SVGs (rendered inline) or a
+                    user-uploaded photo persisted to localStorage. The
+                    old ui-avatars.com img was the only external HTTP
+                    dependency in this panel; gone now per operator
+                    request ("همه افلاین باشد"). Clicking the avatar
+                    opens the picker. */}
                 <div className="bg-white/5 rounded-2xl p-5 border border-white/10">
                   <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-full overflow-hidden border-4 border-white/20 shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => setAvatarPickerOpen(true)}
+                      className="relative w-14 h-14 rounded-full overflow-hidden border-4 border-white/20 shadow-xl hover:border-emerald-400/60 transition group"
+                      title={t('changeAvatar')}
+                    >
                       <img
-                        src={`https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=6366f1&color=fff&bold=true`}
-                        alt="User"
+                        src={
+                          loadStoredAvatar(avatarUserId, avatarInitial) ||
+                          presetAvatarUrl('indigo', avatarInitial)
+                        }
+                        alt={displayName}
                         className="w-full h-full object-cover"
+                        // avatarRev forces React to re-fetch the image
+                        // after a pick (same src would otherwise cache).
+                        key={`avatar-${avatarRev}`}
                       />
-                    </div>
+                      <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-[10px] text-white font-semibold">
+                        {t('changeAvatar')}
+                      </span>
+                    </button>
                     <div>
                       <p className="text-white font-bold text-lg">{displayName}</p>
                       <p className="text-gray-400 text-sm">{userStatus}</p>
@@ -179,7 +224,7 @@ export default function SettingsPanel({
 
                 {/* زبان */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Language</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">{t('language')}</h3>
                   <div className="relative">
                     <button
                       onClick={() => setLangOpen(!langOpen)}
@@ -230,7 +275,7 @@ export default function SettingsPanel({
                     is the default (and the only useful setting for
                     general chat). */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">AI Mode</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">{t('aiMode')}</h3>
                   <p className="text-[11px] text-gray-500 mb-4 leading-relaxed">
                     General chat always uses <span className="text-violet-300">Simorgh AI</span>.
                     This setting controls <span className="text-sky-300">project chat</span> only.
@@ -264,7 +309,7 @@ export default function SettingsPanel({
                         ? <Lock className="w-6 h-6 text-gray-500" />
                         : <Wifi className="w-6 h-6 text-blue-400" />}
                       <div className="text-left">
-                        <div className="text-white font-medium">Online AI</div>
+                        <div className="text-white font-medium">{t('onlineAI')}</div>
                         <div className="text-xs text-gray-400">
                           {isGeneralChatActive
                             ? 'Disabled in general chat (project chat only)'
@@ -288,7 +333,9 @@ export default function SettingsPanel({
                             {isGeneralChatActive ? '(active)' : '(default)'}
                           </span>
                         </div>
-                        <div className="text-xs text-gray-400">LLM + VLM</div>
+                        {/* "LLM + VLM" subtitle removed per operator
+                            request — kept the tile parent intact so
+                            spacing matches the Online AI tile. */}
                       </div>
                     </button>
                         </>
@@ -299,7 +346,7 @@ export default function SettingsPanel({
 
                 {/* Notifications - NOW ENABLED */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Notifications</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">{t('notifications')}</h3>
                   <button
                     onClick={handleNotificationToggle}
                     className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
@@ -329,7 +376,7 @@ export default function SettingsPanel({
 
                 {/* Themes - NOW WORKING */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Themes</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">{t('theme')}</h3>
                   <div className="grid grid-cols-2 gap-3">
                     {themes.map((themeOption) => (
                       <button
@@ -368,13 +415,23 @@ export default function SettingsPanel({
                   className="w-full py-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 font-medium hover:bg-red-500/20 transition"
                 >
                   <LogOut className="w-5 h-5 inline mr-2" />
-                  Logout
+                  {t('logout')}
                 </button>
               </div>
             </motion.div>
           </>
         )}
       </AnimatePresence>
+
+      {/* Offline avatar picker — mounts above the panel so the user
+          can change their photo without dismissing settings. */}
+      <AvatarPicker
+        isOpen={avatarPickerOpen}
+        onClose={() => setAvatarPickerOpen(false)}
+        userId={avatarUserId}
+        userInitial={avatarInitial}
+        onSaved={() => setAvatarRev((n) => n + 1)}
+      />
     </>
   );
 }

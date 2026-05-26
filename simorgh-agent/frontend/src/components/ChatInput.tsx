@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom';
 import { UploadedFile } from '../types';
 import { showError, showInfo } from '../utils/alerts';
 import { TokenUsageRing } from './TokenUsageRing';
+import { useLanguage } from '../context/LanguageContext';
 
 /** Header context the chat input renders inside its top bar. Mirrors
  * the shape ChatArea already constructs for its standalone header. */
@@ -185,6 +186,7 @@ export function ChatInput({
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const { t } = useLanguage();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -407,7 +409,7 @@ export function ChatInput({
   }, []);
 
   const inputClasses = centered
-    ? 'w-full max-w-3xl mx-auto px-2 sm:px-4'
+    ? 'w-full max-w-3xl lg:max-w-5xl mx-auto px-2 sm:px-4'
     : 'border-t border-transparent backdrop-blur-xl p-2 sm:p-4';
 
   return (
@@ -415,9 +417,9 @@ export function ChatInput({
       {/* Quota exceeded warning */}
       {quotaExceeded && (
         <div className="mb-2 px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-center">
-          <span className="text-sm text-red-400">Daily quota exceeded. Resets at midnight UTC. </span>
+          <span className="text-sm text-red-400">{t('dailyQuotaExceeded')} {t('resetsAtMidnight')} </span>
           <Link to="/upgrade" className="text-sm text-blue-400 hover:text-blue-300 underline">
-            Upgrade plan
+            {t('upgradePlan')}
           </Link>
         </div>
       )}
@@ -483,7 +485,7 @@ export function ChatInput({
                 handleSend();
               }
             }}
-            placeholder={disabled ? "Please create or select a project and chat to start messaging..." : "Ask Simorgh anything..."}
+            placeholder={disabled ? t('sendDisabledPlaceholder') : t('sendPlaceholder')}
             disabled={disabled}
             rows={1}
             className="w-full pl-3 md:pl-4 pr-14 md:pr-16 py-2 md:py-3 rounded-xl bg-transparent text-white text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed overflow-y-auto max-h-[120px] sm:max-h-[200px] leading-normal"
@@ -493,7 +495,7 @@ export function ChatInput({
             type="button"
             onClick={handleSend}
             disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
-            title="Send (Enter)"
+            title={t('send')}
             // Big tap-friendly Enter glyph — kept the ↵ symbol per
             // operator feedback ("not a paper plane, just bigger
             // Enter"). Active tile when there's text to send,
@@ -519,7 +521,7 @@ export function ChatInput({
                 onClick={() => fileInputRef.current?.click()}
                 disabled={disabled || isUploading}
                 className="p-1.5 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50 flex-shrink-0"
-                title="Attach files"
+                title={t('attachFiles')}
               >
                 <PaperclipIcon className="w-4 h-4 text-gray-300" />
               </button>
@@ -546,10 +548,10 @@ export function ChatInput({
               } disabled:opacity-50`}
             title={
               isTranscribing
-                ? 'Transcribing...'
+                ? t('transcribing')
                 : isRecording
-                ? 'Stop recording'
-                : 'Start voice recording (Speech-to-Text)'
+                ? t('stopRecording')
+                : t('recordVoice')
             }
           >
             {isTranscribing ? (
@@ -583,7 +585,7 @@ export function ChatInput({
               <button
                 onClick={onCancel}
                 className="p-1 rounded-md hover:bg-red-500/15 transition-colors flex-shrink-0"
-                title="Stop generating"
+                title={t('stopGenerating')}
               >
                 <StopCircleIcon className="w-4 h-4 text-red-400" />
               </button>

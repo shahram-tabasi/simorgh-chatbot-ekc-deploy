@@ -2,6 +2,7 @@
 import React from 'react';
 import { Menu, Settings, History, Search, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useLanguage } from '../context/LanguageContext';
 
 interface MobileHeaderProps {
   onMenuClick: () => void;
@@ -17,6 +18,7 @@ interface MobileHeaderProps {
 
 export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsClick }: MobileHeaderProps) {
   const [showSettingsMenu, setShowSettingsMenu] = React.useState(false);
+  const { t } = useLanguage();
 
   return (
     <>
@@ -86,7 +88,7 @@ export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsCl
                         className="w-full px-4 py-3 flex items-center gap-3 hover:bg-white/10 transition-colors text-left"
                       >
                         <Search className="w-5 h-5 text-blue-400" />
-                        <span className="text-white font-medium">Search</span>
+                        <span className="text-white font-medium">{t('search')}</span>
                       </button>
 
                       {/* Chat History */}
@@ -98,7 +100,7 @@ export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsCl
                         className="w-full px-4 py-3 flex items-center gap-3 hover:bg-white/10 transition-colors text-left"
                       >
                         <MessageSquare className="w-5 h-5 text-purple-400" />
-                        <span className="text-white font-medium">Chat History</span>
+                        <span className="text-white font-medium">{t('chatHistory')}</span>
                       </button>
 
                       {/* Divider */}
@@ -113,7 +115,7 @@ export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsCl
                         className="w-full px-4 py-3 flex items-center gap-3 hover:bg-white/10 transition-colors text-left"
                       >
                         <Settings className="w-5 h-5 text-gray-400" />
-                        <span className="text-white font-medium">Settings</span>
+                        <span className="text-white font-medium">{t('settings')}</span>
                       </button>
                     </div>
                   </motion.div>

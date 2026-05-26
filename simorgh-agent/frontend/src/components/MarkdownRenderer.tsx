@@ -1,11 +1,11 @@
 // src/components/MarkdownRenderer.tsx
-import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeSanitize from 'rehype-sanitize';
 import rehypeRaw from 'rehype-raw';
 import 'highlight.js/styles/github-dark.css';
+import { autoLinkKesra } from '../utils/kesraLinks';
 
 interface MarkdownRendererProps {
   content: string;
@@ -14,6 +14,10 @@ interface MarkdownRendererProps {
 }
 
 export function MarkdownRenderer({ content, className = '', dir = 'ltr' }: MarkdownRendererProps) {
+  // Pre-process the markdown source to auto-link mentions of the
+  // internal Kesra software (env-overridable URL). Runs before the
+  // markdown parser so the link goes through the normal sanitizer.
+  const processed = autoLinkKesra(content);
   return (
     <div
       className={`markdown-content ${className}`}
@@ -170,7 +174,7 @@ export function MarkdownRenderer({ content, className = '', dir = 'ltr' }: Markd
           ),
         }}
       >
-        {content}
+        {processed}
       </ReactMarkdown>
     </div>
   );

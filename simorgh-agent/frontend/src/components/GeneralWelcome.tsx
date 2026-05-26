@@ -1,3 +1,5 @@
+import { useLanguage } from '../context/LanguageContext';
+
 interface GeneralWelcomeProps {
   onHide: () => void;
   onPromptClick: (prompt: string) => void;
@@ -15,6 +17,7 @@ const suggestedPrompts = [
 ];
 
 export default function GeneralWelcome({ onPromptClick, onPromptDoubleClick }: GeneralWelcomeProps) {
+  const { t, dir } = useLanguage();
   return (
     <div className="flex flex-col items-center justify-center px-2 py-1 md:py-2 w-full max-w-full box-border">
       {/* Logo - tighter on mobile so the prompts fit above the fold. */}
@@ -43,19 +46,21 @@ export default function GeneralWelcome({ onPromptClick, onPromptDoubleClick }: G
         />
       </div>
 
-      {/* Welcome text - Persian, smaller on mobile */}
+      {/* Welcome subtitle — translated via current locale. The
+          original copy was Persian-only; with i18n the same surface
+          serves EN/FA/DE without re-mounting. */}
       <p
         className="text-sm sm:text-base md:text-lg text-gray-400 text-center max-w-md mb-3 md:mb-5 font-light px-2 w-full"
-        dir="rtl"
+        dir={dir}
       >
-        برای شروع روی یکی از موضوعات زیر کلیک کنید
+        {t('welcomeTagline')}
       </p>
 
       {/* Suggested prompts — single horizontal row, swipe/scroll to
           reveal extras (matches the original layout the operator
           wanted preserved). On the desktop the mouse wheel scrolls
           the row sideways; on touch devices it pans. */}
-      <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider box-border" dir="rtl">
+      <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider box-border" dir={dir}>
         <div className="inline-flex gap-1.5 sm:gap-2 px-2 pb-2 pr-8">
           {suggestedPrompts.map((item, i) => (
             <button
