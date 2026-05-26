@@ -78,10 +78,19 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
 CACHE_COLLECTION = os.getenv(
     "GENERAL_CHAT_CACHE_COLLECTION", "general_chat_cache"
 )
-# Operator brief: "greater than 95%". 0.95 cosine is conservative
-# enough that paraphrases of meaningfully different questions
-# stay distinct. Tune via env without redeploy.
-SIMILARITY_THRESHOLD = float(os.getenv("GENERAL_CHAT_CACHE_THRESHOLD", "0.95"))
+# Production-tuned default (May 2026): bumped from 0.95 → 0.98
+# after observing a real-world false hit:
+#   cached question: "شرایط و مدارک لازم برای مرخصی استعلاجی…"  (sick leave)
+#   incoming q     : "شرایط و فرآیند درخواست مرخصی بدون حقوق…"  (unpaid leave)
+#   cosine         : 0.9574 → above the old 0.95 threshold → wrong
+#                              answer served on first ask.
+# At 0.98 the same pair misses (re-runs LLM, caches the correct
+# answer per topic) while exact text and near-paraphrases still
+# hit. Trade-off: lower overall hit rate, but eliminates the
+# "first user gets a wrong-topic answer" failure mode that needed
+# manual 👎 to recover. Tunable per-deploy via env without code
+# change.
+SIMILARITY_THRESHOLD = float(os.getenv("GENERAL_CHAT_CACHE_THRESHOLD", "0.98"))
 # Embedding dimensionality. Auto-detected on the first
 # successful _embed() call by reading the length of whatever the
 # embeddings-service returns. Operator can pin a specific value
