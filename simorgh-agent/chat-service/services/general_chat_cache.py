@@ -82,11 +82,16 @@ CACHE_COLLECTION = os.getenv(
 # enough that paraphrases of meaningfully different questions
 # stay distinct. Tune via env without redeploy.
 SIMILARITY_THRESHOLD = float(os.getenv("GENERAL_CHAT_CACHE_THRESHOLD", "0.95"))
-# Must match the embedding model used everywhere else in the
-# stack — currently MiniLM-L6-v2 / 384. If the embedding service
-# ever switches model, this collection has to be re-created with
-# the new dim and re-seeded.
-EMBEDDING_DIM = int(os.getenv("EMBEDDINGS_DIM", "384"))
+# Embedding dimensionality. Auto-detected on the first
+# successful _embed() call by reading the length of whatever the
+# embeddings-service returns. Operator can pin a specific value
+# via EMBEDDINGS_DIM but the default (None → autodetect) handles
+# any model change without code edits — the EKC deploy uses a
+# 768-dim model (mpnet/BGE/similar), not the 384-dim MiniLM the
+# legacy comment assumed (May 2026: write was silently skipping
+# because of the hardcoded mismatch).
+_DIM_ENV = os.getenv("EMBEDDINGS_DIM")
+EMBEDDING_DIM: Optional[int] = int(_DIM_ENV) if _DIM_ENV else None
 
 _client: Optional[QdrantClient] = None
 _collection_ready: bool = False
@@ -102,12 +107,17 @@ def _qdrant() -> QdrantClient:
 
 
 def _ensure_collection() -> bool:
-    """Create the cache collection on first use. Idempotent — safe
-    to call on every request, but the `_collection_ready` flag
-    elides the work after the first success."""
+    """Create the cache collection on first use. Deferred until
+    EMBEDDING_DIM has been determined — either via env or after
+    the first _embed() call detected it from the response.
+    Idempotent past first success via `_collection_ready`."""
     global _collection_ready
     if _collection_ready:
         return True
+    if EMBEDDING_DIM is None:
+        # Dim still unknown — caller should _embed() first to
+        # trigger autodetect, then retry.
+        return False
     c = _qdrant()
     try:
         existing = {col.name for col in c.get_collections().collections}
@@ -123,6 +133,26 @@ def _ensure_collection() -> bool:
                 "general_chat_cache: created collection %s (dim=%d, cosine)",
                 CACHE_COLLECTION, EMBEDDING_DIM,
             )
+        else:
+            # If the collection already exists but with a different
+            # dim than what the embeddings-service now produces, we
+            # CAN'T merge — vectors would be mathematically
+            # incomparable. Refuse to operate (every search would
+            # be a runtime error) until an operator drops the
+            # stale collection. Logged loudly so the operator can
+            # `curl -X DELETE qdrant:6333/collections/general_chat_cache`
+            # and let us re-create with the new dim.
+            info = c.get_collection(CACHE_COLLECTION)
+            stored_dim = getattr(info.config.params.vectors, "size", None)
+            if stored_dim and stored_dim != EMBEDDING_DIM:
+                log.error(
+                    "general_chat_cache: existing collection has dim=%s but "
+                    "embeddings-service now returns dim=%s. Drop the collection "
+                    "to let it be re-created: "
+                    "`curl -X DELETE http://qdrant:6333/collections/%s`",
+                    stored_dim, EMBEDDING_DIM, CACHE_COLLECTION,
+                )
+                return False
         _collection_ready = True
         return True
     except Exception as e:
@@ -137,7 +167,15 @@ async def _embed(text: str) -> Optional[List[float]]:
     """Embed via the same embeddings-service the HR pipeline
     uses, so the cache vectors live in the same coordinate
     system. Returns None on failure — callers should treat that
-    as cache-miss and proceed to LLM."""
+    as cache-miss and proceed to LLM.
+
+    Autodetects EMBEDDING_DIM on the first successful response.
+    All subsequent responses must match that dim, otherwise we
+    log + return None (vector space changed mid-process, which
+    means the embedding service was restarted with a different
+    model).
+    """
+    global EMBEDDING_DIM
     try:
         async with httpx.AsyncClient(timeout=10.0) as cx:
             r = await cx.post(
@@ -148,10 +186,25 @@ async def _embed(text: str) -> Optional[List[float]]:
             data = r.json()
             # Legacy embeddings-service returns {"embedding": [...]}.
             vec = data.get("embedding") or data.get("vector")
-            if not isinstance(vec, list) or len(vec) != EMBEDDING_DIM:
+            if not isinstance(vec, list) or not vec:
                 log.warning(
                     "general_chat_cache: embedding response had wrong shape: %s",
-                    {"keys": list(data.keys()), "len": len(vec) if isinstance(vec, list) else None},
+                    {"keys": list(data.keys())},
+                )
+                return None
+            if EMBEDDING_DIM is None:
+                EMBEDDING_DIM = len(vec)
+                log.info(
+                    "general_chat_cache: autodetected embedding dim=%d "
+                    "(set EMBEDDINGS_DIM=%d to pin if the model changes)",
+                    EMBEDDING_DIM, EMBEDDING_DIM,
+                )
+            if len(vec) != EMBEDDING_DIM:
+                log.warning(
+                    "general_chat_cache: embedding dim drift — expected %d, got %d. "
+                    "Embedding service likely restarted with a different model. "
+                    "Drop the cache collection to recover.",
+                    EMBEDDING_DIM, len(vec),
                 )
                 return None
             return vec
@@ -173,13 +226,14 @@ async def lookup(
     descending. Returns the entry dict with `entry_id` and `cosine`
     populated, or None on miss / cache-disabled.
     """
-    if not _ensure_collection():
-        return None
     if not question or not question.strip():
         return None
-
+    # Embed FIRST so EMBEDDING_DIM is populated by the time we
+    # call _ensure_collection — collection creation needs the dim.
     vec = await _embed(question.strip())
     if vec is None:
+        return None
+    if not _ensure_collection():
         return None
 
     # Category filtering removed (May 2026 — the first cache run
@@ -254,21 +308,23 @@ async def write(
     """Upsert a new cache entry. Returns the point id on success
     (so the caller can echo it in SSE meta for later like/dislike),
     None on failure."""
-    if not _ensure_collection():
-        log.warning("general_chat_cache: write SKIPPED — collection not ready")
-        return None
     if not (question and question.strip() and answer and answer.strip()):
         log.warning(
             "general_chat_cache: write SKIPPED — empty input (qlen=%d alen=%d)",
             len(question or ""), len(answer or ""),
         )
         return None
+    # Embed FIRST so EMBEDDING_DIM is populated by the time we
+    # call _ensure_collection — collection creation needs the dim.
     vec = await _embed(question.strip())
     if vec is None:
         log.warning(
             "general_chat_cache: write SKIPPED — embed returned None for q=%r",
             question[:80],
         )
+        return None
+    if not _ensure_collection():
+        log.warning("general_chat_cache: write SKIPPED — collection not ready")
         return None
     point_id = str(uuid4())
     payload = {

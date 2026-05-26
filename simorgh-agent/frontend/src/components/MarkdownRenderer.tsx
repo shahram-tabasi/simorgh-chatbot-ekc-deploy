@@ -16,19 +16,29 @@ interface MarkdownRendererProps {
 
 export function MarkdownRenderer({ content, className = '', dir = 'ltr' }: MarkdownRendererProps) {
   // Pre-process the markdown source in two passes before the
-  // parser runs. Order matters:
-  //   1. autoLinkKesra wraps bare mentions of the internal Kesra
-  //      software in markdown link syntax pointing at the env-
-  //      overridable URL.
-  //   2. autoLinkUrls then wraps every remaining bare URL
-  //      (https://… or www.…) so AI replies with literal links
-  //      become clickable (operator request, May 2026 — GFM's
-  //      autolink heuristic misses RTL-embedded URLs and
-  //      sentence-end-punctuation cases).
-  // Running Kesra first is intentional: it converts "Kesra" tokens
-  // into [Kesra](URL) which autoLinkUrls then skips (its
-  // PROTECT_RE preserves existing markdown links).
-  const processed = autoLinkUrls(autoLinkKesra(content));
+  // parser runs. ORDER MATTERS — and bit us in production
+  // (May 2026 — "kasra.http://electrokavir.com" rendered):
+  //
+  //   The Kesra autolinker wraps the bare word "kasra" as a
+  //   markdown link `[kasra](https://kasra.electrokavir.com)`.
+  //   Run on raw text containing "kasra.electrokavir.com", it
+  //   matched JUST the "kasra" prefix and left the rest
+  //   (".electrokavir.com") as bare text — which the URL
+  //   autolinker then wrapped as `<http://electrokavir.com>`.
+  //   Two adjacent links with a literal "." between them
+  //   rendered as the broken-looking
+  //   "kasra.http://electrokavir.com" the operator reported.
+  //
+  // Fix: run URL autolinker FIRST. Its angle-bracket form
+  // `<http://kasra.electrokavir.com>` is then a complete URL
+  // that autoLinkKesra's `skip` regex (which excludes
+  // `https?://\S+` segments) leaves untouched, so the "kasra"
+  // inside the URL doesn't get re-wrapped.
+  //
+  // The Kesra pass still handles bare word mentions of
+  // "kasra"/"کسرا" outside any URL, which is what it was
+  // designed for.
+  const processed = autoLinkKesra(autoLinkUrls(content));
   return (
     <div
       className={`markdown-content ${className}`}
