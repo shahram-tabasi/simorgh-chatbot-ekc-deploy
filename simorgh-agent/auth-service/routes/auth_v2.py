@@ -712,7 +712,8 @@ async def update_preferences(
         theme=data.theme,
         language=data.language,
         ai_mode=data.ai_mode,
-        notifications_enabled=data.notifications_enabled
+        notifications_enabled=data.notifications_enabled,
+        preferences_data=data.preferences_data,
     )
 
     if not updated_prefs:

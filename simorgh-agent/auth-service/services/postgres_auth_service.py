@@ -793,9 +793,16 @@ class PostgresAuthService:
         theme: Optional[str] = None,
         language: Optional[str] = None,
         ai_mode: Optional[str] = None,
-        notifications_enabled: Optional[bool] = None
+        notifications_enabled: Optional[bool] = None,
+        preferences_data: Optional[dict] = None,
     ) -> Optional[dict]:
-        """Update user preferences."""
+        """Update user preferences.
+
+        `preferences_data` MERGES into the existing JSONB column —
+        callers can PATCH a single key (e.g. just `pinned_messages`)
+        without losing siblings. Used for cross-device pin sync
+        (issue #4b, May 2026).
+        """
         updates = []
         values = []
         param_count = 1
@@ -818,6 +825,20 @@ class PostgresAuthService:
         if notifications_enabled is not None:
             updates.append(f"notifications_enabled = ${param_count}")
             values.append(notifications_enabled)
+            param_count += 1
+
+        if preferences_data is not None:
+            # Postgres JSONB concat (||) is a SHALLOW top-level
+            # merge: keys present in the patch replace those keys
+            # in the existing object; sibling keys are preserved.
+            # That's exactly the semantic we want — a PATCH on
+            # `pinned_messages` overwrites the full pin map but
+            # leaves `theme_extras` or any future sibling alone.
+            import json as _json
+            updates.append(
+                f"preferences_data = COALESCE(preferences_data, '{{}}'::jsonb) || ${param_count}::jsonb"
+            )
+            values.append(_json.dumps(preferences_data))
             param_count += 1
 
         if not updates:

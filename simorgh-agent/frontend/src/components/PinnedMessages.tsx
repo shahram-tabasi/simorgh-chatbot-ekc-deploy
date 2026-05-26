@@ -44,6 +44,40 @@ function storageKey(chatId: string | null | undefined): string | null {
   return chatId ? `${STORAGE_PREFIX}${chatId}` : null;
 }
 
+/**
+ * GET the user's current pinned_messages map from the auth
+ * service, then return a shallow-merged copy with this chat's
+ * array replaced. Needed because the PATCH endpoint shallow-
+ * merges at the `preferences_data.<key>` level: sending just
+ * `{ pinned_messages: { [chatId]: ... } }` would REPLACE the
+ * full pinned_messages dict — wiping other chats' pins. We
+ * fetch the current full map, splice in this chat's update,
+ * and send the whole merged map back. Network cost is a few KB.
+ *
+ * Falls back to a single-chat map if the GET fails, so the
+ * caller's PATCH still works (other devices won't have the
+ * latest pins until next successful GET, but local stays
+ * authoritative).
+ */
+async function mergePinnedForChat(
+  token: string,
+  chatId: string,
+  next: PinnedMessage[],
+): Promise<Record<string, PinnedMessage[]>> {
+  try {
+    const r = await fetch('/api/auth/v2/me/preferences', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) throw new Error(`GET preferences ${r.status}`);
+    const data = await r.json();
+    const current: Record<string, PinnedMessage[]> =
+      (data?.preferences_data?.pinned_messages as Record<string, PinnedMessage[]>) || {};
+    return { ...current, [chatId]: next };
+  } catch {
+    return { [chatId]: next };
+  }
+}
+
 function snippetOf(content: string): string {
   return content
     .replace(/```[\s\S]*?```/g, '')   // strip code blocks
@@ -68,6 +102,56 @@ export function usePinnedMessages(chatId: string | null | undefined) {
       setPinned(raw ? (JSON.parse(raw) as PinnedMessage[]) : []);
     } catch {
       setPinned([]);
+    }
+  }, [chatId]);
+
+  // Cross-device sync (issue #4b, May 2026): AuthContext writes
+  // server-stored pinned_messages into per-chat localStorage keys
+  // on login and on token-refresh, then dispatches this event so
+  // mounted hooks can re-read for their current chatId. Without
+  // this, the hook would stay on the localStorage snapshot at
+  // mount time even after a fresh login overwrote it.
+  useEffect(() => {
+    const onSync = () => {
+      const key = storageKey(chatId);
+      if (!key) return;
+      try {
+        const raw = localStorage.getItem(key);
+        setPinned(raw ? (JSON.parse(raw) as PinnedMessage[]) : []);
+      } catch { /* localStorage failure → keep current state */ }
+    };
+    window.addEventListener('simorgh-pins-synced', onSync);
+    return () => window.removeEventListener('simorgh-pins-synced', onSync);
+  }, [chatId]);
+
+  // Push the chat's full pin list to the auth-service preferences
+  // JSONB so other devices see the same pins on next login /
+  // refresh. Fire-and-forget — local state is the snappy source of
+  // truth for this session, network is for cross-device only.
+  const syncPinsToServer = useCallback(async (next: PinnedMessage[]) => {
+    if (!chatId) return;
+    const token = localStorage.getItem('simorgh_token');
+    if (!token) return;
+    try {
+      await fetch('/api/auth/v2/me/preferences', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          // Backend shallow-merges preferences_data. By sending
+          // only `{ pinned_messages: { [chatId]: next } }` we
+          // REPLACE the full `pinned_messages` key — which would
+          // wipe other chats' pins. So we have to GET first then
+          // merge client-side. Cheap: preferences are ~few KB.
+          preferences_data: {
+            pinned_messages: await mergePinnedForChat(token, chatId, next),
+          },
+        }),
+      });
+    } catch {
+      /* best-effort — local copy is authoritative for this session */
     }
   }, [chatId]);
 
@@ -99,17 +183,20 @@ export function usePinnedMessages(chatId: string | null | undefined) {
         next = [...prev, entry].slice(-MAX_PINS_PER_CHAT);
       }
       persist(next);
+      // Best-effort cross-device sync (issue #4b).
+      void syncPinsToServer(next);
       return next;
     });
-  }, [persist]);
+  }, [persist, syncPinsToServer]);
 
   const clearPin = useCallback((messageId: string) => {
     setPinned(prev => {
       const next = prev.filter(p => p.messageId !== messageId);
       persist(next);
+      void syncPinsToServer(next);
       return next;
     });
-  }, [persist]);
+  }, [persist, syncPinsToServer]);
 
   const isPinned = useCallback(
     (messageId: string) => pinned.some(p => p.messageId === messageId),

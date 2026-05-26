@@ -129,6 +129,13 @@ class UpdatePreferencesRequest(BaseModel):
     language: Optional[str] = Field(None, max_length=10)
     ai_mode: Optional[str] = Field(None, pattern='^(online|local|auto)$')
     notifications_enabled: Optional[bool] = None
+    # Arbitrary JSON bag for client-side preferences that don't
+    # warrant their own column. Currently holds `pinned_messages`
+    # (issue #4b, May 2026 — per-chat message bookmarks synced
+    # across devices). Merged shallowly into the existing
+    # preferences_data column server-side; callers only need to
+    # send the keys they want to change.
+    preferences_data: Optional[dict] = None
 
 
 # =============================================================================
