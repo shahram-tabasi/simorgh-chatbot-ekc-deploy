@@ -71,6 +71,13 @@ export interface Dict {
   yourPlan: string;
   upgradePlan: string;
 
+  // Quota indicator (sidebar header ring + popover)
+  tier: string;
+  questionsRemaining: string;
+  questionsUsedToday: string;
+  resetsAt: string;
+  unlimitedDescription: string;
+
   // Auth pages
   signIn: string;
   signUp: string;
@@ -169,6 +176,12 @@ export const translations: Record<Language, Dict> = {
     yourPlan: 'Your plan',
     upgradePlan: 'Upgrade plan',
 
+    tier: 'Tier',
+    questionsRemaining: 'remaining',
+    questionsUsedToday: 'used today',
+    resetsAt: 'Resets at',
+    unlimitedDescription: 'Your tier has unlimited questions per day.',
+
     signIn: 'Sign in',
     signUp: 'Sign up',
     signingIn: 'Signing in...',
@@ -264,6 +277,12 @@ export const translations: Record<Language, Dict> = {
     yourPlan: 'پلن شما',
     upgradePlan: 'ارتقاء پلن',
 
+    tier: 'پلن',
+    questionsRemaining: 'باقی‌مانده',
+    questionsUsedToday: 'استفاده‌شده امروز',
+    resetsAt: 'بازنشانی در',
+    unlimitedDescription: 'پلن شما تعداد سوال نامحدود در روز دارد.',
+
     signIn: 'ورود',
     signUp: 'ثبت نام',
     signingIn: 'در حال ورود...',
@@ -358,6 +377,12 @@ export const translations: Record<Language, Dict> = {
     role: 'Rolle',
     yourPlan: 'Ihr Tarif',
     upgradePlan: 'Tarif upgraden',
+
+    tier: 'Tarif',
+    questionsRemaining: 'verbleibend',
+    questionsUsedToday: 'heute verwendet',
+    resetsAt: 'Zurücksetzen um',
+    unlimitedDescription: 'Ihr Tarif bietet unbegrenzte Fragen pro Tag.',
 
     signIn: 'Anmelden',
     signUp: 'Registrieren',

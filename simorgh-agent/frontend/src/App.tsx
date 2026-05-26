@@ -16,7 +16,12 @@ import NotificationToast, { ToastNotification } from './components/NotificationT
 import SpecReview from './pages/SpecReview';
 import AdminPanel from './pages/AdminPanel';
 import UpgradePage from './pages/UpgradePage';
-import { QuotaRing } from './components/QuotaRing';
+// QuotaRing (the big sidebar tile) was replaced by QuotaIndicator —
+// a small ring + popover that lives in the sidebar header next to
+// the wordmark. Keeping the import path here as a breadcrumb in case
+// someone wants to bring the tile back; the symbol is no longer
+// referenced.
+import { QuotaIndicator } from './components/QuotaIndicator';
 // ProjectAgentDashboard removed - all agent functionality is now in the main chat display
 
 // Auth components (modern + auto-routing)
@@ -378,8 +383,20 @@ function MainChat() {
       setEditingMessage(null);
     } else {
       sendMessage(content, files);
+      // Update the quota ring — optimistic local decrement gives the
+      // sidebar's QuotaIndicator an immediate visual response, then
+      // fetchQuota syncs against server truth a moment later. Without
+      // this the ring stayed empty until a full page refresh
+      // (reported May 2026 as part of issue #2: "until know token
+      // consume no applied"). Only modern users have a quota.
+      if (isModernTier) {
+        decrementLocal();
+        // Defer server refresh slightly so the backend has time to
+        // record the consumption before we re-fetch.
+        setTimeout(() => { fetchQuota(); }, 800);
+      }
     }
-  }, [editingMessage, editMessage, sendMessage]);
+  }, [editingMessage, editMessage, sendMessage, isModernTier, decrementLocal, fetchQuota]);
 
   // هدر ثابت + پروژه‌ها
   const displayProjects = [
@@ -439,20 +456,26 @@ function MainChat() {
             onNewProject={canCreateProjects ? handleCreateProject : undefined}
             // Legacy users get project-only chat: hide the "new general chat" entry point.
             onNewGeneralChat={user && isLegacyUser(user) ? undefined : handleCreateGeneralChat}
+            // The chunky "Free Tier 20/20 — Upgrade plan →" tile used
+            // to live INSIDE the sidebar body (above ProjectTree).
+            // Issue #2 (May 2026): operator wanted it gone from there
+            // and replaced by a compact ring in the header that fills
+            // as tokens are consumed and opens a popover on click.
+            // We pass the new QuotaIndicator into the header slot
+            // instead of rendering it as a body row.
+            headerExtra={
+              isModernTier ? (
+                <QuotaIndicator
+                  used={quota.questions_used_today}
+                  total={quota.questions_limit}
+                  remaining={quota.questions_remaining}
+                  tier={quota.user_role}
+                  resetsAt={quota.resets_at}
+                  unlimited={quota.user_role === 'admin' || quota.user_role === 'max'}
+                />
+              ) : null
+            }
           >
-            {/* Quota — clickable ring badge that routes to /upgrade.
-                Admin / Max tiers get an unlimited tile (no ring fill,
-                no upgrade link). Same colour stages as the linear bar
-                it replaced. */}
-            {isModernTier && (
-              <QuotaRing
-                used={quota.questions_used_today}
-                total={quota.questions_limit}
-                remaining={quota.questions_remaining}
-                tier={quota.user_role}
-                unlimited={quota.user_role === 'admin' || quota.user_role === 'max'}
-              />
-            )}
             <ProjectTree
               projects={displayProjects}
               // Hide general chats entirely for legacy users — project chat only.

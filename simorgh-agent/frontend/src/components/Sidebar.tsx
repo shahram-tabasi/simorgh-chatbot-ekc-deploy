@@ -10,6 +10,12 @@ interface SidebarProps {
   className?: string;
   onNewProject?: () => void;
   onNewGeneralChat?: () => void;
+  /** Optional slot rendered in the brand row, just before the
+      collapse-toggle button. Used by App.tsx to drop the
+      QuotaIndicator (small ring + click-to-open popover) into the
+      header without giving the Sidebar a hard dependency on the
+      quota hook. */
+  headerExtra?: React.ReactNode;
 }
 
 export function Sidebar({
@@ -20,6 +26,7 @@ export function Sidebar({
   className = '',
   onNewProject,
   onNewGeneralChat,
+  headerExtra,
 }: SidebarProps) {
   const [isMobile, setIsMobile] = React.useState(false);
 
@@ -88,11 +95,20 @@ export function Sidebar({
               <div
                 className="flex-shrink-0 flex items-center justify-between px-4 pt-3 pb-2"
               >
-                {/* "Simorgh AI" wordmark. Renamed from "Simorgh Code"
-                    per operator request. Switched the inline
-                    leading-none (which was clipping descenders like
-                    the 'g' in Simorgh) to leading-tight + a small
-                    pb so the gradient text always renders complete. */}
+                {/* "Simorgh AI" wordmark.
+                    Design (issue raised May 2026 — "AI looked
+                    ugly, didn't read as part of Simorgh"):
+                      • Extend the Simorgh gradient to three stops
+                        (sky → violet → fuchsia) so the right edge
+                        of the wordmark glides into a warmer hue.
+                      • Render "AI" as an UPPERCASE small-cap mark
+                        rather than a casual same-weight word: 12px,
+                        semibold, generous tracking, picking up the
+                        violet→fuchsia tail of the gradient so it
+                        visually belongs to Simorgh instead of
+                        sitting next to it as plain white text.
+                      • Slight ml + baseline alignment so the mark
+                        anchors to the bottom-right of "Simorgh". */}
                 {side === 'right' && !isMobile && (
                   <div className="flex items-center gap-2.5">
                     <img
@@ -100,21 +116,32 @@ export function Sidebar({
                       alt=""
                       className="w-12 h-12 flex-shrink-0"
                     />
-                    <div className="flex items-baseline gap-1.5 leading-tight pb-1">
+                    <div className="flex items-baseline gap-1 leading-tight pb-1">
                       <span
-                        className="text-[28px] font-bold tracking-tight bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent"
+                        className="text-[28px] font-bold tracking-tight bg-gradient-to-r from-sky-400 via-violet-400 to-fuchsia-400 bg-clip-text text-transparent"
                         style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif", lineHeight: 1.15 }}
                       >
                         Simorgh
                       </span>
                       <span
-                        className="text-[22px] font-normal text-slate-200/90 tracking-tight"
-                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif", lineHeight: 1.15 }}
+                        className="ml-0.5 text-[12px] font-semibold uppercase bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent"
+                        style={{
+                          fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+                          lineHeight: 1.15,
+                          letterSpacing: '0.2em',
+                        }}
                       >
                         AI
                       </span>
                     </div>
                   </div>
+                )}
+
+                {/* App-supplied slot — quota indicator etc. — kept
+                    on the same row as the wordmark so the popover
+                    anchors near the brand mark. */}
+                {headerExtra && (
+                  <div className="flex-shrink-0">{headerExtra}</div>
                 )}
 
                 <button
