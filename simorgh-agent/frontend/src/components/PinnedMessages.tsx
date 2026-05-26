@@ -153,12 +153,14 @@ export function PinnedMessagesPanel({ pinned, onJump, onUnpin }: PanelProps) {
   );
 
   return (
-    // Anchored top-LEFT now (was top-right). The composer rebuild
-    // pushed the AI's most-recent-reply controls to the right edge,
-    // and the operator wanted the pin chip out of that traffic
-    // lane — left-3 puts it over the empty rail just below the
-    // chat header.
-    <div className="absolute top-3 left-3 z-20 select-none">
+    // Anchored top-LEFT (was top-right). Pushed flush against the
+    // chat-area's left edge with `-left-1` plus a small top-1 nudge
+    // because the first AI reply's Simorgh-bird avatar lives at
+    // roughly (left: 8px, top: 24px) and earlier `top-3 left-3`
+    // sat *directly* over it (operator screenshot, May 2026). Going
+    // further left + slightly higher tucks the chip into the corner
+    // where no message chrome ever renders.
+    <div className="absolute top-1 -left-1 z-20 select-none">
       <button
         type="button"
         onClick={() => setOpen(v => !v)}

@@ -96,19 +96,17 @@ export function Sidebar({
                 className="flex-shrink-0 flex items-center justify-between px-4 pt-3 pb-2"
               >
                 {/* "Simorgh AI" wordmark.
-                    Design (issue raised May 2026 — "AI looked
-                    ugly, didn't read as part of Simorgh"):
-                      • Extend the Simorgh gradient to three stops
-                        (sky → violet → fuchsia) so the right edge
-                        of the wordmark glides into a warmer hue.
-                      • Render "AI" as an UPPERCASE small-cap mark
-                        rather than a casual same-weight word: 12px,
-                        semibold, generous tracking, picking up the
-                        violet→fuchsia tail of the gradient so it
-                        visually belongs to Simorgh instead of
-                        sitting next to it as plain white text.
-                      • Slight ml + baseline alignment so the mark
-                        anchors to the bottom-right of "Simorgh". */}
+                    Design v3 (May 2026 — operator's third pass):
+                    "tiny and ugly" was the verdict on the 12px
+                    gradient-mark form. Per operator direction:
+                    bold, bright white, slightly smaller than
+                    "Simorgh" but in the same weight family, with
+                    a soft violet/fuchsia glow that ties it back
+                    into the gradient on the left. The glow uses
+                    text-shadow (CSS, no Tailwind plugin) so it
+                    works inline; the shadow's hues match the
+                    Simorgh gradient's right edge so the two
+                    pieces still read as one wordmark. */}
                 {side === 'right' && !isMobile && (
                   <div className="flex items-center gap-2.5">
                     <img
@@ -116,7 +114,7 @@ export function Sidebar({
                       alt=""
                       className="w-12 h-12 flex-shrink-0"
                     />
-                    <div className="flex items-baseline gap-1 leading-tight pb-1">
+                    <div className="flex items-baseline gap-1.5 leading-tight pb-1">
                       <span
                         className="text-[28px] font-bold tracking-tight bg-gradient-to-r from-sky-400 via-violet-400 to-fuchsia-400 bg-clip-text text-transparent"
                         style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif", lineHeight: 1.15 }}
@@ -124,11 +122,13 @@ export function Sidebar({
                         Simorgh
                       </span>
                       <span
-                        className="ml-0.5 text-[12px] font-semibold uppercase bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent"
+                        className="text-[22px] font-bold text-white"
                         style={{
                           fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
                           lineHeight: 1.15,
-                          letterSpacing: '0.2em',
+                          letterSpacing: '0.02em',
+                          textShadow:
+                            '0 0 8px rgba(167, 139, 250, 0.55), 0 0 16px rgba(217, 70, 239, 0.30)',
                         }}
                       >
                         AI
