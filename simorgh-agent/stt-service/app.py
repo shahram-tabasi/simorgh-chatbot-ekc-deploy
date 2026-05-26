@@ -38,6 +38,17 @@ MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "base")  # tiny, base, small, mediu
 DEVICE = os.getenv("WHISPER_DEVICE", "cpu")  # cpu or cuda
 COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")  # int8, float16, float32
 
+# Default language hint for faster-whisper. The current frontend
+# (ChatInput.tsx) doesn't pass a `language` query param, so without a
+# default Whisper auto-detects per clip — and on the short 2-4s
+# recordings produced by the chat mic, auto-detect mis-fires ~70% of
+# the time on Persian: probabilities like ar=0.21 / ru=0.23 / en=0.56
+# instead of fa, leading to gibberish text and a frontend "Could not
+# transcribe audio" error. Setting STT_DEFAULT_LANGUAGE=fa pins it to
+# Persian when the caller didn't specify; explicit ?language=XX
+# requests still win.
+DEFAULT_LANGUAGE = os.getenv("STT_DEFAULT_LANGUAGE", "fa").strip() or None
+
 # FastAPI app
 app = FastAPI(
     title="Simorgh STT Service",
@@ -207,7 +218,14 @@ async def transcribe_audio(
         else:
             source_format = "webm"  # Default to webm (browser recording format)
 
-    logger.info(f"Received audio: {audio.filename}, format: {source_format}, size: {audio.size or 'unknown'}")
+    # Apply the configured default ONLY when caller didn't pass one.
+    # Explicit ?language=en still wins. See DEFAULT_LANGUAGE comment.
+    effective_language = language or DEFAULT_LANGUAGE
+
+    logger.info(
+        f"Received audio: {audio.filename}, format: {source_format}, "
+        f"size: {audio.size or 'unknown'}, language={effective_language or 'auto'}"
+    )
 
     try:
         # Read audio bytes
@@ -225,7 +243,7 @@ async def transcribe_audio(
         # Transcribe
         segments, info = model.transcribe(
             audio_array,
-            language=language,
+            language=effective_language,
             beam_size=5,
             vad_filter=True,  # Filter out non-speech
             vad_parameters=dict(min_silence_duration_ms=500)
