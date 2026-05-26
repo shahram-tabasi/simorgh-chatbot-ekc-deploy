@@ -35,6 +35,26 @@ const TRAILING_PUNCT_RE = /[,.;:!?،؛؟]+$/;
 /**
  * Wrap bare URLs in a single line as markdown links, preserving
  * any existing [text](url) constructs.
+ *
+ * Output form depends on whether the URL already has a scheme:
+ *
+ *   • https://… / http://…  →  wrapped with angle brackets
+ *     (`<URL>`), the standard CommonMark autolink form. Crucial:
+ *     GFM's `autolinkLiteral` then treats the result as a single
+ *     atomic link and won't reparse the inner text. Wrapping
+ *     with `[URL](URL)` instead causes a double-link nesting
+ *     (`<a><a>...</a></a>`) — browsers handle that
+ *     inconsistently and one common failure mode is the outer
+ *     href being dropped, so clicking opens an `about:blank`
+ *     tab. That was the May-2026 "creates link but opens blank
+ *     page" regression.
+ *
+ *   • www.…  (no scheme)  →  wrapped as `[text](https://text)`
+ *     so the resulting <a> has a usable absolute href.
+ *     GFM's autolinkLiteral wouldn't make this clickable on
+ *     its own without the scheme, so the [text](url) form is
+ *     necessary here. The text is plain (just the URL chars),
+ *     so inner-reparsing is harmless even if it happens.
  */
 function linkifyPlainSegment(seg: string): string {
   return seg.replace(URL_RE, (match) => {
@@ -43,8 +63,12 @@ function linkifyPlainSegment(seg: string): string {
     // outside the link so clicking the URL doesn't 404.
     const trimmed = match.replace(TRAILING_PUNCT_RE, '');
     const tail = match.slice(trimmed.length);
-    const href = trimmed.startsWith('www.') ? `https://${trimmed}` : trimmed;
-    return `[${trimmed}](${href})${tail}`;
+    if (/^https?:\/\//i.test(trimmed)) {
+      return `<${trimmed}>${tail}`;
+    }
+    // www.… case — prepend scheme to the href, keep the visible
+    // text as the user typed it.
+    return `[${trimmed}](https://${trimmed})${tail}`;
   });
 }
 
