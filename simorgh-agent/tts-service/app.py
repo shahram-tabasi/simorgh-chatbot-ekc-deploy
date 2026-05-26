@@ -72,19 +72,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Available voices (subset of edge-tts voices)
+# Available voices (subset of edge-tts voices).
+#
+# Two key forms accepted: the historical "-1" / "-2" suffixed names
+# (legacy clients still in production), AND the suffix-less form that
+# the current frontend sends from MessageList.tsx (`fa-female` /
+# `en-male` based on a Persian/Arabic regex on the rendered text).
+# Keeping both avoids silent fallback to DEFAULT_VOICE — which is
+# English-only and produces NO audio for Persian text, since
+# Microsoft Edge TTS can't synthesize Persian Unicode through an
+# English voice. See _resolve_voice() warning below.
 VOICE_MAP = {
     # English
+    "en-female":   "en-US-AriaNeural",
+    "en-male":     "en-US-GuyNeural",
     "en-female-1": "en-US-AriaNeural",
     "en-female-2": "en-US-JennyNeural",
-    "en-male-1": "en-US-GuyNeural",
-    "en-male-2": "en-US-ChristopherNeural",
+    "en-male-1":   "en-US-GuyNeural",
+    "en-male-2":   "en-US-ChristopherNeural",
     # Persian / Farsi
+    "fa-female":   "fa-IR-DilaraNeural",
+    "fa-male":     "fa-IR-FaridNeural",
     "fa-female-1": "fa-IR-DilaraNeural",
-    "fa-male-1": "fa-IR-FaridNeural",
+    "fa-male-1":   "fa-IR-FaridNeural",
     # Arabic
+    "ar-female":   "ar-SA-ZariyahNeural",
+    "ar-male":     "ar-SA-HamedNeural",
     "ar-female-1": "ar-SA-ZariyahNeural",
-    "ar-male-1": "ar-SA-HamedNeural",
+    "ar-male-1":   "ar-SA-HamedNeural",
 }
 
 
@@ -124,15 +139,27 @@ def _get_cache_path(cache_key: str) -> Path:
 
 
 def _resolve_voice(voice_id: Optional[str]) -> str:
-    """Resolve voice ID to edge-tts voice name"""
+    """Resolve voice ID to edge-tts voice name.
+
+    Falling back to DEFAULT_VOICE silently used to mask a real bug:
+    the frontend sends `fa-female` for Persian text, but if that key
+    wasn't in VOICE_MAP the fallback picked the English default
+    voice — and Microsoft's TTS returns NO AUDIO when asked to read
+    Persian script with an English voice, producing a 500 with the
+    unhelpful "no audio received" log. Now we warn loudly so the
+    next mismatch is obvious.
+    """
     if not voice_id:
         return DEFAULT_VOICE
-    # Check if it's a friendly name
     if voice_id in VOICE_MAP:
         return VOICE_MAP[voice_id]
-    # Check if it's already a full edge-tts voice name
+    # Accept a full edge-tts voice name passed through directly.
     if "Neural" in voice_id:
         return voice_id
+    logger.warning(
+        f"Unknown voice_id={voice_id!r}; falling back to DEFAULT_VOICE={DEFAULT_VOICE}. "
+        f"If the request text is non-English this will produce 0 bytes of audio."
+    )
     return DEFAULT_VOICE
 
 
