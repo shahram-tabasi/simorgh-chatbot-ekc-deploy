@@ -206,56 +206,76 @@ async def synthesize(request: SynthesizeRequest):
             }
         )
 
-    # Generate speech
-    try:
-        logger.info(f"Synthesizing: {len(request.text)} chars, voice={voice}, rate={rate}")
+    # Microsoft's edge TTS endpoint is sporadically flaky through
+    # high-latency proxies — `NoAudioReceived` (and empty-body returns)
+    # fire for some requests with no obvious content pattern; same
+    # text+voice usually succeeds on a second try. One retry with a
+    # short backoff catches almost all transient cases. If the second
+    # attempt also fails, the request body is logged in full so an
+    # operator can reproduce and decide if frontend text-cleanup needs
+    # tightening for some character class.
+    logger.info(f"Synthesizing: {len(request.text)} chars, voice={voice}, rate={rate}")
 
-        communicate = edge_tts.Communicate(
-            text=request.text,
-            voice=voice,
-            rate=rate,
-            volume=volume,
-            proxy=TTS_PROXY,
-        )
-
-        # Collect audio data
-        audio_data = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data.write(chunk["data"])
-
-        audio_data.seek(0)
-        audio_bytes = audio_data.read()
-
-        if not audio_bytes:
-            raise HTTPException(status_code=500, detail="TTS engine returned empty audio")
-
-        # Cache the result
+    audio_bytes: bytes = b""
+    for attempt in (1, 2):
         try:
-            cache_path.write_bytes(audio_bytes)
-            _cleanup_cache()
+            communicate = edge_tts.Communicate(
+                text=request.text,
+                voice=voice,
+                rate=rate,
+                volume=volume,
+                proxy=TTS_PROXY,
+            )
+            buf = io.BytesIO()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    buf.write(chunk["data"])
+            audio_bytes = buf.getvalue()
+            if audio_bytes:
+                if attempt > 1:
+                    logger.info(f"Synthesis succeeded on retry {attempt}")
+                break
+            # Empty body without exception — treat as the transient
+            # "no audio" case and retry.
+            logger.warning(f"Empty audio on attempt {attempt}; retrying")
+        except edge_tts.exceptions.NoAudioReceived:
+            logger.warning(f"NoAudioReceived on attempt {attempt}; retrying")
         except Exception as e:
-            logger.warning(f"Failed to cache audio: {e}")
+            # Non-transient errors (network, library bugs, etc.) skip
+            # retry — re-raising immediately so the client sees the
+            # real cause instead of a generic "no audio" after 500ms.
+            logger.error(f"TTS synthesis error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
+        if attempt == 1:
+            await asyncio.sleep(0.25)
 
-        logger.info(f"Synthesized: {len(audio_bytes)} bytes, voice={voice}")
-
-        return StreamingResponse(
-            io.BytesIO(audio_bytes),
-            media_type="audio/mpeg",
-            headers={
-                "Content-Disposition": "inline",
-                "X-TTS-Cached": "false",
-                "X-TTS-Voice": voice,
-                "Content-Length": str(len(audio_bytes)),
-            }
+    if not audio_bytes:
+        logger.error(
+            "No audio received from edge-tts after 2 attempts. "
+            f"voice={voice} rate={rate} text_len={len(request.text)} "
+            f"text_preview={request.text[:300]!r}"
         )
-
-    except edge_tts.exceptions.NoAudioReceived:
-        logger.error("No audio received from edge-tts")
         raise HTTPException(status_code=500, detail="TTS synthesis failed: no audio received")
+
+    # Cache the result
+    try:
+        cache_path.write_bytes(audio_bytes)
+        _cleanup_cache()
     except Exception as e:
-        logger.error(f"TTS synthesis error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
+        logger.warning(f"Failed to cache audio: {e}")
+
+    logger.info(f"Synthesized: {len(audio_bytes)} bytes, voice={voice}")
+
+    return StreamingResponse(
+        io.BytesIO(audio_bytes),
+        media_type="audio/mpeg",
+        headers={
+            "Content-Disposition": "inline",
+            "X-TTS-Cached": "false",
+            "X-TTS-Voice": voice,
+            "Content-Length": str(len(audio_bytes)),
+        }
+    )
 
 
 @app.get("/voices")
