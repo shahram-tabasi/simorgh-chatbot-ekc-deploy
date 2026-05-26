@@ -6,6 +6,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import rehypeRaw from 'rehype-raw';
 import 'highlight.js/styles/github-dark.css';
 import { autoLinkKesra } from '../utils/kesraLinks';
+import { autoLinkUrls } from '../utils/autolinkUrls';
 
 interface MarkdownRendererProps {
   content: string;
@@ -14,10 +15,20 @@ interface MarkdownRendererProps {
 }
 
 export function MarkdownRenderer({ content, className = '', dir = 'ltr' }: MarkdownRendererProps) {
-  // Pre-process the markdown source to auto-link mentions of the
-  // internal Kesra software (env-overridable URL). Runs before the
-  // markdown parser so the link goes through the normal sanitizer.
-  const processed = autoLinkKesra(content);
+  // Pre-process the markdown source in two passes before the
+  // parser runs. Order matters:
+  //   1. autoLinkKesra wraps bare mentions of the internal Kesra
+  //      software in markdown link syntax pointing at the env-
+  //      overridable URL.
+  //   2. autoLinkUrls then wraps every remaining bare URL
+  //      (https://… or www.…) so AI replies with literal links
+  //      become clickable (operator request, May 2026 — GFM's
+  //      autolink heuristic misses RTL-embedded URLs and
+  //      sentence-end-punctuation cases).
+  // Running Kesra first is intentional: it converts "Kesra" tokens
+  // into [Kesra](URL) which autoLinkUrls then skips (its
+  // PROTECT_RE preserves existing markdown links).
+  const processed = autoLinkUrls(autoLinkKesra(content));
   return (
     <div
       className={`markdown-content ${className}`}

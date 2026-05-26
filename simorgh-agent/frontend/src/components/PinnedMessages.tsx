@@ -158,44 +158,68 @@ export function PinnedMessagesPanel({ pinned, onJump }: PanelProps) {
       {pinned.map((p) => {
         const isActive = activeId === p.messageId;
         return (
-          <button
-            key={p.messageId}
-            type="button"
-            onClick={() => {
-              setActiveId(p.messageId);
-              onJump(p.messageId);
-            }}
-            title={p.snippet || ''}
-            aria-current={isActive ? 'true' : undefined}
-            className={`flex items-center justify-center
-                        w-5 h-3 rounded-sm transition-colors
-                        ${
-                          isActive
-                            ? 'text-violet-300'
-                            : 'text-gray-500 hover:text-gray-200'
-                        }`}
-          >
-            {/* Stretched-dash glyph. SVG rather than unicode "—"
-                so the stroke weight stays consistent across
-                fonts/browsers. Thicker stroke for the active row
-                so the "current" pin reads clearly even at
-                12-pixel scale. */}
-            <svg
-              aria-hidden
-              viewBox="0 0 16 4"
-              className="w-4 h-1"
+          // group wrapper so the hover preview to the right can
+          // pick up the parent's :hover state without any JS.
+          <div key={p.messageId} className="group relative">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveId(p.messageId);
+                onJump(p.messageId);
+              }}
+              aria-current={isActive ? 'true' : undefined}
+              className={`flex items-center justify-center
+                          w-5 h-3 rounded-sm transition-colors
+                          ${
+                            isActive
+                              ? 'text-violet-300'
+                              : 'text-gray-500 hover:text-gray-200'
+                          }`}
             >
-              <line
-                x1="1"
-                y1="2"
-                x2="15"
-                y2="2"
-                stroke="currentColor"
-                strokeWidth={isActive ? 2 : 1.5}
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
+              {/* Stretched-dash glyph. SVG rather than unicode "—"
+                  so the stroke weight stays consistent across
+                  fonts/browsers. Thicker stroke for the active row
+                  so the "current" pin reads clearly even at small
+                  scale. */}
+              <svg
+                aria-hidden
+                viewBox="0 0 16 4"
+                className="w-4 h-1"
+              >
+                <line
+                  x1="1"
+                  y1="2"
+                  x2="15"
+                  y2="2"
+                  stroke="currentColor"
+                  strokeWidth={isActive ? 2 : 1.5}
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+
+            {/* Hover preview — snippet shown to the right of the
+                dash column. CSS-only via group-hover; no JS state
+                or libraries. opacity-0 + pointer-events-none keeps
+                it from blocking clicks when collapsed; a tiny
+                transition smooths the appearance. The pointer
+                triangle is faked with a small ::before via a
+                rounded notch on the left edge. */}
+            {p.snippet && (
+              <div
+                role="tooltip"
+                className="pointer-events-none opacity-0 group-hover:opacity-100
+                           transition-opacity duration-150
+                           absolute left-full top-1/2 -translate-y-1/2 ml-2 z-30
+                           min-w-[140px] max-w-[260px] px-2.5 py-1.5
+                           rounded-md border border-white/10 bg-slate-900/95
+                           backdrop-blur shadow-lg text-[11px] leading-snug
+                           text-gray-200 whitespace-normal"
+              >
+                {p.snippet}
+              </div>
+            )}
+          </div>
         );
       })}
     </div>
