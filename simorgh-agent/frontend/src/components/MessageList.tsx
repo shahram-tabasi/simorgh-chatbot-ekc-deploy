@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Message } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { showError } from '../utils/alerts';
 import {
   ProcessingActivity,
   generateProcessingSteps,
@@ -326,6 +327,31 @@ export function MessageList({
       });
 
       if (!response.ok) {
+        // tts-service returns 503 with a structured body
+        // ({error_code, user_message_fa, user_message_en, ...}) when the
+        // upstream speech provider is unreachable. Surface that to the
+        // user instead of silently failing — see the matching backend
+        // path in tts-service/app.py.
+        let userMessage: string | null = null;
+        try {
+          const errBody = await response.json();
+          // Prefer the Persian message when the rendered reply is in
+          // Persian script (same regex used to pick the voice above),
+          // else fall back to English. Backend always provides both.
+          userMessage = (persianArabicRegex.test(plainText)
+            ? errBody?.user_message_fa
+            : errBody?.user_message_en) ?? null;
+        } catch {
+          /* response wasn't JSON — fall through to the generic toast */
+        }
+        const isPersian = persianArabicRegex.test(plainText);
+        showError(
+          isPersian ? 'پخش صدا ممکن نشد' : 'Voice playback failed',
+          userMessage
+            ?? (isPersian
+              ? 'در حال حاضر امکان پخش صوتی پاسخ وجود ندارد. لطفاً بعداً دوباره تلاش کنید.'
+              : 'Could not play the spoken reply right now. Please try again later.')
+        );
         throw new Error(`TTS failed: ${response.status}`);
       }
 

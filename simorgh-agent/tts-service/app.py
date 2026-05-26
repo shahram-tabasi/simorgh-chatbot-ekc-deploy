@@ -282,7 +282,28 @@ async def synthesize(request: SynthesizeRequest):
             f"voice={voice} rate={rate} text_len={len(request.text)} "
             f"text_preview={request.text[:300]!r}"
         )
-        raise HTTPException(status_code=500, detail="TTS synthesis failed: no audio received")
+        # 503 (Service Unavailable) — not 500 — because the failure is
+        # almost always upstream connectivity to Microsoft, not a bug in
+        # this service. The structured body lets the frontend distinguish
+        # "TTS-needs-internet" from a generic crash and show a localised
+        # message instead of a silent click on the speak button.
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error_code": "tts_upstream_unavailable",
+                "detail": "TTS upstream returned no audio after retries",
+                "user_message_fa": (
+                    "خدمات تبدیل متن به گفتار در حال حاضر در دسترس نیست. "
+                    "اتصال اینترنت سرور را بررسی کنید."
+                ),
+                "user_message_en": (
+                    "Text-to-speech is currently unavailable — the server "
+                    "could not reach the upstream speech provider. Please "
+                    "check the server's outbound internet connection."
+                ),
+                "voice": voice,
+            },
+        )
 
     # Cache the result
     try:
