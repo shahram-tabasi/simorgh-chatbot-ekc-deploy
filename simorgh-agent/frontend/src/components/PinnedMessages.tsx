@@ -23,7 +23,7 @@
 // can find it via querySelector.
 
 import { useCallback, useEffect, useState } from 'react';
-import { PinIcon, XIcon, ChevronDownIcon } from 'lucide-react';
+import { XIcon, ChevronDownIcon } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 export interface PinnedMessage {
@@ -127,8 +127,38 @@ export function PinnedMessagesPanel({ pinned, onJump, onUnpin }: PanelProps) {
 
   if (pinned.length === 0) return null;
 
+  // The chip glyph is a "stretched dash" (a single elongated
+  // horizontal line) matching the operator's reference: visually
+  // anchors a pinned point in the conversation without competing
+  // with the message content. We render a small SVG rule rather
+  // than the unicode "—" so its stroke weight stays consistent
+  // across browsers/fonts and aligns optically with the surrounding
+  // glyphs.
+  const StretchedDash = (
+    <svg
+      aria-hidden
+      viewBox="0 0 12 12"
+      className="w-3 h-3 flex-shrink-0"
+    >
+      <line
+        x1="1.5"
+        y1="6"
+        x2="10.5"
+        y2="6"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+
   return (
-    <div className="absolute top-3 right-3 z-20 select-none">
+    // Anchored top-LEFT now (was top-right). The composer rebuild
+    // pushed the AI's most-recent-reply controls to the right edge,
+    // and the operator wanted the pin chip out of that traffic
+    // lane — left-3 puts it over the empty rail just below the
+    // chat header.
+    <div className="absolute top-3 left-3 z-20 select-none">
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
@@ -141,7 +171,7 @@ export function PinnedMessagesPanel({ pinned, onJump, onUnpin }: PanelProps) {
                     }`}
         aria-expanded={open}
       >
-        <PinIcon className="w-3 h-3" />
+        {StretchedDash}
         <span>{t('pinned') || 'Pinned'}</span>
         <span className="text-gray-400">({pinned.length})</span>
         <ChevronDownIcon
@@ -178,9 +208,13 @@ export function PinnedMessagesPanel({ pinned, onJump, onUnpin }: PanelProps) {
                          border border-white/[0.06] hover:border-violet-400/30
                          hover:bg-white/[0.04] transition cursor-pointer"
             >
-              {/* Tab-style left grip — matches the reference UI's
-                  file-tab handle look. */}
-              <span className="mt-1 flex-shrink-0 w-0.5 h-3 rounded-full bg-violet-400/60 group-hover:bg-violet-300" />
+              {/* Stretched-dash left mark — matches the chip's glyph
+                  and the operator's reference image. Same colour as
+                  the chip when the row is hovered so the eye reads
+                  it as the same family. */}
+              <span className="mt-1.5 flex-shrink-0 text-violet-400/70 group-hover:text-violet-300 transition-colors">
+                {StretchedDash}
+              </span>
               <div className="flex-1 min-w-0">
                 <p className="text-[11.5px] text-gray-200 leading-snug line-clamp-2">
                   {p.snippet || '…'}
