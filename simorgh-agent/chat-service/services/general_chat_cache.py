@@ -135,24 +135,45 @@ def _ensure_collection() -> bool:
             )
         else:
             # If the collection already exists but with a different
-            # dim than what the embeddings-service now produces, we
-            # CAN'T merge — vectors would be mathematically
-            # incomparable. Refuse to operate (every search would
-            # be a runtime error) until an operator drops the
-            # stale collection. Logged loudly so the operator can
-            # `curl -X DELETE qdrant:6333/collections/general_chat_cache`
-            # and let us re-create with the new dim.
+            # dim than what the embeddings-service now produces,
+            # AUTO-DROP and re-create. Vectors stored at the old
+            # dim are mathematically incomparable with new queries
+            # (cosine over different dimensions is undefined), so
+            # there's no value in keeping them. Loudly logged so
+            # an operator scanning logs sees the recovery happened.
+            #
+            # First-run cache-was-empty case (May 2026): this fires
+            # exactly once after an embedding-model swap, recovers,
+            # and the cache builds up again from real traffic.
             info = c.get_collection(CACHE_COLLECTION)
             stored_dim = getattr(info.config.params.vectors, "size", None)
             if stored_dim and stored_dim != EMBEDDING_DIM:
-                log.error(
+                log.warning(
                     "general_chat_cache: existing collection has dim=%s but "
-                    "embeddings-service now returns dim=%s. Drop the collection "
-                    "to let it be re-created: "
-                    "`curl -X DELETE http://qdrant:6333/collections/%s`",
-                    stored_dim, EMBEDDING_DIM, CACHE_COLLECTION,
+                    "embeddings-service now returns dim=%s — auto-dropping "
+                    "and recreating. Any previously cached answers are lost "
+                    "(they'd be incomparable to new queries anyway).",
+                    stored_dim, EMBEDDING_DIM,
                 )
-                return False
+                try:
+                    c.delete_collection(CACHE_COLLECTION)
+                except Exception as drop_err:
+                    log.error(
+                        "general_chat_cache: failed to drop stale collection: %s",
+                        drop_err,
+                    )
+                    return False
+                c.create_collection(
+                    collection_name=CACHE_COLLECTION,
+                    vectors_config=qmodels.VectorParams(
+                        size=EMBEDDING_DIM,
+                        distance=qmodels.Distance.COSINE,
+                    ),
+                )
+                log.info(
+                    "general_chat_cache: re-created collection %s (dim=%d, cosine)",
+                    CACHE_COLLECTION, EMBEDDING_DIM,
+                )
         _collection_ready = True
         return True
     except Exception as e:
