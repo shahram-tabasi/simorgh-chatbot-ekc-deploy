@@ -13,13 +13,20 @@ import {
   Edit2Icon,
   Volume2Icon,
   LoaderIcon,
-  SquareIcon
+  SquareIcon,
+  PinIcon,
+  PinOffIcon
 } from 'lucide-react';
 import { Message } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { showError } from '../utils/alerts';
 import { useAuth, isModernUser, isLegacyUser } from '../context/AuthContext';
 import { loadStoredAvatar, presetAvatarUrl } from './AvatarPicker';
+import {
+  usePinnedMessages,
+  PinnedMessagesPanel,
+  scrollToPinnedMessage,
+} from './PinnedMessages';
 import {
   ProcessingActivity,
   generateProcessingSteps,
@@ -34,6 +41,10 @@ interface MessageListProps {
   onUpdateReaction?: (messageId: string, reaction: 'like' | 'dislike' | 'none') => void;
   onSwitchVersion?: (messageId: string, versionIndex: number) => void;
   onEditMessage?: (message: Message) => void;
+  /** Scopes the pinned-messages localStorage key. Without this the
+      Pin button still works but pins from different chats would
+      bleed into each other. Pass the current active chat id. */
+  chatId?: string | null;
 }
 
 // Helper function to detect if text contains Persian/Arabic characters
@@ -135,8 +146,10 @@ export function MessageList({
   onRegenerateResponse,
   onUpdateReaction,
   onSwitchVersion,
-  onEditMessage
+  onEditMessage,
+  chatId
 }: MessageListProps) {
+  const { pinned, togglePin, isPinned, clearPin } = usePinnedMessages(chatId);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
@@ -522,10 +535,19 @@ export function MessageList({
   }, []);
 
   return (
+    // Outer wrapper: relatively positioned so the floating
+    // PinnedMessagesPanel can anchor to the top-right of the chat
+    // area (issue #3, May 2026).
+    <div className="relative flex-1 min-h-0">
+      <PinnedMessagesPanel
+        pinned={pinned}
+        onJump={scrollToPinnedMessage}
+        onUnpin={clearPin}
+      />
     <div
       ref={containerRef}
       // Mobile: ensure scrollable messages with proper spacing
-      className="flex-1 overflow-y-auto overflow-x-hidden px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6"
+      className="h-full overflow-y-auto overflow-x-hidden px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6"
       onScroll={handleScroll}
     >
       {messages.map((message, index) => {
@@ -535,10 +557,13 @@ export function MessageList({
         return (
           <motion.div
             key={message.id}
+            data-message-id={message.id}
             initial={{ opacity: 1, y: 0 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0 }}
-            // Mobile: reduce gap and ensure proper layout
+            // Mobile: reduce gap and ensure proper layout. Pin-flash
+            // class added briefly when jumping from PinnedMessages
+            // (see scrollToPinnedMessage in PinnedMessages.tsx).
             className={`flex gap-2 sm:gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {message.role === 'assistant' && (
@@ -731,6 +756,25 @@ export function MessageList({
                     <Share2Icon className="w-3.5 h-3.5" />
                   </button>
 
+                  {/* Pin — bookmarks this reply so the user can jump
+                      back to it from the PinnedMessages panel that
+                      floats at the top of the chat (issue #3). Pin
+                      state lives in localStorage scoped per chat. */}
+                  <button
+                    onClick={() => togglePin(message.id, message.content)}
+                    className={`p-1.5 rounded-lg hover:bg-white/10 transition-colors ${
+                      isPinned(message.id) ? 'text-violet-300 bg-violet-400/10' : 'text-gray-400'
+                    }`}
+                    title={isPinned(message.id) ? 'Unpin this reply' : 'Pin this reply'}
+                    aria-pressed={isPinned(message.id)}
+                  >
+                    {isPinned(message.id) ? (
+                      <PinOffIcon className="w-3.5 h-3.5" />
+                    ) : (
+                      <PinIcon className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+
                   {/* Version Navigator */}
                   {message.versions && message.versions.length > 0 && (
                     <>
@@ -835,6 +879,8 @@ export function MessageList({
           Copied to clipboard
         </div>
       )}
+    </div>
+    {/* /relative outer wrapper added for PinnedMessagesPanel */}
     </div>
   );
 }

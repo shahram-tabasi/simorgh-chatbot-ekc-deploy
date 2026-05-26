@@ -201,3 +201,17 @@
 .animate-slide-up {
   animation: slide-up 0.3s ease-out forwards;
 }
+
+/* Pinned-message flash highlight (issue #3, May 2026). Added
+   briefly by scrollToPinnedMessage() in PinnedMessages.tsx so the
+   user's eye lands on the bubble it just scrolled to. The class
+   removes itself after ~2s (setTimeout in the same module). */
+@keyframes simorgh-pin-flash-kf {
+  0%   { box-shadow: 0 0 0 0    rgba(167, 139, 250, 0.0); }
+  20%  { box-shadow: 0 0 0 4px  rgba(167, 139, 250, 0.55); }
+  100% { box-shadow: 0 0 0 0    rgba(167, 139, 250, 0.0); }
+}
+.simorgh-pin-flash {
+  animation: simorgh-pin-flash-kf 1.6s ease-out;
+  border-radius: 0.5rem;
+}

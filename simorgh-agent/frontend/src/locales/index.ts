@@ -78,6 +78,11 @@ export interface Dict {
   resetsAt: string;
   unlimitedDescription: string;
 
+  // Pinned messages (issue #3)
+  pinned: string;
+  noPins: string;
+  unpin: string;
+
   // Auth pages
   signIn: string;
   signUp: string;
@@ -182,6 +187,10 @@ export const translations: Record<Language, Dict> = {
     resetsAt: 'Resets at',
     unlimitedDescription: 'Your tier has unlimited questions per day.',
 
+    pinned: 'Pinned',
+    noPins: 'No pinned messages yet.',
+    unpin: 'Unpin',
+
     signIn: 'Sign in',
     signUp: 'Sign up',
     signingIn: 'Signing in...',
@@ -283,6 +292,10 @@ export const translations: Record<Language, Dict> = {
     resetsAt: 'بازنشانی در',
     unlimitedDescription: 'پلن شما تعداد سوال نامحدود در روز دارد.',
 
+    pinned: 'سنجاق‌شده',
+    noPins: 'هنوز پیامی سنجاق نشده است.',
+    unpin: 'حذف سنجاق',
+
     signIn: 'ورود',
     signUp: 'ثبت نام',
     signingIn: 'در حال ورود...',
@@ -383,6 +396,10 @@ export const translations: Record<Language, Dict> = {
     questionsUsedToday: 'heute verwendet',
     resetsAt: 'Zurücksetzen um',
     unlimitedDescription: 'Ihr Tarif bietet unbegrenzte Fragen pro Tag.',
+
+    pinned: 'Angeheftet',
+    noPins: 'Noch keine angehefteten Nachrichten.',
+    unpin: 'Lösen',
 
     signIn: 'Anmelden',
     signUp: 'Registrieren',

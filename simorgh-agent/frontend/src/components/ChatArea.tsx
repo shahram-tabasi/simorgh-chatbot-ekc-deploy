@@ -376,6 +376,7 @@ export function ChatArea({
               onUpdateReaction={onUpdateReaction}
               onSwitchVersion={onSwitchVersion}
               onEditMessage={onEditMessage}
+              chatId={activeChatId}
             />
           </div>
 
