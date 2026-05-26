@@ -43,6 +43,12 @@ from services.hr_chat import (
     LLM_GATEWAY_URL as HR_LLM_GATEWAY_URL,
     HR_LLM_MODEL,
 )
+# Shared semantic answer cache (issue #1, May 2026). Cross-user,
+# Qdrant-backed, cosine ≥ 0.95. See services/general_chat_cache.py
+# for the full design. lookup() short-circuits the LLM; write()
+# happens after a fresh answer completes; bump_hit() is fire-and-
+# forget telemetry on each cached serve.
+from services import general_chat_cache as cache
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v2/general-chat/hr", tags=["HR General Chat"])
@@ -76,7 +82,8 @@ class HrStreamRequest(BaseModel):
 
 async def _persist_pair(chat_id: str, user_id: str, user_msg: str,
                          assistant_msg: str, citations: list,
-                         refusal: bool = False) -> None:
+                         refusal: bool = False,
+                         cache_entry_id: Optional[str] = None) -> None:
     """Best-effort save of the user message + assistant response to the
     chat-history store. Called after the SSE stream completes.
 
@@ -118,6 +125,12 @@ async def _persist_pair(chat_id: str, user_id: str, user_msg: str,
                 "source": "hr_direct_rag",
                 "citations": citations,
                 "refusal": refusal,
+                # Bind this assistant message to its cache entry
+                # (when present). The frontend echoes this back on
+                # like/dislike so the reactions route can promote /
+                # remove the right cache row without re-embedding
+                # the question.
+                "cache_entry_id": cache_entry_id,
             },
         }
         redis.cache_chat_message(chat_id, user_message_payload)
@@ -159,31 +172,106 @@ async def hr_stream(req: HrStreamRequest):
         accumulated = []
         citations: list = []
         was_refusal = False
+        # Set when this stream came from the cache (so we DON'T
+        # re-write the same answer back to cache below). Carries
+        # the entry id for later like/dislike binding via message
+        # metadata.
+        cache_entry_id: Optional[str] = None
+
+        # ── Cache short-circuit ────────────────────────────────────
+        # Before paying the embedding+retrieval+LLM cost, ask the
+        # cross-user semantic cache whether someone has answered a
+        # near-identical question before (cosine ≥ 0.95, same
+        # category). On hit we replay the cached answer as SSE
+        # chunks so the client UX is identical to a fresh stream.
         try:
-            async for kind, data in stream_hr_answer(req.query, req.category):
-                if kind == "chunk":
-                    accumulated.append(str(data or ""))
-                elif kind == "meta":
-                    citations = (data or {}).get("hits") or []
-                elif kind == "refusal":
-                    was_refusal = True
-                    accumulated.append(str(data or ""))
-                frame = {kind: data}
-                yield f"data: {json.dumps(frame, ensure_ascii=False)}\n\n"
+            hit = await cache.lookup(req.query, req.category)
         except Exception as e:
-            log.exception("hr_stream pipeline crashed")
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+            log.warning("hr_stream: cache lookup failed: %s", e)
+            hit = None
+
+        if hit:
+            cache_entry_id = hit["entry_id"]
+            citations = hit.get("citations") or []
+            cached_answer = hit.get("answer") or ""
+            log.info(
+                "hr_stream cache HIT entry=%s cosine=%.4f like_score=%d category=%s q=%r",
+                cache_entry_id, hit.get("cosine", 0.0),
+                hit.get("like_score", 0), req.category, req.query[:80],
+            )
+            # Emit the same SSE meta frame stream_hr_answer would
+            # have produced — plus a `cache_hit` marker + entry_id
+            # so the frontend can bind future like/dislike actions
+            # to this cache entry without re-embedding the query.
+            meta_payload = {
+                "hits": citations,
+                "top_score": 1.0,           # cache hits are "perfect" for UX
+                "threshold": RELEVANCE_THRESHOLD,
+                "cache_hit": True,
+                "cache_entry_id": cache_entry_id,
+                "cache_cosine": round(float(hit.get("cosine", 0.0)), 4),
+            }
+            yield f"data: {json.dumps({'meta': meta_payload}, ensure_ascii=False)}\n\n"
+            # Replay the answer as one big chunk. We could split it
+            # to simulate token-by-token streaming, but the cached
+            # answer is already complete and the user gets instant
+            # gratification this way — feels faster than the LLM.
+            accumulated.append(cached_answer)
+            yield f"data: {json.dumps({'chunk': cached_answer}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': {'reason': 'cache_hit'}}, ensure_ascii=False)}\n\n"
+            # Telemetry — fire and forget.
+            try:
+                await cache.bump_hit(cache_entry_id)
+            except Exception:
+                pass
+        else:
+            # ── Normal LLM path ─────────────────────────────────────
+            try:
+                async for kind, data in stream_hr_answer(req.query, req.category):
+                    if kind == "chunk":
+                        accumulated.append(str(data or ""))
+                    elif kind == "meta":
+                        citations = (data or {}).get("hits") or []
+                    elif kind == "refusal":
+                        was_refusal = True
+                        accumulated.append(str(data or ""))
+                    frame = {kind: data}
+                    yield f"data: {json.dumps(frame, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                log.exception("hr_stream pipeline crashed")
+                yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+        full_assistant = "".join(accumulated).strip()
+
+        # Write to the cross-user semantic cache. Only on FRESH
+        # successful answers — refusals are policy text the AI
+        # couldn't ground and shouldn't be served via cache; cache
+        # hits are already cached so re-writing would just dup.
+        if (
+            not cache_entry_id  # fresh answer (not from cache)
+            and not was_refusal
+            and full_assistant
+        ):
+            try:
+                cache_entry_id = await cache.write(
+                    question=req.query,
+                    answer=full_assistant,
+                    citations=citations,
+                    category=req.category,
+                )
+            except Exception as e:
+                log.warning("hr_stream: cache write failed: %s", e)
 
         # Persist after the stream is fully emitted to the client.
         # Avoids blocking the streaming with a slow Redis/postgres
         # write; the user sees the answer immediately and we save
         # in the trailing tail of the response.
-        full_assistant = "".join(accumulated).strip()
         if req.chat_id and full_assistant:
             await _persist_pair(
                 chat_id=req.chat_id, user_id=req.user_id,
                 user_msg=req.query, assistant_msg=full_assistant,
                 citations=citations, refusal=was_refusal,
+                cache_entry_id=cache_entry_id,
             )
 
         # Record the question against the modern user's daily quota.
@@ -277,3 +365,50 @@ async def debug(q: str, category: Optional[str] = None, top_k: int = 5):
             "ok"
         ),
     }
+
+
+# ============================================================
+# Cache reactions endpoint
+# ============================================================
+#
+# Apply a like/dislike to a cached cross-user answer (issue #1,
+# May 2026). The frontend calls this when the user clicks 👍/👎
+# on a general-chat assistant message that carries
+# `metadata.cache_entry_id`. Liking bumps the cache entry's
+# `like_score` so it wins ties on future cosine matches; disliking
+# hard-deletes it so no future user sees it.
+
+class CacheReactionRequest(BaseModel):
+    cache_entry_id: str = Field(..., min_length=1)
+    reaction: str = Field(..., pattern="^(like|dislike|none)$",
+                          description="'like' bumps score; "
+                          "'dislike' removes the entry; 'none' is a no-op")
+    user_id: str = Field(..., min_length=1,
+                         description="Modern UUID — used so a single user "
+                         "can't run up the score by liking the same answer "
+                         "from multiple devices")
+
+
+@router.post("/cache-reaction")
+async def cache_reaction(req: CacheReactionRequest):
+    """Apply a like/dislike to a cached answer.
+
+    Returns a small status object so the client can show success
+    feedback. Idempotent: re-liking by the same user is a no-op;
+    disliking a missing entry returns ok (already gone).
+    """
+    if req.reaction == "none":
+        return {"ok": True, "action": "noop"}
+    try:
+        if req.reaction == "like":
+            ok = await cache.like(req.cache_entry_id, req.user_id)
+            return {"ok": bool(ok), "action": "like",
+                    "entry_id": req.cache_entry_id}
+        # dislike — hard-delete
+        ok = await cache.dislike(req.cache_entry_id)
+        return {"ok": bool(ok), "action": "dislike",
+                "entry_id": req.cache_entry_id}
+    except Exception as e:
+        log.exception("cache_reaction failed for entry=%s reaction=%s",
+                      req.cache_entry_id, req.reaction)
+        raise HTTPException(status_code=500, detail=str(e))

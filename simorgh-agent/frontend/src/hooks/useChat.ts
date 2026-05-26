@@ -1145,6 +1145,12 @@ export function useChat(
   };
 
   const updateMessageReaction = (messageId: string, reaction: 'like' | 'dislike' | 'none') => {
+    // Find the message first so we can read its cache_entry_id
+    // BEFORE the optimistic state update (which doesn't affect
+    // metadata but keeps the lookup obvious).
+    const target = messages.find(m => m.id === messageId);
+    const cacheEntryId = (target?.metadata as any)?.cache_entry_id as string | undefined;
+
     setMessages(prev => prev.map(msg => {
       if (msg.id === messageId) {
         return {
@@ -1155,6 +1161,31 @@ export function useChat(
       }
       return msg;
     }));
+
+    // Cross-user cache reactions (issue #1, May 2026). When the
+    // reacted-to assistant message came from / was added to the
+    // semantic cache, push the user's verdict back so:
+    //   • like   → bumps that entry's like_score (wins ties on
+    //              future cosine matches across all users)
+    //   • dislike → hard-deletes the entry from the cache (no
+    //              future user sees that bad answer again)
+    // Fire-and-forget — UI feedback already happened locally.
+    if (cacheEntryId && (reaction === 'like' || reaction === 'dislike')) {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) return;
+      fetch('/api/v2/general-chat/hr/cache-reaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          cache_entry_id: cacheEntryId,
+          reaction,
+          user_id: userId,
+        }),
+      }).catch(() => { /* best-effort; local state already updated */ });
+    }
   };
 
   const switchVersion = (messageId: string, versionIndex: number) => {
