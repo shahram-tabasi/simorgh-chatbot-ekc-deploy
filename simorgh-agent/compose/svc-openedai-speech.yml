@@ -24,13 +24,27 @@ services:
     volumes:
       - ../tts/voices:/app/voices:ro
       - ../tts/config/voice_to_speaker.yaml:/app/config/voice_to_speaker.yaml:ro
+    # Override the image's CMD (`bash startup.min.sh`). The .min
+    # startup script ignores $PORT and runs two `download_voices_*.sh`
+    # helpers that try to write en_US / en_GB Piper voices into
+    # /app/voices — which is bind-mounted read-only here, so they
+    # fail noisily on every boot. We skip the whole thing and invoke
+    # the underlying server directly with the only flags that matter:
+    # --port to make the legacy `tts-service:8002` alias reach the
+    # right listener, and --preload to warm the Persian voice we DO
+    # ship via the workflow. Equivalent to the canonical startup.sh
+    # tail (`python speech.py ${PRELOAD_MODEL:+--preload …} $EXTRA_ARGS $@`)
+    # minus the parts that don't apply offline.
+    entrypoint: ["bash", "-c"]
+    command:
+      - "cd /app && exec python speech.py --host 0.0.0.0 --port 8002 --preload voices/fa_IR-amir-medium.onnx"
     environment:
       - PRELOAD_MODEL=voices/fa_IR-amir-medium.onnx
       - TTS_HOME=/app/voices
       - HF_HUB_OFFLINE=1
-      # openedai-speech reads PORT (not UVICORN_PORT); without it the
-      # server defaults to 8000 and the legacy tts-service:8002 alias
-      # would route clients into the void.
+      # PORT is left here for documentation — startup.min.sh ignores
+      # it, but if a future image variant honors it the override
+      # above already covers us via the explicit --port arg.
       - PORT=8002
     networks:
       app_net:
