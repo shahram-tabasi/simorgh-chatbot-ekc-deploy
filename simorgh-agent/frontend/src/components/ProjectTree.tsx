@@ -264,22 +264,22 @@ export function ProjectTree({
           <div className="flex items-center px-2 mb-1">
             <button
               onClick={onToggleGeneralChats}
-              className="flex items-center gap-1.5 flex-1 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-300 transition"
+              className="flex items-center gap-1.5 flex-1 text-left text-[13px] font-semibold text-gray-400 uppercase tracking-wider hover:text-gray-200 transition"
             >
               {showGeneralChats ? (
-                <ChevronDown className="w-3 h-3" />
+                <ChevronDown className="w-3.5 h-3.5" />
               ) : (
-                <ChevronRight className="w-3 h-3" />
+                <ChevronRight className="w-3.5 h-3.5" />
               )}
-              <Sparkles className="w-3 h-3" />
+              <Sparkles className="w-3.5 h-3.5" />
               <span>General</span>
             </button>
             <button
               onClick={onCreateGeneralChat}
-              className="p-1 hover:bg-white/10 rounded text-gray-500 hover:text-gray-300 transition"
+              className="p-1.5 hover:bg-white/10 rounded text-gray-400 hover:text-gray-200 transition"
               title="New general chat"
             >
-              <Plus className="w-3.5 h-3.5" />
+              <Plus className="w-4 h-4" />
             </button>
           </div>
 
@@ -319,7 +319,7 @@ export function ProjectTree({
 
         {/* Projects Section */}
         <div>
-          <div className="px-2 mb-1 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+          <div className="px-2 mb-1 text-[13px] font-semibold text-gray-400 uppercase tracking-wider">
             Projects
           </div>
 

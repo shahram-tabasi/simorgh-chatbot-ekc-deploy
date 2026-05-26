@@ -206,6 +206,66 @@ function MainChat() {
     createGeneralChat("New conversation");
   };
 
+  // Auto-create an empty general chat the first time a modern user
+  // lands on the chatbot with no active selection. Lets the operator
+  // tap a Persian HR prompt and have it sent straight to the LLM —
+  // without that chat we'd have no chatId for useChat.sendMessage().
+  // Legacy/TPMS users are skipped (they use project chats only).
+  //
+  // Important: useProjects re-creates `selectChat`/`createGeneralChat`
+  // refs on every render and `generalChats` is a fresh array after
+  // any setState. Depending on those would fire this effect dozens of
+  // times per render cycle on slower Android Chrome devices (was
+  // observed as a "freeze" on the entry page). We instead depend on
+  // primitives only (userId, activeChatId, generalChats.length) and
+  // read the latest refs through useRef + a tracking effect — so the
+  // body still sees current data but doesn't re-run on identity churn.
+  const autoCreatedRef = React.useRef(false);
+  const autoCreateDepsRef = React.useRef({
+    selectChat,
+    generalChats,
+    createGeneralChatFn: handleCreateGeneralChat,
+  });
+  React.useEffect(() => {
+    autoCreateDepsRef.current = {
+      selectChat,
+      generalChats,
+      createGeneralChatFn: handleCreateGeneralChat,
+    };
+  });
+  React.useEffect(() => {
+    if (autoCreatedRef.current) return;
+    if (!user || !userId) return;
+    if (isLegacyUser(user)) return;
+    if (activeChatId) {
+      // Some other path (history selector, deep link) already picked a
+      // chat — count that as the entry chat and stop auto-creating.
+      autoCreatedRef.current = true;
+      return;
+    }
+    // Deep-link landing: /chatbot/project/<token> stashes a pending
+    // session in sessionStorage. Let the deep-link effect resolve it
+    // first instead of racing it with a brand-new general chat.
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('session') || sessionStorage.getItem('simorgh_pending_session')) {
+      return;
+    }
+    const { selectChat: pickChat, generalChats: chats, createGeneralChatFn } =
+      autoCreateDepsRef.current;
+    // If the operator already has general chats, surface the most
+    // recent one instead of spamming a brand new row on every reload.
+    if (chats.length > 0) {
+      autoCreatedRef.current = true;
+      pickChat(null, chats[0].id);
+      return;
+    }
+    autoCreatedRef.current = true;
+    createGeneralChatFn();
+    // Intentionally NOT depending on selectChat / generalChats / the
+    // handler — the .length primitive is enough to wake us when chats
+    // finish loading, and the ref carries the latest function refs.
+  }, [user, userId, activeChatId, generalChats.length]);
+
   // Add notification when AI responds
   const addNotification = React.useCallback((message: string) => {
     if (!notificationsEnabled) return;
@@ -365,7 +425,11 @@ function MainChat() {
           offlineLocked={!canUseOfflineLlm}
         />
 
-        <div className="relative z-10 flex h-full mt-0 md:mt-0 overflow-hidden">
+        {/* Top padding on mobile reserves room for the fixed MobileHeader
+            (h-14 + iOS safe area) so the first chat message and the
+            sidebar drawers don't get hidden behind it. md+ doesn't
+            render the mobile header so the offset is reset to 0. */}
+        <div className="relative z-10 flex h-full overflow-hidden pt-[calc(3.5rem+env(safe-area-inset-top))] md:pt-0">
           {/* سایدبار راست */}
           <Sidebar
             isOpen={rightSidebar.isOpen}

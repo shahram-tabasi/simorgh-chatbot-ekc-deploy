@@ -486,7 +486,7 @@ export function ChatInput({
             placeholder={disabled ? "Please create or select a project and chat to start messaging..." : "Ask Simorgh anything..."}
             disabled={disabled}
             rows={1}
-            className="w-full pl-3 md:pl-4 pr-10 md:pr-12 py-2 md:py-3 rounded-xl bg-transparent text-white text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed overflow-y-auto max-h-[120px] sm:max-h-[200px] leading-normal"
+            className="w-full pl-3 md:pl-4 pr-14 md:pr-16 py-2 md:py-3 rounded-xl bg-transparent text-white text-base placeholder-gray-500 focus:outline-none resize-none disabled:cursor-not-allowed overflow-y-auto max-h-[120px] sm:max-h-[200px] leading-normal"
             style={{ minHeight: '40px' }}
           />
           <button
@@ -494,14 +494,18 @@ export function ChatInput({
             onClick={handleSend}
             disabled={disabled || quotaExceeded || (!message.trim() && files.length === 0)}
             title="Send (Enter)"
-            className={`absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-1 rounded text-[14px] leading-none font-mono transition-colors ${
-              message.trim().length > 0
-                ? 'text-sky-300 hover:text-sky-200 hover:bg-sky-500/10'
-                : 'text-gray-600 hover:text-gray-400 cursor-default'
+            // Big tap-friendly Enter glyph — kept the ↵ symbol per
+            // operator feedback ("not a paper plane, just bigger
+            // Enter"). Active tile when there's text to send,
+            // ghost background otherwise.
+            className={`absolute right-1.5 md:right-2 top-1/2 -translate-y-1/2 w-10 h-10 md:w-11 md:h-11 rounded-full flex items-center justify-center transition-all disabled:cursor-not-allowed text-2xl md:text-3xl leading-none font-bold ${
+              message.trim().length > 0 || files.length > 0
+                ? 'bg-sky-500/20 text-sky-200 hover:bg-sky-500/30 hover:scale-105 active:scale-95'
+                : 'bg-white/5 text-gray-500 hover:bg-white/10 hover:text-gray-300'
             }`}
             aria-label="Send"
           >
-            ↵
+            <span style={{ lineHeight: 1, transform: 'translateY(-1px)' }}>↵</span>
           </button>
         </div>
 

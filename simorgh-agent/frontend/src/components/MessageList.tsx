@@ -432,16 +432,22 @@ export function MessageList({
     }
   }, [isStreaming]);
 
-  // Auto-scroll when messages change
+  // Auto-scroll only when a brand-new message is appended — NOT on
+  // every streaming chunk. Previously the effect re-ran on the full
+  // `messages` array reference (which changes on each SSE chunk) and
+  // kept yanking the viewport downward as text was being typed,
+  // making the reply visibly "crawl upward" while the operator was
+  // mid-read. By depending on length alone and scrolling once per
+  // new message, the content now grows downward in-place and the
+  // user can read at their own pace.
   useEffect(() => {
     const newMessageAdded = messages.length > lastMessageCountRef.current;
     lastMessageCountRef.current = messages.length;
 
-    if (shouldAutoScroll) {
-      // Use instant scroll during streaming, smooth for new messages
-      scrollToBottom(isStreaming);
+    if (newMessageAdded && shouldAutoScroll) {
+      scrollToBottom(false);
     }
-  }, [messages, shouldAutoScroll, scrollToBottom, isStreaming]);
+  }, [messages.length, shouldAutoScroll, scrollToBottom]);
 
   // Also scroll when typing indicator appears
   useEffect(() => {
@@ -480,15 +486,18 @@ export function MessageList({
             className={`flex gap-2 sm:gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {message.role === 'assistant' && (
-              <div className="flex-shrink-0 w-11 h-11 rounded-full bg-white/10 overflow-hidden flex items-center justify-center">
+              // Bare Simorgh mark — no circle, no scale.
+              // Uses favicon.svg (square viewBox) instead of simorgh.svg
+              // — the latter is a 3:2 wordmark-style asset whose bird
+              // sits in the upper portion of its viewBox, so in a
+              // square avatar slot the tail was getting clipped.
+              <div className="flex-shrink-0 w-10 h-10 sm:w-11 sm:h-11 flex items-center justify-center">
                 <img
-                  src={`${import.meta.env.BASE_URL}simorgh.svg`}
+                  src={`${import.meta.env.BASE_URL}favicon.svg`}
                   alt="Simorgh"
-                  className="w-full h-full"
+                  className="w-full h-full object-contain"
                   style={{
-                    objectFit: 'cover',
-                    transform: 'scale(1.15)',
-                    filter: 'brightness(0) invert(1)',
+                    filter: 'drop-shadow(0 0 6px rgba(96,165,250,0.35))',
                   }}
                 />
               </div>
@@ -570,46 +579,12 @@ export function MessageList({
                     {message.content}
                   </p>
                 )}
-                {/* HR/Strategy citation badges — one per source the
-                    grounded LLM was given. The endpoint emits these
-                    in the SSE meta frame; useSessionChat attaches
-                    them to message.metadata.citations. Shown under
-                    the assistant bubble, RTL-friendly. */}
-                {message.role === 'assistant'
-                  && !message.metadata?.refusal
-                  && Array.isArray((message.metadata as any)?.citations)
-                  && (message.metadata as any).citations.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5" dir={textDir}>
-                    {((message.metadata as any).citations as Array<{
-                      n: number;
-                      doc_title?: string;
-                      filename?: string;
-                      section_path?: string;
-                      doc_code?: string;
-                      category?: string;
-                      score?: number;
-                    }>).map((c) => {
-                      const title = c.doc_title || c.filename || 'منبع';
-                      const section = c.section_path && c.section_path !== title
-                        ? ` ❯ ${c.section_path}` : '';
-                      const tone = c.category === 'org_strategy'
-                        ? 'bg-purple-500/10 text-purple-300 border-purple-400/30'
-                        : 'bg-emerald-500/10 text-emerald-300 border-emerald-400/30';
-                      return (
-                        <span
-                          key={`${message.id}-cite-${c.n}`}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] border ${tone}`}
-                          title={c.doc_code ? `${title} (${c.doc_code})` : title}
-                        >
-                          <span className="opacity-70">[{c.n}]</span>
-                          <span className="truncate max-w-[260px]">
-                            {title}{section}
-                          </span>
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* Source citation chips intentionally hidden from the
+                    default view — operators found them noisy in
+                    everyday HR Q&A. The metadata is still attached to
+                    each assistant message (message.metadata.citations)
+                    so we can wire an opt-in "show sources" toggle
+                    later without re-fetching. */}
               </div>
 
               {/* AI Message Controls */}

@@ -1,90 +1,28 @@
-import React from 'react';
-import { Brain, Zap, CircuitBoard, Cpu, Lightbulb, Shield, Settings, TrendingUp } from 'lucide-react';
-
 interface GeneralWelcomeProps {
   onHide: () => void;
   onPromptClick: (prompt: string) => void;
   onPromptDoubleClick?: (prompt: string) => void;
 }
 
+// Persian HR prompts — single-click sends the full prompt as a message.
 const suggestedPrompts = [
-  // Row 1: 5 buttons
-  {
-    icon: Lightbulb,
-    title: 'Short Circuit Analysis',
-    subtitle: 'Fault current calculations',
-    prompt: `Explain the methodology for calculating short circuit currents in electrical networks. What are the key factors that affect fault levels, and how do you ensure equipment ratings are adequate?`,
-    enabled: true,
-    emoji: '💡'
-  },
-  {
-    icon: Brain,
-    title: 'AI in Electrical Design',
-    subtitle: 'AI applications in engineering',
-    prompt: `Explain how artificial intelligence and machine learning can be applied to electrical panel design and optimization. What are the key benefits and current limitations?`,
-    enabled: true,
-    emoji: '🤖'
-  },
-  {
-    icon: Zap,
-    title: 'Transformer Ratings',
-    subtitle: 'Understanding transformer specifications',
-    prompt: `Explain the key parameters for transformer selection including rated voltage, power rating (kVA), impedance, and insulation class. What are the standard ratings for industrial applications?`,
-    enabled: true,
-    emoji: '⚡'
-  },
-  {
-    icon: CircuitBoard,
-    title: 'LV Switchgear Best Practices',
-    subtitle: 'Low voltage panel design',
-    prompt: `What are the best practices for designing low voltage (LV) switchgear panels? Include considerations for busbar sizing, circuit breaker selection, IP rating, and thermal management.`,
-    enabled: true,
-    emoji: '📟'
-  },
-  {
-    icon: TrendingUp,
-    title: 'Energy Efficiency',
-    subtitle: 'Power quality and optimization',
-    prompt: `What are the best practices for improving energy efficiency in industrial electrical systems? Discuss power factor correction, harmonic mitigation, and load optimization strategies.`,
-    enabled: true,
-    emoji: '📊'
-  },
-  // Row 2: 3 buttons
-  {
-    icon: Shield,
-    title: 'Protection Coordination',
-    subtitle: 'Protective device coordination',
-    prompt: `Explain the principles of protection coordination in electrical distribution systems. How do you ensure proper coordination between upstream and downstream protective devices?`,
-    enabled: true,
-    emoji: '🛡️'
-  },
-  {
-    icon: Settings,
-    title: 'IEC vs ANSI Standards',
-    subtitle: 'International electrical standards',
-    prompt: `Compare IEC (International Electrotechnical Commission) and ANSI (American National Standards Institute) standards for electrical equipment. What are the key differences in voltage levels, protection schemes, and equipment ratings?`,
-    enabled: true,
-    emoji: '📐'
-  },
-  {
-    icon: Cpu,
-    title: 'Smart Grid Technology',
-    subtitle: 'Modern distribution systems',
-    prompt: `Describe the key components and benefits of smart grid technology in electrical distribution systems. How do IoT sensors, automation, and AI enhance grid reliability and efficiency?`,
-    enabled: true,
-    emoji: '🌐'
-  }
+  { title: 'انواع مرخصی', prompt: 'انواع مرخصی در شرکت الکتروکویر را توضیح بده.', emoji: '📋' },
+  { title: 'انواع مرخصی استحقاقی', prompt: 'انواع مرخصی استحقاقی و شرایط استفاده از آن را توضیح بده.', emoji: '🗓️' },
+  { title: 'مجوز خروج', prompt: 'فرآیند درخواست و صدور مجوز خروج در ساعات کاری چگونه است؟', emoji: '🚪' },
+  { title: 'مرخصی استعلاجی', prompt: 'شرایط و مدارک لازم برای مرخصی استعلاجی چیست؟', emoji: '🏥' },
+  { title: 'مرخصی حج', prompt: 'شرایط و مدت زمان مرخصی حج برای کارکنان چیست؟', emoji: '🕋' },
+  { title: 'مرخصی بدون حقوق', prompt: 'شرایط و فرآیند درخواست مرخصی بدون حقوق چگونه است؟', emoji: '📝' },
 ];
 
-export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleClick }: GeneralWelcomeProps) {
+export default function GeneralWelcome({ onPromptClick, onPromptDoubleClick }: GeneralWelcomeProps) {
   return (
-    <div className="flex flex-col items-center justify-center px-2 py-1 md:py-2 w-full max-w-full box-border overflow-hidden">
-      {/* Logo - smaller on mobile, centered */}
+    <div className="flex flex-col items-center justify-center px-2 py-1 md:py-2 w-full max-w-full box-border">
+      {/* Logo - tighter on mobile so the prompts fit above the fold. */}
       <div className="flex flex-col items-center justify-center mb-2 md:mb-4 w-full">
         <img
           src={`${import.meta.env.BASE_URL}simorgh.svg`}
           alt="Simorgh Logo"
-          className="w-20 h-20 sm:w-28 sm:h-28 md:w-40 md:h-40 mb-2 drop-shadow-2xl select-none animate-fade-in"
+          className="w-14 h-14 sm:w-20 sm:h-20 md:w-32 md:h-32 mb-1 drop-shadow-2xl select-none animate-fade-in"
           onError={(e) => {
             const target = e.target as HTMLImageElement;
             target.style.display = 'none';
@@ -93,7 +31,7 @@ export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleCl
         <img
           src={`${import.meta.env.BASE_URL}text_simorgh.svg`}
           alt="Simorgh"
-          className="h-12 sm:h-16 md:h-24 lg:h-28 drop-shadow-2xl select-none animate-fade-in-delay"
+          className="h-8 sm:h-12 md:h-20 lg:h-24 drop-shadow-2xl select-none animate-fade-in-delay"
           onError={(e) => {
             const target = e.target as HTMLImageElement;
             target.style.display = 'none';
@@ -105,41 +43,34 @@ export default function GeneralWelcome({ onHide, onPromptClick, onPromptDoubleCl
         />
       </div>
 
-      {/* Welcome text - smaller on mobile */}
-      <p className="text-sm sm:text-base md:text-lg text-gray-400 text-center max-w-md mb-2 md:mb-4 font-light px-2 w-full">
-        Ask me anything about electrical engineering, AI,
-        <br />or technology
+      {/* Welcome text - Persian, smaller on mobile */}
+      <p
+        className="text-sm sm:text-base md:text-lg text-gray-400 text-center max-w-md mb-3 md:mb-5 font-light px-2 w-full"
+        dir="rtl"
+      >
+        برای شروع روی یکی از موضوعات زیر کلیک کنید
       </p>
 
-      {/* Suggested prompts - Single row slider */}
-      <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden prompt-slider box-border">
-        <div className="inline-flex gap-1.5 sm:gap-2 px-2 pb-2 pr-8">
-          {suggestedPrompts.map((item, i) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={i}
-                onClick={() => item.enabled && onPromptClick(item.prompt)}
-                onDoubleClick={() => item.enabled && onPromptDoubleClick?.(item.prompt)}
-                disabled={!item.enabled}
-                className={`group rounded-xl sm:rounded-2xl border transition-all relative overflow-hidden px-2.5 py-1.5 sm:px-4 sm:py-2.5 flex items-center gap-1.5 sm:gap-2.5 flex-shrink-0 ${
-                  item.enabled
-                    ? 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/20 cursor-pointer hover:scale-105 hover:shadow-xl hover:shadow-blue-500/20'
-                    : 'bg-white/[0.02] border-white/5 cursor-not-allowed opacity-40'
-                }`}
-                style={{
-                  animation: `fadeInUp 0.4s ease-out ${0.6 + i * 0.1}s backwards`
-                }}
-              >
-                <div className={`text-base sm:text-xl transition-transform ${item.enabled ? 'group-hover:scale-110' : ''}`}>
-                  {item.emoji}
-                </div>
-                <div className="text-[10px] sm:text-xs font-medium text-white lowercase whitespace-nowrap">
-                  {item.title}
-                </div>
-              </button>
-            );
-          })}
+      {/* Suggested prompts — wrap into rows, single click sends. */}
+      <div className="w-full max-w-2xl mx-auto px-2" dir="rtl">
+        <div className="flex flex-wrap justify-center gap-2 sm:gap-2.5 pb-2">
+          {suggestedPrompts.map((item, i) => (
+            <button
+              key={i}
+              // Single click sends the prompt straight to the chat — falls
+              // back to insert-only when the parent didn't wire a sender.
+              onClick={() => (onPromptDoubleClick ?? onPromptClick)(item.prompt)}
+              className="group rounded-full border transition-all px-3 py-1.5 sm:px-4 sm:py-2 flex items-center gap-2 flex-shrink-0
+                         bg-white/5 hover:bg-white/10 border-white/10 hover:border-blue-400/40
+                         cursor-pointer hover:shadow-lg hover:shadow-blue-500/10"
+              style={{ animation: `fadeInUp 0.4s ease-out ${0.4 + i * 0.08}s backwards` }}
+            >
+              <span className="text-base sm:text-lg">{item.emoji}</span>
+              <span className="text-xs sm:text-sm font-medium text-white whitespace-nowrap">
+                {item.title}
+              </span>
+            </button>
+          ))}
         </div>
       </div>
 

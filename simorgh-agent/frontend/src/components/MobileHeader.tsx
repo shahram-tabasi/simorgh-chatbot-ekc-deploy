@@ -1,35 +1,22 @@
 // src/components/MobileHeader.tsx
 import React from 'react';
-import { Menu, Settings, ChevronDown, History, Search, MessageSquare, Lock } from 'lucide-react';
+import { Menu, Settings, History, Search, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface MobileHeaderProps {
   onMenuClick: () => void;
   onHistoryClick: () => void;
   onSettingsClick: () => void;
-  currentModel: 'online' | 'offline';
+  // Legacy props kept so existing call sites still compile. The model
+  // selector chip was removed from the header (was misleading — general
+  // chats hard-pin the LLM server-side); these are no longer rendered.
+  currentModel?: 'online' | 'offline';
   userTier?: string;
   offlineLocked?: boolean;
 }
 
-export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsClick, currentModel, userTier, offlineLocked }: MobileHeaderProps) {
-  const [showModelSelector, setShowModelSelector] = React.useState(false);
+export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsClick }: MobileHeaderProps) {
   const [showSettingsMenu, setShowSettingsMenu] = React.useState(false);
-  const [selectedModel, setSelectedModel] = React.useState<'online' | 'offline'>(currentModel);
-
-  React.useEffect(() => {
-    setSelectedModel(currentModel);
-  }, [currentModel]);
-
-  const handleModelChange = (mode: 'online' | 'offline') => {
-    if (mode === 'offline' && offlineLocked) return; // Modern users can't use offline
-    setSelectedModel(mode);
-    localStorage.setItem('llm_mode', mode);
-    window.dispatchEvent(new CustomEvent('llm-mode-changed', { detail: mode }));
-    setShowModelSelector(false);
-  };
-
-  const modelDisplayName = selectedModel === 'online' ? 'Sonnet 4.5' : 'Local AI';
 
   return (
     <>
@@ -54,14 +41,12 @@ export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsCl
             </button>
           </div>
 
-          {/* Center: Model Selector */}
-          <button
-            onClick={() => setShowModelSelector(true)}
-            className="flex items-center gap-2 px-3 py-1.5 hover:bg-white/10 rounded-lg transition-colors"
-          >
-            <span className="text-white font-medium text-sm">{modelDisplayName}</span>
-            <ChevronDown className="w-4 h-4 text-gray-400" />
-          </button>
+          {/* Center: Simorgh wordmark — replaces the old model-selector
+              dropdown which was confusing operators (the actual LLM is
+              pinned server-side for general chats). Decorative only. */}
+          <span className="text-white font-medium text-sm tracking-wide select-none">
+            Simorgh AI
+          </span>
 
           {/* Right: Settings with Dropdown */}
           <div className="relative">
@@ -139,103 +124,6 @@ export default function MobileHeader({ onMenuClick, onHistoryClick, onSettingsCl
         </div>
       </div>
 
-      {/* Model Selector Bottom Sheet */}
-      <AnimatePresence>
-        {showModelSelector && (
-          <>
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowModelSelector(false)}
-              className="md:hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-40"
-            />
-
-            {/* Bottom Sheet */}
-            <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-              className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-black/95 backdrop-blur-xl rounded-t-3xl border-t border-white/20"
-              style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}
-            >
-              <div className="p-6 space-y-4">
-                {/* Handle bar */}
-                <div className="flex justify-center">
-                  <div className="w-12 h-1 bg-white/30 rounded-full" />
-                </div>
-
-                <h3 className="text-white text-lg font-semibold">Select AI Model</h3>
-
-                {/* Online AI Option */}
-                <button
-                  onClick={() => handleModelChange('online')}
-                  className={`w-full p-4 rounded-xl border-2 flex items-start gap-3 transition-all ${
-                    selectedModel === 'online'
-                      ? 'border-blue-500 bg-blue-500/10'
-                      : 'border-white/10 hover:border-white/30'
-                  }`}
-                >
-                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                    <div className="w-5 h-5 rounded-full bg-blue-500" />
-                  </div>
-                  <div className="text-left flex-1">
-                    <div className="text-white font-semibold">Sonnet 4.5</div>
-                    <div className="text-xs text-gray-400 mt-0.5">Cloud • GPT-4 • Grok</div>
-                  </div>
-                  {selectedModel === 'online' && (
-                    <div className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
-                      <div className="w-2 h-2 rounded-full bg-white" />
-                    </div>
-                  )}
-                </button>
-
-                {/* Local AI Option */}
-                <button
-                  onClick={() => handleModelChange('offline')}
-                  disabled={offlineLocked}
-                  className={`w-full p-4 rounded-xl border-2 flex items-start gap-3 transition-all ${
-                    offlineLocked
-                      ? 'border-white/5 opacity-50 cursor-not-allowed'
-                      : selectedModel === 'offline'
-                        ? 'border-purple-500 bg-purple-500/10'
-                        : 'border-white/10 hover:border-white/30'
-                  }`}
-                >
-                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-                    {offlineLocked ? (
-                      <Lock className="w-5 h-5 text-gray-500" />
-                    ) : (
-                      <div className="w-5 h-5 rounded-full bg-purple-500" />
-                    )}
-                  </div>
-                  <div className="text-left flex-1">
-                    <div className="text-white font-semibold">Local AI</div>
-                    <div className="text-xs text-gray-400 mt-0.5">
-                      {offlineLocked ? 'Available for legacy network users' : 'On-premise • 192.168.1.61/62 • Private'}
-                    </div>
-                  </div>
-                  {selectedModel === 'offline' && !offlineLocked && (
-                    <div className="flex-shrink-0 w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center">
-                      <div className="w-2 h-2 rounded-full bg-white" />
-                    </div>
-                  )}
-                </button>
-
-                {/* Cancel button */}
-                <button
-                  onClick={() => setShowModelSelector(false)}
-                  className="w-full py-3 text-gray-400 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
     </>
   );
 }

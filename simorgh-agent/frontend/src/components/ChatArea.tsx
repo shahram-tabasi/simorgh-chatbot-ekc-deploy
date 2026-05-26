@@ -205,16 +205,15 @@ export function ChatArea({
     }
   }, [messages.length]);
 
-  // Welcome screen is shown ONLY when there is NO chat selected at
-  // all. The previous design also showed it briefly during chat
-  // switches (while history was loading) by way of an
-  // isAwaitingHistory window with a 1.5s timeout — but on slow
-  // networks the timeout expired before the chat detail GET returned,
-  // making the welcome screen blast over the user's actual chat
-  // history. The new rule: if there's an activeChatId, there's a
-  // chat — render the message list (possibly empty briefly) with
-  // the chat input at the bottom. Never flash welcome.
-  const isIdle = !activeChatId;
+  // Welcome screen rules:
+  //  - No active chat → show welcome (entry state for legacy/edge cases).
+  //  - General chat with zero messages → also show welcome so the
+  //    operator gets the Persian HR prompts on the auto-created chat.
+  //  - Project chat with zero messages → MessageList stays (project
+  //    chats already render the project-specific WelcomeScreen above).
+  const isIdle =
+    !activeChatId ||
+    (!isProjectChat && messages.length === 0 && !isTyping);
 
   // Live diff stats for the chat-input header's +N -M chips.
   const diffStats = useProjectDiffStats(headerContext?.projectId ?? null);
@@ -298,10 +297,18 @@ export function ChatArea({
 
   return (
     <div className="flex-1 flex flex-col h-full relative overflow-hidden w-full max-w-full min-w-0">
-      {/* IDLE MODE: Welcome content with ChatInput integrated - centered vertically */}
+      {/* IDLE MODE: Welcome content with ChatInput integrated.
+          Scroll-then-center pattern:
+            outer = single scroll container (overflow-y-auto)
+            inner = min-h-full + flex justify-center
+          This centers content when it fits AND lets the page scroll
+          when it doesn't — fixes the Android Chrome case where
+          `flex justify-center + overflow-y-auto` on the same node
+          pushed the logo above scroll-top and trapped the prompts
+          off-screen, making the page look frozen. */}
       {isIdle && (
-        <div className="flex-1 flex flex-col justify-center items-center overflow-y-auto overflow-x-hidden px-2 sm:px-4 md:px-8 lg:px-20 w-full min-w-0">
-          <div className="w-full max-w-3xl mx-auto flex flex-col items-center overflow-hidden min-w-0">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden w-full min-w-0">
+          <div className="min-h-full w-full max-w-3xl mx-auto flex flex-col items-center justify-center px-2 sm:px-4 md:px-8 lg:px-20 py-4 min-w-0">
             {isProjectChat ? (
               <WelcomeScreen
                 onHide={() => {}}
@@ -316,7 +323,7 @@ export function ChatArea({
               />
             )}
             {/* ChatInput - part of welcome content, centered */}
-            <div className="w-full px-2 sm:px-4 mt-2">
+            <div className="w-full px-2 sm:px-4 mt-3">
               <ChatInput
                 onSend={handleSend}
                 onCancel={onCancelGeneration}

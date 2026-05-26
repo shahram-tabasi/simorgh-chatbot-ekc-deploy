@@ -83,7 +83,9 @@ export default function Signup() {
   };
 
   return (
-    <div className="min-h-screen flex">
+    // Stack on mobile so the long signup form can grow + scroll
+    // naturally; side-by-side on lg+ (matches ModernLogin layout).
+    <div className="min-h-screen flex flex-col lg:flex-row">
       {/* Left Side - Branding (same as login) */}
       <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-700 relative overflow-hidden">
         <div className="absolute inset-0">
@@ -154,13 +156,14 @@ export default function Signup() {
         </div>
       </div>
 
-      {/* Right Side - Signup Form */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center p-6 sm:p-12 bg-white dark:bg-gray-900 overflow-y-auto">
+      {/* Right Side - Signup Form. Top-aligned on mobile so the form
+          scrolls naturally with the on-screen keyboard; centered on lg+. */}
+      <div className="w-full lg:w-1/2 flex flex-col items-stretch justify-start lg:items-center lg:justify-center px-6 py-8 sm:p-12 bg-white dark:bg-gray-900 overflow-y-auto">
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5 }}
-          className="w-full max-w-md"
+          className="w-full max-w-md mx-auto"
         >
           {/* Mobile Logo */}
           <div className="lg:hidden text-center mb-6">
