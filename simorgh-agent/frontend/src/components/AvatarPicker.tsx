@@ -128,13 +128,13 @@ export default function AvatarPicker({
       setUploadError('Please pick an image file.');
       return;
     }
-    if (file.size > 2 * 1024 * 1024) {
-      setUploadError('Image must be 2 MB or less.');
+    // Cap at 500 KB so the base64-encoded data URL (~×1.34) stays
+    // under the backend's avatar_url max_length (800 KB) when we
+    // PATCH it for cross-device persistence (issue #1, May 2026).
+    if (file.size > 500 * 1024) {
+      setUploadError('Image must be 500 KB or less.');
       return;
     }
-    // Read as data URL so the avatar persists offline in localStorage
-    // (no backend round-trip, no remote dependency). Big enough for
-    // a 200×200 profile picture; bigger uploads get rejected above.
     const reader = new FileReader();
     reader.onload = () => {
       const url = String(reader.result || '');
@@ -144,6 +144,33 @@ export default function AvatarPicker({
     reader.onerror = () => setUploadError('Could not read that file.');
     reader.readAsDataURL(file);
     if (fileRef.current) fileRef.current.value = '';
+  };
+
+  // Persist the chosen avatar to the backend (auth-service) so it
+  // syncs across devices. localStorage is still written first so the
+  // UI is snappy and we have an offline fallback; the PATCH is
+  // best-effort — a failed network call doesn't undo the local save.
+  // Stripping the `preset:<id>` form down to the rendered data URL
+  // avoids leaking our internal marker into the users table.
+  const persistAvatarRemote = async (value: string) => {
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) return;
+      const remoteValue =
+        value.startsWith('preset:')
+          ? presetAvatarUrl(value.slice('preset:'.length), userInitial)
+          : value;
+      await fetch('/api/auth/v2/me', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ avatar_url: remoteValue }),
+      });
+    } catch {
+      // Best-effort — silent on failure. Local save already happened.
+    }
   };
 
   const handleSave = () => {
@@ -163,6 +190,8 @@ export default function AvatarPicker({
       onSaved?.(broadcast);
       window.dispatchEvent(new CustomEvent('simorgh-avatar-changed', { detail: broadcast }));
     } catch {}
+    // Fire-and-forget — UI closes regardless of remote save outcome.
+    void persistAvatarRemote(value);
     onClose();
   };
 
@@ -172,6 +201,8 @@ export default function AvatarPicker({
     setUploadedData(null);
     onSaved?.('');
     window.dispatchEvent(new CustomEvent('simorgh-avatar-changed', { detail: '' }));
+    // Also clear remote — empty string is the unset signal.
+    void persistAvatarRemote('');
     onClose();
   };
 

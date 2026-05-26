@@ -112,7 +112,15 @@ class UpdateProfileRequest(BaseModel):
     first_name: Optional[str] = Field(None, max_length=100)
     last_name: Optional[str] = Field(None, max_length=100)
     display_name: Optional[str] = Field(None, max_length=200)
-    avatar_url: Optional[str] = None
+    # avatar_url accepts either:
+    #   • an external URL (e.g. Google OAuth's `picture` URL), OR
+    #   • a `data:image/...;base64,...` data URL for cross-device
+    #     persistence of a user-chosen / uploaded avatar (issue #1,
+    #     May 2026).
+    # Cap at 800 KB-encoded so a 500 KB image (the frontend file-
+    # upload limit, base64 ≈ ×1.34 + small slack) fits but a
+    # multi-MB upload can't bloat the users row.
+    avatar_url: Optional[str] = Field(None, max_length=800_000)
 
 
 class UpdatePreferencesRequest(BaseModel):

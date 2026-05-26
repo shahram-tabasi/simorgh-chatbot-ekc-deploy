@@ -96,6 +96,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setUser(userData);
     localStorage.setItem('simorgh_token', accessToken);
     localStorage.setItem('simorgh_user', JSON.stringify(userData));
+    // Cross-device avatar sync (issue #1, May 2026): if the user has
+    // an avatar_url stored server-side (set on a previous device via
+    // PATCH /api/auth/v2/me) and the local `simorgh_avatar_<id>` key
+    // is empty, seed it from the server value. This way a user
+    // logging in on a fresh device immediately sees their chosen
+    // avatar instead of the default preset. We do NOT overwrite a
+    // pre-existing local choice — that would clobber an unsaved
+    // selection if the page just hasn't synced yet.
+    try {
+      const userId = (userData as any)?.id || (userData as any)?.EMPUSERNAME;
+      const serverAvatar = (userData as any)?.avatar_url;
+      if (userId && serverAvatar) {
+        const localKey = `simorgh_avatar_${userId}`;
+        if (!localStorage.getItem(localKey)) {
+          localStorage.setItem(localKey, serverAvatar);
+          // Tell mounted components (MessageList, UserProfile) to
+          // pick up the new value without a full reload.
+          window.dispatchEvent(
+            new CustomEvent('simorgh-avatar-changed', { detail: serverAvatar })
+          );
+        }
+      }
+    } catch {
+      /* localStorage failure is non-fatal — UI just falls back to default avatar */
+    }
   }, []);
 
   // Clear auth
