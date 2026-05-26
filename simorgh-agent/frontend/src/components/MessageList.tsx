@@ -149,7 +149,11 @@ export function MessageList({
   onEditMessage,
   chatId
 }: MessageListProps) {
-  const { pinned, togglePin, isPinned, clearPin } = usePinnedMessages(chatId);
+  // clearPin is unused now that the dash column is read-only —
+  // unpinning happens via the per-message pin button via
+  // togglePin. Kept the hook's return signature unchanged for
+  // future callers; just doesn't bind clearPin here.
+  const { pinned, togglePin, isPinned } = usePinnedMessages(chatId);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
@@ -542,7 +546,6 @@ export function MessageList({
       <PinnedMessagesPanel
         pinned={pinned}
         onJump={scrollToPinnedMessage}
-        onUnpin={clearPin}
       />
     <div
       ref={containerRef}

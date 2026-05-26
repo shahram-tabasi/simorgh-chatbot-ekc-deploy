@@ -1,29 +1,33 @@
 // src/components/PinnedMessages.tsx
 //
-// Issue #3 (May 2026): per-chat pinned-message bookmarks. The
-// operator wanted a small "pin" button per AI reply and a handle
-// stack to jump back to those replies later — useful for long
-// conversations where the user keeps referring to an earlier
-// answer.
+// Issue #3 (May 2026): per-chat pinned-message bookmarks.
 //
 // Storage is localStorage scoped per chat
 // (`simorgh_pinned_msgs_<chatId>`). Cross-device persistence would
 // need a backend table; not in scope for now. Pin state survives
 // chat-switch within the same browser.
 //
-// This module exports:
+// UI (operator's third pass, May 2026 — replaces the original
+// "Pinned (N) ⌄" pill+dropdown):
+//   The panel renders as a SILENT VERTICAL COLUMN OF DASHES at the
+//   top-left of the chat — one stretched-dash per pin, no text, no
+//   count. Click a dash to jump to that message. The last-clicked
+//   dash stays bright violet (the "active" pin); the rest fade to
+//   gray. To unpin, use the per-message pin button — this column
+//   is read-only navigation.
+//
+// Exports:
 //   • usePinnedMessages(chatId) — hook with pinned[], togglePin,
 //     isPinned, clearPin.
-//   • <PinnedMessagesPanel> — floating "Pinned (N)" chip that
-//     expands into a list of tab-style handles; clicking a handle
-//     scrolls the chat to that message.
+//   • <PinnedMessagesPanel> — the dash column.
+//   • scrollToPinnedMessage(id) — smooth-scroll + flash highlight
+//     helper.
 //
 // The chat container is expected to render each message wrapper
 // with `data-message-id={message.id}` so the smooth-scroll path
 // can find it via querySelector.
 
 import { useCallback, useEffect, useState } from 'react';
-import { XIcon, ChevronDownIcon } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 export interface PinnedMessage {
@@ -118,128 +122,82 @@ export function usePinnedMessages(chatId: string | null | undefined) {
 interface PanelProps {
   pinned: PinnedMessage[];
   onJump: (messageId: string) => void;
-  onUnpin: (messageId: string) => void;
+  // (onUnpin removed — the dash column is read-only navigation
+  //  now; unpin happens via the per-message pin button. See the
+  //  May-2026 third-pass redesign note at the top of this file.)
 }
 
-export function PinnedMessagesPanel({ pinned, onJump, onUnpin }: PanelProps) {
+export function PinnedMessagesPanel({ pinned, onJump }: PanelProps) {
   const { t } = useLanguage();
-  const [open, setOpen] = useState(false);
+  // The "active" pin = the last dash the user clicked. It stays
+  // bright until they click a different dash; the rest fade to
+  // gray. We DO NOT persist this across reloads — being a pure UI
+  // state ("where am I right now"), it's cheap to reset on chat
+  // switch alongside the pinned array.
+  const [activeId, setActiveId] = useState<string | null>(null);
 
-  if (pinned.length === 0) return null;
-
-  // The chip glyph is a "stretched dash" (a single elongated
-  // horizontal line) matching the operator's reference: visually
-  // anchors a pinned point in the conversation without competing
-  // with the message content. We render a small SVG rule rather
-  // than the unicode "—" so its stroke weight stays consistent
-  // across browsers/fonts and aligns optically with the surrounding
-  // glyphs.
-  const StretchedDash = (
-    <svg
-      aria-hidden
-      viewBox="0 0 12 12"
-      className="w-3 h-3 flex-shrink-0"
-    >
-      <line
-        x1="1.5"
-        y1="6"
-        x2="10.5"
-        y2="6"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
+  if (pinned.length === 0) {
+    if (activeId !== null) setActiveId(null);
+    return null;
+  }
 
   return (
-    // Anchored top-LEFT (was top-right). Pushed flush against the
-    // chat-area's left edge with `-left-1` plus a small top-1 nudge
-    // because the first AI reply's Simorgh-bird avatar lives at
-    // roughly (left: 8px, top: 24px) and earlier `top-3 left-3`
-    // sat *directly* over it (operator screenshot, May 2026). Going
-    // further left + slightly higher tucks the chip into the corner
-    // where no message chrome ever renders.
-    <div className="absolute top-1 -left-1 z-20 select-none">
-      <button
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full
-                    border text-[11px] font-medium transition shadow-sm
-                    ${
-                      open
-                        ? 'bg-violet-500/15 border-violet-400/40 text-violet-100'
-                        : 'bg-black/40 border-white/15 text-gray-200 hover:bg-black/60 hover:border-white/25'
-                    }`}
-        aria-expanded={open}
-      >
-        {StretchedDash}
-        <span>{t('pinned') || 'Pinned'}</span>
-        <span className="text-gray-400">({pinned.length})</span>
-        <ChevronDownIcon
-          className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-
-      {open && (
-        <div className="mt-2 w-72 max-h-[420px] overflow-y-auto rounded-lg
-                        border border-white/10 bg-slate-900/95 backdrop-blur
-                        shadow-2xl p-1.5 space-y-1">
-          {pinned.length === 0 && (
-            <div className="px-2 py-3 text-[11px] text-gray-500 text-center">
-              {t('noPins') || 'No pinned messages yet.'}
-            </div>
-          )}
-          {pinned.map((p) => (
-            <div
-              key={p.messageId}
-              role="button"
-              tabIndex={0}
-              onClick={() => {
-                onJump(p.messageId);
-                setOpen(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onJump(p.messageId);
-                  setOpen(false);
-                }
-              }}
-              className="group flex items-start gap-2 px-2 py-2 rounded-md
-                         border border-white/[0.06] hover:border-violet-400/30
-                         hover:bg-white/[0.04] transition cursor-pointer"
+    // Vertical column of stretched-dash buttons, one per pin.
+    // Anchored top-left of the chat area, tucked flush against the
+    // edge so it doesn't overlap the first AI reply's Simorgh-bird
+    // avatar. No outer chip / no count / no text — operator wanted
+    // the dashes themselves to be the entire UI (third pass, May
+    // 2026). Unpinning happens via the per-message pin button;
+    // this column is read-only navigation.
+    <div
+      className="absolute top-2 -left-1 z-20 select-none flex flex-col gap-1.5
+                 px-1.5 py-1 rounded-md bg-black/30 backdrop-blur-sm
+                 border border-white/[0.04]"
+      aria-label={t('pinned') || 'Pinned'}
+    >
+      {pinned.map((p) => {
+        const isActive = activeId === p.messageId;
+        return (
+          <button
+            key={p.messageId}
+            type="button"
+            onClick={() => {
+              setActiveId(p.messageId);
+              onJump(p.messageId);
+            }}
+            title={p.snippet || ''}
+            aria-current={isActive ? 'true' : undefined}
+            className={`flex items-center justify-center
+                        w-5 h-3 rounded-sm transition-colors
+                        ${
+                          isActive
+                            ? 'text-violet-300'
+                            : 'text-gray-500 hover:text-gray-200'
+                        }`}
+          >
+            {/* Stretched-dash glyph. SVG rather than unicode "—"
+                so the stroke weight stays consistent across
+                fonts/browsers. Thicker stroke for the active row
+                so the "current" pin reads clearly even at
+                12-pixel scale. */}
+            <svg
+              aria-hidden
+              viewBox="0 0 16 4"
+              className="w-4 h-1"
             >
-              {/* Stretched-dash left mark — matches the chip's glyph
-                  and the operator's reference image. Same colour as
-                  the chip when the row is hovered so the eye reads
-                  it as the same family. */}
-              <span className="mt-1.5 flex-shrink-0 text-violet-400/70 group-hover:text-violet-300 transition-colors">
-                {StretchedDash}
-              </span>
-              <div className="flex-1 min-w-0">
-                <p className="text-[11.5px] text-gray-200 leading-snug line-clamp-2">
-                  {p.snippet || '…'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUnpin(p.messageId);
-                }}
-                className="flex-shrink-0 p-1 rounded text-gray-500
-                           hover:text-red-300 hover:bg-red-500/10
-                           opacity-0 group-hover:opacity-100 transition"
-                aria-label={t('unpin') || 'Unpin'}
-                title={t('unpin') || 'Unpin'}
-              >
-                <XIcon className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+              <line
+                x1="1"
+                y1="2"
+                x2="15"
+                y2="2"
+                stroke="currentColor"
+                strokeWidth={isActive ? 2 : 1.5}
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        );
+      })}
     </div>
   );
 }
