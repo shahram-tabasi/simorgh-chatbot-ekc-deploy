@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeBackground } from './components/ThemeBackground';
 import { Sidebar } from './components/Sidebar';
 import { ProjectTree } from './components/ProjectTree';
@@ -16,6 +16,7 @@ import NotificationToast, { ToastNotification } from './components/NotificationT
 import SpecReview from './pages/SpecReview';
 import AdminPanel from './pages/AdminPanel';
 import UpgradePage from './pages/UpgradePage';
+import { QuotaRing } from './components/QuotaRing';
 // ProjectAgentDashboard removed - all agent functionality is now in the main chat display
 
 // Auth components (modern + auto-routing)
@@ -439,27 +440,18 @@ function MainChat() {
             // Legacy users get project-only chat: hide the "new general chat" entry point.
             onNewGeneralChat={user && isLegacyUser(user) ? undefined : handleCreateGeneralChat}
           >
-            {/* Quota Badge for modern users */}
+            {/* Quota — clickable ring badge that routes to /upgrade.
+                Admin / Max tiers get an unlimited tile (no ring fill,
+                no upgrade link). Same colour stages as the linear bar
+                it replaced. */}
             {isModernTier && (
-              <div className="px-3 py-2 mx-2 mb-2 rounded-lg bg-white/5 border border-white/10">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-400 capitalize">{quota.user_role} tier</span>
-                  <span className={`font-medium ${quotaExceeded ? 'text-red-400' : quotaWarning ? 'text-amber-400' : 'text-emerald-400'}`}>
-                    {quota.questions_remaining}/{quota.questions_limit}
-                  </span>
-                </div>
-                <div className="mt-1 w-full bg-gray-700 rounded-full h-1">
-                  <div
-                    className={`h-1 rounded-full transition-all ${quotaExceeded ? 'bg-red-500' : quotaWarning ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                    style={{ width: `${Math.min(100, (quota.questions_used_today / Math.max(1, quota.questions_limit)) * 100)}%` }}
-                  />
-                </div>
-                {quota.user_role !== 'admin' && quota.user_role !== 'max' && (
-                  <Link to="/upgrade" className="block mt-1.5 text-center text-xs text-blue-400 hover:text-blue-300 transition">
-                    Upgrade plan
-                  </Link>
-                )}
-              </div>
+              <QuotaRing
+                used={quota.questions_used_today}
+                total={quota.questions_limit}
+                remaining={quota.questions_remaining}
+                tier={quota.user_role}
+                unlimited={quota.user_role === 'admin' || quota.user_role === 'max'}
+              />
             )}
             <ProjectTree
               projects={displayProjects}

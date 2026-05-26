@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
-  UserIcon,
   SparklesIcon,
   FileIcon,
   ThumbsUpIcon,
@@ -19,6 +18,8 @@ import {
 import { Message } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { showError } from '../utils/alerts';
+import { useAuth, isModernUser, isLegacyUser } from '../context/AuthContext';
+import { loadStoredAvatar, presetAvatarUrl } from './AvatarPicker';
 import {
   ProcessingActivity,
   generateProcessingSteps,
@@ -143,6 +144,35 @@ export function MessageList({
   const [speakingMessageId, setSpeakingMessageId] = React.useState<string | null>(null);
   const [speechLoading, setSpeechLoading] = React.useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Resolve the current user's chosen avatar (preset SVG or uploaded
+  // image) from localStorage so the user bubble shows their picture
+  // instead of the generic person glyph. Re-derives on the same
+  // `simorgh-avatar-changed` CustomEvent the SettingsPanel listens to.
+  const { user } = useAuth();
+  const avatarUserId = user
+    ? isModernUser(user)
+      ? (user.id as string)
+      : isLegacyUser(user)
+        ? user.EMPUSERNAME
+        : null
+    : null;
+  const avatarInitial = (
+    (user && isModernUser(user) && (user.display_name || user.first_name || user.email)) ||
+    (user && isLegacyUser(user) && user.EMPUSERNAME) ||
+    'U'
+  ).trim().charAt(0).toUpperCase();
+  const [userAvatarUrl, setUserAvatarUrl] = React.useState<string>(() =>
+    loadStoredAvatar(avatarUserId, avatarInitial) || presetAvatarUrl('indigo', avatarInitial)
+  );
+  React.useEffect(() => {
+    setUserAvatarUrl(loadStoredAvatar(avatarUserId, avatarInitial) || presetAvatarUrl('indigo', avatarInitial));
+    const onChange = () => {
+      setUserAvatarUrl(loadStoredAvatar(avatarUserId, avatarInitial) || presetAvatarUrl('indigo', avatarInitial));
+    };
+    window.addEventListener('simorgh-avatar-changed', onChange);
+    return () => window.removeEventListener('simorgh-avatar-changed', onChange);
+  }, [avatarUserId, avatarInitial]);
   const scrollAnimationRef = useRef<number | null>(null);
   const lastMessageCountRef = useRef(messages.length);
 
@@ -777,8 +807,16 @@ export function MessageList({
             </div>
 
             {message.role === 'user' && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
-                <UserIcon className="w-4 h-4 text-white" />
+              // Use the operator's chosen avatar (preset SVG or uploaded
+              // image) instead of the generic person glyph — same source
+              // the SettingsPanel renders, kept in sync via the
+              // `simorgh-avatar-changed` event.
+              <div className="flex-shrink-0 w-8 h-8 rounded-full overflow-hidden bg-white/10 flex items-center justify-center">
+                <img
+                  src={userAvatarUrl}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
               </div>
             )}
           </motion.div>

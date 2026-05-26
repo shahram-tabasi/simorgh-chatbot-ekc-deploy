@@ -77,19 +77,22 @@ export function Sidebar({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: side === 'right' ? -20 : 20 }}
               transition={{ duration: 0.2 }}
-              className={`${isMobile ? 'w-full' : 'w-80'} h-full overflow-y-auto`}
+              // The sidebar shell no longer scrolls — the contents
+              // (top brand/quota/new-project/filters + General row)
+              // stay pinned and only the inner chat list scrolls.
+              // Previously this was `h-full overflow-y-auto` which
+              // let everything scroll together.
+              className={`${isMobile ? 'w-full' : 'w-80'} h-full flex flex-col overflow-hidden`}
             >
-              {/* Header with Logo and toggle button */}
+              {/* Brand row — fixed at the top, never scrolls. */}
               <div
-                className="flex items-center justify-between px-4 pt-3 pb-2"
+                className="flex-shrink-0 flex items-center justify-between px-4 pt-3 pb-2"
               >
-                {/* Brand mark — bird + "Simorgh Code" wordmark.
-                    Typography deliberately matches Claude Code's
-                    layout (operator reference): heavy weight + size
-                    on the product noun ("Simorgh"), lighter +
-                    smaller on the qualifier ("Code"), tight tracking.
-                    Real DOM text (not inline SVG) so it inherits the
-                    app's font stack and looks crisp on hi-dpi. */}
+                {/* "Simorgh AI" wordmark. Renamed from "Simorgh Code"
+                    per operator request. Switched the inline
+                    leading-none (which was clipping descenders like
+                    the 'g' in Simorgh) to leading-tight + a small
+                    pb so the gradient text always renders complete. */}
                 {side === 'right' && !isMobile && (
                   <div className="flex items-center gap-2.5">
                     <img
@@ -97,18 +100,18 @@ export function Sidebar({
                       alt=""
                       className="w-12 h-12 flex-shrink-0"
                     />
-                    <div className="flex items-baseline gap-1.5 leading-none">
+                    <div className="flex items-baseline gap-1.5 leading-tight pb-1">
                       <span
                         className="text-[28px] font-bold tracking-tight bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent"
-                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}
+                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif", lineHeight: 1.15 }}
                       >
                         Simorgh
                       </span>
                       <span
                         className="text-[22px] font-normal text-slate-200/90 tracking-tight"
-                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}
+                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif", lineHeight: 1.15 }}
                       >
-                        Code
+                        AI
                       </span>
                     </div>
                   </div>
@@ -127,8 +130,11 @@ export function Sidebar({
                 </button>
               </div>
 
-              {/* محتوای sidebar */}
-              <div className="h-full">{children}</div>
+              {/* Sidebar body — flex column that lets the inner
+                  ProjectTree decide which subsections scroll. The
+                  brand row above is flex-shrink-0; everything else
+                  inherits a flex-1 + min-h-0 to honour child scroll. */}
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">{children}</div>
             </motion.div>
           )}
         </AnimatePresence>

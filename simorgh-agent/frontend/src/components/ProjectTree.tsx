@@ -259,32 +259,40 @@ export function ProjectTree({
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3 space-y-4">
-        {/* General Chats — hidden entirely for legacy users (onCreateGeneralChat undefined). */}
-        {onCreateGeneralChat && (
-        <div>
-          <div className="flex items-center px-2 mb-1">
+      {/* Pinned GENERAL row — sits outside the scroll container so the
+          header (and the + button next to it) stays visible while the
+          chats below scroll. Visually distinct as a button-like tile
+          (filled background, coloured Sparkles, hover lift). */}
+      {onCreateGeneralChat && (
+        <div className="flex-shrink-0 px-3 pt-2 pb-1.5">
+          <div className="flex items-center gap-1 px-2 py-2 rounded-lg bg-gradient-to-r from-purple-500/[0.12] to-indigo-500/[0.08] border border-purple-400/20 hover:border-purple-400/40 transition">
             <button
               onClick={onToggleGeneralChats}
-              className="flex items-center gap-1.5 flex-1 text-left text-[13px] font-semibold text-gray-400 uppercase tracking-wider hover:text-gray-200 transition"
+              className="flex items-center gap-1.5 flex-1 text-left text-[13px] font-bold text-purple-100 uppercase tracking-wider hover:text-white transition"
             >
               {showGeneralChats ? (
-                <ChevronDown className="w-3.5 h-3.5" />
+                <ChevronDown className="w-4 h-4 text-purple-300" />
               ) : (
-                <ChevronRight className="w-3.5 h-3.5" />
+                <ChevronRight className="w-4 h-4 text-purple-300" />
               )}
-              <Sparkles className="w-3.5 h-3.5" />
+              <Sparkles className="w-4 h-4 text-fuchsia-400" />
               <span>{t('general')}</span>
             </button>
             <button
               onClick={onCreateGeneralChat}
-              className="p-1.5 hover:bg-white/10 rounded text-gray-400 hover:text-gray-200 transition"
+              className="p-1.5 hover:bg-white/15 rounded-md text-purple-200 hover:text-white transition"
               title={t('newGeneralChat')}
             >
               <Plus className="w-4 h-4" />
             </button>
           </div>
+        </div>
+      )}
 
+      {/* Scrollable list: General chats + Projects + project sessions */}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-4">
+        {onCreateGeneralChat && (
+        <div>
           {showGeneralChats && generalChats.length > 0 && (
             <motion.div className="space-y-0.5">
               {generalChats
