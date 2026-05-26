@@ -26,7 +26,15 @@ services:
       - "80"
       - "8031"             # legacy port — see network alias below
     command:
-      - "--model-id=/data/models--sentence-transformers--all-MiniLM-L6-v2"
+      # --model-id is the HF repo id, NOT a filesystem path. TEI then
+      # resolves it through its HF cache at HUGGINGFACE_HUB_CACHE
+      # (=/data) — which the workflow / Dockerfile pre-populates. A
+      # path like /data/models--<owner>--<repo> looks correct but
+      # fails: actual config.json files only exist under
+      # snapshots/<sha>/ inside the cache layout, so TEI's "open
+      # config.json in <model-id>" probe errors out. The repo-id
+      # form works regardless of which snapshot SHA the cache holds.
+      - "--model-id=sentence-transformers/all-MiniLM-L6-v2"
       - "--port=8031"       # listen on the OLD embeddings-service port so
                             # the alias below works with hardcoded clients
     environment:
