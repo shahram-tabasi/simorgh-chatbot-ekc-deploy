@@ -49,13 +49,22 @@ const TRAILING_PUNCT_RE = /[,.;:!?،؛؟]+$/;
  *     tab. That was the May-2026 "creates link but opens blank
  *     page" regression.
  *
- *   • www.…  (no scheme)  →  wrapped as `[text](https://text)`
- *     so the resulting <a> has a usable absolute href.
- *     GFM's autolinkLiteral wouldn't make this clickable on
- *     its own without the scheme, so the [text](url) form is
- *     necessary here. The text is plain (just the URL chars),
- *     so inner-reparsing is harmless even if it happens.
+ *   • www.…  (no scheme)  →  wrapped as `[text](http://text)`
+ *     so the resulting <a> has a usable absolute href. The
+ *     scheme defaults to **http** — operator note May 2026:
+ *     "for general chat all sites are http, not https". The
+ *     EKC deployment's internal hosts (Kesra, document
+ *     portal, etc.) are reached over plain http; auto-
+ *     upgrading them to https would have the browser hit
+ *     a TLS handshake against a server that doesn't speak
+ *     it, which is what manifested as "links open a blank
+ *     page" on click. URLs that the AI explicitly writes
+ *     with `https://` are preserved as-is by the branch
+ *     above — so this default doesn't downgrade anything
+ *     the model intentionally typed.
  */
+const DEFAULT_SCHEME_FOR_SCHEMELESS = 'http';
+
 function linkifyPlainSegment(seg: string): string {
   return seg.replace(URL_RE, (match) => {
     // Strip a single trailing run of punctuation that's almost
@@ -66,9 +75,9 @@ function linkifyPlainSegment(seg: string): string {
     if (/^https?:\/\//i.test(trimmed)) {
       return `<${trimmed}>${tail}`;
     }
-    // www.… case — prepend scheme to the href, keep the visible
-    // text as the user typed it.
-    return `[${trimmed}](https://${trimmed})${tail}`;
+    // www.… case — prepend the default scheme to the href, keep
+    // the visible text as the user typed it.
+    return `[${trimmed}](${DEFAULT_SCHEME_FOR_SCHEMELESS}://${trimmed})${tail}`;
   });
 }
 
