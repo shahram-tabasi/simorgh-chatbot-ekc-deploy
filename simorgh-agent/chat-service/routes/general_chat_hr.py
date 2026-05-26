@@ -318,13 +318,28 @@ async def hr_stream(req: HrStreamRequest):
         # onDone-triggered fetchQuota sees the incremented count
         # immediately (the original 800ms-timer fetch was racing
         # this call and snapping the optimistic decrement back).
+        # Logs on every outcome — the previous "silently skip when
+        # tier_service is None" behaviour hid an entire-day's worth
+        # of broken-quota investigation (chat-service main.py never
+        # called init_tier_service before c0942f4's follow-up).
         if not was_refusal:
             try:
                 from services.user_tier_service import get_tier_service
                 from uuid import UUID as _UUID
                 tier_service = get_tier_service()
-                if tier_service:
-                    await tier_service.increment_usage(_UUID(req.user_id))
+                if tier_service is None:
+                    log.warning(
+                        "hr_stream: tier_service is None — quota NOT incremented "
+                        "for user=%s. init_tier_service was not called at "
+                        "chat-service startup.",
+                        req.user_id,
+                    )
+                else:
+                    new_count = await tier_service.increment_usage(_UUID(req.user_id))
+                    log.info(
+                        "hr_stream: quota incremented for user=%s, new daily count=%s",
+                        req.user_id, new_count,
+                    )
             except Exception as e:
                 log.warning(
                     "hr_stream: failed to increment quota for user=%s: %s",

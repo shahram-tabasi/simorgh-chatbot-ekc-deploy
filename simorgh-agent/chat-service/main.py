@@ -52,6 +52,44 @@ app.include_router(project_chat_session_router)
 app.include_router(general_chat_hr_router)
 
 
+@app.on_event("startup")
+async def _bootstrap_services() -> None:
+    """Open the Postgres pool and wire singleton services that
+    routes look up via get_*_service(). Mirrors admin-service's
+    bootstrap pattern.
+
+    Why this exists, May 2026 — operator's "quota still not work"
+    bug-day: the daily-quota counter for general-chat AND
+    project-chat lives behind `services.user_tier_service.UserTierService`,
+    a module-level singleton initialised by `init_tier_service(db)`.
+    chat-service never called that initialiser, so
+    `get_tier_service()` returned None and EVERY call to
+    `increment_usage` was a silent no-op. The `if tier_service:`
+    guard masked the failure as "successful skip" with no log
+    line. Net effect: questions_used stayed at 0 in the daily-usage
+    table indefinitely, the QuotaIndicator's optimistic decrement
+    got reverted by every fetchQuota, the ring "immediately reset".
+
+    Wiring the service at startup is what flips it from no-op to
+    real INSERT/UPDATE against `user_daily_usage`.
+    """
+    from database import PostgresConnection
+    from services.user_tier_service import init_tier_service
+
+    db = PostgresConnection()
+    try:
+        await db.init_async_pool()
+    except Exception as e:
+        logger.error("chat-service: postgres pool init failed: %s", e)
+        return
+
+    try:
+        init_tier_service(db)
+        logger.info("chat-service: tier_service initialised")
+    except Exception as e:
+        logger.error("chat-service: init_tier_service failed: %s", e)
+
+
 @app.get("/health")
 def health():
     return {"status": "healthy", "service": "chat-service"}
