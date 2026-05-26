@@ -261,6 +261,26 @@ async def hr_stream(req: HrStreamRequest):
                 )
             except Exception as e:
                 log.warning("hr_stream: cache write failed: %s", e)
+            else:
+                # Emit a trailing META frame with the new
+                # cache_entry_id so the frontend can bind
+                # in-session 👍/👎 to the cache entry RIGHT
+                # NOW, instead of waiting for the chat to be
+                # reloaded from Redis. Without this, the very
+                # first user to ask a question can't dislike
+                # the answer until they switch chats and come
+                # back (the persisted assistant message has
+                # the id; the live in-memory one doesn't).
+                # Triggered the "i dislike the 3rd, again the
+                # cache retrieved" report — they were
+                # disliking a fresh-stream answer that had no
+                # cache_entry_id attached to its message, so
+                # the frontend reaction handler silently
+                # skipped the cache-reaction call.
+                if cache_entry_id:
+                    yield (
+                        f"data: {json.dumps({'meta': {'cache_entry_id': cache_entry_id}}, ensure_ascii=False)}\n\n"
+                    )
 
         # Persist after the stream is fully emitted to the client.
         # Avoids blocking the streaming with a slow Redis/postgres

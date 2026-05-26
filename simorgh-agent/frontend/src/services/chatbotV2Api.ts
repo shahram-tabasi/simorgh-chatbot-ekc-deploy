@@ -297,7 +297,26 @@ export interface HrCitation {
 }
 
 export interface HrStreamHandlers {
-  onMeta?: (meta: { hits: HrCitation[]; top_score: number; threshold: number }) => void;
+  onMeta?: (meta: {
+    hits: HrCitation[];
+    top_score: number;
+    threshold: number;
+    // Set when this stream was served from the cross-user
+    // semantic cache. The frontend needs this so the user's
+    // 👍/👎 on the resulting assistant message can call back to
+    // /api/v2/general-chat/hr/cache-reaction with the right
+    // entry id (issue #1, May 2026). Optional because regular
+    // LLM-served streams omit it on the cache miss path —
+    // there the backend writes a cache entry AFTER the stream
+    // completes and surfaces the new id in the persisted
+    // message metadata only; in-session 👍/👎 on a fresh stream
+    // won't bind until the chat reloads. Acceptable trade-off:
+    // the second user to ask the question gets the cached
+    // entry id immediately and can like/dislike from there.
+    cache_hit?: boolean;
+    cache_entry_id?: string;
+    cache_cosine?: number;
+  }) => void;
   onChunk: (delta: string) => void;
   onRefusal?: (text: string) => void;
   onDone?: (info: { reason: string; top_score?: number }) => void;

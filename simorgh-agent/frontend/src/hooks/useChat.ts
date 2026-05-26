@@ -492,6 +492,34 @@ export function useChat(
               // Citations arrive BEFORE the first token. Stamp them on
               // a (still-empty) assistant message so the bubble renders
               // source badges while gpt-oss is generating.
+              //
+              // Also stamps cache_entry_id (issue #1, May 2026): the
+              // backend sends this in the meta frame on cache HIT AND
+              // on the trailing meta frame after a cache MISS that
+              // successfully wrote a new entry. Threading it into the
+              // assistant message's metadata is what makes 👍/👎
+              // on a cache-served answer call /cache-reaction with
+              // the right id — without this, the dislike click does
+              // nothing (operator's "again the cache retrieved"
+              // report immediately above this commit).
+              const cacheMeta = {
+                ...(meta.cache_hit ? { cache_hit: true as const } : {}),
+                ...(meta.cache_entry_id ? { cache_entry_id: meta.cache_entry_id } : {}),
+                ...(meta.cache_cosine !== undefined ? { cache_cosine: meta.cache_cosine } : {}),
+              };
+              // Build a partial-merge payload: only include
+              // keys that the meta frame actually carries. The
+              // trailing meta frame from the cache-MISS path
+              // (chat-service general_chat_hr.py) sends ONLY
+              // `cache_entry_id` after the stream completes —
+              // unconditionally including `citations: meta.hits`
+              // here would overwrite the previously-set citations
+              // with undefined and the bubble would lose its
+              // source badges.
+              const metaPatch: Record<string, any> = { ...cacheMeta };
+              if (Array.isArray(meta.hits)) metaPatch.citations = meta.hits as any;
+              if (typeof meta.top_score === 'number') metaPatch.top_score = meta.top_score;
+
               if (!messageAdded) {
                 messageAdded = true;
                 setIsTyping(false);
@@ -502,17 +530,12 @@ export function useChat(
                   timestamp: new Date(),
                   metadata: {
                     streaming: true,
-                    citations: meta.hits as any,
-                    top_score: meta.top_score,
+                    ...metaPatch,
                   },
                 }]);
               } else {
                 setMessages(prev => prev.map(m => m.id === aiMessageId
-                  ? { ...m, metadata: {
-                      ...(m.metadata || {}),
-                      citations: meta.hits as any,
-                      top_score: meta.top_score,
-                    }}
+                  ? { ...m, metadata: { ...(m.metadata || {}), ...metaPatch }}
                   : m));
               }
             },
