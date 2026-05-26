@@ -1400,29 +1400,80 @@ class RedisService:
 
     def delete_chat(self, chat_id: str, user_id: str) -> bool:
         """
-        Delete a chat and all its data
+        Delete a chat and all its data — comprehensive sweep.
+
+        Issue #4 (May 2026): user clicked "delete chat", saw the
+        success toast, but the chat reappeared on every refresh.
+        Two root causes diagnosed:
+
+          (a) Modern users have UUID ids and legacy users have
+              EMPUSERNAME strings; metadata.user_id and the user
+              index key (`user:{X}:chats:general`) don't always
+              use the same one. SREM with the wrong key hits an
+              empty set, the listing's set still contains the
+              chat_id, chat reappears.
+
+          (b) General chats whose messages were persisted via the
+              HR direct-RAG path (general_chat_hr.py:_persist_pair)
+              write `chat:history:{chat_id}` directly but never
+              create `chat:{chat_id}:metadata`. The previous delete
+              path skipped metadata-less chats entirely.
+
+        New behaviour: scan-and-sweep every key shape that could
+        carry this chat_id, and SREM from ALL user indices rather
+        than only the one the caller knows about. SREM on a
+        non-member is a no-op so this is idempotent.
 
         Args:
             chat_id: Chat identifier
-            user_id: User identifier (for index cleanup)
+            user_id: Caller-supplied user id; still used as a hint
+                     for the explicit SREM at the bottom but the
+                     scan_iter sweep no longer relies on it.
         """
         try:
-            # Delete metadata
-            self.chat_client.delete(f"chat:{chat_id}:metadata")
+            deleted = 0
+            # 1. Chat-scoped keys: chat:{id}:metadata + anything else
+            #    namespaced under the chat id.
+            for key in self.chat_client.scan_iter(match=f"chat:{chat_id}:*"):
+                self.chat_client.delete(key)
+                deleted += 1
+            # 2. Flat history key (cache_chat_message format).
+            if self.chat_client.delete(f"chat:history:{chat_id}"):
+                deleted += 1
+            # 3. Namespaced history keys (append_history_to_key format).
+            for key in self.chat_client.scan_iter(match=f"general:chat_id:{chat_id}:*"):
+                self.chat_client.delete(key)
+                deleted += 1
+            for key in self.chat_client.scan_iter(match=f"project:*:chat_id:{chat_id}:*"):
+                self.chat_client.delete(key)
+                deleted += 1
 
-            # Delete message history
-            self.clear_chat_history(chat_id)
+            # 4. SREM from EVERY user index set, regardless of which
+            #    user_id is recorded. SREM is O(1) and idempotent;
+            #    scan_iter is non-blocking. This is the part that
+            #    actually fixes the "chat reappears" bug.
+            sets_touched = 0
+            for key in self.chat_client.scan_iter(match="user:*:chats:general"):
+                if self.chat_client.srem(key, chat_id):
+                    sets_touched += 1
+            for key in self.chat_client.scan_iter(match="user:*:chats:all"):
+                if self.chat_client.srem(key, chat_id):
+                    sets_touched += 1
+            for key in self.chat_client.scan_iter(match="user:*:chats:project:*"):
+                if self.chat_client.srem(key, chat_id):
+                    sets_touched += 1
 
-            # Remove from user indices
-            self.chat_client.srem(f"user:{user_id}:chats:all", chat_id)
-            self.chat_client.srem(f"user:{user_id}:chats:general", chat_id)
+            # Belt-and-braces: explicit removes for the supplied
+            # user_id (covers a race where a SREM-target key is
+            # created after our scan iterator passed its position).
+            if user_id:
+                self.chat_client.srem(f"user:{user_id}:chats:all", chat_id)
+                self.chat_client.srem(f"user:{user_id}:chats:general", chat_id)
 
-            # Remove from all project indices (scan and clean)
-            pattern = f"user:{user_id}:chats:project:*"
-            for key in self.chat_client.scan_iter(match=pattern):
-                self.chat_client.srem(key, chat_id)
-
-            logger.info(f"Chat deleted: {chat_id}")
+            logger.info(
+                f"Chat deleted: {chat_id} "
+                f"(keys removed={deleted}, user-index sets swept={sets_touched})"
+            )
             return True
         except RedisError as e:
             logger.error(f"Failed to delete chat: {e}")

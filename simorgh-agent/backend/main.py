@@ -1347,26 +1347,47 @@ async def delete_chat(
     redis: RedisService = Depends(get_redis)
 ):
     """
-    Delete a chat session (requires authentication)
+    Delete a chat session (requires authentication).
 
-    Validates that the requesting user owns this chat
+    Validates that the requesting user owns this chat. Tolerates the
+    case where metadata is missing — general chats whose messages
+    were persisted only via the HR direct-RAG path
+    (general_chat_hr.py:_persist_pair) write `chat:history:{chat_id}`
+    but never create `chat:{chat_id}:metadata`, so the old "404 if no
+    metadata" path left those chats undeletable. The hardened
+    delete_chat sweep handles them correctly (it scans for all keys
+    matching the chat_id), and ownership is verified via the
+    user-index sets instead in that branch.
     """
-    # Get metadata
     metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
 
-    if not metadata:
-        raise HTTPException(status_code=404, detail="Chat not found")
+    if metadata:
+        # Normal path: metadata-based ownership check.
+        if metadata.get("user_id") != current_user:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You don't have permission to delete this chat"
+            )
+        user_id_for_delete = metadata.get("user_id")
+    else:
+        # Metadata-less path: verify ownership by checking that
+        # `chat_id` is actually in one of current_user's chat-index
+        # sets. This catches orphan history-only chats created by
+        # the HR direct-RAG persistence path without exposing the
+        # delete to arbitrary other users.
+        user_chat_ids = set(redis.get_user_general_chats(current_user))
+        if chat_id not in user_chat_ids:
+            # Belt-and-braces: also check the project indices in
+            # case this is a project chat with no metadata.
+            user_all = set(redis.get_user_all_chats(current_user))
+            if chat_id not in user_all:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Chat not found"
+                )
+        user_id_for_delete = current_user
 
-    # Security: Verify the chat belongs to the requesting user
-    if metadata.get("user_id") != current_user:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied: You don't have permission to delete this chat"
-        )
-
-    # Delete the chat
-    user_id = metadata.get("user_id")
-    success = redis.delete_chat(chat_id, user_id)
+    success = redis.delete_chat(chat_id, user_id_for_delete)
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete chat")
