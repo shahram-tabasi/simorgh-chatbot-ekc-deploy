@@ -28,16 +28,27 @@ services:
       - PRELOAD_MODEL=voices/fa_IR-amir-medium.onnx
       - TTS_HOME=/app/voices
       - HF_HUB_OFFLINE=1
-      - UVICORN_PORT=8002     # listen on legacy port so the alias works
+      # openedai-speech reads PORT (not UVICORN_PORT); without it the
+      # server defaults to 8000 and the legacy tts-service:8002 alias
+      # would route clients into the void.
+      - PORT=8002
     networks:
       app_net:
         # Drop-in for tts-service: clients keep hitting
         # http://tts-service:8002 and Docker DNS resolves here.
-        # Stop the old tts-service first.
+        # Stop AND REMOVE the old tts-service first — leaving the
+        # stopped container in place keeps a second IP attached to
+        # the alias, which makes DNS round-robin 50% of requests to
+        # nowhere. Same lesson the whisper rollout taught.
         aliases:
           - tts-service
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8002/v1/models || exit 1"]
+      # ghcr.io/matatonic/openedai-speech-min is a minimal Python
+      # image with neither curl nor wget — the obvious shell-based
+      # healthcheck exits 127 (command not found) on every interval
+      # and the container never leaves `(health: starting)`. Probe
+      # via python3 + urllib, same pattern as svc-whisper.yml.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/v1/models', timeout=3).read()"]
       interval: 30s
       timeout: 10s
       retries: 3
