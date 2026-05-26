@@ -37,7 +37,13 @@ services:
     # minus the parts that don't apply offline.
     entrypoint: ["bash", "-c"]
     command:
-      - "cd /app && exec python speech.py --host 0.0.0.0 --port 8002 --preload voices/fa_IR-amir-medium.onnx"
+      # No --preload here: that flag is XTTS-only (warms a single
+      # XTTS voice into VRAM), and ghcr.io/.../openedai-speech-MIN
+      # strips XTTS support entirely — speech.py only imports
+      # ModelManager when --preload is set, then NameErrors on it
+      # immediately. Piper voices are loaded lazily per-request via
+      # voice_to_speaker.yaml mappings; no warm-up needed.
+      - "cd /app && exec python speech.py --host 0.0.0.0 --port 8002"
     environment:
       - PRELOAD_MODEL=voices/fa_IR-amir-medium.onnx
       - TTS_HOME=/app/voices
