@@ -731,6 +731,29 @@ class MCPManager:
         try:
             while True:
                 await asyncio.sleep(interval)
+                # First: try to bring up any registered server that
+                # never connected (or got reaped) so we don't sit on a
+                # missing-tool state forever. connect_all retries 3
+                # times at boot, but a transient BrokenResourceError
+                # there is permanent for the lifetime of the process
+                # without this — every gitlab_mcp tool then 404s via
+                # REST fallback.
+                for name, cfg in self.servers.items():
+                    if name in self.sessions:
+                        continue
+                    try:
+                        await asyncio.wait_for(
+                            self._connect_server(name, cfg),
+                            timeout=float(os.getenv("MCP_RECONNECT_TIMEOUT_SEC", "10")),
+                        )
+                        logger.info("MCP keepalive %s: late connect ok", name)
+                        miss_count.pop(name, None)
+                    except (asyncio.TimeoutError, Exception) as e_late:
+                        logger.debug(
+                            "MCP keepalive %s: late connect attempt failed (%s)",
+                            name, type(e_late).__name__,
+                        )
+
                 for name, session in list(self.sessions.items()):
                     # Try the spec's ping first; if that raises (server
                     # doesn't implement the ping handler, returns an MCP

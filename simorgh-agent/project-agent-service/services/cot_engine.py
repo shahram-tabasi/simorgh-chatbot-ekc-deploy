@@ -662,7 +662,7 @@ PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
 10. Maximum {max_tasks} steps. Anything longer is almost always a
     planning failure — recompose.
 11. NEVER emit placeholder strings as tool_input values — no
-    "<path_found_in_step1>", "<top hit>", "<filename>", "{path}",
+    "<path_found_in_step1>", "<top hit>", "<filename>", "{{path}}",
     "PATH_FROM_STEP_1" etc. The executor passes tool_input verbatim
     to MCP tools; placeholder strings 404 every time. Two correct
     patterns instead:
