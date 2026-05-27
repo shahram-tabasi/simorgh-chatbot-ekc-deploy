@@ -63,6 +63,15 @@ services:
       # multi-step plans; 2048 was tight enough to truncate gpt-oss JSON
       # mid-step on retrieval-heavy requests.
       - COT_LLM_MAX_TOKENS=${COT_LLM_MAX_TOKENS:-4096}
+      # MCP transport tuning. Some MCP servers (context-search, gitlab-mcp)
+      # reap idle sessions; the streamable-http client doesn't propagate
+      # the resulting 400 back to the in-flight call_tool future, so every
+      # stale call would otherwise wait MCP_CALL_TIMEOUT_SEC before the
+      # retry path fires. We pre-emptively reconnect any session that has
+      # been idle longer than MCP_SESSION_MAX_IDLE_SEC.
+      - MCP_CALL_TIMEOUT_SEC=${MCP_CALL_TIMEOUT_SEC:-15}
+      - MCP_SESSION_MAX_IDLE_SEC=${MCP_SESSION_MAX_IDLE_SEC:-25}
+      - MCP_RECONNECT_TIMEOUT_SEC=${MCP_RECONNECT_TIMEOUT_SEC:-10}
       # 2026-05 enterprise migration: code exec → runtime-broker (ephemeral
       # docker), project files → gitlab-mcp, mail → mail-bridge.
       - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}

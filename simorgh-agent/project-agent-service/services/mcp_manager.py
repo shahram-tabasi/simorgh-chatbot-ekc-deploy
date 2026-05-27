@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Optional, Dict, List, Any
 from contextlib import AsyncExitStack
 
@@ -87,6 +88,13 @@ class MCPManager:
         self.tool_schemas: Dict[str, Any] = {}  # tool_name -> Tool schema
         self._exit_stack = AsyncExitStack()
         self._server_stacks: Dict[str, AsyncExitStack] = {}
+        # Last-activity timestamp per session. Used by call_tool to
+        # proactively re-handshake before the MCP server's idle reaper
+        # kills the session — that path otherwise costs a full
+        # MCP_CALL_TIMEOUT_SEC wait per stale call (the streamable-http
+        # client doesn't propagate the server's 400 as an exception
+        # to the in-flight call_tool future).
+        self._last_used_ts: Dict[str, float] = {}
         self._connected = False
 
     def register_server(self, name: str, url: str, description: str = ""):
@@ -208,6 +216,7 @@ class MCPManager:
             # is functionally alive.
             self.sessions[name] = session
             self._server_stacks[name] = server_stack
+            self._last_used_ts[name] = time.monotonic()
             logger.debug(
                 f"  Tools for {name}: {tool_names_for_log}"
             )
@@ -408,10 +417,52 @@ class MCPManager:
         clean_args = {k: v for k, v in arguments.items() if not k.startswith("_")}
 
         # The persistent streamable-HTTP session can be evicted server-side
-        # after idle. The first POST then 400s with a stale session id. Try
-        # once, then on any failure rebuild the session and retry. Wrap the
-        # call in wait_for so a hung SSE doesn't freeze the whole turn.
-        per_call_timeout = float(os.getenv("MCP_CALL_TIMEOUT_SEC", "30"))
+        # after idle (operator-observed: context-search and gitlab-mcp both
+        # reap idle sessions; the next POST then 400s but the streamable-
+        # http client doesn't propagate that to the call_tool future, so
+        # we burn the full per_call_timeout per stale call). Two defences:
+        #
+        #   1. Proactive idle re-handshake — if it's been more than
+        #      MCP_SESSION_MAX_IDLE_SEC since the last successful call,
+        #      tear the session down and rebuild BEFORE issuing the call.
+        #      Re-handshake costs ~20 ms; the alternative is waiting the
+        #      full timeout.
+        #   2. Tight per-call timeout for the call itself. Healthy round-
+        #      trip is sub-100ms; the previous 30s was a stale-session
+        #      latency, not a real upper bound on tool latency.
+        per_call_timeout = float(os.getenv("MCP_CALL_TIMEOUT_SEC", "15"))
+        max_idle = float(os.getenv("MCP_SESSION_MAX_IDLE_SEC", "25"))
+
+        last_ts = self._last_used_ts.get(server_name, 0.0)
+        if last_ts and (time.monotonic() - last_ts) > max_idle:
+            logger.info(
+                "MCP session %s idle %.1fs > %.1fs — refreshing before call",
+                server_name, time.monotonic() - last_ts, max_idle,
+            )
+            cfg_pre = self.servers.get(server_name)
+            stale_pre = self._server_stacks.pop(server_name, None)
+            self.sessions.pop(server_name, None)
+            if stale_pre is not None:
+                try:
+                    await stale_pre.aclose()
+                except Exception:
+                    pass
+            if cfg_pre is not None:
+                try:
+                    await asyncio.wait_for(
+                        self._connect_server(server_name, cfg_pre),
+                        timeout=float(os.getenv("MCP_RECONNECT_TIMEOUT_SEC", "10")),
+                    )
+                    session = self.sessions.get(server_name) or session
+                except Exception as e_pre:
+                    # Refresh failed — fall through to the regular path,
+                    # which will see the stale session, fail, and run
+                    # the on-failure reconnect+retry.
+                    logger.warning(
+                        "MCP proactive refresh of %s failed (%s); "
+                        "falling back to in-call retry",
+                        server_name, e_pre,
+                    )
 
         async def _do_call(s):
             return await asyncio.wait_for(
@@ -421,6 +472,7 @@ class MCPManager:
 
         try:
             result = await _do_call(session)
+            self._last_used_ts[server_name] = time.monotonic()
         except Exception as e:
             logger.warning(
                 f"MCP call_tool {tool_name} on {server_name} failed "
@@ -472,6 +524,7 @@ class MCPManager:
                 raise
             try:
                 result = await _do_call(session)
+                self._last_used_ts[server_name] = time.monotonic()
             except Exception as e2:
                 # Second MCP attempt failed too — the streamable-HTTP
                 # transport is genuinely down. For servers that expose a
