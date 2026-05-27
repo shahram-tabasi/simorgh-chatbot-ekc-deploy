@@ -45,21 +45,24 @@ services:
       - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://nginx/api/llm}
       - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
       - LLM_GATEWAY_URL=http://llm-gateway:8030
-      # CoT planner endpoint. Priority order in cot_engine._call_llm:
-      #   1. COT_LLM_BASE_URL → VLM-7B on .62 (instruction-tuned;
-      #      actually follows multi-step plans). Default ON because
-      #      live testing showed gpt-oss-20b base model produces
-      #      "Direct response" minimal plans even with explicit
-      #      tool-use guidance — grammar gives valid JSON but not
-      #      smart JSON.
-      #   2. LLM_GATEWAY_URL → gpt-oss-20b on .61 with grammar
-      #      constraint. Fallback when the VLM is down. Useful for
-      #      strictly-structured calls (commit message synthesis,
-      #      entity extraction) where schema validity dominates.
-      #   3. self.llm_service legacy path.
+      # CoT planner endpoint. Priority order in cot_engine._call_llm,
+      # controlled by COT_PLANNER_PRIMARY:
+      #   harmony     (default) → LLM_GATEWAY_URL with Harmony tool calls
+      #                           (gpt-oss-20b on .61 emits submit_plan via
+      #                           native tool_calls channel; rich plans).
+      #   guided_json           → LLM_GATEWAY_URL with vLLM guided_json
+      #                           decoding (schema-constrained; still gpt-oss
+      #                           on .61, kept for A/B testing).
+      #   Both paths auto-fall-through to COT_LLM_BASE_URL (Qwen2.5-VL-7B
+      #   on .62) if the gpt-oss reply is empty / unparseable, and finally
+      #   to the legacy self.llm_service path.
+      - COT_PLANNER_PRIMARY=${COT_PLANNER_PRIMARY:-harmony}
       - COT_LLM_BASE_URL=${COT_LLM_BASE_URL:-http://nginx/api/vlm/v1}
       - COT_LLM_MODEL=${COT_LLM_MODEL:-qwen2.5-vl-7b}
-      - COT_LLM_MAX_TOKENS=${COT_LLM_MAX_TOKENS:-2048}
+      # 4096 covers the full submit_plan arguments object for typical
+      # multi-step plans; 2048 was tight enough to truncate gpt-oss JSON
+      # mid-step on retrieval-heavy requests.
+      - COT_LLM_MAX_TOKENS=${COT_LLM_MAX_TOKENS:-4096}
       # 2026-05 enterprise migration: code exec → runtime-broker (ephemeral
       # docker), project files → gitlab-mcp, mail → mail-bridge.
       - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}
