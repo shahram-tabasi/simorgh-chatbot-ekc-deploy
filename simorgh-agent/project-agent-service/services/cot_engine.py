@@ -1387,10 +1387,23 @@ class COTEngine:
 
         tool_calls = body.get("tool_calls") or []
         if not tool_calls:
-            # gpt-oss didn't tool-call — model returned prose despite
-            # tool_choice forcing. Raise so _call_llm tries the next
-            # path instead of handing prose to the JSON parser, which
-            # would silently materialise the "Direct response" stub.
+            # gpt-oss-20b regularly ignores tool_choice for the planner
+            # because COT_SYSTEM_PROMPT ends with "Respond with ONLY
+            # valid JSON" — that instruction outranks the tool-call
+            # channel and the model writes the plan to `content` as
+            # plain JSON. When that happens, recover the content as if
+            # it were the tool arguments; _parse_llm_response handles
+            # the same shape downstream (outer-brace reparse +
+            # _salvage_partial_steps). Falling through to VLM here is
+            # wasteful — we already have a usable plan in hand.
+            content = (body.get("response") or "").strip()
+            if content.startswith("{") and '"steps"' in content:
+                logger.info(
+                    "harmony: content-channel JSON detected (finish=%s, "
+                    "len=%d) — using content as plan",
+                    body.get("finish_reason"), len(content),
+                )
+                return content
             raise RuntimeError(
                 "harmony: tool_calls empty, "
                 f"finish={body.get('finish_reason')}, "
