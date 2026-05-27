@@ -1266,6 +1266,18 @@ class ProjectManagerAgent:
             and isinstance(tool_input, dict)
         ):
             raw_path = (tool_input.get("path") or "").strip()
+            # Placeholder strings sneaked in by the planner ("<path_found_in_step1>",
+            # "<top hit>", "{path}" etc). These always 404 in the field — guard them
+            # here and synthesise a hint so the planner's salvage path can recover
+            # using the prior step's actual output.
+            looks_like_placeholder = (
+                ("<" in raw_path and ">" in raw_path)
+                or ("{" in raw_path and "}" in raw_path)
+                or raw_path.lower() in {
+                    "top hit", "top_hit", "path", "filename",
+                    "the file", "the pdf", "<path>", "<top hit>",
+                }
+            )
             if raw_path in ("", "/", "*", "."):
                 logger.info(
                     "dispatch: short-circuiting %s with invalid path=%r "
@@ -1286,6 +1298,59 @@ class ProjectManagerAgent:
                         "reason": "invalid_path_for_file_read",
                     },
                 }
+            if looks_like_placeholder:
+                # Try to resolve from prior step outputs before failing.
+                # search_context returns hits[0].path, get_project_tree
+                # returns a list of {path,type} — pick the first plausible
+                # file path we can find. This recovers the chain without
+                # needing a planner reprompt.
+                prev = tool_input.get("_previous_results") or {}
+                resolved = None
+                for k in sorted(prev.keys()):
+                    blob = prev[k] or {}
+                    out = blob.get("output") if isinstance(blob, dict) else None
+                    if not out:
+                        continue
+                    try:
+                        parsed = json.loads(out) if isinstance(out, str) else out
+                    except Exception:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        hits = parsed.get("hits")
+                        if isinstance(hits, list) and hits:
+                            p = hits[0].get("path") if isinstance(hits[0], dict) else None
+                            if isinstance(p, str) and p and "<" not in p:
+                                resolved = p
+                                break
+                if resolved:
+                    logger.info(
+                        "dispatch: resolved %s placeholder path %r -> %r "
+                        "from previous step outputs",
+                        tool, raw_path, resolved,
+                    )
+                    tool_input["path"] = resolved
+                else:
+                    logger.warning(
+                        "dispatch: short-circuiting %s — planner emitted "
+                        "placeholder path=%r and no prior step output had "
+                        "a usable hits[0].path to substitute",
+                        tool, raw_path,
+                    )
+                    return {
+                        "output": (
+                            f"{tool} was called with placeholder path={raw_path!r}. "
+                            "The planner emitted a template string instead of a "
+                            "concrete file path; no prior search step returned a "
+                            "hit to substitute. To answer the user, retry the "
+                            "plan: run get_project_tree first, then read the "
+                            "specific file by its exact path."
+                        ),
+                        "metadata": {
+                            "via":  "dispatcher_guard",
+                            "tool": tool,
+                            "reason": "placeholder_path",
+                        },
+                    }
 
         # Try MCP first for microservice tools (dynamic routing). Both
         # transport failures (MCP exception, REST 404) and successful-

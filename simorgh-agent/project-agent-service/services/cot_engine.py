@@ -661,6 +661,23 @@ PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
    silently. Never plan a step against a denied source.
 10. Maximum {max_tasks} steps. Anything longer is almost always a
     planning failure — recompose.
+11. NEVER emit placeholder strings as tool_input values — no
+    "<path_found_in_step1>", "<top hit>", "<filename>", "{path}",
+    "PATH_FROM_STEP_1" etc. The executor passes tool_input verbatim
+    to MCP tools; placeholder strings 404 every time. Two correct
+    patterns instead:
+      A. If you ALREADY know the value (user named the file, or you
+         saw it in get_project_tree above), write the LITERAL string.
+      B. If the value comes from an earlier step's output, OMIT the
+         field entirely (or use `null`). The dispatcher's recovery
+         path will substitute hits[0].path from the prior search.
+    Concrete example for "analyse spec.pdf":
+       step 1: get_project_tree(project=<repo>)
+       step 2: read_artifact_mcp(project=<repo>, path="spec.pdf")
+              ← LITERAL path, not "<path_from_step1>"
+    The ONLY angle-bracket strings allowed are the documentation
+    placeholders <repo>, <oenum>, <this> in THIS prompt — never in
+    your output JSON.
 
 {tpms_instructions}
 

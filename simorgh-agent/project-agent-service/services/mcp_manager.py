@@ -725,21 +725,37 @@ class MCPManager:
             while True:
                 await asyncio.sleep(interval)
                 for name, session in list(self.sessions.items()):
-                    try:
-                        # Prefer the spec-defined ping; fall back to
-                        # list_tools for older mcp SDK versions that
-                        # don't expose send_ping on ClientSession.
-                        ping = getattr(session, "send_ping", None)
-                        if ping is not None:
+                    # Try the spec's ping first; if that raises (server
+                    # doesn't implement the ping handler, returns an MCP
+                    # error, etc.), fall back to a list_tools call. Both
+                    # paths bump _last_used_ts on success.
+                    ok = False
+                    ping = getattr(session, "send_ping", None)
+                    if ping is not None:
+                        try:
                             await asyncio.wait_for(ping(), timeout=5.0)
-                        else:
+                            ok = True
+                        except Exception as e:
+                            logger.debug(
+                                "MCP keepalive %s send_ping failed (%s); "
+                                "trying list_tools",
+                                name, type(e).__name__,
+                            )
+                    if not ok:
+                        try:
                             await asyncio.wait_for(session.list_tools(), timeout=5.0)
+                            ok = True
+                        except Exception as e:
+                            # Bumped to INFO so a chronic keepalive miss is
+                            # visible in operator logs — these directly
+                            # translate to "next call hits stale session".
+                            logger.info(
+                                "MCP keepalive %s failed via list_tools "
+                                "(%s); next call_tool will reconnect",
+                                name, type(e).__name__,
+                            )
+                    if ok:
                         self._last_used_ts[name] = time.monotonic()
-                    except Exception as e:
-                        logger.debug(
-                            "MCP keepalive %s failed (%s); next call_tool "
-                            "will reconnect", name, type(e).__name__,
-                        )
         except asyncio.CancelledError:
             logger.info("MCP keepalive loop cancelled")
             raise
