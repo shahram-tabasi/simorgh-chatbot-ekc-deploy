@@ -439,30 +439,44 @@ class MCPManager:
                 "MCP session %s idle %.1fs > %.1fs — refreshing before call",
                 server_name, time.monotonic() - last_ts, max_idle,
             )
-            cfg_pre = self.servers.get(server_name)
-            stale_pre = self._server_stacks.pop(server_name, None)
-            self.sessions.pop(server_name, None)
-            if stale_pre is not None:
-                try:
-                    await stale_pre.aclose()
-                except Exception:
-                    pass
-            if cfg_pre is not None:
-                try:
-                    await asyncio.wait_for(
-                        self._connect_server(server_name, cfg_pre),
-                        timeout=float(os.getenv("MCP_RECONNECT_TIMEOUT_SEC", "10")),
-                    )
-                    session = self.sessions.get(server_name) or session
-                except Exception as e_pre:
-                    # Refresh failed — fall through to the regular path,
-                    # which will see the stale session, fail, and run
-                    # the on-failure reconnect+retry.
-                    logger.warning(
-                        "MCP proactive refresh of %s failed (%s); "
-                        "falling back to in-call retry",
-                        server_name, e_pre,
-                    )
+
+            reconnect_timeout = float(os.getenv("MCP_RECONNECT_TIMEOUT_SEC", "10"))
+
+            async def _refresh() -> bool:
+                cfg_pre = self.servers.get(server_name)
+                if cfg_pre is None:
+                    return False
+                stale_pre = self._server_stacks.pop(server_name, None)
+                self.sessions.pop(server_name, None)
+                if stale_pre is not None:
+                    # aclose on a server-reaped session can hang waiting
+                    # for the SSE close handshake — wrap it tightly and
+                    # drop the stack on the floor if the close stalls.
+                    try:
+                        await asyncio.wait_for(stale_pre.aclose(), timeout=2.0)
+                    except (asyncio.TimeoutError, Exception):
+                        pass
+                await self._connect_server(server_name, cfg_pre)
+                return True
+
+            try:
+                ok = await asyncio.wait_for(_refresh(), timeout=reconnect_timeout)
+                if ok:
+                    refreshed = self.sessions.get(server_name)
+                    if refreshed is not None:
+                        session = refreshed
+            except (asyncio.TimeoutError, Exception) as e_pre:
+                # Refresh failed or hung — fall through. The regular
+                # _do_call below will likely fail with TimeoutError,
+                # which triggers the existing reconnect+retry+REST path
+                # (which is harder to hang because it doesn't aclose
+                # the stale stack synchronously when the new one is
+                # already up).
+                logger.warning(
+                    "MCP proactive refresh of %s failed (%s); "
+                    "falling back to in-call retry",
+                    server_name, type(e_pre).__name__,
+                )
 
         async def _do_call(s):
             return await asyncio.wait_for(
