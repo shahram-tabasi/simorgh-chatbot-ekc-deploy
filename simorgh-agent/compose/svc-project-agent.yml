@@ -72,6 +72,11 @@ services:
       - MCP_CALL_TIMEOUT_SEC=${MCP_CALL_TIMEOUT_SEC:-15}
       - MCP_SESSION_MAX_IDLE_SEC=${MCP_SESSION_MAX_IDLE_SEC:-25}
       - MCP_RECONNECT_TIMEOUT_SEC=${MCP_RECONNECT_TIMEOUT_SEC:-10}
+      # Background keepalive interval. Each connected MCP session is
+      # pinged on this cadence so the server's idle reaper never fires
+      # (recommended upstream pattern; fastmcp#120, mcp spec). Set to 0
+      # to disable and rely entirely on the on-call refresh path.
+      - MCP_KEEPALIVE_SEC=${MCP_KEEPALIVE_SEC:-20}
       # 2026-05 enterprise migration: code exec → runtime-broker (ephemeral
       # docker), project files → gitlab-mcp, mail → mail-bridge.
       - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}

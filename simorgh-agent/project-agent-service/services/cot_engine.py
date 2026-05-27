@@ -192,6 +192,41 @@ COT_PLAN_SCHEMA: Dict[str, Any] = {
 }
 
 
+# Footer swapped in by _call_llm_harmony_tools to replace the JSON-only
+# instructions when the planner is being driven via Harmony tool calling.
+# The "Respond with ONLY valid JSON" footer of COT_SYSTEM_PROMPT conflicts
+# with Harmony's channel separation; this footer aligns with the spec
+# (commentary channel for tool calls, final for end-user text).
+_HARMONY_FOOTER = """\
+============================================================================
+OUTPUT — CALL THE submit_plan TOOL EXACTLY ONCE
+============================================================================
+Submit your plan by calling the `submit_plan` tool with the complete plan
+as its arguments. Do NOT write the plan in the final-text channel — the
+executor reads only the tool arguments.
+
+For each step include:
+1. step_number (integer, 1-indexed)
+2. title (short imperative — "Read spec PDF")
+3. description (one sentence: what + why)
+4. task_type: action | query | analysis | generation | review |
+              shell_command | email
+5. tool_needed (exact tool name from the catalog above)
+6. tool_input (specific parameters as a JSON object)
+7. depends_on (array of step_numbers; [] for retrieval steps that run
+               independently; non-empty for synthesis steps and chained
+               reads)
+8. priority (1-10; higher runs sooner among independent steps)
+9. estimated_duration (string with unit, e.g. "10s")
+
+TOKEN BUDGET — STRICT.
+  • `reasoning`            ≤ 40 words (1-2 sentences naming the rung)
+  • each `description`     ≤ 15 words
+  • each `title`           ≤  6 words
+  • whole plan             ≤  5 steps unless absolutely necessary
+"""
+
+
 COT_SYSTEM_PROMPT = """You are the Simorgh CoT planner. Given a user request for a specific
 project, you produce a short, executable plan. The executor will run the
 steps in order; the model that writes the final answer reads only the
@@ -1336,24 +1371,59 @@ class COTEngine:
         `submit_plan` tool whose `parameters` schema IS the
         ``COT_PLAN_SCHEMA``; the model fills it in one shot.
 
+        Two upstream-informed tweaks vs. the naive shape:
+
+        1. ``tool_choice="auto"`` (not forced submit_plan). vLLM's
+           recipe for gpt-oss explicitly states "only tool_choice=auto
+           is supported" — forced named-function tool_choice on the
+           Chat Completions endpoint is documented as unsupported and
+           in practice degrades to the model writing the plan to the
+           content channel instead of calling the tool. With auto +
+           a strong tool description + the conflicting "respond with
+           JSON" footer stripped (see below), gpt-oss reliably picks
+           the tool.
+
+        2. The COT_SYSTEM_PROMPT footer that says "Respond with ONLY
+           valid JSON in this exact format" is stripped on this code
+           path. That instruction conflicts with Harmony's channel
+           separation (final vs commentary) and forces the model to
+           emit the plan as final-channel content. Replaced with a
+           short footer that explicitly directs gpt-oss to call the
+           tool.
+
         Output: the JSON-encoded plan, returned as a string so the
-        existing ``_parse_llm_response`` keeps working unchanged.
+        existing ``_parse_llm_response`` keeps working unchanged. The
+        content-channel-recovery branch below is the belt-and-braces
+        for cases where the model still skips the tool.
         """
         import httpx
         timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
+
+        # Strip the "Respond with ONLY valid JSON" footer from the
+        # system prompt so Harmony's channel routing isn't fighting
+        # an explicit format instruction. Replace with a tool-call-
+        # native footer. Anchor is COT_SYSTEM_PROMPT's section header.
+        messages = list(messages)
+        if messages and messages[0].get("role") == "system":
+            sys_txt = messages[0]["content"] or ""
+            marker = "OUTPUT — VALID JSON ONLY, NO PROSE BEFORE OR AFTER"
+            idx = sys_txt.find(marker)
+            if idx > 0:
+                sys_txt = sys_txt[:idx].rstrip() + "\n\n" + _HARMONY_FOOTER
+                messages[0] = {"role": "system", "content": sys_txt}
 
         submit_plan_tool = {
             "type": "function",
             "function": {
                 "name": "submit_plan",
                 "description": (
-                    "Submit your chain-of-thought plan as a JSON object "
-                    "with `reasoning` (one paragraph explaining the "
-                    "approach) and `steps` (an array of concrete task "
-                    "steps, each with step_number, title, description, "
-                    "task_type, tool_needed, tool_input, depends_on, "
-                    "and optionally priority and estimated_duration). "
-                    "Call this tool exactly once with the complete plan."
+                    "Submit your chain-of-thought plan. You MUST call this "
+                    "tool exactly once — do NOT write the plan as a final "
+                    "response. Pass `reasoning` (one paragraph naming the "
+                    "retrieval ladder rung you picked) and `steps` (the "
+                    "ordered task list; each step has step_number, title, "
+                    "description, task_type, tool_needed, tool_input, "
+                    "depends_on, priority, estimated_duration)."
                 ),
                 "parameters": COT_PLAN_SCHEMA,
             },
@@ -1366,12 +1436,12 @@ class COTEngine:
             "temperature":   0.3,
             "max_tokens":    int(os.getenv("COT_LLM_MAX_TOKENS", "4096")),
             "tools":         [submit_plan_tool],
-            # Force the model to call submit_plan rather than producing
-            # free-form text. vLLM's openai parser honours this.
-            "tool_choice":   {
-                "type": "function",
-                "function": {"name": "submit_plan"},
-            },
+            # vLLM's gpt-oss recipe only supports tool_choice="auto".
+            # Forced named-function tool_choice is documented as not
+            # working on the Chat Completions endpoint; in production
+            # it caused gpt-oss to write the plan to the content
+            # channel instead of calling submit_plan.
+            "tool_choice":   "auto",
         }
 
         async with httpx.AsyncClient(timeout=timeout) as client:

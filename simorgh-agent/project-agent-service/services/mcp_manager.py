@@ -95,6 +95,11 @@ class MCPManager:
         # client doesn't propagate the server's 400 as an exception
         # to the in-flight call_tool future).
         self._last_used_ts: Dict[str, float] = {}
+        # Background keepalive task — pings each connected session on a
+        # short interval so the server's idle reaper never fires.
+        # Upstream-recommended pattern for Streamable-HTTP MCP transport
+        # (fastmcp#120, mcp spec § session lifecycle).
+        self._keepalive_task: Optional[asyncio.Task] = None
         self._connected = False
 
     def register_server(self, name: str, url: str, description: str = ""):
@@ -163,6 +168,11 @@ class MCPManager:
             f"MCP Manager: {connected}/{len(self.servers)} servers connected, "
             f"{len(self.tools)} tools available"
         )
+
+        # Start the background keepalive loop once at least one server
+        # is up. Stays alive for the lifetime of the manager.
+        if self._connected and self._keepalive_task is None:
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
     async def _connect_server(self, name: str, config: MCPServerConfig):
         """Connect to a single MCP server via Streamable HTTP."""
@@ -689,8 +699,60 @@ class MCPManager:
             },
         }
 
+    async def _keepalive_loop(self):
+        """Periodically ping each connected MCP session to keep it warm.
+
+        Streamable-HTTP MCP servers reap idle sessions aggressively
+        (operator-observed: context-search and gitlab-mcp do this within
+        ~30s; .NET MCP and proxies like nginx / ALB are 60-75s by
+        default). Without a heartbeat, the next user-triggered tool call
+        wastes a full MCP_CALL_TIMEOUT_SEC waiting for the streamable-
+        http client to surface the server's 400, then takes the
+        reconnect-and-retry path. With this heartbeat, the session is
+        bumped every MCP_KEEPALIVE_SEC and that path is never reached
+        on normal traffic.
+
+        Failure modes are intentionally swallowed: a transient ping
+        failure is fine (the next user call will reconnect via the
+        existing on-failure retry path); we just want to keep the
+        timestamp fresh when things are healthy.
+        """
+        interval = float(os.getenv("MCP_KEEPALIVE_SEC", "20"))
+        if interval <= 0:
+            return
+        logger.info("MCP keepalive loop started (interval=%.1fs)", interval)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                for name, session in list(self.sessions.items()):
+                    try:
+                        # Prefer the spec-defined ping; fall back to
+                        # list_tools for older mcp SDK versions that
+                        # don't expose send_ping on ClientSession.
+                        ping = getattr(session, "send_ping", None)
+                        if ping is not None:
+                            await asyncio.wait_for(ping(), timeout=5.0)
+                        else:
+                            await asyncio.wait_for(session.list_tools(), timeout=5.0)
+                        self._last_used_ts[name] = time.monotonic()
+                    except Exception as e:
+                        logger.debug(
+                            "MCP keepalive %s failed (%s); next call_tool "
+                            "will reconnect", name, type(e).__name__,
+                        )
+        except asyncio.CancelledError:
+            logger.info("MCP keepalive loop cancelled")
+            raise
+
     async def disconnect_all(self):
         """Disconnect from all MCP servers."""
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            try:
+                await self._keepalive_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._keepalive_task = None
         for name, stack in list(self._server_stacks.items()):
             try:
                 await stack.aclose()
