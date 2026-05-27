@@ -720,6 +720,13 @@ class MCPManager:
         interval = float(os.getenv("MCP_KEEPALIVE_SEC", "20"))
         if interval <= 0:
             return
+        # On consecutive failed pings for the same server, force a
+        # reconnect. The "transport is closed" case (ClosedResourceError,
+        # BrokenResourceError) means our session is dead but pinned in
+        # self.sessions — without a reconnect here, every user call will
+        # still hit the slow refresh path.
+        max_misses = int(os.getenv("MCP_KEEPALIVE_MAX_MISSES", "2"))
+        miss_count: Dict[str, int] = {}
         logger.info("MCP keepalive loop started (interval=%.1fs)", interval)
         try:
             while True:
@@ -746,16 +753,53 @@ class MCPManager:
                             await asyncio.wait_for(session.list_tools(), timeout=5.0)
                             ok = True
                         except Exception as e:
-                            # Bumped to INFO so a chronic keepalive miss is
-                            # visible in operator logs — these directly
-                            # translate to "next call hits stale session".
                             logger.info(
                                 "MCP keepalive %s failed via list_tools "
-                                "(%s); next call_tool will reconnect",
+                                "(%s); will reconnect after %d misses",
                                 name, type(e).__name__,
+                                max_misses,
                             )
                     if ok:
                         self._last_used_ts[name] = time.monotonic()
+                        miss_count.pop(name, None)
+                        continue
+
+                    # Failure path — count misses and reconnect when
+                    # we cross the threshold. One miss could be a
+                    # transient blip; consecutive misses mean the
+                    # transport is genuinely dead.
+                    miss_count[name] = miss_count.get(name, 0) + 1
+                    if miss_count[name] < max_misses:
+                        continue
+                    cfg = self.servers.get(name)
+                    if cfg is None:
+                        continue
+                    logger.info(
+                        "MCP keepalive %s: %d consecutive misses, "
+                        "force-reconnecting",
+                        name, miss_count[name],
+                    )
+                    stale = self._server_stacks.pop(name, None)
+                    self.sessions.pop(name, None)
+                    self._last_used_ts.pop(name, None)
+                    if stale is not None:
+                        try:
+                            await asyncio.wait_for(stale.aclose(), timeout=2.0)
+                        except (asyncio.TimeoutError, Exception):
+                            pass
+                    try:
+                        await asyncio.wait_for(
+                            self._connect_server(name, cfg),
+                            timeout=float(os.getenv("MCP_RECONNECT_TIMEOUT_SEC", "10")),
+                        )
+                        miss_count.pop(name, None)
+                        logger.info("MCP keepalive %s: reconnected", name)
+                    except (asyncio.TimeoutError, Exception) as e_rec:
+                        logger.warning(
+                            "MCP keepalive %s: reconnect failed (%s); "
+                            "will retry next cycle",
+                            name, type(e_rec).__name__,
+                        )
         except asyncio.CancelledError:
             logger.info("MCP keepalive loop cancelled")
             raise
