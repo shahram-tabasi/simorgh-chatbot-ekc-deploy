@@ -1971,6 +1971,85 @@ def process_spec_extraction(
 # CHAT/RAG ENDPOINT
 # =============================================================================
 
+async def _answer_image_with_vlm(
+    image_bytes: bytes,
+    filename: str,
+    content_type: str,
+    user_text: str,
+    llm_mode: str = None,
+) -> Optional[str]:
+    """Answer a chat turn that carries a raster image by routing it to the
+    local VLM on 192.168.1.62 via llm-gateway.
+
+    Uploaded images (SLDs, photos, screenshots) have no text layer, so the
+    doc-processor path extracts nothing and the bytes are lost. The gateway
+    auto-selects the VLM backend whenever a message contains image_url
+    content, so we just build an OpenAI-shape data-URL message and POST it
+    in offline mode. Returns the answer text, or None to fall through to
+    the existing doc-processor path.
+    """
+    import base64 as _b64
+    import httpx as _httpx
+
+    gateway_url = os.getenv("LLM_GATEWAY_URL", "http://llm-gateway:8030").strip().rstrip("/")
+    if not gateway_url:
+        return None
+
+    ext = (filename or "img.png").rsplit(".", 1)[-1].lower()
+    mime = content_type if (content_type or "").startswith("image/") else {
+        "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+        "bmp": "image/bmp", "tiff": "image/tiff", "gif": "image/gif",
+        "webp": "image/webp",
+    }.get(ext, "image/png")
+
+    b64 = _b64.b64encode(image_bytes).decode("ascii")
+    question = (user_text or "").strip() or (
+        "Describe this engineering drawing in detail. If it is a single "
+        "line diagram or panel schematic, list the feeder/section, ratings, "
+        "device tags (CB, contactor, CT, PT, relays) and any table values "
+        "you can read."
+    )
+    system_prompt = (
+        "You are Simorgh, an electrical-engineering assistant. The user has "
+        "attached an image (often a single line diagram, panel schematic, or "
+        "datasheet). Read it carefully and answer in the user's language. "
+        "Quote exact device tags, ratings and table values you can see; say "
+        "plainly when a field on the drawing is blank rather than inventing a "
+        "value."
+    )
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            ]},
+        ],
+        # offline → local backends; no force_backend so the gateway's
+        # image sniff routes this to the VLM (.62).
+        "mode": "offline",
+        "temperature": 0.2,
+        "max_tokens": int(os.getenv("VLM_VISION_MAX_TOKENS", "1500")),
+    }
+    timeout = float(os.getenv("LLM_GATEWAY_TIMEOUT_SEC", "180"))
+    try:
+        async with _httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(f"{gateway_url}/generate", json=payload)
+            r.raise_for_status()
+            body = r.json()
+    except Exception as e:
+        logger.error(f"VLM image call failed: {e}")
+        return None
+
+    answer = (body.get("response") or "").strip()
+    if not answer:
+        logger.warning("VLM image: empty answer (backend=%s)", body.get("backend"))
+        return None
+    logger.info("VLM image: answered via %s (%d chars)", body.get("backend"), len(answer))
+    return answer
+
+
 @app.post("/api/chat/send")
 async def send_chat_message(
     request: Request,
@@ -2353,13 +2432,84 @@ async def send_chat_message(
         if _file:
             logger.info(f"📎 Processing uploaded file: {_file.filename}")
 
+            # Read the bytes once (the UploadFile stream can only be
+            # consumed once; reused for the temp-file write below).
+            _img_bytes = await _file.read()
+
+            # IMAGE SHORT-CIRCUIT: raster images (SLDs, photos, screenshots)
+            # have no text layer, so the doc-processor path below extracts
+            # nothing. Route the image straight to the local VLM on .62 via
+            # llm-gateway and return its answer.
+            _img_ct = (getattr(_file, "content_type", "") or "").lower()
+            _is_image = _img_ct.startswith("image/") or (_file.filename or "").lower().endswith(
+                (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".gif", ".webp")
+            )
+            if _is_image and _img_bytes:
+                _vlm_answer = await _answer_image_with_vlm(
+                    image_bytes=_img_bytes,
+                    filename=_file.filename or "image",
+                    content_type=_img_ct,
+                    user_text=_content,
+                    llm_mode=_llm_mode,
+                )
+                if _vlm_answer:
+                    _created = datetime.utcnow().isoformat()
+                    _disp = _content or f"📎 {_file.filename}"
+                    _umsg = {
+                        "message_id": str(uuid.uuid4()), "chat_id": _chat_id,
+                        "project_id": project_number, "page_id": _chat_id,
+                        "role": "user", "sender": "user",
+                        "content": _disp, "text": _disp,
+                        "timestamp": _created, "created_at": _created,
+                        "user_id": _user_id, "has_attachment": True,
+                        "attachment_filename": _file.filename,
+                    }
+                    _amsg = {
+                        "message_id": str(uuid.uuid4()), "chat_id": _chat_id,
+                        "project_id": project_number, "page_id": _chat_id,
+                        "role": "assistant", "sender": "assistant",
+                        "content": _vlm_answer, "text": _vlm_answer,
+                        "timestamp": _created, "created_at": _created,
+                        "llm_mode": "offline_vlm", "context_used": True,
+                        "cached": False,
+                    }
+                    try:
+                        redis.cache_chat_message(_chat_id, _umsg)
+                        redis.cache_chat_message(_chat_id, _amsg)
+                    except Exception as e:
+                        logger.warning(f"VLM image: redis cache failed: {e}")
+                    try:
+                        await memory.persistence.store_message(
+                            message_id=_umsg["message_id"], chat_id=_chat_id,
+                            user_id=_user_id, role="user", content=_disp,
+                            project_number=project_number,
+                            metadata={"has_attachment": True,
+                                      "attachment_filename": _file.filename})
+                        await memory.persistence.store_message(
+                            message_id=_amsg["message_id"], chat_id=_chat_id,
+                            user_id=_user_id, role="assistant", content=_vlm_answer,
+                            project_number=project_number,
+                            metadata={"llm_mode": "offline_vlm", "vision": True})
+                    except Exception as e:
+                        logger.warning(f"VLM image: postgres store failed: {e}")
+                    return {
+                        "chat_id": _chat_id,
+                        "response": _vlm_answer,
+                        "llm_mode": "offline_vlm",
+                        "context_used": True,
+                        "cached_response": False,
+                        "tokens": None,
+                    }
+                # VLM unavailable/empty — fall through to doc-processor.
+                logger.info("VLM image: no answer; falling back to doc-processor")
+
             # Save file temporarily
             import tempfile
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / f"{uuid.uuid4()}_{_file.filename}"
 
             with open(temp_file, 'wb') as f:
-                f.write(await _file.read())
+                f.write(_img_bytes)
 
             try:
                 # Import doc processor client
