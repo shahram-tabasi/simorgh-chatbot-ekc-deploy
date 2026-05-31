@@ -33,6 +33,15 @@ _llm_mode_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "_project_agent_llm_mode", default=None,
 )
 
+# Per-request image perception (describe-then-reason). Set in handle_input
+# when an image is attached; read by _execute_llm_task so the SYNTH step
+# always sees the VLM's structured description as authoritative ground
+# truth — regardless of which plan the planner produced. Task-scoped so
+# concurrent requests don't trample each other.
+_image_desc_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_project_agent_image_desc", default="",
+)
+
 from models.project_models import (
     COTRequest, COTAnalysis, TaskStatus, TaskType, TaskTrigger,
     MessageChannel, MessageRole, AgentState,
@@ -353,6 +362,7 @@ class ProjectManagerAgent:
         # planner, retrieval-query builder and synth all see it. The
         # stored user message (above) keeps the user's original text.
         cot_input = user_input
+        _image_desc_var.set(image_grounding or "")
         if image_grounding:
             cot_input = (
                 f"{user_input}\n\n"
@@ -1521,6 +1531,26 @@ class ProjectManagerAgent:
         prev = tool_input.get("_previous_results", {})
         context_parts = []
 
+        # Image perception grounding (describe-then-reason). When this turn
+        # carried an image, the VLM's structured description is the most
+        # authoritative source for the answer — inject it FIRST so the
+        # synth sees it regardless of what (possibly empty) retrieval steps
+        # the planner scheduled. This is what makes "describe this image" /
+        # "compare this image to my repo" work end-to-end even when the
+        # project has no repo to search.
+        _img_desc = ""
+        try:
+            _img_desc = _image_desc_var.get()
+        except Exception:
+            _img_desc = ""
+        image_present = bool(_img_desc)
+        if image_present:
+            context_parts.append(
+                "=== Attached image (vision model transcription — "
+                "AUTHORITATIVE for anything about the image) ===\n"
+                + _img_desc
+            )
+
         # Include EKC general technical knowledge
         if self.ekc_knowledge and self.ekc_knowledge.is_available():
             ekc_results = self.ekc_knowledge.search_fulltext(
@@ -1600,11 +1630,16 @@ class ProjectManagerAgent:
             "retrieval block. Quote the block.\n"
             "5. When citing, name the source file/path so the user can "
             "verify.\n"
+            "6. When an 'Attached image' transcription block is present, it "
+            "is the AUTHORITATIVE description of the image the user sent — "
+            "answer the user's question about the image directly from it "
+            "(quote the table rows, device tags, ratings). Combine it with "
+            "any other retrieval blocks when the question spans both.\n"
             "Be concise but specific."
         )
-        if kept == 0 and skipped == 0:
-            # No prior retrieval at all — degrade to the generic
-            # assistant role (e.g. simple "rephrase this" task).
+        if kept == 0 and skipped == 0 and not image_present:
+            # No prior retrieval at all and no image — degrade to the
+            # generic assistant role (e.g. simple "rephrase this" task).
             synth_system = (
                 "You are a project assistant. Answer concisely and "
                 "accurately."
