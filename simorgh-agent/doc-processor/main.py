@@ -52,6 +52,22 @@ DOCLING_TIMEOUT_SEC = float(os.getenv("DOCLING_TIMEOUT_SEC", "180"))
 DOCLING_FORMATS = {".pdf", ".docx", ".pptx", ".html", ".md"}  # docling's strong suite
 
 # ------------------------------------------------------------------
+# VLM image understanding. Raster images (single-line diagrams, panel
+# schematics, photos) carry meaning in layout + symbols, not a text
+# layer — EasyOCR returns disconnected fragments or nothing. We route
+# images to the local VLM (Qwen2.5-VL on .62) via llm-gateway, which
+# produces a structured markdown DESCRIPTION of the image. This is the
+# "perception → text" stage of a describe-then-reason pipeline (VIPER /
+# SeeingEye): the VLM translates pixels to structured text, and the
+# downstream text LLM (gpt-oss planner) reasons over it. EasyOCR stays
+# as the fallback when the gateway is unavailable.
+# ------------------------------------------------------------------
+LLM_GATEWAY_URL = os.getenv("LLM_GATEWAY_URL", "http://llm-gateway:8030").rstrip("/")
+USE_VLM_IMAGES = os.getenv("USE_VLM_IMAGES", "1").lower() in ("1", "true", "yes", "on")
+VLM_IMAGE_MAX_TOKENS = int(os.getenv("VLM_IMAGE_MAX_TOKENS", "1800"))
+VLM_IMAGE_TIMEOUT_SEC = float(os.getenv("VLM_IMAGE_TIMEOUT_SEC", "180"))
+
+# ------------------------------------------------------------------
 # FastAPI App Configuration
 # ------------------------------------------------------------------
 app = FastAPI(
@@ -291,8 +307,92 @@ class UniversalDocumentProcessor:
 
         return ''.join(parts)
 
+    async def _try_vlm_image(self, file_path: Path) -> str | None:
+        """Describe an image with the local VLM via llm-gateway.
+
+        Returns structured markdown on success, None on ANY failure so the
+        caller falls back to EasyOCR. The gateway auto-selects the VLM
+        backend (.62) whenever a message carries image_url content, so we
+        just send an offline-mode request with a base64 data URL.
+        """
+        if not USE_VLM_IMAGES:
+            return None
+        try:
+            import base64
+            ext = file_path.suffix.lower().lstrip(".")
+            mime = {
+                "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                "bmp": "image/bmp", "tiff": "image/tiff", "tif": "image/tiff",
+                "gif": "image/gif", "webp": "image/webp",
+            }.get(ext, "image/png")
+            b64 = base64.b64encode(file_path.read_bytes()).decode("ascii")
+
+            system_prompt = (
+                "You are a vision extraction engine for an electrical-"
+                "engineering document pipeline. Convert the image into clean, "
+                "structured Markdown that a downstream text model can reason "
+                "over. Rules: (1) If it is a single-line diagram, panel "
+                "schematic, or feeder drawing, transcribe every table row as "
+                "a Markdown table (field | value) and list device tags, "
+                "ratings, and labels verbatim. (2) Preserve exact codes, "
+                "part numbers, and units. (3) When a field is blank on the "
+                "drawing, write '(blank)' rather than guessing. (4) For "
+                "non-technical images, give a concise factual description. "
+                "Output ONLY the Markdown — no preamble."
+            )
+            payload = {
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": [
+                        {"type": "text",
+                         "text": f"Extract this image to Markdown. Filename: {file_path.name}"},
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                    ]},
+                ],
+                "mode": "offline",            # → local backends
+                "temperature": 0.1,
+                "max_tokens": VLM_IMAGE_MAX_TOKENS,
+            }
+            async with httpx.AsyncClient(timeout=VLM_IMAGE_TIMEOUT_SEC) as c:
+                r = await c.post(f"{LLM_GATEWAY_URL}/generate", json=payload)
+            if r.status_code != 200:
+                logger.warning(
+                    "vlm-image: %s returned HTTP %s (body[:200]=%r); "
+                    "falling back to EasyOCR",
+                    file_path.name, r.status_code, r.text[:200],
+                )
+                return None
+            md = (r.json().get("response") or "").strip()
+            if not md:
+                logger.warning(
+                    "vlm-image: %s returned empty markdown; falling back",
+                    file_path.name,
+                )
+                return None
+            logger.info(
+                "vlm-image: described %s → %d chars markdown",
+                file_path.name, len(md),
+            )
+            return md
+        except Exception as e:
+            logger.warning(
+                "vlm-image: %s failed (%s: %s); falling back to EasyOCR",
+                file_path.name, type(e).__name__, e,
+            )
+            return None
+
     async def process_image(self, file_path: Path) -> str:
-        """Process image using EasyOCR with enhanced preprocessing"""
+        """Convert an image to markdown.
+
+        Primary path: VLM description (structured, layout-aware) — the
+        right tool for schematics where OCR alone yields fragments.
+        Fallback: EasyOCR with preprocessing when the VLM is unavailable.
+        """
+        vlm_md = await self._try_vlm_image(file_path)
+        if vlm_md:
+            return vlm_md
+
         reader = self.get_ocr_reader()
         image = Image.open(file_path)
 

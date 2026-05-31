@@ -31,6 +31,14 @@ services:
       - USE_DOCLING=${USE_DOCLING:-0}
       - DOCLING_URL=${DOCLING_URL:-http://docling-serve:5001}
       - DOCLING_TIMEOUT_SEC=${DOCLING_TIMEOUT_SEC:-180}
+      # VLM image understanding. Images are described by the local VLM
+      # (Qwen2.5-VL on .62) via llm-gateway → structured markdown, the
+      # perception stage of describe-then-reason. Falls back to EasyOCR
+      # on any failure. Set USE_VLM_IMAGES=0 to force the OCR path.
+      - LLM_GATEWAY_URL=${LLM_GATEWAY_URL:-http://llm-gateway:8030}
+      - USE_VLM_IMAGES=${USE_VLM_IMAGES:-1}
+      - VLM_IMAGE_MAX_TOKENS=${VLM_IMAGE_MAX_TOKENS:-1800}
+      - VLM_IMAGE_TIMEOUT_SEC=${VLM_IMAGE_TIMEOUT_SEC:-180}
 
 networks:
   app_net:

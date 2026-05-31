@@ -333,28 +333,41 @@ class ProjectManagerAgent:
             "input_preview": user_input[:100],
         })
 
-        # 1b. IMAGE TURN → answer directly with the local VLM (.62).
-        # The text-only CoT planner cannot see pixels; an attached image
-        # (SLD, photo, screenshot) is routed straight to the vision model
-        # via llm-gateway, which auto-selects the VLM backend for
-        # image_url content. Returns None (falls through to the normal
-        # text flow) when there's no usable image for this turn.
-        vlm_answer = await self._maybe_answer_image_with_vlm(
+        # 1b. IMAGE PERCEPTION (describe-then-reason / VIPER pattern).
+        # The text-only CoT planner cannot see pixels, so the VLM on .62
+        # acts as a perception agent: it translates the attached image
+        # into a structured Markdown description, which we inject as
+        # grounding into the CoT. The planner then REASONS over that
+        # description as text and can combine it with repo/TPMS/knowledge
+        # retrieval — e.g. "compare this SLD to the spec in my repo".
+        # Returns "" when there's no usable image this turn.
+        image_grounding = await self._perceive_image(
             project_id=project_id,
             user_input=user_input,
             document_id=document_id,
             document_filename=document_filename,
-            channel=channel,
-            chat_id=chat_id,
         )
-        if vlm_answer is not None:
-            return vlm_answer
+
+        # The input the CoT pipeline reasons over. When an image was
+        # perceived, the structured description rides along so the
+        # planner, retrieval-query builder and synth all see it. The
+        # stored user message (above) keeps the user's original text.
+        cot_input = user_input
+        if image_grounding:
+            cot_input = (
+                f"{user_input}\n\n"
+                f"[Attached image — vision model description below; treat it "
+                f"as ground truth about the image and combine it with any "
+                f"retrieved project data when answering]\n{image_grounding}"
+            )
 
         # 2. Build project context from all memory layers
         await self._notify_progress(project_id, "building_context", {})
         project_context = await self.memory.build_agent_context(
-            project_id, query=user_input
+            project_id, query=cot_input
         )
+        if image_grounding:
+            project_context["image_description"] = image_grounding
 
         # 2a. Check Redis for project structure analysis — re-run if missing (data loss recovery)
         await self._ensure_project_analysis(project_id, project_context)
@@ -372,7 +385,7 @@ class ProjectManagerAgent:
 
         cot_request = COTRequest(
             project_id=uuid.UUID(project_id) if isinstance(project_id, str) else project_id,
-            user_input=user_input,
+            user_input=cot_input,
             channel=channel,
             chat_id=chat_id,
             document_id=uuid.UUID(document_id) if document_id else None,
@@ -433,7 +446,7 @@ class ProjectManagerAgent:
             execution_results, final_response = await self._execute_task_chain(
                 project_id, str(analysis.chain_id), tasks_created,
                 project_context=project_context,
-                user_input=user_input,
+                user_input=cot_input,
             )
         elif not auto_execute:
             final_response = (
@@ -2081,82 +2094,82 @@ class ProjectManagerAgent:
             logger.error(f"EPLAN draw failed: {e}")
             return {"output": f"EPLAN draw error: {e}", "metadata": {"error": True}}
 
-    async def _maybe_answer_image_with_vlm(
+    async def _perceive_image(
         self, project_id: str, user_input: str,
         document_id: Optional[str], document_filename: Optional[str],
-        channel, chat_id: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
-        """If this turn carries an image, answer it directly with the
-        local VLM on .62 (via llm-gateway) and return the standard
-        handle_input response dict. Return None to fall through to the
-        normal text CoT flow.
+    ) -> str:
+        """Perception stage of describe-then-reason. If this turn carries
+        an image, ask the local VLM on .62 (via llm-gateway) for a
+        structured Markdown description and return it as a string for the
+        CoT to reason over. Returns "" when there's no usable image.
 
         The image bytes are stashed in Redis at upload time
-        (set_uploaded_image); the text-only /documents markdown path
-        drops them. We base64-data-URL the bytes into an OpenAI-shape
+        (set_uploaded_image). We base64-data-URL them into an OpenAI-shape
         image_url message and POST to the gateway in offline mode — the
-        gateway's _has_image sniff routes image content to the VLM
-        backend automatically, no force_backend needed.
+        gateway's _has_image sniff routes image content to the VLM backend
+        automatically. The VLM is used as a PERCEPTION agent (pixels →
+        structured text), not as the final answerer; gpt-oss then reasons
+        over the description plus any retrieval the planner schedules.
         """
-        # Cheap gate: only proceed when there's a document reference that
-        # looks like an image.
         fn = (document_filename or "").lower()
         looks_image = fn.endswith(
             (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".gif", ".webp")
         )
         if not document_id and not looks_image:
-            return None
+            return ""
 
         try:
             from services.redis_service import get_redis_service
             stash = get_redis_service().get_uploaded_image(str(document_id)) if document_id else None
         except Exception as e:
-            logger.warning("vlm image: redis lookup failed: %s", e)
+            logger.warning("perceive_image: redis lookup failed: %s", e)
             stash = None
 
         if not stash or not stash.get("b64"):
-            # No bytes available (text upload, expired stash, or image
-            # uploaded before this feature shipped). Fall through.
             if looks_image:
                 logger.info(
-                    "vlm image: %s looks like an image but no bytes were "
-                    "stashed (doc_id=%s); falling back to text flow",
+                    "perceive_image: %s looks like an image but no bytes "
+                    "were stashed (doc_id=%s); skipping perception",
                     fn or document_filename, document_id,
                 )
-            return None
+            return ""
 
         mime = stash.get("mime") or "image/png"
         b64 = stash["b64"]
         fname = stash.get("filename") or document_filename or "image"
 
         await self._notify_progress(project_id, "vlm_vision", {
-            "status": f"Analysing image {fname} with the vision model…",
+            "status": f"Reading image {fname} with the vision model…",
             "filename": fname,
         })
 
         gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
         if not gateway_url:
-            logger.warning("vlm image: LLM_GATEWAY_URL unset; cannot reach VLM")
-            return None
+            logger.warning("perceive_image: LLM_GATEWAY_URL unset; cannot reach VLM")
+            return ""
 
-        question = user_input.strip() or (
-            "Describe this engineering drawing in detail. If it is a single "
-            "line diagram or panel schematic, list the feeder/section, "
-            "ratings, device tags (CB, contactor, CT, PT, relays), and any "
-            "table values you can read."
-        )
+        # Perception prompt: extract, don't answer. The downstream gpt-oss
+        # synth produces the user-facing reply; the VLM's job is a faithful
+        # structured transcription so the planner can reason + retrieve.
         system_prompt = (
-            "You are Simorgh, an electrical-engineering assistant. The user "
-            "has attached an image (often a single line diagram, panel "
-            "schematic, or datasheet). Read it carefully and answer in the "
-            "user's language. Quote exact device tags, ratings, and table "
-            "values you can see; say plainly when a field on the drawing is "
-            "blank rather than inventing a value."
+            "You are a vision extraction engine in an electrical-engineering "
+            "pipeline. Convert the attached image into clean, structured "
+            "Markdown that a downstream text model will reason over. If it is "
+            "a single-line diagram, panel schematic, or feeder drawing: "
+            "transcribe every table row as a Markdown table (field | value), "
+            "and list device tags, ratings, bus data, and labels verbatim. "
+            "Preserve exact codes, part numbers and units. When a field is "
+            "blank on the drawing write '(blank)' rather than guessing. For "
+            "non-technical images give a concise factual description. Output "
+            "ONLY the Markdown — no preamble, do not answer the user's "
+            "question, just transcribe what is visible."
         )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": [
-                {"type": "text", "text": question},
+                {"type": "text",
+                 "text": f"Transcribe this image to structured Markdown. "
+                         f"Filename: {fname}. (User asked: {user_input[:200]})"},
                 {"type": "image_url",
                  "image_url": {"url": f"data:{mime};base64,{b64}"}},
             ]},
@@ -2164,9 +2177,8 @@ class ProjectManagerAgent:
         payload = {
             "messages": messages,
             "mode": "offline",            # → local backends
-            # no force_backend: _has_image sniff routes image → VLM (.62)
-            "temperature": 0.2,
-            "max_tokens": int(os.getenv("VLM_VISION_MAX_TOKENS", "1500")),
+            "temperature": 0.1,
+            "max_tokens": int(os.getenv("VLM_VISION_MAX_TOKENS", "1800")),
         }
 
         import httpx
@@ -2177,53 +2189,25 @@ class ProjectManagerAgent:
                 r.raise_for_status()
                 body = r.json()
         except Exception as e:
-            logger.error("vlm image: gateway call failed: %s", e)
+            logger.error("perceive_image: gateway call failed: %s", e)
             await self._notify_progress(project_id, "vlm_vision_error", {
                 "error": str(e)[:200],
             })
-            # Fall through to text flow rather than hard-failing the turn.
-            return None
+            return ""
 
-        answer = (body.get("response") or "").strip()
+        desc = (body.get("response") or "").strip()
         backend = body.get("backend") or body.get("mode") or "offline_vlm"
-        if not answer:
+        if not desc:
             logger.warning(
-                "vlm image: empty answer from gateway (backend=%s)", backend
+                "perceive_image: empty description (backend=%s)", backend
             )
-            return None
+            return ""
 
         logger.info(
-            "vlm image: answered via %s for doc_id=%s (%d chars)",
-            backend, document_id, len(answer),
+            "perceive_image: described %s via %s (%d chars) → CoT grounding",
+            fname, backend, len(desc),
         )
-
-        # Persist the assistant reply so it shows in history like any turn.
-        try:
-            await self.memory.store_message(
-                project_id=project_id,
-                role="assistant",
-                content=answer,
-                channel=channel.value if hasattr(channel, "value") else str(channel),
-                chat_id=chat_id,
-            )
-        except Exception as e:
-            logger.debug("vlm image: store_message failed: %s", e)
-
-        await self._notify_progress(project_id, "complete", {
-            "response_preview": answer[:200],
-            "tasks_completed": 1,
-            "tasks_failed": 0,
-        })
-
-        return {
-            "response": answer,
-            "chain_id": "",
-            "reasoning": f"Image turn answered directly by vision model ({backend}).",
-            "tasks_created": 0,
-            "tasks": [{"id": "vlm", "title": "Analyse image", "status": "completed"}],
-            "execution_results": [],
-            "commit": None,
-        }
+        return desc
 
     async def _execute_sld_analyze_task(self, project_id: str, task: Dict,
                                         tool_input: Dict) -> Dict:

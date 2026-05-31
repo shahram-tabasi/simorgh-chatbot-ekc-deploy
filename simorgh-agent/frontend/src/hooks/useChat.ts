@@ -131,7 +131,8 @@ export function useChat(
   // Streaming message sender using Server-Sent Events
   const sendMessageStreaming = useCallback(async (
     content: string,
-    options?: ChatOptions
+    options?: ChatOptions,
+    files?: UploadedFile[]
   ) => {
     if (!chatId || !userId) {
       console.error('❌ Cannot send message: chatId or userId missing');
@@ -260,6 +261,36 @@ export function useChat(
         const projectId = sessResp.data.project_id;
         if (!projectId) throw new Error('session has no project_id');
 
+        // If files are attached, upload them to project-agent /documents
+        // FIRST (this stashes image bytes for the VLM and registers the
+        // document), then pass the document_id on the stream body so the
+        // agent runs the describe-then-reason vision pipeline in CoT.
+        let _documentId: string | undefined;
+        let _documentFilename: string | undefined;
+        if (files && files.length > 0 && files[0].file) {
+          try {
+            const fd = new FormData();
+            fd.append('file', files[0].file);
+            const upResp = await axios.post(
+              `${API_BASE}/v2/agent/projects/${projectId}/documents`,
+              fd,
+              {
+                headers: {
+                  'Content-Type': 'multipart/form-data',
+                  'Authorization': `Bearer ${token}`,
+                },
+                signal: abortControllerRef.current?.signal,
+              },
+            );
+            _documentId =
+              upResp.data?.document_id || upResp.data?.id || upResp.data?.document?.id;
+            _documentFilename = files[0].name;
+            console.log('📎 Uploaded attachment to project-agent:', _documentId);
+          } catch (upErr) {
+            console.error('Attachment upload failed:', upErr);
+          }
+        }
+
         const url = `${API_BASE}/v2/agent/projects/${projectId}/message/stream`;
         const response = await fetch(url, {
           method: 'POST',
@@ -278,6 +309,11 @@ export function useChat(
             // accepts this on ProjectMessageCreate and falls back to
             // local if the requested online provider isn't configured.
             llm_mode: llmMode || 'offline',
+            // Attachment reference (set when a file was uploaded above).
+            // The agent fetches the stashed image bytes by document_id
+            // and runs vision perception before planning.
+            document_id: _documentId,
+            document_filename: _documentFilename,
           }),
           signal: abortControllerRef.current?.signal,
         });
@@ -984,11 +1020,20 @@ export function useChat(
 
     setMessages(prev => [...prev, userMessage]);
 
-    // Use streaming unless disabled or files are attached
-    const useStreaming = options?.useStreaming !== false && (!files || files.length === 0);
+    // Routing:
+    //  - Project sessions (`session_…`) ALWAYS use the modern streaming
+    //    CoT path, including when files are attached. Images are uploaded
+    //    to project-agent /documents (which stashes the bytes) and the
+    //    document_id rides along on the stream body; the agent runs the
+    //    describe-then-reason vision pipeline. No legacy endpoint.
+    //  - General chats with files fall back to the batch path.
+    const isProjectSession = chatId.startsWith('session_');
+    const hasFiles = !!(files && files.length > 0);
+    const useStreaming =
+      options?.useStreaming !== false && (!hasFiles || isProjectSession);
 
     if (useStreaming) {
-      await sendMessageStreaming(content, options);
+      await sendMessageStreaming(content, options, files);
     } else {
       await sendMessageBatch(content, files, options);
     }
