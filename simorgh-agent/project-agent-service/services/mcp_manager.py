@@ -1000,6 +1000,13 @@ def get_mcp_manager() -> MCPManager:
                 # no MCP tool needed for that direction.
                 "MAIL_BRIDGE_MCP_URL", "http://mail-bridge:8051/mcp"
             ),
+            "techserver": os.getenv(
+                # Legacy techserver (SMB host). Exposes techserver_get_tree
+                # (list a project's files by OE number, Drawing/ CAD
+                # excluded, no download) and techserver_read_artifact
+                # (fetch ONE file as markdown). Replaces bulk techserver_sync.
+                "TECHSERVER_MCP_URL", "http://techserver-mcp:8053/mcp"
+            ),
         }
 
         for name, url in servers.items():
