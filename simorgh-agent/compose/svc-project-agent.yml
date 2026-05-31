@@ -130,6 +130,10 @@ services:
       - PROJECT_EXPLORER_MCP_URL=http://project-explorer:8052/mcp
       - TPMS_CONTEXT_MCP_URL=http://tpms-context-agent:8050/mcp
       - CONTEXT_SEARCH_MCP_URL=http://context-search:8049/mcp
+      # Legacy techserver (SMB) read surface — list project tree + fetch
+      # single files on demand (Drawing/ CAD excluded). Replaces the old
+      # bulk techserver_sync copy.
+      - TECHSERVER_MCP_URL=http://techserver-mcp:8053/mcp
       # MySQL TPMS (legacy)
       - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
       - MYSQL_PORT=${MYSQL_PORT:-3306}

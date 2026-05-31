@@ -588,10 +588,24 @@ TOOL CATALOG (CORE)
                the user's phrasing doesn't match an indexed entity,
                it returns empty rather than approximating.
 
-- techserver_sync(oenum)
-    PURPOSE  : ladder E — SMB copy of legacy engineering files into the
-               project workspace.
+- techserver_get_tree(oenum)
+    PURPOSE  : ladder E — list a legacy techserver project's file tree by
+               OE number WITHOUT downloading anything. Drawing/ and CAD/
+               archive files are hard-excluded.
+    USE WHEN : the user asks about files on the techserver for an OE
+               number. ALWAYS call this before techserver_read_artifact.
+    OUTPUT   : {entries:[{path,type,size}], file_count, share}. Pick the
+               exact `path` of the file you need for the read step.
     DO NOT   : call when `sources_enabled.techserver` is FALSE.
+
+- techserver_read_artifact(oenum, path)
+    PURPOSE  : ladder E — fetch ONE file from a techserver project and
+               return it as markdown (PDF/Office/text natively, images
+               via the VLM). Copies just that file, not the project.
+    USE WHEN : you have an exact path from techserver_get_tree.
+    DO NOT   : pass a path under Drawing/ or a CAD/archive file — it is
+               refused. Do not call when `sources_enabled.techserver`
+               is FALSE.
 
 - memory_query(query, scope?)
     PURPOSE  : ladder F (chat history) and generic working-memory

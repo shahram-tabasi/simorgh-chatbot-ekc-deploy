@@ -87,7 +87,8 @@ include:
   # ---- New services (enterprise migration) ----------------------------------
   - compose/svc-gitlab-mcp.yml         # GitLab REST + MCP (replaces tech-kb + techserver)
   - compose/svc-runtime-broker.yml     # Per-project long-lived session containers
-  - compose/svc-project-explorer.yml   # Two-phase project exploration agent
+  - compose/svc-project-explorer.yml
+  - compose/svc-techserver-mcp.yml   # Two-phase project exploration agent
   - compose/svc-context-search.yml     # Hybrid (BM25 + kNN) search over ES
   - compose/svc-tpms-context-agent.yml # On-demand TPMS context for CoT
   - compose/svc-mail-bridge.yml        # Mailcow IMAP/SMTP bridge (replaces mail-gateway + project-mail)
