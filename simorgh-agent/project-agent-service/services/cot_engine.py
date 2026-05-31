@@ -1040,10 +1040,30 @@ class COTEngine:
                     "Ignore the TPMS schema instructions below."
                 )
             if sources_enabled.get("techserver"):
+                # Surface the techserver OE number so the planner can fill
+                # techserver_get_tree(oenum=...) without guessing. It lives
+                # in sources_enabled.techserver_oenum (set by the wizard) or
+                # falls back to the project's tpms_oenum.
+                ts_oenum = (
+                    sources_enabled.get("techserver_oenum")
+                    or proj_meta.get("techserver_oenum")
+                    or proj_meta.get("tpms_oenum")
+                    or project_context.get("tpms_oenum")
+                    or ""
+                )
+                oenum_hint = (
+                    f" The OE number for this project is {ts_oenum}; pass "
+                    f"oenum=\"{ts_oenum}\" to both tools."
+                    if ts_oenum else
+                    " Extract the OE number from the user's message and pass "
+                    "it as oenum."
+                )
                 allowed_lines.append(
-                    "  - techserver_get_tree / techserver_read_artifact — list a "
-                    "techserver project tree by OE number, then read single "
-                    "files on demand (Drawing/ CAD excluded)."
+                    "  - techserver_get_tree / techserver_read_artifact — for "
+                    "ANY question about this project's files, FIRST call "
+                    "techserver_get_tree(oenum) to list the tree (Drawing/ CAD "
+                    "excluded), then techserver_read_artifact(oenum, path=<exact "
+                    "path from the tree>) to read a specific file." + oenum_hint
                 )
             else:
                 allowed_lines.append(
