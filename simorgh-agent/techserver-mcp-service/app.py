@@ -27,7 +27,6 @@ Endpoints (REST mirrors + MCP at /mcp):
   GET  /tree?oenum=
   GET  /artifact?oenum=&path=
 """
-from __future__ import annotations
 
 import asyncio
 import json
