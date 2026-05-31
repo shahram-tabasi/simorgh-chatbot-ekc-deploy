@@ -58,6 +58,7 @@ from services.project_memory_service import get_project_memory_service, ProjectM
 from services.shell_service import get_shell_service, ShellServiceClient
 from services.email_gateway import get_email_gateway, InboundEmail
 from services.doc_processor_client import DocProcessorClient
+from services.redis_service import get_redis_service
 
 # Role gate for project creation. Configurable via env so adding more roles
 # (e.g. manager_technical) doesn't require a code change.
@@ -1518,6 +1519,40 @@ async def upload_document(
     # For text files, decode directly
     markdown_content = ""
     content_text = ""
+
+    # Stash raw bytes of IMAGE uploads so a later chat turn can route them
+    # to the vision model. doc-processor below converts binaries to
+    # markdown and we only persist that markdown — fine for PDFs/Office
+    # (real text layer) but raster diagrams (SLDs, photos, screenshots)
+    # have no text, so the bytes would be lost and the VLM could never
+    # see them. Keep them in Redis (base64, 24h TTL) keyed by document_id.
+    _img_ct = (file.content_type or "").lower()
+    _is_image = _img_ct.startswith("image/") or (
+        file.filename and file.filename.lower().endswith(
+            (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".gif", ".webp")
+        )
+    )
+    if _is_image:
+        try:
+            import base64 as _b64
+            ext = (file.filename or "img.png").rsplit(".", 1)[-1].lower()
+            mime = _img_ct if _img_ct.startswith("image/") else {
+                "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                "bmp": "image/bmp", "tiff": "image/tiff", "gif": "image/gif",
+                "webp": "image/webp",
+            }.get(ext, "image/png")
+            get_redis_service().set_uploaded_image(
+                document_id=doc_id_str,
+                b64=_b64.b64encode(raw_content).decode("ascii"),
+                mime_type=mime,
+                filename=file.filename or "image.png",
+            )
+            logger.info(
+                "Stashed image bytes for VLM: doc_id=%s (%d bytes, %s)",
+                doc_id_str, len(raw_content), mime,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to stash image bytes for {file.filename}: {e}")
 
     if is_binary:
         try:

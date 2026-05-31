@@ -1094,6 +1094,38 @@ class RedisService:
     # UTILITIES
     # =========================================================================
 
+    def set_uploaded_image(
+        self, document_id: str, b64: str, mime_type: str,
+        filename: str = "", ttl: int = 86400,
+    ) -> bool:
+        """Stash an uploaded image (base64) so a later chat turn can route
+        it to the vision model. The /documents upload path converts
+        binaries to markdown and discards the raw bytes; raster diagrams
+        (SLDs, screenshots) have no text layer, so the bytes must be kept
+        here for the VLM. base64 is plain ASCII so decode_responses=True
+        is safe. TTL defaults to 24h."""
+        try:
+            key = f"uploaded_image:{document_id}"
+            payload = json.dumps({
+                "b64": b64, "mime": mime_type, "filename": filename,
+            })
+            self.cache_client.setex(key, ttl, payload)
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to stash uploaded image {document_id}: {e}")
+            return False
+
+    def get_uploaded_image(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """Return {b64, mime, filename} for a stashed image, or None."""
+        try:
+            raw = self.cache_client.get(f"uploaded_image:{document_id}")
+            if not raw:
+                return None
+            return json.loads(raw)
+        except (RedisError, ValueError) as e:
+            logger.error(f"Failed to read uploaded image {document_id}: {e}")
+            return None
+
     def _get_client(self, db_name: str) -> redis.Redis:
         """Get Redis client by database name"""
         clients = {

@@ -333,6 +333,23 @@ class ProjectManagerAgent:
             "input_preview": user_input[:100],
         })
 
+        # 1b. IMAGE TURN → answer directly with the local VLM (.62).
+        # The text-only CoT planner cannot see pixels; an attached image
+        # (SLD, photo, screenshot) is routed straight to the vision model
+        # via llm-gateway, which auto-selects the VLM backend for
+        # image_url content. Returns None (falls through to the normal
+        # text flow) when there's no usable image for this turn.
+        vlm_answer = await self._maybe_answer_image_with_vlm(
+            project_id=project_id,
+            user_input=user_input,
+            document_id=document_id,
+            document_filename=document_filename,
+            channel=channel,
+            chat_id=chat_id,
+        )
+        if vlm_answer is not None:
+            return vlm_answer
+
         # 2. Build project context from all memory layers
         await self._notify_progress(project_id, "building_context", {})
         project_context = await self.memory.build_agent_context(
@@ -2063,6 +2080,150 @@ class ProjectManagerAgent:
         except Exception as e:
             logger.error(f"EPLAN draw failed: {e}")
             return {"output": f"EPLAN draw error: {e}", "metadata": {"error": True}}
+
+    async def _maybe_answer_image_with_vlm(
+        self, project_id: str, user_input: str,
+        document_id: Optional[str], document_filename: Optional[str],
+        channel, chat_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """If this turn carries an image, answer it directly with the
+        local VLM on .62 (via llm-gateway) and return the standard
+        handle_input response dict. Return None to fall through to the
+        normal text CoT flow.
+
+        The image bytes are stashed in Redis at upload time
+        (set_uploaded_image); the text-only /documents markdown path
+        drops them. We base64-data-URL the bytes into an OpenAI-shape
+        image_url message and POST to the gateway in offline mode — the
+        gateway's _has_image sniff routes image content to the VLM
+        backend automatically, no force_backend needed.
+        """
+        # Cheap gate: only proceed when there's a document reference that
+        # looks like an image.
+        fn = (document_filename or "").lower()
+        looks_image = fn.endswith(
+            (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".gif", ".webp")
+        )
+        if not document_id and not looks_image:
+            return None
+
+        try:
+            from services.redis_service import get_redis_service
+            stash = get_redis_service().get_uploaded_image(str(document_id)) if document_id else None
+        except Exception as e:
+            logger.warning("vlm image: redis lookup failed: %s", e)
+            stash = None
+
+        if not stash or not stash.get("b64"):
+            # No bytes available (text upload, expired stash, or image
+            # uploaded before this feature shipped). Fall through.
+            if looks_image:
+                logger.info(
+                    "vlm image: %s looks like an image but no bytes were "
+                    "stashed (doc_id=%s); falling back to text flow",
+                    fn or document_filename, document_id,
+                )
+            return None
+
+        mime = stash.get("mime") or "image/png"
+        b64 = stash["b64"]
+        fname = stash.get("filename") or document_filename or "image"
+
+        await self._notify_progress(project_id, "vlm_vision", {
+            "status": f"Analysing image {fname} with the vision model…",
+            "filename": fname,
+        })
+
+        gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
+        if not gateway_url:
+            logger.warning("vlm image: LLM_GATEWAY_URL unset; cannot reach VLM")
+            return None
+
+        question = user_input.strip() or (
+            "Describe this engineering drawing in detail. If it is a single "
+            "line diagram or panel schematic, list the feeder/section, "
+            "ratings, device tags (CB, contactor, CT, PT, relays), and any "
+            "table values you can read."
+        )
+        system_prompt = (
+            "You are Simorgh, an electrical-engineering assistant. The user "
+            "has attached an image (often a single line diagram, panel "
+            "schematic, or datasheet). Read it carefully and answer in the "
+            "user's language. Quote exact device tags, ratings, and table "
+            "values you can see; say plainly when a field on the drawing is "
+            "blank rather than inventing a value."
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            ]},
+        ]
+        payload = {
+            "messages": messages,
+            "mode": "offline",            # → local backends
+            # no force_backend: _has_image sniff routes image → VLM (.62)
+            "temperature": 0.2,
+            "max_tokens": int(os.getenv("VLM_VISION_MAX_TOKENS", "1500")),
+        }
+
+        import httpx
+        timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(f"{gateway_url}/generate", json=payload)
+                r.raise_for_status()
+                body = r.json()
+        except Exception as e:
+            logger.error("vlm image: gateway call failed: %s", e)
+            await self._notify_progress(project_id, "vlm_vision_error", {
+                "error": str(e)[:200],
+            })
+            # Fall through to text flow rather than hard-failing the turn.
+            return None
+
+        answer = (body.get("response") or "").strip()
+        backend = body.get("backend") or body.get("mode") or "offline_vlm"
+        if not answer:
+            logger.warning(
+                "vlm image: empty answer from gateway (backend=%s)", backend
+            )
+            return None
+
+        logger.info(
+            "vlm image: answered via %s for doc_id=%s (%d chars)",
+            backend, document_id, len(answer),
+        )
+
+        # Persist the assistant reply so it shows in history like any turn.
+        try:
+            await self.memory.store_message(
+                project_id=project_id,
+                role="assistant",
+                content=answer,
+                channel=channel.value if hasattr(channel, "value") else str(channel),
+                chat_id=chat_id,
+            )
+        except Exception as e:
+            logger.debug("vlm image: store_message failed: %s", e)
+
+        await self._notify_progress(project_id, "complete", {
+            "response_preview": answer[:200],
+            "tasks_completed": 1,
+            "tasks_failed": 0,
+        })
+
+        return {
+            "response": answer,
+            "chain_id": "",
+            "reasoning": f"Image turn answered directly by vision model ({backend}).",
+            "tasks_created": 0,
+            "tasks": [{"id": "vlm", "title": "Analyse image", "status": "completed"}],
+            "execution_results": [],
+            "commit": None,
+        }
 
     async def _execute_sld_analyze_task(self, project_id: str, task: Dict,
                                         tool_input: Dict) -> Dict:
