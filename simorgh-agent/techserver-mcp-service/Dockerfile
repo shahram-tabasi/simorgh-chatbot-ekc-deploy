@@ -3,9 +3,11 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # smbclient is the SMB/CIFS client used to list + fetch single files from
-# the legacy techserver. Self-contained service — no shared libs.
+# the legacy techserver. curl is included for in-container debugging /
+# manual endpoint probing (the slim base image ships neither). Self-
+# contained service — no shared libs.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends smbclient && \
+    apt-get install -y --no-install-recommends smbclient curl && \
     rm -rf /var/lib/apt/lists/*
 
 COPY techserver-mcp-service/requirements.txt /app/requirements.txt
