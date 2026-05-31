@@ -346,13 +346,21 @@ D. CROSS-PROJECT STANDARDS / TECHNICAL KNOWLEDGE
    Skip if `sources_enabled.ekc` is FALSE — the user opted out of
    EKC-derived knowledge and the planner MUST stay inside their repo.
 
-E. ENGINEERING FILES NOT IN GIT  (legacy techserver layout)
-   Trigger: user references files by OE-number folder, drawings stored on
-            the SMB techserver, "show me the BOM from 1.3 for OE 12345"
-   Plan:    techserver_sync(oenum)  ← pulls into workspace
-            → gitlab_mcp.read_artifact_mcp(...) for the synced files
+E. ENGINEERING FILES NOT IN GIT  (legacy techserver, SMB host)
+   Trigger: user references files by OE-number folder on the techserver,
+            "show me the spec from techserver for OE 12065", "the CT&PT
+            calc on 1.3 for OE 12065"
+   Plan:    techserver_get_tree(oenum)            ← MANDATORY first; lists
+                                                    the project's files
+                                                    WITHOUT downloading
+                                                    (huge Drawing/ CAD tree
+                                                    is excluded)
+            → techserver_read_artifact(oenum, path=<EXACT path from tree>)
+                                                    ← fetches ONE file → md
             → llm.synthesize
-   Skip if `sources_enabled.techserver` is FALSE.
+   ALWAYS tree-first; pick the exact path from the tree. NEVER bulk-copy
+   and NEVER request a path under Drawing/. Skip if
+   `sources_enabled.techserver` is FALSE.
 
 F. CHAT HISTORY  (this user, this project, past turns)
    Trigger: "we discussed", "you said earlier", "last time", "continue
@@ -813,7 +821,8 @@ _FALLBACK_MCP_TOOLS = """You also have access to these microservice tools:
 - eplan_draw: Trigger EPLAN drawing generation. Input: {{"project_name": "name", "eplan_data": "[...]"}}
 - eplan_resolve_port: Find available EPLAN server port. Input: {{"username": "agent"}}
 - sld_analyze: Analyze a Single Line Diagram (SLD) image/PDF using GPT-4o vision. Returns structured JSON with CBs, feeders, transformers, ratings. Input: {{"document_id": "doc-uuid", "filename": "sld.pdf"}}
-- techserver_sync: Copy project files from techserver (192.168.1.3) via SMB to workspace. For legacy users only. Input: {{"oenum": "12345"}}"""
+- techserver_get_tree: List a legacy techserver project tree by OE number (Drawing/ CAD excluded; no download). Input: {{"oenum": "12065"}}
+- techserver_read_artifact: Fetch ONE techserver file as markdown. Input: {{"oenum": "12065", "path": "Document/Client/Spec/...pdf"}}"""
 
 
 class COTEngine:
@@ -1032,11 +1041,14 @@ class COTEngine:
                 )
             if sources_enabled.get("techserver"):
                 allowed_lines.append(
-                    "  - techserver_sync — for SMB-mounted project files."
+                    "  - techserver_get_tree / techserver_read_artifact — list a "
+                    "techserver project tree by OE number, then read single "
+                    "files on demand (Drawing/ CAD excluded)."
                 )
             else:
                 allowed_lines.append(
-                    "  - techserver is DISABLED — do NOT call techserver_sync."
+                    "  - techserver is DISABLED — do NOT call techserver_get_tree "
+                    "or techserver_read_artifact."
                 )
             if sources_enabled.get("upload"):
                 allowed_lines.append(
