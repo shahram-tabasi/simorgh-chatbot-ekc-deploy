@@ -602,7 +602,7 @@ TOOL CATALOG (CORE)
                archive files are hard-excluded.
     USE WHEN : the user asks about files on the techserver for an OE
                number. ALWAYS call this before techserver_read_artifact.
-    OUTPUT   : {entries:[{path,type,size}], file_count, share}. Pick the
+    OUTPUT   : {{entries:[{{path,type,size}}], file_count, share}}. Pick the
                exact `path` of the file you need for the read step.
     DO NOT   : call when `sources_enabled.techserver` is FALSE.
 
