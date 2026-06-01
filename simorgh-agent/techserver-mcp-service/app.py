@@ -226,14 +226,17 @@ def _excluded(path: str) -> bool:
     return False
 
 
-def _parse_tree(listing: str) -> list[dict]:
-    """Parse `smbclient -c 'recurse ON; ls'` output into [{path,type,size}],
-    pruning excluded dirs (Drawing/) and CAD/archive extensions."""
+def _parse_tree(listing: str, base: str = "") -> list[dict]:
+    """Parse smbclient ls output into [{path,type,size}], pruning excluded
+    dirs (Drawing/) and CAD/archive extensions.
+
+    Handles BOTH recurse-ON output (with `\\Dir\\Sub` headers) and a plain
+    single-directory `ls` (no headers — entries are relative to `base`)."""
     entries: list[dict] = []
-    cur = ""  # current directory path relative to share root, "/"-joined
+    cur = base.strip("/")  # current dir relative to share root
     for line in listing.splitlines():
         if line.startswith("\\"):
-            # Directory header: "\Document\Client"
+            # recurse-mode directory header: "\Document\Client"
             cur = line.strip().lstrip("\\").replace("\\", "/")
             continue
         m = _ENTRY_RE.match(line)
@@ -254,11 +257,26 @@ def _parse_tree(listing: str) -> list[dict]:
     return entries
 
 
-async def get_tree_impl(oenum: str, refresh: bool = False) -> dict:
+async def get_tree_impl(
+    oenum: str, path: str = "", recursive: bool = False, refresh: bool = False,
+) -> dict:
+    """List a techserver project's files.
+
+    DEFAULT is a fast SINGLE-LEVEL listing of `path` (root when empty) —
+    a full recursive walk of a real project (1000+ files) takes far longer
+    than the agent's MCP call timeout, so recurse is opt-in. The agent
+    browses top-down: list root → list a subdir by passing its path →
+    read a file. Each level is cached.
+    """
     share = await _resolve_share(oenum)
     digits = re.sub(r"\D", "", oenum)
+    sub = path.strip().strip("/").replace("\\", "/")
+    if sub and _excluded(sub):
+        raise HTTPException(status_code=403,
+                            detail=f"path '{sub}' is excluded (Drawing/CAD)")
+
     cache = _r()
-    ckey = f"techserver:tree:{digits}"
+    ckey = f"techserver:tree:{digits}:{'R' if recursive else 'L'}:{sub}"
     if cache and not refresh:
         try:
             hit = cache.get(ckey)
@@ -269,17 +287,33 @@ async def get_tree_impl(oenum: str, refresh: bool = False) -> dict:
         except Exception:
             pass
 
+    # Build the smbclient command. Single-level: `cd <sub>; ls`. Recursive:
+    # `cd <sub>; recurse ON; ls` (only used when explicitly requested).
+    smb_path = sub.replace("/", "\\")
+    cmd_parts = []
+    if smb_path:
+        cmd_parts.append(f'cd "{smb_path}"')
+    if recursive:
+        cmd_parts.append("recurse ON")
+    cmd_parts.append("ls")
+    smb_cmd = "; ".join(cmd_parts)
+
     rc, out, err = await _smb(
-        [f"//{TECHSERVER_HOST}/{share}", "-c", "recurse ON; ls"], SMB_TIMEOUT,
+        [f"//{TECHSERVER_HOST}/{share}", "-c", smb_cmd], SMB_TIMEOUT,
     )
     if "NT_STATUS" in out or "NT_STATUS" in err:
+        blob = (err or out)
+        if "NT_STATUS_OBJECT_NAME_NOT_FOUND" in blob or "NT_STATUS_OBJECT_PATH_NOT_FOUND" in blob:
+            raise HTTPException(status_code=404, detail=f"path not found: {sub}")
         raise HTTPException(status_code=502,
-                            detail=f"smbclient error: {(err or out)[:200]}")
-    files = _parse_tree(out)
+                            detail=f"smbclient error: {blob[:200]}")
+    files = _parse_tree(out, base=sub)
     result = {
         "oenum": digits,
         "share": share,
         "host": TECHSERVER_HOST,
+        "path": sub,
+        "recursive": recursive,
         "entries": files,
         "file_count": sum(1 for f in files if f["type"] == "blob"),
         "dir_count": sum(1 for f in files if f["type"] == "tree"),
@@ -395,8 +429,10 @@ async def projects(search: str = "") -> dict:
 
 
 @app.get("/tree")
-async def tree(oenum: str = Query(...), refresh: bool = False) -> dict:
-    return await get_tree_impl(oenum, refresh=refresh)
+async def tree(oenum: str = Query(...), path: str = "",
+               recursive: bool = False, refresh: bool = False) -> dict:
+    return await get_tree_impl(oenum, path=path, recursive=recursive,
+                               refresh=refresh)
 
 
 @app.get("/artifact")
@@ -426,15 +462,25 @@ async def techserver_list_projects(search_term: str = "") -> dict:
 
 
 @mcp.tool()
-async def techserver_get_tree(oenum: str, refresh: bool = False) -> dict:
-    """List a techserver project's file tree by OE number WITHOUT downloading.
+async def techserver_get_tree(
+    oenum: str, path: str = "", recursive: bool = False, refresh: bool = False,
+) -> dict:
+    """List a techserver project's files by OE number WITHOUT downloading.
 
-    Returns {entries:[{path,type,size}], file_count, ...}. The Drawing/
-    subtree and CAD/archive files (.dwg/.dxf/.ema/.edb/.elk/.zip/.rar/.7z)
-    are hard-excluded. Result is cached in Redis; pass refresh=true to
-    force a re-list.
+    Browse top-down: call with path="" to list the ROOT (fast — returns the
+    top folders like Document/, Identity/), then call again with
+    path="Document/Client" to list inside a subfolder, and so on. This
+    single-level default is FAST; a full project has 1000+ files and a
+    recursive walk is slow, so recursive=true is opt-in and should only be
+    used on a narrow subfolder.
+
+    Returns {entries:[{path,type,size}], file_count, dir_count, path, ...}.
+    The Drawing/ subtree and CAD/archive files (.dwg/.dxf/.ema/.edb/.elk/
+    .zip/.rar/.7z) are hard-excluded. Each level is cached; refresh=true
+    forces a re-list.
     """
-    return await get_tree_impl(oenum, refresh=refresh)
+    return await get_tree_impl(oenum, path=path, recursive=recursive,
+                               refresh=refresh)
 
 
 @mcp.tool()

@@ -47,14 +47,18 @@ class TechserverPlan(CotPlan):
             "tool_needed=\"techserver_get_tree\" with tool_input={\"oenum\": \"" +
             (oe or "<oenum>") + "\"}:\n"
             "  1. techserver_get_tree(oenum)                       ← ALWAYS first; "
-            "lists the project tree (Drawing/ CAD excluded), no download.\n"
+            "lists the ROOT folders (fast, single level). Browse deeper by calling "
+            "it again with path=\"Document/Client\" etc. Do NOT pass recursive=true "
+            "on the whole project (1000+ files — it is slow).\n"
             "  2. techserver_read_artifact(oenum, path=<EXACT path from the tree>) "
             "← to read a specific file (returns markdown; images via VLM).\n"
             "  3. llm.synthesize (depends_on the reads).\n"
-            "For a plain \"what's in my project\" question, ONE techserver_get_tree "
-            "step + a synthesis is enough — the tree IS the answer. NEVER emit "
-            "get_project_tree for this project; it is the WRONG tool. NEVER request "
-            "a path under Drawing/ or a CAD/archive file; it is refused."
+            "ALWAYS end with a tool_needed=\"llm\", task_type=\"generation\" step "
+            "(depends_on the tree/read steps) so the result is turned into an answer "
+            "— even for \"what's in my project\", plan TWO steps: "
+            "techserver_get_tree THEN llm.synthesize. NEVER emit get_project_tree "
+            "for this project; it is the WRONG tool. NEVER request a path under "
+            "Drawing/ or a CAD/archive file; it is refused."
         )
 
     async def gather_grounding(self, ctx: PlanContext) -> PlanGrounding:
