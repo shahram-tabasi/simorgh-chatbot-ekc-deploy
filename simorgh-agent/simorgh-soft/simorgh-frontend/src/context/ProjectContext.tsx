@@ -91,6 +91,32 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const [projectId, setProjectId] = useState<string | null>(initialProject?._id || null);
   const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null); // ⭐ جدید
 
+  // Deep-link hydrate: the chatbot creates a project on simorgh-soft's
+  // backend, then redirects the user to /simorgh-design-suite/?projectId=<_id>.
+  // If we see that query param on mount AND we don't already have a project
+  // loaded, fetch it and hydrate the context. One-shot — won't fight a
+  // later in-app project switch.
+  React.useEffect(() => {
+    if (initialProject) return;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const pid = q.get("projectId");
+      if (!pid) return;
+      (async () => {
+        try {
+          const p = await projectService.getProjectById(pid);
+          if (p) {
+            setProjectData({ ...defaultProjectData, ...p });
+            setProjectId(pid);
+          }
+        } catch (e) {
+          console.warn("deep-link hydrate failed:", e);
+        }
+      })();
+    } catch { /* ignore: no window (SSR / test) */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const updateProjectData = (data: Partial<ProjectData>) => {
     setProjectData(prev => ({
       ...prev,

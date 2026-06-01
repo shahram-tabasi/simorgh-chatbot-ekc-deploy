@@ -1864,6 +1864,113 @@ async def set_llm_mode(
 
 
 # =============================================================================
+# SIMORGH DESIGN SUITE — create a project in simorgh-soft from chatbot sources
+# Feature-flagged: only active when SOFT_BRIDGE_ENABLED=1. Endpoints:
+#   POST /projects/{project_id}/soft/gather    → propose fields w/ provenance
+#   POST /projects/{project_id}/soft/create    → submit confirmed spec
+# =============================================================================
+@router.post("/projects/{project_id}/soft/gather")
+async def soft_gather_spec(project_id: str,
+                           current_user: str = Depends(get_current_user)):
+    """Run extractors in parallel across the project's enabled sources,
+    reconcile, and return the proposed ProjectSpec + provenance + gaps.
+    The chatbot UI renders this as a confirmation form."""
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    se = project.get("sources_enabled") or {}
+    tpms_oenum = (se.get("techserver_oenum") or project.get("tpms_oenum")
+                  or None) if se.get("tpms") else (project.get("tpms_oenum"))
+    repo_path = project.get("gitlab_repo_path") if se.get("gitlab") else None
+    ts_oenum = se.get("techserver_oenum") if se.get("techserver") else None
+
+    try:
+        recent = await memory.get_recent_context(project_id, limit=12)
+    except Exception:
+        recent = []
+
+    from services.soft_extractor import gather_all
+    from services.soft_reconciler import reconcile
+    bag = await gather_all(
+        project_id=project_id, tpms_oenum=tpms_oenum,
+        repo_path=repo_path, techserver_oenum=ts_oenum,
+        recent_messages=recent,
+    )
+    spec, prov, gaps, conflicts = reconcile(bag)
+    return {
+        "spec":      spec.model_dump(),
+        "prov":      [p.model_dump() for p in prov],
+        "gaps":      gaps,
+        "conflicts": conflicts,
+    }
+
+
+class SoftCreateRequest(BaseModel):
+    spec: Dict[str, Any]
+
+
+@router.post("/projects/{project_id}/soft/create")
+async def soft_create_project(project_id: str, req: SoftCreateRequest,
+                              current_user: str = Depends(get_current_user)):
+    """Validate the user-confirmed spec and POST it to simorgh-soft. On
+    success returns the soft project _id and a deep-link URL the chat UI
+    redirects to."""
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from services.soft_spec import ProjectSpec, REQUIRED_FIELDS
+    try:
+        spec = ProjectSpec(**req.spec)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"invalid spec: {e}")
+    missing = [f for f in REQUIRED_FIELDS if not str(getattr(spec, f, "") or "").strip()]
+    if missing:
+        raise HTTPException(status_code=400,
+                            detail=f"missing required fields: {missing}")
+
+    from services.simorgh_soft_client import create_project, deep_link
+    try:
+        created = await create_project(spec.model_dump())
+    except Exception as e:
+        logger.error("simorgh-soft create failed: %s", e)
+        raise HTTPException(status_code=502,
+                            detail=f"simorgh-soft create failed: {e}")
+    soft_id = str(created.get("_id") or "")
+    if not soft_id:
+        raise HTTPException(status_code=502,
+                            detail="simorgh-soft returned no _id")
+
+    # Persist the mapping so a later chat turn can deep-link without re-asking.
+    try:
+        await memory.update_project(project_id, simorgh_soft_project_id=soft_id)
+    except Exception as e:
+        logger.warning("could not persist simorgh_soft_project_id: %s", e)
+
+    return {
+        "soft_project_id": soft_id,
+        "deep_link":       deep_link(soft_id),
+        "created":         {k: created.get(k) for k in ("projectName", "createdOn")},
+    }
+
+
+def _soft_bridge_enabled() -> bool:
+    import os
+    return os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on")
+
+
+# =============================================================================
 # ROUTE REGISTRATION
 # =============================================================================
 

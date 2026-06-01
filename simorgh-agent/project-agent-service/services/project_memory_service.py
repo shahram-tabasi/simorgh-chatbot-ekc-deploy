@@ -170,6 +170,7 @@ class ProjectMemoryService:
                    gitlab_repo_path, gitlab_repo_url, gitlab_base_branch,
                    simorgh_branch, sources_enabled, exploration_status,
                    COALESCE(has_documents, FALSE) AS has_documents,
+                   simorgh_soft_project_id,
                    metadata, created_at, updated_at
             FROM projects WHERE id = $1
         """

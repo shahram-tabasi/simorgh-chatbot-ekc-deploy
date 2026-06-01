@@ -63,6 +63,12 @@ services:
       # plan-and-execute on any error. REACT_MAX_STEPS caps the loop.
       - COT_ENGINE_MODE=${COT_ENGINE_MODE:-}
       - REACT_MAX_STEPS=${REACT_MAX_STEPS:-10}
+      # Simorgh Design Suite bridge (POST simorgh-soft /api/projects from
+      # the chat). Set SOFT_BRIDGE_ENABLED=1 in .env to expose the
+      # /soft/gather and /soft/create endpoints + add the chatbot UI form.
+      - SOFT_BRIDGE_ENABLED=${SOFT_BRIDGE_ENABLED:-}
+      - SIMORGH_SOFT_BASE_URL=${SIMORGH_SOFT_BASE_URL:-http://simorgh-soft:3001}
+      - SIMORGH_SOFT_PUBLIC_PATH=${SIMORGH_SOFT_PUBLIC_PATH:-/simorgh-design-suite/}
       - COT_LLM_BASE_URL=${COT_LLM_BASE_URL:-http://nginx/api/vlm/v1}
       - COT_LLM_MODEL=${COT_LLM_MODEL:-qwen2.5-vl-7b}
       # 4096 covers the full submit_plan arguments object for typical
