@@ -524,6 +524,23 @@ TOOL CATALOG (CORE)
                see neighbouring paragraphs, not just the one chunk
                that matched.
 
+- documents_rag.list_project_documents(user_id, project_oenum?)
+    PURPOSE  : list the uploaded documents indexed for this project —
+               one entry per file (document_id, filename, chunk_count).
+    USE WHEN : FIRST step whenever the user says "the document/file I
+               uploaded", "the attached file", or asks to COMPARE /
+               aggregate ACROSS files. Know what exists before you read
+               or search. Empty list ⇒ nothing uploaded; say so, do not
+               invent. (project scope is injected automatically.)
+
+- documents_rag.read_document(document_id, user_id, project_oenum?, max_chars?)
+    PURPOSE  : full text of ONE uploaded file (chunks reassembled in
+               order), keyed by a document_id from list_project_documents.
+    USE WHEN : the user wants a whole specific file summarised/analysed,
+               or you are comparing two files — read_document each, then
+               synthesise. Prefer over search when you need the entire
+               file, not the best-matching snippet.
+
 - project_explorer.get_exploration(project_id)
     PURPOSE  : read the pre-computed project map written to Redis by
                project-explorer at session startup — file tree,

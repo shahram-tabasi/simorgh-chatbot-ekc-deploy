@@ -164,6 +164,63 @@ async def retrieve_chunks(
         return {"error": str(e)[:200], "results": []}
 
 
+@mcp.tool()
+async def list_project_documents(
+    user_id: str,
+    project_oenum: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List the documents that have been uploaded and indexed for this
+    project/session. Returns one entry per document: document_id, filename,
+    and chunk_count.
+
+    USE THIS FIRST when the user refers to "the document(s) I uploaded",
+    "the attached file", or asks to compare/aggregate across files — so you
+    KNOW what exists before searching. If it returns an empty list, no
+    documents are indexed yet; tell the user rather than inventing content.
+    """
+    if _qdrant is None:
+        return {"error": "Qdrant unavailable", "documents": []}
+    try:
+        docs = _qdrant.list_documents(
+            user_id=user_id,
+            session_id=session_id,
+            project_oenum=project_oenum,
+        )
+        return {"documents": docs, "count": len(docs)}
+    except Exception as e:
+        logger.exception("list_project_documents failed")
+        return {"error": str(e)[:200], "documents": []}
+
+
+@mcp.tool()
+async def read_document(
+    document_id: str,
+    user_id: str,
+    project_oenum: Optional[str] = None,
+    session_id: Optional[str] = None,
+    max_chars: int = 20000,
+) -> Dict[str, Any]:
+    """Return the FULL text of one uploaded document (its chunks
+    reassembled in order), given a document_id from list_project_documents.
+    Use when the user asks to summarise or analyse a specific whole file,
+    rather than search across many. Truncated at max_chars.
+    """
+    if _qdrant is None:
+        return {"error": "Qdrant unavailable", "text": ""}
+    try:
+        return _qdrant.get_document_text(
+            document_id=document_id,
+            user_id=user_id,
+            session_id=session_id,
+            project_oenum=project_oenum,
+            max_chars=max_chars,
+        )
+    except Exception as e:
+        logger.exception("read_document failed")
+        return {"error": str(e)[:200], "text": ""}
+
+
 # FastMCP's streamable_http_app exposes route /mcp internally. Mount at
 # "/" so its public path is /mcp (mounting at "/mcp" would produce /mcp/mcp).
 # Its session_manager needs an active TaskGroup; when the inner app is

@@ -1471,6 +1471,7 @@ class ProjectManagerAgent:
         # EXACTLY here so retrieval targets the same collection.
         if isinstance(tool_input, dict) and tool in (
             "search_project_documents", "retrieve_chunks",
+            "list_project_documents", "read_document",
         ):
             _pc = getattr(self, "_active_plan_ctx", None)
             _scope = (
