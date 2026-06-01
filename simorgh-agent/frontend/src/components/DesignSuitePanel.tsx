@@ -138,8 +138,8 @@ export default function DesignSuitePanel({ projectId, isLegacy }: Props) {
       )}
 
       {open && data && !done && (
-        <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-4">
-          <h3 className="text-white font-semibold flex items-center gap-2">
+        <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-4 max-h-[75vh] overflow-y-auto">
+          <h3 className="text-white font-semibold flex items-center gap-2 sticky top-0 -mt-1 pt-1 pb-2 bg-[#1f2937]/80 backdrop-blur z-10">
             <Wand2 className="w-4 h-4" /> Confirm project parameters
           </h3>
           <p className="text-xs text-gray-400 mt-1">

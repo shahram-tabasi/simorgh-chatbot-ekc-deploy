@@ -246,26 +246,39 @@ async def _extract_via_llm(transcript: str, *, source: str, confidence: float,
                            note: str, timeout: float = 30.0
                            ) -> Dict[str, FieldValue]:
     """One LLM call → robustly parsed Dict[field, FieldValue]. Used by
-    chat-history, uploads, and techserver extractors so they share one
-    prompt + one parser."""
+    chat-history, uploads, techserver, SLD extractors so they share one
+    prompt + one parser. Retries 5xx with backoff because llm-gateway
+    routinely 502s under bursts (observed during gather)."""
     if not transcript or len(transcript) < 30:
         return {}
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.post(f"{LLM_GATEWAY_URL}/generate", json={
-                "messages": [
-                    {"role": "system", "content": "You are a precise data extractor."},
-                    {"role": "user", "content":
-                        _EXTRACT_SCHEMA_PROMPT.format(transcript=transcript[:24000])},
-                ],
-                "mode": "online",
-                "temperature": 0.0,
-                "max_tokens": 900,
-            })
-            r.raise_for_status()
-            body = r.json()
-    except Exception as e:
-        logger.warning("soft.extract.llm (%s) failed: %s", source, e)
+    payload = {
+        "messages": [
+            {"role": "system", "content": "You are a precise data extractor."},
+            {"role": "user", "content":
+                _EXTRACT_SCHEMA_PROMPT.format(transcript=transcript[:24000])},
+        ],
+        "mode": "online",
+        "temperature": 0.0,
+        "max_tokens": 900,
+    }
+    body = None
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(f"{LLM_GATEWAY_URL}/generate", json=payload)
+                if r.status_code in (502, 503, 504):
+                    raise httpx.HTTPStatusError("gateway busy",
+                                                request=r.request, response=r)
+                r.raise_for_status()
+                body = r.json()
+                break
+        except Exception as e:
+            last_err = e
+            await asyncio.sleep(1.5 * (attempt + 1))
+    if body is None:
+        logger.warning("soft.extract.llm (%s) failed after retries: %s",
+                       source, last_err)
         return {}
     text = (body.get("response") or body.get("text") or "").strip()
     flat = _parse_extracted_json(text, source=source,
@@ -670,17 +683,31 @@ async def gather_all(*, project_id: str, tpms_oenum: Optional[str],
     (equipments/devices) are both populated here — the reconciler picks
     the highest-confidence source per field.
     """
-    coros = [
+    # Run NON-LLM extractors in parallel — they don't touch llm-gateway,
+    # so concurrency is safe and cheap.
+    fast_results = await asyncio.gather(
         from_tpms(tpms_oenum),
+        from_gitlab(repo_path),
+        return_exceptions=True,
+    )
+    # Run LLM-backed extractors SEQUENTIALLY. The gateway routinely 502s
+    # when 3+ /generate calls hit it concurrently, which was the actual
+    # cause of "uploads never reached the form" (observed: chat + uploads
+    # both 502'd while TPMS landed cleanly). One-at-a-time + 5xx retries
+    # in _extract_via_llm trades a few seconds of latency for reliability.
+    llm_results: List[Any] = []
+    for coro in [
         from_chat_history(recent_messages),
         from_uploads(project_id, tpms_oenum or project_id),
-        from_gitlab(repo_path),
         from_techserver(techserver_oenum, mcp_manager=mcp_manager),
         from_sld_uploads(project_id, tpms_oenum or project_id),
-    ]
-    results = await asyncio.gather(*coros, return_exceptions=True)
+    ]:
+        try:
+            llm_results.append(await coro)
+        except Exception as e:
+            llm_results.append(e)
     bag: Dict[str, List[FieldValue]] = {}
-    for r in results:
+    for r in list(fast_results) + llm_results:
         if isinstance(r, Exception) or not isinstance(r, dict):
             if isinstance(r, Exception):
                 logger.warning("soft.extract source raised: %s", r)

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { projectService } from './services/projectService';
 import { TabNavigation } from './components/Tabs/TabNavigation';
 import { ProjectDefinitionTab } from './components/ProjectDefinition/ProjectDefinitionTab';
 import { TemplateCreationTab, KeyboardShortcutsDialog } from './components/TemplateCreation/TemplateCreationTab';
@@ -344,8 +345,44 @@ const MainApp: React.FC = () => {
 
 // کامپوننت اصلی با Project Selection
 export function App() {
+  // Deep-link bootstrap: if the URL carries `?projectId=<mongo-id>` (set by
+  // the chatbot bridge after it POSTs to simorgh-soft /api/projects),
+  // load that project NOW and skip the selection screen — otherwise the
+  // user lands on the create/select dialog and the param is never
+  // consumed (the previous ProjectContext-side hydration ran too late).
+  const initialPidFromUrl = React.useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get('projectId'); }
+    catch { return null; }
+  }, []);
+
   const [currentProject, setCurrentProject] = useState<any>(null);
-  const [showProjectSelection, setShowProjectSelection] = useState(true);
+  const [showProjectSelection, setShowProjectSelection] = useState(!initialPidFromUrl);
+  const [deepLinkLoading, setDeepLinkLoading] = useState(!!initialPidFromUrl);
+  const [deepLinkError, setDeepLinkError] = useState<string>('');
+
+  useEffect(() => {
+    if (!initialPidFromUrl) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const p = await projectService.getProjectById(initialPidFromUrl);
+        if (cancelled) return;
+        if (p) {
+          setCurrentProject(p);
+          setShowProjectSelection(false);
+        } else {
+          setDeepLinkError('Project not found.');
+          setShowProjectSelection(true);
+        }
+      } catch (e: any) {
+        setDeepLinkError(e?.message || 'Could not load the linked project.');
+        setShowProjectSelection(true);
+      } finally {
+        if (!cancelled) setDeepLinkLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [initialPidFromUrl]);
 
   const handleProjectSelect = (project: any) => {
     setCurrentProject(project);
@@ -358,8 +395,25 @@ export function App() {
     setShowProjectSelection(false);
   };
 
+  if (deepLinkLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-gray-300 bg-slate-900">
+        <div>Loading project…</div>
+      </div>
+    );
+  }
+
   if (showProjectSelection) {
-    return <ProjectSelection onProjectSelect={handleProjectSelect} onNewProject={handleNewProject} />;
+    return (
+      <>
+        {deepLinkError && (
+          <div className="fixed top-2 left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded bg-red-500/15 border border-red-500/40 text-red-200 text-sm">
+            {deepLinkError}
+          </div>
+        )}
+        <ProjectSelection onProjectSelect={handleProjectSelect} onNewProject={handleNewProject} />
+      </>
+    );
   }
 
   return (
