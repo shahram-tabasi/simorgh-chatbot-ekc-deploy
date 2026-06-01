@@ -55,6 +55,9 @@ TECHSERVER_DOMAIN   = os.getenv("TECHSERVER_DOMAIN", "")  # else parsed from USE
 SMB_MAX_PROTO       = os.getenv("TECHSERVER_SMB_PROTO", "SMB3")
 SMB_TIMEOUT         = float(os.getenv("TECHSERVER_SMB_TIMEOUT", "120"))
 GET_TIMEOUT         = float(os.getenv("TECHSERVER_GET_TIMEOUT", "300"))
+# The full recursive tree of a 1000+ file project is slow — give it room.
+# It runs at most once per TTL; all navigation/search hits the cache after.
+FULLTREE_TIMEOUT    = float(os.getenv("TECHSERVER_FULLTREE_TIMEOUT", "300"))
 
 DOC_PROCESSOR_URL   = os.getenv("DOC_PROCESSOR_URL", "http://doc-processor:8000").rstrip("/")
 REDIS_URL           = os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -257,26 +260,20 @@ def _parse_tree(listing: str, base: str = "") -> list[dict]:
     return entries
 
 
-async def get_tree_impl(
-    oenum: str, path: str = "", recursive: bool = False, refresh: bool = False,
-) -> dict:
-    """List a techserver project's files.
+async def _full_tree(oenum: str, refresh: bool = False) -> dict:
+    """Build (once) and cache the COMPLETE recursive file tree for a project.
 
-    DEFAULT is a fast SINGLE-LEVEL listing of `path` (root when empty) —
-    a full recursive walk of a real project (1000+ files) takes far longer
-    than the agent's MCP call timeout, so recurse is opt-in. The agent
-    browses top-down: list root → list a subdir by passing its path →
-    read a file. Each level is cached.
+    This is the expensive operation — a full `recurse ON; ls` over a
+    1000+ file project — so it runs with the long FULLTREE_TIMEOUT and its
+    result is cached in Redis under a stable key. Every navigation
+    (get_tree of any subpath) and every search is served from THIS cached
+    list instantly, so the slow SMB walk happens at most once per TTL.
+    Returns {oenum, share, entries:[{path,type,size}], file_count, ...}.
     """
     share = await _resolve_share(oenum)
     digits = re.sub(r"\D", "", oenum)
-    sub = path.strip().strip("/").replace("\\", "/")
-    if sub and _excluded(sub):
-        raise HTTPException(status_code=403,
-                            detail=f"path '{sub}' is excluded (Drawing/CAD)")
-
     cache = _r()
-    ckey = f"techserver:tree:{digits}:{'R' if recursive else 'L'}:{sub}"
+    ckey = f"techserver:fulltree:{digits}"
     if cache and not refresh:
         try:
             hit = cache.get(ckey)
@@ -287,33 +284,18 @@ async def get_tree_impl(
         except Exception:
             pass
 
-    # Build the smbclient command. Single-level: `cd <sub>; ls`. Recursive:
-    # `cd <sub>; recurse ON; ls` (only used when explicitly requested).
-    smb_path = sub.replace("/", "\\")
-    cmd_parts = []
-    if smb_path:
-        cmd_parts.append(f'cd "{smb_path}"')
-    if recursive:
-        cmd_parts.append("recurse ON")
-    cmd_parts.append("ls")
-    smb_cmd = "; ".join(cmd_parts)
-
     rc, out, err = await _smb(
-        [f"//{TECHSERVER_HOST}/{share}", "-c", smb_cmd], SMB_TIMEOUT,
+        [f"//{TECHSERVER_HOST}/{share}", "-c", "recurse ON; ls"],
+        FULLTREE_TIMEOUT,
     )
     if "NT_STATUS" in out or "NT_STATUS" in err:
-        blob = (err or out)
-        if "NT_STATUS_OBJECT_NAME_NOT_FOUND" in blob or "NT_STATUS_OBJECT_PATH_NOT_FOUND" in blob:
-            raise HTTPException(status_code=404, detail=f"path not found: {sub}")
         raise HTTPException(status_code=502,
-                            detail=f"smbclient error: {blob[:200]}")
-    files = _parse_tree(out, base=sub)
+                            detail=f"smbclient error: {(err or out)[:200]}")
+    files = _parse_tree(out)
     result = {
         "oenum": digits,
         "share": share,
         "host": TECHSERVER_HOST,
-        "path": sub,
-        "recursive": recursive,
         "entries": files,
         "file_count": sum(1 for f in files if f["type"] == "blob"),
         "dir_count": sum(1 for f in files if f["type"] == "tree"),
@@ -326,6 +308,93 @@ async def get_tree_impl(
         except Exception:
             pass
     return result
+
+
+def _subtree(entries: list[dict], sub: str, recursive: bool) -> list[dict]:
+    """Slice the full entry list to those under `sub`. recursive=False
+    returns only DIRECT children of `sub`; recursive=True returns the whole
+    subtree. sub='' means the project root."""
+    sub = sub.strip("/")
+    prefix = (sub + "/") if sub else ""
+    out = []
+    for e in entries:
+        p = e["path"]
+        if sub and not p.startswith(prefix):
+            continue
+        rel = p[len(prefix):] if prefix else p
+        if not rel:
+            continue
+        if not recursive and "/" in rel:
+            continue  # deeper than direct child
+        out.append(e)
+    return out
+
+
+async def get_tree_impl(
+    oenum: str, path: str = "", recursive: bool = False, refresh: bool = False,
+) -> dict:
+    """List a techserver project's files, served from the cached FULL tree.
+
+    The full recursive tree is built once (slow) and cached in Redis; this
+    function slices it for the requested `path` (root when empty), so
+    navigation is instant after the first build. recursive=False returns
+    direct children only; recursive=True returns the whole subtree.
+    """
+    digits = re.sub(r"\D", "", oenum)
+    sub = path.strip().strip("/").replace("\\", "/")
+    if sub and _excluded(sub):
+        raise HTTPException(status_code=403,
+                            detail=f"path '{sub}' is excluded (Drawing/CAD)")
+
+    full = await _full_tree(oenum, refresh=refresh)
+    all_entries = full.get("entries", [])
+    sliced = _subtree(all_entries, sub, recursive)
+    if sub and not sliced:
+        # Distinguish "empty dir" from "no such path".
+        if not any(e["path"] == sub or e["path"].startswith(sub + "/")
+                   for e in all_entries):
+            raise HTTPException(status_code=404, detail=f"path not found: {sub}")
+    return {
+        "oenum": digits,
+        "share": full.get("share"),
+        "host": TECHSERVER_HOST,
+        "path": sub,
+        "recursive": recursive,
+        "entries": sliced,
+        "file_count": sum(1 for f in sliced if f["type"] == "blob"),
+        "dir_count": sum(1 for f in sliced if f["type"] == "tree"),
+        "total_project_files": full.get("file_count"),
+        "excluded_dirs": sorted(EXCLUDE_DIRS),
+        "cached": full.get("cached", False),
+    }
+
+
+async def search_tree_impl(oenum: str, query: str, limit: int = 50) -> dict:
+    """Search the cached full tree for files/dirs whose path matches `query`
+    (case-insensitive substring; space-separated terms are AND-ed). Lets
+    the agent find what it needs across the whole project without listing
+    every level. Served from the Redis-cached full tree."""
+    full = await _full_tree(oenum)
+    terms = [t for t in query.lower().split() if t]
+    hits = []
+    for e in full.get("entries", []):
+        low = e["path"].lower()
+        if all(t in low for t in terms):
+            hits.append(e)
+            if len(hits) >= limit:
+                break
+    return {
+        "oenum": re.sub(r"\D", "", oenum),
+        "share": full.get("share"),
+        "query": query,
+        "hits": hits,
+        "hit_count": len(hits),
+        "total_project_files": full.get("file_count"),
+        "truncated": len(hits) >= limit,
+    }
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +504,12 @@ async def tree(oenum: str = Query(...), path: str = "",
                                refresh=refresh)
 
 
+@app.get("/search")
+async def search(oenum: str = Query(...), query: str = Query(...),
+                 limit: int = 50) -> dict:
+    return await search_tree_impl(oenum, query, limit=limit)
+
+
 @app.get("/artifact")
 async def artifact(oenum: str = Query(...), path: str = Query(...)) -> dict:
     return await read_artifact_impl(oenum, path)
@@ -467,20 +542,36 @@ async def techserver_get_tree(
 ) -> dict:
     """List a techserver project's files by OE number WITHOUT downloading.
 
-    Browse top-down: call with path="" to list the ROOT (fast — returns the
-    top folders like Document/, Identity/), then call again with
-    path="Document/Client" to list inside a subfolder, and so on. This
-    single-level default is FAST; a full project has 1000+ files and a
-    recursive walk is slow, so recursive=true is opt-in and should only be
-    used on a narrow subfolder.
+    The FULL project tree is built once and cached in Redis, so navigation
+    is instant after the first call (the first call may take a few seconds
+    while the tree is built). Usage:
+      • path="" → the project ROOT folders (Document/, Identity/, …).
+      • path="Document/Client" → the DIRECT children of that folder.
+      • recursive=true → the WHOLE subtree under `path` (use on a folder,
+        e.g. path="Document/Client", recursive=true — cheap, served from
+        cache).
+    To FIND a file anywhere without walking levels, use techserver_search.
 
-    Returns {entries:[{path,type,size}], file_count, dir_count, path, ...}.
-    The Drawing/ subtree and CAD/archive files (.dwg/.dxf/.ema/.edb/.elk/
-    .zip/.rar/.7z) are hard-excluded. Each level is cached; refresh=true
-    forces a re-list.
+    Returns {path, entries:[{path,type,size}], file_count, dir_count,
+    total_project_files, ...}. The Drawing/ subtree and CAD/archive files
+    (.dwg/.dxf/.ema/.edb/.elk/.zip/.rar/.7z) are hard-excluded.
+    refresh=true rebuilds the cached tree.
     """
     return await get_tree_impl(oenum, path=path, recursive=recursive,
                                refresh=refresh)
+
+
+@mcp.tool()
+async def techserver_search(oenum: str, query: str, limit: int = 50) -> dict:
+    """Search a techserver project's file tree by OE number for paths
+    matching `query` (case-insensitive; space-separated terms are AND-ed).
+    Served from the cached full tree, so it spans the WHOLE project without
+    listing every folder. Use this to locate what you need, e.g.
+    query="spec 6.6kv" or query="CT PT calculation". Returns
+    {hits:[{path,type,size}], hit_count, ...}; hand a hit's `path` to
+    techserver_read_artifact.
+    """
+    return await search_tree_impl(oenum, query, limit=limit)
 
 
 @mcp.tool()

@@ -1246,8 +1246,10 @@ class ProjectManagerAgent:
                 new_tool = _remap[tool]
                 if isinstance(raw_input, dict):
                     ri = dict(raw_input)
-                    # Drop gitlab-shaped args; supply oenum.
-                    for k in ("project", "project_id", "ref", "recursive"):
+                    # Drop gitlab-shaped args (project/ref); KEEP path +
+                    # recursive — they're valid on the techserver tools and
+                    # let the agent navigate into a subfolder.
+                    for k in ("project", "project_id", "ref"):
                         ri.pop(k, None)
                     if _oe and not ri.get("oenum"):
                         ri["oenum"] = str(_oe)
