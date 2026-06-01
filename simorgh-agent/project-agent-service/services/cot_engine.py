@@ -362,14 +362,19 @@ E. ENGINEERING FILES NOT IN GIT  (legacy techserver, SMB host)
    and NEVER request a path under Drawing/. Skip if
    `sources_enabled.techserver` is FALSE.
 
-F. CHAT HISTORY  (this user, this project, past turns)
+F. CHAT HISTORY  (this user, past conversations)
    Trigger: "we discussed", "you said earlier", "last time", "continue
-            from where", "the X we agreed on", "tell me again"
-   Plan:    memory_query(query, scope="chat_history", project_id=...)
+            from where", "the X we agreed on", "tell me again", any
+            reference to an earlier conversation.
+   Plan:    chat_history_search(query, user_id=<this>, project_id=<this>)
             → llm.synthesize
-   The last 5 user/assistant turns are ALREADY injected into your
-   project context — read them before adding this step. Only add the
-   step when the reference is older than that window.
+   PREFER chat_history_search — it is HYBRID (keyword + semantic) over the
+   user's full message history with metadata filters, so it recalls exact
+   names / OE numbers / standards AND paraphrased topics. memory_query is
+   the older Qdrant-only fallback. Pass exclude_chat_id=<current chat> to
+   skip the conversation you're already in. The last ~5 turns of THIS
+   chat are ALREADY in your context — only add this step when the
+   reference is older than that window.
 
 F2. RELATIONSHIPS / CROSS-DOC LOOKUP  (which docs mention X?)
     Trigger: "which documents mention IEC 61439", "every file that

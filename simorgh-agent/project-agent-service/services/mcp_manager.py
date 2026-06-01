@@ -1007,6 +1007,12 @@ def get_mcp_manager() -> MCPManager:
                 # (fetch ONE file as markdown). Replaces bulk techserver_sync.
                 "TECHSERVER_MCP_URL", "http://techserver-mcp:8053/mcp"
             ),
+            "chat_history": os.getenv(
+                # Hybrid (BM25+kNN) retrieval over the user's past chats.
+                # Exposes chat_history_search(query, user_id, project_id,
+                # …) for the CoT's long-term-memory recall.
+                "CHAT_HISTORY_MCP_URL", "http://chat-history-mcp:8054/mcp"
+            ),
         }
 
         for name, url in servers.items():

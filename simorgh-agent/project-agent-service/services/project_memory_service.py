@@ -23,6 +23,31 @@ TTL_TASK_CACHE = 3600        # 1h - task cache
 TTL_CONTEXT_CACHE = 1800     # 30m - context cache
 TTL_COT_RESULT = 7200        # 2h - COT analysis results
 
+import os as _os
+
+_CHAT_HISTORY_URL = _os.getenv(
+    "CHAT_HISTORY_URL", "http://chat-history-mcp:8054"
+).rstrip("/")
+
+
+async def _index_chat_message(chat_id: str, user_id: str, project_id: str,
+                              role: str, content: str, message_id: str) -> None:
+    """Fire-and-forget: index a stored message into chat-history-mcp for
+    hybrid long-term recall. Best-effort — any failure (service down, ES
+    not ready) is swallowed; message persistence already succeeded."""
+    if not content or len(content.strip()) < 3:
+        return
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            await c.post(f"{_CHAT_HISTORY_URL}/index", json={
+                "chat_id": chat_id, "user_id": user_id,
+                "project_id": project_id, "role": role,
+                "content": content, "message_id": message_id,
+            })
+    except Exception as e:
+        logger.debug("chat-history index skipped: %s", e)
+
 
 class ProjectMemoryService:
     """Unified memory service for project agent operations."""
@@ -385,6 +410,19 @@ class ProjectMemoryService:
                                      metadata=kwargs.get('metadata'))
             except Exception:
                 # Never let mirror failure break message persistence.
+                pass
+            # Index into chat-history-mcp for hybrid long-term recall.
+            # Fire-and-forget; never block or fail message persistence.
+            try:
+                import asyncio as _aio
+                _meta = kwargs.get('metadata') or {}
+                _uid = (kwargs.get('user_id') or _meta.get('user_id') or '')
+                _aio.create_task(_index_chat_message(
+                    chat_id=chat_id or '', user_id=str(_uid),
+                    project_id=str(project_id), role=role, content=content,
+                    message_id=msg_id,
+                ))
+            except Exception:
                 pass
         return dict(result) if result else None
 

@@ -1328,6 +1328,19 @@ class ProjectManagerAgent:
             if not pid or str(pid).lower() in ("unknown", "none", "null", ""):
                 tool_input["project_id"] = str(project_id)
 
+        # chat_history_search needs user_id + project_id scoping and should
+        # skip the current chat (its recent turns are already in context).
+        # The planner rarely knows the real user_id/chat_id, so inject them
+        # from the active PlanContext.
+        if isinstance(tool_input, dict) and tool == "chat_history_search":
+            _pc = getattr(self, "_active_plan_ctx", None)
+            _uid = getattr(_pc, "user_id", None) if _pc else None
+            _cid = getattr(_pc, "chat_id", None) if _pc else None
+            if _uid and not tool_input.get("user_id"):
+                tool_input["user_id"] = str(_uid)
+            if _cid and not tool_input.get("exclude_chat_id"):
+                tool_input["exclude_chat_id"] = str(_cid)
+
         # gitlab_mcp.* tools take `project` as the GitLab path (e.g.
         # "shahram-tabasi/test") or a numeric GitLab project id — NEVER
         # the chatbot UUID or the friendly project name. The planner

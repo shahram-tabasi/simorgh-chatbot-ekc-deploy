@@ -1,0 +1,51 @@
+# =============================================================================
+# CHAT-HISTORY-MCP - Hybrid (BM25 + kNN) retrieval over a user's past chats.
+# Port 8054. REST + MCP. Standalone long-term-memory layer for the CoT.
+#
+# The CoT planner calls chat_history_search when the user references an
+# earlier discussion older than the recent-turns window already in context.
+# Messages are indexed into the `simorgh-chat` ES index at store_message
+# time (the agent POSTs /index, fire-and-forget). Reuses the shared
+# Elasticsearch + embeddings-service infra (no new datastore).
+# =============================================================================
+services:
+  chat-history-mcp:
+    image: simorgh-chat-history-mcp:local
+    build:
+      context: ..
+      dockerfile: chat-history-mcp-service/Dockerfile
+    container_name: chat-history-mcp
+    expose:
+      - "8054"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Internal-only traffic; xray proxy 503s on RFC1918, so disable it.
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - NO_PROXY=*
+      - http_proxy=
+      - https_proxy=
+      - no_proxy=*
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - ELASTIC_USER=${ELASTIC_USER:-elastic}
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+      # embeddings-service:8031 → 768-dim sentence-transformers (matches the
+      # dense_vector dim of the chat index + context-search content index).
+      - EMBEDDINGS_URL=${CHAT_EMBEDDINGS_URL:-http://embeddings-service:8031}
+      - CHAT_EMBED_DIM=${CHAT_EMBED_DIM:-768}
+      - CHAT_INDEX=${CHAT_INDEX:-simorgh-chat}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8054/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
