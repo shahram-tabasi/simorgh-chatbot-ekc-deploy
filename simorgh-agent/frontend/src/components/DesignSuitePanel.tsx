@@ -182,8 +182,40 @@ export default function DesignSuitePanel({ projectId, isLegacy }: Props) {
             })}
           </div>
 
+          {/* Tier-2 preview: equipments + devices counts with their source. */}
+          {(() => {
+            const eqProv = data.prov.find((x) => x.field === "equipments");
+            const equips = Array.isArray((values as any).equipments)
+              ? (values as any).equipments
+              : (data.spec as any).equipments || [];
+            const totalDevices = equips.reduce(
+              (n: number, e: any) => n + (Array.isArray(e?.devices) ? e.devices.length : 0), 0);
+            if (!equips || equips.length === 0) return null;
+            return (
+              <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sky-100 text-sm font-medium">
+                      Tier-2 design data ready
+                    </div>
+                    <div className="text-xs text-sky-200/80 mt-0.5">
+                      {equips.length} panel{equips.length === 1 ? "" : "s"} ·
+                      {" "}{totalDevices} feeder{totalDevices === 1 ? "" : "s"}
+                      {eqProv?.note ? <> · <span className="opacity-80">{eqProv.note}</span></> : null}
+                    </div>
+                  </div>
+                  {eqProv && (
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] border ${SOURCE_COLORS[eqProv.source]}`}>
+                      {eqProv.source}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="mt-3 flex items-center gap-2">
-            <button onClick={submit} disabled={busy || data.gaps.length > 0 && !values.projectName}
+            <button onClick={submit} disabled={busy || (data.gaps.length > 0 && !values.projectName)}
               className="px-3 py-2 rounded-lg bg-emerald-600/40 hover:bg-emerald-600/60
                          border border-emerald-500/40 text-emerald-100 text-sm font-medium
                          disabled:opacity-50 flex items-center gap-2">

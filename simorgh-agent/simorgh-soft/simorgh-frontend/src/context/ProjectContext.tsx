@@ -20,52 +20,59 @@ interface ProjectContextType {
   setSelectedEquipment: (equipment: Equipment | null) => void;
 }
 
+// EMPTY DEFAULTS. Previously this object was full of demo values
+// ("New Project", "SIMORGH", standard "IEC", country "Iran", 20 kV MV,
+// "Brown/Black/Grey", etc.). They leaked into every newly-opened project
+// — even when the chatbot bridge sent specific extracted values, any
+// missing keys fell back to the demo. Per requirements: rely on REAL
+// data only. Nested keys are kept (empty) so existing UI components
+// that read `projectData.technicalSettings.mediumVoltage.X` don't crash.
 const defaultProjectData: ProjectData = {
-  projectName: 'New Project',
+  projectName: '',
   projectId: '',
   projectNumber: '',
   noticeToProceedDate: '',
   deliveryDate: '',
-  projectDescription: 'Project Description',
-  planner: 'SIMORGH',
-  designOffice: 'ELECTRO KAVIR',
+  projectDescription: '',
+  planner: '',
+  designOffice: '',
   createdOn: new Date().toLocaleDateString(),
   changedOn: new Date().toLocaleDateString(),
   location: '',
   client: '',
-  standard: 'IEC',
-  country: 'Iran',
-  language: 'English',
+  standard: '',
+  country: '',
+  language: '',
   comment: '',
   technicalSettings: {
     mediumVoltage: {
-      nominalVoltage: '20',
-      maxShortCircuitPower: '250',
-      minShortCircuitPower: '100',
-      maxCrossSection: '500',
-      minCrossSection: '25'
+      nominalVoltage: '',
+      maxShortCircuitPower: '',
+      minShortCircuitPower: '',
+      maxCrossSection: '',
+      minCrossSection: ''
     },
     lowVoltage: {
-      nominalVoltage: '400',
-      frequency: '50',
-      permissibleTouchVoltage: '50',
-      ambientTemperature: '45',
-      numberOfPoles: '3-contact preferably, 4-contact if required',
-      earthFaultDetection: 'if required',
-      referencePoint: 'Transformer-secondary terminals',
-      relativeOperatingVoltage: '100',
-      maxPermissibleVoltage: '14',
-      maxCrossSection: '300',
-      minCrossSection: '1.5',
+      nominalVoltage: '',
+      frequency: '',
+      permissibleTouchVoltage: '',
+      ambientTemperature: '',
+      numberOfPoles: '',
+      earthFaultDetection: '',
+      referencePoint: '',
+      relativeOperatingVoltage: '',
+      maxPermissibleVoltage: '',
+      maxCrossSection: '',
+      minCrossSection: '',
       enableReducedCrossSection: false
     }
   },
   techSettings: {
-    general: { altitudeAboveSeaLevel: '1000', designTemperature: '45' },
-    wireSize: { controlCircuit: '1.5', ctSecondary: '2.5', ptSecondary: '2.5', plcPowerSupply: '1.5' },
-    wireColor: { acPhase: 'Brown', dcPlus: 'Red', acNeutral: 'Blue', dcMinus: 'Black', plcInput: 'Green', plcOutput: 'Yellow', threePhase: 'Brown/Black/Grey' },
+    general: { altitudeAboveSeaLevel: '', designTemperature: '' },
+    wireSize: { controlCircuit: '', ctSecondary: '', ptSecondary: '', plcPowerSupply: '' },
+    wireColor: { acPhase: '', dcPlus: '', acNeutral: '', dcMinus: '', plcInput: '', plcOutput: '', threePhase: '' },
     wireManufacturer: { lv: '', mv: '' },
-    others: { thicknessOfPainting: '80', colorType: 'RAL', backgroundColor: '7035', writingColor: '9005' }
+    others: { thicknessOfPainting: '', colorType: '', backgroundColor: '', writingColor: '' }
   },
   templates: { LV: [], MV: [], HV: [] },
   deviceLibrary: { LV: [], MV: [], HV: [] },

@@ -60,6 +60,46 @@ class TechnicalSettings(BaseModel):
     lowVoltage: LowVoltage = Field(default_factory=LowVoltage)
 
 
+# ---------------------------------------------------------------------------
+# Tier-2 nested types: panels (Equipment) and feeders (DeviceTableRow).
+# Mirror simorgh-soft/types/project.ts:222-258 — only the fields the UI
+# actually reads. Strings throughout (the UI inputs are <input type="text">).
+# ---------------------------------------------------------------------------
+class DeviceTableRow(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    id: str
+    rowNumber: int
+    templateId: str = ""
+    templateName: str = ""
+    busSection: str = ""
+    feederNo: str = ""
+    wiringType: str = ""
+    ratingPower: str = ""
+    flc: str = ""
+    equipmentId: str = ""
+    tag: str = ""
+    description: str = ""
+    cableSize: str = ""
+    sfdHfd: str = ""
+    moduleNo: str = ""
+    size: str = ""
+
+
+class Equipment(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    id: str
+    name: str
+    type: Literal["LV", "MV", "HV"] = "MV"
+    power: str = ""
+    deviceCount: int = 0
+    description: str = ""
+    # `properties` carries panel-level facts (rated voltage, busbar,
+    # IP rating, etc.) — kept as a free-form dict so we can stuff whatever
+    # the source gives us; simorgh-soft tolerates any keys here.
+    properties: Dict[str, Any] = Field(default_factory=dict)
+    devices: List[DeviceTableRow] = Field(default_factory=list)
+
+
 class ProjectSpec(BaseModel):
     """The minimum sufficient JSON to POST simorgh-soft /api/projects.
     Keep field names EXACTLY as the JS schema expects; simorgh-soft does
@@ -78,27 +118,52 @@ class ProjectSpec(BaseModel):
     noticeToProceedDate: str = ""
     deliveryDate: str = ""
 
-    # Org / context — sensible Iran/IEC defaults match simorgh-soft's UI.
-    planner: str = "SIMORGH"
-    designOffice: str = "ELECTRO KAVIR"
+    # Org / context. NO demo defaults — rely on real extracted data only.
+    # (Previously "SIMORGH"/"IEC"/"Iran"/etc. were here; they leaked into
+    # every project and were almost always wrong.)
+    planner: str = ""
+    designOffice: str = ""
     location: str = ""
     client: str = ""
-    standard: str = "IEC"
-    country: str = "Iran"
-    language: str = "English"
+    standard: str = ""
+    country: str = ""
+    language: str = ""
     comment: str = ""
 
     # Electrical defaults — v1 leaves these empty/strings; UI lets user fill.
     technicalSettings: TechnicalSettings = Field(default_factory=TechnicalSettings)
 
-    # Design data — empty at creation; user populates in the UI.
+    # Design data. templates/deviceLibrary/outputTypes start empty (user
+    # populates in the UI). equipments + devices CAN be pre-populated from
+    # tier-2 sources (TPMS panels/feeders, SLD vision, load lists).
     templates: Dict[str, List[Any]] = Field(
         default_factory=lambda: {"LV": [], "MV": [], "HV": []})
     deviceLibrary: Dict[str, List[Any]] = Field(
         default_factory=lambda: {"LV": [], "MV": [], "HV": []})
     devices: List[Any] = Field(default_factory=list)
-    equipments: List[Any] = Field(default_factory=list)
+    equipments: List[Equipment] = Field(default_factory=list)
     outputTypes: List[Any] = Field(default_factory=list)
+
+
+def classify_voltage(rated_voltage: Optional[str]) -> Literal["LV", "MV", "HV"]:
+    """Map a voltage string (e.g. "6.6 kV", "400V", "33000") to simorgh-soft's
+    LV / MV / HV bucket. IEC convention: ≤1 kV = LV, 1-36 kV = MV, >36 kV = HV.
+    Returns "MV" on parse failure (most common case)."""
+    if not rated_voltage:
+        return "MV"
+    s = str(rated_voltage).strip().lower().replace(",", ".")
+    import re
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(kv|v)?", s)
+    if not m:
+        return "MV"
+    num = float(m.group(1))
+    unit = m.group(2) or ""
+    kv = num if unit == "kv" else (num / 1000.0 if unit == "v" or num > 100 else num)
+    if kv <= 1.0:
+        return "LV"
+    if kv <= 36.0:
+        return "MV"
+    return "HV"
 
 
 # Fields the user MUST confirm before we POST (no defaults exist for these).

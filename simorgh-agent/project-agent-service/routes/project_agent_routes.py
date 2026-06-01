@@ -1897,10 +1897,15 @@ async def soft_gather_spec(project_id: str,
 
     from services.soft_extractor import gather_all
     from services.soft_reconciler import reconcile
+    # Pass the live MCP manager so the techserver extractor can call
+    # techserver_get_tree / techserver_read_artifact through the same
+    # transport the rest of the agent uses (no duplicate auth/wiring).
+    agent = get_project_agent()
+    mcp = getattr(agent, "mcp_manager", None)
     bag = await gather_all(
         project_id=project_id, tpms_oenum=tpms_oenum,
         repo_path=repo_path, techserver_oenum=ts_oenum,
-        recent_messages=recent,
+        recent_messages=recent, mcp_manager=mcp,
     )
     spec, prov, gaps, conflicts = reconcile(bag)
     return {
