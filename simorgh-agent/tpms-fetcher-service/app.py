@@ -20,8 +20,8 @@ from typing import Optional, List, Dict, Any
 
 import pymysql
 import pymysql.cursors
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 from mcp.server.fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
@@ -102,7 +102,13 @@ class ProjectMainResponse(BaseModel):
 
 
 class PanelResponse(BaseModel):
+    # extra="allow" lets us widen the SELECT list (e.g. extra electrical /
+    # busbar / provenance columns from technical_panel_identity) without
+    # having to redeclare every field here.
+    model_config = ConfigDict(extra="allow")
+
     id: int
+    id_project_scope: Optional[int] = None
     scope_name: str = ""
     plane_name: str = ""
     plane_type: str = ""
@@ -112,9 +118,12 @@ class PanelResponse(BaseModel):
     voltage_rate: Optional[str] = None
     main_busbar_size: Optional[str] = None
     cell_count: Optional[int] = None
+    revision: Optional[int] = None
 
 
 class FeederResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     id: int
     scope_name: str = ""
     feeder_no: str = ""
@@ -125,16 +134,57 @@ class FeederResponse(BaseModel):
     flc: str = ""
     cb_rating: str = ""
     cable_size: str = ""
+    revision: Optional[int] = None
+
+
+class ProjectIdentityResponse(BaseModel):
+    """Project-level identity record (overall data shared by all switchgears
+    in the project — wire colors, plating, brands, climate). The matching
+    row in TPMS is `technical_project_identity_`; custom k/v rows live in
+    TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS."""
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    id_project_main: int
+    revision: Optional[int] = None
+    additional_fields: List[Dict[str, Any]] = []
 
 
 class FetchResponse(BaseModel):
     oenum: str
     project: Optional[ProjectMainResponse] = None
+    project_identity: Optional[ProjectIdentityResponse] = None
     panels: List[PanelResponse] = []
     feeders: List[FeederResponse] = []
     equipment_count: int = 0
     fetched_at: str
     status: str = "ok"
+    # Revision filter applied to this snapshot. None / "latest" = current
+    # state only (default); "all" = every revision; otherwise the specific
+    # revision number requested.
+    revision: Optional[str] = "latest"
+
+
+# ---------------------------------------------------------------------------
+# Revision filter parsing
+# ---------------------------------------------------------------------------
+# TPMS keeps every revision of every panel / feeder side-by-side. The
+# default behaviour everywhere is "latest revision only" — the chatbot
+# user always wants current state unless they explicitly ask for history.
+#
+# Three modes:
+#   None | "latest"  -> latest revision per (panel | feeder)
+#   "all"            -> every revision row
+#   "<int>"          -> only rows with that exact Revision value
+def _parse_revision(rev: Optional[str]) -> Any:
+    if rev is None or rev == "" or rev == "latest":
+        return "latest"
+    if rev == "all":
+        return "all"
+    try:
+        return int(rev)
+    except (TypeError, ValueError):
+        return "latest"
 
 
 def _fetch_project_main(conn, oenum: str) -> Optional[Dict]:
@@ -169,57 +219,253 @@ def _fetch_project_main(conn, oenum: str) -> Optional[Dict]:
         return row
 
 
-def _fetch_panels(conn, id_project_main: int) -> List[Dict]:
+# Common SELECT lists. Kept in module scope so we don't repeat ~25 columns
+# across the per-revision-mode branches.
+_PANEL_COLS = """
+    p.ID                       AS id,
+    p.IDProjectScope           AS id_project_scope,
+    IFNULL(p.Plane_Name1,'')   AS scope_name,
+    IFNULL(p.Plane_Name1,'')   AS plane_name,
+    IFNULL(p.Plane_Type,'')    AS plane_type,
+    IFNULL(p.ProductType_label,'') AS product_type,
+    p.Height                   AS height,
+    p.Width                    AS width,
+    p.Depth                    AS depth,
+    p.Voltage_Rate             AS voltage_rate,
+    p.Switch_Amperage          AS switch_amperage,
+    p.rated_voltage            AS rated_voltage,
+    p.KABUS                    AS kabus,
+    p.ABUS                     AS abus,
+    p.Main_Busbar_Size         AS main_busbar_size,
+    p.Earth_Size               AS earth_size,
+    p.Neutral_Size             AS neutral_size,
+    p.frequency                AS frequency,
+    p.IP                       AS ip_rating,
+    p.Cell_Count               AS cell_count,
+    p.Revision                 AS revision,
+    p.USR_USERNAME             AS updated_by,
+    p.Date_Created             AS updated_at
+"""
+
+_FEEDER_COLS = """
+    v.ID                       AS id,
+    v.Tablo_ID                 AS tablo_id,
+    IFNULL(v.scopeName,'')     AS scope_name,
+    IFNULL(v.feeder_no,'')     AS feeder_no,
+    IFNULL(v.tag,'')           AS tag,
+    IFNULL(v.Designation,'')   AS designation,
+    IFNULL(v.wiring_type,'')   AS wiring_type,
+    IFNULL(v.rating_power,'')  AS rating_power,
+    IFNULL(v.flc,'')           AS flc,
+    IFNULL(v.cb_rating,'')     AS cb_rating,
+    IFNULL(v.cable_size,'')    AS cable_size,
+    IFNULL(v.module_type,'')   AS module_type,
+    IFNULL(v.Module,'')        AS module,
+    IFNULL(v.Size,'')          AS size,
+    IFNULL(v.description,'')   AS description,
+    IFNULL(v.bus_section,'')   AS bus_section,
+    IFNULL(v.templateName,'')  AS template_name,
+    IFNULL(v.sfd_hfd,'')       AS sfd_hfd,
+    v.overLoad_rating          AS overload_rating,
+    v.contactor_rating         AS contactor_rating,
+    v.revision                 AS revision,
+    v.ordering                 AS ordering
+"""
+
+
+def _fetch_panels(conn, id_project_main: int,
+                  revision: Any = "latest") -> List[Dict]:
+    """Read switchgear/panel identity rows for the project.
+
+    technical_panel_identity stores every revision of every panel side by
+    side (project 1730 has 97 rows for 11 distinct IDProjectScope values).
+    Default: return only the latest revision per IDProjectScope so the
+    chatbot sees current state. Pass revision="all" for full history, or
+    an int to pin a specific revision number."""
+    if revision == "all":
+        sql = f"""
+            SELECT {_PANEL_COLS}
+            FROM technical_panel_identity p
+            WHERE p.IDProjectMain = %s
+            ORDER BY p.IDProjectScope, p.Revision
+        """
+        args: tuple = (id_project_main,)
+    elif isinstance(revision, int):
+        sql = f"""
+            SELECT {_PANEL_COLS}
+            FROM technical_panel_identity p
+            WHERE p.IDProjectMain = %s AND p.Revision = %s
+            ORDER BY p.IDProjectScope
+        """
+        args = (id_project_main, revision)
+    else:
+        # default: latest revision per panel
+        sql = f"""
+            SELECT {_PANEL_COLS}
+            FROM technical_panel_identity p
+            JOIN (
+                SELECT IDProjectMain, IDProjectScope, MAX(Revision) AS max_rev
+                FROM technical_panel_identity
+                WHERE IDProjectMain = %s
+                GROUP BY IDProjectMain, IDProjectScope
+            ) lp ON lp.IDProjectMain = p.IDProjectMain
+                AND lp.IDProjectScope = p.IDProjectScope
+                AND lp.max_rev       = p.Revision
+            WHERE p.IDProjectMain = %s
+            ORDER BY p.IDProjectScope
+        """
+        args = (id_project_main, id_project_main)
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT ID as id,
-                   IFNULL(Plane_Name1,'') as scope_name,
-                   IFNULL(Plane_Name1,'') as plane_name,
-                   IFNULL(Plane_Type,'') as plane_type,
-                   Height as height, Width as width, Depth as depth,
-                   Voltage_Rate as voltage_rate,
-                   Main_Busbar_Size as main_busbar_size,
-                   Cell_Count as cell_count
-            FROM technical_panel_identity
-            WHERE IDProjectMain = %s ORDER BY ID
-        """, (id_project_main,))
+        cur.execute(sql, args)
         return cur.fetchall()
 
 
-def _fetch_feeders(conn, id_project_main: int) -> List[Dict]:
+def _fetch_feeders(conn, id_project_main: int,
+                   revision: Any = "latest") -> List[Dict]:
+    """Read feeders (View_draft) for the project.
+
+    View_draft keeps every revision of every feeder. `revision` is nullable
+    (NULL is the initial draft) and goes NULL → 1 → 2 → … so we treat
+    COALESCE(revision,-1) as the ordering. Default returns the latest row
+    per (Tablo_ID, feeder_no); for project 1730 this collapses 3292 rows
+    → ~268, which matches what the technical user sees in HeidiSQL."""
+    if revision == "all":
+        sql = f"""
+            SELECT {_FEEDER_COLS}
+            FROM View_draft v
+            WHERE v.Project_ID = %s
+            ORDER BY v.Tablo_ID, v.ordering, v.feeder_no, v.revision
+        """
+        args: tuple = (id_project_main,)
+    elif isinstance(revision, int):
+        sql = f"""
+            SELECT {_FEEDER_COLS}
+            FROM View_draft v
+            WHERE v.Project_ID = %s AND v.revision = %s
+            ORDER BY v.Tablo_ID, v.ordering, v.feeder_no
+        """
+        args = (id_project_main, revision)
+    else:
+        sql = f"""
+            SELECT {_FEEDER_COLS}
+            FROM View_draft v
+            JOIN (
+                SELECT Tablo_ID, feeder_no,
+                       MAX(COALESCE(revision,-1)) AS max_rev
+                FROM View_draft
+                WHERE Project_ID = %s
+                GROUP BY Tablo_ID, feeder_no
+            ) lx ON lx.Tablo_ID = v.Tablo_ID
+                AND lx.feeder_no = v.feeder_no
+                AND lx.max_rev   = COALESCE(v.revision,-1)
+            WHERE v.Project_ID = %s
+            ORDER BY v.Tablo_ID, v.ordering, v.feeder_no
+        """
+        args = (id_project_main, id_project_main)
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT ID as id,
-                   IFNULL(scopeName,'') as scope_name,
-                   IFNULL(feeder_no,'') as feeder_no,
-                   IFNULL(tag,'') as tag,
-                   IFNULL(Designation,'') as designation,
-                   IFNULL(wiring_type,'') as wiring_type,
-                   IFNULL(rating_power,'') as rating_power,
-                   IFNULL(flc,'') as flc,
-                   IFNULL(cb_rating,'') as cb_rating,
-                   IFNULL(cable_size,'') as cable_size
-            FROM View_draft
-            WHERE Project_ID = %s ORDER BY Tablo_ID, ordering, ID
-        """, (id_project_main,))
+        cur.execute(sql, args)
         return cur.fetchall()
 
 
-def _fetch_equipment_count(conn, id_project_main: int) -> int:
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT COUNT(*) as cnt
+def _fetch_equipment_count(conn, id_project_main: int,
+                           revision: Any = "latest") -> int:
+    """Count equipment rows whose parent feeder is in the requested
+    revision scope. View_draft_Equipment carries neither Project_ID nor
+    Tablo_ID — it links only via draftId → View_draft.ID, so we must
+    intersect against the same revision-filtered set used for feeders."""
+    if revision == "all":
+        sql = """
+            SELECT COUNT(*) AS cnt
             FROM View_draft_Equipment e
-            INNER JOIN View_draft d ON e.draftId = d.ID
-            WHERE d.Project_ID = %s
-        """, (id_project_main,))
+            JOIN View_draft v ON v.ID = e.draftId
+            WHERE v.Project_ID = %s
+        """
+        args: tuple = (id_project_main,)
+    elif isinstance(revision, int):
+        sql = """
+            SELECT COUNT(*) AS cnt
+            FROM View_draft_Equipment e
+            JOIN View_draft v ON v.ID = e.draftId
+            WHERE v.Project_ID = %s AND v.revision = %s
+        """
+        args = (id_project_main, revision)
+    else:
+        sql = """
+            SELECT COUNT(*) AS cnt
+            FROM View_draft_Equipment e
+            JOIN View_draft v ON v.ID = e.draftId
+            JOIN (
+                SELECT Tablo_ID, feeder_no,
+                       MAX(COALESCE(revision,-1)) AS max_rev
+                FROM View_draft
+                WHERE Project_ID = %s
+                GROUP BY Tablo_ID, feeder_no
+            ) lx ON lx.Tablo_ID = v.Tablo_ID
+                AND lx.feeder_no = v.feeder_no
+                AND lx.max_rev   = COALESCE(v.revision,-1)
+            WHERE v.Project_ID = %s
+        """
+        args = (id_project_main, id_project_main)
+    with conn.cursor() as cur:
+        cur.execute(sql, args)
         row = cur.fetchone()
         return row["cnt"] if row else 0
 
 
+def _fetch_project_identity(conn, id_project_main: int) -> Optional[Dict]:
+    """Project-level identity (overall data shared across all switchgears).
+
+    `technical_project_identity_.Revision` is often 0 across all rows for
+    the same project — TPMS users overwrite by inserting a new row instead
+    of incrementing Revision. So MAX(Revision) alone would tie; we tiebreak
+    on ID DESC (most recently inserted wins) which matches how the TPMS UI
+    shows the "current" project identity. Custom k/v fields come from
+    TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS scoped by that latest ID."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT * FROM technical_project_identity_
+            WHERE IDProjectMain = %s
+            ORDER BY Revision DESC, ID DESC
+            LIMIT 1
+        """, (id_project_main,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cur.execute("""
+            SELECT field_title, field_descriptions, Status, date_u
+            FROM TECHNICAL_PROJECT_IDENTITY_ADDITIONAL_FIELDS
+            WHERE IDProjectMain = %s
+              AND IDTechnicalProjectIdentity = %s
+            ORDER BY ID
+        """, (id_project_main, row["ID"]))
+        row["additional_fields"] = cur.fetchall()
+        # Snake-case the FK column the response model expects so
+        # ProjectIdentityResponse(..., id_project_main=...) works.
+        row["id_project_main"] = row.get("IDProjectMain")
+        row["id"] = row.get("ID")
+        return row
+
+
+# Fields from `technical_project_identity_` worth rendering in the agent
+# text. Skips the dozens of numeric FK columns (Isolation, Color_Type,
+# wire colors, etc.) whose values are opaque without joining lookup tables
+# — those still come through the JSON payload, just not the markdown.
+_PROJECT_IDENTITY_TEXT_FIELDS: List[tuple] = [
+    ("Above_Sea_Level",     "Altitude"),
+    ("Average_Temperature", "Avg. Temperature"),
+    ("Delivery_Date",       "Delivery Date"),
+    ("Project_Group",       "Project Group"),
+    ("Wire_Brand",          "Wire Brand"),
+    ("Control_Wire_Brand",  "Control Wire Brand"),
+    ("USR_USERNAME",        "Last Updated By"),
+    ("Date_Created",        "Last Updated At"),
+    ("Revision",            "Revision"),
+]
+
+
 def _project_to_text(data: Dict) -> str:
     """Convert project data to agent-readable text format."""
-    lines = []
+    lines: List[str] = []
     proj = data.get("project")
     if proj:
         lines.append(f"# Project: {proj['project_name']} (OENUM: {proj['oenum']})")
@@ -231,28 +477,50 @@ def _project_to_text(data: Dict) -> str:
         lines.append(f"- Technical Expert: {proj['technical_expert_label']}")
         lines.append("")
 
+    pid = data.get("project_identity")
+    if pid:
+        lines.append("## Project Identity (overall — shared by all switchgears)")
+        for col, label in _PROJECT_IDENTITY_TEXT_FIELDS:
+            val = pid.get(col)
+            if val in (None, "", 0):
+                continue
+            lines.append(f"- {label}: {val}")
+        for af in pid.get("additional_fields") or []:
+            title = af.get("field_title") or ""
+            desc  = af.get("field_descriptions") or ""
+            if title or desc:
+                lines.append(f"- {title}: {desc}")
+        lines.append("")
+
     panels = data.get("panels", [])
     if panels:
-        lines.append(f"## Panels ({len(panels)} total)")
+        lines.append(f"## Panels ({len(panels)} total — latest revision only)")
         for p in panels:
-            lines.append(f"### {p.get('plane_name', 'Panel')} (Type: {p.get('plane_type', 'N/A')})")
-            dims = f"{p.get('height','?')} x {p.get('width','?')} x {p.get('depth','?')} mm"
+            head = p.get("plane_name") or f"Panel {p.get('id_project_scope') or p.get('id')}"
+            lines.append(f"### {head} (Type: {p.get('plane_type', 'N/A')})")
+            dims = f"{p.get('height','?')} x {p.get('width','?')} x {p.get('depth','?')}"
             lines.append(f"  Dimensions: {dims}")
-            lines.append(f"  Voltage Rate: {p.get('voltage_rate', 'N/A')}")
-            lines.append(f"  Main Busbar: {p.get('main_busbar_size', 'N/A')}")
-            lines.append(f"  Cells: {p.get('cell_count', 'N/A')}")
+            lines.append(f"  Voltage Rate: {p.get('voltage_rate', 'N/A')} | Rated: {p.get('rated_voltage') or 'N/A'}")
+            lines.append(f"  Switch Amperage: {p.get('switch_amperage','N/A')} | KABUS: {p.get('kabus','N/A')} | ABUS: {p.get('abus','N/A')}")
+            lines.append(f"  Main Busbar: {p.get('main_busbar_size', 'N/A')} | Earth: {p.get('earth_size','N/A')} | Neutral: {p.get('neutral_size','N/A')}")
+            lines.append(f"  Cells: {p.get('cell_count', 'N/A')} | IP: {p.get('ip_rating','N/A')}")
+            if p.get("revision") is not None:
+                lines.append(f"  Revision: {p['revision']} (updated {p.get('updated_at','?')} by {p.get('updated_by','?')})")
             lines.append("")
 
     feeders = data.get("feeders", [])
     if feeders:
-        lines.append(f"## Feeders ({len(feeders)} total)")
+        lines.append(f"## Feeders ({len(feeders)} total — latest revision only)")
         for f in feeders:
             lines.append(f"- Feeder {f.get('feeder_no','?')}: {f.get('designation','')}")
-            lines.append(f"  Tag: {f.get('tag','')}, Type: {f.get('wiring_type','')}")
+            lines.append(f"  Tag: {f.get('tag','')}, Type: {f.get('wiring_type','')}, Module: {f.get('module_type','') or f.get('module','')}")
             lines.append(f"  Power: {f.get('rating_power','')} | FLC: {f.get('flc','')}")
-            lines.append(f"  CB: {f.get('cb_rating','')} | Cable: {f.get('cable_size','')}")
+            lines.append(f"  CB: {f.get('cb_rating','')} | Cable: {f.get('cable_size','')} | OL: {f.get('overload_rating','') or '-'}")
+            if f.get("template_name"):
+                lines.append(f"  Template: {f['template_name']}")
 
     lines.append(f"\nEquipment items: {data.get('equipment_count', 0)}")
+    lines.append(f"Revision filter: {data.get('revision', 'latest')}")
     lines.append(f"Fetched at: {data.get('fetched_at', 'N/A')}")
     return "\n".join(lines)
 
@@ -277,9 +545,24 @@ async def health_mysql():
         return {"status": "degraded", "mysql": "unavailable", "error": str(e)}
 
 
+def _cache_key(oenum: str, revision: Any) -> str:
+    return f"{oenum}::{revision}"
+
+
 @app.post("/fetch/{oenum}", response_model=FetchResponse)
-async def fetch_project(oenum: str):
-    """Fetch complete project data from TPMS and cache it."""
+async def fetch_project(
+    oenum: str,
+    revision: Optional[str] = Query(
+        None,
+        description="Revision filter: 'latest' (default), 'all', or a specific Revision integer.",
+    ),
+):
+    """Fetch complete project data from TPMS and cache it.
+
+    By default returns the current state only (latest revision per panel
+    / feeder / project-identity). Pass ?revision=all to include history or
+    ?revision=<n> to pin a specific revision number."""
+    rev = _parse_revision(revision)
     try:
         conn = get_mysql_connection()
         project = _fetch_project_main(conn, oenum)
@@ -288,24 +571,30 @@ async def fetch_project(oenum: str):
             raise HTTPException(status_code=404, detail=f"Project {oenum} not found in TPMS")
 
         id_pm = project["id_project_main"]
-        panels = _fetch_panels(conn, id_pm)
-        feeders = _fetch_feeders(conn, id_pm)
-        eq_count = _fetch_equipment_count(conn, id_pm)
+        project_identity = _fetch_project_identity(conn, id_pm)
+        panels = _fetch_panels(conn, id_pm, revision=rev)
+        feeders = _fetch_feeders(conn, id_pm, revision=rev)
+        eq_count = _fetch_equipment_count(conn, id_pm, revision=rev)
         conn.close()
 
         now = datetime.utcnow().isoformat()
         data = {
             "oenum": oenum,
             "project": project,
+            "project_identity": project_identity,
             "panels": panels,
             "feeders": feeders,
             "equipment_count": eq_count,
             "fetched_at": now,
             "status": "ok",
+            "revision": str(rev),
         }
-        _project_cache[oenum] = data
+        _project_cache[_cache_key(oenum, rev)] = data
 
-        logger.info(f"Fetched TPMS data: {oenum} - {len(panels)} panels, {len(feeders)} feeders")
+        logger.info(
+            "Fetched TPMS data: %s rev=%s - %d panels, %d feeders, %d equipment",
+            oenum, rev, len(panels), len(feeders), eq_count,
+        )
 
         # Fire-and-forget: upsert into the simorgh-projects ES index so
         # the COT agent can search structured project metadata + aggregate
@@ -322,19 +611,29 @@ async def fetch_project(oenum: str):
 
 
 @app.get("/project/{oenum}", response_model=FetchResponse)
-async def get_project(oenum: str):
+async def get_project(
+    oenum: str,
+    revision: Optional[str] = Query(None),
+):
     """Get cached project data (or fetch if not cached)."""
-    if oenum not in _project_cache:
-        return await fetch_project(oenum)
-    return FetchResponse(**_project_cache[oenum])
+    rev = _parse_revision(revision)
+    key = _cache_key(oenum, rev)
+    if key not in _project_cache:
+        return await fetch_project(oenum, revision=revision)
+    return FetchResponse(**_project_cache[key])
 
 
 @app.get("/project/{oenum}/text")
-async def get_project_text(oenum: str):
+async def get_project_text(
+    oenum: str,
+    revision: Optional[str] = Query(None),
+):
     """Get project data as agent-readable plain text."""
-    if oenum not in _project_cache:
-        await fetch_project(oenum)
-    data = _project_cache.get(oenum)
+    rev = _parse_revision(revision)
+    key = _cache_key(oenum, rev)
+    if key not in _project_cache:
+        await fetch_project(oenum, revision=revision)
+    data = _project_cache.get(key)
     if not data:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"oenum": oenum, "text": _project_to_text(data)}
@@ -435,56 +734,65 @@ def project_exists(oenum: str):
 mcp = FastMCP("tpms-fetcher", instructions="Fetch project data from TPMS MySQL")
 
 
-@mcp.tool()
-def tpms_fetch(oenum: str) -> str:
-    """Fetch complete project data from TPMS by OENUM. Returns JSON with project, panels, feeders."""
+def _fetch_into_cache(oenum: str, revision: Optional[str]) -> Optional[Dict]:
+    """Shared helper for the MCP tools — populate `_project_cache` for the
+    (oenum, revision) pair and return the cached dict. Returns None if the
+    OE-number could not be resolved against View_Project_Main."""
+    rev = _parse_revision(revision)
+    key = _cache_key(oenum, rev)
+    if key in _project_cache:
+        return _project_cache[key]
+    conn = get_mysql_connection()
     try:
-        conn = get_mysql_connection()
         project = _fetch_project_main(conn, oenum)
         if not project:
-            conn.close()
-            return json.dumps({"error": f"Project {oenum} not found in TPMS"})
-
+            return None
         id_pm = project["id_project_main"]
-        panels = _fetch_panels(conn, id_pm)
-        feeders = _fetch_feeders(conn, id_pm)
-        eq_count = _fetch_equipment_count(conn, id_pm)
-        conn.close()
-
-        now = datetime.utcnow().isoformat()
         data = {
-            "oenum": oenum, "project": project, "panels": panels,
-            "feeders": feeders, "equipment_count": eq_count,
-            "fetched_at": now, "status": "ok",
+            "oenum": oenum,
+            "project": project,
+            "project_identity": _fetch_project_identity(conn, id_pm),
+            "panels":          _fetch_panels(conn, id_pm, revision=rev),
+            "feeders":         _fetch_feeders(conn, id_pm, revision=rev),
+            "equipment_count": _fetch_equipment_count(conn, id_pm, revision=rev),
+            "fetched_at":      datetime.utcnow().isoformat(),
+            "status":          "ok",
+            "revision":        str(rev),
         }
-        _project_cache[oenum] = data
+    finally:
+        conn.close()
+    _project_cache[key] = data
+    return data
+
+
+@mcp.tool()
+def tpms_fetch(oenum: str, revision: Optional[str] = None) -> str:
+    """Fetch complete project data from TPMS by OENUM. Returns JSON with
+    project, project_identity, panels, feeders, equipment_count.
+
+    revision: 'latest' (default) returns only current state — each panel /
+    feeder collapsed to its newest revision row, matching what a technical
+    user sees in the TPMS UI. Pass 'all' to include every revision, or an
+    integer to pin a specific revision number."""
+    try:
+        data = _fetch_into_cache(oenum, revision)
+        if data is None:
+            return json.dumps({"error": f"Project {oenum} not found in TPMS"})
         return json.dumps(data, default=str)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
 
 @mcp.tool()
-def tpms_get_text(oenum: str) -> str:
-    """Get project data as agent-readable plain text by OENUM. Fetches from TPMS if not cached."""
+def tpms_get_text(oenum: str, revision: Optional[str] = None) -> str:
+    """Get project data as agent-readable plain text by OENUM. Default is
+    latest-revision-only (current state); pass revision='all' for history
+    or an integer for a specific revision."""
     try:
-        if oenum not in _project_cache:
-            # Fetch first
-            conn = get_mysql_connection()
-            project = _fetch_project_main(conn, oenum)
-            if not project:
-                conn.close()
-                return f"Project {oenum} not found in TPMS"
-            id_pm = project["id_project_main"]
-            panels = _fetch_panels(conn, id_pm)
-            feeders = _fetch_feeders(conn, id_pm)
-            eq_count = _fetch_equipment_count(conn, id_pm)
-            conn.close()
-            _project_cache[oenum] = {
-                "oenum": oenum, "project": project, "panels": panels,
-                "feeders": feeders, "equipment_count": eq_count,
-                "fetched_at": datetime.utcnow().isoformat(),
-            }
-        return _project_to_text(_project_cache[oenum])
+        data = _fetch_into_cache(oenum, revision)
+        if data is None:
+            return f"Project {oenum} not found in TPMS"
+        return _project_to_text(data)
     except Exception as e:
         return f"TPMS fetch error: {e}"
 
