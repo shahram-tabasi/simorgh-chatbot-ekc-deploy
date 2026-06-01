@@ -117,16 +117,19 @@ class UploadDeepPlan(CotPlan):
                 origin="knowledge_repo",
             )
 
-        # 2. Persistent project-document store. This is where the
-        #    /api/v2/agent/projects/{id}/documents upload route ACTUALLY
-        #    indexes uploaded files: collection user_system_project_{oenum
-        #    -or-id}, user_id="system". The ephemeral upload_<hash> path
-        #    below is a separate, older subsystem that the upload route
-        #    does NOT populate — so for project chats the real content
-        #    lives here. Pull the top chunks for the question and inject
-        #    them as grounding so the synthesizer has the document even if
-        #    the planner never calls a retrieval tool (it routinely
-        #    doesn't, or calls it without scope).
+        # 2. Persistent project-document store — the authoritative source
+        #    for uploads. The planner LLM is unreliable about calling the
+        #    right retrieval tool (it keeps falling back to gitlab/search
+        #    tools that 404 on a repo-less project), so we PRE-LOAD the
+        #    documents' content here as grounding. The synthesizer then has
+        #    the files regardless of what tools the plan picks.
+        #
+        #    Strategy: enumerate the project's documents and inject each
+        #    one's full (capped) text. For "compare/aggregate across files"
+        #    questions this is exactly what's needed — both files present in
+        #    the prompt. Falls back to semantic_search only if enumeration
+        #    yields nothing. Total budget is bounded so we never blow the
+        #    context window.
         scope = (ctx.tpms_oenum or ctx.project_id or "").strip()
         if scope:
             try:
@@ -135,29 +138,53 @@ class UploadDeepPlan(CotPlan):
                 )
                 qdrant = getattr(get_project_memory_service(), "qdrant", None)
                 if qdrant is not None:
-                    hits = qdrant.semantic_search(
-                        user_id="system",
-                        query=ctx.user_input,
-                        limit=8,
-                        # Low floor: "summarise this doc" queries match
-                        # weakly against any single chunk; we want the
-                        # document's chunks regardless of tight similarity.
-                        score_threshold=0.0,
-                        project_oenum=scope,
-                    )
-                    log.info("upload_deep: persistent-store hits=%d scope=%s",
-                             len(hits), scope)
-                    for h in hits:
-                        g.add(
-                            text=h.get("text") or "",
-                            source=(h.get("metadata") or {}).get("filename")
-                                   or h.get("section_title") or "upload",
-                            section=h.get("section_title"),
-                            score=h.get("score"),
-                            origin="upload",
+                    docs = []
+                    try:
+                        docs = qdrant.list_documents(user_id="system", project_oenum=scope)
+                    except Exception as e:
+                        log.warning("upload_deep: list_documents failed: %s", e)
+
+                    TOTAL_BUDGET = 24000
+                    used = 0
+                    if docs:
+                        # Spread the budget across however many docs exist so
+                        # a two-file comparison gets both, not just the first.
+                        per_doc = max(2000, TOTAL_BUDGET // max(1, len(docs)))
+                        for d in docs:
+                            fname = d.get("filename") or ""
+                            if not fname or used >= TOTAL_BUDGET:
+                                continue
+                            try:
+                                doc = qdrant.get_document_text(
+                                    user_id="system", project_oenum=scope,
+                                    filename=fname, max_chars=per_doc,
+                                )
+                            except Exception as e:
+                                log.warning("upload_deep: read %s failed: %s", fname, e)
+                                continue
+                            txt = doc.get("text") or ""
+                            if txt:
+                                g.add(text=txt, source=fname, origin="upload",
+                                      section=fname)
+                                used += len(txt)
+                        log.info("upload_deep: preloaded %d docs (%d chars) scope=%s",
+                                 len(docs), used, scope)
+                    else:
+                        # No enumerable docs — fall back to query-driven search.
+                        hits = qdrant.semantic_search(
+                            user_id="system", query=ctx.user_input, limit=8,
+                            score_threshold=0.0, project_oenum=scope,
                         )
+                        for h in hits:
+                            g.add(text=h.get("text") or "",
+                                  source=(h.get("metadata") or {}).get("filename")
+                                         or h.get("section_title") or "upload",
+                                  section=h.get("section_title"),
+                                  score=h.get("score"), origin="upload")
+                        log.info("upload_deep: fallback search hits=%d scope=%s",
+                                 len(hits), scope)
             except Exception as e:
-                log.warning("upload_deep: persistent-store retrieve failed: %s", e)
+                log.warning("upload_deep: persistent-store grounding failed: %s", e)
 
         # 3. Ephemeral upload investigation (legacy subsystem). Requires the
         #    upload to already be indexed into upload_<hash> by the attach

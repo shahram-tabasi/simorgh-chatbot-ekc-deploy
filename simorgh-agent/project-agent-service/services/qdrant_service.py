@@ -474,6 +474,85 @@ class QdrantService:
             logger.error(f"❌ Semantic search failed: {e}")
             return []
 
+    def _scroll_tenant(self, tenant_id: str, document_id: Optional[str] = None,
+                       filename: Optional[str] = None):
+        """Scroll ALL points for a tenant (optionally one document) from the
+        unified collection. Payload-only. [] if collection absent."""
+        try:
+            exists = any(
+                c.name == DOCS_COLLECTION
+                for c in self.client.get_collections().collections
+            )
+        except Exception:
+            exists = True
+        if not exists:
+            return []
+        must = [FieldCondition(key=TENANT_FIELD, match=MatchValue(value=tenant_id))]
+        if document_id:
+            must.append(FieldCondition(key="document_id", match=MatchValue(value=document_id)))
+        if filename:
+            must.append(FieldCondition(key="section_title", match=MatchValue(value=filename)))
+        flt = Filter(must=must)
+        out, offset = [], None
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=DOCS_COLLECTION, scroll_filter=flt,
+                limit=256, with_payload=True, with_vectors=False, offset=offset,
+            )
+            out.extend(points)
+            if offset is None:
+                break
+        return out
+
+    def list_documents(self, user_id: str, session_id: Optional[str] = None,
+                       project_oenum: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Distinct documents for a tenant: document_id, filename, chunk_count."""
+        tenant_id = _tenant_of(session_id, project_oenum)
+        try:
+            points = self._scroll_tenant(tenant_id)
+        except Exception as e:
+            logger.error(f"❌ list_documents failed: {e}")
+            return []
+        docs: Dict[str, Dict[str, Any]] = {}
+        for p in points:
+            pl = p.payload or {}
+            did = pl.get("document_id") or ""
+            if not did:
+                continue
+            d = docs.setdefault(did, {
+                "document_id": did,
+                "filename": (pl.get("metadata") or {}).get("filename")
+                            or pl.get("section_title") or "",
+                "chunk_count": 0,
+            })
+            d["chunk_count"] += 1
+        return list(docs.values())
+
+    def get_document_text(self, document_id: Optional[str] = None,
+                          user_id: str = "system", session_id: Optional[str] = None,
+                          project_oenum: Optional[str] = None,
+                          filename: Optional[str] = None,
+                          max_chars: int = 12000) -> Dict[str, Any]:
+        """Reassemble one document's full text (chunk_index order), by
+        document_id or filename."""
+        tenant_id = _tenant_of(session_id, project_oenum)
+        try:
+            points = self._scroll_tenant(tenant_id, document_id=document_id, filename=filename)
+        except Exception as e:
+            logger.error(f"❌ get_document_text failed: {e}")
+            return {"document_id": document_id or "", "filename": filename or "",
+                    "text": "", "chunk_count": 0}
+        chunks = sorted((p.payload or {} for p in points),
+                        key=lambda pl: pl.get("chunk_index", 0))
+        out_name = filename or ""
+        parts: List[str] = []
+        for pl in chunks:
+            out_name = out_name or (pl.get("metadata") or {}).get("filename") \
+                or pl.get("section_title") or ""
+            parts.append(pl.get("text", ""))
+        return {"document_id": document_id or "", "filename": out_name,
+                "text": "\n".join(parts)[:max_chars], "chunk_count": len(chunks)}
+
     def get_document_chunks(
         self,
         project_number: str,

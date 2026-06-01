@@ -1370,6 +1370,39 @@ class ProjectManagerAgent:
                     "sections": ["panels", "feeders"],
                 }
 
+        # UPLOAD REMAP. When the active plan is upload_deep, the planner
+        # still reaches for gitlab/repo tools (search_blobs, search_context,
+        # read_artifact_mcp, get_project_tree) which 404 on a repo-less
+        # upload project — observed even with the addendum forbidding them.
+        # The document content is already pre-loaded into grounding, but
+        # remap these to the documents_rag equivalents so any retrieval step
+        # the planner DOES run returns real data instead of a 404.
+        if _ap_name == "upload_deep" and isinstance(tool, str):
+            _u_search = {"search_context", "search_blobs", "regex_search_project",
+                         "search", "search_technical_knowledge"}
+            _u_tree = {"get_project_tree", "list_projects_mcp"}
+            _u_read = {"read_artifact_mcp", "read_file_mcp", "read_artifact",
+                       "read_file"}
+            ri = dict(raw_input) if isinstance(raw_input, dict) else {}
+            _uq = ri.get("query") or ri.get("pattern") or ri.get("q") \
+                or getattr(getattr(self, "_active_plan_ctx", None), "user_input", "")
+            if tool in _u_search:
+                logger.info("upload remap: %s -> search_project_documents", tool)
+                tool, raw_input = "search_project_documents", {"query": _uq}
+            elif tool in _u_tree:
+                logger.info("upload remap: %s -> list_project_documents", tool)
+                tool, raw_input = "list_project_documents", {}
+            elif tool in _u_read:
+                # A read with a usable filename → read that file; otherwise
+                # list the documents so the planner/synth can see them.
+                p = (ri.get("path") or ri.get("filename") or "").strip()
+                if p and "<" not in p and p not in ("", "/", "*", "."):
+                    logger.info("upload remap: %s -> read_document(filename=%s)", tool, p)
+                    tool, raw_input = "read_document", {"filename": p}
+                else:
+                    logger.info("upload remap: %s -> list_project_documents (no path)", tool)
+                    tool, raw_input = "list_project_documents", {}
+
         # Normalize tool_input: LLM may return a string instead of dict
         if isinstance(raw_input, str) and raw_input:
             if tool == "memory_query":
