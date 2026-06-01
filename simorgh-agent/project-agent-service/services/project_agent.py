@@ -554,6 +554,16 @@ class ProjectManagerAgent:
             "tasks_failed": len([r for r in execution_results if r.get("status") == "failed"]),
         })
 
+        # Background slot-collector: keep the Design Suite spec fresh after
+        # every turn. Fire-and-forget; never blocks the chat response. Only
+        # runs when SOFT_BRIDGE_ENABLED is set (collector itself short-
+        # circuits on a stable sources_signature, so this is cheap).
+        try:
+            from services.soft_collector import schedule_refresh
+            schedule_refresh(project_id)
+        except Exception as e:
+            logger.debug("soft_collector schedule_refresh failed: %s", e)
+
         return {
             "response": final_response,
             "chain_id": str(analysis.chain_id),
@@ -1928,6 +1938,19 @@ class ProjectManagerAgent:
             if rest_fallback is not None:
                 return rest_fallback
 
+        # Design Suite slot-collector tools. Local (not MCP) so the ReAct
+        # loop can read the live spec state, ask the user for clarifications
+        # via a structured SSE event, and finally submit to simorgh-soft.
+        # All three are no-ops when SOFT_BRIDGE_ENABLED is unset.
+        if tool in ("read_soft_spec", "ask_user", "submit_soft_spec"):
+            try:
+                return await self._execute_soft_bridge_tool(
+                    project_id, tool, tool_input)
+            except Exception as e:
+                logger.warning("soft-bridge tool %s failed: %s", tool, e)
+                return {"output": f"[{tool} failed: {e}]",
+                        "metadata": {"tool": tool, "via": "soft_bridge"}}
+
         # Direct execution for core tools + HTTP fallback for microservice tools
         if tool == "llm" or task_type in ("generation", "analysis", "review"):
             return await self._execute_llm_task(project_id, task, tool_input)
@@ -1966,6 +1989,130 @@ class ProjectManagerAgent:
         else:
             # Default: use LLM
             return await self._execute_llm_task(project_id, task, tool_input)
+
+    # ------------------------------------------------------------------
+    # Design Suite slot-collector tools (local; gated by SOFT_BRIDGE_ENABLED)
+    # ------------------------------------------------------------------
+    async def _execute_soft_bridge_tool(
+            self, project_id: str, tool: str, tool_input: Dict) -> Dict:
+        """Three pseudo-tools the ReAct loop drives the spec collection +
+        submission with:
+
+          read_soft_spec()
+            → returns the persisted SoftSpecState (forces a fresh refresh
+              on miss so the very first call still works).
+
+          ask_user(questions=[{header, question, options[], multiSelect}])
+            → records a pending_ask row, emits an SSE event the chat UI
+              renders as an inline form, and returns
+              {status: "asked", pending_id}. The loop typically ENDS the
+              turn after this; on the user's next message we re-read the
+              state (the answer endpoint will have merged answers into
+              the spec) and continue.
+
+          submit_soft_spec()
+            → if state.gaps is non-empty: returns the gaps so the model
+              calls ask_user. Otherwise POSTs to simorgh-soft and returns
+              the deep-link.
+        """
+        # Hot import: avoids a startup-time hard dep on these modules when
+        # SOFT_BRIDGE_ENABLED is unset (and they may not be present in some
+        # build flavors).
+        from services import soft_spec_state as sss
+        from services.soft_collector import refresh as collector_refresh
+
+        if tool == "read_soft_spec":
+            state = await sss.get_state(project_id)
+            if state is None:
+                state = await collector_refresh(project_id, force=True)
+            return {
+                "output": json.dumps((state or {}), default=str)[:3000],
+                "metadata": {
+                    "tool": "read_soft_spec", "via": "soft_bridge",
+                    "completeness": (state or {}).get("completeness", 0),
+                    "gaps": (state or {}).get("gaps", []),
+                },
+            }
+
+        if tool == "ask_user":
+            questions = tool_input.get("questions") or []
+            if not isinstance(questions, list) or not questions:
+                return {"output": "ask_user: `questions` must be a non-empty list",
+                        "metadata": {"tool": "ask_user", "via": "soft_bridge",
+                                     "error": "bad_input"}}
+            # Best-effort chat_id from the active PlanContext.
+            _pc = getattr(self, "_active_plan_ctx", None)
+            chat_id = getattr(_pc, "chat_id", None) if _pc else None
+            pending_id = await sss.create_pending_ask(
+                project_id, str(chat_id) if chat_id else None, questions)
+            # Tell the UI to render the inline form. The event piggybacks on
+            # the existing progress-callback transport — useChat.ts's event
+            # parser already handles arbitrary event names.
+            await self._notify_progress(project_id, "ask_user", {
+                "pending_id": pending_id,
+                "questions":  questions,
+            })
+            return {
+                "output": (f"Asked the user {len(questions)} clarifying "
+                           f"question(s). pending_id={pending_id}. The user "
+                           "will submit answers via the form; STOP calling "
+                           "tools and end the turn with a short "
+                           "acknowledgement."),
+                "metadata": {"tool": "ask_user", "via": "soft_bridge",
+                             "pending_id": pending_id},
+            }
+
+        if tool == "submit_soft_spec":
+            state = await sss.get_state(project_id)
+            if state is None:
+                state = await collector_refresh(project_id, force=True)
+            if not state:
+                return {"output": "submit_soft_spec: no state available",
+                        "metadata": {"tool": "submit_soft_spec",
+                                     "via": "soft_bridge", "error": "no_state"}}
+            gaps = state.get("gaps") or []
+            if gaps:
+                return {
+                    "output": json.dumps({
+                        "ready": False, "gaps": gaps,
+                        "hint": ("Resolve gaps first by calling ask_user "
+                                 "with one question per missing field.")},
+                        default=str),
+                    "metadata": {"tool": "submit_soft_spec", "via": "soft_bridge",
+                                 "gaps": gaps},
+                }
+            try:
+                from services.simorgh_soft_client import create_project, deep_link
+                spec = state.get("spec") or {}
+                created = await create_project(spec)
+            except Exception as e:
+                logger.error("submit_soft_spec POST failed: %s", e)
+                return {"output": f"submit failed: {e}",
+                        "metadata": {"tool": "submit_soft_spec",
+                                     "via": "soft_bridge", "error": str(e)}}
+            soft_id = str(created.get("_id") or "")
+            if soft_id:
+                await sss.mark_submitted(project_id, soft_id)
+                try:
+                    await self.memory.update_project(
+                        project_id, simorgh_soft_project_id=soft_id)
+                except Exception:
+                    pass
+            url = deep_link(soft_id) if soft_id else ""
+            # Surface to UI so the chat can render a clickable button.
+            await self._notify_progress(project_id, "soft_submitted", {
+                "soft_project_id": soft_id, "deep_link": url,
+            })
+            return {
+                "output": json.dumps({
+                    "ready": True, "soft_project_id": soft_id, "deep_link": url},
+                    default=str),
+                "metadata": {"tool": "submit_soft_spec", "via": "soft_bridge",
+                             "deep_link": url},
+            }
+
+        return {"output": f"unknown soft-bridge tool: {tool}",
+                "metadata": {"tool": tool, "via": "soft_bridge"}}
 
     async def _execute_llm_task(self, project_id: str, task: Dict,
                                 tool_input: Dict) -> Dict:

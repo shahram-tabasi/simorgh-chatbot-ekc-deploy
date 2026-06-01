@@ -7,6 +7,7 @@ import GeneralWelcome from './GeneralWelcome';
 import { useAuth, isLegacyUser } from '../context/AuthContext';
 import { MessageList } from './MessageList';
 import DesignSuitePanel from './DesignSuitePanel';
+import DesignSuiteInline from './DesignSuiteInline';
 import { ChatInput } from './ChatInput';
 import { Message, UploadedFile } from '../types';
 
@@ -378,14 +379,21 @@ export function ChatArea({
           )}
           {/* Remove overflow-y-auto from here - let MessageList handle scrolling */}
           <div className="flex-1 flex flex-col pt-2 md:pt-2 overflow-hidden px-2 sm:px-4 md:px-8 lg:px-20">
-            {/* Legacy-only: launcher for the Simorgh Design Suite project
-                creation flow. The button is inert until the user clicks
-                it; on click the agent gathers + reconciles fields from
-                TPMS / chat history / uploaded docs and shows a
-                provenance-tagged confirmation form. Backend route is
-                feature-flagged (SOFT_BRIDGE_ENABLED). */}
+            {/* Design Suite slot-collector status + inline ask_user forms.
+                The background collector keeps the spec live; this surface
+                shows completeness and any pending clarifications. Answers
+                submitted here auto-fire a follow-up chat message so the
+                ReAct loop sees the resolved gaps and can submit. The old
+                DesignSuitePanel button stays below as a one-shot fallback. */}
             {legacy && isProjectChat && headerContext?.projectId && (
-              <DesignSuitePanel projectId={headerContext.projectId} isLegacy={legacy} />
+              <>
+                <DesignSuiteInline
+                  projectId={headerContext.projectId}
+                  isLegacy={legacy}
+                  onAnswered={(note) => handleSend(note)}
+                />
+                <DesignSuitePanel projectId={headerContext.projectId} isLegacy={legacy} />
+              </>
             )}
             <MessageList
               messages={messages}

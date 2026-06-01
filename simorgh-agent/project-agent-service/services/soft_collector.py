@@ -1,0 +1,189 @@
+"""
+soft_collector.py — background slot collector for the Design Suite spec.
+
+`refresh(project_id)` runs the existing extractors (services/soft_extractor.py),
+reconciles via services/soft_reconciler.py, computes a per-field
+provenance + completeness%, and persists to soft_spec_state.
+
+Cheap to call: a `sources_signature` hash (chat-message count + doc-count +
+oenum + repo path + recent-message-tail digest) short-circuits the refresh
+when nothing has changed, so the post-hook in handle_input / upload_document
+is safe to fire after every event.
+
+NEVER raises — failures are logged. The chat path must not break because
+of a slot-collector hiccup.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import os
+from typing import Any, Dict, List, Optional
+
+from services.soft_spec import CONFIRMABLE_FIELDS, REQUIRED_FIELDS
+
+logger = logging.getLogger(__name__)
+
+
+def _enabled() -> bool:
+    return os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on")
+
+
+def _digest_recent_messages(msgs: List[Dict[str, Any]], n: int = 8) -> str:
+    """Fingerprint the last N (role, content[:160]) pairs so we re-extract
+    only when the chat tail actually moved. Cheap MD5 is fine here."""
+    tail = msgs[-n:]
+    h = hashlib.md5()
+    for m in tail:
+        h.update((m.get("role") or "?").encode("utf-8", "ignore"))
+        h.update(b"\x00")
+        h.update((m.get("content") or "")[:160].encode("utf-8", "ignore"))
+        h.update(b"\x01")
+    return h.hexdigest()
+
+
+async def _build_signature(*, project_id: str, project_row: Dict[str, Any],
+                           recent: List[Dict[str, Any]]) -> str:
+    """Stable fingerprint of all sources contributing to the spec. Bumps
+    whenever ANY of them moves; otherwise refresh() short-circuits."""
+    se = project_row.get("sources_enabled") or {}
+    parts = [
+        f"oe={project_row.get('tpms_oenum') or ''}",
+        f"repo={project_row.get('gitlab_repo_path') or ''}",
+        f"ts_oe={(se.get('techserver_oenum') or '')}",
+        f"src={int(bool(se.get('tpms')))}{int(bool(se.get('gitlab')))}"
+              f"{int(bool(se.get('techserver')))}{int(bool(se.get('upload')))}",
+        f"hasdocs={int(bool(project_row.get('has_documents')))}",
+        f"chat={_digest_recent_messages(recent)}",
+    ]
+    # The set of indexed documents matters too — if uploads changed, we
+    # want a fresh extraction. Use the qdrant list as the doc-fingerprint.
+    try:
+        from services.project_memory_service import get_project_memory_service
+        q = getattr(get_project_memory_service(), "qdrant", None)
+        scope = (project_row.get("tpms_oenum") or project_id)
+        docs = q.list_documents(user_id="system", project_oenum=scope) if q else []
+        names = sorted([str(d.get("filename") or "") for d in (docs or [])])
+        parts.append("docs=" + "|".join(names))
+    except Exception:
+        parts.append("docs=?")
+    return hashlib.md5("\n".join(parts).encode()).hexdigest()
+
+
+def _completeness(spec_dump: Dict[str, Any], gaps: List[str]) -> int:
+    """0..100 over the CONFIRMABLE_FIELDS set."""
+    n = len(CONFIRMABLE_FIELDS)
+    if not n:
+        return 100
+    filled = 0
+    for f in CONFIRMABLE_FIELDS:
+        v = spec_dump.get(f)
+        if v not in (None, "", [], {}) and f not in gaps:
+            filled += 1
+    return int(round(filled * 100 / n))
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str, Any]]:
+    """Re-run the extractors (sequential LLM calls, parallel non-LLM) and
+    persist if the signature changed. Returns the new state row or the
+    current row if nothing was recomputed; returns None when disabled or
+    on a hard failure (logged)."""
+    if not _enabled():
+        return None
+    try:
+        from services.project_memory_service import get_project_memory_service
+        from services.soft_extractor import gather_all
+        from services.soft_reconciler import reconcile
+        from services import soft_spec_state as sss
+    except Exception as e:
+        logger.warning("soft_collector.refresh import failed: %s", e)
+        return None
+
+    memory = get_project_memory_service()
+    try:
+        project = await memory.get_project(project_id)
+    except Exception as e:
+        logger.warning("soft_collector.refresh get_project %s: %s", project_id, e)
+        return None
+    if not project:
+        return None
+
+    try:
+        recent = await memory.get_recent_context(project_id, limit=12)
+    except Exception:
+        recent = []
+
+    sig = await _build_signature(project_id=project_id, project_row=project,
+                                 recent=recent)
+    existing = await sss.get_state(project_id)
+    if existing and not force and existing.get("sources_signature") == sig:
+        return existing
+
+    se = project.get("sources_enabled") or {}
+    tpms_oenum = (project.get("tpms_oenum")
+                  or (se.get("techserver_oenum") if se.get("tpms") else None))
+    repo_path = project.get("gitlab_repo_path") if se.get("gitlab") else None
+    ts_oenum = se.get("techserver_oenum") if se.get("techserver") else None
+
+    agent_singleton = None
+    try:
+        from main import get_project_agent_singleton as _gas  # type: ignore
+        agent_singleton = _gas()
+    except Exception:
+        try:
+            from services.project_agent import get_project_agent
+            agent_singleton = get_project_agent()
+        except Exception:
+            pass
+    mcp = getattr(agent_singleton, "mcp_manager", None) if agent_singleton else None
+
+    try:
+        bag = await gather_all(
+            project_id=project_id, tpms_oenum=tpms_oenum,
+            repo_path=repo_path, techserver_oenum=ts_oenum,
+            recent_messages=recent, mcp_manager=mcp,
+        )
+    except Exception as e:
+        logger.warning("soft_collector.refresh gather %s: %s", project_id, e)
+        return existing
+
+    try:
+        spec, prov, gaps, conflicts = reconcile(bag)
+    except Exception as e:
+        logger.warning("soft_collector.refresh reconcile %s: %s", project_id, e)
+        return existing
+
+    spec_dump = spec.model_dump()
+    prov_dump = [p.model_dump() if hasattr(p, "model_dump") else p for p in prov]
+    completeness = _completeness(spec_dump, gaps)
+
+    await sss.upsert_state(
+        project_id,
+        spec=spec_dump, prov=prov_dump, gaps=gaps, conflicts=conflicts,
+        completeness=completeness, sources_signature=sig,
+    )
+    logger.info("soft_collector: project=%s completeness=%d gaps=%d conflicts=%d",
+                project_id, completeness, len(gaps), len(conflicts))
+    return await sss.get_state(project_id)
+
+
+def schedule_refresh(project_id: str) -> None:
+    """Fire-and-forget. Safe to call from anywhere; survives shutdown.
+    Used as a post-hook in handle_input / upload_document / wizard."""
+    if not _enabled():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(refresh(project_id))
+    except RuntimeError:
+        # No running loop (sync caller) — best-effort: spin one off.
+        try:
+            asyncio.run(refresh(project_id))
+        except Exception as e:
+            logger.warning("schedule_refresh sync fallback failed: %s", e)
+    except Exception as e:
+        logger.warning("schedule_refresh %s: %s", project_id, e)

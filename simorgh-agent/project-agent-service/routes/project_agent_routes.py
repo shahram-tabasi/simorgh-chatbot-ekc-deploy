@@ -1744,6 +1744,12 @@ async def upload_document(
             await memory.update_project(project_id, has_documents=True)
         except Exception as e:
             logger.warning("could not set has_documents for %s: %s", project_id, e)
+        # Background slot-collector: a new document changed the spec sources.
+        try:
+            from services.soft_collector import schedule_refresh
+            schedule_refresh(project_id)
+        except Exception as e:
+            logger.debug("soft_collector schedule_refresh failed: %s", e)
 
     return {
         "document_id": doc_id_str,
@@ -1968,6 +1974,111 @@ async def soft_create_project(project_id: str, req: SoftCreateRequest,
         "deep_link":       deep_link(soft_id),
         "created":         {k: created.get(k) for k in ("projectName", "createdOn")},
     }
+
+
+# =============================================================================
+# Background slot-collector — state + ask_user answer endpoints
+# (the ReAct loop uses the in-process pseudo-tools; these REST endpoints
+# are for the chat UI: the sidebar chip polls /state, the inline form
+# POSTs answers to /answer/{pending_id}.)
+# =============================================================================
+@router.get("/projects/{project_id}/soft/state")
+async def soft_state(project_id: str,
+                     refresh: bool = False,
+                     current_user: str = Depends(get_current_user)):
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+    from services import soft_spec_state as sss
+    from services.soft_collector import refresh as collector_refresh
+    state = await sss.get_state(project_id)
+    if state is None or refresh:
+        state = await collector_refresh(project_id, force=bool(refresh))
+        if state is None:
+            state = await sss.get_state(project_id) or {}
+    # Surface still-open pending asks so a reload of the chat shows the
+    # form again instead of losing it.
+    pending = await sss.list_open_pending(project_id)
+    return {"state": state, "pending": pending}
+
+
+class SoftAnswerRequest(BaseModel):
+    answers: Dict[str, Any]
+
+
+@router.post("/projects/{project_id}/soft/answer/{pending_id}")
+async def soft_answer(project_id: str, pending_id: str,
+                      req: SoftAnswerRequest,
+                      current_user: str = Depends(get_current_user)):
+    """User submits answers to an ask_user form. We record them, merge them
+    into the spec as user-source FieldValues (top of SOURCE_RANK), update
+    the persisted state, and return the new state. The frontend can then
+    auto-fire a chat message ("answers provided") so the ReAct loop on the
+    next turn sees gaps=[] and proceeds to submit_soft_spec."""
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from services import soft_spec_state as sss
+    pending = await sss.get_pending_ask(pending_id)
+    if not pending or str(pending.get("project_id")) != str(project_id):
+        raise HTTPException(status_code=404, detail="pending ask not found")
+    if pending.get("answered_at"):
+        return {"status": "already_answered"}
+    saved = await sss.answer_pending_ask(pending_id, req.answers or {})
+    if not saved:
+        raise HTTPException(status_code=500, detail="could not record answers")
+
+    # Merge answers into the spec. The user's FieldValues are top-rank, so
+    # they win any conflict with the auto-extracted values.
+    try:
+        from services.soft_spec import (FieldValue, ProjectSpec,
+                                        REQUIRED_FIELDS, CONFIRMABLE_FIELDS)
+        from services.soft_reconciler import reconcile
+        current = await sss.get_state(project_id) or {}
+        current_spec = current.get("spec") or {}
+        # Re-seed bag from the current spec (each field becomes a "default"
+        # source-priority entry), then overlay the user's answers as "user"
+        # (which beats every other source thanks to SOURCE_RANK).
+        bag: Dict[str, list] = {}
+        for k, v in (current_spec or {}).items():
+            if v in (None, "", [], {}):
+                continue
+            bag.setdefault(k, []).append(FieldValue(
+                value=v, source="default", confidence=0.5,
+                note="from prior state"))
+        for k, v in (req.answers or {}).items():
+            if v in (None, "",):
+                continue
+            bag.setdefault(k, []).append(FieldValue(
+                value=v, source="user", confidence=0.99,
+                note="user-provided via ask_user form"))
+        spec, prov, gaps, conflicts = reconcile(bag)
+        # Completeness inline so we don't re-run extractors here.
+        n = max(1, len(CONFIRMABLE_FIELDS))
+        filled = sum(1 for f in CONFIRMABLE_FIELDS
+                     if str(getattr(spec, f, "") or "").strip() and f not in gaps)
+        completeness = int(round(filled * 100 / n))
+        await sss.upsert_state(
+            project_id, spec=spec.model_dump(),
+            prov=[p.model_dump() for p in prov], gaps=gaps,
+            conflicts=conflicts, completeness=completeness,
+            sources_signature=(current.get("sources_signature") or "") + ":user",
+        )
+    except Exception as e:
+        logger.error("soft_answer merge failed: %s", e)
+    state = await sss.get_state(project_id)
+    return {"status": "ok", "state": state}
 
 
 def _soft_bridge_enabled() -> bool:

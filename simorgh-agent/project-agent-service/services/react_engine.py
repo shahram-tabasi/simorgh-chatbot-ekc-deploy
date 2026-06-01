@@ -75,6 +75,23 @@ COMPUTE / VERIFY:
 
 WEB:
 - web_search(query="...") for current external information when the project's own data is insufficient.
+
+SIMORGH DESIGN SUITE (legacy users only):
+When the user asks to CREATE / BUILD / SUBMIT / OPEN their project in the
+Design Suite (variants: "create my design suite project", "build it",
+"create simorgh-soft project", "submit my project", Persian
+"پروژه سیمرغ دیزاین رو بساز"), follow this exact recipe:
+  1. read_soft_spec — see what's already collected (the background
+     collector has been filling fields from every chat / upload / source).
+  2. If `gaps` or `conflicts` is non-empty: call ask_user ONCE with one
+     question per gap/conflict (use `options` when there's a finite set,
+     e.g. standard: ["IEC","ANSI","GOST"]). STOP after ask_user — the
+     answers arrive on the user's NEXT turn; do not loop.
+  3. If `gaps` is empty: call submit_soft_spec. It returns
+     {ready:true, deep_link, soft_project_id}. Reply with a short
+     confirmation and the deep-link as a clickable markdown link.
+Do NOT manually compose the spec or pass `spec` to any tool — the
+collector owns it. Your job is only to read, ask, and submit.
 """
 
 
@@ -137,6 +154,9 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
         "web_search", "web_search_news",
         "session_exec_tool", "shell",
     }
+    # Design Suite slot-collector tools (only when the bridge is enabled).
+    if os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on"):
+        allow |= {"read_soft_spec", "ask_user", "submit_soft_spec"}
     # Source-conditional tools.
     if se.get("gitlab"):
         allow |= {"get_project_tree", "read_artifact_mcp", "search_blobs",
@@ -162,6 +182,62 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
             },
         })
     have = {t["function"]["name"] for t in tools}
+
+    # Design Suite local tools — always synthesised; they are not on any
+    # MCP server, just local methods on ProjectManagerAgent.
+    if os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on"):
+        if "read_soft_spec" not in have:
+            tools.append({"type": "function", "function": {
+                "name": "read_soft_spec",
+                "description": ("Read the current Simorgh Design Suite project "
+                                "spec the background collector has accumulated "
+                                "from TPMS / chat / uploads / techserver. "
+                                "Returns {spec, prov, gaps, conflicts, "
+                                "completeness}. Call this FIRST when the user "
+                                "asks to create / build / submit the design "
+                                "suite project."),
+                "parameters": {"type": "object", "properties": {}}}})
+        if "ask_user" not in have:
+            tools.append({"type": "function", "function": {
+                "name": "ask_user",
+                "description": ("Ask the user one or more clarifying questions "
+                                "via an inline form. Use ONLY when "
+                                "read_soft_spec returned non-empty `gaps` or "
+                                "`conflicts`. One question per gap/conflict; "
+                                "be concrete. After calling this, STOP — the "
+                                "answers come back on the user's next turn."),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "questions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "field":       {"type": "string", "description":
+                                                    "the spec field this answers (e.g. 'projectName')"},
+                                    "header":     {"type": "string"},
+                                    "question":   {"type": "string"},
+                                    "options":    {"type": "array",
+                                                   "items": {"type": "string"}},
+                                    "multiSelect": {"type": "boolean"}
+                                },
+                                "required": ["field", "question"]
+                            }
+                        }
+                    },
+                    "required": ["questions"]
+                }}})
+        if "submit_soft_spec" not in have:
+            tools.append({"type": "function", "function": {
+                "name": "submit_soft_spec",
+                "description": ("Submit the collected spec to simorgh-soft "
+                                "and return the deep-link the user clicks to "
+                                "open the new project. Refuses if `gaps` are "
+                                "non-empty — call ask_user first."),
+                "parameters": {"type": "object", "properties": {}}}})
+        have = {t["function"]["name"] for t in tools}
+
     # Guarantee the document tools + a python sandbox are always present,
     # even if the registry snapshot is incomplete at call time.
     if "list_project_documents" not in have:
