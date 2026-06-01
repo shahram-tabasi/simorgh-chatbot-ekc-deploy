@@ -96,6 +96,13 @@ def route(ctx: PlanContext) -> CotPlan:
         chosen = _TPMS_PLAN
     elif ctx.input_modality == "voice":
         chosen = _VOICE_FIRST_PLAN
+    # Project has indexed documents but this turn carried no attachment,
+    # no repo, no tpms/techserver source — a follow-up question about an
+    # earlier upload. Use UploadDeepPlan so its grounding pulls the
+    # project's document chunks instead of falling to knowledge_only
+    # (which would lose them). Ranks last, just above knowledge_only.
+    elif ctx.has_documents:
+        chosen = _UPLOAD_DEEP_PLAN
     elif not ctx.has_upload and not ctx.has_selected_repo:
         chosen = _KNOWLEDGE_ONLY_PLAN
     else:
@@ -103,11 +110,12 @@ def route(ctx: PlanContext) -> CotPlan:
     log.info(
         "cot_router: picked plan=%s "
         "(sources=%d, upload=%s, upload_chars=%d, modality=%s, "
-        "techserver=%s/oe=%s, tpms=%s/oe=%s)",
+        "techserver=%s/oe=%s, tpms=%s/oe=%s, has_documents=%s)",
         chosen.name, len(ctx.selected_repos),
         ctx.has_upload, ctx.upload_size_chars, ctx.input_modality,
         ctx.has_techserver, ctx.techserver_oenum or "",
         ctx.has_tpms, ctx.tpms_oenum or "",
+        ctx.has_documents,
     )
     return chosen
 

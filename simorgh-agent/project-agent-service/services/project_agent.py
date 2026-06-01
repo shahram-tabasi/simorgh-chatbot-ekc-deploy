@@ -326,6 +326,7 @@ class ProjectManagerAgent:
                 has_tpms=has_tpms,
                 tpms_oenum=str(tpms_oenum) if tpms_oenum else None,
                 repo_path=str(repo_path) if repo_path else None,
+                has_documents=bool((project_for_ctx or {}).get("has_documents")),
             )
             chosen_plan = cot_route(plan_ctx)
             set_active_plan(chosen_plan)

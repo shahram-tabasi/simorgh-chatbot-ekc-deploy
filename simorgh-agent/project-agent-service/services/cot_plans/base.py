@@ -65,6 +65,12 @@ class PlanContext:
     # "<oenum>" goes straight to tpms-fetcher and 404s).
     has_tpms: bool = False
     tpms_oenum: Optional[str] = None
+    # True when the project already has at least one indexed document
+    # (projects.has_documents). Lets the router keep the project upload-
+    # aware on text-only follow-up turns, so previously-uploaded files
+    # stay retrievable for the whole conversation — not just the turn the
+    # file was attached. Distinct from has_upload (this turn carried a file).
+    has_documents: bool = False
     # Canonical name of the selected gitlab repo (group/project). Used
     # by the same executor-side scrubber to swap "<repo>" placeholders
     # the planner emits into the real path.

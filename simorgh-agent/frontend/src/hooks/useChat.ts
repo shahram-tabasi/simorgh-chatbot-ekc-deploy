@@ -261,16 +261,20 @@ export function useChat(
         const projectId = sessResp.data.project_id;
         if (!projectId) throw new Error('session has no project_id');
 
-        // If files are attached, upload them to project-agent /documents
-        // FIRST (this stashes image bytes for the VLM and registers the
-        // document), then pass the document_id on the stream body so the
-        // agent runs the describe-then-reason vision pipeline in CoT.
+        // Upload EVERY attached file to project-agent /documents (each is
+        // parsed, embedded and indexed under the project's tenant in the
+        // shared vector store). Previously only files[0] was uploaded, so
+        // a two-file comparison silently dropped the second file. We upload
+        // all of them; the agent's grounding retrieves across all project
+        // documents by project scope. The first uploaded id is still passed
+        // on the stream body for the single-image vision pipeline.
         let _documentId: string | undefined;
         let _documentFilename: string | undefined;
-        if (files && files.length > 0 && files[0].file) {
+        const _attached = (files || []).filter((f) => f.file);
+        for (const f of _attached) {
           try {
             const fd = new FormData();
-            fd.append('file', files[0].file);
+            fd.append('file', f.file as File);
             const upResp = await axios.post(
               `${API_BASE}/v2/agent/projects/${projectId}/documents`,
               fd,
@@ -282,12 +286,19 @@ export function useChat(
                 signal: abortControllerRef.current?.signal,
               },
             );
-            _documentId =
+            const id =
               upResp.data?.document_id || upResp.data?.id || upResp.data?.document?.id;
-            _documentFilename = files[0].name;
-            console.log('📎 Uploaded attachment to project-agent:', _documentId);
+            if (_documentId === undefined) {
+              _documentId = id;
+              _documentFilename = f.name;
+            }
+            console.log('📎 Uploaded attachment to project-agent:', f.name, id,
+                        upResp.data?.status, upResp.data?.chunks_indexed);
+            if (upResp.data?.status === 'index_failed') {
+              console.warn('⚠️ Attachment indexed 0 chunks (not searchable):', f.name);
+            }
           } catch (upErr) {
-            console.error('Attachment upload failed:', upErr);
+            console.error('Attachment upload failed:', f.name, upErr);
           }
         }
 

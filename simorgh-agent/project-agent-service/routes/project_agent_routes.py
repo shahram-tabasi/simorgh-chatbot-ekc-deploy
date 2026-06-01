@@ -1722,21 +1722,33 @@ async def upload_document(
         document_filename=file.filename,
     )
 
-    # Update document record
+    # Update document record. Mark 'completed' only when chunks actually
+    # landed in the vector store; otherwise 'index_failed' so the failure
+    # is visible instead of a silent 200 with an unsearchable document.
+    final_status = "completed" if chunks_stored > 0 else "index_failed"
     try:
         await memory.update_document(
             doc_id_str,
-            processing_status="completed",
+            processing_status=final_status,
             chunk_count=chunks_stored,
             content_summary=content_summary,
         )
     except Exception:
         pass
 
+    # Flip the project-level has_documents flag so the router keeps the
+    # project upload-aware on later (text-only) turns — uploaded files stay
+    # retrievable across the whole conversation, not just the attach turn.
+    if chunks_stored > 0:
+        try:
+            await memory.update_project(project_id, has_documents=True)
+        except Exception as e:
+            logger.warning("could not set has_documents for %s: %s", project_id, e)
+
     return {
         "document_id": doc_id_str,
         "filename": file.filename,
-        "status": "completed",
+        "status": final_status,
         "markdown_length": len(markdown_content),
         "chunks_indexed": chunks_stored,
         "processing": processing_results,

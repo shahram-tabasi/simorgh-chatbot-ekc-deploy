@@ -24,6 +24,39 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Unified document collection (Qdrant multitenancy best practice).
+#
+# Historically this service created ONE COLLECTION PER project/session
+# (user_{uid}_project_{oenum}). Qdrant's docs are explicit that this does
+# not scale — each collection holds many RocksDB file handles, so a few
+# hundred collections exhausts the process FD limit ("Too many open files")
+# and there is a hard ceiling on collection count. The recommended pattern
+# is a SINGLE collection partitioned by a tenant payload field, indexed
+# with is_tenant=true, and filtered at query time.
+#   https://qdrant.tech/documentation/manage-data/multitenancy/
+#
+# We store every project's / session's document chunks in ONE collection
+# and isolate by the `tenant_id` payload field (= project_oenum for project
+# chats, session_id for general chats). Set QDRANT_DOCS_COLLECTION to
+# override the name.
+# ---------------------------------------------------------------------------
+DOCS_COLLECTION = os.getenv("QDRANT_DOCS_COLLECTION", "project_documents")
+TENANT_FIELD = "tenant_id"
+
+
+def _tenant_of(session_id: Optional[str], project_oenum: Optional[str]) -> str:
+    """The partition key for a doc chunk. Project chats isolate by
+    project_oenum (the project UUID / OE number); general chats by
+    session_id. Exactly one must be provided."""
+    if project_oenum:
+        return f"project:{str(project_oenum).strip().lower()}"
+    if session_id:
+        return f"session:{str(session_id).strip().lower()}"
+    raise ValueError(
+        "Either session_id or project_oenum must be provided for tenant isolation"
+    )
+
 
 class QdrantService:
     """
@@ -185,7 +218,10 @@ class QdrantService:
         Returns:
             True if collection exists or was created
         """
-        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
+        # Unified model: one collection for ALL tenants; isolate by the
+        # tenant_id payload field. (user_id/session_id/project_oenum are
+        # validated by _tenant_of at call sites that store/search.)
+        collection_name = DOCS_COLLECTION
 
         try:
             # Check if collection exists
@@ -193,7 +229,7 @@ class QdrantService:
             exists = any(c.name == collection_name for c in collections)
 
             if not exists:
-                # Create collection with vector configuration
+                # Create the single shared collection.
                 self.client.create_collection(
                     collection_name=collection_name,
                     vectors_config=VectorParams(
@@ -201,9 +237,31 @@ class QdrantService:
                         distance=Distance.COSINE
                     )
                 )
-                logger.info(f"✅ Created Qdrant collection: {collection_name}")
-            else:
-                logger.info(f"✓ Collection already exists: {collection_name}")
+                logger.info(f"✅ Created unified Qdrant collection: {collection_name}")
+
+            # Always (idempotently) ensure the tenant payload index exists.
+            # is_tenant=true tells Qdrant to co-locate each tenant's points
+            # on disk, which is what makes single-collection multitenancy
+            # fast. Safe to call repeatedly.
+            try:
+                from qdrant_client.models import KeywordIndexParams
+                self.client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=TENANT_FIELD,
+                    field_schema=KeywordIndexParams(type="keyword", is_tenant=True),
+                )
+            except Exception as idx_e:
+                # Older qdrant-client without KeywordIndexParams, or index
+                # already present — fall back to a plain keyword index and
+                # don't fail the write path over it.
+                try:
+                    self.client.create_payload_index(
+                        collection_name=collection_name,
+                        field_name=TENANT_FIELD,
+                        field_schema="keyword",
+                    )
+                except Exception:
+                    logger.debug("tenant payload index ensure: %s", idx_e)
 
             return True
 
@@ -262,7 +320,8 @@ class QdrantService:
         Returns:
             True if successful
         """
-        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
+        collection_name = DOCS_COLLECTION
+        tenant_id = _tenant_of(session_id, project_oenum)
 
         # Ensure collection exists
         if not self.ensure_collection_exists(user_id, session_id, project_oenum):
@@ -283,8 +342,12 @@ class QdrantService:
 
                 embedding = self.generate_embedding(text)
 
-                # Prepare payload with session context
+                # Prepare payload with tenant context. tenant_id is the
+                # partition key for single-collection multitenancy; the
+                # original project_oenum/session_id/user_id are also kept
+                # for auditing and back-compat reads.
                 payload = {
+                    TENANT_FIELD: tenant_id,
                     "document_id": document_id,
                     "user_id": user_id,
                     "text": text,
@@ -351,23 +414,36 @@ class QdrantService:
         Returns:
             List of search results with chunks and scores
         """
-        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
+        collection_name = DOCS_COLLECTION
+        tenant_id = _tenant_of(session_id, project_oenum)
 
         try:
             # Generate query embedding
             query_embedding = self.generate_embedding(query)
 
-            # Prepare filter if document_id specified
-            search_filter = None
+            # Always filter by tenant; optionally narrow to one document.
+            must = [
+                FieldCondition(key=TENANT_FIELD, match=MatchValue(value=tenant_id))
+            ]
             if document_id:
-                search_filter = Filter(
-                    must=[
-                        FieldCondition(
-                            key="document_id",
-                            match=MatchValue(value=document_id)
-                        )
-                    ]
+                must.append(
+                    FieldCondition(key="document_id", match=MatchValue(value=document_id))
                 )
+            search_filter = Filter(must=must)
+
+            # If the unified collection doesn't exist yet (fresh install /
+            # nothing indexed), searching it 404s — treat as no results
+            # instead of erroring.
+            try:
+                exists = any(
+                    c.name == collection_name
+                    for c in self.client.get_collections().collections
+                )
+            except Exception:
+                exists = True
+            if not exists:
+                logger.info("docs collection %s absent — no results", collection_name)
+                return []
 
             # Perform search
             results = self.client.search(

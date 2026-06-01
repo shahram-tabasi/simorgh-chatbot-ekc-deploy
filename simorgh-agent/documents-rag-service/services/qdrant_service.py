@@ -9,7 +9,9 @@ Author: Simorgh Industrial Assistant
 """
 
 import os
+import json
 import logging
+import urllib.request
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from qdrant_client import QdrantClient
@@ -23,6 +25,48 @@ import hashlib
 import uuid
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Unified document collection — MUST match project-agent-service's
+# qdrant_service constants exactly. Uploads are written by project-agent
+# into ONE collection partitioned by the tenant_id payload field; this
+# service only READS that collection (the search_project_documents /
+# retrieve_chunks MCP tools), so it must target the same collection name,
+# the same tenant key scheme, AND the same embedding model/dimension.
+#
+# Embedding parity is critical: project-agent embeds via embeddings-service
+# (768-dim). This service historically fell back to SentenceTransformer
+# MiniLM (384-dim) because main.py passes llm_service=None — which made
+# every project-document search a dimension mismatch that returned nothing.
+# _embed_query below pins query embeddings to embeddings-service so stored
+# and query vectors are produced by the same model.
+# ---------------------------------------------------------------------------
+DOCS_COLLECTION = os.getenv("QDRANT_DOCS_COLLECTION", "project_documents")
+TENANT_FIELD = "tenant_id"
+EMBEDDINGS_URL = os.getenv("EMBEDDINGS_URL", "http://embeddings-service:8031")
+
+
+def _tenant_of(session_id: Optional[str], project_oenum: Optional[str]) -> str:
+    if project_oenum:
+        return f"project:{str(project_oenum).strip().lower()}"
+    if session_id:
+        return f"session:{str(session_id).strip().lower()}"
+    raise ValueError(
+        "Either session_id or project_oenum must be provided for tenant isolation"
+    )
+
+
+def _embed_query(text: str, timeout: int = 30) -> List[float]:
+    """Embed via the shared embeddings-service so query vectors match the
+    vectors project-agent stored. Contract: POST /embeddings {"text": ...}
+    → {"embedding": [...]}."""
+    req = urllib.request.Request(
+        f"{EMBEDDINGS_URL}/embeddings",
+        data=json.dumps({"text": text}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r).get("embedding", [])
 
 
 class QdrantService:
@@ -351,23 +395,36 @@ class QdrantService:
         Returns:
             List of search results with chunks and scores
         """
-        collection_name = self._get_collection_name(user_id, session_id, project_oenum)
+        # Unified collection + tenant filter (must match project-agent's
+        # write path). Embed the query via embeddings-service for parity
+        # with the stored vectors.
+        collection_name = DOCS_COLLECTION
+        tenant_id = _tenant_of(session_id, project_oenum)
 
         try:
-            # Generate query embedding
-            query_embedding = self.generate_embedding(query)
+            # Generate query embedding via the shared service (768-dim).
+            query_embedding = _embed_query(query)
 
-            # Prepare filter if document_id specified
-            search_filter = None
+            must = [
+                FieldCondition(key=TENANT_FIELD, match=MatchValue(value=tenant_id))
+            ]
             if document_id:
-                search_filter = Filter(
-                    must=[
-                        FieldCondition(
-                            key="document_id",
-                            match=MatchValue(value=document_id)
-                        )
-                    ]
+                must.append(
+                    FieldCondition(key="document_id", match=MatchValue(value=document_id))
                 )
+            search_filter = Filter(must=must)
+
+            # If the unified collection doesn't exist yet, don't error.
+            try:
+                exists = any(
+                    c.name == collection_name
+                    for c in self.client.get_collections().collections
+                )
+            except Exception:
+                exists = True
+            if not exists:
+                logger.info("docs collection %s absent — no results", collection_name)
+                return []
 
             # Perform search
             results = self.client.search(

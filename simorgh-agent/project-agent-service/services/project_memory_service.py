@@ -169,6 +169,7 @@ class ProjectMemoryService:
                    agent_enabled, agent_model, git_repo_initialized,
                    gitlab_repo_path, gitlab_repo_url, gitlab_base_branch,
                    simorgh_branch, sources_enabled, exploration_status,
+                   COALESCE(has_documents, FALSE) AS has_documents,
                    metadata, created_at, updated_at
             FROM projects WHERE id = $1
         """
