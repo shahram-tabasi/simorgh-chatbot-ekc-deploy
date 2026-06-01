@@ -1046,11 +1046,22 @@ class COTEngine:
                 )
                 tpms_hint = (
                     f" The OE number for this project is \"{tpms_oenum}\"; "
-                    f"pass oenum=\"{tpms_oenum}\" — never the literal "
-                    f"string <oenum>."
+                    f"pass oenum=\"{tpms_oenum}\" verbatim. NEVER emit the "
+                    f"literal string <oenum>, NEVER emit cross-step "
+                    f"placeholders like <output_of_step_N>, and NEVER plan "
+                    f"a separate \"find / extract the OE\" step — the OE is "
+                    f"already known and surfaced right here."
                     if tpms_oenum else
-                    " The project's OE number is not stored on the record; "
-                    "extract it from the user's message and pass it as oenum."
+                    " The project's OE number is NOT stored on the record. "
+                    "If the user's message contains a recognisable OE token "
+                    "(e.g. \"04A12065\", \"12345\"), pass that literal "
+                    "string as oenum. If it does not, DO NOT plan any TPMS "
+                    "or techserver retrieval, DO NOT plan a multi-step "
+                    "\"find the OE\" chain through the repo, and DO NOT emit "
+                    "cross-step placeholders like <output_of_step_N>. "
+                    "Instead emit a SINGLE llm.synthesize step that asks "
+                    "the user to provide the OE number — that is the "
+                    "correct plan when context is missing."
                 )
                 allowed_lines.append(
                     "  - tpms_context_agent / tpms_fetcher — only when the "
