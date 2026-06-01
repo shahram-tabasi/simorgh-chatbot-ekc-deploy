@@ -9,6 +9,18 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.12.1
     container_name: qdrant
+    # Qdrant/RocksDB opens many file handles per collection + segment. The
+    # Docker default nofile soft limit (often 1024) gets exhausted by only
+    # a handful of collections, after which CREATE COLLECTION fails with
+    # "RocksDB open error: Too many open files (os error 24)" → HTTP 500.
+    # That silently broke document indexing: uploads parsed + embedded but
+    # the per-project collection could never be created, so nothing was
+    # stored and the chatbot found no content. Qdrant docs recommend a high
+    # limit; 65536 comfortably covers many collections + segments.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
       - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=${QDRANT_MAX_REQUEST_MB:-64}
