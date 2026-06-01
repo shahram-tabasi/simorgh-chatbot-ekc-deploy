@@ -1194,10 +1194,11 @@ class COTEngine:
                 # knowledge_repo_service.retrieve already has its
                 # own state). request.project_id is the only field
                 # we can pull here without restructuring.
-                # Carry techserver source state so TechserverPlan's
+                # Carry techserver + TPMS source state so the plan's
                 # addendum can emit the OE number. sources_enabled was
-                # resolved above; techserver_oenum lives there or on the
-                # project meta.
+                # resolved above; oenum may live on sources_enabled,
+                # proj_meta, or the top-level project_context — try all
+                # three.
                 _ts_oenum = (
                     sources_enabled.get("techserver_oenum")
                     or proj_meta.get("techserver_oenum")
@@ -1205,11 +1206,26 @@ class COTEngine:
                     or project_context.get("tpms_oenum")
                     or None
                 )
+                _tpms_oenum = (
+                    proj_meta.get("tpms_oenum")
+                    or project_context.get("tpms_oenum")
+                    or sources_enabled.get("techserver_oenum")
+                    or None
+                )
+                _repo_path = (
+                    proj_meta.get("gitlab_repo_path")
+                    or project_context.get("gitlab_repo_path")
+                    or None
+                )
                 plan_ctx = PlanContext(
                     user_input=request.user_input,
                     project_id=getattr(request, "project_id", "") or "",
                     has_techserver=bool(sources_enabled.get("techserver")),
                     techserver_oenum=str(_ts_oenum) if _ts_oenum else None,
+                    has_tpms=bool(sources_enabled.get("tpms")),
+                    tpms_oenum=str(_tpms_oenum) if _tpms_oenum else None,
+                    repo_path=str(_repo_path) if _repo_path else None,
+                    has_selected_repo=bool(_repo_path),
                 )
                 plan_addendum = plan.system_prompt_addendum(plan_ctx) or ""
                 grounding = await plan.gather_grounding(plan_ctx)
