@@ -1182,6 +1182,9 @@ class ProjectManagerAgent:
         return compacted
 
     async def _execute_single_task(
+        self,
+        project_id: str,
+        task: Dict,
         prev_results: Dict,
     ) -> Dict[str, Any]:
         """Execute a single task using the appropriate tool."""
