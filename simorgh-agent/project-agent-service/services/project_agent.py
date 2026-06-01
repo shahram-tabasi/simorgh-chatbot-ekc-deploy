@@ -1237,28 +1237,55 @@ class ProjectManagerAgent:
         if _ap_name == "techserver" and isinstance(tool, str):
             _ts_oe = getattr(self, "_active_plan_ctx", None)
             _oe = getattr(_ts_oe, "techserver_oenum", None) if _ts_oe else None
-            _remap = {
-                "get_project_tree": "techserver_get_tree",
-                "read_artifact_mcp": "techserver_read_artifact",
-                "read_file_mcp": "techserver_read_artifact",
+            _ts_q = getattr(_ts_oe, "user_input", "") if _ts_oe else ""
+
+            ri = dict(raw_input) if isinstance(raw_input, dict) else {}
+            for k in ("project", "project_id", "ref"):
+                ri.pop(k, None)
+            if _oe and not ri.get("oenum"):
+                ri["oenum"] = str(_oe)
+
+            # Search tools → techserver_search. gpt-oss reaches for the
+            # gitlab/ES search tools (search_context/search_blobs), which
+            # don't run on a repo-less techserver project. Map them to the
+            # techserver path search, carrying the query.
+            _search_tools = {
+                "search_context", "search_blobs", "regex_search_project",
+                "search", "search_technical_knowledge",
             }
-            if tool in _remap:
-                new_tool = _remap[tool]
-                if isinstance(raw_input, dict):
-                    ri = dict(raw_input)
-                    # Drop gitlab-shaped args (project/ref); KEEP path +
-                    # recursive — they're valid on the techserver tools and
-                    # let the agent navigate into a subfolder.
-                    for k in ("project", "project_id", "ref"):
-                        ri.pop(k, None)
-                    if _oe and not ri.get("oenum"):
-                        ri["oenum"] = str(_oe)
-                    raw_input = ri
-                elif _oe:
-                    raw_input = {"oenum": str(_oe)}
+            _tree_tools = {"get_project_tree": "techserver_get_tree"}
+            _read_tools = {"read_artifact_mcp", "read_file_mcp",
+                           "read_artifact", "read_file"}
+
+            new_tool = None
+            if tool in _search_tools:
+                new_tool = "techserver_search"
+                q = ri.get("query") or ri.get("pattern") or ri.get("q") or _ts_q
+                ri = {"oenum": str(_oe) if _oe else ri.get("oenum"),
+                      "query": q}
+            elif tool in _tree_tools:
+                new_tool = _tree_tools[tool]
+                # keep path/recursive if present
+            elif tool in _read_tools:
+                # A read with a concrete path → read that one file.
+                # A read with NO usable path → retrieve-then-read by query
+                # (techserver_fetch_files resolves the best files itself).
+                p = (ri.get("path") or "").strip()
+                if p and "<" not in p and p not in ("", "/", "*", "."):
+                    new_tool = "techserver_read_artifact"
+                    ri = {"oenum": str(_oe) if _oe else ri.get("oenum"),
+                          "path": p}
+                else:
+                    new_tool = "techserver_fetch_files"
+                    q = ri.get("query") or _ts_q
+                    ri = {"oenum": str(_oe) if _oe else ri.get("oenum"),
+                          "query": q, "top_n": 3}
+
+            if new_tool:
+                raw_input = ri
                 logger.info(
-                    "techserver remap: %s -> %s (oenum=%s)",
-                    tool, new_tool, _oe,
+                    "techserver remap: %s -> %s (oenum=%s, keys=%s)",
+                    tool, new_tool, _oe, list(ri.keys()),
                 )
                 tool = new_tool
 
