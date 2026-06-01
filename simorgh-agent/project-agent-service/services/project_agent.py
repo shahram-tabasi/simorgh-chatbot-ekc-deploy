@@ -585,7 +585,30 @@ class ProjectManagerAgent:
                 _meta.setdefault("tool", task.get("tool_used") or "")
                 _meta.setdefault("title", task.get("title") or "")
                 result["metadata"] = _meta
-                accumulated_context[task["sort_order"]] = result
+
+                # PER-STEP COMPACTION (context-window survival). gpt-oss
+                # (16K) and the VLM (32K) have small windows; a single big
+                # step output (a 1273-file tree, a 500KB spec → markdown)
+                # would blow the next step's budget. Following Anthropic's
+                # context-engineering guidance, compact a large step result
+                # into a TASK-CONDITIONED summary (conditioned on the user's
+                # question + the steps still to run) and hand the SUMMARY to
+                # downstream steps — while keeping the full output on the
+                # `results` list so the final synth can still quote it
+                # verbatim. Small outputs pass through untouched.
+                remaining_titles = [
+                    t.get("title") or "" for t in tasks[i + 1:]
+                ]
+                ctx_result = await self._compact_step_result(
+                    project_id=project_id,
+                    step_no=task["sort_order"],
+                    title=task.get("title") or "",
+                    tool=task.get("tool_used") or "",
+                    result=result,
+                    user_input=user_input,
+                    remaining_titles=remaining_titles,
+                )
+                accumulated_context[task["sort_order"]] = ctx_result
 
                 # Track the last generation result as the final response
                 if task.get("task_type") in ("generation", "analysis"):
@@ -1050,10 +1073,115 @@ class ProjectManagerAgent:
             logger.warning(f"gitlab REST fallback for {tool} failed: {e}")
             return None
 
+    async def _compact_step_result(
+        self, project_id: str, step_no: Any, title: str, tool: str,
+        result: Dict[str, Any], user_input: str,
+        remaining_titles: List[str],
+    ) -> Dict[str, Any]:
+        """Task-conditioned compaction of a single step's output.
+
+        Small context windows (gpt-oss 16K, VLM 32K) can't carry a big
+        step output (a 1273-file tree, a 500KB spec → markdown) into the
+        next step. Per Anthropic's context-engineering guidance we COMPACT
+        — not clear — because the downstream steps can't re-fetch the
+        reasoning: produce a summary conditioned on the user's question
+        and the steps still to run, preserving the facts those steps need
+        (paths, IDs, ratings, standards, numbers) while dropping bulk.
+
+        Returns a result dict for accumulated_context. When the output is
+        below the threshold it's returned unchanged. When compacted, the
+        returned dict's `output` is the summary, and metadata records that
+        plus the original length so the synth knows it's a digest. The
+        FULL output stays on the chain's `results` list (caller keeps it),
+        so the final answer can still quote specifics.
+        """
+        output = result.get("output")
+        if not isinstance(output, str):
+            return result
+        threshold = int(os.getenv("COT_STEP_COMPACT_CHARS", "6000"))
+        if len(output) <= threshold:
+            return result
+
+        gateway_url = os.getenv("LLM_GATEWAY_URL", "").strip().rstrip("/")
+        if not gateway_url:
+            # No summarizer available — fall back to a head+tail trim so we
+            # at least don't overflow the next step. Lossy but bounded.
+            head = output[: threshold // 2]
+            tail = output[-threshold // 2:]
+            trimmed = dict(result)
+            trimmed["output"] = (
+                head + "\n\n[… middle trimmed for context budget …]\n\n" + tail
+            )
+            md = dict(trimmed.get("metadata") or {})
+            md["compacted"] = "trim"
+            md["original_chars"] = len(output)
+            trimmed["metadata"] = md
+            return trimmed
+
+        await self._notify_progress(project_id, "compacting_step", {
+            "step": step_no, "title": title, "chars": len(output),
+        })
+
+        remaining = "; ".join(t for t in remaining_titles if t) or "(final synthesis)"
+        system_prompt = (
+            "You are a context compaction engine in a multi-step agent. "
+            "Summarize ONE step's tool output so later steps can use it "
+            "WITHOUT the full text. This is lossy ONLY for bulk/boilerplate "
+            "— you MUST preserve every concrete fact a later step could "
+            "need: file paths, IDs/OE numbers, names, ratings, standards "
+            "(e.g. IEC 60044), numeric values, table rows, error messages, "
+            "and which items exist. Prefer compact lists/tables over prose. "
+            "Do NOT invent anything. Do NOT add commentary."
+        )
+        user_prompt = (
+            f"USER'S OVERALL QUESTION:\n{user_input[:1500]}\n\n"
+            f"THIS STEP: #{step_no} — {title} (tool={tool})\n"
+            f"STEPS STILL TO RUN (compaction must keep what they'll need):\n"
+            f"  {remaining}\n\n"
+            f"STEP OUTPUT TO COMPACT (len={len(output)} chars):\n"
+            f"{output[:int(os.getenv('COT_STEP_COMPACT_INPUT_CAP', '40000'))]}\n\n"
+            "Return ONLY the faithful compacted summary."
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        payload = {
+            "messages": messages,
+            "mode": "offline",
+            "force_backend": "text",   # summarization is text-only → gpt-oss .61
+            "temperature": 0.1,
+            "max_tokens": int(os.getenv("COT_STEP_COMPACT_MAX_TOKENS", "1200")),
+        }
+        import httpx
+        timeout = float(os.getenv("LLM_GATEWAY_COT_TIMEOUT_SEC", "180"))
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(f"{gateway_url}/generate", json=payload)
+                r.raise_for_status()
+                summary = (r.json().get("response") or "").strip()
+        except Exception as e:
+            logger.warning("step compaction failed (%s); using head trim", e)
+            summary = ""
+
+        if not summary:
+            head = output[: threshold // 2]
+            tail = output[-threshold // 2:]
+            summary = head + "\n\n[… middle trimmed …]\n\n" + tail
+
+        logger.info(
+            "step compaction: #%s %r %d -> %d chars",
+            step_no, title, len(output), len(summary),
+        )
+        compacted = dict(result)
+        compacted["output"] = summary
+        md = dict(compacted.get("metadata") or {})
+        md["compacted"] = "llm"
+        md["original_chars"] = len(output)
+        compacted["metadata"] = md
+        return compacted
+
     async def _execute_single_task(
-        self,
-        project_id: str,
-        task: Dict,
         prev_results: Dict,
     ) -> Dict[str, Any]:
         """Execute a single task using the appropriate tool."""

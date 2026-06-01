@@ -63,6 +63,15 @@ services:
       # multi-step plans; 2048 was tight enough to truncate gpt-oss JSON
       # mid-step on retrieval-heavy requests.
       - COT_LLM_MAX_TOKENS=${COT_LLM_MAX_TOKENS:-4096}
+      # Per-step result compaction (context-window survival). When a CoT
+      # step's output exceeds COT_STEP_COMPACT_CHARS, it's summarized
+      # (task-conditioned on the question + remaining steps) before being
+      # handed to the next step, so a big tree/spec doesn't overflow the
+      # small gpt-oss/VLM windows. The full output is still kept for the
+      # final synthesis. Set COT_STEP_COMPACT_CHARS very high to disable.
+      - COT_STEP_COMPACT_CHARS=${COT_STEP_COMPACT_CHARS:-6000}
+      - COT_STEP_COMPACT_INPUT_CAP=${COT_STEP_COMPACT_INPUT_CAP:-40000}
+      - COT_STEP_COMPACT_MAX_TOKENS=${COT_STEP_COMPACT_MAX_TOKENS:-1200}
       # MCP transport tuning. Some MCP servers (context-search, gitlab-mcp)
       # reap idle sessions; the streamable-http client doesn't propagate
       # the resulting 400 back to the in-flight call_tool future, so every
