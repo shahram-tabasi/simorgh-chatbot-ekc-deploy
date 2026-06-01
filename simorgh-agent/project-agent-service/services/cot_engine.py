@@ -1033,6 +1033,21 @@ class COTEngine:
                     "Do NOT call project_analyze unless the user explicitly "
                     "asks for a workspace-wide audit."
                 )
+            else:
+                # Without this explicit gate the planner falls back to the
+                # canonical examples (which are ALL gitlab-shaped) and
+                # plans get_project_tree / read_artifact_mcp / search_blobs
+                # steps even though no repo exists for this project. The
+                # planner LLM weights examples heavily — silent absence
+                # of a permission is not the same as a prohibition.
+                allowed_lines.append(
+                    "  - GitLab is DISABLED for this project (no repo "
+                    "selected). DO NOT call gitlab_mcp.get_project_tree, "
+                    "read_artifact_mcp, search_blobs, search_context, "
+                    "regex_search_project, or any other gitlab/repo tool. "
+                    "DO NOT plan a \"Search README\" / \"Read README\" / "
+                    "\"List repo files\" step — there is no repo to read."
+                )
             if sources_enabled.get("tpms"):
                 # Surface the project's OE number to the planner so it can
                 # fill get_project_context(oenum=...) / tpms_fetch(oenum=...)
@@ -1063,10 +1078,33 @@ class COTEngine:
                     "the user to provide the OE number — that is the "
                     "correct plan when context is missing."
                 )
+                # When TPMS is the project's ONLY structured-data source
+                # (no gitlab repo, no techserver), it IS the project — any
+                # "overview / scope / what is this project / panels /
+                # feeders / customer specs" question must START with
+                # tpms_context_agent. Without this, the planner reaches
+                # for README search out of habit (canonical examples are
+                # repo-shaped) and the chain dead-ends at 404 because no
+                # repo exists.
+                tpms_primary = (
+                    not sources_enabled.get("gitlab")
+                    and not sources_enabled.get("techserver")
+                )
+                primary_line = (
+                    " THIS IS THIS PROJECT'S PRIMARY DATA BACKBONE — for "
+                    "ANY question about the project (overview, scope, "
+                    "\"what is this project\", panels, feeders, customer "
+                    "specs, switchgear, voltage, busbar, …) the FIRST "
+                    "step MUST be tpms_context_agent.get_project_context. "
+                    "Do NOT search a README, do NOT search the repo, do "
+                    "NOT call gitlab tools."
+                    if tpms_primary else
+                    " Use when the question is about TPMS project records "
+                    "(oenum, panels, feeders, scopes)."
+                )
                 allowed_lines.append(
-                    "  - tpms_context_agent / tpms_fetcher — only when the "
-                    "question is about TPMS project records (oenum, panels, "
-                    "feeders, scopes)." + tpms_hint
+                    "  - tpms_context_agent / tpms_fetcher —" +
+                    primary_line + tpms_hint
                 )
             else:
                 allowed_lines.append(
