@@ -147,6 +147,11 @@ services:
       # single files on demand (Drawing/ CAD excluded). Replaces the old
       # bulk techserver_sync copy.
       - TECHSERVER_MCP_URL=http://techserver-mcp:8053/mcp
+      # Chat-history hybrid retrieval (long-term memory). _MCP_URL is the
+      # MCP surface the CoT discovers; _URL is the REST /index endpoint the
+      # store_message path posts each message to (fire-and-forget).
+      - CHAT_HISTORY_MCP_URL=http://chat-history-mcp:8054/mcp
+      - CHAT_HISTORY_URL=http://chat-history-mcp:8054
       # MySQL TPMS (legacy)
       - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
       - MYSQL_PORT=${MYSQL_PORT:-3306}
