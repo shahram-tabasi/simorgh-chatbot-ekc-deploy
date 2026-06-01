@@ -439,6 +439,36 @@ class ProjectManagerAgent:
         )
 
         instructions = project_context.get("instructions", [])
+
+        # ReAct engine (opt-in via COT_ENGINE_MODE=react). Replaces the
+        # static plan-and-execute flow with a reason→tool→observe loop so
+        # the model sees each tool result before choosing the next action —
+        # eliminating the value-threading bug class (placeholders / can't
+        # use a prior step's output) and adding flexibility. Reuses the
+        # same tool dispatcher, streaming events and grounding. Default
+        # (flag unset) leaves the existing path completely untouched.
+        if os.getenv("COT_ENGINE_MODE", "").lower() == "react":
+            try:
+                from services.react_engine import react_loop
+                result = await react_loop(
+                    self, project_id, cot_request, project_context,
+                    instructions, cot_input, llm_mode=llm_mode,
+                )
+                await self.memory.store_message(
+                    project_id=project_id, role="assistant",
+                    content=result.get("response", ""),
+                    channel=channel.value, chat_id=chat_id,
+                )
+                await self._notify_progress(project_id, "complete", {
+                    "response_preview": (result.get("response") or "")[:200],
+                    "tasks_completed": result.get("tasks_created", 0),
+                    "tasks_failed": 0,
+                })
+                return result
+            except Exception as e:
+                logger.error("react engine failed, falling back to plan-execute: %s", e)
+                # fall through to the existing engine on any error
+
         analysis = await self.cot_engine.analyze(
             cot_request, project_context, instructions
         )
