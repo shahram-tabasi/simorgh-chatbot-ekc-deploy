@@ -1121,9 +1121,22 @@ class COTEngine:
                 # knowledge_repo_service.retrieve already has its
                 # own state). request.project_id is the only field
                 # we can pull here without restructuring.
+                # Carry techserver source state so TechserverPlan's
+                # addendum can emit the OE number. sources_enabled was
+                # resolved above; techserver_oenum lives there or on the
+                # project meta.
+                _ts_oenum = (
+                    sources_enabled.get("techserver_oenum")
+                    or proj_meta.get("techserver_oenum")
+                    or proj_meta.get("tpms_oenum")
+                    or project_context.get("tpms_oenum")
+                    or None
+                )
                 plan_ctx = PlanContext(
                     user_input=request.user_input,
                     project_id=getattr(request, "project_id", "") or "",
+                    has_techserver=bool(sources_enabled.get("techserver")),
+                    techserver_oenum=str(_ts_oenum) if _ts_oenum else None,
                 )
                 plan_addendum = plan.system_prompt_addendum(plan_ctx) or ""
                 grounding = await plan.gather_grounding(plan_ctx)

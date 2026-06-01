@@ -27,10 +27,12 @@ from .multi_repo import MultiRepoPlan
 from .upload_deep import UploadDeepPlan
 from .repo_plus_upload import RepoPlusUploadPlan
 from .voice_first import VoiceFirstPlan
+from .techserver import TechserverPlan
 
 __all__ = [
     "CotPlan", "PlanContext", "PlanGrounding",
     "DefaultPlan",
     "KnowledgeOnlyPlan", "SingleRepoPlan", "MultiRepoPlan",
     "UploadDeepPlan", "RepoPlusUploadPlan", "VoiceFirstPlan",
+    "TechserverPlan",
 ]

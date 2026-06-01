@@ -282,6 +282,22 @@ class ProjectManagerAgent:
             modality = "voice" if (channel.value == "voice"
                                     or (channel.value == "chat" and False)) else "text"
 
+            # Techserver source: the project ticked the legacy SMB source
+            # at creation. sources_enabled lives at the top level or nested
+            # under `project`. techserver_oenum (wizard) → tpms_oenum.
+            _se = (
+                (project_for_ctx or {}).get("sources_enabled")
+                or ((project_for_ctx or {}).get("project") or {}).get("sources_enabled")
+                or {}
+            )
+            has_techserver = bool(_se.get("techserver"))
+            techserver_oenum = (
+                _se.get("techserver_oenum")
+                or (project_for_ctx or {}).get("techserver_oenum")
+                or (project_for_ctx or {}).get("tpms_oenum")
+                or None
+            )
+
             plan_ctx = PlanContext(
                 user_input=user_input,
                 project_id=project_id,
@@ -293,6 +309,8 @@ class ProjectManagerAgent:
                 upload_filenames=[document_filename] if document_filename else [],
                 upload_size_chars=0,
                 input_modality=modality,
+                has_techserver=has_techserver,
+                techserver_oenum=str(techserver_oenum) if techserver_oenum else None,
             )
             chosen_plan = cot_route(plan_ctx)
             set_active_plan(chosen_plan)

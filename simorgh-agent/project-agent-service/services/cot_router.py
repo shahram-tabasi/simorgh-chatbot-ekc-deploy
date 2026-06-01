@@ -25,6 +25,7 @@ from .cot_plans import (
     DefaultPlan,
     KnowledgeOnlyPlan, SingleRepoPlan, MultiRepoPlan,
     UploadDeepPlan, RepoPlusUploadPlan, VoiceFirstPlan,
+    TechserverPlan,
 )
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ _MULTI_REPO_PLAN       = MultiRepoPlan()
 _UPLOAD_DEEP_PLAN      = UploadDeepPlan()
 _REPO_PLUS_UPLOAD_PLAN = RepoPlusUploadPlan()
 _VOICE_FIRST_PLAN      = VoiceFirstPlan()
+_TECHSERVER_PLAN       = TechserverPlan()
 
 # Active plan for the current asyncio task. handle_input installs
 # this once per request via set_active_plan(); cot_engine reads it
@@ -77,6 +79,13 @@ def route(ctx: PlanContext) -> CotPlan:
         chosen = _MULTI_REPO_PLAN
     elif ctx.has_selected_repo:
         chosen = _SINGLE_REPO_PLAN
+    # Techserver is this project's source AND there's no repo/upload to
+    # anchor on — route to TechserverPlan so the planner uses the SMB
+    # tools instead of falling back to gitlab (which 404s on a repo-less
+    # project). Ranks below repo/upload (explicit per-turn intent) but
+    # above voice/knowledge_only.
+    elif ctx.has_techserver:
+        chosen = _TECHSERVER_PLAN
     elif ctx.input_modality == "voice":
         chosen = _VOICE_FIRST_PLAN
     elif not ctx.has_upload and not ctx.has_selected_repo:
@@ -85,9 +94,11 @@ def route(ctx: PlanContext) -> CotPlan:
         chosen = _DEFAULT_PLAN
     log.info(
         "cot_router: picked plan=%s "
-        "(sources=%d, upload=%s, upload_chars=%d, modality=%s)",
+        "(sources=%d, upload=%s, upload_chars=%d, modality=%s, "
+        "techserver=%s/oe=%s)",
         chosen.name, len(ctx.selected_repos),
         ctx.has_upload, ctx.upload_size_chars, ctx.input_modality,
+        ctx.has_techserver, ctx.techserver_oenum or "",
     )
     return chosen
 

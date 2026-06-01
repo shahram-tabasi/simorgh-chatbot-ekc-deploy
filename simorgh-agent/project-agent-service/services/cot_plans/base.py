@@ -49,6 +49,13 @@ class PlanContext:
     has_upload: bool = False
     upload_filenames: List[str] = field(default_factory=list)
     upload_size_chars: int = 0
+    # Legacy techserver (SMB) source. Set when the project ticked the
+    # techserver source at creation; techserver_oenum is the OE number
+    # used to resolve the SMB share. Routed to TechserverPlan so the
+    # planner uses techserver_get_tree / techserver_read_artifact rather
+    # than the gitlab tools (which 404 on a repo-less project).
+    has_techserver: bool = False
+    techserver_oenum: Optional[str] = None
     # Modality
     input_modality: str = "text"   # "text" | "voice" | "mixed"
     # Recent history hint — useful for "follow-up to previous plan"
