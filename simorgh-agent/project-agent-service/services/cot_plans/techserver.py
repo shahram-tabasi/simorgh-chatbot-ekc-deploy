@@ -36,18 +36,25 @@ class TechserverPlan(CotPlan):
             "ACTIVE PLAN: techserver\n"
             "============================================================================\n"
             "This project's files live on the legacy techserver (SMB), NOT in a "
-            "GitLab repo. There is NO repo to search — do NOT call get_project_tree, "
-            "read_artifact_mcp, search_blobs or search_context; they will 404.\n"
+            "GitLab repo.\n"
+            "  ❌ FORBIDDEN tools (they 404 here — this project has NO repo): "
+            "get_project_tree, read_file_mcp, read_artifact_mcp, search_blobs, "
+            "search_context, project_analyze.\n"
+            "  ✅ USE ONLY these for files: techserver_get_tree, "
+            "techserver_read_artifact.\n"
             + oe_line +
-            "For ANY question about this project's files:\n"
+            "For ANY question about this project's files, the FIRST step MUST be "
+            "tool_needed=\"techserver_get_tree\" with tool_input={\"oenum\": \"" +
+            (oe or "<oenum>") + "\"}:\n"
             "  1. techserver_get_tree(oenum)                       ← ALWAYS first; "
             "lists the project tree (Drawing/ CAD excluded), no download.\n"
             "  2. techserver_read_artifact(oenum, path=<EXACT path from the tree>) "
             "← to read a specific file (returns markdown; images via VLM).\n"
             "  3. llm.synthesize (depends_on the reads).\n"
             "For a plain \"what's in my project\" question, ONE techserver_get_tree "
-            "step + a synthesis is enough — the tree IS the answer. NEVER request a "
-            "path under Drawing/ or a CAD/archive file; it is refused."
+            "step + a synthesis is enough — the tree IS the answer. NEVER emit "
+            "get_project_tree for this project; it is the WRONG tool. NEVER request "
+            "a path under Drawing/ or a CAD/archive file; it is refused."
         )
 
     async def gather_grounding(self, ctx: PlanContext) -> PlanGrounding:

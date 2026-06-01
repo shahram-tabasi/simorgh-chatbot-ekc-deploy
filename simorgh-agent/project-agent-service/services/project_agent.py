@@ -1086,6 +1086,48 @@ class ProjectManagerAgent:
                 if tool.startswith(prefix):
                     tool = tool[len(prefix):]
                     break
+            # techserver_* may also arrive dotted.
+            if tool.startswith("techserver."):
+                tool = tool[len("techserver."):]
+
+        # TECHSERVER REMAP. When the active plan is techserver, the
+        # planner sometimes still reaches for the generic gitlab tools
+        # (get_project_tree / read_artifact_mcp) because the base prompt
+        # features them heavily — those 404 on a repo-less techserver
+        # project. Remap them to the techserver equivalents and inject
+        # the OE number so the chain actually runs. Safety net on top of
+        # the TechserverPlan addendum.
+        try:
+            from services.cot_router import active_plan as _active_plan
+            _ap = _active_plan()
+            _ap_name = getattr(_ap, "name", "") if _ap else ""
+        except Exception:
+            _ap_name = ""
+        if _ap_name == "techserver" and isinstance(tool, str):
+            _ts_oe = getattr(self, "_active_plan_ctx", None)
+            _oe = getattr(_ts_oe, "techserver_oenum", None) if _ts_oe else None
+            _remap = {
+                "get_project_tree": "techserver_get_tree",
+                "read_artifact_mcp": "techserver_read_artifact",
+                "read_file_mcp": "techserver_read_artifact",
+            }
+            if tool in _remap:
+                new_tool = _remap[tool]
+                if isinstance(raw_input, dict):
+                    ri = dict(raw_input)
+                    # Drop gitlab-shaped args; supply oenum.
+                    for k in ("project", "project_id", "ref", "recursive"):
+                        ri.pop(k, None)
+                    if _oe and not ri.get("oenum"):
+                        ri["oenum"] = str(_oe)
+                    raw_input = ri
+                elif _oe:
+                    raw_input = {"oenum": str(_oe)}
+                logger.info(
+                    "techserver remap: %s -> %s (oenum=%s)",
+                    tool, new_tool, _oe,
+                )
+                tool = new_tool
 
         # Normalize tool_input: LLM may return a string instead of dict
         if isinstance(raw_input, str) and raw_input:
