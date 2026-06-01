@@ -548,18 +548,32 @@ class QdrantService:
             points = self._scroll_tenant(
                 tenant_id, document_id=document_id, filename=filename
             )
-            # Fuzzy fallback: exact filename match found nothing — scan the
-            # tenant's docs and substring-match the requested name (handles
-            # minor differences in how the planner echoes the filename).
+            # Fuzzy fallback: exact filename match found nothing. The LLM
+            # often slightly garbles the (Persian/Arabic) filename — extra
+            # "ال" article, a stray space, different normalization. Pick the
+            # tenant's document whose filename is CLOSEST (difflib ratio),
+            # so a near-miss still resolves instead of returning empty.
             if not points and filename:
+                import difflib
                 want = filename.strip().lower()
                 all_pts = self._scroll_tenant(tenant_id)
-                points = [
-                    p for p in all_pts
-                    if want in str((p.payload or {}).get("section_title", "")).lower()
-                    or want in str(((p.payload or {}).get("metadata") or {})
-                                   .get("filename", "")).lower()
-                ]
+                names = {}
+                for p in all_pts:
+                    pl = p.payload or {}
+                    nm = str(pl.get("section_title")
+                             or (pl.get("metadata") or {}).get("filename") or "")
+                    if nm:
+                        names.setdefault(nm, []).append(p)
+                best, best_score = None, 0.0
+                for nm in names:
+                    score = difflib.SequenceMatcher(None, want, nm.lower()).ratio()
+                    # token overlap helps for "الموجودی انبار" vs "موجودی انبار"
+                    if want in nm.lower() or nm.lower() in want:
+                        score = max(score, 0.9)
+                    if score > best_score:
+                        best, best_score = nm, score
+                if best and best_score >= 0.6:
+                    points = names[best]
         except Exception as e:
             logger.error(f"❌ get_document_text failed: {e}")
             return {"document_id": document_id, "filename": filename or "",

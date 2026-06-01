@@ -57,6 +57,12 @@ services:
       #   on .62) if the gpt-oss reply is empty / unparseable, and finally
       #   to the legacy self.llm_service path.
       - COT_PLANNER_PRIMARY=${COT_PLANNER_PRIMARY:-harmony}
+      # Engine selector. Unset/empty = default static plan-and-execute.
+      # Set COT_ENGINE_MODE=react (in .env) to use the ReAct
+      # reason→tool→observe loop (services/react_engine.py); falls back to
+      # plan-and-execute on any error. REACT_MAX_STEPS caps the loop.
+      - COT_ENGINE_MODE=${COT_ENGINE_MODE:-}
+      - REACT_MAX_STEPS=${REACT_MAX_STEPS:-10}
       - COT_LLM_BASE_URL=${COT_LLM_BASE_URL:-http://nginx/api/vlm/v1}
       - COT_LLM_MODEL=${COT_LLM_MODEL:-qwen2.5-vl-7b}
       # 4096 covers the full submit_plan arguments object for typical

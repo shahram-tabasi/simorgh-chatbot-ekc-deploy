@@ -538,6 +538,26 @@ class QdrantService:
         tenant_id = _tenant_of(session_id, project_oenum)
         try:
             points = self._scroll_tenant(tenant_id, document_id=document_id, filename=filename)
+            if not points and filename:
+                # LLM often garbles the filename — pick the closest match.
+                import difflib
+                want = filename.strip().lower()
+                names: Dict[str, list] = {}
+                for p in self._scroll_tenant(tenant_id):
+                    pl = p.payload or {}
+                    nm = str(pl.get("section_title")
+                             or (pl.get("metadata") or {}).get("filename") or "")
+                    if nm:
+                        names.setdefault(nm, []).append(p)
+                best, best_score = None, 0.0
+                for nm in names:
+                    s = difflib.SequenceMatcher(None, want, nm.lower()).ratio()
+                    if want in nm.lower() or nm.lower() in want:
+                        s = max(s, 0.9)
+                    if s > best_score:
+                        best, best_score = nm, s
+                if best and best_score >= 0.6:
+                    points = names[best]
         except Exception as e:
             logger.error(f"❌ get_document_text failed: {e}")
             return {"document_id": document_id or "", "filename": filename or "",
