@@ -1304,6 +1304,71 @@ class ProjectManagerAgent:
                 )
                 tool = new_tool
 
+        # TPMS REMAP. Parallel to the techserver block above. When the
+        # active plan is `tpms`, the planner LLM regularly:
+        #   (a) calls a forbidden gitlab/repo tool (search_context,
+        #       search_blobs, regex_search_project, get_project_tree,
+        #       read_artifact_mcp, search_technical_knowledge) as a
+        #       "find the OE" first step — even though the addendum
+        #       lists those as ❌ FORBIDDEN.
+        #   (b) calls the right tool (get_project_context / tpms_fetch /
+        #       tpms_get_text) but drops the `oenum` argument — passing
+        #       project_id instead, or just omitting it entirely. The
+        #       addendum hardcodes the OE; the LLM ignores it.
+        # Both end in either 404 or an empty result, then the synthesizer
+        # apologises with "no project info". Hard-fix at the dispatcher:
+        # always inject ctx.tpms_oenum into TPMS-tool calls, and skip
+        # forbidden tools that have no chance of succeeding for a TPMS-
+        # only project.
+        if _ap_name == "tpms" and isinstance(tool, str):
+            _tpms_pc = getattr(self, "_active_plan_ctx", None)
+            _tpms_oe = (getattr(_tpms_pc, "tpms_oenum", None)
+                        if _tpms_pc else None)
+
+            _tpms_tools = {
+                "get_project_context", "tpms_fetch", "tpms_get_text",
+            }
+            _forbidden_for_tpms = {
+                "get_project_tree", "read_artifact_mcp", "read_file_mcp",
+                "search_blobs", "search_context", "regex_search_project",
+                "search_technical_knowledge", "project_analyze",
+                "techserver_get_tree", "techserver_search",
+                "techserver_fetch_files", "techserver_read_artifact",
+            }
+
+            if tool in _tpms_tools:
+                # Inject the OE if missing. The LLM also often passes
+                # project_id where it should have passed oenum; strip it
+                # so tpms-context-agent's pydantic schema doesn't reject
+                # the call.
+                ri = dict(raw_input) if isinstance(raw_input, dict) else {}
+                for k in ("project", "project_id", "ref", "_previous_results"):
+                    ri.pop(k, None)
+                if _tpms_oe and not ri.get("oenum"):
+                    ri["oenum"] = str(_tpms_oe)
+                # Default to the broadest sections if the LLM didn't pick
+                # any — "brief overview" needs identity+panels+feeders.
+                if "sections" not in ri:
+                    ri["sections"] = ["panels", "feeders"]
+                raw_input = ri
+                logger.info(
+                    "tpms inject: tool=%s oenum=%s keys=%s",
+                    tool, _tpms_oe, list(ri.keys()),
+                )
+            elif tool in _forbidden_for_tpms:
+                # Convert the forbidden retrieval into the canonical TPMS
+                # retrieval so the chain still produces real data instead
+                # of silently no-opping into the synthesizer.
+                logger.info(
+                    "tpms remap: %s -> get_project_context (oenum=%s)",
+                    tool, _tpms_oe,
+                )
+                tool = "get_project_context"
+                raw_input = {
+                    "oenum": str(_tpms_oe) if _tpms_oe else None,
+                    "sections": ["panels", "feeders"],
+                }
+
         # Normalize tool_input: LLM may return a string instead of dict
         if isinstance(raw_input, str) and raw_input:
             if tool == "memory_query":
