@@ -1489,12 +1489,23 @@ async def upload_document(
     if project["owner_id"] != current_user:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Create document record
+    # Create document record. file_type stores the MIME content-type, but
+    # the column is bounded (VARCHAR(255) after migration 005; older DBs
+    # may still be VARCHAR(50) until the ALTER runs). Office MIME types run
+    # 65-73 chars and used to overflow VARCHAR(50) → StringDataRightTruncation
+    # → 500, so the upload silently failed and nothing reached Qdrant. Cap
+    # defensively here so the insert can never crash regardless of the
+    # column width actually deployed; prefer the short extension form when
+    # the raw MIME is too long to keep the stored value meaningful.
+    _ctype = file.content_type or ""
+    if len(_ctype) > 50:
+        _ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
+        _ctype = (f"application/{_ext}" if _ext else _ctype)[:50]
     doc_record = await memory.create_document_record(
         project_id=project_id,
         filename=file.filename,
         original_filename=file.filename,
-        file_type=file.content_type,
+        file_type=_ctype,
         file_size=file.size,
         uploaded_by=current_user,
     )
