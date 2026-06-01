@@ -12,11 +12,13 @@ Endpoints:
   /mcp                         - MCP Streamable HTTP endpoint
 """
 
+import hashlib
 import json
 import logging
 import os
+import re
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import pymysql
 import pymysql.cursors
@@ -651,6 +653,62 @@ class AccessCheckRequest(BaseModel):
         populate_by_name = True
 
 
+# ---------------------------------------------------------------------------
+# TPMS password verification.
+#
+# `technical_users.DraftPassword` is hashed (usually SHA-256 stored as the
+# 64-hex / dashed-binary "Microsoft SQL Server" format, sometimes MD5, very
+# rarely bcrypt). The legacy login (auth-service/services/hash_detector.py)
+# auto-detects which one and verifies — we mirror that logic here instead
+# of importing the shared package because this service has no path to it.
+#
+# bcrypt is detected but only verifies when passlib is installed; SHA-256 /
+# MD5 work on pure stdlib. If the production DB ever migrates to bcrypt we
+# can drop passlib into requirements.txt at that point.
+# ---------------------------------------------------------------------------
+def _normalize_hex_hash(h: str) -> str:
+    return h.replace("-", "").replace(" ", "").lower()
+
+
+def _detect_hash_type(stored: str) -> str:
+    s = stored.strip()
+    if re.match(r"^\$2[aby]\$\d+\$", s):
+        return "bcrypt"
+    no_sep = _normalize_hex_hash(s)
+    if re.fullmatch(r"[0-9a-f]{64}", no_sep): return "sha256"
+    if re.fullmatch(r"[0-9a-f]{32}", no_sep): return "md5"
+    if re.fullmatch(r"[0-9a-f]{40}", no_sep): return "sha1"
+    return "unknown"
+
+
+def _verify_tpms_password(plain: str, stored: Any) -> Tuple[bool, str]:
+    """Verify a TPMS DraftPassword. Returns (is_valid, hash_type).
+    `stored` may arrive as bytes (BINARY column) or str."""
+    if stored is None:
+        return False, "missing"
+    if isinstance(stored, (bytes, bytearray)):
+        stored = stored.hex()
+    stored = str(stored)
+    ht = _detect_hash_type(stored)
+    if ht == "sha256":
+        digest = hashlib.sha256(plain.encode("utf-8")).hexdigest().lower()
+        return digest == _normalize_hex_hash(stored), "sha256"
+    if ht == "md5":
+        digest = hashlib.md5(plain.encode("utf-8")).hexdigest().lower()
+        return digest == _normalize_hex_hash(stored), "md5"
+    if ht == "bcrypt":
+        try:
+            from passlib.context import CryptContext
+            return (CryptContext(schemes=["bcrypt"]).verify(plain, stored),
+                    "bcrypt")
+        except Exception as e:
+            logger.error("bcrypt verify failed (passlib not installed?): %s", e)
+            return False, "bcrypt_error"
+    # Last-resort: plaintext compare. Some very old TPMS installs stored
+    # the password directly in DraftPassword without hashing.
+    return plain == stored, "plaintext"
+
+
 @app.post("/projects/{oenum}/check-access")
 def check_oenum_access(oenum: str, req: AccessCheckRequest):
     """Verify that `user` exists in TPMS' `technical_users` table with the
@@ -665,19 +723,22 @@ def check_oenum_access(oenum: str, req: AccessCheckRequest):
         conn = get_mysql_connection()
         try:
             with conn.cursor() as cur:
-                # 1. Auth.
+                # 1. Auth. technical_users stores the hashed password in
+                # `DraftPassword` (NOT `EMPPASSWORD` — that column doesn't
+                # exist; the previous code here failed for every user).
                 cur.execute(
-                    "SELECT EMPUSERNAME, EMPPASSWORD FROM technical_users "
+                    "SELECT EMPUSERNAME, DraftPassword FROM technical_users "
                     "WHERE EMPUSERNAME = %s LIMIT 1",
                     (req.user,),
                 )
                 u = cur.fetchone()
                 if not u:
                     return {"ok": False, "reason": "user not found"}
-                # MySQL stores plaintext in TPMS technical_users (per the
-                # existing tpms_auth_service); a future SHA migration
-                # should swap this comparator without touching callers.
-                if u.get("EMPPASSWORD") != req.password:
+                ok, hash_type = _verify_tpms_password(
+                    req.password, u.get("DraftPassword"))
+                if not ok:
+                    logger.warning("tpms_auth_fail user=%s hash_type=%s",
+                                   req.user, hash_type)
                     return {"ok": False, "reason": "bad password"}
 
                 # 2. Resolve the project's IDProjectMain.
@@ -687,10 +748,12 @@ def check_oenum_access(oenum: str, req: AccessCheckRequest):
                 id_pm = project["id_project_main"]
 
                 # 3. Entitlement: user must have a draft_permission row.
+                # draft_permission.Project_ID is BIGINT — pass the int and a
+                # stringified copy to tolerate either column type.
                 cur.execute(
                     "SELECT 1 FROM draft_permission "
                     "WHERE user = %s "
-                    "  AND (project_ID = %s OR project_ID = CAST(%s AS CHAR)) "
+                    "  AND (Project_ID = %s OR Project_ID = CAST(%s AS CHAR)) "
                     "LIMIT 1",
                     (req.user, id_pm, id_pm),
                 )
@@ -699,6 +762,8 @@ def check_oenum_access(oenum: str, req: AccessCheckRequest):
                             "reason": "user not entitled for this oenum"}
         finally:
             conn.close()
+        logger.info("tpms_auth_ok user=%s oenum=%s hash_type=%s",
+                    req.user, oenum, hash_type)
         return {"ok": True, "oenum": oenum, "id_project_main": id_pm}
     except Exception as e:
         logger.error("check_oenum_access error: %s", e)

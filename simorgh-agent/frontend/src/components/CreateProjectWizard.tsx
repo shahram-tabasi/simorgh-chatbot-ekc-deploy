@@ -219,8 +219,11 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
       setError('TPMS credentials are required because you ticked TPMS or techserver.');
       return;
     }
-    if (sources.techserver && !sources.techserver_oenum.trim()) {
-      setError('OE number is required for techserver copy.');
+    // Both `tpms` and `techserver` need an OE number — the backend
+    // rejects with a 400 otherwise, which surfaces in the UI as the
+    // generic "invalid data" Farsi error and confuses the user.
+    if ((sources.tpms || sources.techserver) && !sources.techserver_oenum.trim()) {
+      setError('OE number is required for the TPMS / techserver sources.');
       return;
     }
 
@@ -407,10 +410,14 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
                     </span>
                   </label>
 
-                  {sources.techserver && (
+                  {/* OE-number input — required by BOTH the TPMS and
+                      techserver pulls. The field name `techserver_oenum`
+                      is historical; the backend treats it as the project's
+                      OE for any per-OE source. */}
+                  {(sources.tpms || sources.techserver) && (
                     <input type="text" value={sources.techserver_oenum}
                       onChange={(e) => setSources({...sources, techserver_oenum: e.target.value})}
-                      placeholder="Technical OE number (e.g. 12345)"
+                      placeholder="OE number (e.g. 12345) — used for TPMS and/or techserver"
                       className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm" />
                   )}
                 </>
