@@ -1456,6 +1456,42 @@ class ProjectManagerAgent:
             if _cid and not tool_input.get("exclude_chat_id"):
                 tool_input["exclude_chat_id"] = str(_cid)
 
+        # documents_rag tools (search_project_documents / retrieve_chunks)
+        # search the per-project Qdrant collection, named
+        # user_{user_id}_project_{project_oenum}. They REQUIRE a scope key
+        # or fail with "Either session_id or project_oenum must be provided
+        # for collection isolation". The planner almost never supplies it
+        # (and sometimes emits "<oenum>"/"<this>" placeholders), so the
+        # search hits no collection and the chatbot reports "document not
+        # retrieved" even though the upload indexed fine.
+        #
+        # Uploads are stored by the upload route with user_id="system" and
+        # project_oenum = (project.tpms_oenum or project_id). Mirror that
+        # EXACTLY here so retrieval targets the same collection.
+        if isinstance(tool_input, dict) and tool in (
+            "search_project_documents", "retrieve_chunks",
+        ):
+            _pc = getattr(self, "_active_plan_ctx", None)
+            _scope = (
+                (getattr(_pc, "tpms_oenum", None) if _pc else None)
+                or str(project_id)
+            )
+            # The planner's value may be missing, empty, or a placeholder.
+            _cur = str(tool_input.get("project_oenum") or "")
+            if (not _cur) or _cur.lower() in ("none", "null", "unknown") \
+                    or ("<" in _cur):
+                tool_input["project_oenum"] = _scope
+            # Documents are indexed under the synthetic "system" user, not
+            # the human user_id — override whatever the planner guessed.
+            tool_input["user_id"] = "system"
+            # session_id would route to the wrong (general-chat) collection;
+            # drop it so project_oenum wins the isolation key.
+            tool_input.pop("session_id", None)
+            logger.info(
+                "documents_rag scope inject tool=%s project_oenum=%s",
+                tool, tool_input["project_oenum"],
+            )
+
         # gitlab_mcp.* tools take `project` as the GitLab path (e.g.
         # "shahram-tabasi/test") or a numeric GitLab project id — NEVER
         # the chatbot UUID or the friendly project name. The planner
