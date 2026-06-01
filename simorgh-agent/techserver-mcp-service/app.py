@@ -372,28 +372,102 @@ async def get_tree_impl(
     }
 
 
-async def search_tree_impl(oenum: str, query: str, limit: int = 50) -> dict:
-    """Search the cached full tree for files/dirs whose path matches `query`
-    (case-insensitive substring; space-separated terms are AND-ed). Lets
-    the agent find what it needs across the whole project without listing
-    every level. Served from the Redis-cached full tree."""
+def _score_path(path: str, terms: list[str], is_file: bool) -> float:
+    """Relevance score for a candidate path against query terms. Higher is
+    better. Implements the funnel's ranking layer so the agent reads the
+    BEST few files, not the first N it happens to find."""
+    low = path.lower()
+    base = os.path.basename(low)
+    score = 0.0
+    for t in terms:
+        if t not in low:
+            return -1.0  # AND semantics: every term must appear somewhere
+        # Term in the filename/leaf is worth far more than deep in the path.
+        if t in base:
+            score += 3.0
+            if base.startswith(t):
+                score += 1.0
+        else:
+            score += 1.0
+    # Prefer files over directories for a "find the document" query.
+    if is_file:
+        score += 1.5
+    # Prefer shallower, "primary" copies over deep revision forks; and
+    # nudge the latest revision when several match.
+    depth = low.count("/")
+    score -= 0.15 * depth
+    m = re.search(r"rev[\s._-]*(\d+)", low)
+    if m:
+        score += 0.05 * int(m.group(1))   # later REV slightly preferred
+    return score
+
+
+async def search_tree_impl(oenum: str, query: str, limit: int = 25) -> dict:
+    """Search the cached full tree for paths matching `query` and return them
+    RANKED by relevance (filename match > path match, files > dirs, shallower
+    + later-REV preferred). This is the funnel's search+rank layer: the agent
+    uses these ranked paths to decide which few files to actually read.
+    case-insensitive; space-separated terms are AND-ed across the path."""
     full = await _full_tree(oenum)
     terms = [t for t in query.lower().split() if t]
-    hits = []
+    if not terms:
+        return {"oenum": re.sub(r"\D", "", oenum), "query": query,
+                "hits": [], "hit_count": 0}
+    scored = []
     for e in full.get("entries", []):
-        low = e["path"].lower()
-        if all(t in low for t in terms):
-            hits.append(e)
-            if len(hits) >= limit:
-                break
+        s = _score_path(e["path"], terms, e.get("type") == "blob")
+        if s >= 0:
+            scored.append((s, e))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    hits = [{**e, "score": round(s, 2)} for s, e in scored[:limit]]
     return {
         "oenum": re.sub(r"\D", "", oenum),
         "share": full.get("share"),
         "query": query,
         "hits": hits,
         "hit_count": len(hits),
+        "total_matched": len(scored),
         "total_project_files": full.get("file_count"),
-        "truncated": len(hits) >= limit,
+        "truncated": len(scored) > limit,
+    }
+
+
+async def fetch_files_impl(oenum: str, query: str = "", paths: Optional[list] = None,
+                           top_n: int = 3) -> dict:
+    """Retrieve-then-read in ONE round-trip: resolve the best matching files
+    (from `query` via ranked search, or from explicit `paths`), fetch ONLY
+    the top_n to the working dir, convert each to markdown via doc-processor,
+    and return their contents. This is the funnel's read layer — bounded so
+    the agent doesn't over-read (anti-pattern: 15 reads when 3 matter)."""
+    chosen: list[str] = []
+    if paths:
+        chosen = [p for p in paths if isinstance(p, str) and p.strip()][:top_n]
+    elif query:
+        s = await search_tree_impl(oenum, query, limit=max(top_n * 3, 10))
+        # Only files, already ranked; take the best top_n.
+        chosen = [h["path"] for h in s["hits"]
+                  if h.get("type") == "blob"][:top_n]
+    if not chosen:
+        return {"oenum": re.sub(r"\D", "", oenum), "query": query,
+                "files": [], "fetched": 0,
+                "note": "no matching files to fetch"}
+
+    files = []
+    for p in chosen:
+        try:
+            art = await read_artifact_impl(oenum, p)
+            files.append({"path": p, "content": art.get("content", ""),
+                          "size": art.get("size")})
+        except HTTPException as he:
+            files.append({"path": p, "error": f"{he.status_code}: {he.detail}"})
+        except Exception as e:
+            files.append({"path": p, "error": str(e)[:200]})
+    return {
+        "oenum": re.sub(r"\D", "", oenum),
+        "query": query,
+        "files": files,
+        "fetched": sum(1 for f in files if f.get("content")),
+        "via": "techserver-search+fetch",
     }
 
 
@@ -518,6 +592,12 @@ async def artifact(oenum: str = Query(...), path: str = Query(...)) -> dict:
     return await read_artifact_impl(oenum, path)
 
 
+@app.get("/fetch")
+async def fetch(oenum: str = Query(...), query: str = "",
+                top_n: int = 3) -> dict:
+    return await fetch_files_impl(oenum, query=query, top_n=top_n)
+
+
 # ---------------------------------------------------------------------------
 # MCP surface
 # ---------------------------------------------------------------------------
@@ -564,16 +644,33 @@ async def techserver_get_tree(
 
 
 @mcp.tool()
-async def techserver_search(oenum: str, query: str, limit: int = 50) -> dict:
-    """Search a techserver project's file tree by OE number for paths
-    matching `query` (case-insensitive; space-separated terms are AND-ed).
-    Served from the cached full tree, so it spans the WHOLE project without
-    listing every folder. Use this to locate what you need, e.g.
+async def techserver_search(oenum: str, query: str, limit: int = 25) -> dict:
+    """Search a techserver project's file tree by OE number and return paths
+    RANKED by relevance (filename match > path match; files > folders;
+    shallower + later-REV preferred). Spans the WHOLE project from the cached
+    tree — no folder-by-folder listing. Use it to LOCATE candidates, e.g.
     query="spec 6.6kv" or query="CT PT calculation". Returns
-    {hits:[{path,type,size}], hit_count, ...}; hand a hit's `path` to
-    techserver_read_artifact.
+    {hits:[{path,type,size,score}], hit_count, total_matched}. Then either
+    read the single best hit with techserver_read_artifact, or — better —
+    use techserver_fetch_files to read the top few in one step.
     """
     return await search_tree_impl(oenum, query, limit=limit)
+
+
+@mcp.tool()
+async def techserver_fetch_files(
+    oenum: str, query: str = "", paths: Optional[list] = None, top_n: int = 3,
+) -> dict:
+    """Retrieve-then-read in ONE round-trip (the recommended path for
+    "analyse/summarise the X document"). Either give a `query` (the tool
+    ranks the tree and picks the best top_n FILES) or an explicit `paths`
+    list. It fetches ONLY those few files from the techserver, converts each
+    to markdown (PDF/Office/text natively, images via the VLM) and returns
+    their contents. Bounded by top_n (default 3) so you don't over-read.
+    Returns {files:[{path,content,size}], fetched}. Prefer this over many
+    separate techserver_read_artifact calls. Never targets Drawing/ or CAD.
+    """
+    return await fetch_files_impl(oenum, query=query, paths=paths, top_n=top_n)
 
 
 @mcp.tool()
