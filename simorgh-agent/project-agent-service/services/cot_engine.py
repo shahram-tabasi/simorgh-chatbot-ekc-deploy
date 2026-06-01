@@ -733,9 +733,10 @@ PLAN: [1] gitlab_mcp.search_blobs(query="VT secondary voltage",
 
 Q: "how many MV panels does this project have?"  (TPMS-shaped)
 PLAN: [1] tpms_context_agent.get_project_context(
-                oenum=<oenum>, sections=["panels"])
+                oenum="04A12065", sections=["panels"])
       [2] llm.synthesize  (depends_on=[1])
-2 steps.
+2 steps.  (Substitute the project's actual OE number, surfaced in the
+          "Allowed data sources" block above. Never emit "<oenum>".)
 
 Q: "we discussed the earthing strategy two weeks ago — what did we
     decide?"  (chat-history reference older than the last 5 turns)
@@ -747,13 +748,13 @@ PLAN: [1] memory_query(query="earthing strategy decision",
 Q: "switch ABC plant 6.6kV to 3.3kV — blast radius?"  (complex)
 PLAN: [1] context_search.search_past_cot("voltage downgrade blast radius")
       [1] tpms_context_agent.get_project_context(
-                oenum, sections=["panels","feeders","customer_specs"])
+                oenum="04A12065", sections=["panels","feeders","customer_specs"])
       [1] gitlab_mcp.search_technical_knowledge(
                 "6kV to 3.3kV conversion checklist")
                                                   ← three retrievals in parallel
       [2] context_search.aggregate_field(
                 index="projects", group_by="motor_type",
-                filter_query="oenum:<oenum>")     (depends_on=[1])
+                filter_query="oenum:04A12065")    (depends_on=[1])
       [3] llm.synthesize  (depends_on=[1,2])
 5 steps; three of them concurrent.
 
@@ -1033,10 +1034,28 @@ class COTEngine:
                     "asks for a workspace-wide audit."
                 )
             if sources_enabled.get("tpms"):
+                # Surface the project's OE number to the planner so it can
+                # fill get_project_context(oenum=...) / tpms_fetch(oenum=...)
+                # with the real value instead of copying the literal
+                # <oenum> placeholder from the canonical examples below.
+                tpms_oenum = (
+                    proj_meta.get("tpms_oenum")
+                    or project_context.get("tpms_oenum")
+                    or sources_enabled.get("techserver_oenum")
+                    or ""
+                )
+                tpms_hint = (
+                    f" The OE number for this project is \"{tpms_oenum}\"; "
+                    f"pass oenum=\"{tpms_oenum}\" — never the literal "
+                    f"string <oenum>."
+                    if tpms_oenum else
+                    " The project's OE number is not stored on the record; "
+                    "extract it from the user's message and pass it as oenum."
+                )
                 allowed_lines.append(
                     "  - tpms_context_agent / tpms_fetcher — only when the "
                     "question is about TPMS project records (oenum, panels, "
-                    "feeders, scopes)."
+                    "feeders, scopes)." + tpms_hint
                 )
             else:
                 allowed_lines.append(
