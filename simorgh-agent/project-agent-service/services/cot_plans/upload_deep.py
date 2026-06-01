@@ -44,9 +44,15 @@ class UploadDeepPlan(CotPlan):
             "those summaries as authoritative excerpts from the upload; you "
             "may cite them as [G1]…[Gn].\n"
         ) if big else (
-            f"The upload is small enough to read inline ({ctx.upload_size_chars:,} "
-            "chars). Use the document-read tool to fetch its contents in full, "
-            "then synthesize from there.\n"
+            "The uploaded document's content has been retrieved and is in the "
+            "KNOWLEDGE GROUNDING block below (origin: upload). SYNTHESISE YOUR "
+            "ANSWER FROM THOSE PASSAGES. Do NOT call gitlab/repo tools "
+            "(get_project_tree, read_artifact_mcp, search_context) — there is "
+            "no repo. If you need MORE of the document, call "
+            "documents_rag.search_project_documents (project scope is injected "
+            "automatically — you do NOT need to supply oenum/session). If the "
+            "grounding block is empty, say you could not read the document — "
+            "do NOT invent its contents.\n"
         )
         names = ", ".join(ctx.upload_filenames[:3]) or "(filename pending)"
         return (
@@ -100,12 +106,52 @@ class UploadDeepPlan(CotPlan):
                 origin="knowledge_repo",
             )
 
-        # 2. Upload investigation — requires the upload to already
-        #    be indexed (the upload_attach hook calls ensure_indexed
-        #    once at attach time; we just retrieve here). If the
-        #    cache miss happens (very first turn after a service
-        #    restart), the planner will pick up the upload via
-        #    doc-processor on the read step.
+        # 2. Persistent project-document store. This is where the
+        #    /api/v2/agent/projects/{id}/documents upload route ACTUALLY
+        #    indexes uploaded files: collection user_system_project_{oenum
+        #    -or-id}, user_id="system". The ephemeral upload_<hash> path
+        #    below is a separate, older subsystem that the upload route
+        #    does NOT populate — so for project chats the real content
+        #    lives here. Pull the top chunks for the question and inject
+        #    them as grounding so the synthesizer has the document even if
+        #    the planner never calls a retrieval tool (it routinely
+        #    doesn't, or calls it without scope).
+        scope = (ctx.tpms_oenum or ctx.project_id or "").strip()
+        if scope:
+            try:
+                from services.project_memory_service import (
+                    get_project_memory_service,
+                )
+                qdrant = getattr(get_project_memory_service(), "qdrant", None)
+                if qdrant is not None:
+                    hits = qdrant.semantic_search(
+                        user_id="system",
+                        query=ctx.user_input,
+                        limit=8,
+                        # Low floor: "summarise this doc" queries match
+                        # weakly against any single chunk; we want the
+                        # document's chunks regardless of tight similarity.
+                        score_threshold=0.0,
+                        project_oenum=scope,
+                    )
+                    log.info("upload_deep: persistent-store hits=%d scope=%s",
+                             len(hits), scope)
+                    for h in hits:
+                        g.add(
+                            text=h.get("text") or "",
+                            source=(h.get("metadata") or {}).get("filename")
+                                   or h.get("section_title") or "upload",
+                            section=h.get("section_title"),
+                            score=h.get("score"),
+                            origin="upload",
+                        )
+            except Exception as e:
+                log.warning("upload_deep: persistent-store retrieve failed: %s", e)
+
+        # 3. Ephemeral upload investigation (legacy subsystem). Requires the
+        #    upload to already be indexed into upload_<hash> by the attach
+        #    hook. Kept for back-compat / large-file MapReduce; for project
+        #    chats step 2 above is the authoritative source.
         if ctx.upload_filenames and ctx.chat_id:
             try:
                 from services.upload_investigator import (
