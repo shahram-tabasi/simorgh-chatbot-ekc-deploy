@@ -48,13 +48,13 @@ HOW YOU WORK:
 {source_rules}
 
 DOCUMENT / FILE QUESTIONS:
-- documents_rag.list_project_documents → see which uploaded files exist (filenames).
-- documents_rag.read_document(filename="<exact attached name>") → full text of one file. To compare two files, read EACH by filename.
-- documents_rag.search_project_documents(query="...") → find specific passages across files.
-- The user's uploaded file content may already be provided in CONTEXT below — use it directly.
+- The uploaded files' FULL CONTENT is usually already provided in the CONTEXT block below (origin: upload). READ IT THERE FIRST and answer directly — often you need NO tool calls at all.
+- If you need a file that's not in CONTEXT: documents_rag.list_project_documents to see the exact filenames, then documents_rag.read_document(filename="<exact name>") for its full text. To compare two files, read EACH once by filename.
+- NEVER use session_read_artifact_tool / workspace file tools to read uploads — uploaded files live in the document store, NOT the sandbox filesystem.
+- To COMPARE/aggregate across files: get both files' text (from CONTEXT or read_document), then reason over them; optionally use shell+python to match/sort items precisely.
 
 COMPUTE / VERIFY:
-- shell(command="python3 -c '...'") runs Python in an isolated per-project sandbox. Use it to calculate, parse, cross-reference lists, or verify an idea before answering.
+- shell(command="python3 -c '...'") runs Python in an isolated per-project sandbox. Use it to calculate, parse, cross-reference lists, or verify before answering.
 
 WEB:
 - web_search(query="...") for current external information when the project's own data is insufficient.
@@ -104,13 +104,36 @@ def _excluded_prefixes(project_context: Dict[str, Any]) -> List[str]:
 
 
 def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """OpenAI-style function schemas from the live MCP tool registry,
-    minus tools that can't apply to this project's sources."""
-    ex = _excluded_prefixes(project_context)
+    """FOCUSED OpenAI-style function schemas. A small, well-chosen toolset
+    keeps the loop on-task — offering all ~40 MCP tools makes the model
+    wander (observed: it burned steps on session_read_artifact_tool trying
+    to read uploads from the sandbox workspace). We allow only the document
+    tools, code/web tools, and the project's actually-enabled source tools.
+    """
+    se = (project_context.get("sources_enabled")
+          or (project_context.get("project") or {}).get("sources_enabled") or {})
+
+    # Always-useful core: uploaded-document tools + web + sandbox code exec.
+    allow = {
+        "list_project_documents", "read_document",
+        "search_project_documents", "retrieve_chunks",
+        "web_search", "web_search_news",
+        "session_exec_tool", "shell",
+    }
+    # Source-conditional tools.
+    if se.get("gitlab"):
+        allow |= {"get_project_tree", "read_artifact_mcp", "search_blobs",
+                  "search_technical_knowledge"}
+    if se.get("tpms"):
+        allow |= {"get_project_context", "tpms_fetch", "tpms_get_text"}
+    if se.get("techserver"):
+        allow |= {"techserver_get_tree", "techserver_search",
+                  "techserver_fetch_files", "techserver_read_artifact"}
+
     tools: List[Dict[str, Any]] = []
     schemas = getattr(mcp_manager, "tool_schemas", {}) or {}
     for name, tool in schemas.items():
-        if any(name.startswith(p) for p in ex):
+        if name not in allow:
             continue
         params = getattr(tool, "inputSchema", None) or {"type": "object", "properties": {}}
         tools.append({
@@ -121,9 +144,21 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
                 "parameters": params,
             },
         })
-    # Always offer a shell + web_search even if not in the registry snapshot.
     have = {t["function"]["name"] for t in tools}
-    if "shell" not in have:
+    # Guarantee the document tools + a python sandbox are always present,
+    # even if the registry snapshot is incomplete at call time.
+    if "list_project_documents" not in have:
+        tools.append({"type": "function", "function": {
+            "name": "list_project_documents",
+            "description": "List uploaded files indexed for this project (filenames + chunk_count).",
+            "parameters": {"type": "object", "properties": {}}}})
+    if "read_document" not in have:
+        tools.append({"type": "function", "function": {
+            "name": "read_document",
+            "description": "Full text of one uploaded file. Identify by filename (exact attached name).",
+            "parameters": {"type": "object", "properties": {
+                "filename": {"type": "string"}}, "required": ["filename"]}}})
+    if "shell" not in have and "session_exec_tool" not in have:
         tools.append({"type": "function", "function": {
             "name": "shell",
             "description": "Run a shell command (incl. python3) in the project's isolated sandbox.",
@@ -135,8 +170,9 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
 async def _llm_step(gateway_url: str, messages: List[Dict[str, Any]],
                     tools: List[Dict[str, Any]], mode: str
                     ) -> Tuple[Optional[str], Optional[Dict], str]:
-    """One LLM turn. Returns (tool_name, tool_args, final_text).
-    If the model calls a tool, final_text is "". If it answers, tool_name is None."""
+    """One LLM turn. Returns (tool_name, tool_args, final_text). Retries on
+    transient gateway 5xx (the loop makes many calls; the gateway 502s
+    under burst)."""
     payload = {
         "messages": messages,
         "mode": mode,
@@ -146,10 +182,22 @@ async def _llm_step(gateway_url: str, messages: List[Dict[str, Any]],
         "tools": tools,
         "tool_choice": "auto",
     }
-    async with httpx.AsyncClient(timeout=STEP_TIMEOUT) as c:
-        r = await c.post(f"{gateway_url}/generate", json=payload)
-        r.raise_for_status()
-        body = r.json()
+    body = None
+    last_err = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=STEP_TIMEOUT) as c:
+                r = await c.post(f"{gateway_url}/generate", json=payload)
+                if r.status_code in (502, 503, 504):
+                    raise httpx.HTTPStatusError("gateway busy", request=r.request, response=r)
+                r.raise_for_status()
+                body = r.json()
+                break
+        except Exception as e:
+            last_err = e
+            await __import__("asyncio").sleep(1.5 * (attempt + 1))
+    if body is None:
+        raise last_err or RuntimeError("gateway call failed")
     tool_calls = body.get("tool_calls") or []
     if tool_calls:
         fn = tool_calls[0].get("function", {}) or {}
