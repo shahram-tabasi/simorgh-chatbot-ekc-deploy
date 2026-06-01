@@ -56,6 +56,19 @@ class PlanContext:
     # than the gitlab tools (which 404 on a repo-less project).
     has_techserver: bool = False
     techserver_oenum: Optional[str] = None
+    # TPMS source (the structured project records — panels, feeders,
+    # customer specs). tpms_oenum is read from the projects row at chat
+    # time so the executor can defensively substitute the literal
+    # <oenum> placeholder the planner LLM keeps emitting (the canonical
+    # examples in the CoT prompt use angle-bracket conventions
+    # everywhere — without an executor-side substitution the LLM's
+    # "<oenum>" goes straight to tpms-fetcher and 404s).
+    has_tpms: bool = False
+    tpms_oenum: Optional[str] = None
+    # Canonical name of the selected gitlab repo (group/project). Used
+    # by the same executor-side scrubber to swap "<repo>" placeholders
+    # the planner emits into the real path.
+    repo_path: Optional[str] = None
     # Modality
     input_modality: str = "text"   # "text" | "voice" | "mixed"
     # Recent history hint — useful for "follow-up to previous plan"

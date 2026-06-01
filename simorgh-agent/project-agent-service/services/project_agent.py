@@ -298,6 +298,18 @@ class ProjectManagerAgent:
                 or None
             )
 
+            # TPMS source. tpms_oenum is set by the wizard (and stored on
+            # the projects row). The executor uses it to swap the literal
+            # "<oenum>" placeholder the planner LLM emits — the canonical
+            # CoT prompt examples use angle-bracket conventions throughout,
+            # so the LLM faithfully copies them as tool arguments.
+            has_tpms = bool(_se.get("tpms"))
+            tpms_oenum = (
+                (project_for_ctx or {}).get("tpms_oenum")
+                or _se.get("techserver_oenum")
+                or None
+            )
+
             plan_ctx = PlanContext(
                 user_input=user_input,
                 project_id=project_id,
@@ -311,6 +323,9 @@ class ProjectManagerAgent:
                 input_modality=modality,
                 has_techserver=has_techserver,
                 techserver_oenum=str(techserver_oenum) if techserver_oenum else None,
+                has_tpms=has_tpms,
+                tpms_oenum=str(tpms_oenum) if tpms_oenum else None,
+                repo_path=str(repo_path) if repo_path else None,
             )
             chosen_plan = cot_route(plan_ctx)
             set_active_plan(chosen_plan)
@@ -1319,6 +1334,41 @@ class ProjectManagerAgent:
                     tool_input = parsed
             except Exception:
                 pass
+
+        # Defensive placeholder scrubber. The CoT system prompt uses
+        # angle-bracket placeholders (<oenum>, <repo>, <id>, <top hit>,
+        # <path_from_step1>) as documentation conventions, and the LLM
+        # faithfully copies them as actual tool arguments — yielding URLs
+        # like /project/%3Coenum%3E/text → 404. Replace the known ones
+        # from PlanContext before crossing the MCP boundary; leave
+        # unknown placeholders alone so the resulting 404 surfaces the
+        # planner bug instead of silently calling with garbage.
+        _pc = getattr(self, "_active_plan_ctx", None)
+        if _pc and isinstance(tool_input, dict):
+            _subs: Dict[str, str] = {}
+            if getattr(_pc, "tpms_oenum", None):
+                _subs["<oenum>"] = _pc.tpms_oenum
+                _subs["<OENUM>"] = _pc.tpms_oenum
+            elif getattr(_pc, "techserver_oenum", None):
+                _subs["<oenum>"] = _pc.techserver_oenum
+                _subs["<OENUM>"] = _pc.techserver_oenum
+            if getattr(_pc, "repo_path", None):
+                _subs["<repo>"]  = _pc.repo_path
+                _subs["<REPO>"]  = _pc.repo_path
+            if project_id:
+                _subs["<id>"]   = str(project_id)
+                _subs["<ID>"]   = str(project_id)
+            if _subs:
+                _scrubbed: list = []
+                for k, v in list(tool_input.items()):
+                    if isinstance(v, str) and v in _subs:
+                        tool_input[k] = _subs[v]
+                        _scrubbed.append((k, v, _subs[v]))
+                if _scrubbed:
+                    logger.info(
+                        "tool_input placeholder scrub tool=%s subs=%s",
+                        tool, _scrubbed,
+                    )
 
         # Always pass through the canonical project_id when the LLM left
         # a placeholder ("unknown", empty, missing) — MCP tools like
