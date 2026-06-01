@@ -331,14 +331,17 @@ def _subtree(entries: list[dict], sub: str, recursive: bool) -> list[dict]:
 
 
 async def get_tree_impl(
-    oenum: str, path: str = "", recursive: bool = False, refresh: bool = False,
+    oenum: str, path: str = "", recursive: bool = True, refresh: bool = False,
 ) -> dict:
     """List a techserver project's files, served from the cached FULL tree.
 
-    The full recursive tree is built once (slow) and cached in Redis; this
-    function slices it for the requested `path` (root when empty), so
-    navigation is instant after the first build. recursive=False returns
-    direct children only; recursive=True returns the whole subtree.
+    DEFAULT is recursive=True: the whole tree (or whole subtree under
+    `path`) is returned in ONE call, so the agent always sees the full
+    folder structure (Document/Client/Spec/…) and never has to "navigate"
+    level by level — gpt-oss reliably under-navigates, so we hand it
+    everything and let the agent's per-step compaction trim it. Pass
+    recursive=false for just the direct children of `path`. The full tree
+    is built once (slow) and cached in Redis; every call slices the cache.
     """
     digits = re.sub(r"\D", "", oenum)
     sub = path.strip().strip("/").replace("\\", "/")
@@ -499,7 +502,7 @@ async def projects(search: str = "") -> dict:
 
 @app.get("/tree")
 async def tree(oenum: str = Query(...), path: str = "",
-               recursive: bool = False, refresh: bool = False) -> dict:
+               recursive: bool = True, refresh: bool = False) -> dict:
     return await get_tree_impl(oenum, path=path, recursive=recursive,
                                refresh=refresh)
 
@@ -538,24 +541,23 @@ async def techserver_list_projects(search_term: str = "") -> dict:
 
 @mcp.tool()
 async def techserver_get_tree(
-    oenum: str, path: str = "", recursive: bool = False, refresh: bool = False,
+    oenum: str, path: str = "", recursive: bool = True, refresh: bool = False,
 ) -> dict:
     """List a techserver project's files by OE number WITHOUT downloading.
 
-    The FULL project tree is built once and cached in Redis, so navigation
-    is instant after the first call (the first call may take a few seconds
-    while the tree is built). Usage:
-      • path="" → the project ROOT folders (Document/, Identity/, …).
-      • path="Document/Client" → the DIRECT children of that folder.
-      • recursive=true → the WHOLE subtree under `path` (use on a folder,
-        e.g. path="Document/Client", recursive=true — cheap, served from
-        cache).
-    To FIND a file anywhere without walking levels, use techserver_search.
+    By DEFAULT returns the FULL recursive tree (every folder + file in the
+    project, e.g. Document/Client/Spec/…) in ONE call — you do NOT need to
+    navigate folder by folder. Just call techserver_get_tree(oenum) and you
+    get the complete structure. Optional:
+      • path="Document/Client" → restrict to that subtree.
+      • recursive=false → only the direct children of `path`.
+    To jump straight to matching files, use techserver_search.
 
-    Returns {path, entries:[{path,type,size}], file_count, dir_count,
-    total_project_files, ...}. The Drawing/ subtree and CAD/archive files
-    (.dwg/.dxf/.ema/.edb/.elk/.zip/.rar/.7z) are hard-excluded.
-    refresh=true rebuilds the cached tree.
+    The tree is built once and cached in Redis (first call may take a few
+    seconds; later calls are instant). Returns {path, entries:[{path,type,
+    size}], file_count, dir_count, total_project_files, ...}. The Drawing/
+    subtree and CAD/archive files (.dwg/.dxf/.ema/.edb/.elk/.zip/.rar/.7z)
+    are hard-excluded. refresh=true rebuilds the cache.
     """
     return await get_tree_impl(oenum, path=path, recursive=recursive,
                                refresh=refresh)
