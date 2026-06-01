@@ -533,13 +533,17 @@ TOOL CATALOG (CORE)
                or search. Empty list ⇒ nothing uploaded; say so, do not
                invent. (project scope is injected automatically.)
 
-- documents_rag.read_document(document_id, user_id, project_oenum?, max_chars?)
-    PURPOSE  : full text of ONE uploaded file (chunks reassembled in
-               order), keyed by a document_id from list_project_documents.
+- documents_rag.read_document(user_id, filename?, document_id?, project_oenum?, max_chars?)
+    PURPOSE  : full text of ONE uploaded file (chunks reassembled in order).
     USE WHEN : the user wants a whole specific file summarised/analysed,
                or you are comparing two files — read_document each, then
-               synthesise. Prefer over search when you need the entire
-               file, not the best-matching snippet.
+               synthesise.
+    KEY      : pass `filename` = the EXACT name the user attached (e.g.
+               "موجودی انبار.xlsx"). Do NOT pass a document_id you haven't
+               actually seen — the executor cannot thread an id from a
+               prior list step into this call, so a guessed id returns
+               nothing. Filename is known from the user's message at plan
+               time; use it.
 
 - project_explorer.get_exploration(project_id)
     PURPOSE  : read the pre-computed project map written to Redis by

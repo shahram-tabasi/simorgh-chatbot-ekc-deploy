@@ -195,16 +195,23 @@ async def list_project_documents(
 
 @mcp.tool()
 async def read_document(
-    document_id: str,
     user_id: str,
+    filename: Optional[str] = None,
+    document_id: Optional[str] = None,
     project_oenum: Optional[str] = None,
     session_id: Optional[str] = None,
     max_chars: int = 20000,
 ) -> Dict[str, Any]:
     """Return the FULL text of one uploaded document (its chunks
-    reassembled in order), given a document_id from list_project_documents.
-    Use when the user asks to summarise or analyse a specific whole file,
-    rather than search across many. Truncated at max_chars.
+    reassembled in order). Identify it by `filename` (PREFERRED — pass the
+    exact name the user attached, e.g. "موجودی انبار.xlsx") or by
+    `document_id` from list_project_documents. Use when the user asks to
+    summarise/analyse a whole file, or to compare two files (read each).
+    Truncated at max_chars.
+
+    Prefer filename: you know it from the user's message at plan time,
+    whereas document_id is only known after list_project_documents runs and
+    cannot be threaded into this call.
     """
     if _qdrant is None:
         return {"error": "Qdrant unavailable", "text": ""}
@@ -214,6 +221,7 @@ async def read_document(
             user_id=user_id,
             session_id=session_id,
             project_oenum=project_oenum,
+            filename=filename,
             max_chars=max_chars,
         )
     except Exception as e:

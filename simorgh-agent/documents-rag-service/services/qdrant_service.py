@@ -455,11 +455,11 @@ class QdrantService:
             logger.error(f"❌ Semantic search failed: {e}")
             return []
 
-    def _scroll_tenant(self, tenant_id: str, document_id: Optional[str] = None):
-        """Scroll ALL points for a tenant (optionally one document) from the
-        unified collection. Payload-only; no vectors. Returns [] if the
-        collection doesn't exist yet."""
-        from qdrant_client.models import ScrollRequest as _SR  # noqa: F401
+    def _scroll_tenant(self, tenant_id: str, document_id: Optional[str] = None,
+                       filename: Optional[str] = None):
+        """Scroll ALL points for a tenant (optionally one document, by id or
+        by filename) from the unified collection. Payload-only; no vectors.
+        Returns [] if the collection doesn't exist yet."""
         try:
             exists = any(
                 c.name == DOCS_COLLECTION
@@ -473,6 +473,14 @@ class QdrantService:
         if document_id:
             must.append(
                 FieldCondition(key="document_id", match=MatchValue(value=document_id))
+            )
+        if filename:
+            # Upload stores section_title = filename on every chunk, so we
+            # can resolve a file by its name — which the planner KNOWS at
+            # plan time (it's in the user's message), unlike the runtime
+            # document_id UUID.
+            must.append(
+                FieldCondition(key="section_title", match=MatchValue(value=filename))
             )
         flt = Filter(must=must)
         out, offset = [], None
@@ -522,34 +530,54 @@ class QdrantService:
 
     def get_document_text(
         self,
-        document_id: str,
-        user_id: str,
+        document_id: Optional[str] = None,
+        user_id: str = "system",
         session_id: Optional[str] = None,
         project_oenum: Optional[str] = None,
+        filename: Optional[str] = None,
         max_chars: int = 20000,
     ) -> Dict[str, Any]:
         """Reconstruct a single document's full text by concatenating its
-        chunks in chunk_index order (capped at max_chars)."""
+        chunks in chunk_index order (capped at max_chars). Resolve by
+        document_id OR filename — prefer filename, which the planner knows
+        at plan time (the runtime document_id UUID is only known AFTER
+        list_project_documents runs, and the executor can't pass values
+        between steps)."""
         tenant_id = _tenant_of(session_id, project_oenum)
         try:
-            points = self._scroll_tenant(tenant_id, document_id=document_id)
+            points = self._scroll_tenant(
+                tenant_id, document_id=document_id, filename=filename
+            )
+            # Fuzzy fallback: exact filename match found nothing — scan the
+            # tenant's docs and substring-match the requested name (handles
+            # minor differences in how the planner echoes the filename).
+            if not points and filename:
+                want = filename.strip().lower()
+                all_pts = self._scroll_tenant(tenant_id)
+                points = [
+                    p for p in all_pts
+                    if want in str((p.payload or {}).get("section_title", "")).lower()
+                    or want in str(((p.payload or {}).get("metadata") or {})
+                                   .get("filename", "")).lower()
+                ]
         except Exception as e:
             logger.error(f"❌ get_document_text failed: {e}")
-            return {"document_id": document_id, "text": "", "chunk_count": 0}
+            return {"document_id": document_id, "filename": filename or "",
+                    "text": "", "chunk_count": 0}
         chunks = sorted(
             (p.payload or {} for p in points),
             key=lambda pl: pl.get("chunk_index", 0),
         )
-        filename = ""
+        out_name = filename or ""
         parts: List[str] = []
         for pl in chunks:
-            filename = filename or (pl.get("metadata") or {}).get("filename") \
+            out_name = out_name or (pl.get("metadata") or {}).get("filename") \
                 or pl.get("section_title") or ""
             parts.append(pl.get("text", ""))
         text = "\n".join(parts)[:max_chars]
         return {
-            "document_id": document_id,
-            "filename": filename,
+            "document_id": document_id or "",
+            "filename": out_name,
             "text": text,
             "chunk_count": len(chunks),
         }
