@@ -20,6 +20,7 @@ import hashlib
 import json
 import asyncio
 import requests
+from requests.exceptions import RequestException
 from typing import List, Dict, Any, Optional, Iterator, Union, AsyncIterator
 from enum import Enum
 import openai
@@ -114,6 +115,15 @@ class LLMService:
         )
 
         logger.info(f"✅ Local LLM endpoint (load-balanced): {self.local_llm_url}")
+
+        # Dedicated sentence-transformers embeddings microservice. The
+        # local LLM server ({local_llm_url}/embeddings) does NOT expose an
+        # embeddings route — it 404s — which silently broke document
+        # indexing (uploads parsed fine but never reached Qdrant). This is
+        # the same endpoint knowledge_repo_service uses successfully.
+        self.embeddings_url = os.getenv(
+            "EMBEDDINGS_URL", "http://embeddings-service:8031"
+        )
 
         # Default mode
         self.default_mode = LLMMode(
@@ -1389,13 +1399,16 @@ Return a JSON array of relationships:
             Embedding vector
         """
         try:
-            # Call local LLM embedding endpoint
-            # The endpoint should accept: {"input": "text"}
-            # And return: {"embedding": [float, ...]}
+            # Call the dedicated embeddings microservice (sentence-
+            # transformers). Contract: POST /embeddings {"text": "..."}
+            # → {"embedding": [float, ...], "dim": N}. The previous code
+            # hit {local_llm_url}/embeddings with {"input": ...}, which
+            # 404s — the local LLM server has no embeddings route — so
+            # every document upload parsed correctly but failed to index.
 
             response = requests.post(
-                f"{self.local_llm_url}/embeddings",
-                json={"input": text},
+                f"{self.embeddings_url}/embeddings",
+                json={"text": text},
                 timeout=timeout,
                 headers={"Content-Type": "application/json"}
             )
@@ -1416,7 +1429,7 @@ Return a JSON array of relationships:
                 return embedding
 
             else:
-                error_msg = f"Local LLM embedding failed: HTTP {response.status_code}"
+                error_msg = f"Embeddings-service failed: HTTP {response.status_code}"
                 logger.error(f"❌ {error_msg}")
 
                 # If embedding endpoint doesn't exist, try fallback with generation
