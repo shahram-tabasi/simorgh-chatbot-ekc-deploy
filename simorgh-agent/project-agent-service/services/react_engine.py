@@ -32,8 +32,25 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-MAX_STEPS = int(os.getenv("REACT_MAX_STEPS", "10"))
+MAX_STEPS = int(os.getenv("REACT_MAX_STEPS", "8"))
 STEP_TIMEOUT = float(os.getenv("REACT_LLM_TIMEOUT_SEC", "90"))
+# Char budget for the rolling transcript sent to the model each turn.
+# gpt-oss = 16k tokens (~50k chars in/out). Keep the transcript well under
+# that so accumulated tool outputs never overflow → no gateway 502s.
+HISTORY_BUDGET = int(os.getenv("REACT_HISTORY_BUDGET_CHARS", "36000"))
+
+
+def _trim_history(messages: List[Dict[str, Any]]) -> None:
+    """Drop the OLDEST tool exchanges (keeping the pinned system + first
+    user message) until the transcript fits HISTORY_BUDGET. Mutates in
+    place. Pins messages[0] (system, holds the pre-loaded CONTEXT) and
+    messages[1] (the user request)."""
+    def _size() -> int:
+        return sum(len(str(m.get("content") or "")) +
+                   len(json.dumps(m.get("tool_calls") or "")) for m in messages)
+    # Indices 0,1 are pinned; trim from index 2 forward.
+    while _size() > HISTORY_BUDGET and len(messages) > 4:
+        del messages[2]
 
 
 REACT_SYSTEM_PROMPT = """You are Simorgh, an expert engineering assistant that solves the user's request by REASONING and ACTING in a loop.
@@ -230,23 +247,54 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
         mode = "offline" if mode in ("local", "gpt-oss") else "online"
 
     plan_ctx = getattr(agent, "_active_plan_ctx", None)
+    scope = ((getattr(plan_ctx, "tpms_oenum", None) if plan_ctx else None)
+             or (project_context.get("tpms_oenum"))
+             or str(project_id) or "").strip()
 
-    # Grounding (reuses the upload document pre-load + knowledge layer).
+    # Pre-load the project's uploaded documents DIRECTLY into CONTEXT.
+    # We don't rely on the plan's gather_grounding here (it may not fire in
+    # this code path), and pre-loading the actual content is what lets the
+    # model answer — often in ONE step with no tool calls. Each file is
+    # capped; the total is bounded so we never approach the model's context
+    # window (gpt-oss = 16k tokens — overflowing it is what made the
+    # gateway 502 during long loops).
     grounding_text = ""
+    PRELOAD_PER_DOC = int(os.getenv("REACT_PRELOAD_PER_DOC", "6000"))
+    PRELOAD_TOTAL = int(os.getenv("REACT_PRELOAD_TOTAL", "16000"))
     try:
-        from services.cot_router import active_plan
-        plan = active_plan()
-        if plan is not None and plan_ctx is not None:
-            g = await plan.gather_grounding(plan_ctx)
-            rendered = g.render() if g else ""
-            if rendered:
-                grounding_text = "\n\n# CONTEXT (pre-loaded; prefer this before searching):\n" + rendered
+        qdrant = getattr(agent.memory, "qdrant", None) if getattr(agent, "memory", None) else None
+        if qdrant is not None and scope:
+            docs = qdrant.list_documents(user_id="system", project_oenum=scope) or []
+            blocks, used = [], 0
+            per = max(2000, PRELOAD_TOTAL // max(1, len(docs))) if docs else PRELOAD_PER_DOC
+            per = min(per, PRELOAD_PER_DOC)
+            for d in docs:
+                fn = d.get("filename") or ""
+                if not fn or used >= PRELOAD_TOTAL:
+                    continue
+                doc = qdrant.get_document_text(user_id="system", project_oenum=scope,
+                                               filename=fn, max_chars=per)
+                txt = (doc or {}).get("text") or ""
+                if txt:
+                    blocks.append(f"## FILE: {fn}\n{txt}")
+                    used += len(txt)
+            if blocks:
+                grounding_text = ("\n\n# CONTEXT — full text of this project's uploaded "
+                                  "files (answer from this directly; you usually need NO "
+                                  "tool calls):\n\n" + "\n\n".join(blocks))
+                logger.info("react: preloaded %d docs (%d chars) scope=%s",
+                            len(blocks), used, scope)
     except Exception as e:
-        logger.warning("react: grounding failed: %s", e)
+        logger.warning("react: document preload failed: %s", e)
+
+    # Effective step cap: never let a high REACT_MAX_STEPS cause runaway
+    # thrashing / gateway load. With content pre-loaded the model should
+    # finish in 1-4 steps; 12 is a generous ceiling.
+    steps_cap = min(MAX_STEPS, 12)
 
     tools = _build_tools(agent.mcp_manager, project_context)
     system = REACT_SYSTEM_PROMPT.format(
-        max_steps=MAX_STEPS,
+        max_steps=steps_cap,
         source_rules=_source_rules(project_context, plan_ctx),
     )
     proj_line = (f"Project: {project_context.get('name','')}  "
@@ -265,7 +313,7 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
     steps: List[Dict[str, Any]] = []
     final_response = ""
 
-    for i in range(1, MAX_STEPS + 1):
+    for i in range(1, steps_cap + 1):
         if not gateway_url:
             final_response = "LLM gateway is not configured (LLM_GATEWAY_URL)."
             break
@@ -286,8 +334,8 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
         title = f"{tool_name}"
         await agent._notify_progress(project_id, "task_executing", {
             "task_id": task_id, "task_title": title,
-            "step": i, "total": MAX_STEPS,
-            "progress_percent": int(i * 100 / MAX_STEPS),
+            "step": i, "total": steps_cap,
+            "progress_percent": int(i * 100 / steps_cap),
         })
 
         task = {
@@ -317,7 +365,25 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
                                          "function": {"name": tool_name,
                                                       "arguments": json.dumps(tool_args or {})}}]})
         messages.append({"role": "tool", "tool_call_id": task_id,
-                         "name": tool_name, "content": output[:6000]})
+                         "name": tool_name, "content": output[:2500]})
+
+        # Keep the running transcript within the model's context window.
+        # The system message (with the pre-loaded document CONTEXT) and the
+        # original user request are pinned; older tool exchanges are dropped
+        # when the transcript grows too large. Without this the history
+        # outgrows gpt-oss's 16k-token window and the gateway 502s.
+        _trim_history(messages)
+
+        # Convergence nudge: once the model has had a few tool turns, remind
+        # it that the file content is already in CONTEXT and it should
+        # answer rather than keep exploring. This stops the observed
+        # thrashing (repeated session_exec/search with no progress).
+        if i >= 3:
+            messages.append({"role": "user", "content": (
+                "You now have enough information (the files' content is in the "
+                "CONTEXT above). If you can answer the user's request, STOP "
+                "calling tools and give the FINAL answer now. Only call another "
+                "tool if it is strictly necessary.")})
     else:
         # Hit the step cap without a final answer — make one last synthesis.
         try:
