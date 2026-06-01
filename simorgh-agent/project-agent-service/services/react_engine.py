@@ -259,8 +259,8 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
     # window (gpt-oss = 16k tokens — overflowing it is what made the
     # gateway 502 during long loops).
     grounding_text = ""
-    PRELOAD_PER_DOC = int(os.getenv("REACT_PRELOAD_PER_DOC", "6000"))
-    PRELOAD_TOTAL = int(os.getenv("REACT_PRELOAD_TOTAL", "16000"))
+    PRELOAD_PER_DOC = int(os.getenv("REACT_PRELOAD_PER_DOC", "14000"))
+    PRELOAD_TOTAL = int(os.getenv("REACT_PRELOAD_TOTAL", "30000"))
     try:
         qdrant = getattr(agent.memory, "qdrant", None) if getattr(agent, "memory", None) else None
         if qdrant is not None and scope:
