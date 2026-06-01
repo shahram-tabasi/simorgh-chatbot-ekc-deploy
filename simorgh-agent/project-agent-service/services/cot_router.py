@@ -25,7 +25,7 @@ from .cot_plans import (
     DefaultPlan,
     KnowledgeOnlyPlan, SingleRepoPlan, MultiRepoPlan,
     UploadDeepPlan, RepoPlusUploadPlan, VoiceFirstPlan,
-    TechserverPlan,
+    TechserverPlan, TpmsPlan,
 )
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ _UPLOAD_DEEP_PLAN      = UploadDeepPlan()
 _REPO_PLUS_UPLOAD_PLAN = RepoPlusUploadPlan()
 _VOICE_FIRST_PLAN      = VoiceFirstPlan()
 _TECHSERVER_PLAN       = TechserverPlan()
+_TPMS_PLAN             = TpmsPlan()
 
 # Active plan for the current asyncio task. handle_input installs
 # this once per request via set_active_plan(); cot_engine reads it
@@ -86,6 +87,13 @@ def route(ctx: PlanContext) -> CotPlan:
     # above voice/knowledge_only.
     elif ctx.has_techserver:
         chosen = _TECHSERVER_PLAN
+    # TPMS-only project (the project's structured data lives in TPMS
+    # MySQL; no repo, no SMB share). Without this branch the request
+    # falls to KnowledgeOnly and the planner LLM leaks the canonical
+    # repo-shaped examples ("Search README → Read README → …"), 404ing
+    # on a project that has no repo. Same priority slot as techserver.
+    elif ctx.has_tpms:
+        chosen = _TPMS_PLAN
     elif ctx.input_modality == "voice":
         chosen = _VOICE_FIRST_PLAN
     elif not ctx.has_upload and not ctx.has_selected_repo:
@@ -95,10 +103,11 @@ def route(ctx: PlanContext) -> CotPlan:
     log.info(
         "cot_router: picked plan=%s "
         "(sources=%d, upload=%s, upload_chars=%d, modality=%s, "
-        "techserver=%s/oe=%s)",
+        "techserver=%s/oe=%s, tpms=%s/oe=%s)",
         chosen.name, len(ctx.selected_repos),
         ctx.has_upload, ctx.upload_size_chars, ctx.input_modality,
         ctx.has_techserver, ctx.techserver_oenum or "",
+        ctx.has_tpms, ctx.tpms_oenum or "",
     )
     return chosen
 
