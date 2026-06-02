@@ -87,6 +87,33 @@ def _completeness(spec_dump: Dict[str, Any], gaps: List[str]) -> int:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+async def _ensure_memory_pools(memory) -> None:
+    """Make sure the memory service has working pg + qdrant pools. Inside
+    a FastAPI request these are always set by main.py at startup; from a
+    one-shot script (`python3 -c "..."`) they default to None and every
+    .pg.execute_one_async crashes with NoneType. Lazy-bootstrap here so
+    the collector is callable from either context."""
+    if getattr(memory, "pg", None) is None:
+        try:
+            from database.postgres_connection import PostgresConnection
+            pc = PostgresConnection()
+            await pc.init_async_pool()
+            memory.pg = pc
+            logger.info("soft_collector: bootstrapped pg (one-shot mode)")
+        except Exception as e:
+            logger.warning("soft_collector: could not bootstrap pg: %s", e)
+    if getattr(memory, "qdrant", None) is None:
+        try:
+            from services.qdrant_service import QdrantService
+            memory.qdrant = QdrantService(llm_service=None)
+            logger.info("soft_collector: bootstrapped qdrant (one-shot mode)")
+        except Exception as e:
+            logger.warning("soft_collector: could not bootstrap qdrant: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str, Any]]:
     """Re-run the extractors (sequential LLM calls, parallel non-LLM) and
     persist if the signature changed. Returns the new state row or the
@@ -104,6 +131,8 @@ async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str,
         return None
 
     memory = get_project_memory_service()
+    # Bootstrap pools if we're running outside the FastAPI app context.
+    await _ensure_memory_pools(memory)
     try:
         project = await memory.get_project(project_id)
     except Exception as e:
