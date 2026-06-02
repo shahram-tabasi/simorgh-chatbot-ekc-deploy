@@ -30,3 +30,7 @@ paramiko>=3.4.0
 tenacity>=8.2.3
 sentence-transformers>=3.0.0
 torch==2.5.0
+# fastembed for the BM25 sparse encoder in services/qdrant_hybrid.
+# Pulls in onnxruntime; CPU-only path is ~120 MB. The hybrid path
+# falls back to dense-only when this fails to import.
+fastembed>=0.4.0

@@ -44,6 +44,27 @@ logger = logging.getLogger(__name__)
 DOCS_COLLECTION = os.getenv("QDRANT_DOCS_COLLECTION", "project_documents")
 TENANT_FIELD = "tenant_id"
 
+# When QDRANT_HYBRID=1 the service ensures a NAMED-VECTOR collection
+# ({dense, sparse}), writes both vectors per chunk, and serves searches
+# via the Qdrant Query API with dense+sparse RRF fusion and (optionally)
+# bge-reranker-v2-m3 cross-encoder reranking. The legacy single-dense
+# path remains as a fallback when QDRANT_HYBRID=0 OR when the hybrid
+# encoder stack (bge-m3, fastembed, sentence-transformers) is missing.
+# See services/qdrant_hybrid.py for the encoder + collection plumbing.
+try:
+    from services.qdrant_hybrid import (
+        QDRANT_HYBRID_ENABLED, SchemaMismatchError,
+        ensure_hybrid_collection, build_point as _build_hybrid_point,
+        hybrid_search as _hybrid_search,
+    )
+except Exception as _hyb_e:  # noqa: BLE001
+    logger.warning("qdrant_hybrid import failed (%s); hybrid disabled", _hyb_e)
+    QDRANT_HYBRID_ENABLED = False
+    SchemaMismatchError = type("SchemaMismatchError", (RuntimeError,), {})
+    ensure_hybrid_collection = None
+    _build_hybrid_point = None
+    _hybrid_search = None
+
 
 def _tenant_of(session_id: Optional[str], project_oenum: Optional[str]) -> str:
     """The partition key for a doc chunk. Project chats isolate by
@@ -223,6 +244,23 @@ class QdrantService:
         # validated by _tenant_of at call sites that store/search.)
         collection_name = DOCS_COLLECTION
 
+        # Hybrid path: named-vector schema (dense bge-m3 + sparse BM25).
+        # Delegates to qdrant_hybrid for both create-if-missing and the
+        # schema-mismatch guard (existing dense-only collection → raises
+        # SchemaMismatchError pointing at the migration script).
+        if QDRANT_HYBRID_ENABLED and ensure_hybrid_collection is not None:
+            try:
+                return ensure_hybrid_collection(
+                    self.client, collection_name, tenant_field=TENANT_FIELD,
+                )
+            except SchemaMismatchError as e:
+                # Propagate — operator MUST run the migration before the
+                # service is usable in hybrid mode. Silent fallback to
+                # dense-only would leave the collection in a state where
+                # writes succeed but hybrid reads return [].
+                logger.error("qdrant: hybrid schema mismatch: %s", e)
+                raise
+
         try:
             # Check if collection exists
             collections = self.client.get_collections().collections
@@ -340,8 +378,6 @@ class QdrantService:
                     logger.warning(f"⚠️ Empty chunk text, skipping")
                     continue
 
-                embedding = self.generate_embedding(text)
-
                 # Prepare payload with tenant context. tenant_id is the
                 # partition key for single-collection multitenancy; the
                 # original project_oenum/session_id/user_id are also kept
@@ -365,12 +401,27 @@ class QdrantService:
                 if "metadata" in chunk:
                     payload["metadata"] = chunk["metadata"]
 
-                # Create point
-                point = PointStruct(
-                    id=chunk_id,
-                    vector=embedding,
-                    payload=payload
-                )
+                # Hybrid path: build a point carrying BOTH dense (bge-m3)
+                # and sparse (BM25) vectors under the named-vectors
+                # schema. Chunks where either encoder fails are skipped
+                # rather than written half-populated.
+                if QDRANT_HYBRID_ENABLED and _build_hybrid_point is not None:
+                    point = _build_hybrid_point(
+                        point_id=chunk_id, text=text, payload=payload,
+                    )
+                    if point is None:
+                        logger.warning(
+                            "qdrant: hybrid encoder failed for chunk; skipping",
+                        )
+                        continue
+                else:
+                    # Legacy single-dense path.
+                    embedding = self.generate_embedding(text)
+                    point = PointStruct(
+                        id=chunk_id,
+                        vector=embedding,
+                        payload=payload
+                    )
                 points.append(point)
 
             # Upload points in batch
@@ -416,6 +467,41 @@ class QdrantService:
         """
         collection_name = DOCS_COLLECTION
         tenant_id = _tenant_of(session_id, project_oenum)
+
+        # Hybrid path: native Qdrant Query API with dense+sparse RRF
+        # fusion plus bge-reranker-v2-m3 cross-encoder reranking. The
+        # legacy dense-only call below stays as fallback when hybrid is
+        # disabled or its encoders aren't available.
+        if QDRANT_HYBRID_ENABLED and _hybrid_search is not None:
+            try:
+                hits = _hybrid_search(
+                    self.client, collection_name=collection_name,
+                    query=query, tenant_id=tenant_id, limit=limit,
+                    score_threshold=score_threshold,
+                    document_id=document_id, rerank=True,
+                )
+                formatted = [{
+                    "chunk_id":      h.chunk_id,
+                    "score":         h.score,
+                    "text":          h.text,
+                    "section_title": h.section_title,
+                    "chunk_index":   h.chunk_index,
+                    "document_id":   h.document_id,
+                    "metadata":      h.metadata,
+                } for h in hits]
+                logger.info(
+                    "🔍 hybrid: %d results for %r in %s",
+                    len(formatted), query[:60], collection_name,
+                )
+                return formatted
+            except SchemaMismatchError as e:
+                logger.error("qdrant.semantic_search: %s", e)
+                return []
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "qdrant.semantic_search hybrid path failed (%s) — "
+                    "falling back to legacy dense", e,
+                )
 
         try:
             # Generate query embedding
