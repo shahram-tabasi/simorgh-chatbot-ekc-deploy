@@ -324,6 +324,46 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
                 "page":        {"type": "integer", "minimum": 1},
                 "language":    {"type": "string"},
             }, "required": ["document_id", "page"]}}})
+    # Apache AGE graph-as-router. The agent calls graph_route(query)
+    # BEFORE running search to find which sub-corpora (uploads / TPMS /
+    # GitLab) and which specific documents are likely-relevant —
+    # constrains the search and prevents the "irrelevant cross-source
+    # noise" failure that vanilla top-k can't solve. cypher_query is
+    # an escape hatch for ad-hoc graph exploration.
+    if "graph_route" not in have:
+        tools.append({"type": "function", "function": {
+            "name": "graph_route",
+            "description": (
+                "Look up the user's query in the project entity graph "
+                "(Apache AGE). Returns {entities, routed_document_ids, "
+                "sources_to_hit, rationale}: WHICH documents and "
+                "sub-corpora to search before running search_chunks / "
+                "TPMS lookups. Call this FIRST on queries that mention "
+                "an IEC/ISO standard, an OE number, a panel number, "
+                "or a feeder tag (L11B, INC 2, COUPLING 2/1, etc.)."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string"},
+            }, "required": ["query"]}}})
+    if "cypher_query" not in have:
+        tools.append({"type": "function", "function": {
+            "name": "cypher_query",
+            "description": (
+                "Run an arbitrary openCypher query against the project "
+                "graph in Apache AGE. Use sparingly for graph "
+                "exploration the regex router didn't cover (e.g. "
+                "'every document mentioning IEC 62271-200'). Schema: "
+                "(:Project)-[:CONTAINS]->(:Document)-[:MENTIONS "
+                "{count}]->(:Entity {type, key, name})."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "query":  {"type": "string",
+                           "description": "openCypher query string."},
+                "params": {"type": "object",
+                           "description": "Optional Cypher params."},
+                "limit":  {"type": "integer", "minimum": 1, "maximum": 100,
+                           "description": "Max rows (default 20)."},
+            }, "required": ["query"]}}})
     return tools
 
 

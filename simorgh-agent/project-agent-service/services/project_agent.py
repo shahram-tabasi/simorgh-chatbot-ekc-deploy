@@ -2211,6 +2211,47 @@ class ProjectManagerAgent:
                              "ok": bool(result.get("ok"))},
             }
 
+        # Apache AGE graph-as-router. graph_route runs the populator's
+        # entity regex over the query and walks the graph to find
+        # likely-relevant documents + sub-corpora. cypher_query is an
+        # ad-hoc escape hatch — both return structured dicts; on any
+        # failure the agent gets a clear "ok=false" signal and can fall
+        # back to plain search.
+        if tool == "graph_route":
+            from services.graph_router import route_query
+            q = str(tool_input.get("query") or "").strip()
+            if not q:
+                return {"output": "graph_route: require non-empty query",
+                        "metadata": {"tool": "graph_route", "error": "bad_input"}}
+            decision = route_query(q, project_id=project_id)
+            return {
+                "output": json.dumps(decision.to_dict(), ensure_ascii=False)[:2500],
+                "metadata": {"tool": "graph_route",
+                             "entities": len(decision.entities),
+                             "routed_docs": len(decision.routed_document_ids),
+                             "sources": decision.sources_to_hit,
+                             "fallback": decision.fallback},
+            }
+
+        if tool == "cypher_query":
+            from services.graph_router import cypher_query as _cq
+            q = str(tool_input.get("query") or "").strip()
+            params = tool_input.get("params") or {}
+            try:
+                limit = int(tool_input.get("limit") or 20)
+            except (TypeError, ValueError):
+                limit = 20
+            if not q:
+                return {"output": "cypher_query: require non-empty query",
+                        "metadata": {"tool": "cypher_query", "error": "bad_input"}}
+            res = _cq(q, params=params if isinstance(params, dict) else {}, limit=limit)
+            return {
+                "output": json.dumps(res, ensure_ascii=False, default=str)[:3500],
+                "metadata": {"tool": "cypher_query",
+                             "ok": bool(res.get("ok")),
+                             "rows": len(res.get("rows") or [])},
+            }
+
         if tool == "submit_soft_spec":
             state = await sss.get_state(project_id)
             if state is None:
