@@ -13,6 +13,7 @@ import CreateProjectChatModal from './components/CreateProjectChatModal';
 import Login from './components/Login';
 import SpecTaskNotification from './components/SpecTaskNotification';
 import NotificationToast, { ToastNotification } from './components/NotificationToast';
+import { subscribeNotify } from './services/notifyBus';
 import SpecReview from './pages/SpecReview';
 import AdminPanel from './pages/AdminPanel';
 import UpgradePage from './pages/UpgradePage';
@@ -96,7 +97,7 @@ function MainChat() {
     () => projects.find(p => p.id === activeProjectId) || null,
     [projects, activeProjectId]
   );
-  const defaultModel = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'claude-sonnet-4-6';
+  const defaultModel = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'SimorghAI-model';
 
   const handleSpecTaskCreated = (taskId: string) => {
     console.log('📊 New spec task:', taskId);
@@ -301,6 +302,33 @@ function MainChat() {
   const removeNotification = React.useCallback((id: string) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
   }, []);
+
+  // SignalR-style hub: any component can call notify(...) and we pipe
+  // it into the same NotificationToast queue. Re-emitting with the same
+  // `key` updates the live toast (useful for progress bars).
+  React.useEffect(() => {
+    if (!notificationsEnabled) return;
+    return subscribeNotify((ev) => {
+      setNotifications((prev) => {
+        const existingIdx = ev.key ? prev.findIndex((n) => n.id === ev.key) : -1;
+        const next: ToastNotification = {
+          id:        ev.key || ev.id,
+          message:   ev.message,
+          timestamp: Date.now(),
+          type:      ev.type,
+          title:     ev.title,
+          progress:  ev.progress,
+          timeoutMs: ev.timeoutMs,
+        };
+        if (existingIdx >= 0) {
+          const copy = [...prev];
+          copy[existingIdx] = next;
+          return copy;
+        }
+        return [...prev, next];
+      });
+    });
+  }, [notificationsEnabled]);
 
   // Handle chat selection - close right sidebar on mobile
   const handleSelectChat = React.useCallback((projectId: string | null, chatId: string) => {
