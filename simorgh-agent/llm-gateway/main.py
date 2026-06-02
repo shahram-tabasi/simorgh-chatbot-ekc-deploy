@@ -41,6 +41,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
@@ -50,6 +51,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import live_settings
+from harmony import (
+    is_harmony_output,
+    parse_harmony,
+    sanitize_chat_message,
+)
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("llm-gateway")
@@ -380,6 +386,20 @@ async def _do_chat_completion(
     body = r.json()
     choice = (body.get("choices") or [{}])[0]
     msg    = choice.get("message", {}) or {}
+    # gpt-oss Harmony cleanup: drop the `analysis` channel (unaligned
+    # CoT — never expose) and, if vLLM wasn't served with
+    # `--reasoning-parser openai_gptoss`, collapse raw Harmony tokens
+    # in `content` to the `final` channel. Also recovers tool calls
+    # from Harmony commentary when the OpenAI-shape parser missed them.
+    is_gpt_oss = backend_kind == "offline_text"
+    debug: Dict[str, Any] = {}
+    if is_gpt_oss:
+        msg, debug = sanitize_chat_message(msg)
+        if debug.get("analysis"):
+            logger.debug(
+                "harmony: dropped %d chars of analysis channel from response",
+                len(debug["analysis"]),
+            )
     return {
         "response":      msg.get("content") or "",
         # Surface tool_calls verbatim so the caller can drive a tool-
@@ -448,13 +468,101 @@ async def generate(req: GenerateRequest) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # /generate/stream — SSE
 # ---------------------------------------------------------------------------
+class _HarmonyStreamFilter:
+    """Streaming-side Harmony scrubber for gpt-oss outputs.
+
+    Two concerns:
+      1. vLLM's openai_gptoss reasoning parser emits the analysis channel
+         in `delta.reasoning_content`. We never want that leaving the
+         gateway — drop it at this layer.
+      2. When the reasoning parser isn't enabled server-side, raw
+         Harmony tokens leak into `delta.content` interleaved across
+         channels. A small state machine over a sliding buffer
+         suppresses non-`final` channels and strips stray sentinels.
+    """
+    _OPEN_RE = re.compile(
+        r"<\|channel\|>(?P<ch>analysis|commentary|final)"
+        r"(?:\s+to=[^\s<|]+)?(?:\s*<\|constrain\|>[a-zA-Z0-9_-]+)?"
+        r"<\|message\|>"
+    )
+    # Channel-close / role-change tokens. Anything after these returns to
+    # the suppressed default state until the next channel-open marker.
+    _CLOSE_RE = re.compile(r"<\|(?:end|return|call|start)\|>")
+    # Any stray standalone sentinel that survived the open/close passes —
+    # strip from emitted text so users never see `<|message|>` etc.
+    _STRAY_RE = re.compile(r"<\|(?:start|end|return|call|message|channel|constrain)\|>")
+
+    def __init__(self) -> None:
+        self.in_final = False
+        self.saw_any_channel = False
+        self.buf = ""
+
+    def feed(self, chunk: str) -> str:
+        """Append a streaming chunk; return whatever portion is safe to
+        emit downstream (final channel only, sentinels stripped)."""
+        if not chunk:
+            return ""
+        self.buf += chunk
+        out_parts: List[str] = []
+        # Repeatedly consume channel-open / channel-close markers in
+        # order. Anything in between is content for the current channel.
+        while True:
+            m_open = self._OPEN_RE.search(self.buf)
+            m_close = self._CLOSE_RE.search(self.buf)
+            # Pick whichever marker is earliest; bail if neither.
+            if m_open and m_close:
+                m, kind = (m_open, "open") if m_open.start() <= m_close.start() else (m_close, "close")
+            elif m_open:
+                m, kind = m_open, "open"
+            elif m_close:
+                m, kind = m_close, "close"
+            else:
+                break
+            head = self.buf[:m.start()]
+            if self.in_final or not self.saw_any_channel:
+                out_parts.append(head)
+            if kind == "open":
+                self.saw_any_channel = True
+                self.in_final = (m.group("ch") == "final")
+            else:
+                # Channel closed — leave the final channel; next emit
+                # waits for another channel-open marker.
+                self.in_final = False
+            self.buf = self.buf[m.end():]
+        # Tail may contain a partial sentinel (`<|chan…`). Hold back the
+        # last 40 chars so we never yield half of a marker.
+        if self.in_final or not self.saw_any_channel:
+            if len(self.buf) > 40:
+                emit = self._STRAY_RE.sub("", self.buf[:-40])
+                self.buf = self.buf[-40:]
+                out_parts.append(emit)
+        return "".join(out_parts)
+
+    def flush(self) -> str:
+        """End-of-stream: emit whatever's left in the buffer if we're
+        in the final channel (or we never saw a channel marker)."""
+        if self.in_final or not self.saw_any_channel:
+            tail = self._STRAY_RE.sub("", self.buf)
+            self.buf = ""
+            return tail
+        self.buf = ""
+        return ""
+
+
 async def _stream_chat_completion(
     backend_kind: str,
     base_url: str,
     api_key: Optional[str],
     payload: Dict[str, Any],
 ) -> AsyncIterator[str]:
-    """Yield content chunks (str) parsed from an OpenAI streaming response."""
+    """Yield content chunks (str) parsed from an OpenAI streaming response.
+
+    For offline_text (gpt-oss) the chunks are scrubbed through
+    _HarmonyStreamFilter so the analysis channel never reaches the
+    client, even when vLLM isn't served with the openai_gptoss
+    reasoning parser. delta.reasoning_content is dropped unconditionally."""
+    is_gpt_oss = backend_kind == "offline_text"
+    harmony = _HarmonyStreamFilter() if is_gpt_oss else None
     async with httpx.AsyncClient(timeout=_timeout_sec()) as c:
         async with c.stream(
             "POST",
@@ -474,7 +582,7 @@ async def _stream_chat_completion(
                 else:
                     data = line.strip()
                 if data == "[DONE]":
-                    return
+                    break
                 try:
                     payload_obj = json.loads(data)
                 except Exception:
@@ -483,9 +591,25 @@ async def _stream_chat_completion(
                 if not choices:
                     continue
                 delta = choices[0].get("delta") or {}
+                # gpt-oss-specific: drop the analysis channel surfaced by
+                # vLLM's openai_gptoss reasoning parser. Never forward to
+                # users (unaligned CoT per OpenAI's guidance).
+                if is_gpt_oss and "reasoning_content" in delta:
+                    delta.pop("reasoning_content", None)
                 chunk = delta.get("content") or ""
-                if chunk:
+                if not chunk:
+                    continue
+                if harmony is not None:
+                    safe = harmony.feed(chunk)
+                    if safe:
+                        yield safe
+                else:
                     yield chunk
+    # End-of-stream: flush any final-channel residue still in the buffer.
+    if harmony is not None:
+        tail = harmony.flush()
+        if tail:
+            yield tail
 
 
 @app.post("/generate/stream")
