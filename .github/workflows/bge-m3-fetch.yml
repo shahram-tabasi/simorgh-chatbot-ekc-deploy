@@ -1,0 +1,288 @@
+name: Download bge-m3 (hybrid retrieval embedder)
+
+# Pre-downloads BAAI/bge-m3 — the multilingual dense embedder used by
+# the Qdrant hybrid path (services/qdrant_hybrid.py) and by
+# context-search-service when QDRANT_HYBRID=1.
+#
+# Runs on a GitHub-hosted runner where HuggingFace bandwidth is fast
+# and unmetered, packs the snapshot into a tarball laid out so it
+# extracts straight into the simorgh_huggingface_cache Docker volume
+# (mounted at /root/.cache/huggingface in project-agent-service), and
+# uploads as one or more artifacts.
+#
+# Mirrors the split/upload pattern from docling-models-fetch.yml. The
+# default is 2 parts so a contributor on a 5 GB/day Iranian-proxy cap
+# can grab one half per day.
+#
+# After the workflow finishes, follow the "Install instructions" step
+# (printed at the end of the run) — or use the helper script at
+# scripts/install-bge-m3.sh which automates the volume-load + snapshot-
+# path discovery + .env update.
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Branch / tag / commit to pin (blank = main)"
+        type: string
+        default: ""
+      parts:
+        description: "Split the tarball into N parts (1 = no split, 2 = default for the daily-cap proxy)"
+        type: choice
+        default: "2"
+        options: ["1", "2", "3", "4"]
+      include_onnx:
+        description: "Include ONNX runtime weights (~+700 MB; only needed if you serve bge-m3 via onnxruntime)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  MODEL: "BAAI/bge-m3"
+  # Filename-safe form of the repo id: BAAI__bge-m3
+  FNAME: "BAAI__bge-m3"
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install --quiet "huggingface_hub[cli]==0.24.6"
+
+      - name: Download bge-m3 into a cache layout
+        env:
+          # Explicitly disable hf_transfer / xet — its blob-only layout
+          # breaks offline loading because sentence-transformers can't
+          # find the snapshot files. Standard downloader = proper
+          # symlinks into snapshots/<hash>/.
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+          HF_HUB_DISABLE_XET: "1"
+          REVISION: ${{ inputs.revision }}
+          INCLUDE_ONNX: ${{ inputs.include_onnx }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -eu
+          mkdir -p hf-cache
+          ARGS=( "$MODEL" --cache-dir hf-cache )
+          if [ -n "$REVISION" ]; then ARGS+=( --revision "$REVISION" ); fi
+          if [ -n "$HF_TOKEN" ]; then ARGS+=( --token "$HF_TOKEN" ); fi
+          # Skip ONNX weights by default — bge-m3's HF repo includes a
+          # ~700 MB onnx/ directory that only matters if you're running
+          # the model through onnxruntime. sentence-transformers uses
+          # the PyTorch weights (~2.2 GB). Saves bandwidth + storage.
+          if [ "$INCLUDE_ONNX" != "true" ]; then
+            ARGS+=( --exclude "onnx/*" --exclude "*.onnx" --exclude "*.onnx_data" )
+          fi
+          echo "Fetching $MODEL …"
+          huggingface-cli download "${ARGS[@]}"
+          echo "----- snapshot contents -----"
+          find hf-cache -maxdepth 5 -printf '%y %p\n' | head -40
+          du -sh hf-cache
+
+      - name: Pack tarball
+        id: pack
+        run: |
+          set -eu
+          # Lay out so extracting at /root/.cache/huggingface lands
+          # files at /root/.cache/huggingface/hub/models--BAAI--bge-m3/...
+          # — which is exactly what HF_HOME=/root/.cache/huggingface
+          # expects (matches svc-project-agent.yml volume mount).
+          mkdir -p staging/huggingface
+          mv hf-cache staging/huggingface/hub
+          OUT="${FNAME}.tar.gz"
+          tar -C staging -czf "$OUT" huggingface
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          echo "size=$(stat -c%s "$OUT")" >> "$GITHUB_OUTPUT"
+
+      - name: Capture snapshot hash for install instructions
+        id: snap
+        run: |
+          set -eu
+          # The snapshot directory name IS the git commit hash on HF.
+          # Capture it so the install runbook can drop the exact
+          # EMBEDDING_MODEL path into the .env without the operator
+          # having to ssh in and look.
+          SNAP_DIR=$(find staging/huggingface/hub -maxdepth 4 -type d \
+                       -path "*/models--BAAI--bge-m3/snapshots/*" | head -1)
+          SNAP_HASH=$(basename "$SNAP_DIR")
+          echo "snapshot_hash=$SNAP_HASH" >> "$GITHUB_OUTPUT"
+          echo "Snapshot hash: $SNAP_HASH"
+
+      - name: Split tarball into N parts
+        id: split
+        env:
+          OUT: ${{ steps.pack.outputs.out }}
+          PARTS: ${{ inputs.parts }}
+        run: |
+          set -eu
+          mkdir -p parts
+          if [ "$PARTS" -le 1 ]; then
+            cp "$OUT" parts/
+            cp "$OUT.sha256" parts/
+            echo "split=false" >> "$GITHUB_OUTPUT"
+            echo "Single-piece mode: parts/ contains the whole tarball."
+            ls -lh parts/
+            exit 0
+          fi
+          split -n "$PARTS" -d --suffix-length=2 "$OUT" "parts/${OUT}.part."
+          cp "$OUT.sha256" "parts/"
+          cat > "parts/REASSEMBLE.sh" <<BASH
+          #!/usr/bin/env bash
+          set -e
+          base="${OUT}"
+          parts=( \$(ls "\${base}".part.* | sort) )
+          echo "Reassembling \${#parts[@]} parts → \${base} …"
+          cat "\${parts[@]}" > "\${base}"
+          echo "Verifying SHA256 …"
+          sha256sum -c "\${base}.sha256"
+          echo "✅ \${base} ready."
+          BASH
+          chmod +x parts/REASSEMBLE.sh
+          ls -lh parts/
+          echo "split=true" >> "$GITHUB_OUTPUT"
+
+      # ── Single-piece upload ──────────────────────────────────────────
+      - name: Upload artifact (single piece)
+        if: steps.split.outputs.split == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bge-m3
+          path: |
+            parts/${{ env.FNAME }}.tar.gz
+            parts/${{ env.FNAME }}.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      # ── Split upload — one artifact per part, downloadable independently
+      - name: Upload part 1 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bge-m3-part-1of${{ inputs.parts }}
+          path: |
+            parts/${{ env.FNAME }}.tar.gz.part.00
+            parts/${{ env.FNAME }}.tar.gz.sha256
+            parts/REASSEMBLE.sh
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 2 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bge-m3-part-2of${{ inputs.parts }}
+          path: parts/${{ env.FNAME }}.tar.gz.part.01
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 3 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bge-m3-part-3of${{ inputs.parts }}
+          path: parts/${{ env.FNAME }}.tar.gz.part.02
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 4 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '4'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bge-m3-part-4of${{ inputs.parts }}
+          path: parts/${{ env.FNAME }}.tar.gz.part.03
+          retention-days: 14
+          compression-level: 0
+
+      - name: Install instructions
+        env:
+          PARTS: ${{ inputs.parts }}
+          SPLIT: ${{ steps.split.outputs.split }}
+          SNAP: ${{ steps.snap.outputs.snapshot_hash }}
+        run: |
+          if [ "$SPLIT" != "true" ]; then
+            cat <<EOF
+          ============================================================
+          Artifact: bge-m3   (single piece, ~2.2 GB)
+          Snapshot: ${SNAP}
+          ============================================================
+
+          # 1. On any machine with gh CLI + internet:
+          gh run download \$RUN_ID \\
+              -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
+              -n bge-m3
+          sha256sum -c ${FNAME}.tar.gz.sha256
+
+          # 2. Transfer to .68:
+          scp ${FNAME}.tar.gz ubuntu@192.168.1.68:/tmp/
+
+          # 3. On .68 — pipe through the helper script (preferred):
+          ssh ubuntu@192.168.1.68
+          cd /home/ubuntu/simorgh-chatbot-ekc-deploy
+          ./scripts/install-bge-m3.sh /tmp/${FNAME}.tar.gz
+
+          # The helper:
+          #   - extracts into the simorgh_huggingface_cache Docker volume
+          #     (project-agent-service mounts it at /root/.cache/huggingface)
+          #   - discovers the snapshot hash and prints the exact
+          #     EMBEDDING_MODEL path to paste into .env
+          #   - runs a smoke load so you know the model is intact
+          #
+          # Manual equivalent (if you don't have the helper script):
+          docker volume create simorgh_huggingface_cache || true
+          docker run --rm \\
+              -v simorgh_huggingface_cache:/dst \\
+              -v /tmp:/src:ro \\
+              alpine sh -c 'tar xzf /src/${FNAME}.tar.gz -C /dst && \\
+                            du -sh /dst/hub/models--BAAI--bge-m3'
+          # Then set in .env (Option B):
+          #   EMBEDDING_MODEL=/root/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/${SNAP}
+          # And restart:
+          #   docker compose restart project-agent-service context-search
+          ============================================================
+          EOF
+            exit 0
+          fi
+
+          cat <<EOF
+          ============================================================
+          Artifact: bge-m3   (split into ${PARTS} parts, ~2.2 GB total)
+          Snapshot: ${SNAP}
+          ============================================================
+
+          # 1. On a workstation with internet — download each part.
+          #    Spread across days if you're on a metered link:
+          for i in \$(seq 1 ${PARTS}); do
+            gh run download \$RUN_ID \\
+                -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
+                -n bge-m3-part-\${i}of${PARTS}
+          done
+
+          # 2. Reassemble (REASSEMBLE.sh ships inside part 1of${PARTS}):
+          chmod +x REASSEMBLE.sh
+          ./REASSEMBLE.sh
+          # → produces ${FNAME}.tar.gz, verified by sha256
+
+          # 3. Transfer + install on .68 via the helper script:
+          scp ${FNAME}.tar.gz ubuntu@192.168.1.68:/tmp/
+          ssh ubuntu@192.168.1.68 \\
+              'cd /home/ubuntu/simorgh-chatbot-ekc-deploy && \\
+               ./scripts/install-bge-m3.sh /tmp/${FNAME}.tar.gz'
+
+          # The helper extracts into the Docker volume, discovers the
+          # snapshot hash, prints the EMBEDDING_MODEL line for your
+          # .env, and runs a smoke-test load.
+          #
+          # Snapshot hash for this build: ${SNAP}
+          # → EMBEDDING_MODEL=/root/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/${SNAP}
+          ============================================================
+          EOF
