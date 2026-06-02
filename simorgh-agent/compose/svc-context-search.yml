@@ -31,10 +31,27 @@ services:
       - AGE_GRAPH_NAME=${AGE_GRAPH_NAME:-simorgh}
       - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
       - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+      # Phase 7: cross-encoder rerank on /search/content. Reads the
+      # bge-reranker-v2-m3 model from the shared simorgh_huggingface_cache
+      # volume mounted below — the model is loaded lazily on the first
+      # /search/content call, so a missing model only fails THAT path,
+      # never the service startup.
+      - CONTENT_SEARCH_RERANK=${CONTENT_SEARCH_RERANK:-1}
+      - CONTENT_SEARCH_RERANKER_MODEL=${CONTENT_SEARCH_RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      - CONTENT_SEARCH_RERANK_PREFETCH=${CONTENT_SEARCH_RERANK_PREFETCH:-30}
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
+    volumes:
+      # Shared HuggingFace cache — same simorgh_huggingface_cache volume
+      # the project-agent-service uses. bge-reranker-v2-m3 (~600 MB)
+      # already lives there once you've pre-downloaded it via the
+      # bge-m3 / hf-model-fetch workflows.
+      - huggingface_cache:/root/.cache/huggingface
     deploy:
       resources:
         limits:
-          memory: ${CONTEXT_SEARCH_MEM_LIMIT:-1g}
+          memory: ${CONTEXT_SEARCH_MEM_LIMIT:-2g}
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -50,3 +67,8 @@ networks:
   app_net:
     name: simorgh_app_net
     driver: bridge
+
+volumes:
+  huggingface_cache:
+    name: simorgh_huggingface_cache
+    external: true

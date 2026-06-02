@@ -181,6 +181,29 @@ services:
       - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
       - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
       - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
+      # ----- Offline-extraction architecture (phases 1-7) ------------------
+      # Phase 2: whole-document spec extraction with guided_json + verify
+      - SOFT_WHOLE_DOC=${SOFT_WHOLE_DOC:-1}
+      - SOFT_WHOLE_DOC_MAX_CHARS=${SOFT_WHOLE_DOC_MAX_CHARS:-200000}
+      - SOFT_WHOLE_DOC_TIMEOUT_SEC=${SOFT_WHOLE_DOC_TIMEOUT_SEC:-180}
+      - SOFT_WHOLE_DOC_MAX_TOKENS=${SOFT_WHOLE_DOC_MAX_TOKENS:-4000}
+      - SOFT_WHOLE_DOC_TEMPERATURE=${SOFT_WHOLE_DOC_TEMPERATURE:-1.0}
+      # Phase 4: Qdrant hybrid (dense bge-m3 + sparse BM25 + reranker)
+      - QDRANT_HYBRID=${QDRANT_HYBRID:-1}
+      - QDRANT_COLLECTION_SIZE=${QDRANT_COLLECTION_SIZE:-1024}
+      - QDRANT_SPARSE_MODEL=${QDRANT_SPARSE_MODEL:-Qdrant/bm25}
+      - QDRANT_RERANKER_MODEL=${QDRANT_RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      - QDRANT_RERANK=${QDRANT_RERANK:-1}
+      - QDRANT_PREFETCH_DENSE=${QDRANT_PREFETCH_DENSE:-60}
+      - QDRANT_PREFETCH_SPARSE=${QDRANT_PREFETCH_SPARSE:-60}
+      - QDRANT_FUSE_TOP_K=${QDRANT_FUSE_TOP_K:-30}
+      # Phase 5: VLM verifier (Qwen-VL on .62 page-image cross-check)
+      - VLM_VERIFIER_TIMEOUT_SEC=${VLM_VERIFIER_TIMEOUT_SEC:-120}
+      - VLM_VERIFIER_MAX_TOKENS=${VLM_VERIFIER_MAX_TOKENS:-1200}
+      - VLM_VERIFIER_DPI=${VLM_VERIFIER_DPI:-180}
+      - VLM_VERIFIER_PAGE_TTL_SEC=${VLM_VERIFIER_PAGE_TTL_SEC:-3600}
+      # Phase 6: Apache AGE graph-as-router
+      - GRAPH_ROUTER_MAX_DOCS=${GRAPH_ROUTER_MAX_DOCS:-20}
     volumes:
       - ../uploads:/app/uploads
       - ../logs:/app/logs
