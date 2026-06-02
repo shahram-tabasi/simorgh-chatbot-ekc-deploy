@@ -49,12 +49,16 @@ include:
 
   # ---- Microservices (REST + MCP) -------------------------------------------
   - compose/svc-doc-processor.yml
-  # - compose/svc-docling.yml             # OPT-IN: offline PDF→MD via IBM Docling.
-  #                                       # Build once on a connected host:
-  #                                       #   docker build -t simorgh-docling:offline \
-  #                                       #     -f docling/Dockerfile docling/
-  #                                       # Then uncomment + set USE_DOCLING=1 in
-  #                                       # doc-processor to start using it.
+  - compose/svc-docling.yml               # IBM Docling — offline PDF/DOCX/PPTX → Markdown.
+                                          # Preserves heading order, table cells, body text in
+                                          # bordered boxes. doc-processor routes to docling-serve
+                                          # when USE_DOCLING=1 and silently falls back to
+                                          # pdfplumber+EasyOCR on any failure.
+                                          # Build once on a connected host:
+                                          #   docker build -t simorgh-docling:offline \
+                                          #     -f docling/Dockerfile docling/
+                                          # Or pre-populate the simorgh_docling_models volume
+                                          # via .github/workflows/docling-models-fetch.yml.
   - compose/svc-stt.yml
   # ---- OPT-IN: standard-image replacements for hand-rolled wrappers --------
   # Each pre-bakes its model into the image so runtime is fully offline.
