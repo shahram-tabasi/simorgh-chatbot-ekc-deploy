@@ -29,10 +29,32 @@ logger = logging.getLogger(__name__)
 
 
 def _pg():
-    """Reuse the project_memory_service's postgres pool — avoids opening
-    yet another connection pool for the collector + ask_user state."""
-    from services.project_memory_service import get_project_memory_service
-    return get_project_memory_service().pg
+    """Resolve a PostgresConnection that's usable from any caller — the
+    FastAPI request path or a one-shot script. The previous version went
+    only through the project_memory singleton; when invoked from
+    `python3 -c` BEFORE main.py wires up the pools, .pg is None and
+    callers get NoneType.execute_one_async errors. Falls back to a
+    self-initialising PostgresConnection (config from env)."""
+    try:
+        from services.project_memory_service import get_project_memory_service
+        pg = get_project_memory_service().pg
+        if pg is not None:
+            return pg
+    except Exception:
+        pass
+    # Fallback — works even outside the app context.
+    from database.postgres_connection import PostgresConnection
+    pc = PostgresConnection()
+    # Ensure the async pool is initialised on first use.
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        if pc._async_pool is None:
+            loop.create_task(pc.init_async_pool())
+    except RuntimeError:
+        # No loop; one-shot tools can run it themselves.
+        pass
+    return pc
 
 
 # ---------------------------------------------------------------------------

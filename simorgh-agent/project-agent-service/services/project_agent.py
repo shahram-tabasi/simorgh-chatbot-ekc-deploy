@@ -1456,32 +1456,30 @@ class ProjectManagerAgent:
         else:
             tool_input = {}
 
-        # SOFT-BRIDGE INTENT REMAP. When SOFT_BRIDGE_ENABLED and the user's
-        # input is unambiguously about creating / building / submitting a
-        # Simorgh Design Suite project, force the right tool. The planner
-        # frequently picks `project_init` (the chatbot's own initializer)
-        # because its description superficially matches; that tool then
-        # fails with "owner_id required" / "project_name required" and
-        # produces the apologetic failure the user just saw. Remap to
-        # submit_soft_spec — which itself returns the gap list when the
-        # spec isn't ready, so ask_user can follow up on the next turn.
+        # SOFT-BRIDGE INTENT REMAP — embedding-based, not keyword. When the
+        # user's input semantically matches "create my Simorgh Design Suite
+        # project" (paraphrases incl. Persian work), and the planner picked
+        # a project-creator-shaped tool that would fail or do the wrong
+        # thing here (project_init, tpms_fetch, tpms_get_text), redirect
+        # to submit_soft_spec. The classifier itself falls back to a
+        # keyword check when the embeddings-service is unreachable, so
+        # this never silently fails.
         if (os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on")
-                and isinstance(tool, str)):
+                and isinstance(tool, str)
+                and tool in ("project_init", "create_project",
+                             "tpms_fetch", "tpms_get_text")):
             _pc = getattr(self, "_active_plan_ctx", None)
-            _uin = (getattr(_pc, "user_input", "") or "").lower()
-            _hits = ("design suite", "design-suite", "simorgh-soft",
-                     "simorgh soft", "simorgh design", "simorgh-design",
-                     "سیمرغ دیزاین", "سیمرغ-دیزاین")
-            _design_intent = any(h in _uin for h in _hits)
-            _create_intent = any(w in _uin for w in (
-                "create", "build", "submit", "open", "make my project",
-                "بساز", "بسازید", "ایجاد", "ثبت"))
-            if (_design_intent and _create_intent
-                    and tool in ("project_init", "create_project",
-                                 "tpms_fetch", "tpms_get_text")):
+            _uin = (getattr(_pc, "user_input", "") or "")
+            try:
+                from services.intent_classifier import is_design_suite_create
+                _design_create = is_design_suite_create(_uin)
+            except Exception as e:
+                logger.debug("intent_classifier failed (%s); skipping remap", e)
+                _design_create = False
+            if _design_create:
                 logger.info(
                     "soft-bridge remap: %s -> submit_soft_spec "
-                    "(user_input matched design+create intent)", tool)
+                    "(intent_classifier matched design_suite_create)", tool)
                 tool = "submit_soft_spec"
                 raw_input = {}
                 tool_input = {}
@@ -1576,11 +1574,11 @@ class ProjectManagerAgent:
             "search_project_documents", "retrieve_chunks",
             "list_project_documents", "read_document",
         ):
-            _pc = getattr(self, "_active_plan_ctx", None)
-            _scope = (
-                (getattr(_pc, "tpms_oenum", None) if _pc else None)
-                or str(project_id)
-            )
+            # Tenant key = chatbot project UUID, ALWAYS. We used to fall
+            # back to tpms_oenum, which broke multi-tenant isolation when
+            # different chatbot projects shared the same OE. The OE stays
+            # available to TPMS-specific tools via _pc.tpms_oenum.
+            _scope = str(project_id)
             # The planner's value may be missing, empty, or a placeholder.
             _cur = str(tool_input.get("project_oenum") or "")
             if (not _cur) or _cur.lower() in ("none", "null", "unknown") \

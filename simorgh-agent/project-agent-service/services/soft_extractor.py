@@ -337,20 +337,39 @@ _TITLE_BLOCK_PREFIX_CHARS = 1500
 _TYPE_GUIDANCE = {
     "spec": (
         "This file is a TECHNICAL SPECIFICATION. The title block usually "
-        "names the END CLIENT (e.g. 'Mobarakeh Steel Company'), the PROJECT "
-        "or PLANT (e.g. 'Hot Strip Mill #2'), and the document number "
-        "(e.g. '347180ETS802'). Extract:\n"
-        "  - client = the client/owner organisation from the header\n"
-        "  - projectName = plant/project name from the header (e.g. "
-        "'Hot Strip Mill #2 6.6kV Switchgears')\n"
-        "  - projectDescription = the subject line / document title\n"
-        "  - projectNumber = the doc number containing 'ETS' or the OE/order\n"
-        "  - standard = IEC / ANSI / GOST if cited\n"
-        "  - technicalSettings.mediumVoltage.nominalVoltage = MV nominal "
-        "(e.g. '6.6' for 6.6 kV)\n"
-        "  - technicalSettings.lowVoltage.frequency = Hz if stated\n"
-        "  - techSettings.general.altitudeAboveSeaLevel / designTemperature "
-        "if a 'site conditions' table appears"
+        "names the END CLIENT (top-of-cover-sheet), the PROJECT or PLANT, "
+        "and the document number. Pull these fields:\n"
+        "  - client                = client/owner organisation\n"
+        "  - projectName           = plant/project name from the header\n"
+        "  - projectDescription    = the subject line / document title\n"
+        "  - projectNumber         = doc number containing 'ETS' or the OE/order\n"
+        "  - standard              = IEC / ANSI / GOST if cited\n"
+        "  - technicalSettings.mediumVoltage.nominalVoltage  = MV nominal (e.g. '6.6')\n"
+        "  - technicalSettings.lowVoltage.frequency          = Hz if stated\n"
+        "  - techSettings.general.altitudeAboveSeaLevel      = if site-conditions table appears\n"
+        "  - techSettings.general.designTemperature          = same\n\n"
+        "FEW-SHOT EXAMPLES (study these — the real cover sheets look like this):\n\n"
+        "Example 1 — title block reads:\n"
+        "    Mobarakeh Steel Company\n"
+        "    HOT STRIP MILL #2\n"
+        "    DOCUMENT TITLE: Technical Specification for 6.6KV Switchgears\n"
+        "    DOCUMENT No. 347180ETS802   Rev. A\n"
+        "→ correct output:\n"
+        "  {\"client\": \"Mobarakeh Steel Company\",\n"
+        "   \"projectName\": \"Hot Strip Mill #2 — 6.6 kV Switchgears\",\n"
+        "   \"projectDescription\": \"Technical Specification for 6.6 kV Switchgears\",\n"
+        "   \"projectNumber\": \"347180ETS802\",\n"
+        "   \"technicalSettings.mediumVoltage.nominalVoltage\": \"6.6\"}\n\n"
+        "Example 2 — title block reads:\n"
+        "    Chahfiroozeh copper concentration plant\n"
+        "    Doc. Title: Data Sheet for MV PANEL\n"
+        "    G26S1  ME  DD  EL  DSH  W11  AA  99  006   REV.:03\n"
+        "→ correct output:\n"
+        "  {\"client\": \"Chahfiroozeh\",\n"
+        "   \"projectName\": \"Chahfiroozeh copper concentration plant — MV Panel\",\n"
+        "   \"projectDescription\": \"Data Sheet for MV PANEL (20 & 6.6 kV)\",\n"
+        "   \"projectNumber\": \"G26S1MEDDELDSHW11AA99006\",\n"
+        "   \"technicalSettings.mediumVoltage.nominalVoltage\": \"20\"}"
     ),
     "datasheet": (
         "This file is an EQUIPMENT DATA SHEET (likely MV/LV PANEL). The "
@@ -446,7 +465,7 @@ async def from_uploads(project_id: str, project_oenum: str,
         q = getattr(get_project_memory_service(), "qdrant", None)
         if q is None:
             return {}
-        scope = project_oenum or project_id
+        scope = str(project_id)
         docs = q.list_documents(user_id="system", project_oenum=scope) or []
     except Exception as e:
         logger.warning("soft.extract.uploads list failed: %s", e)
@@ -549,7 +568,7 @@ async def from_sld_uploads(project_id: str, project_oenum: str,
         q = getattr(get_project_memory_service(), "qdrant", None)
         if q is None:
             return {}
-        scope = project_oenum or project_id
+        scope = str(project_id)
         docs = q.list_documents(user_id="system", project_oenum=scope) or []
     except Exception as e:
         logger.warning("soft.extract.sld list failed: %s", e)
@@ -835,9 +854,9 @@ async def gather_all(*, project_id: str, tpms_oenum: Optional[str],
     llm_results: List[Any] = []
     for coro in [
         from_chat_history(recent_messages),
-        from_uploads(project_id, tpms_oenum or project_id),
+        from_uploads(project_id, str(project_id)),
         from_techserver(techserver_oenum, mcp_manager=mcp_manager),
-        from_sld_uploads(project_id, tpms_oenum or project_id),
+        from_sld_uploads(project_id, str(project_id)),
     ]:
         try:
             llm_results.append(await coro)

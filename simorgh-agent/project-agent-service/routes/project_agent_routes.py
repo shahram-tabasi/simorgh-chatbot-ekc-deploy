@@ -1655,13 +1655,17 @@ async def upload_document(
                     i += chunk_size - overlap
 
                 if chunk_dicts:
-                    # Use OENUM for collection name to match search queries
-                    oenum = project.get("tpms_oenum") or project_id
+                    # Tenant key = chatbot project UUID, ALWAYS. Using
+                    # tpms_oenum here was the multi-tenancy bug — multiple
+                    # chatbot projects sharing OE 12065 wrote into the same
+                    # tenant and contaminated each other's document set.
+                    # The OE is still available as payload metadata for
+                    # any TPMS-keyed queries.
                     success = qdrant.add_document_chunks(
                         user_id="system",
                         document_id=doc_id_str,
                         chunks=chunk_dicts,
-                        project_oenum=oenum,
+                        project_oenum=project_id,
                     )
                     chunks_stored = len(chunk_dicts) if success else 0
                     processing_results["semantic_index"] = f"completed ({chunks_stored} chunks)"
