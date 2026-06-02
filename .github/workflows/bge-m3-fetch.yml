@@ -91,14 +91,19 @@ jobs:
         id: pack
         run: |
           set -eu
-          # Lay out so extracting at /root/.cache/huggingface lands
-          # files at /root/.cache/huggingface/hub/models--BAAI--bge-m3/...
-          # — which is exactly what HF_HOME=/root/.cache/huggingface
-          # expects (matches svc-project-agent.yml volume mount).
-          mkdir -p staging/huggingface
-          mv hf-cache staging/huggingface/hub
+          # The archive root MUST be `hub/` so that extracting straight
+          # into the simorgh_huggingface_cache volume (which is mounted
+          # at /root/.cache/huggingface inside project-agent-service)
+          # lands files at /root/.cache/huggingface/hub/models--BAAI--bge-m3/…
+          #
+          # An earlier version of this workflow packed `huggingface/hub/…`
+          # at the root, which made extraction land one level too deep.
+          # install-bge-m3.sh auto-detects both layouts via tar tzf, but
+          # the canonical shape going forward is `hub/` at the root.
+          mkdir -p staging/hub
+          mv hf-cache/* staging/hub/
           OUT="${FNAME}.tar.gz"
-          tar -C staging -czf "$OUT" huggingface
+          tar -C staging -czf "$OUT" hub
           ls -lh "$OUT"
           sha256sum "$OUT" | tee "$OUT.sha256"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
@@ -112,7 +117,7 @@ jobs:
           # Capture it so the install runbook can drop the exact
           # EMBEDDING_MODEL path into the .env without the operator
           # having to ssh in and look.
-          SNAP_DIR=$(find staging/huggingface/hub -maxdepth 4 -type d \
+          SNAP_DIR=$(find staging/hub -maxdepth 4 -type d \
                        -path "*/models--BAAI--bge-m3/snapshots/*" | head -1)
           SNAP_HASH=$(basename "$SNAP_DIR")
           echo "snapshot_hash=$SNAP_HASH" >> "$GITHUB_OUTPUT"

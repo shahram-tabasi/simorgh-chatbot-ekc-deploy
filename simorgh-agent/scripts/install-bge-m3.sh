@@ -96,16 +96,60 @@ fi
 echo "▶ Ensuring volume ${VOLUME} exists …"
 docker volume create "${VOLUME}" >/dev/null
 
+# Detect tarball layout so we strip the right number of leading components.
+# The workflow up to commit 94840eb packed the archive with `huggingface/`
+# as the root directory; later runs pack it with `hub/` as the root. We
+# auto-detect to support both.
+#   layout A — root entry is "huggingface/hub/..."   → strip 1
+#   layout B — root entry is "hub/..."               → strip 0
+#   layout C — root entry is "models--BAAI--bge-m3/" → strip 0 + nest under hub/
+echo "▶ Detecting archive layout …"
+FIRST_ENTRY="$(tar tzf "${TARBALL}" 2>/dev/null | head -1 | tr -d '\n')"
+case "${FIRST_ENTRY}" in
+  huggingface/*)
+    STRIP=1
+    EXTRACT_TO="/dst"
+    echo "  layout: huggingface/hub/… (strip 1)"
+    ;;
+  hub/*)
+    STRIP=0
+    EXTRACT_TO="/dst"
+    echo "  layout: hub/… (strip 0)"
+    ;;
+  models--*/*|.huggingface/* )
+    STRIP=0
+    EXTRACT_TO="/dst/hub"
+    echo "  layout: models--…/ (nest under hub/)"
+    ;;
+  *)
+    echo "  Unrecognised archive layout (first entry: '${FIRST_ENTRY}')."
+    echo "  Defaulting to extract-as-is into /dst — manual cleanup may be needed."
+    STRIP=0
+    EXTRACT_TO="/dst"
+    ;;
+esac
+
+# Clean any stale top-level "huggingface/" directory left over from a
+# previous run that used the broken layout — otherwise we leave dead
+# files in the volume taking up disk.
+echo "▶ Removing any stale huggingface/ subdir from prior failed runs …"
+docker run --rm -v "${VOLUME}:/dst" alpine sh -c \
+  'if [ -d /dst/huggingface ]; then rm -rf /dst/huggingface && echo "  cleaned stale /dst/huggingface"; fi' \
+  || true
+
 echo "▶ Extracting ${TARBALL_NAME} into volume ${VOLUME} …"
 # Run as root inside the helper container so the volume gets the right
 # perms; project-agent-service's HF_HOME=/root/.cache/huggingface
-# expects /root ownership.
+# expects /root ownership. STRIP / EXTRACT_TO were chosen above by the
+# layout-detection block so the resulting tree is always
+#   /dst/hub/models--BAAI--bge-m3/snapshots/<hash>/...
 docker run --rm \
   -v "${VOLUME}:/dst" \
   -v "${TARBALL_DIR}:/src:ro" \
   alpine sh -c "
     set -e
-    tar xzf '/src/${TARBALL_NAME}' -C /dst
+    mkdir -p '${EXTRACT_TO}'
+    tar xzf '/src/${TARBALL_NAME}' -C '${EXTRACT_TO}' --strip-components=${STRIP}
     echo '----- extracted tree -----'
     find /dst/hub/models--BAAI--bge-m3 -maxdepth 4 -type d
     du -sh /dst/hub/models--BAAI--bge-m3
