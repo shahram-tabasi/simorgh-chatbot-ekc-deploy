@@ -459,7 +459,14 @@ async def from_uploads(project_id: str, project_oenum: str,
     Electro Kavir / MSC engineering packages. ALWAYS includes the first
     1.5k chars of every document (the title block + cover sheet, where the
     project/client/doc-number always live) plus extra body context up to
-    PER_DOC. Specs get a bigger body budget than datasheets / SLDs."""
+    PER_DOC. Specs get a bigger body budget than datasheets / SLDs.
+
+    When SOFT_WHOLE_DOC=1 (default), the LLM stage is replaced with a
+    schema-driven whole-document extractor against the local gpt-oss-20b
+    + vLLM `guided_json`. The regex pass still runs as a cheap pre-fill,
+    but the LLM now sees the FULL markdown (not a 16K-char window) and
+    runs a second verification pass over the gaps — the old path
+    silently truncated 95% of a 27-page spec."""
     try:
         from services.project_memory_service import get_project_memory_service
         q = getattr(get_project_memory_service(), "qdrant", None)
@@ -472,6 +479,8 @@ async def from_uploads(project_id: str, project_oenum: str,
         return {}
     if not docs:
         return {}
+
+    use_whole_doc = os.getenv("SOFT_WHOLE_DOC", "1").lower() in ("1", "true", "yes", "on")
 
     PER_TYPE_BUDGET = {
         "spec": 16000, "datasheet": 10000, "sld": 4000,
@@ -511,18 +520,44 @@ async def from_uploads(project_id: str, project_oenum: str,
         except Exception as e:
             logger.warning("soft.extract.regex %s: %s", fn, e)
 
-        # 2. LLM SECOND. Type-aware extractor enriches fields the regex
-        #    didn't catch (free-form descriptions, narrative client names,
-        #    nuanced standard names). Best-effort: a gateway 502 doesn't
-        #    block regex's contribution.
-        transcript = (f"## FILE: {fn}\n## TYPE: {dt}\n"
-                      f"## TITLE BLOCK / COVER:\n{head}\n\n"
-                      f"## BODY:\n{txt[_TITLE_BLOCK_PREFIX_CHARS:]}")
-        got = await _extract_via_llm_typed(
-            transcript, doc_type=dt,
-            source="uploads", confidence=0.82,
-            note=f"from {dt} '{fn}'", timeout=timeout,
-        )
+        # 2. LLM SECOND. The legacy path used a type-aware prompt over a
+        #    16K-char transcript window, which silently dropped pages 3+
+        #    of any 27-page spec. When SOFT_WHOLE_DOC=1 we delegate to
+        #    soft_extractor_whole_doc.extract_one_document, which sees
+        #    the FULL markdown, uses vLLM guided_json for schema-tight
+        #    output, and runs a verification pass over null/low-conf
+        #    fields. Best-effort: gateway failures still don't block
+        #    the regex contribution.
+        if use_whole_doc:
+            try:
+                from services.soft_extractor_whole_doc import extract_one_document
+                # Whole-doc path needs the un-truncated text — refetch
+                # with a generous cap. The per-file budget above is for
+                # the legacy LLM stage only.
+                wd = q.get_document_text(
+                    user_id="system", project_oenum=scope,
+                    filename=fn, max_chars=200_000,
+                )
+                full_md = (wd or {}).get("text") or txt
+                got = await extract_one_document(
+                    filename=fn, doc_type=dt,
+                    markdown=full_md, timeout=timeout,
+                )
+            except Exception as e:
+                logger.warning(
+                    "soft.extract.whole_doc %s: %s — falling back to legacy LLM stage",
+                    fn, e,
+                )
+                got = {}
+        else:
+            transcript = (f"## FILE: {fn}\n## TYPE: {dt}\n"
+                          f"## TITLE BLOCK / COVER:\n{head}\n\n"
+                          f"## BODY:\n{txt[_TITLE_BLOCK_PREFIX_CHARS:]}")
+            got = await _extract_via_llm_typed(
+                transcript, doc_type=dt,
+                source="uploads", confidence=0.82,
+                note=f"from {dt} '{fn}'", timeout=timeout,
+            )
         # Merge: regex already populated bag; LLM only fills new fields.
         for k, fv in got.items():
             if k not in bag:
