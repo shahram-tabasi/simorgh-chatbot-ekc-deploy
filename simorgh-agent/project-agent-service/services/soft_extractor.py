@@ -498,6 +498,23 @@ async def from_uploads(project_id: str, project_oenum: str,
         # where client / project / doc-number always live) so even when
         # the body budget gets trimmed by the LLM, the header is in view.
         head = txt[:_TITLE_BLOCK_PREFIX_CHARS]
+
+        # 1. REGEX FIRST. Deterministic title-block extractor — runs in
+        #    milliseconds, no gateway dependency, anchors on doc-code +
+        #    DOCUMENT No / TITLE / REV / kV / Hz / IEC patterns common to
+        #    real client packages. Lifts completeness even when llm-gateway
+        #    is busy (the LLM-only path returned 0 on gateway 502s).
+        try:
+            for k, fv in extract_via_regex(fn, txt, dt).items():
+                if k not in bag:
+                    bag[k] = fv
+        except Exception as e:
+            logger.warning("soft.extract.regex %s: %s", fn, e)
+
+        # 2. LLM SECOND. Type-aware extractor enriches fields the regex
+        #    didn't catch (free-form descriptions, narrative client names,
+        #    nuanced standard names). Best-effort: a gateway 502 doesn't
+        #    block regex's contribution.
         transcript = (f"## FILE: {fn}\n## TYPE: {dt}\n"
                       f"## TITLE BLOCK / COVER:\n{head}\n\n"
                       f"## BODY:\n{txt[_TITLE_BLOCK_PREFIX_CHARS:]}")
@@ -506,7 +523,7 @@ async def from_uploads(project_id: str, project_oenum: str,
             source="uploads", confidence=0.82,
             note=f"from {dt} '{fn}'", timeout=timeout,
         )
-        # Merge: first value seen for each field wins (per-file source).
+        # Merge: regex already populated bag; LLM only fills new fields.
         for k, fv in got.items():
             if k not in bag:
                 bag[k] = fv
@@ -548,6 +565,151 @@ def _doc_type_of(filename: str) -> str:
         if any(h in low for h in hints):
             return t
     return "other"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic title-block regex extractor.
+#
+# The LLM extractor is gateway-bound — when llm-gateway is busy (gpt-oss
+# is capacity-constrained under load and routinely 502s), the upload path
+# returns nothing. Per the hybrid-extraction research (arxiv 2604.00003 +
+# 2506.17374), engineering documents have STABLE title-block conventions
+# that regex catches with 90%+ accuracy and ZERO latency / cost.
+#
+# Patterns below are tuned to real client packages observed in this stack
+# (Mobarakeh Steel "DOCUMENT No 347180ETS802 / Rev A / Page X of Y",
+# Chahfiroozeh / Electro Kavir "G26S1MEDDELDSHW11AA99006 REV.:03"). They
+# produce FieldValues with the same shape as the LLM extractor; the
+# reconciler picks the best per field — usually regex when the LLM 502s,
+# LLM when both succeed and confidence is closer.
+# ---------------------------------------------------------------------------
+# Header noise — known boilerplate words we DON'T want as the client name.
+_CLIENT_NEGATIVE = (
+    "document", "doc.", "title", "subject", "for approval", "page",
+    "rev.", "rev:", "data sheet", "specification", "drawing",
+)
+
+# Electro-Kavir style "G26S1MEDDELDSHW11AA99006" — leading letter, digits,
+# at least two more uppercase segments, ending in digits. Matches the
+# concatenated cover-sheet form too ("G26S1 ME DD EL DSH W11 AA 99 006"
+# with whitespace stripped).
+_EK_CODE_RE = re.compile(
+    r"\b[A-Z][0-9]{1,3}[A-Z][0-9]?[A-Z]{1,4}[A-Z][A-Z0-9]+[0-9]{2,6}\b"
+)
+# Mobarakeh-style "347180ETS802" (numeric+letters+numeric).
+_MSC_CODE_RE = re.compile(r"\b[0-9]{4,8}[A-Z]{2,5}[0-9]{2,5}[A-Z]?\b")
+# Generic DOCUMENT No: token capture.
+_DOC_NO_RE = re.compile(r"DOCUMENT\s*N[oO][\.\s:]+([A-Z0-9\-]+)", re.IGNORECASE)
+_TITLE_RE = re.compile(
+    r"DOCUMENT\s+TITLE\s*[:\.]?\s*\n?\s*(.+?)(?:\n\s*\n|\n\s*DOCUMENT|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_DOC_TITLE_PERSIAN_RE = re.compile(
+    r"Doc\.\s*Title\s*[:\.]?\s*(.+?)(?:\n|$)", re.IGNORECASE,
+)
+_REV_RE = re.compile(r"\bREV\.?\s*[:\.]?\s*([A-Z0-9]+)\b", re.IGNORECASE)
+_KV_RE = re.compile(r"(\b\d{1,3}(?:\.\d{1,2})?)\s*[kK][vV]\b")
+_HZ_RE = re.compile(r"\b(50|60)\s*[hH][zZ]\b")
+_STD_RE = re.compile(r"\b(IEC|ANSI|GOST|BS|DIN)\b")
+_ALT_M_RE = re.compile(r"\b(\d{2,5})\s*m(?:eters?)?\s*(?:above|asl|amsl)?",
+                       re.IGNORECASE)
+_TEMP_C_RE = re.compile(r"(?:design|ambient|max(?:imum)?)\s*temp[a-z]*\s*[:\.]?\s*"
+                        r"(\d{1,3}(?:\.\d)?)\s*°?\s*[cC]",
+                        re.IGNORECASE)
+
+
+def _good_client_line(line: str) -> bool:
+    s = (line or "").strip()
+    if not (5 <= len(s) <= 80):
+        return False
+    low = s.lower()
+    if any(w in low for w in _CLIENT_NEGATIVE):
+        return False
+    # need at least 2 alphabetic words (filters out things like "347180ETS802")
+    words = [w for w in re.split(r"[\s\-_]+", s) if w.isalpha() and len(w) > 2]
+    return len(words) >= 2
+
+
+def extract_via_regex(filename: str, text: str, doc_type: str
+                      ) -> Dict[str, "FieldValue"]:
+    """Pull title-block fields with regex anchors only. Fast (<5ms), no
+    network. Returns a FieldValue dict the same shape as the LLM extractor
+    so the reconciler can merge them transparently."""
+    if not text:
+        return {}
+    head = text[:3500]   # title block always lives in the cover sheet
+    out: Dict[str, FieldValue] = {}
+    note = f"regex from {doc_type} '{filename}'"
+
+    def put(field: str, value: Any, conf: float):
+        if value in (None, ""):
+            return
+        out[field] = FieldValue(value=str(value).strip(),
+                                source="uploads", confidence=conf, note=note)
+
+    # 1. Project / doc number — try doc-code regexes first (high precision),
+    #    then the generic "DOCUMENT No" header capture.
+    m = _MSC_CODE_RE.search(head) or _EK_CODE_RE.search(head)
+    if m:
+        put("projectNumber", m.group(0), 0.88)
+    else:
+        m = _DOC_NO_RE.search(head)
+        if m:
+            put("projectNumber", m.group(1), 0.82)
+
+    # 2. Description = document title. Persian datasheets use "Doc. Title".
+    m = _TITLE_RE.search(head) or _DOC_TITLE_PERSIAN_RE.search(head)
+    if m:
+        title = re.sub(r"\s+", " ", m.group(1)).strip()
+        if 6 <= len(title) <= 200:
+            put("projectDescription", title, 0.85)
+
+    # 3. Client = first non-empty, "human readable" line near the top
+    #    (company names always sit in the cover sheet header). Skip lines
+    #    that look like doc numbers / boilerplate words.
+    first_lines = [ln.strip() for ln in head.splitlines() if ln.strip()][:8]
+    for ln in first_lines:
+        if _good_client_line(ln):
+            put("client", ln, 0.75)
+            # Also use as project hint if no title found.
+            if "projectName" not in out and 10 <= len(ln) <= 120:
+                # Combine "<client>" + nearest "<subject>" line if present.
+                idx = first_lines.index(ln)
+                tail = " ".join(first_lines[idx+1: idx+4])
+                tail = re.sub(r"\b(DOCUMENT|TITLE|Doc\.|REV\.|Page).*", "",
+                              tail, flags=re.IGNORECASE).strip()
+                pn = ln if len(tail) < 4 else f"{ln} — {tail[:80]}"
+                put("projectName", pn, 0.65)
+            break
+
+    # 4. Electrical anchors.
+    m = _KV_RE.search(head)
+    if m:
+        out["technicalSettings.mediumVoltage.nominalVoltage"] = FieldValue(
+            value=m.group(1), source="uploads", confidence=0.72, note=note)
+    m = _HZ_RE.search(head)
+    if m:
+        out["technicalSettings.lowVoltage.frequency"] = FieldValue(
+            value=m.group(1), source="uploads", confidence=0.75, note=note)
+    m = _STD_RE.search(text[:8000])
+    if m:
+        put("standard", m.group(1).upper(), 0.78)
+
+    # 5. Site-conditions (rare in cover sheet, more often in spec body).
+    m = _ALT_M_RE.search(text[:8000])
+    if m:
+        out["techSettings.general"] = FieldValue(
+            value={"altitudeAboveSeaLevel": m.group(1)},
+            source="uploads", confidence=0.7, note=note)
+    m = _TEMP_C_RE.search(text[:8000])
+    if m:
+        cur = out.get("techSettings.general")
+        merged = (cur.value if cur and isinstance(cur.value, dict) else {})
+        merged["designTemperature"] = m.group(1)
+        out["techSettings.general"] = FieldValue(
+            value=merged, source="uploads", confidence=0.7, note=note)
+
+    return out
 
 
 async def from_sld_uploads(project_id: str, project_oenum: str,
