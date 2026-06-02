@@ -838,7 +838,12 @@ _FALLBACK_MCP_TOOLS = """You also have access to these microservice tools:
 - web_search_news: Search recent news. Input: {{"query": "search query", "max_results": 5}}
 - tpms_fetch: Fetch project data from TPMS database by OENUM. Input: {{"oenum": "12345"}}
 - tpms_get_text: Get project data as readable text by OENUM. Input: {{"oenum": "12345"}}
-- project_init: Initialize a new project workspace (git, dirs, TPMS data). Input: {{"project_name": "name", "oenum": "optional"}}
+- project_init: Initialize a new project workspace (git, dirs, TPMS data). Input: {{"project_name": "name", "oenum": "optional"}}.
+    DO NOT call this when the user asks to create / build / submit a project in **Simorgh Design Suite** / simorgh-soft — that is the soft-bridge surface: use submit_soft_spec instead.
+
+- read_soft_spec: Read the chatbot-collected Simorgh Design Suite project spec (auto-built in the background from TPMS / chat / uploads / techserver). Input: {{}}. Returns {{spec, prov, gaps, conflicts, completeness}}. **Call FIRST** when the user asks to create / build / submit a Simorgh Design Suite project.
+- ask_user: Ask the user one or more clarifying questions via an inline form. Input: {{"questions": [{{"field": "projectName", "header": "Project name", "question": "What is the project name?", "options": ["..."], "multiSelect": false}}, ...]}}. Use ONLY when read_soft_spec returned non-empty `gaps` or `conflicts` — one question per gap/conflict. STOP after calling; answers come back on the user's NEXT turn.
+- submit_soft_spec: Submit the collected spec to simorgh-soft and return the deep-link. Input: {{}}. Refuses if `gaps` is non-empty — call ask_user first. **This is THE tool to call when the user says "create my Design Suite project" / "build the simorgh-soft project" / "submit"**.
 - project_analyze: Analyze project workspace structure and contents. Input: {{"depth": "medium"}}
 - command_generate: Generate safe shell commands from task description. Input: {{"task_description": "what to do", "task_type": "search|file_ops|analysis|git"}}
 - command_validate: Validate if a shell command is safe. Input: {{"command": "the command"}}

@@ -1456,6 +1456,36 @@ class ProjectManagerAgent:
         else:
             tool_input = {}
 
+        # SOFT-BRIDGE INTENT REMAP. When SOFT_BRIDGE_ENABLED and the user's
+        # input is unambiguously about creating / building / submitting a
+        # Simorgh Design Suite project, force the right tool. The planner
+        # frequently picks `project_init` (the chatbot's own initializer)
+        # because its description superficially matches; that tool then
+        # fails with "owner_id required" / "project_name required" and
+        # produces the apologetic failure the user just saw. Remap to
+        # submit_soft_spec — which itself returns the gap list when the
+        # spec isn't ready, so ask_user can follow up on the next turn.
+        if (os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on")
+                and isinstance(tool, str)):
+            _pc = getattr(self, "_active_plan_ctx", None)
+            _uin = (getattr(_pc, "user_input", "") or "").lower()
+            _hits = ("design suite", "design-suite", "simorgh-soft",
+                     "simorgh soft", "simorgh design", "simorgh-design",
+                     "سیمرغ دیزاین", "سیمرغ-دیزاین")
+            _design_intent = any(h in _uin for h in _hits)
+            _create_intent = any(w in _uin for w in (
+                "create", "build", "submit", "open", "make my project",
+                "بساز", "بسازید", "ایجاد", "ثبت"))
+            if (_design_intent and _create_intent
+                    and tool in ("project_init", "create_project",
+                                 "tpms_fetch", "tpms_get_text")):
+                logger.info(
+                    "soft-bridge remap: %s -> submit_soft_spec "
+                    "(user_input matched design+create intent)", tool)
+                tool = "submit_soft_spec"
+                raw_input = {}
+                tool_input = {}
+
         # Qwen2.5-VL sometimes wraps the real arg dict as a JSON string
         # inside a "prompt" key, e.g.
         #   tool_input = {"prompt": "{\"depth\":\"medium\",\"project_id\":\"x\"}"}
@@ -2072,12 +2102,58 @@ class ProjectManagerAgent:
                                      "via": "soft_bridge", "error": "no_state"}}
             gaps = state.get("gaps") or []
             if gaps:
+                # Auto-create a pending_ask with one question per gap so the
+                # chat UI shows the form immediately, even if the planner
+                # doesn't follow the "call ask_user explicitly" recipe.
+                try:
+                    from services import soft_spec_state as sss
+                    _pc = getattr(self, "_active_plan_ctx", None)
+                    chat_id = getattr(_pc, "chat_id", None) if _pc else None
+                    _LABELS = {
+                        "projectName":        ("Project name",
+                                               "What should this project be called in Design Suite?"),
+                        "projectDescription": ("Project description",
+                                               "One or two sentences describing the project scope."),
+                        "client":             ("Client",
+                                               "Which client / customer is this project for?"),
+                        "location":           ("Location",
+                                               "Site city / plant location."),
+                        "standard":           ("Standard",
+                                               "Which standard governs the design?"),
+                        "country":            ("Country",
+                                               "Country where the project will be installed."),
+                        "language":           ("Language",
+                                               "Document language."),
+                        "projectNumber":      ("OE / project number",
+                                               "Internal OE / order number for this project."),
+                    }
+                    _OPTIONS = {
+                        "standard": ["IEC", "ANSI", "GOST", "BS"],
+                        "language": ["English", "Persian", "Other"],
+                    }
+                    questions = []
+                    for g in gaps:
+                        header, qtext = _LABELS.get(
+                            g, (g, f"Please provide a value for `{g}`."))
+                        q = {"field": g, "header": header, "question": qtext}
+                        if g in _OPTIONS:
+                            q["options"] = _OPTIONS[g]
+                        questions.append(q)
+                    pid = await sss.create_pending_ask(
+                        project_id, str(chat_id) if chat_id else None, questions)
+                    await self._notify_progress(project_id, "ask_user", {
+                        "pending_id": pid, "questions": questions,
+                    })
+                except Exception as e:
+                    logger.warning("auto ask_user for gaps failed: %s", e)
                 return {
-                    "output": json.dumps({
-                        "ready": False, "gaps": gaps,
-                        "hint": ("Resolve gaps first by calling ask_user "
-                                 "with one question per missing field.")},
-                        default=str),
+                    "output": (
+                        "I can't submit yet — the following project field"
+                        f"{'s' if len(gaps) != 1 else ''} need your input: "
+                        + ", ".join(gaps) +
+                        ". I've opened a quick form under the Design Suite "
+                        "status chip above; please fill it in and I'll "
+                        "submit on the next turn."),
                     "metadata": {"tool": "submit_soft_spec", "via": "soft_bridge",
                                  "gaps": gaps},
                 }

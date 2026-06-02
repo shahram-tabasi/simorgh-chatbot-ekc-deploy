@@ -331,15 +331,116 @@ async def from_chat_history(messages: List[Dict[str, Any]], timeout: float = 30.
 # into the chat's vector store. Picks up names/clients/dates embedded in
 # uploaded specs / inventory lists.
 # ---------------------------------------------------------------------------
+_TITLE_BLOCK_PREFIX_CHARS = 1500
+
+
+_TYPE_GUIDANCE = {
+    "spec": (
+        "This file is a TECHNICAL SPECIFICATION. The title block usually "
+        "names the END CLIENT (e.g. 'Mobarakeh Steel Company'), the PROJECT "
+        "or PLANT (e.g. 'Hot Strip Mill #2'), and the document number "
+        "(e.g. '347180ETS802'). Extract:\n"
+        "  - client = the client/owner organisation from the header\n"
+        "  - projectName = plant/project name from the header (e.g. "
+        "'Hot Strip Mill #2 6.6kV Switchgears')\n"
+        "  - projectDescription = the subject line / document title\n"
+        "  - projectNumber = the doc number containing 'ETS' or the OE/order\n"
+        "  - standard = IEC / ANSI / GOST if cited\n"
+        "  - technicalSettings.mediumVoltage.nominalVoltage = MV nominal "
+        "(e.g. '6.6' for 6.6 kV)\n"
+        "  - technicalSettings.lowVoltage.frequency = Hz if stated\n"
+        "  - techSettings.general.altitudeAboveSeaLevel / designTemperature "
+        "if a 'site conditions' table appears"
+    ),
+    "datasheet": (
+        "This file is an EQUIPMENT DATA SHEET (likely MV/LV PANEL). The "
+        "title block carries: PROJECT TITLE (e.g. 'Chahfiroozeh copper "
+        "concentration plant'), an equipment doc code (e.g. "
+        "'G26S1MEDDELDSHW11AA99006'). Extract:\n"
+        "  - projectName / client = the plant / project named in the title\n"
+        "  - projectNumber = the doc code\n"
+        "  - technicalSettings.mediumVoltage.nominalVoltage (kV) if shown\n"
+        "  - standard = IEC / ANSI if cited\n"
+        "  - planner / designOffice = the 'Doc Originator' or supplier"
+    ),
+    "sld": (
+        "This file is a SINGLE LINE DIAGRAM (mostly graphical). The title "
+        "block usually has a small text block with project + doc code. "
+        "Extract project / client / standard ONLY if clearly visible — do "
+        "NOT invent. The detailed equipment list will come from the SLD "
+        "vision pipeline separately."
+    ),
+    "loadlist": (
+        "This file is a LOAD LIST or BOM (Excel/markdown table). The header "
+        "rows often carry the project/client. Extract those header values; "
+        "the per-row equipment will come from the load-list pipeline "
+        "separately."
+    ),
+    "other": (
+        "Extract any of the simorgh-soft top-level fields you see; otherwise "
+        "return {}."
+    ),
+}
+
+
+def _typed_prompt(doc_type: str, transcript: str) -> str:
+    return (f"{_EXTRACT_SCHEMA_PROMPT.split('Input:')[0]}"
+            f"DOCUMENT TYPE: {doc_type}\n"
+            f"DOCUMENT-TYPE GUIDANCE:\n{_TYPE_GUIDANCE.get(doc_type, _TYPE_GUIDANCE['other'])}\n\n"
+            f"Input:\n{transcript}\n")
+
+
+async def _extract_via_llm_typed(transcript: str, *, doc_type: str,
+                                 source: str, confidence: float, note: str,
+                                 timeout: float = 30.0
+                                 ) -> Dict[str, FieldValue]:
+    """Same as _extract_via_llm but with per-document-type guidance prepended
+    so the LLM looks for the right title-block fields per type."""
+    if not transcript or len(transcript) < 30:
+        return {}
+    payload = {
+        "messages": [
+            {"role": "system",
+             "content": "You are a precise data extractor for engineering documents."},
+            {"role": "user", "content": _typed_prompt(doc_type, transcript[:24000])},
+        ],
+        "mode": "online", "temperature": 0.0, "max_tokens": 900,
+    }
+    body = None
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(f"{LLM_GATEWAY_URL}/generate", json=payload)
+                if r.status_code in (502, 503, 504):
+                    raise httpx.HTTPStatusError("gateway busy",
+                                                request=r.request, response=r)
+                r.raise_for_status()
+                body = r.json()
+                break
+        except Exception as e:
+            last_err = e
+            await asyncio.sleep(1.5 * (attempt + 1))
+    if body is None:
+        logger.warning("soft.extract.llm_typed (%s/%s) failed after retries: %s",
+                       source, doc_type, last_err)
+        return {}
+    text = (body.get("response") or body.get("text") or "").strip()
+    flat = _parse_extracted_json(text, source=source,
+                                 confidence=confidence, note=note)
+    return _reshape_dotted(flat)
+
+
 async def from_uploads(project_id: str, project_oenum: str,
                        timeout: float = 60.0) -> Dict[str, FieldValue]:
-    """Tier 1 extraction over uploaded client documents (project
-    specifications, mostly PDF — already parsed to markdown by doc-processor
-    on upload, with docling/easyocr handling scanned PDFs).
+    """Tier 1 extraction over uploaded client documents.
 
-    Runs the schema-aware extractor on EACH document separately (per-file
-    provenance) and keeps the best value per field across files. Bigger
-    char budget per doc than chat history because specs are dense."""
+    Per-file, doc-type-aware: filename pattern (ETS/DSH/SLD/LDL/etc.) picks
+    a type-specific prompt that knows the title-block conventions in real
+    Electro Kavir / MSC engineering packages. ALWAYS includes the first
+    1.5k chars of every document (the title block + cover sheet, where the
+    project/client/doc-number always live) plus extra body context up to
+    PER_DOC. Specs get a bigger body budget than datasheets / SLDs."""
     try:
         from services.project_memory_service import get_project_memory_service
         q = getattr(get_project_memory_service(), "qdrant", None)
@@ -353,28 +454,40 @@ async def from_uploads(project_id: str, project_oenum: str,
     if not docs:
         return {}
 
-    PER_DOC = 12000
-    MAX_DOCS = 5
+    PER_TYPE_BUDGET = {
+        "spec": 16000, "datasheet": 10000, "sld": 4000,
+        "loadlist": 8000, "other": 8000,
+    }
+    MAX_DOCS = 6
     bag: Dict[str, FieldValue] = {}
     for d in docs[:MAX_DOCS]:
         fn = d.get("filename") or ""
         if not fn:
             continue
+        dt = _doc_type_of(fn)
+        budget = PER_TYPE_BUDGET.get(dt, 8000)
         try:
             txt = (q.get_document_text(user_id="system", project_oenum=scope,
-                                       filename=fn, max_chars=PER_DOC)
+                                       filename=fn, max_chars=budget)
                    or {}).get("text") or ""
         except Exception as e:
             logger.warning("soft.extract.uploads read %s: %s", fn, e)
             continue
         if not txt:
             continue
-        got = await _extract_via_llm(
-            f"## FILE: {fn}\n{txt}", source="uploads", confidence=0.78,
-            note=f"from uploaded file {fn}", timeout=timeout,
+        # Title-block bias: prepend the FIRST 1.5k chars (cover sheet,
+        # where client / project / doc-number always live) so even when
+        # the body budget gets trimmed by the LLM, the header is in view.
+        head = txt[:_TITLE_BLOCK_PREFIX_CHARS]
+        transcript = (f"## FILE: {fn}\n## TYPE: {dt}\n"
+                      f"## TITLE BLOCK / COVER:\n{head}\n\n"
+                      f"## BODY:\n{txt[_TITLE_BLOCK_PREFIX_CHARS:]}")
+        got = await _extract_via_llm_typed(
+            transcript, doc_type=dt,
+            source="uploads", confidence=0.82,
+            note=f"from {dt} '{fn}'", timeout=timeout,
         )
-        # Merge: keep the first value seen for each field (per-file source);
-        # different files contributing different fields is the common case.
+        # Merge: first value seen for each field wins (per-file source).
         for k, fv in got.items():
             if k not in bag:
                 bag[k] = fv
@@ -392,6 +505,30 @@ _SLD_NAME_HINTS = ("sld", "single line", "singleline", "single-line",
                    "تک خطی", "تک-خطی", "تک‌خطی", "تكخطی")
 _LIST_NAME_HINTS = ("load list", "loadlist", "load_list", "datasheet",
                     "data sheet", "نیاز پروژه", "موجودی")
+# Electro Kavir / Mobarakeh Steel doc-code conventions used in real
+# client packages (e.g. "G26S1MEDDELDSHW11AA99006" or "347180ETS802"):
+#   ETS  -> Engineering Technical Specification (project spec)
+#   DSH  -> Data Sheet
+#   SLD  -> Single Line Diagram
+#   LDL  -> Load List
+#   CTP  -> Cable / Termination plan
+# Detection is on filename; case-insensitive substring.
+_DOC_TYPE_HINTS = {
+    "spec":      ("ets", "specification", "technical spec",
+                  "spec for", "تکنیکال", "specification."),
+    "datasheet": ("dsh", "data sheet", "datasheet"),
+    "sld":       _SLD_NAME_HINTS,
+    "loadlist":  ("ldl", "load list", "loadlist", "load_list",
+                  "نیاز پروژه", "موجودی"),
+}
+
+
+def _doc_type_of(filename: str) -> str:
+    low = (filename or "").lower()
+    for t, hints in _DOC_TYPE_HINTS.items():
+        if any(h in low for h in hints):
+            return t
+    return "other"
 
 
 async def from_sld_uploads(project_id: str, project_oenum: str,
