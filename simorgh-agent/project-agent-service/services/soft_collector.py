@@ -194,23 +194,47 @@ async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str,
         logger.warning("soft_collector.refresh gather %s: %s", project_id, e)
         return existing
 
+    # HITL contract: extractors PROPOSE, the user APPROVES, only THEN does
+    # the spec change. Write each FieldValue into soft_spec_proposal grouped
+    # by source_kind (so a re-extraction from the same source replaces its
+    # pending proposals atomically — no duplicate buildup). We deliberately
+    # do NOT call reconcile / upsert_state here — that would silently push
+    # opportunistic values into the spec the user can't see.
     try:
-        spec, prov, gaps, conflicts = reconcile(bag)
+        from services import soft_proposals as sp
+        by_kind: Dict[str, List[Dict[str, Any]]] = {}
+        for field, fvs in (bag or {}).items():
+            for fv in fvs:
+                kind = (getattr(fv, "source", None) or "uploads")
+                by_kind.setdefault(kind, []).append({
+                    "field":      field,
+                    "value":      getattr(fv, "value", None),
+                    "confidence": float(getattr(fv, "confidence", 0.5) or 0.5),
+                    "note":       getattr(fv, "note", None),
+                })
+        total = 0
+        for kind, proposals in by_kind.items():
+            total += await sp.replace_proposals(project_id, kind, proposals)
+        # Persist the signature + counts on soft_spec_state for the chip,
+        # but the spec dict itself stays empty until the user approves.
+        # completeness here is "how many CONFIRMABLE_FIELDS have at least
+        # one *approved* proposal".
+        approved = await sp.list_approved(project_id)
+        approved_fields = {a["field"] for a in approved}
+        from services.soft_spec import REQUIRED_FIELDS
+        gaps = [f for f in REQUIRED_FIELDS if f not in approved_fields]
+        spec_dump = {a["field"]: a["value"] for a in approved}
+        completeness = _completeness(spec_dump, gaps)
+        await sss.upsert_state(
+            project_id, spec=spec_dump, prov=[], gaps=gaps, conflicts=[],
+            completeness=completeness, sources_signature=sig,
+        )
+        logger.info(
+            "soft_collector: project=%s proposed=%d approved=%d completeness=%d",
+            project_id, total, len(approved), completeness,
+        )
     except Exception as e:
-        logger.warning("soft_collector.refresh reconcile %s: %s", project_id, e)
-        return existing
-
-    spec_dump = spec.model_dump()
-    prov_dump = [p.model_dump() if hasattr(p, "model_dump") else p for p in prov]
-    completeness = _completeness(spec_dump, gaps)
-
-    await sss.upsert_state(
-        project_id,
-        spec=spec_dump, prov=prov_dump, gaps=gaps, conflicts=conflicts,
-        completeness=completeness, sources_signature=sig,
-    )
-    logger.info("soft_collector: project=%s completeness=%d gaps=%d conflicts=%d",
-                project_id, completeness, len(gaps), len(conflicts))
+        logger.warning("soft_collector.refresh persist %s: %s", project_id, e)
     return await sss.get_state(project_id)
 
 

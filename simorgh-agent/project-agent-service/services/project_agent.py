@@ -1970,7 +1970,8 @@ class ProjectManagerAgent:
         # loop can read the live spec state, ask the user for clarifications
         # via a structured SSE event, and finally submit to simorgh-soft.
         # All three are no-ops when SOFT_BRIDGE_ENABLED is unset.
-        if tool in ("read_soft_spec", "ask_user", "submit_soft_spec"):
+        if tool in ("read_soft_spec", "ask_user", "submit_soft_spec",
+                    "list_pending_proposals", "approve_proposals"):
             try:
                 return await self._execute_soft_bridge_tool(
                     project_id, tool, tool_input)
@@ -2090,6 +2091,69 @@ class ProjectManagerAgent:
                              "pending_id": pending_id},
             }
 
+        if tool == "list_pending_proposals":
+            # CoT inspects what extractors proposed for review. Returns
+            # one row per (field, proposal); the CoT then either approves
+            # specific ones (approve_proposals) or asks the user about
+            # ambiguous ones (ask_user). NEVER writes anything.
+            from services import soft_proposals as sp
+            pending = await sp.list_pending(project_id)
+            approved = await sp.list_approved(project_id)
+            return {
+                "output": json.dumps({
+                    "pending": pending, "approved_count": len(approved)},
+                    default=str)[:3500],
+                "metadata": {"tool": "list_pending_proposals",
+                             "via": "soft_bridge",
+                             "pending_count": len(pending)},
+            }
+
+        if tool == "approve_proposals":
+            # User-driven write gate, callable by the CoT once it has had
+            # the user confirm specific values via ask_user. Input:
+            #   {"approvals": [{"proposal_id": "...", "action": "approve"
+            #                    |"reject"|"edit", "value": ...}, ...]}
+            from services import soft_proposals as sp
+            from services import soft_spec_state as sss
+            approvals = tool_input.get("approvals") or []
+            if not isinstance(approvals, list) or not approvals:
+                return {"output": "approve_proposals: `approvals` must be a "
+                        "non-empty list of {proposal_id, action[, value]}",
+                        "metadata": {"tool": "approve_proposals",
+                                     "via": "soft_bridge",
+                                     "error": "bad_input"}}
+            written = 0
+            for a in approvals:
+                if not isinstance(a, dict):
+                    continue
+                pid = a.get("proposal_id")
+                action = str(a.get("action") or "").lower()
+                if not pid:
+                    continue
+                if action == "approve":
+                    r = await sp.approve(pid)
+                    if r:
+                        written += 1
+                elif action == "edit":
+                    r = await sp.approve(pid, approved_value=a.get("value"))
+                    if r:
+                        written += 1
+                elif action == "reject":
+                    await sp.reject(pid)
+            # Re-derive the spec from the now-approved set.
+            try:
+                from routes.project_agent_routes import _rederive_spec_from_approved
+                await _rederive_spec_from_approved(project_id)
+            except Exception as e:
+                logger.warning("rederive after approve failed: %s", e)
+            return {
+                "output": f"Recorded {written} approved values; rejected the "
+                          f"rest. Call read_soft_spec or submit_soft_spec to "
+                          f"continue.",
+                "metadata": {"tool": "approve_proposals",
+                             "via": "soft_bridge", "written": written},
+            }
+
         if tool == "submit_soft_spec":
             state = await sss.get_state(project_id)
             if state is None:
@@ -2098,6 +2162,34 @@ class ProjectManagerAgent:
                 return {"output": "submit_soft_spec: no state available",
                         "metadata": {"tool": "submit_soft_spec",
                                      "via": "soft_bridge", "error": "no_state"}}
+            # HITL gate: under the new contract every field that ends up in
+            # the spec MUST have a corresponding APPROVED proposal. If there
+            # are pending (un-reviewed) proposals, refuse: the user must
+            # approve / reject them first. This is what stops irrelevant
+            # uploads from silently mutating the project.
+            try:
+                from services import soft_proposals as sp
+                pending = await sp.list_pending(project_id)
+            except Exception:
+                pending = []
+            if pending:
+                # Surface the pending list to the chat UI so the user can
+                # review (the existing inline form will render it).
+                await self._notify_progress(project_id, "ask_user", {
+                    "kind": "proposals_pending",
+                    "pending_count": len(pending),
+                })
+                return {
+                    "output": ("Cannot submit yet — I have "
+                               f"{len(pending)} extracted value(s) waiting "
+                               "for your review. Please approve or reject the "
+                               "pending proposals in the chat panel; I'll "
+                               "submit once they're cleared."),
+                    "metadata": {"tool": "submit_soft_spec",
+                                 "via": "soft_bridge",
+                                 "blocked_on": "pending_proposals",
+                                 "pending_count": len(pending)},
+                }
             gaps = state.get("gaps") or []
             if gaps:
                 # Auto-create a pending_ask with one question per gap so the

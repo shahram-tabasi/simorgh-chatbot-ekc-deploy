@@ -1930,6 +1930,119 @@ class SoftCreateRequest(BaseModel):
     spec: Dict[str, Any]
 
 
+# =============================================================================
+# HITL proposals — list + approve/edit/reject (the user is the WRITE gate).
+# =============================================================================
+@router.get("/projects/{project_id}/soft/proposals")
+async def soft_proposals(project_id: str,
+                         current_user: str = Depends(get_current_user)):
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+    from services import soft_proposals as sp
+    pending = await sp.list_pending(project_id)
+    approved = await sp.list_approved(project_id)
+    # Group pending by field so the UI shows one card per field with all
+    # competing source proposals stacked under it.
+    by_field: Dict[str, List[Dict[str, Any]]] = {}
+    for p in pending:
+        by_field.setdefault(p["field"], []).append(p)
+    return {"pending_by_field": by_field, "approved": approved}
+
+
+class ApprovalRequest(BaseModel):
+    approvals: List[Dict[str, Any]]   # [{proposal_id, action, value?}]
+
+
+@router.post("/projects/{project_id}/soft/approve")
+async def soft_approve(project_id: str, req: ApprovalRequest,
+                       current_user: str = Depends(get_current_user)):
+    """User-driven write gate. Each entry:
+       {"proposal_id": "...", "action": "approve"|"reject"|"edit",
+        "value": <new value if edit>}
+    Approved values flow through to soft_spec_state via the same reconcile
+    pipeline the rest of the system uses. Rejected proposals are kept for
+    audit but never written."""
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+    from services import soft_proposals as sp
+    from services import soft_spec_state as sss
+    written = 0
+    for a in (req.approvals or []):
+        pid = a.get("proposal_id")
+        action = (a.get("action") or "").lower()
+        if not pid:
+            continue
+        if action == "approve":
+            r = await sp.approve(pid)
+            if r:
+                written += 1
+        elif action == "edit":
+            r = await sp.approve(pid, approved_value=a.get("value"))
+            if r:
+                written += 1
+        elif action == "reject":
+            await sp.reject(pid)
+    # Re-derive the spec from APPROVED proposals only and persist.
+    await _rederive_spec_from_approved(project_id)
+    state = await sss.get_state(project_id)
+    return {"written": written, "state": state}
+
+
+async def _rederive_spec_from_approved(project_id: str) -> None:
+    """Recompute soft_spec_state.spec by reconciling ONLY the approved
+    proposals. This is the single place where soft_spec_state.spec is
+    populated — the extractors no longer touch it directly."""
+    from services import soft_proposals as sp
+    from services import soft_spec_state as sss
+    from services.soft_spec import (FieldValue, CONFIRMABLE_FIELDS,
+                                    REQUIRED_FIELDS)
+    from services.soft_reconciler import reconcile
+    approved = await sp.list_approved(project_id)
+    bag: Dict[str, List[FieldValue]] = {}
+    for a in approved:
+        try:
+            bag.setdefault(a["field"], []).append(FieldValue(
+                value=a["value"],
+                source=(a["source_kind"] if a["source_kind"] in
+                        ("user", "tpms", "uploads", "chat", "gitlab",
+                         "techserver", "default") else "default"),
+                confidence=float(a.get("confidence") or 0.5),
+                note=a.get("source_note"),
+            ))
+        except Exception:
+            continue
+    spec, prov, gaps, conflicts = reconcile(bag)
+    spec_dump = spec.model_dump()
+    # Completeness over CONFIRMABLE_FIELDS minus `comment` (optional).
+    optional = {"comment"}
+    counted = [f for f in CONFIRMABLE_FIELDS if f not in optional]
+    filled = sum(1 for f in counted
+                 if str(spec_dump.get(f) or "").strip() and f not in gaps)
+    completeness = int(round(filled * 100 / max(1, len(counted))))
+    existing = await sss.get_state(project_id) or {}
+    await sss.upsert_state(
+        project_id, spec=spec_dump,
+        prov=[p.model_dump() for p in prov],
+        gaps=gaps, conflicts=conflicts, completeness=completeness,
+        sources_signature=existing.get("sources_signature") or "",
+    )
+
+
+# =============================================================================
+# Legacy one-shot create endpoint (kept for back-compat with the old button)
+# =============================================================================
 @router.post("/projects/{project_id}/soft/create")
 async def soft_create_project(project_id: str, req: SoftCreateRequest,
                               current_user: str = Depends(get_current_user)):

@@ -42,6 +42,18 @@ type StateResp = {
   };
   pending: Pending[];
 };
+type Proposal = {
+  id:           string;
+  field:        string;
+  value:        any;
+  source_kind:  string;
+  source_note?: string;
+  confidence:   number;
+};
+type ProposalsResp = {
+  pending_by_field: Record<string, Proposal[]>;
+  approved:         any[];
+};
 
 interface Props {
   projectId: string;
@@ -53,10 +65,13 @@ interface Props {
 
 export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: Props) {
   const [state, setState]     = React.useState<StateResp | null>(null);
+  const [proposals, setProposals] = React.useState<ProposalsResp | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError]     = React.useState("");
   // local form values per pending question id; keyed by `${pid}::${field}`.
   const [vals, setVals] = React.useState<Record<string, any>>({});
+  // user-edited values for proposals; keyed by proposal_id.
+  const [edits, setEdits] = React.useState<Record<string, string>>({});
 
   const token = () => localStorage.getItem("simorgh_token") || "";
 
@@ -64,19 +79,40 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
     if (!isLegacy || !projectId) return;
     setLoading(true); setError("");
     try {
-      const r = await axios.get<StateResp>(
-        `${API_BASE}/v2/agent/projects/${projectId}/soft/state` + (refresh ? "?refresh=true" : ""),
-        { headers: { Authorization: `Bearer ${token()}` } },
-      );
-      setState(r.data);
+      const [s, p] = await Promise.all([
+        axios.get<StateResp>(
+          `${API_BASE}/v2/agent/projects/${projectId}/soft/state` + (refresh ? "?refresh=true" : ""),
+          { headers: { Authorization: `Bearer ${token()}` } },
+        ),
+        axios.get<ProposalsResp>(
+          `${API_BASE}/v2/agent/projects/${projectId}/soft/proposals`,
+          { headers: { Authorization: `Bearer ${token()}` } },
+        ).catch(() => ({ data: { pending_by_field: {}, approved: [] } as ProposalsResp })),
+      ]);
+      setState(s.data);
+      setProposals(p.data);
     } catch (e: any) {
-      // 404 = bridge disabled on the server; quietly hide.
       if (e?.response?.status === 404) { setState(null); return; }
       setError(e?.response?.data?.detail || e?.message || "");
     } finally {
       setLoading(false);
     }
   }, [projectId, isLegacy]);
+
+  const decideProposal = async (proposal_id: string,
+                                 action: "approve" | "reject" | "edit",
+                                 value?: any) => {
+    try {
+      await axios.post(
+        `${API_BASE}/v2/agent/projects/${projectId}/soft/approve`,
+        { approvals: [{ proposal_id, action, value }] },
+        { headers: { Authorization: `Bearer ${token()}` } },
+      );
+      await fetchState();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || e?.message || "Could not record decision.");
+    }
+  };
 
   React.useEffect(() => {
     fetchState();
@@ -91,6 +127,10 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
   const gaps      = state.state.gaps || [];
   const submitted = !!state.state.soft_project_id;
   const pending   = state.pending || [];
+  const pendingByField = proposals?.pending_by_field || {};
+  const pendingFields  = Object.keys(pendingByField);
+  const pendingCount   = pendingFields.reduce(
+    (n, f) => n + (pendingByField[f]?.length || 0), 0);
 
   const submitAnswers = async (pid: string, questions: Question[]) => {
     const answers: Record<string, any> = {};
@@ -150,6 +190,56 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
       {error && (
         <div className="mt-2 text-xs text-red-200 flex items-center gap-1">
           <AlertCircle className="w-3 h-3" /> {error}
+        </div>
+      )}
+
+      {/* Pending PROPOSALS — extractor output waiting for user review.
+          One card per field; multiple competing sources stacked under it.
+          User approves the value that's right, rejects the rest. NO
+          autonomous write reaches the spec until this gate clears. */}
+      {pendingCount > 0 && (
+        <div className="mt-2 rounded-md border border-indigo-500/30 bg-indigo-500/5 p-2">
+          <div className="text-xs text-indigo-100 mb-2">
+            {pendingCount} extracted value{pendingCount === 1 ? "" : "s"} need your review
+            <span className="opacity-70"> · approve the values that belong to THIS project, reject the rest.</span>
+          </div>
+          <div className="grid grid-cols-1 gap-2">
+            {pendingFields.map((field) => (
+              <div key={field} className="rounded border border-white/10 bg-white/5 p-2">
+                <div className="text-xs text-gray-200 font-medium mb-1">
+                  {field}
+                </div>
+                {pendingByField[field].map((prop) => {
+                  const editVal = edits[prop.id] ?? String(typeof prop.value === "object" ? JSON.stringify(prop.value) : (prop.value ?? ""));
+                  return (
+                    <div key={prop.id} className="flex flex-wrap items-center gap-2 py-1">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] border ${SOURCE_COLORS[prop.source_kind] || SOURCE_COLORS["default"]}`}
+                            title={prop.source_note}>
+                        {prop.source_kind}
+                      </span>
+                      <input type="text" value={editVal}
+                        onChange={(e) => setEdits({ ...edits, [prop.id]: e.target.value })}
+                        className="flex-1 min-w-[200px] px-2 py-1 bg-white/10 border border-white/20 rounded text-white text-xs" />
+                      <span className="text-[10px] opacity-70">{Math.round((prop.confidence ?? 0) * 100)}%</span>
+                      <button onClick={() => decideProposal(prop.id, edits[prop.id] !== undefined && edits[prop.id] !== String(prop.value) ? "edit" : "approve", edits[prop.id])}
+                        className="px-2 py-0.5 rounded text-[11px] bg-emerald-600/40 hover:bg-emerald-600/60 border border-emerald-500/40 text-emerald-100">
+                        approve
+                      </button>
+                      <button onClick={() => decideProposal(prop.id, "reject")}
+                        className="px-2 py-0.5 rounded text-[11px] bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/40 text-rose-100">
+                        reject
+                      </button>
+                      {prop.source_note && (
+                        <span className="text-[10px] text-gray-400 truncate max-w-[260px]" title={prop.source_note}>
+                          {prop.source_note}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

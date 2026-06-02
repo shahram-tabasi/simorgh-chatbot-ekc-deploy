@@ -76,22 +76,42 @@ COMPUTE / VERIFY:
 WEB:
 - web_search(query="...") for current external information when the project's own data is insufficient.
 
-SIMORGH DESIGN SUITE (legacy users only):
-When the user asks to CREATE / BUILD / SUBMIT / OPEN their project in the
-Design Suite (variants: "create my design suite project", "build it",
-"create simorgh-soft project", "submit my project", Persian
-"پروژه سیمرغ دیزاین رو بساز"), follow this exact recipe:
-  1. read_soft_spec — see what's already collected (the background
-     collector has been filling fields from every chat / upload / source).
-  2. If `gaps` or `conflicts` is non-empty: call ask_user ONCE with one
-     question per gap/conflict (use `options` when there's a finite set,
-     e.g. standard: ["IEC","ANSI","GOST"]). STOP after ask_user — the
-     answers arrive on the user's NEXT turn; do not loop.
-  3. If `gaps` is empty: call submit_soft_spec. It returns
+SIMORGH DESIGN SUITE (legacy users only) — HITL flow:
+The Design Suite project is built from PROPOSALS. Extractors propose;
+the user APPROVES; only then is the spec written. You are the gatekeeper.
+When the user asks to CREATE / BUILD / SUBMIT / OPEN their project (incl.
+Persian "پروژه سیمرغ دیزاین رو بساز"), follow this recipe:
+
+  1. list_pending_proposals — see every value extractors proposed from
+     uploads / TPMS / chat. Each entry has {proposal_id, field, value,
+     source_kind, source_note, confidence}.
+  2. REASON over them. For each pending proposal decide ONE of:
+       a. clearly relevant + the value is right     → bundle into approvals
+          with action="approve"
+       b. clearly irrelevant (e.g. extracted from a doc that wasn't
+          actually about this project)             → action="reject"
+       c. ambiguous (multiple sources disagree, or unclear if the doc is
+          relevant)                                → DO NOT decide; ask
+          the user via ask_user, mentioning the field, the proposed value
+          and the source (filename / TPMS / chat).
+     For (a) and (b) call approve_proposals ONCE with all bundled
+     decisions; for (c) call ask_user ONCE with the ambiguous fields
+     batched, THEN STOP (the answers arrive on the user's next turn).
+  3. After approvals land, call read_soft_spec — confirm gaps=[] and
+     conflicts=[]. If gaps remain, ask_user about the missing fields
+     (with options when the set is finite, e.g. standard:[IEC,ANSI,GOST]).
+  4. When gaps=[] and conflicts=[], call submit_soft_spec. It returns
      {ready:true, deep_link, soft_project_id}. Reply with a short
      confirmation and the deep-link as a clickable markdown link.
-Do NOT manually compose the spec or pass `spec` to any tool — the
-collector owns it. Your job is only to read, ask, and submit.
+
+Rules:
+  - NEVER manually compose a `spec` object or pass it to any tool.
+    Approvals + the reconciler own that.
+  - NEVER approve a value that came from a document the user did not
+    indicate is project-spec input (e.g. a similarity-check upload).
+    Reject it instead. When unsure, ask.
+  - submit_soft_spec REFUSES when pending proposals exist. Clear them
+    first via approve_proposals + ask_user.
 """
 
 
@@ -156,7 +176,8 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
     }
     # Design Suite slot-collector tools (only when the bridge is enabled).
     if os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on"):
-        allow |= {"read_soft_spec", "ask_user", "submit_soft_spec"}
+        allow |= {"read_soft_spec", "ask_user", "submit_soft_spec",
+                  "list_pending_proposals", "approve_proposals"}
     # Source-conditional tools.
     if se.get("gitlab"):
         allow |= {"get_project_tree", "read_artifact_mcp", "search_blobs",
