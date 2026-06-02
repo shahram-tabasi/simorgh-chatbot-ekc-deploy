@@ -72,12 +72,14 @@ async def _build_signature(*, project_id: str, project_row: Dict[str, Any],
 
 
 def _completeness(spec_dump: Dict[str, Any], gaps: List[str]) -> int:
-    """0..100 over the CONFIRMABLE_FIELDS set."""
-    n = len(CONFIRMABLE_FIELDS)
-    if not n:
-        return 100
+    """0..100 over CONFIRMABLE_FIELDS, EXCLUDING fields that are optional
+    by nature (`comment` is a freeform note — its emptiness shouldn't
+    drag the score down)."""
+    optional = {"comment"}
+    counted = [f for f in CONFIRMABLE_FIELDS if f not in optional]
+    n = len(counted) or 1
     filled = 0
-    for f in CONFIRMABLE_FIELDS:
+    for f in counted:
         v = spec_dump.get(f)
         if v not in (None, "", [], {}) and f not in gaps:
             filled += 1
@@ -92,8 +94,20 @@ async def _ensure_memory_pools(memory) -> None:
     a FastAPI request these are always set by main.py at startup; from a
     one-shot script (`python3 -c "..."`) they default to None and every
     .pg.execute_one_async crashes with NoneType. Lazy-bootstrap here so
-    the collector is callable from either context."""
-    if getattr(memory, "pg", None) is None:
+    the collector is callable from either context.
+
+    Pool-per-loop: asyncpg pools are bound to the event loop they were
+    created on. A second `asyncio.run()` in the same process gets a NEW
+    loop, but our pool sits on the OLD one → "another operation in
+    progress" / "loop is closed". Rebuild whenever the current loop
+    doesn't match the pool's loop."""
+    import asyncio
+    current_loop = asyncio.get_running_loop()
+
+    pg = getattr(memory, "pg", None)
+    pool = getattr(pg, "_async_pool", None) if pg is not None else None
+    pool_loop = getattr(pool, "_loop", None) if pool is not None else None
+    if pg is None or pool is None or pool_loop is not current_loop:
         try:
             from database.postgres_connection import PostgresConnection
             pc = PostgresConnection()

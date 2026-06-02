@@ -691,11 +691,35 @@ def extract_via_regex(filename: str, text: str, doc_type: str
     if m:
         out["technicalSettings.lowVoltage.frequency"] = FieldValue(
             value=m.group(1), source="uploads", confidence=0.75, note=note)
-    m = _STD_RE.search(text[:8000])
+    # `standard` rarely appears on the cover sheet; specs cite it on the
+    # "Applicable Standards" page deeper in. Search the WHOLE text.
+    m = _STD_RE.search(text)
     if m:
         put("standard", m.group(1).upper(), 0.78)
 
-    # 5. Site-conditions (rare in cover sheet, more often in spec body).
+    # 5. Language / country inference — high-confidence cheap heuristics
+    # that work without any external context. Persian script anywhere in
+    # the doc → language=Persian (mixed Persian/English docs in this
+    # stack are still "Persian" for the form). Common Iranian company
+    # patterns → country=Iran (most projects here ARE Iranian; the
+    # heuristic biases right). These are SOFT signals (lower confidence,
+    # 0.6) so a regex match in the LLM enrichment pass can override.
+    persian_chars = sum(1 for ch in text[:5000]
+                        if '؀' <= ch <= 'ۿ')
+    if persian_chars >= 5:
+        put("language", "Persian", 0.7)
+    else:
+        # English bias is also valid when no Persian found AND the title
+        # block contains English words.
+        if re.search(r"\bSpecification|Document|Title|Project\b", head):
+            put("language", "English", 0.65)
+    # Country heuristic: Mobarakeh / Iran-flagged companies → Iran.
+    if (persian_chars >= 5
+            or re.search(r"\b(Iran|MSC|Mobarakeh|MOBARAKEH|Tehran|Isfahan|"
+                         r"Chahfiroozeh|NIOC|NIORDC|NIGC|NIPC)\b", text[:8000])):
+        put("country", "Iran", 0.7)
+
+    # 6. Site-conditions (rare in cover sheet, more often in spec body).
     m = _ALT_M_RE.search(text[:8000])
     if m:
         out["techSettings.general"] = FieldValue(
