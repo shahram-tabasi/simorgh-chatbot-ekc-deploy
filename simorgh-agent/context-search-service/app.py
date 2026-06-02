@@ -287,6 +287,82 @@ def health_deep():
         raise HTTPException(status_code=503, detail=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Cross-encoder reranker (Phase 7)
+# ---------------------------------------------------------------------------
+# The /search/content pipeline already runs hybrid retrieval at the ES
+# layer: BM25 across (title, body) plus a kNN block on the `embedding`
+# field, scored together by ES 8.4+'s native fusion. That covers the
+# RETRIEVAL stage. What's been missing is the RERANK stage that 2026
+# production hybrid pipelines converge on: take ES's fused top-N (say
+# 30) and re-score with a cross-encoder (bge-reranker-v2-m3) before
+# returning top-K. The encoder reads query+passage TOGETHER, so it
+# catches "this snippet mentions the entity but in the wrong context"
+# cases the embedding retriever can't.
+#
+# Loaded lazily — first request takes a few seconds, subsequent are
+# fast (cached in memory). Falls back to ES ordering on any failure;
+# never blocks the response.
+RERANK_ENABLED = os.getenv("CONTENT_SEARCH_RERANK", "1").lower() in (
+    "1", "true", "yes", "on",
+)
+RERANKER_MODEL_NAME = os.getenv(
+    "CONTENT_SEARCH_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3",
+)
+RERANK_PREFETCH = int(os.getenv("CONTENT_SEARCH_RERANK_PREFETCH", "30"))
+
+_reranker_model = None
+_reranker_load_failed = False
+
+
+def _load_content_reranker():
+    """Cross-encoder loader — cached; on first failure marks as
+    unavailable so we don't retry on every request."""
+    global _reranker_model, _reranker_load_failed
+    if _reranker_model is not None or _reranker_load_failed:
+        return _reranker_model
+    if not RERANK_ENABLED:
+        _reranker_load_failed = True
+        return None
+    try:
+        from sentence_transformers import CrossEncoder
+        _reranker_model = CrossEncoder(RERANKER_MODEL_NAME, device="cpu")
+        log.info("content_reranker_loaded", model=RERANKER_MODEL_NAME)
+        return _reranker_model
+    except Exception as e:
+        log.warning("content_reranker_load_failed", error=str(e))
+        _reranker_load_failed = True
+        return None
+
+
+def _rerank_hits(query: str, hits: list[Any], *, top_k: int) -> list[Any]:
+    """Cross-encoder rerank over ES hits. `hits` is the raw ES hit list
+    (each with _source.body, etc.). Returns the same list, reordered,
+    with the cross-encoder score written into `_score`."""
+    if not hits or len(hits) <= 1:
+        return hits
+    m = _load_content_reranker()
+    if m is None:
+        return hits
+    try:
+        pairs = []
+        for h in hits:
+            src = h.get("_source", {}) or {}
+            passage = (src.get("title") or "") + "\n\n" + (src.get("body") or "")
+            pairs.append((query, passage[:2000]))
+        scores = m.predict(pairs)
+        scored = list(zip(hits, scores))
+        scored.sort(key=lambda x: float(x[1]), reverse=True)
+        out = []
+        for h, s in scored[:top_k]:
+            h["_score"] = float(s)
+            out.append(h)
+        return out
+    except Exception as e:
+        log.warning("content_reranker_predict_failed", error=str(e))
+        return hits
+
+
 async def _embed(text: str) -> list[float] | None:
     """Call embeddings-service. Returns None if unavailable — caller should
     degrade to BM25-only."""
@@ -312,6 +388,9 @@ def _filter_clause(req: SearchRequest) -> list[dict]:
 
 @app.post("/search/content", response_model=SearchResponse)
 async def search_content(req: SearchRequest):
+    # When reranking, prefetch a wider top-N from ES so the cross-
+    # encoder has something to re-score. We collapse to req.k after.
+    prefetch_k = max(req.k, RERANK_PREFETCH) if RERANK_ENABLED else req.k
     bm25 = {
         "query": {
             "bool": {
@@ -323,9 +402,9 @@ async def search_content(req: SearchRequest):
                 "filter": _filter_clause(req),
             }
         },
-        "size": req.k,
+        "size": prefetch_k,
         "_source": ["source", "project_id", "oenum", "repo", "ref",
-                    "path", "title", "tags"],
+                    "path", "title", "tags", "body"],
         "highlight": {"fields": {"body": {"fragment_size": 200,
                                           "number_of_fragments": 1}}},
     }
@@ -337,8 +416,8 @@ async def search_content(req: SearchRequest):
             knn_block = {
                 "field": "embedding",
                 "query_vector": vec,
-                "k": req.k,
-                "num_candidates": max(req.k * 5, 50),
+                "k": prefetch_k,
+                "num_candidates": max(prefetch_k * 5, 50),
                 "filter": _filter_clause(req),
             }
 
@@ -348,18 +427,38 @@ async def search_content(req: SearchRequest):
         body["knn"] = knn_block
 
     r = es().search(index="simorgh-content", body=body)
+    raw_hits = list(r["hits"]["hits"])
+
+    # Phase 7: cross-encoder rerank over the fused ES top-N before we
+    # collapse to top-k. Pulls query and passage through the same
+    # transformer, so it catches "relevant entity, wrong context"
+    # misorderings BM25+kNN can't. Falls back to ES ordering on any
+    # encoder failure.
+    if RERANK_ENABLED and len(raw_hits) > req.k:
+        raw_hits = _rerank_hits(req.query, raw_hits, top_k=req.k)
+    else:
+        raw_hits = raw_hits[:req.k]
+
     hits = []
-    for h in r["hits"]["hits"]:
+    for h in raw_hits:
         src = h.get("_source", {})
         snippet = ""
         if "highlight" in h and "body" in h["highlight"]:
             snippet = " … ".join(h["highlight"]["body"])
+        elif src.get("body"):
+            # Reranked hits may bypass ES highlighting (different scorer);
+            # fall back to a head-of-body snippet so the response is
+            # still useful for the agent's grounding step.
+            snippet = (src["body"] or "")[:200]
+        # Drop the raw body from the metadata we return — only needed
+        # for the reranker prompt above.
+        meta_src = {k: v for k, v in src.items() if k not in
+                    {"source", "title", "path", "repo", "body"}}
         hits.append(SearchHit(
             id=h["_id"], score=h["_score"], source=src.get("source", "unknown"),
             title=src.get("title"), path=src.get("path"), repo=src.get("repo"),
             snippet=snippet,
-            metadata={k: v for k, v in src.items() if k not in
-                      {"source", "title", "path", "repo"}},
+            metadata=meta_src,
         ))
     return SearchResponse(hits=hits, took_ms=r["took"])
 
