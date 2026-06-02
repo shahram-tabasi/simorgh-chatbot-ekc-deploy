@@ -24,6 +24,18 @@ import { Wand2, Loader, CheckCircle2, ExternalLink, AlertCircle } from "lucide-r
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "/api";
 
+// Tailwind class per proposal source_kind. `default` is the fallback when an
+// unknown kind shows up — never crash the render over a missing color.
+const SOURCE_COLORS: Record<string, string> = {
+  tpms:       "bg-sky-500/20 border-sky-400/40 text-sky-100",
+  uploads:    "bg-violet-500/20 border-violet-400/40 text-violet-100",
+  chat:       "bg-amber-500/20 border-amber-400/40 text-amber-100",
+  techserver: "bg-emerald-500/20 border-emerald-400/40 text-emerald-100",
+  gitlab:     "bg-orange-500/20 border-orange-400/40 text-orange-100",
+  user:       "bg-pink-500/20 border-pink-400/40 text-pink-100",
+  default:    "bg-white/10 border-white/20 text-gray-200",
+};
+
 type Question = {
   field:        string;
   header?:      string;
@@ -209,11 +221,15 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
                 <div className="text-xs text-gray-200 font-medium mb-1">
                   {field}
                 </div>
-                {pendingByField[field].map((prop) => {
-                  const editVal = edits[prop.id] ?? String(typeof prop.value === "object" ? JSON.stringify(prop.value) : (prop.value ?? ""));
+                {(pendingByField[field] || []).map((prop) => {
+                  const raw = prop?.value;
+                  const asText = raw == null ? ""
+                    : typeof raw === "object" ? JSON.stringify(raw) : String(raw);
+                  const editVal = edits[prop.id] ?? asText;
+                  const colorClass = SOURCE_COLORS[prop.source_kind] || SOURCE_COLORS.default;
                   return (
                     <div key={prop.id} className="flex flex-wrap items-center gap-2 py-1">
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] border ${SOURCE_COLORS[prop.source_kind] || SOURCE_COLORS["default"]}`}
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] border ${colorClass}`}
                             title={prop.source_note}>
                         {prop.source_kind}
                       </span>
@@ -221,7 +237,7 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
                         onChange={(e) => setEdits({ ...edits, [prop.id]: e.target.value })}
                         className="flex-1 min-w-[200px] px-2 py-1 bg-white/10 border border-white/20 rounded text-white text-xs" />
                       <span className="text-[10px] opacity-70">{Math.round((prop.confidence ?? 0) * 100)}%</span>
-                      <button onClick={() => decideProposal(prop.id, edits[prop.id] !== undefined && edits[prop.id] !== String(prop.value) ? "edit" : "approve", edits[prop.id])}
+                      <button onClick={() => decideProposal(prop.id, edits[prop.id] !== undefined && edits[prop.id] !== asText ? "edit" : "approve", edits[prop.id])}
                         className="px-2 py-0.5 rounded text-[11px] bg-emerald-600/40 hover:bg-emerald-600/60 border border-emerald-500/40 text-emerald-100">
                         approve
                       </button>
