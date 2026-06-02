@@ -1565,6 +1565,30 @@ async def upload_document(
         except Exception as e:
             logger.warning(f"Failed to stash image bytes for {file.filename}: {e}")
 
+    # PDFs: stash raw bytes too so the VLM verifier (services/vlm_verifier
+    # → Qwen2.5-VL on .62) can render any page on demand to cross-check
+    # extracted values against the source page. doc-processor returns
+    # markdown only; without this stash the verifier path would have no
+    # way to see drawings, single-line diagrams, or merged-cell tables.
+    _is_pdf = (
+        (_img_ct == "application/pdf") or
+        (file.filename and file.filename.lower().endswith(".pdf"))
+    )
+    if _is_pdf:
+        try:
+            import base64 as _b64
+            get_redis_service().set_uploaded_pdf(
+                document_id=doc_id_str,
+                b64=_b64.b64encode(raw_content).decode("ascii"),
+                filename=file.filename or "document.pdf",
+            )
+            logger.info(
+                "Stashed PDF bytes for VLM verifier: doc_id=%s (%d bytes)",
+                doc_id_str, len(raw_content),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to stash PDF bytes for {file.filename}: {e}")
+
     if is_binary:
         try:
             doc_client = DocProcessorClient()

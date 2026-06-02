@@ -1126,6 +1126,37 @@ class RedisService:
             logger.error(f"Failed to read uploaded image {document_id}: {e}")
             return None
 
+    def set_uploaded_pdf(
+        self, document_id: str, b64: str, filename: str = "", ttl: int = 86400,
+    ) -> bool:
+        """Stash an uploaded PDF (base64) so the VLM verifier can render
+        an arbitrary page on demand. The doc-processor converts PDFs to
+        markdown and discards the bytes, but the chat agent needs the
+        original page raster to cross-check extracted values (table
+        cells, drawings, single-line diagrams) with Qwen-VL on .62.
+
+        Caveat: PDFs can be 5-20MB; 24h TTL is conservative. Tune via
+        the ttl argument or evict via redis-cli if needed."""
+        try:
+            key = f"uploaded_pdf:{document_id}"
+            payload = json.dumps({"b64": b64, "filename": filename})
+            self.cache_client.setex(key, ttl, payload)
+            return True
+        except RedisError as e:
+            logger.error(f"Failed to stash uploaded PDF {document_id}: {e}")
+            return False
+
+    def get_uploaded_pdf(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """Return {b64, filename} for a stashed PDF, or None."""
+        try:
+            raw = self.cache_client.get(f"uploaded_pdf:{document_id}")
+            if not raw:
+                return None
+            return json.loads(raw)
+        except (RedisError, ValueError) as e:
+            logger.error(f"Failed to read uploaded PDF {document_id}: {e}")
+            return None
+
     def _get_client(self, db_name: str) -> redis.Redis:
         """Get Redis client by database name"""
         clients = {

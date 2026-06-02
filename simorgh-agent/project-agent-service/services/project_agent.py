@@ -2154,6 +2154,63 @@ class ProjectManagerAgent:
                              "via": "soft_bridge", "written": written},
             }
 
+        # VLM verifier tools — route to Qwen 2.5-VL on .62 via llm-gateway.
+        # See services/vlm_verifier.py. Best-effort; failures return
+        # structured error dicts so the CoT can gracefully fall back to
+        # text-only evidence.
+        if tool == "verify_value_visible":
+            from services.vlm_verifier import verify_value
+            doc_id = str(tool_input.get("document_id") or "").strip()
+            try:
+                page = int(tool_input.get("page") or 0)
+            except (TypeError, ValueError):
+                page = 0
+            field = str(tool_input.get("field") or "").strip()
+            value = str(tool_input.get("value") or "").strip()
+            language = tool_input.get("language") or None
+            if not (doc_id and page > 0 and field and value):
+                return {
+                    "output": "verify_value_visible: require document_id, "
+                              "page>=1, field, value",
+                    "metadata": {"tool": "verify_value_visible",
+                                 "error": "bad_input"},
+                }
+            result = await verify_value(
+                document_id=doc_id, page=page,
+                field=field, value=value, language=language,
+            )
+            return {
+                "output": json.dumps(result, ensure_ascii=False)[:2500],
+                "metadata": {"tool": "verify_value_visible",
+                             "ok": bool(result.get("ok")),
+                             "confirmed": result.get("confirmed"),
+                             "confidence": result.get("confidence")},
+            }
+
+        if tool == "describe_page":
+            from services.vlm_verifier import describe_page
+            doc_id = str(tool_input.get("document_id") or "").strip()
+            try:
+                page = int(tool_input.get("page") or 0)
+            except (TypeError, ValueError):
+                page = 0
+            language = tool_input.get("language") or None
+            if not (doc_id and page > 0):
+                return {
+                    "output": "describe_page: require document_id and page>=1",
+                    "metadata": {"tool": "describe_page",
+                                 "error": "bad_input"},
+                }
+            result = await describe_page(
+                document_id=doc_id, page=page, language=language,
+            )
+            return {
+                "output": (result.get("markdown") or
+                           f"[describe_page failed: {result.get('error')}]")[:3500],
+                "metadata": {"tool": "describe_page",
+                             "ok": bool(result.get("ok"))},
+            }
+
         if tool == "submit_soft_spec":
             state = await sss.get_state(project_id)
             if state is None:

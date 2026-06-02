@@ -34,3 +34,9 @@ torch==2.5.0
 # Pulls in onnxruntime; CPU-only path is ~120 MB. The hybrid path
 # falls back to dense-only when this fails to import.
 fastembed>=0.4.0
+# pdf2image for services/vlm_verifier — renders a single PDF page to PNG
+# bytes so Qwen-VL on .62 can cross-check extracted values against the
+# source page. Requires poppler-utils system package in the container;
+# render is wrapped in try/except so a missing poppler degrades to
+# "page image unavailable" rather than crashing the agent loop.
+pdf2image>=1.17.0

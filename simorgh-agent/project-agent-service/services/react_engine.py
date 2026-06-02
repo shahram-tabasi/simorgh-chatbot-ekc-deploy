@@ -278,6 +278,52 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
             "description": "Run a shell command (incl. python3) in the project's isolated sandbox.",
             "parameters": {"type": "object", "properties": {
                 "command": {"type": "string"}}, "required": ["command"]}}})
+    # VLM verifier tools — route to Qwen 2.5-VL on .62 via llm-gateway.
+    # Use for high-stakes value confirmation against the source page
+    # (fault current, IP class, rated voltage, anything ambiguous from
+    # text-only extraction) and for "what does this drawing show?"
+    # queries on single-line diagrams / P&IDs. document_id is the UUID
+    # returned by list_project_documents; page is 1-based.
+    if "verify_value_visible" not in have:
+        tools.append({"type": "function", "function": {
+            "name": "verify_value_visible",
+            "description": (
+                "Confirm whether a specific value is visible on a "
+                "specific page of an uploaded PDF, by sending the "
+                "rendered page image to the local vision model. "
+                "Returns {confirmed, evidence_text, confidence, note}. "
+                "Use for cross-checking values extracted from text "
+                "(table cells, drawings, merged cells) before reporting "
+                "them as confirmed."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "document_id": {"type": "string",
+                                "description": "UUID from list_project_documents."},
+                "page":        {"type": "integer", "minimum": 1,
+                                "description": "1-based page number."},
+                "field":       {"type": "string",
+                                "description": "Name of the field to verify (e.g. 'rated voltage')."},
+                "value":       {"type": "string",
+                                "description": "The candidate value to confirm (e.g. '6.6 kV')."},
+                "language":    {"type": "string",
+                                "description": "Optional language hint: 'en', 'fa', 'mixed'."},
+            }, "required": ["document_id", "page", "field", "value"]}}})
+    if "describe_page" not in have:
+        tools.append({"type": "function", "function": {
+            "name": "describe_page",
+            "description": (
+                "Render a specific PDF page through the local vision "
+                "model and return a markdown description of its "
+                "contents: headings, key values with units, tables as "
+                "markdown tables, drawings as prose summaries. Use "
+                "when the user asks about a specific page or when "
+                "text extraction missed the layout of a diagram."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "document_id": {"type": "string"},
+                "page":        {"type": "integer", "minimum": 1},
+                "language":    {"type": "string"},
+            }, "required": ["document_id", "page"]}}})
     return tools
 
 
