@@ -104,7 +104,18 @@ docker volume create "${VOLUME}" >/dev/null
 #   layout B — root entry is "hub/..."               → strip 0
 #   layout C — root entry is "models--BAAI--bge-m3/" → strip 0 + nest under hub/
 echo "▶ Detecting archive layout …"
+# `set -o pipefail` + `head -1` closing the pipe early gives `tar tzf`
+# a SIGPIPE (exit 141), which would abort the script before we can
+# inspect FIRST_ENTRY. Temporarily disable pipefail just for this read.
+set +o pipefail
 FIRST_ENTRY="$(tar tzf "${TARBALL}" 2>/dev/null | head -1 | tr -d '\n')"
+set -o pipefail
+if [[ -z "${FIRST_ENTRY}" ]]; then
+  echo "ERROR: could not read tarball entries — is ${TARBALL_NAME} a valid gzip tarball?" >&2
+  tar tzf "${TARBALL}" 2>&1 | head -3 >&2 || true
+  exit 5
+fi
+echo "  first entry: ${FIRST_ENTRY}"
 case "${FIRST_ENTRY}" in
   huggingface/*)
     STRIP=1
