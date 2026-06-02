@@ -69,6 +69,12 @@ networks:
     driver: bridge
 
 volumes:
+  # Same simorgh_huggingface_cache that svc-project-agent.yml declares
+  # — docker compose merges identically-named volumes across included
+  # files, so both services share the SAME on-disk cache without a
+  # second copy. The `driver: local` field must match the other
+  # declaration; mixing `external: true` here would cause
+  # "conflicting parameters" on `docker compose up`.
   huggingface_cache:
     name: simorgh_huggingface_cache
-    external: true
+    driver: local
