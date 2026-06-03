@@ -59,9 +59,13 @@ Pillow>=10.0.0
 # -------------------------------------------------
 #  PyTorch & Deep Learning
 # -------------------------------------------------
-torch==2.5.0
-torchvision==0.20.0
-torchaudio==2.5.0
+torch>=2.6,<2.8
+# torchvision / torchaudio versions MUST match the torch minor —
+# pip's resolver will downgrade torch back to 2.5 otherwise. 0.21
+# pairs with torch 2.6; 0.22 with torch 2.7. Bump together when
+# torch is bumped.
+torchvision>=0.21,<0.23
+torchaudio>=2.6,<2.8
 
 # Transformers & NLP
 transformers>=4.36.0
