@@ -17,4 +17,4 @@ sentence-transformers>=3.0.0
 # The base image (pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime) ships
 # torch 2.5; pip pulls 2.6+ from the CUDA 12.4 wheel index.
 torch>=2.6,<2.8
-transformers>=4.46
+transformers>=4.46,<5
