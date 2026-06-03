@@ -1,4 +1,11 @@
-FROM python:3.12-slim
+# Phase 7 added a bge-reranker-v2-m3 cross-encoder pass over
+# /search/content. That needs sentence-transformers + torch, which
+# would balloon a python:3.12-slim base by ~3 GB and pull torch from
+# pypi over the metered link. Reuse the pytorch/pytorch image the
+# rest of the torch-using services already pull
+# (project-agent-service, embeddings-service, doc-processor, backend
+# all use this base) — same layers, no extra disk.
+FROM pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
 # ---- Air-gapped registry proxies (override at build with --build-arg) ----
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TRUSTED_HOST=
@@ -31,7 +38,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY context-search-service/requirements.txt .
-RUN pip install --no-cache-dir --timeout 180 --retries 10 -r requirements.txt
+# torch is already in the pytorch base image — strip any torch line
+# out of requirements.txt at install time so pip doesn't try to
+# reinstall (or downgrade) the CUDA-built wheel.
+RUN sed -i '/^torch\b/d;/^torchaudio\b/d;/^torchvision\b/d' requirements.txt \
+ && pip install --no-cache-dir --timeout 180 --retries 10 -r requirements.txt
 
 COPY shared/ /opt/shared/
 RUN pip install --no-cache-dir --timeout 180 --retries 10 -e /opt/shared/
