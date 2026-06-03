@@ -10,7 +10,7 @@ psycopg[binary]==3.2.3
 # is wrapped in try/except inside app.py — if this dep is missing or
 # the model can't load, the endpoint falls back to ES ordering
 # unchanged. ~600 MB cached on first request.
-sentence-transformers>=3.0.0
+sentence-transformers>=3.0.0,<5
 # Phase 4 dense encoder (bge-m3) and bge-reranker-v2-m3 both ship
 # pickled weights. transformers>=4.46 refuses to call torch.load on
 # pickle with torch<2.6 (CVE). Upgrade both so the reranker can load.

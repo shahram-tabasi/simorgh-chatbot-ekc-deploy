@@ -73,7 +73,7 @@ tokenizers>=0.15.0
 accelerate>=0.25.0
 
 # Sentence Transformers (for embeddings) - REQUIRED for Graph RAG
-sentence-transformers>=3.0.0
+sentence-transformers>=3.0.0,<5
 
 # Token counting (for Context Window Manager)
 tiktoken>=0.5.0

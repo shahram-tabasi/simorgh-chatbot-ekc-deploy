@@ -28,7 +28,7 @@ numpy<2.0.0
 
 paramiko>=3.4.0
 tenacity>=8.2.3
-sentence-transformers>=3.0.0
+sentence-transformers>=3.0.0,<5
 # Phase 4 dense encoder (bge-m3) ships pickled pytorch_model.bin. From
 # transformers>=4.46 the library refuses to call torch.load on pickled
 # weights with torch<2.6 (CVE: arbitrary pickle deserialisation under
