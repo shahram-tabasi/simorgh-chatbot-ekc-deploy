@@ -29,7 +29,13 @@ numpy<2.0.0
 paramiko>=3.4.0
 tenacity>=8.2.3
 sentence-transformers>=3.0.0
-torch==2.5.0
+# Phase 4 dense encoder (bge-m3) ships pickled pytorch_model.bin. From
+# transformers>=4.46 the library refuses to call torch.load on pickled
+# weights with torch<2.6 (CVE: arbitrary pickle deserialisation under
+# weights_only=True). Pin both up so bge-m3 loads either via
+# safetensors (preferred when present) or the safer torch.load path.
+torch>=2.6,<2.8
+transformers>=4.46
 # fastembed for the BM25 sparse encoder in services/qdrant_hybrid.
 # Pulls in onnxruntime; CPU-only path is ~120 MB. The hybrid path
 # falls back to dense-only when this fails to import.
