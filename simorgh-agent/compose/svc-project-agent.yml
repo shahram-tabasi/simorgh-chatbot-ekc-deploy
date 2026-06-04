@@ -47,16 +47,24 @@ services:
       - LLM_GATEWAY_URL=http://llm-gateway:8030
       # CoT planner endpoint. Priority order in cot_engine._call_llm,
       # controlled by COT_PLANNER_PRIMARY:
-      #   harmony     (default) → LLM_GATEWAY_URL with Harmony tool calls
-      #                           (gpt-oss-20b on .61 emits submit_plan via
-      #                           native tool_calls channel; rich plans).
-      #   guided_json           → LLM_GATEWAY_URL with vLLM guided_json
-      #                           decoding (schema-constrained; still gpt-oss
-      #                           on .61, kept for A/B testing).
-      #   Both paths auto-fall-through to COT_LLM_BASE_URL (Qwen2.5-VL-7B
-      #   on .62) if the gpt-oss reply is empty / unparseable, and finally
-      #   to the legacy self.llm_service path.
-      - COT_PLANNER_PRIMARY=${COT_PLANNER_PRIMARY:-harmony}
+      #   harmony      → LLM_GATEWAY_URL with tools=[submit_plan]; the
+      #                  model emits the plan as a native tool_call.
+      #                  Despite the legacy name this is generic OpenAI
+      #                  tool calling — works on Qwen3 (hermes parser)
+      #                  AND gpt-oss; produces the richest multi-step
+      #                  plans because the model isn't squeezed into a
+      #                  minimum-effort JSON.
+      #   guided_json  (default) → LLM_GATEWAY_URL with vLLM guided_json
+      #                  schema-constrained decoding. Fully deterministic.
+      #                  Qwen3 produces strong plans here too (unlike
+      #                  gpt-oss, which degenerated to 1-step plans —
+      #                  the original reason harmony was forced on).
+      #   Both auto-fall-through to COT_LLM_BASE_URL (VLM on .62) if the
+      #   reply is empty/unparseable, then to the legacy llm_service path.
+      # Default is now guided_json: Qwen3 is reliable at structured
+      # output, and a schema-locked planner can't loop or emit prose.
+      # Flip to harmony if you want the model to author free-form plans.
+      - COT_PLANNER_PRIMARY=${COT_PLANNER_PRIMARY:-guided_json}
       # Engine selector. Unset/empty = default static plan-and-execute.
       # Set COT_ENGINE_MODE=react (in .env) to use the ReAct
       # reason→tool→observe loop (services/react_engine.py); falls back to

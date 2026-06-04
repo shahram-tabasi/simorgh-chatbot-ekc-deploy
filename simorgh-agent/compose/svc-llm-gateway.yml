@@ -4,7 +4,7 @@
 #
 # Routes between three OpenAI-compatible backends:
 #   online       → api.openai.com           (OPENAI_API_KEY)
-#   offline-text → 192.168.1.61/v1          (gpt-oss-20b   via vllm-openai)
+#   offline-text → 192.168.1.61/v1          (qwen3-30b-a3b via vllm-openai)
 #   offline-vlm  → 192.168.1.62/v1          (qwen2-vl-7b   via vllm-openai)
 #
 # offline-text vs offline-vlm is auto-selected per request: any message
@@ -49,10 +49,16 @@ services:
       - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
 
       # Offline mode: text-only LLM on 192.168.1.61
-      # gpt-oss-20b 16-bit served via vllm/vllm-openai with --tensor-parallel-size 2
-      # across 2× A30. Match LOCAL_LLM_MODEL_TEXT to the LLM_SERVED_NAME on .61.
+      # Qwen3-30B-A3B-Instruct-2507 (4-bit AWQ MoE) served via
+      # vllm/vllm-openai with --tool-call-parser hermes on 1× A30.
+      # Match LOCAL_LLM_MODEL_TEXT to --served-model-name on .61.
       - LOCAL_LLM_URL_TEXT=${LOCAL_LLM_URL_TEXT:-http://192.168.1.61/v1}
-      - LOCAL_LLM_MODEL_TEXT=${LOCAL_LLM_MODEL_TEXT:-gpt-oss-20b}
+      - LOCAL_LLM_MODEL_TEXT=${LOCAL_LLM_MODEL_TEXT:-qwen3-30b-a3b}
+      # Harmony response sanitiser. gpt-oss emitted Harmony channel
+      # tokens (<|channel|>commentary …) that had to be stripped; Qwen3
+      # does NOT, so the sanitiser is OFF by default. Set to 1 ONLY if
+      # you roll back to gpt-oss-20b.
+      - OFFLINE_TEXT_HARMONY=${OFFLINE_TEXT_HARMONY:-0}
 
       # Offline mode: VLM on 192.168.1.62 (A30 24GB)
       - LOCAL_LLM_URL_VLM=${LOCAL_LLM_URL_VLM:-http://192.168.1.62/v1}

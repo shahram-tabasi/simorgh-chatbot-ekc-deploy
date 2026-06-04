@@ -386,12 +386,16 @@ async def _do_chat_completion(
     body = r.json()
     choice = (body.get("choices") or [{}])[0]
     msg    = choice.get("message", {}) or {}
-    # gpt-oss Harmony cleanup: drop the `analysis` channel (unaligned
-    # CoT — never expose) and, if vLLM wasn't served with
-    # `--reasoning-parser openai_gptoss`, collapse raw Harmony tokens
-    # in `content` to the `final` channel. Also recovers tool calls
-    # from Harmony commentary when the OpenAI-shape parser missed them.
-    is_gpt_oss = backend_kind == "offline_text"
+    # Harmony cleanup is gpt-oss-specific: drop the `analysis` channel
+    # and collapse raw Harmony tokens / recover commentary-channel tool
+    # calls. Qwen3 uses the Hermes tool-call format and emits NO Harmony
+    # channel tokens, so this sanitiser is a no-op for it AND its tool-
+    # call recovery could mis-fire on a clean response — so we gate it
+    # behind OFFLINE_TEXT_HARMONY (default 0 = off, set 1 only when the
+    # offline backend is gpt-oss). See svc-llm-gateway.yml.
+    harmony_enabled = os.getenv("OFFLINE_TEXT_HARMONY", "0").lower() in (
+        "1", "true", "yes", "on")
+    is_gpt_oss = backend_kind == "offline_text" and harmony_enabled
     debug: Dict[str, Any] = {}
     if is_gpt_oss:
         msg, debug = sanitize_chat_message(msg)
@@ -557,11 +561,13 @@ async def _stream_chat_completion(
 ) -> AsyncIterator[str]:
     """Yield content chunks (str) parsed from an OpenAI streaming response.
 
-    For offline_text (gpt-oss) the chunks are scrubbed through
+    For offline_text gpt-oss the chunks are scrubbed through
     _HarmonyStreamFilter so the analysis channel never reaches the
-    client, even when vLLM isn't served with the openai_gptoss
-    reasoning parser. delta.reasoning_content is dropped unconditionally."""
-    is_gpt_oss = backend_kind == "offline_text"
+    client. Gated behind OFFLINE_TEXT_HARMONY (default off) — Qwen3
+    emits no Harmony tokens so the filter is unneeded and is skipped."""
+    harmony_enabled = os.getenv("OFFLINE_TEXT_HARMONY", "0").lower() in (
+        "1", "true", "yes", "on")
+    is_gpt_oss = backend_kind == "offline_text" and harmony_enabled
     harmony = _HarmonyStreamFilter() if is_gpt_oss else None
     async with httpx.AsyncClient(timeout=_timeout_sec()) as c:
         async with c.stream(

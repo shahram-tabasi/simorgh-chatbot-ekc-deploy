@@ -1,19 +1,23 @@
 # =============================================================================
 # LLM SERVER — 192.168.1.61 (NVIDIA A30 24 GB × 1)
 # =============================================================================
-# Stack architecture (post-Harmony migration):
+# Stack architecture (post-Qwen3 migration — replaced gpt-oss-20b/Harmony):
 #
 #   nginx :80
 #     ├── /generate-stream → ai_adapter :9100 (FastAPI translator)
 #     │                          └── calls ai_service /v1/chat/completions
 #     └── everything else  → ai_service :9000 (vLLM serve)
 #
-# ai_service runs vLLM's native OpenAI server with the openai_harmony
-# tool-call parser, so `tools=[...]` requests get parsed into proper
-# `message.tool_calls` responses (Harmony's native channel). This is
-# what makes gpt-oss-20b a viable planner — guided_json was forcing
-# the model into a worst-case minimum-effort JSON which produced
-# 1-step "Direct response" degenerate plans.
+# ai_service runs vLLM's native OpenAI server with the HERMES tool-call
+# parser (Qwen3's native tool-call format), so `tools=[...]` requests get
+# parsed into proper `message.tool_calls` responses — INCLUDING MULTIPLE
+# parallel tool_calls in one assistant turn, which gpt-oss-20b's Harmony
+# path could not do (it returned one call per turn and looped; see vLLM
+# issues #22578 / #36849 / #32587). The model is the MoE
+# Qwen3-30B-A3B-Instruct-2507 (30.5B total / 3.3B active) quantized to
+# 4-bit AWQ so it fits the 24GB A30 with headroom for a 16k KV cache.
+# Apache-2.0, 119-language pretraining (incl. Persian), non-thinking
+# "Instruct" variant so it doesn't fight the agent's own CoT planner.
 #
 # ai_adapter is a tiny (~50 MB, no GPU) FastAPI sidecar that keeps the
 # seven legacy callers of /generate-stream working without touching
@@ -21,10 +25,12 @@
 # thinking_level, stream} body into an OpenAI /v1/chat/completions
 # request and streams the response back in the legacy SSE shape.
 #
-# The previous custom ai_service (bespoke FastAPI + Unsloth + vLLM
-# library mode) is no longer used. Its code stays in ai/ for
-# reference / rollback. To roll back, swap the ai_service image
-# back to simorgh-llm-ai-service:local and revert the command.
+# Rollback to gpt-oss-20b: revert the ai_service `command:` block
+# (model → /models/unsloth-gpt-oss-20b-16bit, served-model-name →
+# gpt-oss-20b, tool-call-parser → openai, drop --quantization), restore
+# the harmony_cache volume mount + HF_HUB_OFFLINE env, and set
+# OFFLINE_TEXT_HARMONY=1 on the llm-gateway so its Harmony sanitiser
+# re-engages.
 #
 # Endpoints (post-migration):
 #   POST /v1/chat/completions     (vLLM serve, supports tools=)
@@ -34,18 +40,15 @@
 #   POST /generate-stream         (ai_adapter, legacy-shape SSE)
 #
 # The companion VLM box on .62 still uses vllm/vllm-openai directly
-# (see docker-compose.vlm.yml). With gpt-oss-20b now able to plan
-# correctly via Harmony, the VLM is no longer needed in the CoT
-# planner path — it can be repurposed for actual vision workloads
-# or retired entirely.
+# (see docker-compose.vlm.yml) for actual vision workloads.
 # =============================================================================
 
 services:
   # ---------------------------------------------------------------------------
-  # AI service — vLLM OpenAI server with native Harmony tool calling.
-  # Replaces the bespoke Unsloth+vLLM-library service; we proved in the
-  # harmony-test side-by-side that vLLM serve handles gpt-oss-20b tool
-  # calls correctly with --tool-call-parser openai.
+  # AI service — vLLM OpenAI server serving Qwen3-30B-A3B-Instruct-2507
+  # (4-bit AWQ) with the Hermes tool-call parser. Replaces gpt-oss-20b:
+  # Qwen3 emits MULTIPLE parallel tool_calls per turn and recovers across
+  # tools in multi-turn ReAct, which gpt-oss/Harmony structurally could not.
   # ---------------------------------------------------------------------------
   ai_service:
     image: vllm/vllm-openai:v0.21.0
@@ -55,48 +58,43 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - HF_TOKEN=${HF_TOKEN:-}
-      # gpt-oss-20b weights are already on disk; no re-validate against HF.
+      # Weights are already on disk (downloaded once over the slow link);
+      # don't re-validate against HF.
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
-      # openai_harmony's Rust HTTP client doesn't honor HTTP_PROXY env
-      # vars the way Python httpx does, so the harmony vocab is pre-
-      # downloaded to ./harmony_cache and mounted at the exact path
-      # tiktoken-rs hardcodes (/tmp/tiktoken-rs-cache).
-      # Pre-download recipe (run once on first deploy):
-      #   mkdir -p ./harmony_cache && sudo chmod 777 ./harmony_cache
-      #   docker run --rm --network=host \
-      #     -e HTTPS_PROXY=http://127.0.0.1:10809 \
-      #     -v $(pwd)/harmony_cache:/tmp/tiktoken-rs-cache \
-      #     python:3.12-slim bash -c '
-      #       pip install --quiet --no-cache-dir openai-harmony &&
-      #       python -c "from openai_harmony import load_harmony_encoding,
-      #       HarmonyEncodingName;
-      #       load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)"
-      #     '
     command:
       - "--model"
-      - "/models/unsloth-gpt-oss-20b-16bit"
+      # AWQ 4-bit MoE. Drop the directory named below onto MODEL_CACHE_PATH;
+      # HF repo: cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit
+      # (alt: stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ).
+      - "/models/${VLLM_MODEL_DIR:-Qwen3-30B-A3B-Instruct-2507-AWQ-4bit}"
       - "--served-model-name"
-      - "gpt-oss-20b"
+      - "${LOCAL_LLM_MODEL_TEXT:-qwen3-30b-a3b}"
       - "--host"
       - "0.0.0.0"
       - "--port"
       - "9000"
       - "--tensor-parallel-size"
       - "1"
-      # Harmony tool-call path expands the CoT system prompt + COT_PLAN_SCHEMA
-      # into ~13k tokens once the chat template wraps it. 8192 was rejecting
-      # those requests with "Input length (13121) exceeds model's maximum
-      # context length (8192)" and falling back to the VLM. 16384 gives
-      # headroom without ballooning KV-cache VRAM (gpt-oss-20b supports 32k
-      # natively but we don't need it on a 24GB A30).
+      # AWQ Marlin kernel — fastest AWQ path on Ampere (A30). vLLM
+      # auto-detects AWQ from the quant config too, but pinning it is
+      # explicit and avoids a fallback to the slower generic AWQ kernel.
+      - "--quantization"
+      - "awq_marlin"
+      # 16k input+output. VRAM budget on 24GB: ~16GB weights + ~1.5GB KV
+      # (16k, 1 seq) + ~2.5GB overhead ≈ 20GB. ~4GB headroom = 2-3
+      # concurrent 16k sessions. For more concurrency add
+      # --kv-cache-dtype fp8 (halves KV).
       - "--max-model-len"
       - "${VLLM_MAX_MODEL_LEN:-16384}"
       - "--gpu-memory-utilization"
-      - "${VLLM_GPU_UTIL:-0.85}"
+      - "${VLLM_GPU_UTIL:-0.92}"
       - "--enable-auto-tool-choice"
+      # Qwen3's chat template carries Hermes-style <tool_call> tags; this
+      # is the parser vLLM documents for Qwen3. THIS is the change that
+      # unlocks parallel tool calls vs gpt-oss's broken Harmony path.
       - "--tool-call-parser"
-      - "openai"
+      - "hermes"
       - "--enable-prefix-caching"
       - "--trust-remote-code"
     volumes:
@@ -104,8 +102,6 @@ services:
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models:ro
       # HF cache (writable so vLLM can drop tokenizer metadata).
       - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface
-      # Pre-downloaded harmony vocab at the path tiktoken-rs expects.
-      - ./harmony_cache:/tmp/tiktoken-rs-cache
     networks:
       - ai_net
     deploy:
@@ -145,7 +141,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - UPSTREAM_URL=http://ai_service:9000
-      - UPSTREAM_MODEL=${LOCAL_LLM_MODEL_TEXT:-gpt-oss-20b}
+      - UPSTREAM_MODEL=${LOCAL_LLM_MODEL_TEXT:-qwen3-30b-a3b}
       - TIMEOUT_SEC=1800
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (xray)
