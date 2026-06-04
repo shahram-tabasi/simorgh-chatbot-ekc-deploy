@@ -2119,8 +2119,26 @@ async def soft_create_project(project_id: str, req: SoftCreateRequest,
                             detail=f"missing required fields: {missing}")
 
     from services.simorgh_soft_client import create_project, deep_link
+    spec_payload = spec.model_dump()
+
+    # Phase E: docker-image-tag-style projectName so each Design Suite
+    # project carries the chatbot project + user + creation timestamp
+    # in its name (e.g. `mobarakeh-hsm2:shahram-20260603-1715`). The
+    # LLM-extracted human-readable name is preserved in
+    # projectDescription. Tagging is env-gated (SOFT_PROJECT_TAGGING=0
+    # falls back to the verbatim extracted name).
     try:
-        created = await create_project(spec.model_dump())
+        from services.project_tagger import apply_tag_to_spec
+        spec_payload = apply_tag_to_spec(
+            spec_payload,
+            chatbot_project=project.get("name"),
+            user=current_user,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("project_tagger: tagging failed (%s) — sending verbatim name", e)
+
+    try:
+        created = await create_project(spec_payload)
     except Exception as e:
         logger.error("simorgh-soft create failed: %s", e)
         raise HTTPException(status_code=502,

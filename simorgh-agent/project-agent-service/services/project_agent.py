@@ -2348,6 +2348,26 @@ class ProjectManagerAgent:
             try:
                 from services.simorgh_soft_client import create_project, deep_link
                 spec = state.get("spec") or {}
+                # Phase E: docker-image-tag-style projectName so each
+                # Design Suite project from this chatbot project gets a
+                # traceable tag (<chatbot-project>:<user>-<YYYYMMDD-HHMM>).
+                # Best-effort: any failure falls through to the verbatim
+                # extracted name. Pull chatbot project + user identifier
+                # from the agent context for the tag components.
+                try:
+                    from services.project_tagger import apply_tag_to_spec
+                    proj_row = await self.memory_service.get_project(project_id)
+                    user_hint = (proj_row or {}).get("owner_id") or "anonymous"
+                    spec = apply_tag_to_spec(
+                        spec,
+                        chatbot_project=(proj_row or {}).get("name"),
+                        user=user_hint,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "project_tagger (submit_soft_spec): tagging failed (%s) — verbatim name",
+                        e,
+                    )
                 created = await create_project(spec)
             except Exception as e:
                 logger.error("submit_soft_spec POST failed: %s", e)
