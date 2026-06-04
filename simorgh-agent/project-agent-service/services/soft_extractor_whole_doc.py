@@ -58,7 +58,7 @@ WHOLE_DOC_TEMPERATURE = float(os.getenv("SOFT_WHOLE_DOC_TEMPERATURE", "1.0"))
 _FIELD_LABELS: Dict[str, str] = {
     # ── Project Identity ───────────────────────────────────────────────
     "projectName":         "Project name (e.g. 'Mobarakeh Steel HSM-2 6.6kV Switchgear')",
-    "projectDescription":  "Short description / scope, free-text",
+    "projectDescription":  "PROSE description of the project's scope, in one or two complete sentences. NEVER copy the document's title-block (lines containing 'DOCUMENT No.', 'Rev. A', 'Page of N', pipe-separators '|'); if no real prose description exists in the document, leave this field absent.",
     "projectNumber":       "OE number / project code, format YYAXXXXX (e.g. '04A12065')",
     "projectId":           "Internal PID (often equals OE number)",
     "client":              "End customer / owner / operating entity",

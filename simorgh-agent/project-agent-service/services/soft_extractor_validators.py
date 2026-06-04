@@ -305,6 +305,46 @@ def validate_standard(v: Any) -> str:
     return norm
 
 
+# ---------------------------------------------------------------------------
+# Free-text validators — catch cover-page metadata that LLMs love to grab
+# ---------------------------------------------------------------------------
+# Title-block tokens — a description like
+#   "Technical Specification for 6.6kV Switchgears | | | DOCUMENT No. 347180ETS802 | Rev. A | | Page of 1 27 |"
+# is the PDF's first-page header copied verbatim. It's never what a
+# planner means by "project description". These regexes find the
+# tell-tale tokens.
+_TITLE_BLOCK_SIGNALS = re.compile(
+    r"(?i)"
+    r"(?:document\s+no\.?[:\s]|rev(?:\.|\s|ision)\s*[A-Z0-9]|"
+    r"page\s+(?:of|\d+\s+of)\s+\d|doc[.-]?\s?id|sheet\s+\d+)"
+)
+# Pipe-separated runs are a strong signal we copied a table-of-cover row.
+_PIPE_RUN = re.compile(r"\|\s*\|")
+
+
+def validate_description(v: Any) -> str:
+    """Reject project descriptions that are clearly the PDF cover-page
+    metadata (DOCUMENT No., Rev. A, Page of N), pipe-run table rows, or
+    too short to be meaningful. Free-text Persian and English prose
+    sentences pass through with whitespace normalisation."""
+    s = re.sub(r"\s+", " ", str(v).strip())
+    if not s or len(s) < 8:
+        raise ValueError(f"too short to be a description: {v!r}")
+    if _PIPE_RUN.search(s):
+        raise ValueError(
+            f"looks like a pipe-separated table row (cover page?): {s[:80]!r}"
+        )
+    if _TITLE_BLOCK_SIGNALS.search(s):
+        raise ValueError(
+            f"contains title-block metadata (DOCUMENT No / Rev / Page): {s[:80]!r}"
+        )
+    # Reject "filename = description" — the LLM sometimes parrots the
+    # PDF filename as the description, which is uselessly redundant.
+    if re.search(r"\.(pdf|docx?|xlsx?|dwg)\b", s, re.I) and len(s) < 60:
+        raise ValueError(f"description is just a filename: {s!r}")
+    return s
+
+
 def validate_country(v: Any) -> str:
     norm = _normalise_against(v, COUNTRIES)
     if norm is None:
@@ -330,6 +370,7 @@ def validate_language(v: Any) -> str:
 _VALIDATORS: dict[str, Callable[[Any], str]] = {
     # Identity
     "projectNumber":                                   normalise_oe_number,
+    "projectDescription":                              validate_description,
     # Regional
     "standard":                                        validate_standard,
     "country":                                         validate_country,
