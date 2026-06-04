@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+from services.project_facts import build_project_facts
+
 logger = logging.getLogger(__name__)
 
 MAX_STEPS = int(os.getenv("REACT_MAX_STEPS", "8"))
@@ -493,10 +495,24 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
         max_steps=steps_cap,
         source_rules=_source_rules(project_context, plan_ctx),
     )
+    # Pinned <project_facts> block — pulled out of source_rules into a
+    # canonical immutable block so the OE / repo / source flags are
+    # ALWAYS visible to the model, even when the rolling transcript
+    # sheds older tool exchanges. messages[0] is pinned by _trim_history
+    # so this block survives every turn.
+    proj_meta = (project_context.get("project") or {}) or project_context
+    facts_block = build_project_facts(
+        proj_meta,
+        user_id=(
+            project_context.get("user_id")
+            or proj_meta.get("owner_id")
+            or proj_meta.get("user_id")
+        ),
+    )
     proj_line = (f"Project: {project_context.get('name','')}  "
                  f"project_id: {project_id}")
     messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": system},
+        {"role": "system", "content": f"{facts_block}\n\n{system}"},
         {"role": "user",
          "content": f"{proj_line}{grounding_text}\n\nUser request:\n{user_input}"},
     ]

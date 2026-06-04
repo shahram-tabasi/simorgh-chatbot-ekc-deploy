@@ -18,6 +18,11 @@ from models.project_models import (
     TaskCreate, TaskTrigger, TaskStatus
 )
 from knowledge.tpms_schema_instructions import get_tpms_instructions
+from services.project_facts import (
+    build_project_facts,
+    PROJECT_FACTS_OPEN,
+    PROJECT_FACTS_CLOSE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1281,7 +1286,21 @@ class COTEngine:
         if plan_addendum:
             system_prompt = system_prompt + plan_addendum
 
+        # Pinned <project_facts> block — mirrors Claude Code's CLAUDE.md
+        # pattern. The OE / repo / source-enabled flags live inside this
+        # block, marked with sentinel tags so the budget trimmer below
+        # leaves them untouched even when context_str gets head-chopped.
+        facts_block = build_project_facts(
+            proj_meta,
+            user_id=(
+                project_context.get("user_id")
+                or proj_meta.get("owner_id")
+                or proj_meta.get("user_id")
+            ),
+        )
+
         user_msg = (
+            f"{facts_block}\n\n"
             f"Project Context:\n{context_str}{plan_grounding_text}"
             f"\n\nUser Request:\n{request.user_input}"
         )
