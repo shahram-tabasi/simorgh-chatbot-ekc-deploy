@@ -1078,6 +1078,94 @@ class ProjectManagerAgent:
 
         return results, final_response
 
+    # ------------------------------------------------------------------
+    # canUseTool gate (Claude Code parallel). Single chokepoint in
+    # _execute_single_task that authorises every tool call against the
+    # project's enabled sources + the write-tool policy. Returns None
+    # when the call is allowed, or a precondition_blocked envelope when
+    # it must be refused. The envelope mirrors submit_soft_spec's shape
+    # so the ReAct loop's existing "HANDLING precondition_blocked"
+    # recipe in REACT_SYSTEM_PROMPT can route the model to the right
+    # next action without a separate code path.
+    # ------------------------------------------------------------------
+    _TPMS_FAMILY = (
+        "tpms_fetch", "tpms_get_text", "get_project_context",
+        "get_holidays", "get_company_directory", "get_employee",
+        "lookup_employee", "list_departments",
+    )
+    _TECHSERVER_FAMILY = (
+        "techserver_get_tree", "techserver_search",
+        "techserver_fetch_files", "techserver_read_artifact",
+        "techserver_sync",
+    )
+    _GITLAB_FAMILY = (
+        "get_project_tree", "read_artifact_mcp", "read_file_mcp",
+        "search_blobs", "list_branches_mcp", "list_projects_mcp",
+        "list_user_projects_mcp",
+    )
+    _EKC_TOOLS = ("search_technical_knowledge",)
+
+    def _can_use_tool(
+        self, tool: str, tool_input: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(tool, str) or not tool:
+            return None
+        pc = getattr(self, "_active_plan_ctx", None)
+        if pc is None:
+            return None  # No plan context (background / init call) — allow.
+
+        def _blocked(blocked_on: str, resolver: str, msg: str,
+                     hint: str = "") -> Dict[str, Any]:
+            envelope = {
+                "error": "precondition_blocked",
+                "blocked_on": blocked_on,
+                "resolver": resolver,
+                "tool_attempted": tool,
+                "message": msg,
+            }
+            if hint:
+                envelope["hint"] = hint
+            logger.info("canUseTool DENY tool=%s reason=%s", tool, blocked_on)
+            return {
+                "output": json.dumps(envelope, ensure_ascii=False, default=str),
+                "metadata": {"tool": tool, "via": "dispatcher_guard",
+                             "blocked_on": blocked_on, "resolver": resolver},
+            }
+
+        # Source-disabled families.
+        if tool in self._TPMS_FAMILY and not getattr(pc, "has_tpms", False):
+            return _blocked(
+                "source_disabled:tpms",
+                "list_project_documents",
+                f"{tool} is unavailable: this project did not enable TPMS.",
+                hint=("Use documents_rag.* / techserver_* / gitlab_mcp.* "
+                      "tools — whichever sources the project DOES have."),
+            )
+        if (tool in self._TECHSERVER_FAMILY
+                and not getattr(pc, "has_techserver", False)):
+            return _blocked(
+                "source_disabled:techserver",
+                "list_project_documents",
+                f"{tool} is unavailable: this project did not enable techserver.",
+            )
+        if (tool in self._GITLAB_FAMILY
+                and not getattr(pc, "has_selected_repo", False)):
+            return _blocked(
+                "source_disabled:gitlab",
+                "list_project_documents",
+                f"{tool} is unavailable: this project has no GitLab repo "
+                "selected.",
+            )
+        if tool in self._EKC_TOOLS and not getattr(pc, "has_ekc", True):
+            # has_ekc may not exist on legacy PlanContext (defaults to
+            # True — see the EKC backward-compat note in cot_engine).
+            return _blocked(
+                "source_disabled:ekc",
+                "search_project_documents",
+                "EKC technical-knowledge search is disabled for this project.",
+            )
+        return None
+
     async def _maybe_fuzzy_retry_read(
         self, tool: str, tool_input: dict, result: Any,
     ) -> Optional[dict]:
@@ -2059,6 +2147,19 @@ class ProjectManagerAgent:
                     "title": meta.get("title") or "",
                 }
             tool_input["_previous_results"] = labelled
+
+        # canUseTool gate — single chokepoint where every dispatched
+        # tool call is checked against the project's enabled sources +
+        # the write-tool policy BEFORE the dispatcher fork below.
+        # Previously these checks lived as scattered ifs in the cot_engine
+        # prompt and the react_engine allow set; here they're enforced at
+        # runtime so a hallucinated tool call from a disabled source can't
+        # silently 404 against an empty backend. Returns a
+        # precondition_blocked envelope shaped like the soft_bridge errors
+        # so the ReAct loop can recover (call the suggested resolver).
+        _gate_block = self._can_use_tool(tool, tool_input)
+        if _gate_block is not None:
+            return _gate_block
 
         has_mcp_tool = (
             self.mcp_manager
