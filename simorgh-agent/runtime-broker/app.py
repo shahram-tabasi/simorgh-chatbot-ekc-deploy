@@ -79,10 +79,23 @@ MEM_LIMIT        = os.getenv("BROKER_MEM_LIMIT", "1g")
 CPU_QUOTA        = int(os.getenv("BROKER_CPU_QUOTA", "100000"))   # of 100000 / cpu
 PIDS_LIMIT       = int(os.getenv("BROKER_PIDS_LIMIT", "512"))
 
-# Idle teardown: containers untouched for this many seconds get stopped
-# (the named volume stays — session_start rehydrates it). 0 disables.
-IDLE_TTL_SEC     = int(os.getenv("BROKER_IDLE_TTL_SEC", "86400"))   # 24h
-IDLE_SWEEP_SEC   = int(os.getenv("BROKER_IDLE_SWEEP_SEC", "600"))   # 10m
+# Two-tier idle teardown (Phase 4):
+#   - After IDLE_STOP_SEC of no activity → docker stop (container kept,
+#     volume kept; restart is a docker-start, ~100ms).
+#   - After IDLE_REMOVE_SEC of no activity → docker rm (volume kept;
+#     restart is a docker-create + docker-start, ~1-2s plus image
+#     pull only if missing). Saves ~30-80MB of stopped-container
+#     metadata per project after a day of inactivity.
+# IDLE_TTL_SEC is preserved as a back-compat alias for STOP.
+IDLE_STOP_SEC    = int(os.getenv(
+    "BROKER_IDLE_STOP_SEC",
+    os.getenv("BROKER_IDLE_TTL_SEC", "900")))   # 15m
+IDLE_REMOVE_SEC  = int(os.getenv("BROKER_IDLE_REMOVE_SEC", "86400"))  # 24h
+IDLE_SWEEP_SEC   = int(os.getenv("BROKER_IDLE_SWEEP_SEC", "600"))    # 10m
+# Back-compat: code paths and logs still reference IDLE_TTL_SEC. Keep
+# the symbol pointing at the stop tier (semantics preserved from
+# pre-Phase-4 behaviour for callers reading IDLE_TTL_SEC).
+IDLE_TTL_SEC     = IDLE_STOP_SEC
 
 # Concurrent-exec cap per project. Sized to the canonical 4-source
 # fan-out (gitlab + techserver + tpms + uploads); raise if you see
@@ -240,6 +253,17 @@ def _create_and_start(project_id: str, image: str, env: dict[str, str]):
         # PID table climbs against PIDS_LIMIT over days of use. See
         # github.com/krallin/tini for the canonical writeup.
         init=True,
+        # Per-container log cap. Without this, a runaway loop inside
+        # the container can fill the host's /var/lib/docker partition.
+        # 50 files × 5 MB = 250 MB hard cap per project. Honours the
+        # operator's env override.
+        log_config={
+            "type": os.getenv("BROKER_LOG_DRIVER", "json-file"),
+            "config": {
+                "max-size": os.getenv("BROKER_LOG_MAX_SIZE", "5m"),
+                "max-file": os.getenv("BROKER_LOG_MAX_FILES", "5"),
+            },
+        },
         detach=True,
         restart_policy={"Name": "unless-stopped"},
     )
@@ -758,20 +782,23 @@ def session_git_commit_push(project_id: str, req: CommitPushRequest):
 #   - swept every IDLE_SWEEP_SEC seconds.
 # ---------------------------------------------------------------------------
 async def _idle_sweep_loop() -> None:
-    if IDLE_TTL_SEC <= 0:
+    if IDLE_STOP_SEC <= 0:
         log.info("idle_sweep_disabled")
         return
     import asyncio
     log.info("idle_sweep_started",
-             ttl_sec=IDLE_TTL_SEC, sweep_sec=IDLE_SWEEP_SEC)
+             stop_sec=IDLE_STOP_SEC, remove_sec=IDLE_REMOVE_SEC,
+             sweep_sec=IDLE_SWEEP_SEC)
+    # Two-tier sweep — handles ALL containers tagged with the
+    # CONTAINER_PREFIX, including those already stopped (they may be
+    # eligible for the remove tier).
     while True:
         try:
             await asyncio.sleep(IDLE_SWEEP_SEC)
             now = time.time()
-            for c in _dockerc.containers.list(filters={"name": CONTAINER_PREFIX}):
+            for c in _dockerc.containers.list(
+                    all=True, filters={"name": CONTAINER_PREFIX}):
                 if not c.name.startswith(CONTAINER_PREFIX):
-                    continue
-                if c.status != "running":
                     continue
                 project_id = c.name[len(CONTAINER_PREFIX):]
                 last = _last_activity.get(project_id)
@@ -781,8 +808,32 @@ async def _idle_sweep_loop() -> None:
                     _last_activity[project_id] = now
                     continue
                 idle = now - last
-                if idle >= IDLE_TTL_SEC:
-                    log.info("idle_stop", project_id=project_id, idle_sec=int(idle))
+
+                # Remove tier (highest precedence): container untouched
+                # long enough that even the stopped metadata isn't worth
+                # keeping. Volume stays — next session_start recreates
+                # the container from the image and remounts /work.
+                if (IDLE_REMOVE_SEC > 0
+                        and idle >= IDLE_REMOVE_SEC):
+                    log.info("idle_remove", project_id=project_id,
+                             idle_sec=int(idle))
+                    try:
+                        c.remove(force=True)
+                        _last_activity.pop(project_id, None)
+                        with _exec_sems_lock:
+                            _exec_sems.pop(project_id, None)
+                    except APIError as e:
+                        log.warning("idle_remove_failed",
+                                    project_id=project_id, error=str(e))
+                    continue
+
+                # Stop tier: running container that's been idle long
+                # enough. After stop it stays in the docker list with
+                # status="exited"; next session_start docker-starts it.
+                if (c.status == "running"
+                        and idle >= IDLE_STOP_SEC):
+                    log.info("idle_stop", project_id=project_id,
+                             idle_sec=int(idle))
                     try:
                         c.stop(timeout=10)
                     except APIError as e:
