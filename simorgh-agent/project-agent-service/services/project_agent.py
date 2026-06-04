@@ -1410,6 +1410,43 @@ class ProjectManagerAgent:
                     "sections": ["panels", "feeders"],
                 }
 
+        # UNCONDITIONAL ARG-FILL — the plan-gated remap blocks above only
+        # fire when the active plan name matches the chosen tool's family.
+        # In a multi-source project (gitlab + techserver + tpms + uploads),
+        # the planner may pick `tpms_fetch` while the active plan is
+        # `upload_deep`, and the TPMS injection is skipped → tool runs
+        # without `oenum`. This block injects the canonical project facts
+        # for any tool that clearly needs them, regardless of plan name.
+        # The values mirror what the pinned <project_facts> block tells
+        # the model is true for this project.
+        _pc_fill = getattr(self, "_active_plan_ctx", None)
+        if isinstance(tool, str) and _pc_fill and isinstance(raw_input, (dict, type(None))):
+            _ri = dict(raw_input) if isinstance(raw_input, dict) else {}
+            _tpms_family = {
+                "get_project_context", "tpms_fetch", "tpms_get_text",
+            }
+            _ts_family = {
+                "techserver_get_tree", "techserver_search",
+                "techserver_fetch_files", "techserver_read_artifact",
+            }
+            _filled = False
+            if tool in _tpms_family:
+                _oe = (getattr(_pc_fill, "tpms_oenum", None)
+                       or getattr(_pc_fill, "techserver_oenum", None))
+                if _oe and not _ri.get("oenum"):
+                    _ri["oenum"] = str(_oe); _filled = True
+            elif tool in _ts_family:
+                _oe = (getattr(_pc_fill, "techserver_oenum", None)
+                       or getattr(_pc_fill, "tpms_oenum", None))
+                if _oe and not _ri.get("oenum"):
+                    _ri["oenum"] = str(_oe); _filled = True
+            if _filled:
+                raw_input = _ri
+                logger.info(
+                    "unconditional arg-fill tool=%s injected oenum -> %s",
+                    tool, _ri.get("oenum"),
+                )
+
         # UPLOAD REMAP. When the active plan is upload_deep, the planner
         # still reaches for gitlab/repo tools (search_blobs, search_context,
         # read_artifact_mcp, get_project_tree) which 404 on a repo-less
@@ -2277,16 +2314,40 @@ class ProjectManagerAgent:
                     "kind": "proposals_pending",
                     "pending_count": len(pending),
                 })
+                # Typed precondition_blocked envelope. The agent has an
+                # explicit `resolver` (next tool to call) and a `recipe`
+                # the model can follow — turns the previous prose-only
+                # "blocked" reply into a directly actionable signal so the
+                # ReAct loop continues instead of stopping with the user
+                # confused.
+                blocked = {
+                    "error": "precondition_blocked",
+                    "blocked_on": "pending_proposals",
+                    "pending_count": len(pending),
+                    "resolver": "list_pending_proposals",
+                    "recipe": [
+                        "1. Call list_pending_proposals to see every "
+                        "field, value, source, and confidence.",
+                        "2. For each: action='approve' if relevant + "
+                        "correct, action='reject' if irrelevant, OR "
+                        "call ask_user when ambiguous.",
+                        "3. Call approve_proposals ONCE with the bundle.",
+                        "4. Re-attempt submit_soft_spec.",
+                    ],
+                    "message": (f"Cannot submit yet — {len(pending)} "
+                                "extracted value(s) are waiting for "
+                                "review. Resolve them via "
+                                "list_pending_proposals + "
+                                "approve_proposals, then re-submit."),
+                }
                 return {
-                    "output": ("Cannot submit yet — I have "
-                               f"{len(pending)} extracted value(s) waiting "
-                               "for your review. Please approve or reject the "
-                               "pending proposals in the chat panel; I'll "
-                               "submit once they're cleared."),
+                    "output": json.dumps(blocked, ensure_ascii=False,
+                                         default=str),
                     "metadata": {"tool": "submit_soft_spec",
                                  "via": "soft_bridge",
                                  "blocked_on": "pending_proposals",
-                                 "pending_count": len(pending)},
+                                 "pending_count": len(pending),
+                                 "resolver": "list_pending_proposals"},
                 }
             gaps = state.get("gaps") or []
             if gaps:
@@ -2334,16 +2395,31 @@ class ProjectManagerAgent:
                     })
                 except Exception as e:
                     logger.warning("auto ask_user for gaps failed: %s", e)
+                blocked = {
+                    "error": "precondition_blocked",
+                    "blocked_on": "spec_gaps",
+                    "gaps": gaps,
+                    "resolver": "ask_user",
+                    "recipe": [
+                        "1. The fields above are missing from the spec.",
+                        "2. The chat has auto-opened a form; the user "
+                        "will answer in the next turn.",
+                        "3. STOP and wait — do NOT call submit_soft_spec "
+                        "again until the form has been submitted.",
+                    ],
+                    "message": (
+                        "Cannot submit yet — these spec fields need user "
+                        "input: " + ", ".join(gaps) +
+                        ". A form has been opened; please fill it in."),
+                }
                 return {
-                    "output": (
-                        "I can't submit yet — the following project field"
-                        f"{'s' if len(gaps) != 1 else ''} need your input: "
-                        + ", ".join(gaps) +
-                        ". I've opened a quick form under the Design Suite "
-                        "status chip above; please fill it in and I'll "
-                        "submit on the next turn."),
-                    "metadata": {"tool": "submit_soft_spec", "via": "soft_bridge",
-                                 "gaps": gaps},
+                    "output": json.dumps(blocked, ensure_ascii=False,
+                                         default=str),
+                    "metadata": {"tool": "submit_soft_spec",
+                                 "via": "soft_bridge",
+                                 "blocked_on": "spec_gaps",
+                                 "gaps": gaps,
+                                 "resolver": "ask_user"},
                 }
             try:
                 from services.simorgh_soft_client import create_project, deep_link

@@ -127,6 +127,24 @@ Rules:
     Reject it instead. When unsure, ask.
   - submit_soft_spec REFUSES when pending proposals exist. Clear them
     first via approve_proposals + ask_user.
+
+HANDLING precondition_blocked TOOL RESULTS:
+- When a tool returns JSON shaped like
+    {"error":"precondition_blocked","blocked_on":"...","resolver":"<tool>","recipe":[...]}
+  this is NOT a failure. The tool refused because a prerequisite step
+  hasn't run yet. You MUST:
+    1. READ the `recipe` field — it lists the exact next actions.
+    2. CALL the tool named in `resolver` on the very next step (or the
+       first step of the recipe).
+    3. After resolving, CALL THE ORIGINAL TOOL AGAIN.
+- Specifically for submit_soft_spec blocked on pending_proposals: next
+  step MUST be list_pending_proposals (the resolver). Do NOT stop the
+  loop and write a final answer — the user is asking for the project to
+  be created; the recipe tells you exactly how to get there.
+- Specifically for submit_soft_spec blocked on spec_gaps: the form has
+  already been opened for the user. STOP and write a short final answer
+  acknowledging which fields you're waiting on; do NOT re-call
+  submit_soft_spec in the same turn.
 """
 
 
