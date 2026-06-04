@@ -18,7 +18,7 @@ import React from "react";
 import axios from "axios";
 import { Wand2, Loader, CheckCircle2, ExternalLink, AlertCircle, Inbox } from "lucide-react";
 
-import ProposalsReviewDrawer, { Proposal } from "./ProposalsReviewDrawer";
+import ProposalsReviewDrawer, { Proposal, CategoriesResp } from "./ProposalsReviewDrawer";
 import { notify } from "../services/notifyBus";
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "/api";
@@ -63,6 +63,7 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
   const [vals, setVals]           = React.useState<Record<string, any>>({});
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [busyIds, setBusyIds]     = React.useState<Set<string>>(new Set());
+  const [categories, setCategories] = React.useState<CategoriesResp | null>(null);
   // Track the previous pending count so we can fire a one-shot toast when
   // NEW proposals come in — we don't spam on every poll tick.
   const lastCountRef = React.useRef<number>(0);
@@ -136,6 +137,19 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
     const t = setInterval(fetchState, 8000);
     return () => clearInterval(t);
   }, [fetchState, projectId, isLegacy]);
+
+  // Fetch the category taxonomy once per session — the list is global
+  // (not project-scoped) and very stable, so the polling above doesn't
+  // need to refetch it. Drawer falls back to a flat layout if this
+  // request fails.
+  React.useEffect(() => {
+    if (!isLegacy) return;
+    let cancelled = false;
+    axios.get<CategoriesResp>(`${API_BASE}/v2/agent/soft/categories`)
+      .then((r) => { if (!cancelled) setCategories(r.data); })
+      .catch(() => { /* drawer renders flat if categories unavailable */ });
+    return () => { cancelled = true; };
+  }, [isLegacy]);
 
   // Compute these always (hooks-before-return rule).
   const pendingByField = proposals?.pending_by_field || {};
@@ -316,6 +330,7 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
         pendingByField={pendingByField}
         approvedCount={approvedCount}
         busyIds={busyIds}
+        categories={categories}
         onApprove={onApprove}
         onReject={onReject}
       />

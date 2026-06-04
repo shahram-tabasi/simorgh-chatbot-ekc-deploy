@@ -40,12 +40,30 @@ export type Proposal = {
   confidence:   number;
 };
 
+// Backend-provided category taxonomy (Phase C). Fetched once per
+// session from GET /soft/categories — the drawer renders one
+// collapsible section per group. If null/undefined, the drawer falls
+// back to a flat field-by-field layout (legacy behaviour).
+export type CategoryGroup = {
+  id:     string;
+  label:  string;
+  hint?:  string;
+  fields: string[];
+};
+export type CategoriesResp = {
+  groups:            CategoryGroup[];
+  field_to_category: Record<string, string>;
+  fallback:          string;
+};
+
 interface Props {
   open:           boolean;
   onClose:        () => void;
   pendingByField: Record<string, Proposal[]>;
   approvedCount?: number;
   busyIds?:       Set<string>;
+  /** Category taxonomy from GET /soft/categories. Null = flat fallback. */
+  categories?:    CategoriesResp | null;
   onApprove:      (proposal: Proposal, editedValue?: string) => void | Promise<void>;
   onReject:       (proposal: Proposal) => void | Promise<void>;
 }
@@ -111,6 +129,66 @@ const FIELD_META: Record<string, FieldMeta> = {
     { label: "MV wire / cable maker(s)", icon: Cable },
   "techSettings.wireManufacturer.lv":
     { label: "LV wire / cable maker(s)", icon: Cable },
+
+  // ── Phase C — alt nesting (technicalSettings.*) ───────────────────
+  "technicalSettings.mediumVoltage.nominalVoltage":
+    { label: "MV nominal voltage", unit: "kV", icon: Zap },
+  "technicalSettings.mediumVoltage.maxShortCircuitPower":
+    { label: "MV max short-circuit power", unit: "MVA", icon: Activity },
+  "technicalSettings.mediumVoltage.minShortCircuitPower":
+    { label: "MV min short-circuit power", unit: "MVA", icon: Activity },
+  "technicalSettings.lowVoltage.nominalVoltage":
+    { label: "LV nominal voltage", unit: "V", icon: Zap },
+  "technicalSettings.lowVoltage.frequency":
+    { label: "LV frequency", unit: "Hz", icon: Activity },
+  "technicalSettings.lowVoltage.permissibleTouchVoltage":
+    { label: "Permissible touch voltage", unit: "V", icon: ShieldCheck,
+      hint: "IEC 61936 — typical 50 V AC / 120 V DC for short fault clearance" },
+  "technicalSettings.lowVoltage.ambientTemperature":
+    { label: "LV ambient temperature", unit: "°C", icon: Thermometer },
+  "technicalSettings.lowVoltage.numberOfPoles":
+    { label: "Number of poles", icon: Cable, hint: "3 (3W) or 4 (3W+N)" },
+  "technicalSettings.lowVoltage.earthFaultDetection":
+    { label: "Earth-fault detection method", icon: ShieldCheck },
+
+  // ── Phase C — wire size (cross-section, mm²) ──────────────────────
+  "techSettings.wireSize.controlCircuit":
+    { label: "Control circuit", unit: "mm²", icon: Cable },
+  "techSettings.wireSize.ctSecondary":
+    { label: "CT secondary", unit: "mm²", icon: Cable },
+  "techSettings.wireSize.ptSecondary":
+    { label: "PT / VT secondary", unit: "mm²", icon: Cable },
+  "techSettings.wireSize.plcPowerSupply":
+    { label: "PLC power supply", unit: "mm²", icon: Cable },
+
+  // ── Phase C — wire colour (per IEC 60446) ─────────────────────────
+  "techSettings.wireColor.acPhase":
+    { label: "AC phase colour", icon: Cable,
+      hint: "IEC 60446: L1 brown / L2 black / L3 grey" },
+  "techSettings.wireColor.acNeutral":
+    { label: "AC neutral colour", icon: Cable, hint: "IEC default: blue" },
+  "techSettings.wireColor.dcPlus":
+    { label: "DC + colour", icon: Cable },
+  "techSettings.wireColor.dcMinus":
+    { label: "DC − colour", icon: Cable },
+  "techSettings.wireColor.plcInput":
+    { label: "PLC input colour", icon: Cable },
+  "techSettings.wireColor.plcOutput":
+    { label: "PLC output colour", icon: Cable },
+  "techSettings.wireColor.threePhase":
+    { label: "Three-phase code system", icon: Cable },
+
+  // ── Phase C — finishes / labelling ────────────────────────────────
+  "techSettings.others.thicknessOfPainting":
+    { label: "Paint coat thickness", unit: "µm", icon: ShieldCheck,
+      hint: "Typical 60–100 µm dry-film thickness" },
+  "techSettings.others.colorType":
+    { label: "Paint colour standard", icon: ShieldCheck,
+      hint: "IEC default: RAL 7032 light grey" },
+  "techSettings.others.backgroundColor":
+    { label: "Label background colour", icon: ShieldCheck },
+  "techSettings.others.writingColor":
+    { label: "Label engraving / writing colour", icon: ShieldCheck },
 };
 
 function fieldMeta(field: string): FieldMeta {
@@ -407,12 +485,45 @@ function GenericKeyValueView({ value }: { value: Record<string, any> }) {
 // Drawer
 // ===========================================================================
 export default function ProposalsReviewDrawer({
-  open, onClose, pendingByField, approvedCount = 0, busyIds, onApprove, onReject,
+  open, onClose, pendingByField, approvedCount = 0, busyIds,
+  categories, onApprove, onReject,
 }: Props) {
   const fields = Object.keys(pendingByField).sort();
   const totalPending = fields.reduce(
     (n, f) => n + (pendingByField[f]?.length || 0), 0);
   const [edits, setEdits] = React.useState<Record<string, string>>({});
+
+  // ── Category bucketing ─────────────────────────────────────────────
+  // Group pending fields into the IEC/SIMARIS-aligned sections served
+  // by GET /soft/categories. The drawer renders one collapsible section
+  // per group, in the canonical order. Anything the backend hasn't
+  // categorised (or new fields the frontend doesn't know about yet)
+  // lands in the trailing 'other' bucket.
+  const bucketed = React.useMemo(() => {
+    if (!categories?.groups?.length) return null;
+    const map = categories.field_to_category || {};
+    const fallback = categories.fallback || "other";
+    const buckets: Record<string, string[]> = {};
+    for (const group of categories.groups) buckets[group.id] = [];
+    buckets[fallback] = [];
+    for (const f of fields) {
+      if (!pendingByField[f]?.length) continue;
+      const cat = map[f] || fallback;
+      (buckets[cat] = buckets[cat] || []).push(f);
+    }
+    return buckets;
+  }, [fields, pendingByField, categories]);
+
+  // Per-section expanded state. Default: expanded if it has pending
+  // proposals, collapsed otherwise. The user can manually toggle to
+  // see what categories exist even when empty.
+  const [expandedSections, setExpandedSections] = React.useState<Record<string, boolean>>({});
+  const toggleSection = (id: string) =>
+    setExpandedSections((p) => ({ ...p, [id]: !((p[id] ?? null) === null
+      ? (bucketed?.[id]?.length ?? 0) > 0
+      : p[id]) }));
+  const isExpanded = (id: string): boolean =>
+    expandedSections[id] ?? ((bucketed?.[id]?.length ?? 0) > 0);
 
   React.useEffect(() => { if (open) setEdits({}); }, [open]);
   React.useEffect(() => {
@@ -478,7 +589,95 @@ export default function ProposalsReviewDrawer({
                 </div>
               )}
 
-              {fields.map((field) => {
+              {/* Category-grouped layout (preferred) — falls back to the
+                  flat per-field cards below when /soft/categories was
+                  unreachable at app load. */}
+              {bucketed && categories && categories.groups.map((group) => {
+                const groupFields = bucketed[group.id] || [];
+                const groupPendingCount = groupFields.reduce(
+                  (n, f) => n + (pendingByField[f]?.length || 0), 0);
+                if (groupPendingCount === 0) return null; // hide empty cats
+                const open = isExpanded(group.id);
+                return (
+                  <div key={group.id}
+                       className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
+                    {/* Category header — click to collapse/expand */}
+                    <button
+                      onClick={() => toggleSection(group.id)}
+                      className="w-full px-3 py-2.5 flex items-center gap-2 text-left
+                                 hover:bg-white/[0.04] transition-colors"
+                    >
+                      <ChevronDown
+                        className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform
+                                    ${open ? "" : "-rotate-90"}`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-white font-medium flex items-center gap-2">
+                          {group.label}
+                          <span className="text-[11px] text-indigo-200 bg-indigo-500/15
+                                            border border-indigo-400/30 rounded-full
+                                            px-1.5 py-0 tabular-nums">
+                            {groupPendingCount}
+                          </span>
+                        </div>
+                        {group.hint && (
+                          <div className="text-[11px] text-gray-400 mt-0.5 truncate">
+                            {group.hint}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                    {/* Per-field cards inside the category */}
+                    {open && (
+                      <div className="border-t border-white/10 divide-y divide-white/[0.06]">
+                        {groupFields.map((field) => {
+                          const items = pendingByField[field] || [];
+                          if (!items.length) return null;
+                          const meta = fieldMeta(field);
+                          const FieldIcon = meta.icon;
+                          return (
+                            <div key={field} className="bg-white/[0.02]">
+                              <div className="px-3 py-2 border-b border-white/[0.06]">
+                                <div className="flex items-center gap-2">
+                                  {FieldIcon && (
+                                    <FieldIcon className="w-3.5 h-3.5 text-indigo-300/80 flex-shrink-0" />
+                                  )}
+                                  <div className="text-xs text-gray-100 font-medium">
+                                    {meta.label}
+                                  </div>
+                                  <div className="text-[10px] text-gray-500 font-mono ml-auto truncate max-w-[180px]">
+                                    {field}
+                                  </div>
+                                </div>
+                                {meta.hint && (
+                                  <div className="text-[10px] text-gray-400 mt-0.5">{meta.hint}</div>
+                                )}
+                              </div>
+                              <div className="divide-y divide-white/[0.06]">
+                                {items.map((prop) => (
+                                  <ProposalRow
+                                    key={prop.id}
+                                    prop={prop}
+                                    editValue={edits[prop.id]}
+                                    busy={!!busyIds?.has(prop.id)}
+                                    onEditChange={(val) => setEdits({ ...edits, [prop.id]: val })}
+                                    onApprove={(edited) => onApprove(prop, edited)}
+                                    onReject={() => onReject(prop)}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Fallback flat layout — used when /soft/categories
+                  failed to fetch (e.g. server old, gateway down). */}
+              {!bucketed && fields.map((field) => {
                 const items = pendingByField[field] || [];
                 if (items.length === 0) return null;
                 const meta = fieldMeta(field);
