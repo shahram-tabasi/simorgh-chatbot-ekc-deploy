@@ -2486,6 +2486,51 @@ class ProjectManagerAgent:
             if rest_fallback is not None:
                 return rest_fallback
 
+        # read_run_state — fetch externalised tool output by ref. The
+        # ReAct loop stashes long outputs in Redis under
+        # runstate:<chain_id>:<call_id> and inlines a condensed
+        # envelope in the transcript; this tool resolves the ref back
+        # to the full bytes when the model genuinely needs them.
+        if tool == "read_run_state":
+            try:
+                from services import run_state as _rs
+                ref = ((tool_input or {}).get("ref") or "").strip()
+                if not ref or ":" not in ref:
+                    return {"output": json.dumps({
+                                "error": "bad_ref",
+                                "message": ("ref must be '<chain_id>:"
+                                            "<call_id>'")}),
+                            "metadata": {"tool": "read_run_state",
+                                         "via": "run_state",
+                                         "error": "bad_ref"}}
+                chain_id, call_id = _rs.parse_ref(ref)
+                full = await _rs.fetch_output(
+                    self.memory,
+                    project_id=str(project_id),
+                    chain_id=chain_id,
+                    call_id=call_id,
+                )
+                if full is None:
+                    return {"output": json.dumps({
+                                "error": "not_found",
+                                "ref": ref,
+                                "message": ("Ref expired or never "
+                                            "stashed. Use the preview "
+                                            "from the transcript.")}),
+                            "metadata": {"tool": "read_run_state",
+                                         "via": "run_state",
+                                         "error": "not_found"}}
+                return {"output": full,
+                        "metadata": {"tool": "read_run_state",
+                                     "via": "run_state",
+                                     "chars": len(full),
+                                     "ref": ref}}
+            except Exception as e:
+                logger.warning("read_run_state failed: %s", e)
+                return {"output": f"[read_run_state failed: {e}]",
+                        "metadata": {"tool": "read_run_state",
+                                     "via": "run_state"}}
+
         # TodoWrite / TodoRead — local externalised-state tools. The
         # ReAct loop allocates an AgentTodos store per chain and pins
         # its rendered block into messages[0]; these tools mutate /

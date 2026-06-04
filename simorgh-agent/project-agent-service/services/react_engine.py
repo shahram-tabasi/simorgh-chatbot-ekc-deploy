@@ -33,6 +33,7 @@ import httpx
 from services.project_facts import (
     build_project_facts, resolve_sources_enabled, resolve_repo_path,
 )
+from services import run_state as _run_state
 from services.agent_todos import (
     AgentTodos, get_store as _get_todos_store, clear_store as _clear_todos_store,
     TODOS_OPEN, TODOS_CLOSE,
@@ -145,6 +146,22 @@ Rules:
   - submit_soft_spec REFUSES when pending proposals exist. Clear them
     first via approve_proposals + ask_user.
 
+EXTERNALISED TOOL OUTPUTS (run_state pattern):
+- Tool results longer than the inline threshold come back as a small
+  JSON envelope, not raw text:
+    {{"output_preview": "<head + tail snippet>", "ref": "<chain>:<call>",
+     "full_chars": <N>}}
+- The preview almost always contains the IDs / paths / standards /
+  numbers you need to plan the next step. ANSWER FROM THE PREVIEW
+  whenever possible.
+- ONLY call read_run_state(ref=…) when the preview is genuinely
+  insufficient (e.g. you need to grep the bulk for a specific value
+  buried in the middle). Spurious read_run_state calls re-inflate the
+  context window and defeat the whole purpose of the externalisation.
+- Refs from earlier turns survive within this chat run for ~24 h
+  (Redis TTL). If a ref returns {{"error":"not_found"}}, fall back to
+  the preview you already have or re-issue the original tool call.
+
 HANDLING precondition_blocked TOOL RESULTS:
 - When a tool returns JSON shaped like
     {{"error":"precondition_blocked","blocked_on":"...","resolver":"<tool>","recipe":[...]}}
@@ -214,13 +231,15 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
     se = resolve_sources_enabled(project_context)
 
     # Always-useful core: uploaded-document tools + web + sandbox code exec
-    # + the agent's own todo list (TodoWrite/TodoRead-style state).
+    # + the agent's own todo list (TodoWrite/TodoRead-style state)
+    # + read_run_state for fetching externalised tool outputs by ref.
     allow = {
         "list_project_documents", "read_document",
         "search_project_documents", "retrieve_chunks",
         "web_search", "web_search_news",
         "session_exec_tool", "shell",
         "todo_write", "todo_list",
+        "read_run_state",
     }
     # Design Suite slot-collector tools (only when the bridge is enabled).
     if os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on"):
@@ -353,6 +372,25 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
                 "double-check IDs before a dependency edit."
             ),
             "parameters": {"type": "object", "properties": {}}}})
+    if "read_run_state" not in have:
+        tools.append({"type": "function", "function": {
+            "name": "read_run_state",
+            "description": (
+                "Fetch the FULL output of a prior tool call that was "
+                "externalised. The transcript shows a condensed envelope "
+                "for any tool whose raw output exceeded the inlining "
+                "threshold: the envelope carries `output_preview` (head + "
+                "tail), a `ref` string, and `full_chars`. Call this with "
+                "the same `ref` ONLY when the preview is genuinely "
+                "insufficient — most of the time the preview contains "
+                "the IDs / paths / standards you need and you should "
+                "answer from it directly."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "ref": {"type": "string",
+                        "description": "Externalised-output ref from a "
+                                       "prior tool envelope."}
+            }, "required": ["ref"]}}})
 
     # Guarantee the document tools + a python sandbox are always present,
     # even if the registry snapshot is incomplete at call time.
@@ -757,15 +795,31 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
             "role": "assistant", "content": "",
             "tool_calls": assistant_tool_calls,
         })
+        # Externalise long outputs to run-state (Redis). The transcript
+        # gets a condensed envelope; the full output is fetchable by
+        # ref via the read_run_state local tool. Short outputs inline
+        # verbatim (no extra hop needed).
         for w in wave:
+            call = w["call"]
+            output_str = w["output"] or ""
+            envelope = await _run_state.stash_output(
+                getattr(agent, "memory", None),
+                project_id=project_id,
+                chain_id=chain_id,
+                call_id=call["id"],
+                output=output_str,
+            )
+            if envelope is not None:
+                body = _run_state.envelope_to_transcript_str(envelope)
+            else:
+                body = output_str[:2500]
             messages.append({
-                "role": "tool", "tool_call_id": w["call"]["id"],
-                "name": w["call"]["name"],
-                "content": (w["output"] or "")[:2500],
+                "role": "tool", "tool_call_id": call["id"],
+                "name": call["name"],
+                "content": body,
             })
             prev_results[str(len(prev_results) + 1)] = w["result"]
-            steps.append({"title": w["call"]["name"],
-                          "tool": w["call"]["name"]})
+            steps.append({"title": call["name"], "tool": call["name"]})
 
         # Keep the running transcript within the model's context window.
         # The system message (with the pre-loaded document CONTEXT) and the
