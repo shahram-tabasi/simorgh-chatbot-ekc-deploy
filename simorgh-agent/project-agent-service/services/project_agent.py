@@ -2003,6 +2003,40 @@ class ProjectManagerAgent:
             if rest_fallback is not None:
                 return rest_fallback
 
+        # TodoWrite / TodoRead — local externalised-state tools. The
+        # ReAct loop allocates an AgentTodos store per chain and pins
+        # its rendered block into messages[0]; these tools mutate /
+        # read the store. cot_chain_id is stamped on the task dict by
+        # react_engine so we know which store to address.
+        if tool in ("todo_write", "todo_list"):
+            try:
+                from services import agent_todos as _at
+                _cid = str(task.get("cot_chain_id") or "")
+                if not _cid:
+                    return {"output": "todo_write/todo_list: no chain_id on task",
+                            "metadata": {"tool": tool, "via": "agent_todos",
+                                         "error": "missing_chain_id"}}
+                store = _at.get_store(_cid)
+                if tool == "todo_write":
+                    items = (tool_input or {}).get("todos") or []
+                    rendered = store.write(items)
+                    return {"output": json.dumps(
+                                {"ok": True, "todos": rendered}, default=str),
+                            "metadata": {"tool": "todo_write",
+                                         "via": "agent_todos",
+                                         "count": len(rendered)}}
+                else:
+                    rendered = store.list()
+                    return {"output": json.dumps(
+                                {"todos": rendered}, default=str),
+                            "metadata": {"tool": "todo_list",
+                                         "via": "agent_todos",
+                                         "count": len(rendered)}}
+            except Exception as e:
+                logger.warning("agent_todos tool %s failed: %s", tool, e)
+                return {"output": f"[{tool} failed: {e}]",
+                        "metadata": {"tool": tool, "via": "agent_todos"}}
+
         # Design Suite slot-collector tools. Local (not MCP) so the ReAct
         # loop can read the live spec state, ask the user for clarifications
         # via a structured SSE event, and finally submit to simorgh-soft.
