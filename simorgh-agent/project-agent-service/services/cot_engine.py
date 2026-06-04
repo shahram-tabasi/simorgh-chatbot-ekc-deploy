@@ -671,9 +671,13 @@ TOOL CATALOG (CORE)
 ============================================================================
 PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
 ============================================================================
-1. ONE STEP suffices for tree/list questions ("what's in my project /
-   repo / files"). DO NOT add a "now read everything" follow-up step.
-   The tree is the answer.
+1. TREE/LIST questions ("what's in my project / repo / files / specs /
+   where is the X directory") fan out across EVERY ENABLED source in
+   ONE parallel level, then ONE synthesis step. That's 2 levels total
+   (parallel retrievals + synthesis). DO NOT plan a single-source step
+   when multiple sources are enabled — the user has no idea which
+   storage their files live in. DO NOT add a "now read everything"
+   follow-up; the tree itself is the answer.
 2. NEVER plan more than 3 steps for a yes/no, "summary of X", or "what
    is X" question. Brevity wins; each step costs 10–20s of model time.
 3. PARALLELISE INDEPENDENT STEPS — assign them the same `depends_on`
@@ -732,9 +736,18 @@ PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
 ============================================================================
 CANONICAL EXAMPLES
 ============================================================================
-Q: "what's in my project?"
-PLAN: [1] gitlab_mcp.get_project_tree(project=<repo>)
-DONE. 1 step. No read, no synthesis — the tree is the answer.
+Q: "what's in my project?" / "list files" / "list specs" / "where is the spec directory"
+PLAN: fan out across EVERY enabled listing source in parallel, then synthesise.
+      All steps below are [1] = same level = run in parallel:
+  [1] documents_rag.list_project_documents(user_id, project_oenum)   ← ALWAYS
+  [1] techserver_get_tree(oenum=<OE>)        (only if techserver enabled)
+  [1] gitlab_mcp.get_project_tree(project=<repo>) (only if gitlab enabled)
+  [2] llm.synthesize  (depends_on=[1])
+The user has no idea which storage their files landed in. The agent MUST
+check every storage it has access to before claiming "nothing here". If a
+single source returns empty, that's NOT a complete answer — the other
+enabled sources MUST be tried too. DO NOT plan a single-source step for
+this question.
 
 Q: "analyse HCS-DD-EL-SP-003.pdf"  (user named the file)
 PLAN: [1] gitlab_mcp.read_artifact_mcp(project=<repo>,
