@@ -157,3 +157,128 @@ def build_project_facts(
 def looks_like_project_facts(s: str) -> bool:
     """Cheap detector used by history-trim helpers to skip the block."""
     return PROJECT_FACTS_OPEN in (s or "")
+
+
+# ---------------------------------------------------------------------------
+# Canonical resolvers — DEDUP the project-context lookup chains that
+# previously had to be open-coded at every caller (3+ subtly different
+# fallback orders in cot_engine.py alone). Single source of truth so
+# planner, executor, gate, and prompts all see the same view of "what
+# does this project have".
+# ---------------------------------------------------------------------------
+def resolve_sources_enabled(project_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return the project's sources_enabled dict, regardless of whether the
+    caller spread the project row directly or nested it under `project`.
+
+    Replaces the open-coded pattern
+        (pc.get("sources_enabled") or
+         (pc.get("project") or {}).get("sources_enabled") or {})
+    repeated at multiple sites.
+    """
+    pc = project_context or {}
+    return (pc.get("sources_enabled")
+            or (pc.get("project") or {}).get("sources_enabled")
+            or {})
+
+
+def resolve_proj_meta(project_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The project row itself. Some call sites pass it spread into
+    project_context, others nest it under `project`.
+    """
+    pc = project_context or {}
+    return (pc.get("project") or {}) or pc
+
+
+def resolve_tpms_oenum(project_context: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Canonical TPMS OE number resolver. Order:
+        1. project.tpms_oenum            (set at TPMS-source project creation)
+        2. project_context.tpms_oenum    (some callers spread it at top level)
+        3. sources_enabled.techserver_oenum   (techserver wizard sometimes
+           used this column as a stand-in OE before the dedicated
+           tpms_oenum field existed).
+    Returns None when no OE is known — never the empty string.
+    """
+    pc = project_context or {}
+    meta = resolve_proj_meta(pc)
+    se = resolve_sources_enabled(pc)
+    val = (meta.get("tpms_oenum")
+           or pc.get("tpms_oenum")
+           or se.get("techserver_oenum"))
+    return str(val) if val else None
+
+
+def resolve_techserver_oenum(project_context: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Canonical TechServer OE resolver. Order:
+        1. sources_enabled.techserver_oenum  (set by the techserver wizard)
+        2. project.techserver_oenum          (some legacy projects)
+        3. project.tpms_oenum                (same OE used for both sources
+                                              in single-source-of-truth setups)
+        4. project_context.tpms_oenum
+    Returns None when nothing is known.
+    """
+    pc = project_context or {}
+    meta = resolve_proj_meta(pc)
+    se = resolve_sources_enabled(pc)
+    val = (se.get("techserver_oenum")
+           or meta.get("techserver_oenum")
+           or meta.get("tpms_oenum")
+           or pc.get("tpms_oenum"))
+    return str(val) if val else None
+
+
+def resolve_repo_path(project_context: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Canonical GitLab repo path resolver (`group/path` form)."""
+    pc = project_context or {}
+    meta = resolve_proj_meta(pc)
+    val = (meta.get("gitlab_repo_path")
+           or pc.get("gitlab_repo_path")
+           or meta.get("gitlab_repo_url")
+           or pc.get("gitlab_repo_url"))
+    return str(val) if val else None
+
+
+# ---------------------------------------------------------------------------
+# precondition_blocked envelope — single canonical shape so submit_soft_spec
+# (pending), submit_soft_spec (gaps), and the canUseTool gate all emit the
+# same JSON. The ReAct loop's "HANDLING precondition_blocked" recipe in
+# REACT_SYSTEM_PROMPT pattern-matches on this exact shape; previously each
+# call site invented its own field set, which the model had to learn case
+# by case.
+# ---------------------------------------------------------------------------
+def build_precondition_blocked(
+    *,
+    blocked_on: str,
+    resolver: str,
+    message: str,
+    tool_attempted: Optional[str] = None,
+    recipe: Optional[list] = None,
+    hint: Optional[str] = None,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Return the canonical envelope dict the dispatcher serialises into
+    a tool result. Fields:
+      error             "precondition_blocked" (constant)
+      blocked_on        short reason key, e.g. "pending_proposals",
+                        "spec_gaps", "source_disabled:tpms"
+      resolver          the tool the model should call NEXT to unblock
+      message           human-readable explanation (also rendered to user
+                        if the model echoes it back)
+      tool_attempted    name of the tool that was refused (optional)
+      recipe            ordered list of next-step instructions (optional)
+      hint              one-line suggestion for the model (optional)
+      **extra           anything else the caller wants surfaced in metadata
+    """
+    out: Dict[str, Any] = {
+        "error":      "precondition_blocked",
+        "blocked_on": blocked_on,
+        "resolver":   resolver,
+        "message":    message,
+    }
+    if tool_attempted:
+        out["tool_attempted"] = tool_attempted
+    if recipe:
+        out["recipe"] = list(recipe)
+    if hint:
+        out["hint"] = hint
+    out.update(extra)
+    return out

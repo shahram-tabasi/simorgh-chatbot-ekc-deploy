@@ -284,38 +284,24 @@ class ProjectManagerAgent:
             from services.cot_plans import PlanContext
 
             project_for_ctx = await self.memory.get_project(project_id)
-            repo_path = (project_for_ctx or {}).get("gitlab_repo_path") if project_for_ctx else None
-            selected_repos = [repo_path] if repo_path else []
             modality = "voice" if (channel.value == "voice"
                                     or (channel.value == "chat" and False)) else "text"
 
-            # Techserver source: the project ticked the legacy SMB source
-            # at creation. sources_enabled lives at the top level or nested
-            # under `project`. techserver_oenum (wizard) → tpms_oenum.
-            _se = (
-                (project_for_ctx or {}).get("sources_enabled")
-                or ((project_for_ctx or {}).get("project") or {}).get("sources_enabled")
-                or {}
+            # Canonical resolvers — same fallback chain used by cot_engine,
+            # react_engine, and the dispatcher gate so the planner, agent
+            # loop, and tool guard never see different "this project's OE"
+            # values.
+            from services.project_facts import (
+                resolve_sources_enabled, resolve_tpms_oenum,
+                resolve_techserver_oenum, resolve_repo_path,
             )
+            _se = resolve_sources_enabled(project_for_ctx)
+            repo_path = resolve_repo_path(project_for_ctx)
+            selected_repos = [repo_path] if repo_path else []
             has_techserver = bool(_se.get("techserver"))
-            techserver_oenum = (
-                _se.get("techserver_oenum")
-                or (project_for_ctx or {}).get("techserver_oenum")
-                or (project_for_ctx or {}).get("tpms_oenum")
-                or None
-            )
-
-            # TPMS source. tpms_oenum is set by the wizard (and stored on
-            # the projects row). The executor uses it to swap the literal
-            # "<oenum>" placeholder the planner LLM emits — the canonical
-            # CoT prompt examples use angle-bracket conventions throughout,
-            # so the LLM faithfully copies them as tool arguments.
+            techserver_oenum = resolve_techserver_oenum(project_for_ctx)
             has_tpms = bool(_se.get("tpms"))
-            tpms_oenum = (
-                (project_for_ctx or {}).get("tpms_oenum")
-                or _se.get("techserver_oenum")
-                or None
-            )
+            tpms_oenum = resolve_tpms_oenum(project_for_ctx)
 
             plan_ctx = PlanContext(
                 user_input=user_input,
@@ -1179,15 +1165,11 @@ class ProjectManagerAgent:
 
         def _blocked(blocked_on: str, resolver: str, msg: str,
                      hint: str = "") -> Dict[str, Any]:
-            envelope = {
-                "error": "precondition_blocked",
-                "blocked_on": blocked_on,
-                "resolver": resolver,
-                "tool_attempted": tool,
-                "message": msg,
-            }
-            if hint:
-                envelope["hint"] = hint
+            from services.project_facts import build_precondition_blocked
+            envelope = build_precondition_blocked(
+                blocked_on=blocked_on, resolver=resolver, message=msg,
+                tool_attempted=tool, hint=hint or None,
+            )
             logger.info("canUseTool DENY tool=%s reason=%s", tool, blocked_on)
             return {
                 "output": json.dumps(envelope, ensure_ascii=False, default=str),
@@ -2778,18 +2760,22 @@ class ProjectManagerAgent:
                     "kind": "proposals_pending",
                     "pending_count": len(pending),
                 })
-                # Typed precondition_blocked envelope. The agent has an
-                # explicit `resolver` (next tool to call) and a `recipe`
-                # the model can follow — turns the previous prose-only
-                # "blocked" reply into a directly actionable signal so the
-                # ReAct loop continues instead of stopping with the user
-                # confused.
-                blocked = {
-                    "error": "precondition_blocked",
-                    "blocked_on": "pending_proposals",
-                    "pending_count": len(pending),
-                    "resolver": "list_pending_proposals",
-                    "recipe": [
+                # Typed precondition_blocked envelope (canonical shape
+                # from project_facts.build_precondition_blocked — same
+                # contract as canUseTool gate and spec_gaps below, so
+                # the model's HANDLING precondition_blocked recipe
+                # pattern-matches uniformly across every refusal site).
+                from services.project_facts import build_precondition_blocked
+                blocked = build_precondition_blocked(
+                    blocked_on="pending_proposals",
+                    resolver="list_pending_proposals",
+                    tool_attempted="submit_soft_spec",
+                    message=(f"Cannot submit yet — {len(pending)} "
+                             "extracted value(s) are waiting for "
+                             "review. Resolve them via "
+                             "list_pending_proposals + "
+                             "approve_proposals, then re-submit."),
+                    recipe=[
                         "1. Call list_pending_proposals to see every "
                         "field, value, source, and confidence.",
                         "2. For each: action='approve' if relevant + "
@@ -2798,12 +2784,8 @@ class ProjectManagerAgent:
                         "3. Call approve_proposals ONCE with the bundle.",
                         "4. Re-attempt submit_soft_spec.",
                     ],
-                    "message": (f"Cannot submit yet — {len(pending)} "
-                                "extracted value(s) are waiting for "
-                                "review. Resolve them via "
-                                "list_pending_proposals + "
-                                "approve_proposals, then re-submit."),
-                }
+                    pending_count=len(pending),
+                )
                 return {
                     "output": json.dumps(blocked, ensure_ascii=False,
                                          default=str),
@@ -2859,23 +2841,24 @@ class ProjectManagerAgent:
                     })
                 except Exception as e:
                     logger.warning("auto ask_user for gaps failed: %s", e)
-                blocked = {
-                    "error": "precondition_blocked",
-                    "blocked_on": "spec_gaps",
-                    "gaps": gaps,
-                    "resolver": "ask_user",
-                    "recipe": [
+                from services.project_facts import build_precondition_blocked
+                blocked = build_precondition_blocked(
+                    blocked_on="spec_gaps",
+                    resolver="ask_user",
+                    tool_attempted="submit_soft_spec",
+                    message=(
+                        "Cannot submit yet — these spec fields need user "
+                        "input: " + ", ".join(gaps) +
+                        ". A form has been opened; please fill it in."),
+                    recipe=[
                         "1. The fields above are missing from the spec.",
                         "2. The chat has auto-opened a form; the user "
                         "will answer in the next turn.",
                         "3. STOP and wait — do NOT call submit_soft_spec "
                         "again until the form has been submitted.",
                     ],
-                    "message": (
-                        "Cannot submit yet — these spec fields need user "
-                        "input: " + ", ".join(gaps) +
-                        ". A form has been opened; please fill it in."),
-                }
+                    gaps=list(gaps),
+                )
                 return {
                     "output": json.dumps(blocked, ensure_ascii=False,
                                          default=str),

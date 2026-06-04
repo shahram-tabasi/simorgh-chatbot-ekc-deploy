@@ -30,7 +30,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from services.project_facts import build_project_facts
+from services.project_facts import (
+    build_project_facts, resolve_sources_enabled, resolve_repo_path,
+)
 from services.agent_todos import (
     AgentTodos, get_store as _get_todos_store, clear_store as _clear_todos_store,
     TODOS_OPEN, TODOS_CLOSE,
@@ -162,12 +164,10 @@ HANDLING precondition_blocked TOOL RESULTS:
 def _source_rules(project_context: Dict[str, Any], plan_ctx) -> str:
     """Compact allow/deny guidance mirroring the plan-and-execute source
     gating, so the loop reaches for the right tools for THIS project."""
-    se = (project_context.get("sources_enabled")
-          or (project_context.get("project") or {}).get("sources_enabled") or {})
+    se = resolve_sources_enabled(project_context)
     lines = ["ALLOWED DATA SOURCES FOR THIS PROJECT (do not use others):"]
     if se.get("gitlab"):
-        repo = (project_context.get("gitlab_repo_path")
-                or (project_context.get("project") or {}).get("gitlab_repo_path"))
+        repo = resolve_repo_path(project_context)
         lines.append(f"- gitlab_mcp on repo `{repo or '(see project)'}` "
                      "(get_project_tree, read_artifact_mcp, search_blobs).")
     else:
@@ -188,8 +188,7 @@ def _source_rules(project_context: Dict[str, Any], plan_ctx) -> str:
 
 
 def _excluded_prefixes(project_context: Dict[str, Any]) -> List[str]:
-    se = (project_context.get("sources_enabled")
-          or (project_context.get("project") or {}).get("sources_enabled") or {})
+    se = resolve_sources_enabled(project_context)
     ex: List[str] = []
     if not se.get("tpms"):
         ex += ["tpms_", "get_project_context"]
@@ -208,8 +207,7 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
     to read uploads from the sandbox workspace). We allow only the document
     tools, code/web tools, and the project's actually-enabled source tools.
     """
-    se = (project_context.get("sources_enabled")
-          or (project_context.get("project") or {}).get("sources_enabled") or {})
+    se = resolve_sources_enabled(project_context)
 
     # Always-useful core: uploaded-document tools + web + sandbox code exec
     # + the agent's own todo list (TodoWrite/TodoRead-style state).

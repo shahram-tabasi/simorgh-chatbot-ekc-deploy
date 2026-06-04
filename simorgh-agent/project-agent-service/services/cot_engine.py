@@ -22,6 +22,11 @@ from services.project_facts import (
     build_project_facts,
     PROJECT_FACTS_OPEN,
     PROJECT_FACTS_CLOSE,
+    resolve_sources_enabled,
+    resolve_proj_meta,
+    resolve_tpms_oenum,
+    resolve_techserver_oenum,
+    resolve_repo_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -739,6 +744,51 @@ PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
 {tpms_instructions}
 
 ============================================================================
+SIMORGH DESIGN SUITE — HITL APPROVAL RECIPE (when the user asks to
+CREATE / BUILD / SUBMIT / OPEN their Design Suite project, incl. Persian
+"پروژه سیمرغ دیزاین رو بساز")
+============================================================================
+The Design Suite project is built from PROPOSALS extracted across uploads,
+TPMS, and chat. The HITL gate requires the user to APPROVE or REJECT
+every proposed value before the spec is written. The CoT plan MUST
+encode the exact ordering — submit_soft_spec REFUSES otherwise and
+returns a `precondition_blocked` envelope.
+
+Canonical plan (all dependencies explicit so the DAG executor batches):
+  [1] list_pending_proposals()                          depends_on=[]
+  [2] approve_proposals(approvals=[…])                  depends_on=[1]
+        ← bundle approve/reject decisions for every relevant proposal;
+          for ambiguous ones, plan an llm.ask_user step instead.
+  [3] read_soft_spec()                                  depends_on=[2]
+        ← confirms gaps=[] and conflicts=[] after approvals land.
+  [4] submit_soft_spec()                                depends_on=[3]
+        ← returns {ready, deep_link, soft_project_id}.
+  [5] llm.synthesize (reply with the deep-link)         depends_on=[4]
+
+NEVER plan submit_soft_spec at sort_order=1 with no prerequisites — it
+will refuse, and the user sees a blocked-status reply instead of the
+project. NEVER manually compose a `spec` argument; approvals + the
+reconciler own it. If the user wasn't clear which uploaded document was
+spec-input (vs. similarity check / cover sheet), plan an ask_user step
+BEFORE approve_proposals.
+
+If list_pending_proposals returns []  (no proposals to review), skip
+[2] and go straight to [3] → [4].
+
+============================================================================
+PRECONDITION_BLOCKED ENVELOPES (how every refused tool surfaces)
+============================================================================
+Several tools return a JSON envelope shaped:
+  {"error":"precondition_blocked","blocked_on":"…",
+   "resolver":"<tool>","recipe":[…],"message":"…"}
+when their prerequisites aren't satisfied — submit_soft_spec waiting on
+pending_proposals / spec_gaps, or the dispatcher gate refusing a tool
+whose source is disabled. The plan should anticipate these:
+  • Always sequence the `resolver` tool BEFORE the gated tool.
+  • Never plan a tool from a source not in the ALLOWED list above —
+    the gate will refuse with `blocked_on: "source_disabled:…"`.
+
+============================================================================
 CANONICAL EXAMPLES
 ============================================================================
 Q: "what's in my project?" / "list files" / "list specs" / "where is the spec directory"
@@ -952,14 +1002,10 @@ class COTEngine:
         # it here would silently drop those guardrails from the prompt.
 
         # Early lookup of sources_enabled — both the tool-catalog
-        # filter below AND the later guardrail block need it. (The
-        # later block REASSIGNS this to the same value so behaviour is
-        # unchanged for that code path.)
-        sources_enabled = (
-            project_context.get("sources_enabled")
-            or (project_context.get("project") or {}).get("sources_enabled")
-            or {}
-        )
+        # filter below AND the later guardrail block need it. Goes
+        # through the canonical resolver so the fallback chain is
+        # identical across every caller (planner, react, gate).
+        sources_enabled = resolve_sources_enabled(project_context)
 
         # Build dynamic tool list from MCP or use fallback. PER-QUERY
         # SELECTION + CAPABILITY-AWARE EXCLUSION:
@@ -975,10 +1021,9 @@ class COTEngine:
         #        project where the planner picked tpms_fetch and the
         #        whole chain failed with "Project <oenum> not found
         #        in TPMS" / "required oenum field missing".
-        proj_meta = (project_context.get("project") or {}) or project_context
+        proj_meta = resolve_proj_meta(project_context)
         has_tpms = bool(
-            proj_meta.get("tpms_oenum")
-            or project_context.get("tpms_oenum")
+            resolve_tpms_oenum(project_context)
             or sources_enabled.get("tpms")
         )
         exclude_prefixes: list[str] = []
@@ -1027,11 +1072,11 @@ class COTEngine:
         # NOT leak EKC-derived electrical-domain priors into the prompt.
         # sources_enabled may live at the top level (when callers spread
         # the project dict) or nested under `project` (build_agent_context).
-        sources_enabled = (
-            project_context.get("sources_enabled")
-            or (project_context.get("project") or {}).get("sources_enabled")
-            or {}
-        )
+        # Re-resolve via the canonical helper. Idempotent — same value
+        # as the early lookup above; assignment kept so a later refactor
+        # that reads `sources_enabled` after this point still gets the
+        # right value if the early lookup is ever moved.
+        sources_enabled = resolve_sources_enabled(project_context)
         # Legacy projects predating the wizard have no sources_enabled at
         # all — default to "EKC on" for backward compatibility.
         ekc_allowed = (not sources_enabled) or bool(sources_enabled.get("ekc"))
@@ -1097,12 +1142,7 @@ class COTEngine:
                 # fill get_project_context(oenum=...) / tpms_fetch(oenum=...)
                 # with the real value instead of copying the literal
                 # <oenum> placeholder from the canonical examples below.
-                tpms_oenum = (
-                    proj_meta.get("tpms_oenum")
-                    or project_context.get("tpms_oenum")
-                    or sources_enabled.get("techserver_oenum")
-                    or ""
-                )
+                tpms_oenum = resolve_tpms_oenum(project_context) or ""
                 tpms_hint = (
                     f" The OE number for this project is \"{tpms_oenum}\"; "
                     f"pass oenum=\"{tpms_oenum}\" verbatim. NEVER emit the "
@@ -1158,16 +1198,8 @@ class COTEngine:
                 )
             if sources_enabled.get("techserver"):
                 # Surface the techserver OE number so the planner can fill
-                # techserver_get_tree(oenum=...) without guessing. It lives
-                # in sources_enabled.techserver_oenum (set by the wizard) or
-                # falls back to the project's tpms_oenum.
-                ts_oenum = (
-                    sources_enabled.get("techserver_oenum")
-                    or proj_meta.get("techserver_oenum")
-                    or proj_meta.get("tpms_oenum")
-                    or project_context.get("tpms_oenum")
-                    or ""
-                )
+                # techserver_get_tree(oenum=...) without guessing.
+                ts_oenum = resolve_techserver_oenum(project_context) or ""
                 oenum_hint = (
                     f" The OE number for this project is {ts_oenum}; pass "
                     f"oenum=\"{ts_oenum}\" to both tools."
@@ -1239,28 +1271,11 @@ class COTEngine:
                 # own state). request.project_id is the only field
                 # we can pull here without restructuring.
                 # Carry techserver + TPMS source state so the plan's
-                # addendum can emit the OE number. sources_enabled was
-                # resolved above; oenum may live on sources_enabled,
-                # proj_meta, or the top-level project_context — try all
-                # three.
-                _ts_oenum = (
-                    sources_enabled.get("techserver_oenum")
-                    or proj_meta.get("techserver_oenum")
-                    or proj_meta.get("tpms_oenum")
-                    or project_context.get("tpms_oenum")
-                    or None
-                )
-                _tpms_oenum = (
-                    proj_meta.get("tpms_oenum")
-                    or project_context.get("tpms_oenum")
-                    or sources_enabled.get("techserver_oenum")
-                    or None
-                )
-                _repo_path = (
-                    proj_meta.get("gitlab_repo_path")
-                    or project_context.get("gitlab_repo_path")
-                    or None
-                )
+                # addendum can emit the OE number. Canonical resolvers
+                # — same fallback order used everywhere else.
+                _ts_oenum = resolve_techserver_oenum(project_context)
+                _tpms_oenum = resolve_tpms_oenum(project_context)
+                _repo_path = resolve_repo_path(project_context)
                 plan_ctx = PlanContext(
                     user_input=request.user_input,
                     project_id=getattr(request, "project_id", "") or "",
