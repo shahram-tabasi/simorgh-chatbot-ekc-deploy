@@ -328,6 +328,22 @@ class ProjectManagerAgent:
             logger.warning("cot_router setup failed (continuing with no plan): %s", e)
             chosen_plan = None
 
+        # Phase 1c: lazy warm-up of the project's persistent runtime-
+        # broker session container. runtime-broker manages one named
+        # docker container per project (simorgh-proj-<project_id>)
+        # with a persistent /work volume — but session_start is never
+        # auto-invoked, so most projects' containers are cold and the
+        # agent falls back to the stateless /run path even when state
+        # would help. Calling session_start here is idempotent (the
+        # broker returns "already running" for warm containers) and
+        # cheap (one HTTP roundtrip; the actual docker-start only fires
+        # when the container is stopped). Best-effort — a broker
+        # outage must not block the chat.
+        try:
+            await self._ensure_session_container(project_id)
+        except Exception as e:
+            logger.debug("session warm-up skipped: %s", e)
+
         logger.info(
             f"Agent handling input: project={project_id}, "
             f"channel={channel.value}, input_len={len(user_input)}, "
@@ -3703,6 +3719,50 @@ class ProjectManagerAgent:
 
         output = json.dumps(result, indent=2, default=str)
         return {"output": output, "metadata": result}
+
+    async def _ensure_session_container(self, project_id: str) -> bool:
+        """Idempotent warm-up of the project's runtime-broker session
+        container. Returns True if the container ends up running, False
+        on best-effort failure (broker down, auth missing, etc.).
+
+        Cached in-process for SESSION_WARMUP_TTL_SEC so a flurry of
+        chat turns on the same project doesn't hammer the broker."""
+        import time as _time
+        # Lazy-init the cache on first use so __init__ doesn't have to
+        # know about session warm-up.
+        cache = getattr(self, "_session_warm_cache", None)
+        if cache is None:
+            cache = {}
+            self._session_warm_cache = cache
+        ttl = float(os.getenv("SESSION_WARMUP_TTL_SEC", "120"))
+        now = _time.monotonic()
+        last = cache.get(str(project_id))
+        if last is not None and (now - last) < ttl:
+            return True  # warmed recently; skip the roundtrip
+
+        broker_url = os.getenv("RUNTIME_BROKER_URL",
+                               "http://runtime-broker:8048")
+        token = os.getenv("BROKER_TOKEN", "")
+        headers = ({"authorization": f"Bearer {token}"} if token else {})
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.post(
+                    f"{broker_url}/sessions/{project_id}/start",
+                    json={"project_id": str(project_id)},
+                    headers=headers,
+                )
+                r.raise_for_status()
+                status = (r.json() or {}).get("status", "")
+                if status not in ("running", "created"):
+                    logger.info(
+                        "session warm-up: broker returned status=%s for "
+                        "project=%s", status, project_id)
+                cache[str(project_id)] = now
+                return True
+        except Exception as e:
+            logger.debug("session warm-up failed for %s: %s", project_id, e)
+            return False
 
     async def _auto_commit(self, project_id: str, message: str) -> Optional[Dict]:
         """Auto-commit changes after shell operations."""
