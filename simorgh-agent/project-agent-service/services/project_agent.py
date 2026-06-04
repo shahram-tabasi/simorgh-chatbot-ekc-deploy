@@ -172,6 +172,13 @@ class ProjectManagerAgent:
         # Shell
         self.shell = get_shell_service()
 
+        # DAG executor: serialises per-task auto-commits across parallel
+        # tasks (the runtime-broker `/run` sandbox is ephemeral so file
+        # ops don't race, but the project-scoped git session does — one
+        # commit_push at a time). Lazy-keyed by project_id so two
+        # different projects can still commit concurrently.
+        self._commit_locks: Dict[str, "asyncio.Lock"] = {}
+
         # Email
         self.email_service = email_service
 
@@ -890,11 +897,33 @@ class ProjectManagerAgent:
         wave_cap = int(os.getenv("COT_WAVE_PARALLELISM", "4"))
         sem = _asyncio.Semaphore(wave_cap)
 
+        # Commit lock per project — concurrent DAG tasks queue their
+        # auto-commits so the underlying git_commit_push (per-project
+        # runtime-broker session) never sees a parallel push. Acquired
+        # only by tasks whose tool actually touches the workspace.
+        commit_lock = self._commit_locks.setdefault(
+            project_id, _asyncio.Lock())
+
         async def _run_one(task: Dict) -> Dict:
             """Per-task body — notify, dispatch, compact, update status,
             commit, notify completion. Returns a results-list entry."""
             task_id = str(task["id"])
             step_no = task["sort_order"]
+
+            # Worktree-per-task. The runtime-broker /run sandbox is
+            # ephemeral (fresh container per call) so file ops between
+            # parallel tasks are naturally isolated. We also stamp a
+            # logical per-task subpath into shell tool inputs so any
+            # future persistent-session backend keeps tasks separate,
+            # and the chosen path appears in audit logs / commit
+            # messages.
+            _ti = task.get("tool_input")
+            if isinstance(_ti, dict) and task.get("tool_used") in (
+                    "shell", "session_exec_tool", "git",
+                    "file_export", "command_gen"):
+                if not _ti.get("working_dir"):
+                    _ti["working_dir"] = f"/work/.tasks/{task_id[:8]}"
+
             async with sem:
                 await self._notify_progress(project_id, "task_executing", {
                     "task_id": task_id,
@@ -950,6 +979,40 @@ class ProjectManagerAgent:
                         ),
                         "task_type": task.get("task_type"),
                     }
+
+                    # Worktree-per-task auto-commit. Mirrors the
+                    # sequential path's audit-trail behaviour exactly;
+                    # the per-project commit_lock serialises calls so
+                    # concurrent tasks queue their commit_push instead
+                    # of racing the project's git session.
+                    _tool = task.get("tool_used", "llm")
+                    _tt = task.get("task_type", "action")
+                    _touches = (
+                        _tool in {
+                            "shell", "git", "file_export", "eplan_bridge",
+                            "command_gen", "project_init",
+                            "project_analysis", "techserver",
+                            "tech_kb", "documents_rag",
+                        } or _tt in {
+                            "shell_command", "git_commit", "document",
+                        }
+                    )
+                    if _touches:
+                        _summary = (
+                            result.get("summary")
+                            or (result.get("output") or "")[:120]
+                                .replace("\n", " ").strip()
+                        )
+                        _msg = (f"cot({task_id[:8]}|{_tool}|wt={task_id[:8]}):"
+                                f" {task['title']}")
+                        if _summary:
+                            _msg = f"{_msg}\n\n{_summary}"
+                        try:
+                            async with commit_lock:
+                                await self._auto_commit(project_id, _msg)
+                        except Exception:
+                            pass
+
                     await self._notify_progress(project_id, "task_completed", {
                         "task_id": task_id,
                         "task_title": task["title"],
