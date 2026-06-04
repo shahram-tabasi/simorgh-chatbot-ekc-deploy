@@ -762,7 +762,7 @@ Canonical plan (all dependencies explicit so the DAG executor batches):
   [3] read_soft_spec()                                  depends_on=[2]
         ← confirms gaps=[] and conflicts=[] after approvals land.
   [4] submit_soft_spec()                                depends_on=[3]
-        ← returns {ready, deep_link, soft_project_id}.
+        ← returns {{ready, deep_link, soft_project_id}}.
   [5] llm.synthesize (reply with the deep-link)         depends_on=[4]
 
 NEVER plan submit_soft_spec at sort_order=1 with no prerequisites — it
@@ -779,8 +779,8 @@ If list_pending_proposals returns []  (no proposals to review), skip
 PRECONDITION_BLOCKED ENVELOPES (how every refused tool surfaces)
 ============================================================================
 Several tools return a JSON envelope shaped:
-  {"error":"precondition_blocked","blocked_on":"…",
-   "resolver":"<tool>","recipe":[…],"message":"…"}
+  {{"error":"precondition_blocked","blocked_on":"…",
+   "resolver":"<tool>","recipe":[…],"message":"…"}}
 when their prerequisites aren't satisfied — submit_soft_spec waiting on
 pending_proposals / spec_gaps, or the dispatcher gate refusing a tool
 whose source is disabled. The plan should anticipate these:

@@ -111,8 +111,8 @@ When the user asks to CREATE / BUILD / SUBMIT / OPEN their project (incl.
 Persian "پروژه سیمرغ دیزاین رو بساز"), follow this recipe:
 
   1. list_pending_proposals — see every value extractors proposed from
-     uploads / TPMS / chat. Each entry has {proposal_id, field, value,
-     source_kind, source_note, confidence}.
+     uploads / TPMS / chat. Each entry has {{proposal_id, field, value,
+     source_kind, source_note, confidence}}.
   2. REASON over them. For each pending proposal decide ONE of:
        a. clearly relevant + the value is right     → bundle into approvals
           with action="approve"
@@ -129,7 +129,7 @@ Persian "پروژه سیمرغ دیزاین رو بساز"), follow this recipe:
      conflicts=[]. If gaps remain, ask_user about the missing fields
      (with options when the set is finite, e.g. standard:[IEC,ANSI,GOST]).
   4. When gaps=[] and conflicts=[], call submit_soft_spec. It returns
-     {ready:true, deep_link, soft_project_id}. Reply with a short
+     {{ready:true, deep_link, soft_project_id}}. Reply with a short
      confirmation and the deep-link as a clickable markdown link.
 
 Rules:
@@ -143,7 +143,7 @@ Rules:
 
 HANDLING precondition_blocked TOOL RESULTS:
 - When a tool returns JSON shaped like
-    {"error":"precondition_blocked","blocked_on":"...","resolver":"<tool>","recipe":[...]}
+    {{"error":"precondition_blocked","blocked_on":"...","resolver":"<tool>","recipe":[...]}}
   this is NOT a failure. The tool refused because a prerequisite step
   hasn't run yet. You MUST:
     1. READ the `recipe` field — it lists the exact next actions.
