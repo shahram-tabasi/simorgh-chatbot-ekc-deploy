@@ -50,16 +50,54 @@ HISTORY_BUDGET = int(os.getenv("REACT_HISTORY_BUDGET_CHARS", "36000"))
 
 
 def _trim_history(messages: List[Dict[str, Any]]) -> None:
-    """Drop the OLDEST tool exchanges (keeping the pinned system + first
-    user message) until the transcript fits HISTORY_BUDGET. Mutates in
-    place. Pins messages[0] (system, holds the pre-loaded CONTEXT) and
-    messages[1] (the user request)."""
+    """Anthropic's clear_tool_results context-editing strategy adapted
+    for the ReAct loop. Pins messages[0] (system, holds project_facts +
+    todos block) and messages[1] (the original user request). Then
+    sheds the OLDEST TOOL EXCHANGES BATCHWISE: one batch = one
+    `assistant` message with tool_calls + the contiguous `tool` messages
+    that carry their results. Dropping a batch atomically avoids
+    leaving orphan tool messages with no matching tool_call_id (which
+    breaks gpt-oss and a few OpenAI-compat gateways).
+
+    Only after every tool-exchange batch from the oldest end has been
+    dropped do we fall back to per-message trimming.
+
+    Reference: https://platform.claude.com/docs/en/build-with-claude/
+    context-editing — "tool result clearing" runtime strategy.
+    """
     def _size() -> int:
         return sum(len(str(m.get("content") or "")) +
                    len(json.dumps(m.get("tool_calls") or "")) for m in messages)
-    # Indices 0,1 are pinned; trim from index 2 forward.
+
+    def _drop_oldest_batch() -> bool:
+        # Find first non-pinned assistant message carrying tool_calls.
+        i = 2
+        while i < len(messages):
+            m = messages[i]
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                break
+            i += 1
+        else:
+            return False
+        # Walk forward over the contiguous tool replies for this batch.
+        j = i + 1
+        while j < len(messages) and messages[j].get("role") == "tool":
+            j += 1
+        # Need to leave at least the most-recent batch intact, so refuse
+        # to drop if removing [i:j] would leave 0 non-pinned messages.
+        if j >= len(messages):
+            return False
+        del messages[i:j]
+        return True
+
     while _size() > HISTORY_BUDGET and len(messages) > 4:
-        del messages[2]
+        if not _drop_oldest_batch():
+            # No tool batch left to drop — fall back to per-message trim
+            # from the oldest non-pinned index.
+            if len(messages) > 4:
+                del messages[2]
+            else:
+                break
 
 
 REACT_SYSTEM_PROMPT = """You are Simorgh, an expert engineering assistant that solves the user's request by REASONING and ACTING in a loop.
