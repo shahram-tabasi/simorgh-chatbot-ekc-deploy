@@ -486,9 +486,16 @@ class ProjectManagerAgent:
             "steps": [{"title": s.title, "type": s.task_type.value} for s in analysis.steps],
         })
 
-        # 4. Create tasks from COT steps
+        # 4. Create tasks from COT steps. depends_on is stashed inside
+        # tool_input under the reserved key `_depends_on` so it round-
+        # trips through the JSONB column without a schema migration —
+        # the executor reads it back, builds the DAG, and the
+        # dispatcher strips it before invoking the real tool.
         tasks_created = []
         for step in analysis.steps:
+            _tool_input = dict(step.tool_input or {})
+            if step.depends_on:
+                _tool_input["_depends_on"] = list(step.depends_on)
             task_data = {
                 "title": step.title,
                 "description": step.description,
@@ -496,7 +503,7 @@ class ProjectManagerAgent:
                 "cot_chain_id": str(analysis.chain_id),
                 "priority": step.priority,
                 "tool_used": step.tool_needed,
-                "tool_input": step.tool_input,
+                "tool_input": _tool_input,
                 "sort_order": step.step_number,
                 "triggered_by": TaskTrigger.USER.value if channel == MessageChannel.CHAT
                     else TaskTrigger.EMAIL.value if channel == MessageChannel.EMAIL
@@ -587,10 +594,26 @@ class ProjectManagerAgent:
         project_context: Dict[str, Any] = None,
         user_input: str = "",
     ) -> tuple:
-        """Execute a chain of COT tasks sequentially."""
+        """Execute a chain of COT tasks.
+
+        DAG mode (NEW): when any task declares ``_depends_on`` in its
+        tool_input, build the dependency graph and execute in
+        topological waves via ``asyncio.gather`` — independent steps
+        (e.g. one retrieval per source: gitlab + techserver + tpms +
+        uploads) run in PARALLEL, then dependent steps unlock once
+        their inputs land. Cuts wall-clock by Nx for fan-out plans.
+
+        Sequential fallback: when no task declares deps (legacy
+        plans), the executor walks ``tasks`` in sort_order — identical
+        to the pre-DAG behaviour, with one ``asyncio.gather`` of
+        size 1 per step.
+
+        The per-task body (notify, mark in_progress, dispatch, compact,
+        update status, commit, notify completion) is identical in both
+        modes — implemented in ``_run_chain_task`` below.
+        """
         results = []
         accumulated_context = {}  # Results from previous tasks for chaining
-        final_response = ""
 
         # Pre-seed context with semantic search results from project_context
         if project_context and project_context.get("semantic_results"):
@@ -604,6 +627,29 @@ class ProjectManagerAgent:
                     "metadata": {"source": "qdrant_semantic_search"},
                 }
 
+        # ------ DAG construction ------
+        by_step: Dict[int, Dict] = {t["sort_order"]: t for t in tasks}
+        deps: Dict[int, List[int]] = {}
+        has_any_dep = False
+        for t in tasks:
+            _d = ((t.get("tool_input") or {}).get("_depends_on") or [])
+            try:
+                _d = [int(x) for x in _d if int(x) in by_step
+                      and int(x) != t["sort_order"]]
+            except (TypeError, ValueError):
+                _d = []
+            deps[t["sort_order"]] = _d
+            if _d:
+                has_any_dep = True
+
+        if has_any_dep:
+            return await self._execute_chain_dag(
+                project_id, tasks, by_step, deps,
+                accumulated_context, results, user_input,
+            )
+
+        # ---- Legacy sequential path (unchanged) ----
+        final_response = ""
         for i, task in enumerate(tasks):
             task_id = str(task["id"])
 
@@ -814,6 +860,221 @@ class ProjectManagerAgent:
                     for r in failed:
                         parts.append(f"- {r['title']}: {r.get('error', 'Unknown error')}")
                 final_response = "\n".join(parts) or "Tasks executed but no output generated."
+
+        return results, final_response
+
+    # ------------------------------------------------------------------
+    # DAG executor — runs tasks in topological waves so independent steps
+    # (typical: one retrieval per source) execute in parallel via
+    # asyncio.gather. Per-task body mirrors the sequential path exactly.
+    # ------------------------------------------------------------------
+    async def _execute_chain_dag(
+        self,
+        project_id: str,
+        tasks: List[Dict],
+        by_step: Dict[int, Dict],
+        deps: Dict[int, List[int]],
+        accumulated_context: Dict[str, Any],
+        results: List[Dict],
+        user_input: str,
+    ) -> tuple:
+        import asyncio as _asyncio
+        total = len(tasks)
+        completed_steps: set = set()
+        failed_steps: set = set()
+        final_response = ""
+
+        # Cap parallel fan-out so a 4-source plan doesn't blast every
+        # backend at once. 4 covers the canonical gitlab+techserver+tpms
+        # +uploads case; lower if your MCP gateway has tighter limits.
+        wave_cap = int(os.getenv("COT_WAVE_PARALLELISM", "4"))
+        sem = _asyncio.Semaphore(wave_cap)
+
+        async def _run_one(task: Dict) -> Dict:
+            """Per-task body — notify, dispatch, compact, update status,
+            commit, notify completion. Returns a results-list entry."""
+            task_id = str(task["id"])
+            step_no = task["sort_order"]
+            async with sem:
+                await self._notify_progress(project_id, "task_executing", {
+                    "task_id": task_id,
+                    "task_title": task["title"],
+                    "step": step_no,
+                    "total": total,
+                    "progress_percent": round(
+                        (len(completed_steps) / total) * 100),
+                })
+                await self.memory.update_task(
+                    task_id, project_id, status=TaskStatus.IN_PROGRESS.value)
+                try:
+                    result = await self._execute_single_task(
+                        project_id, task, accumulated_context)
+                    await self.memory.update_task(
+                        task_id, project_id,
+                        status=TaskStatus.COMPLETED.value,
+                        result=result.get("output", ""),
+                        result_metadata=result.get("metadata", {}),
+                    )
+                    _meta = dict(result.get("metadata") or {})
+                    _meta.setdefault("tool", task.get("tool_used") or "")
+                    _meta.setdefault("title", task.get("title") or "")
+                    result["metadata"] = _meta
+
+                    remaining_titles = [
+                        by_step[s].get("title") or ""
+                        for s in by_step
+                        if s != step_no and s not in completed_steps
+                        and s not in failed_steps
+                    ]
+                    ctx_result = await self._compact_step_result(
+                        project_id=project_id,
+                        step_no=step_no,
+                        title=task.get("title") or "",
+                        tool=task.get("tool_used") or "",
+                        result=result,
+                        user_input=user_input,
+                        remaining_titles=remaining_titles,
+                    )
+                    accumulated_context[step_no] = ctx_result
+
+                    full_output = result.get("output", "")
+                    entry = {
+                        "task_id": task_id,
+                        "title": task["title"],
+                        "tool_used": task.get("tool_used"),
+                        "status": "completed",
+                        "output": full_output,
+                        "output_preview": (
+                            full_output[:500] if isinstance(full_output, str)
+                            else str(full_output)[:500]
+                        ),
+                        "task_type": task.get("task_type"),
+                    }
+                    await self._notify_progress(project_id, "task_completed", {
+                        "task_id": task_id,
+                        "task_title": task["title"],
+                        "step": step_no,
+                        "total": total,
+                    })
+                    return entry
+                except Exception as e:  # noqa: BLE001
+                    err = str(e)
+                    logger.error("DAG task %s failed: %s", task_id, err,
+                                 exc_info=True)
+                    await self.memory.update_task(
+                        task_id, project_id,
+                        status=TaskStatus.FAILED.value, error_message=err)
+                    await self._notify_progress(project_id, "task_failed", {
+                        "task_id": task_id,
+                        "task_title": task["title"],
+                        "error": err,
+                    })
+                    return {
+                        "task_id": task_id,
+                        "title": task["title"],
+                        "status": "failed",
+                        "error": err,
+                    }
+
+        # ---- Wave loop. Each pass picks every pending step whose
+        # dependencies are all in completed_steps and runs them in
+        # parallel. Failed deps mark their dependents as blocked so
+        # the chain doesn't spin forever. ----
+        all_steps = set(by_step.keys())
+        guard = 0
+        while completed_steps | failed_steps != all_steps:
+            guard += 1
+            if guard > total + 2:
+                logger.error("DAG executor: loop guard tripped — likely cycle")
+                break
+
+            ready = [
+                s for s in (all_steps - completed_steps - failed_steps)
+                if all(d in completed_steps for d in deps.get(s, []))
+            ]
+            if not ready:
+                # Mark anything still pending as blocked — they had a
+                # failed dependency or a cycle the linter missed.
+                blocked = all_steps - completed_steps - failed_steps
+                for s in blocked:
+                    task = by_step[s]
+                    await self.memory.update_task(
+                        str(task["id"]), project_id,
+                        status=TaskStatus.FAILED.value,
+                        error_message="blocked by failed dependency",
+                    )
+                    results.append({
+                        "task_id": str(task["id"]),
+                        "title": task["title"],
+                        "status": "failed",
+                        "error": "blocked by failed dependency",
+                    })
+                failed_steps |= blocked
+                break
+
+            logger.info(
+                "DAG wave: running %d step(s) in parallel: %s",
+                len(ready), ready,
+            )
+            wave_results = await _asyncio.gather(
+                *[_run_one(by_step[s]) for s in ready],
+                return_exceptions=False,
+            )
+            for s, entry in zip(ready, wave_results):
+                results.append(entry)
+                if entry.get("status") == "completed":
+                    completed_steps.add(s)
+                    if (by_step[s].get("task_type")
+                            in ("generation", "analysis")):
+                        final_response = entry.get("output", "") or final_response
+                else:
+                    failed_steps.add(s)
+
+        # ---- End-of-chain synthesis (mirrors the sequential path) ----
+        if not final_response:
+            completed = [r for r in results if r["status"] == "completed"]
+            failed = [r for r in results if r["status"] == "failed"]
+            if completed:
+                synth_parts = ["The user asked:", user_input or "(unknown)",
+                               "", "Tool results from the plan:"]
+                for r in completed:
+                    out = _format_tool_output_for_synth(
+                        r.get("tool_used") or r.get("title", ""),
+                        r.get("output", ""),
+                    )
+                    synth_parts.append(f"\n## {r['title']}\n{out[:24000]}")
+                synth_parts.append(
+                    "\n\nWrite a concise, natural-language answer for the "
+                    "user using ONLY the tool results above. Use markdown "
+                    "lists / code fences where helpful. Do not ask the "
+                    "user for information already shown above.")
+                try:
+                    synth = await self._execute_llm_task(
+                        project_id,
+                        {"title": "synthesize",
+                         "description": "compose final answer",
+                         "task_type": "generation"},
+                        {"prompt": "\n".join(synth_parts)},
+                    )
+                    final_response = (synth.get("output", "")
+                                      if isinstance(synth, dict) else str(synth))
+                except Exception as e:
+                    logger.warning("DAG final synthesis failed: %s", e)
+            if not final_response:
+                parts = []
+                if completed:
+                    parts.append(f"Completed {len(completed)} task(s):")
+                    for r in completed:
+                        op = (r.get("output_preview")
+                              or str(r.get("output", ""))[:150])
+                        parts.append(f"- {r['title']}: {op}")
+                if failed:
+                    parts.append(f"\nFailed {len(failed)} task(s):")
+                    for r in failed:
+                        parts.append(f"- {r['title']}: "
+                                     f"{r.get('error', 'Unknown error')}")
+                final_response = ("\n".join(parts)
+                                  or "Tasks executed but no output generated.")
 
         return results, final_response
 
@@ -1492,6 +1753,11 @@ class ProjectManagerAgent:
             tool_input = raw_input
         else:
             tool_input = {}
+
+        # Strip executor-internal fields before the dispatch fork —
+        # `_depends_on` is the DAG executor's bookkeeping, not a tool arg.
+        if isinstance(tool_input, dict):
+            tool_input.pop("_depends_on", None)
 
         # SOFT-BRIDGE INTENT REMAP — embedding-based, not keyword. When the
         # user's input semantically matches "create my Simorgh Design Suite
