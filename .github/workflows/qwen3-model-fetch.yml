@@ -1,0 +1,370 @@
+name: Download Qwen3-30B-A3B (offline text LLM, AWQ)
+
+# Pre-downloads the 4-bit AWQ build of Qwen3-30B-A3B-Instruct-2507 — the
+# offline text LLM served by vLLM on 192.168.1.61 (see
+# llms/docker-compose.llm.yml). Replaces gpt-oss-20b.
+#
+# Runs on a GitHub-hosted runner where HuggingFace bandwidth is fast and
+# unmetered, lays the snapshot out as a FLAT directory (config.json +
+# *.safetensors at the top level — exactly what vLLM's
+# `--model /models/<dir>` expects), tars it, splits the tar into N parts,
+# and uploads each part as its own artifact so a contributor on a metered
+# / unstable Iranian-proxy link can grab one part at a time and resume.
+#
+# The model is ~16-17 GB, so this workflow:
+#   • works under /mnt (the runner's big ephemeral SSD, ~65 GB free) —
+#     the default workspace on / has only ~21 GB.
+#   • deletes the model dir after tarring and the tar after splitting so
+#     peak disk stays ≈ 34 GB.
+#
+# ⚠️ STORAGE QUOTA: ~17 GB of artifacts will be produced. On a private
+# repo, GitHub Actions artifact storage is limited (500 MB on Free,
+# more on Pro/Team/Enterprise). If the upload fails with a quota error,
+# lower retention-days, delete old artifacts, or bump your plan. Public
+# repos get more generous limits.
+#
+# After the run, follow the "Install instructions" step printed at the
+# end (download parts → REASSEMBLE.sh → tar -xf → rsync dir to .61).
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Branch / tag / commit to pin (blank = main)"
+        type: string
+        default: ""
+      repo_id:
+        description: "HF repo (AWQ 4-bit). Default is the validated mirror; alt: stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ"
+        type: string
+        default: "cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
+      parts:
+        description: "Split the tar into N parts (smaller = more resumable on a flaky link)"
+        type: choice
+        default: "12"
+        options: ["8", "10", "12", "14", "16"]
+      retention_days:
+        description: "Artifact retention (days). Lower to save storage quota."
+        type: choice
+        default: "5"
+        options: ["2", "3", "5", "7", "14"]
+
+permissions:
+  contents: read
+
+env:
+  # The directory name MUST equal VLLM_MODEL_DIR in llms/.env.example and
+  # the --model dir in llms/docker-compose.llm.yml.
+  MODEL_DIR: "Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
+  FNAME: "Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
+  WORK: "/mnt/qwen"
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Prepare big work dir on /mnt + free headroom
+        run: |
+          set -eu
+          # The default workspace on / has ~21 GB; /mnt has ~65 GB.
+          # Do all heavy I/O under /mnt so the 17 GB model + tar + parts
+          # (peak ≈ 34 GB) never fills the root disk.
+          sudo mkdir -p "$WORK"
+          sudo chown "$USER:$USER" "$WORK"
+          # Belt-and-suspenders: drop a few large preinstalled toolchains
+          # we don't use, in case /mnt is smaller than expected.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL 2>/dev/null || true
+          echo "----- disk free -----"; df -h / /mnt
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install --quiet "huggingface_hub[cli]==0.25.2"
+
+      - name: Download AWQ snapshot as a flat directory
+        env:
+          # hf_transfer/xet use a blob-only layout; the standard
+          # downloader writes real files into --local-dir, which is what
+          # vLLM needs.
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+          HF_HUB_DISABLE_XET: "1"
+          REPO: ${{ inputs.repo_id }}
+          REVISION: ${{ inputs.revision }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${HF_TOKEN:-}" ]; then
+            echo "::error::HF_TOKEN secret is not set. Add it under " \
+                 "Settings → Secrets and variables → Actions → HF_TOKEN."
+            exit 1
+          fi
+          DEST="$WORK/model/$MODEL_DIR"
+          mkdir -p "$DEST"
+          ARGS=( "$REPO" --local-dir "$DEST" --token "$HF_TOKEN" )
+          if [ -n "$REVISION" ]; then ARGS+=( --revision "$REVISION" ); fi
+          echo "Fetching $REPO → $DEST …"
+          huggingface-cli download "${ARGS[@]}"
+          # Drop the hf metadata dir; only the model files belong in the tar.
+          rm -rf "$DEST/.cache"
+          echo "----- snapshot contents -----"
+          ls -lh "$DEST"
+          du -sh "$DEST"
+          # Sanity: AWQ models must carry a quant config.
+          if ! grep -q '"quant' "$DEST/config.json" 2>/dev/null; then
+            echo "::warning::config.json has no quantization stanza — " \
+                 "is this really the AWQ repo?"
+          fi
+
+      - name: Tar the model directory (no gzip — weights are already binary)
+        id: pack
+        run: |
+          set -eu
+          OUT="$WORK/${FNAME}.tar"
+          # Archive root = the model dir name, so `tar -xf` on the other
+          # side recreates Qwen3-…AWQ-4bit/ ready to drop into MODEL_CACHE_PATH.
+          tar -C "$WORK/model" -cf "$OUT" "$MODEL_DIR"
+          # Free the 17 GB source tree now that it's inside the tar.
+          rm -rf "$WORK/model"
+          sha256sum "$OUT" | sed "s#$WORK/##" | tee "$OUT.sha256"
+          ls -lh "$OUT"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Split tar into N parts + checksums + REASSEMBLE.sh
+        id: split
+        env:
+          OUT: ${{ steps.pack.outputs.out }}
+          PARTS: ${{ inputs.parts }}
+        run: |
+          set -eu
+          mkdir -p "$WORK/parts"
+          # split -n N needs a real (seekable) file — we have one.
+          split -n "$PARTS" -d --suffix-length=2 "$OUT" "$WORK/parts/${FNAME}.tar.part."
+          # Free the tar now that the parts exist (peak disk ≈ 34 GB → 17 GB).
+          cp "$OUT.sha256" "$WORK/parts/"
+          rm -f "$OUT"
+          # Per-part checksums so each downloaded part can be verified
+          # independently before reassembly.
+          ( cd "$WORK/parts" && sha256sum "${FNAME}.tar.part."* > SHA256SUMS.parts )
+          cat > "$WORK/parts/REASSEMBLE.sh" <<BASH
+          #!/usr/bin/env bash
+          # Reassemble the Qwen3 AWQ model tar from its parts, verify, extract.
+          set -euo pipefail
+          base="${FNAME}.tar"
+          echo "Verifying parts …"
+          sha256sum -c SHA256SUMS.parts
+          echo "Concatenating \$(ls "\${base}.part."* | wc -l) parts → \${base} …"
+          cat "\${base}.part."* > "\${base}"
+          echo "Verifying \${base} …"
+          sha256sum -c "\${base}.sha256"
+          echo "Extracting (creates ./${MODEL_DIR}/) …"
+          tar -xf "\${base}"
+          rm -f "\${base}"
+          echo "✅ ${MODEL_DIR}/ ready. rsync it to .61:\\\$MODEL_CACHE_PATH/"
+          BASH
+          chmod +x "$WORK/parts/REASSEMBLE.sh"
+          ls -lh "$WORK/parts/"
+
+      # ── One artifact per part, each independently downloadable ──────────
+      # Part 1 also carries the meta files (REASSEMBLE.sh + checksums).
+      - name: Upload part 1
+        if: ${{ inputs.parts >= '1' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-01of${{ inputs.parts }}
+          path: |
+            /mnt/qwen/parts/${{ env.FNAME }}.tar.part.00
+            /mnt/qwen/parts/${{ env.FNAME }}.tar.sha256
+            /mnt/qwen/parts/SHA256SUMS.parts
+            /mnt/qwen/parts/REASSEMBLE.sh
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 2
+        if: ${{ inputs.parts >= '2' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-02of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.01
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 3
+        if: ${{ inputs.parts >= '3' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-03of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.02
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 4
+        if: ${{ inputs.parts >= '4' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-04of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.03
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 5
+        if: ${{ inputs.parts >= '5' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-05of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.04
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 6
+        if: ${{ inputs.parts >= '6' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-06of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.05
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 7
+        if: ${{ inputs.parts >= '7' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-07of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.06
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 8
+        if: ${{ inputs.parts >= '8' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-08of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.07
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 9
+        if: ${{ inputs.parts >= '9' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-09of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.08
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 10
+        if: ${{ inputs.parts >= '10' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-10of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.09
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 11
+        if: ${{ inputs.parts >= '11' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-11of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.10
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 12
+        if: ${{ inputs.parts >= '12' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-12of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.11
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 13
+        if: ${{ inputs.parts >= '13' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-13of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.12
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 14
+        if: ${{ inputs.parts >= '14' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-14of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.13
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 15
+        if: ${{ inputs.parts >= '15' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-15of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.14
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Upload part 16
+        if: ${{ inputs.parts >= '16' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FNAME }}-part-16of${{ inputs.parts }}
+          path: /mnt/qwen/parts/${{ env.FNAME }}.tar.part.15
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Install instructions
+        env:
+          PARTS: ${{ inputs.parts }}
+          REPO: ${{ inputs.repo_id }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Qwen3-30B-A3B AWQ — downloaded in ${PARTS} parts
+
+          Repo: \`${REPO}\` · archive: \`${FNAME}.tar\` (~17 GB total)
+
+          ### 1. Download every part (resume one at a time on a flaky link)
+          \`\`\`bash
+          for i in \$(seq -w 1 ${PARTS}); do
+            gh run download \${{ github.run_id }} \\
+              -R ${{ github.repository }} \\
+              -n ${FNAME}-part-\${i}of${PARTS}
+          done
+          \`\`\`
+
+          ### 2. Reassemble + verify + extract
+          \`\`\`bash
+          chmod +x REASSEMBLE.sh
+          ./REASSEMBLE.sh         # verifies parts, cats → tar, verifies tar, extracts
+          # → creates ./${MODEL_DIR}/
+          \`\`\`
+
+          ### 3. Place on the LLM box (.61) and serve
+          \`\`\`bash
+          # MODEL_CACHE_PATH on .61 defaults to /home/ubuntu/models
+          rsync -a --info=progress2 ${MODEL_DIR}/ \\
+            ubuntu@192.168.1.61:/home/ubuntu/models/${MODEL_DIR}/
+
+          ssh ubuntu@192.168.1.61
+          cd ~/simorgh-chatbot-ekc-deploy/llms
+          # In llms/.env (see llms/.env.example):
+          #   VLLM_MODEL_DIR=${MODEL_DIR}
+          #   LOCAL_LLM_MODEL_TEXT=qwen3-30b-a3b
+          docker compose -f docker-compose.llm.yml up -d --force-recreate ai_service ai_adapter
+          docker compose -f docker-compose.llm.yml logs -f ai_service | grep -Ei 'load|awq|tool|started|error'
+          \`\`\`
+
+          ### 4. Point the gateway at it (.68)
+          \`\`\`bash
+          # In simorgh-agent/.env:
+          #   LOCAL_LLM_MODEL_TEXT=qwen3-30b-a3b
+          #   OFFLINE_TEXT_HARMONY=0
+          docker compose up -d --no-deps --force-recreate llm-gateway project-agent-service
+          \`\`\`
+          EOF
+          echo "Summary written. See the run's Summary tab for the runbook."
