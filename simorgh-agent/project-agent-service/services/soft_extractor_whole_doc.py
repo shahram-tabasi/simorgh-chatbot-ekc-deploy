@@ -438,6 +438,15 @@ async def from_uploads_whole_doc(project_id: str, project_oenum: str,
     typed.sort(key=lambda x: x[2])
 
     bag: Dict[str, FieldValue] = {}
+    # Relevance gate — lazy import so a missing module never blocks
+    # the legacy code path.
+    try:
+        from services.soft_doc_relevance import is_spec_document
+    except Exception as e:  # noqa: BLE001
+        logger.warning("soft.whole_doc: relevance gate unavailable (%s) — "
+                       "extracting from EVERY file (legacy behaviour)", e)
+        is_spec_document = None  # type: ignore
+
     for fn, dt, _ in typed[:max_docs]:
         try:
             res = q.get_document_text(user_id="system", project_oenum=scope,
@@ -449,6 +458,30 @@ async def from_uploads_whole_doc(project_id: str, project_oenum: str,
         markdown = (res or {}).get("text") or ""
         if not markdown:
             continue
+
+        # === DOCUMENT RELEVANCE GATE ====================================
+        # Decide whether THIS file is a switchgear specification before
+        # spending tokens extracting from it. Inventory spreadsheets,
+        # invoices, POs, drawings — all skipped, so they can't pollute
+        # the proposal stream with "country=Iran, frequency=60" etc.
+        # On any failure the gate falls back to is_spec=True so a hiccup
+        # never blocks a legitimate spec.
+        if is_spec_document is not None:
+            try:
+                rel = await is_spec_document(filename=fn, head=markdown[:1500])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("soft.whole_doc relevance gate %s: %s — "
+                               "proceeding anyway", fn, e)
+                rel = None
+            if rel is not None and not rel.is_spec:
+                logger.info(
+                    "soft.whole_doc: SKIP %s — classified as %s "
+                    "(conf=%.2f, stage=%s): %s",
+                    fn, rel.doc_type, rel.confidence, rel.stage, rel.reason,
+                )
+                continue
+        # ================================================================
+
         try:
             got = await extract_one_document(
                 filename=fn, doc_type=dt,
