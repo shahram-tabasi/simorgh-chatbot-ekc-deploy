@@ -1839,6 +1839,16 @@ class ProjectManagerAgent:
                 "techserver_get_tree", "techserver_search",
                 "techserver_fetch_files", "techserver_read_artifact",
             }
+            # All runtime-broker session_* tools take project_id as
+            # their first arg. The CoT prompt promises the dispatcher
+            # injects it automatically so the planner can omit it.
+            _session_family = {
+                "session_start", "session_stop", "session_status_tool",
+                "session_exec_tool", "session_write_file_tool",
+                "session_read_file_tool", "session_read_artifact_tool",
+                "session_git_commit_tool", "session_git_push_tool",
+                "session_git_commit_push_tool",
+            }
             _filled = False
             if tool in _tpms_family:
                 _oe = (getattr(_pc_fill, "tpms_oenum", None)
@@ -1850,12 +1860,57 @@ class ProjectManagerAgent:
                        or getattr(_pc_fill, "tpms_oenum", None))
                 if _oe and not _ri.get("oenum"):
                     _ri["oenum"] = str(_oe); _filled = True
+            elif tool in _session_family:
+                _pid = getattr(_pc_fill, "project_id", None) or str(project_id)
+                if _pid and not _ri.get("project_id"):
+                    _ri["project_id"] = str(_pid); _filled = True
             if _filled:
                 raw_input = _ri
                 logger.info(
-                    "unconditional arg-fill tool=%s injected oenum -> %s",
-                    tool, _ri.get("oenum"),
+                    "unconditional arg-fill tool=%s keys=%s",
+                    tool, list(_ri.keys()),
                 )
+
+        # shell → session_exec_tool remap. When the active project has
+        # a warm runtime-broker session container (auto-warmed by
+        # _ensure_session_container at handle_input time), prefer the
+        # persistent /work volume over the stateless /run sandbox so
+        # files written in step N are visible in step N+1. Mirrors the
+        # techserver / tpms / upload remap pattern above. Only fires
+        # when:
+        #   - the tool is exactly "shell" (not session_exec_tool — no
+        #     double-remap)
+        #   - the planner did not explicitly set persistent=False
+        #   - a project_id is available
+        if (isinstance(tool, str) and tool == "shell"
+                and isinstance(raw_input, dict)):
+            _pid_remap = (getattr(_pc_fill, "project_id", None)
+                          if _pc_fill else None) or str(project_id)
+            _persistent = raw_input.get("persistent")
+            if _pid_remap and _persistent is not False:
+                _cmd = (raw_input.get("command")
+                        or raw_input.get("script") or "")
+                if _cmd:
+                    logger.info(
+                        "shell remap: shell -> session_exec_tool "
+                        "(project=%s)", _pid_remap)
+                    tool = "session_exec_tool"
+                    raw_input = {
+                        "project_id": str(_pid_remap),
+                        "command": _cmd,
+                    }
+                    # Preserve optional timeout / workdir if the
+                    # planner supplied them.
+                    if "timeout_sec" in raw_input or "timeout" in (
+                            raw_input or {}):
+                        raw_input["timeout_sec"] = int(
+                            raw_input.get("timeout_sec")
+                            or raw_input.get("timeout") or 60)
+                    if "working_dir" in raw_input or "workdir" in (
+                            raw_input or {}):
+                        raw_input["workdir"] = (
+                            raw_input.get("workdir")
+                            or raw_input.get("working_dir"))
 
         # UPLOAD REMAP. When the active plan is upload_deep, the planner
         # still reaches for gitlab/repo tools (search_blobs, search_context,

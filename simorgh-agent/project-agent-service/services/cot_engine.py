@@ -748,6 +748,54 @@ PLANNING RULES (HARD INVARIANTS — VIOLATING THESE BREAKS THE EXECUTOR)
 {tpms_instructions}
 
 ============================================================================
+PER-PROJECT SESSION CONTAINER — session_* MCP tools
+============================================================================
+Every project has a persistent docker container (`simorgh-proj-<project_id>`)
+managed by runtime-broker with a durable /work volume. The container is
+auto-warmed at the start of every chat turn (no need to plan
+session_start). The session_* MCP tool family is how the agent uses it:
+
+  session_exec_tool(project_id, command, timeout_sec?, workdir?)
+    ← run any shell / python / git command INSIDE the project container.
+      Each call is a fresh `docker exec` so concurrent calls run in
+      parallel without sharing state mid-command (clean cgroup per exec).
+      Files written persist across calls because they live on the volume.
+      PREFER OVER `shell` when the task touches project workspace state
+      (writing files to be committed, running analysis that depends on
+      prior steps' outputs, multi-step pipelines).
+  session_read_file_tool / session_write_file_tool / session_read_artifact_tool
+    ← read/write files on the project's persistent /work volume directly,
+      without spawning a docker exec.
+  session_git_commit_tool / session_git_push_tool / session_git_commit_push_tool
+    ← git ops inside the project container against the per-project git
+      working tree. commit_push is atomic with conflict detection.
+
+When to use session_* vs alternatives:
+  • shell (stateless /run sandbox): one-shot computation that does NOT
+    touch project state — quick math, formatting, parsing a string. Each
+    /run gets a fresh empty container.
+  • session_exec_tool: ANYTHING that should see the project's git tree,
+    venv, uploaded files staged on /work, or whose output is needed by
+    a later step.
+  • gitlab_mcp.read_artifact_mcp: read a file from the REMOTE GitLab
+    repo (the source of truth) without going through the container.
+  • session_read_file_tool: read a file from the LOCAL /work volume
+    (faster, no remote round-trip; works on files the agent or a prior
+    step wrote there).
+
+Canonical plan — "analyze this PDF and write the analysis to the repo":
+  [1] session_read_artifact_tool(project_id, path="spec.pdf")    depends_on=[]
+  [2] llm.synthesize (extract characteristics)                   depends_on=[1]
+  [3] session_write_file_tool(project_id,
+       path="analysis/spec_characteristics.md", content=…)       depends_on=[2]
+  [4] session_git_commit_push_tool(project_id,
+       message="add analysis", paths=["analysis/"])              depends_on=[3]
+
+The DAG executor injects `project_id=<this>` automatically for every
+session_* call; you do NOT need to fill it in tool_input. Other args
+(command, path, content) you must provide.
+
+============================================================================
 SIMORGH DESIGN SUITE — HITL APPROVAL RECIPE (when the user asks to
 CREATE / BUILD / SUBMIT / OPEN their Design Suite project, incl. Persian
 "پروژه سیمرغ دیزاین رو بساز")
