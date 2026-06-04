@@ -1059,7 +1059,20 @@ async def gather_all(*, project_id: str, tpms_oenum: Optional[str],
     source can't sink the gather. Tier 1 (project fields) + Tier 2
     (equipments/devices) are both populated here — the reconciler picks
     the highest-confidence source per field.
+
+    Source isolation contract: callers pass `tpms_oenum=None /
+    repo_path=None / techserver_oenum=None` to disable each source.
+    Each extractor self-guards: passing None / "" yields an empty
+    result without making any external call (no SMB, no TPMS HTTP,
+    no GitLab clone). Defence in depth — soft_collector already gates
+    on sources_enabled but a defensive extractor catches future
+    callers who forget the gate.
     """
+    logger.info(
+        "soft.gather_all: project=%s tpms_oe=%s ts_oe=%s repo=%s",
+        project_id, tpms_oenum or "-", techserver_oenum or "-",
+        repo_path or "-",
+    )
     # Run NON-LLM extractors in parallel — they don't touch llm-gateway,
     # so concurrency is safe and cheap.
     fast_results = await asyncio.gather(

@@ -167,10 +167,26 @@ async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str,
         return existing
 
     se = project.get("sources_enabled") or {}
-    tpms_oenum = (project.get("tpms_oenum")
-                  or (se.get("techserver_oenum") if se.get("tpms") else None))
-    repo_path = project.get("gitlab_repo_path") if se.get("gitlab") else None
-    ts_oenum = se.get("techserver_oenum") if se.get("techserver") else None
+    # Source isolation: every extractor MUST be gated by sources_enabled.
+    # Pre-fix, the TPMS branch fell through to project.tpms_oenum
+    # unconditionally — so a project created with only TechServer
+    # enabled (sources_enabled.tpms=False) but with project.tpms_oenum
+    # populated from the shared-OE creation flow would still pull
+    # TPMS data into its proposals. Bug surfaced live: a new
+    # TechServer-only project showed Mobarakeh Steel (OE 04A12065)
+    # proposals because tpms_oenum had been carried over.
+    #
+    # Now: each source returns its oenum/repo ONLY when its flag is
+    # enabled. No silent fallbacks across sources.
+    tpms_oenum = project.get("tpms_oenum") if se.get("tpms") else None
+    repo_path  = project.get("gitlab_repo_path") if se.get("gitlab") else None
+    ts_oenum   = se.get("techserver_oenum") if se.get("techserver") else None
+    logger.info(
+        "soft_collector: project=%s sources=%s tpms_oe=%s ts_oe=%s repo=%s",
+        project_id,
+        {k: bool(v) for k, v in se.items() if k in ("tpms", "techserver", "gitlab", "upload")},
+        tpms_oenum or "-", ts_oenum or "-", repo_path or "-",
+    )
 
     agent_singleton = None
     try:
