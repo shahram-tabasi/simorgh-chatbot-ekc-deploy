@@ -395,7 +395,31 @@ async def extract_one_document(*, filename: str, doc_type: str,
                 if rec2.get("present") and c2 >= c1:
                     pass1[k] = rec2
 
-    return _to_field_values(pass1 or {}, filename, doc_type)
+    # Phase B: post-extraction validation. Runs the LLM's JSON output
+    # through unit-canonicalisers, format-normalisers, allowed-value
+    # gates, and plausibility ranges (services/soft_extractor_validators).
+    # Failed validators DROP the field (set present=False with reason)
+    # rather than silently fix it — so "design temperature 354°C"
+    # disappears from the proposal stream entirely instead of being
+    # surfaced for the user to approve.
+    try:
+        from services.soft_extractor_validators import validate_extracted_dict
+
+        def _log_reject(field: str, raw, reason: str) -> None:
+            logger.info(
+                "soft.whole_doc: validator dropped %s/%s=%r — %s",
+                filename, field, raw, reason,
+            )
+
+        validated = validate_extracted_dict(pass1 or {}, on_reject=_log_reject)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "soft.whole_doc: validator pass failed (%s) — using raw LLM output",
+            e,
+        )
+        validated = pass1 or {}
+
+    return _to_field_values(validated, filename, doc_type)
 
 
 async def from_uploads_whole_doc(project_id: str, project_oenum: str,

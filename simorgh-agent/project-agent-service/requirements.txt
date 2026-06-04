@@ -40,6 +40,12 @@ transformers>=4.46,<5
 # Pulls in onnxruntime; CPU-only path is ~120 MB. The hybrid path
 # falls back to dense-only when this fails to import.
 fastembed>=0.4.0
+# Phase B: Jalali → Gregorian date conversion for the post-extraction
+# validator (services/soft_extractor_validators). Persian uploads often
+# carry NTP / delivery dates in the Solar Hijri calendar (1403/12/24);
+# the validator normalises them to ISO 8601 before the spec is POSTed
+# to simorgh-soft. ~30 KB pure-Python, no native deps.
+jdatetime>=4.1.0
 # pdf2image for services/vlm_verifier — renders a single PDF page to PNG
 # bytes so Qwen-VL on .62 can cross-check extracted values against the
 # source page. Requires poppler-utils system package in the container;
