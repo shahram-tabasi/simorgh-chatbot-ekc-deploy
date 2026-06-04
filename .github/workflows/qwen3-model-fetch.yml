@@ -171,7 +171,7 @@ jobs:
       # ── One artifact per part, each independently downloadable ──────────
       # Part 1 also carries the meta files (REASSEMBLE.sh + checksums).
       - name: Upload part 1
-        if: ${{ inputs.parts >= '1' }}
+        if: ${{ fromJSON(inputs.parts) >= 1 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-01of${{ inputs.parts }}
@@ -184,7 +184,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 2
-        if: ${{ inputs.parts >= '2' }}
+        if: ${{ fromJSON(inputs.parts) >= 2 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-02of${{ inputs.parts }}
@@ -193,7 +193,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 3
-        if: ${{ inputs.parts >= '3' }}
+        if: ${{ fromJSON(inputs.parts) >= 3 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-03of${{ inputs.parts }}
@@ -202,7 +202,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 4
-        if: ${{ inputs.parts >= '4' }}
+        if: ${{ fromJSON(inputs.parts) >= 4 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-04of${{ inputs.parts }}
@@ -211,7 +211,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 5
-        if: ${{ inputs.parts >= '5' }}
+        if: ${{ fromJSON(inputs.parts) >= 5 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-05of${{ inputs.parts }}
@@ -220,7 +220,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 6
-        if: ${{ inputs.parts >= '6' }}
+        if: ${{ fromJSON(inputs.parts) >= 6 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-06of${{ inputs.parts }}
@@ -229,7 +229,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 7
-        if: ${{ inputs.parts >= '7' }}
+        if: ${{ fromJSON(inputs.parts) >= 7 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-07of${{ inputs.parts }}
@@ -238,7 +238,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 8
-        if: ${{ inputs.parts >= '8' }}
+        if: ${{ fromJSON(inputs.parts) >= 8 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-08of${{ inputs.parts }}
@@ -247,7 +247,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 9
-        if: ${{ inputs.parts >= '9' }}
+        if: ${{ fromJSON(inputs.parts) >= 9 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-09of${{ inputs.parts }}
@@ -256,7 +256,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 10
-        if: ${{ inputs.parts >= '10' }}
+        if: ${{ fromJSON(inputs.parts) >= 10 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-10of${{ inputs.parts }}
@@ -265,7 +265,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 11
-        if: ${{ inputs.parts >= '11' }}
+        if: ${{ fromJSON(inputs.parts) >= 11 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-11of${{ inputs.parts }}
@@ -274,7 +274,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 12
-        if: ${{ inputs.parts >= '12' }}
+        if: ${{ fromJSON(inputs.parts) >= 12 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-12of${{ inputs.parts }}
@@ -283,7 +283,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 13
-        if: ${{ inputs.parts >= '13' }}
+        if: ${{ fromJSON(inputs.parts) >= 13 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-13of${{ inputs.parts }}
@@ -292,7 +292,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 14
-        if: ${{ inputs.parts >= '14' }}
+        if: ${{ fromJSON(inputs.parts) >= 14 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-14of${{ inputs.parts }}
@@ -301,7 +301,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 15
-        if: ${{ inputs.parts >= '15' }}
+        if: ${{ fromJSON(inputs.parts) >= 15 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-15of${{ inputs.parts }}
@@ -310,7 +310,7 @@ jobs:
           compression-level: 0
 
       - name: Upload part 16
-        if: ${{ inputs.parts >= '16' }}
+        if: ${{ fromJSON(inputs.parts) >= 16 }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FNAME }}-part-16of${{ inputs.parts }}
