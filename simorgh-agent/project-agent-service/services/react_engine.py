@@ -63,8 +63,12 @@ def _trim_history(messages: List[Dict[str, Any]]) -> None:
 
 REACT_SYSTEM_PROMPT = """You are Simorgh, an expert engineering assistant that solves the user's request by REASONING and ACTING in a loop.
 
+<use_parallel_tool_calls>
+For maximum efficiency, whenever you perform multiple independent operations, invoke all relevant tools simultaneously rather than sequentially. In a single assistant turn you may emit MULTIPLE tool_use blocks at once — the executor dispatches them in parallel via asyncio.gather and returns every result before your next turn. Use this whenever the next steps don't depend on each other (e.g. "list_project_documents + get_project_tree + techserver_get_tree" for a project-tree question; "read fileA + read fileB" to compare two files). Only sequence calls when a later call genuinely needs the prior call's output.
+</use_parallel_tool_calls>
+
 HOW YOU WORK:
-- Work ONE step at a time. Either call exactly ONE tool to gather information / take an action, OR give your FINAL answer when you have enough.
+- Work in one or more steps. In each step you may call ONE OR MORE INDEPENDENT tools (they will run in parallel), OR give your FINAL answer when you have enough.
 - After each tool call you WILL SEE its result before deciding the next step. So never guess a value you can obtain from a tool — call the tool, read the real result, then use it.
 - NEVER emit placeholder strings as arguments (no "<oenum>", "<output_of_step_2>", "<repo>", "<id>"). Use real values you have actually seen.
 - Be efficient: prefer the fewest steps that fully answer the question. You have at most {max_steps} steps.
@@ -460,10 +464,20 @@ def _build_tools(mcp_manager, project_context: Dict[str, Any]) -> List[Dict[str,
 
 async def _llm_step(gateway_url: str, messages: List[Dict[str, Any]],
                     tools: List[Dict[str, Any]], mode: str
-                    ) -> Tuple[Optional[str], Optional[Dict], str]:
-    """One LLM turn. Returns (tool_name, tool_args, final_text). Retries on
-    transient gateway 5xx (the loop makes many calls; the gateway 502s
-    under burst)."""
+                    ) -> Tuple[List[Dict[str, Any]], str]:
+    """One LLM turn. Returns (tool_calls, final_text).
+
+    Each entry in `tool_calls` is shaped:
+        {"id": <call_id>, "name": <tool_name>, "args": <dict>}
+
+    Anthropic's parallel-tool-use guidance: tool calls in a single
+    assistant turn are unordered and SHOULD be dispatched concurrently.
+    The previous implementation kept only `tool_calls[0]` which forced
+    a sequential ReAct loop even when the model emitted siblings — the
+    direct cause of the operator's "12 sequential calls" thrash.
+
+    Retries transient gateway 5xx (the loop makes many calls; the
+    gateway 502s under burst)."""
     payload = {
         "messages": messages,
         "mode": mode,
@@ -489,22 +503,30 @@ async def _llm_step(gateway_url: str, messages: List[Dict[str, Any]],
             await __import__("asyncio").sleep(1.5 * (attempt + 1))
     if body is None:
         raise last_err or RuntimeError("gateway call failed")
-    tool_calls = body.get("tool_calls") or []
-    if tool_calls:
-        fn = tool_calls[0].get("function", {}) or {}
-        name = fn.get("name")
-        raw = fn.get("arguments")
+
+    raw_calls = body.get("tool_calls") or []
+    parsed: List[Dict[str, Any]] = []
+    for i, tc in enumerate(raw_calls):
+        fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+        name = fn.get("name") or tc.get("name")
+        if not name:
+            continue
+        raw_args = fn.get("arguments") if "arguments" in fn else tc.get("arguments")
         args: Dict[str, Any] = {}
-        if isinstance(raw, str):
+        if isinstance(raw_args, str):
             try:
-                args = json.loads(raw)
+                args = json.loads(raw_args)
             except Exception:
                 args = {}
-        elif isinstance(raw, dict):
-            args = raw
-        return name, args, ""
+        elif isinstance(raw_args, dict):
+            args = raw_args
+        call_id = tc.get("id") or f"call_{i}_{uuid.uuid4().hex[:8]}"
+        parsed.append({"id": call_id, "name": name, "args": args})
+
+    if parsed:
+        return parsed, ""
     # No tool call → final answer text.
-    return None, None, (body.get("response") or body.get("text") or "").strip()
+    return [], (body.get("response") or body.get("text") or "").strip()
 
 
 async def react_loop(agent, project_id: str, cot_request, project_context: Dict[str, Any],
@@ -612,6 +634,7 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
     steps: List[Dict[str, Any]] = []
     final_response = ""
 
+    import asyncio as _asyncio
     for i in range(1, steps_cap + 1):
         if not gateway_url:
             final_response = "LLM gateway is not configured (LLM_GATEWAY_URL)."
@@ -621,57 +644,84 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
         # sees current todo state without re-deriving from transcript.
         messages[0]["content"] = _system_with_todos()
         try:
-            tool_name, tool_args, final_text = await _llm_step(
+            tool_calls, final_text = await _llm_step(
                 gateway_url, messages, tools, mode)
         except Exception as e:
             logger.error("react: llm step %d failed: %s", i, e)
             final_response = final_response or f"Reasoning step failed: {e}"
             break
 
-        if not tool_name:
+        if not tool_calls:
             final_response = final_text or "(no answer produced)"
             break
 
-        # Stream the step to the UI.
-        task_id = str(uuid.uuid4())
-        title = f"{tool_name}"
-        await agent._notify_progress(project_id, "task_executing", {
-            "task_id": task_id, "task_title": title,
-            "step": i, "total": steps_cap,
-            "progress_percent": int(i * 100 / steps_cap),
+        # Parallel tool-call fan-out — Anthropic parallel-tool-use docs:
+        # "Tool calls in a single assistant turn are unordered. You can
+        # run them concurrently." Dispatch every emitted call in this
+        # turn via asyncio.gather; one slow tool no longer blocks
+        # independent siblings. The agent's planner is teaching this
+        # via the <use_parallel_tool_calls> system-prompt block.
+        async def _dispatch_one(call: Dict[str, Any]) -> Dict[str, Any]:
+            name = call["name"]
+            args = call["args"]
+            call_id = call["id"]
+            await agent._notify_progress(project_id, "task_executing", {
+                "task_id": call_id, "task_title": name,
+                "step": i, "total": steps_cap,
+                "progress_percent": int(i * 100 / steps_cap),
+            })
+            task = {
+                "id": call_id, "title": name, "description": "",
+                "task_type": "shell_command" if name in ("shell", "git") else "query",
+                "tool_used": name, "tool_input": args or {},
+                "sort_order": i,
+                "cot_chain_id": chain_id,
+            }
+            try:
+                result = await agent._execute_single_task(
+                    project_id, task, prev_results)
+            except Exception as e:
+                logger.error("react: tool %s failed: %s", name, e)
+                result = {"output": f"[tool {name} failed: {e}]",
+                          "metadata": {}}
+            output_str = (result or {}).get("output", "") or ""
+            await agent._notify_progress(project_id, "task_completed", {
+                "task_id": call_id, "tool": name,
+                "output_preview": output_str[:200],
+            })
+            return {"call": call, "result": result, "output": output_str}
+
+        wave = await _asyncio.gather(
+            *[_dispatch_one(c) for c in tool_calls],
+            return_exceptions=False,
+        )
+
+        # Single assistant message carrying ALL tool_calls, then a
+        # single user message carrying ALL tool_results — Anthropic's
+        # required shape for parallel tool use. Splitting these into
+        # one-per-tool messages actively teaches the model to be
+        # sequential in subsequent turns.
+        assistant_tool_calls = []
+        for w in wave:
+            c = w["call"]
+            assistant_tool_calls.append({
+                "id": c["id"], "type": "function",
+                "function": {"name": c["name"],
+                             "arguments": json.dumps(c["args"] or {})},
+            })
+        messages.append({
+            "role": "assistant", "content": "",
+            "tool_calls": assistant_tool_calls,
         })
-
-        task = {
-            "id": task_id, "title": title, "description": "",
-            "task_type": "shell_command" if tool_name in ("shell", "git") else "query",
-            "tool_used": tool_name, "tool_input": tool_args or {},
-            "sort_order": i,
-            # Threaded so the local-tool dispatcher (todo_write/todo_list)
-            # can locate this chain's todo store.
-            "cot_chain_id": chain_id,
-        }
-        try:
-            result = await agent._execute_single_task(project_id, task, prev_results)
-        except Exception as e:
-            logger.error("react: tool %s failed: %s", tool_name, e)
-            result = {"output": f"[tool {tool_name} failed: {e}]", "metadata": {}}
-
-        output = (result or {}).get("output", "") or ""
-        prev_results[str(i)] = result
-        steps.append({"title": title, "tool": tool_name})
-
-        await agent._notify_progress(project_id, "task_completed", {
-            "task_id": task_id, "tool": tool_name,
-            "output_preview": output[:200],
-        })
-
-        # Feed the observation back so the NEXT turn can use the real values.
-        messages.append({"role": "assistant", "content": "",
-                         "tool_calls": [{"id": task_id, "type": "function",
-                                         "function": {"name": tool_name,
-                                                      "arguments": json.dumps(tool_args or {})}}]})
-        messages.append({"role": "tool", "tool_call_id": task_id,
-                         "name": tool_name, "content": output[:2500]})
+        for w in wave:
+            messages.append({
+                "role": "tool", "tool_call_id": w["call"]["id"],
+                "name": w["call"]["name"],
+                "content": (w["output"] or "")[:2500],
+            })
+            prev_results[str(len(prev_results) + 1)] = w["result"]
+            steps.append({"title": w["call"]["name"],
+                          "tool": w["call"]["name"]})
 
         # Keep the running transcript within the model's context window.
         # The system message (with the pre-loaded document CONTEXT) and the
@@ -696,7 +746,7 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
             messages.append({"role": "user",
                              "content": "Stop using tools. Give your best final answer now "
                                         "from what you have gathered above."})
-            _, _, final_response = await _llm_step(gateway_url, messages, [], mode)
+            _, final_response = await _llm_step(gateway_url, messages, [], mode)
         except Exception as e:
             final_response = f"(reached step limit; synthesis failed: {e})"
 
