@@ -183,6 +183,146 @@ CONFIRMABLE_FIELDS = [
 
 
 # ---------------------------------------------------------------------------
+# Category groups — mirrors simorgh-soft's UI tabs PLUS the IEC 61439-1 /
+# 62271-200 / SIMARIS design canonical category taxonomy. The frontend
+# proposals viewer renders one collapsible section per group. Categories
+# with no pending proposals collapse by default.
+#
+# Field names use the same dotted shape as the LLM extractor's
+# _EXTRACT_KEYS — nested keys (`techSettings.general.designTemperature`)
+# group under their owning category, NOT under the top-level
+# `techSettings` key.
+# ---------------------------------------------------------------------------
+CATEGORY_GROUPS = [
+    {
+        "id":    "identity",
+        "label": "Project identity",
+        "hint":  "Who, what, by whom — the project's primary headers.",
+        "fields": [
+            "projectName", "projectNumber", "projectId",
+            "projectDescription",
+            "client", "planner", "designOffice",
+        ],
+    },
+    {
+        "id":    "regional",
+        "label": "Regional & dates",
+        "hint":  "Standards family, jurisdiction, document language, timeline.",
+        "fields": [
+            "country", "language", "standard",
+            "noticeToProceedDate", "deliveryDate",
+        ],
+    },
+    {
+        "id":    "site",
+        "label": "Site & environmental",
+        "hint":  "Site location + IEC 62271-1 service envelope.",
+        "fields": [
+            "location",
+            "techSettings.general.designTemperature",
+            "techSettings.general.altitudeAboveSeaLevel",
+        ],
+    },
+    {
+        "id":    "network",
+        "label": "Network characteristics",
+        "hint":  "System voltage, frequency, short-circuit power (IEC 60909 inputs).",
+        "fields": [
+            "techSettings.general.nominalVoltage",
+            "techSettings.general.ratedFrequency",
+            "techSettings.general.shortCircuitCurrent",
+            "technicalSettings.mediumVoltage.nominalVoltage",
+            "technicalSettings.mediumVoltage.maxShortCircuitPower",
+            "technicalSettings.mediumVoltage.minShortCircuitPower",
+            "technicalSettings.lowVoltage.nominalVoltage",
+            "technicalSettings.lowVoltage.frequency",
+            "technicalSettings.lowVoltage.permissibleTouchVoltage",
+            "technicalSettings.lowVoltage.ambientTemperature",
+            "technicalSettings.lowVoltage.numberOfPoles",
+            "technicalSettings.lowVoltage.earthFaultDetection",
+        ],
+    },
+    {
+        "id":    "compliance",
+        "label": "Type testing & compliance",
+        "hint":  "BIL, IAC class, insulation levels per IEC 62271-200.",
+        "fields": [
+            "techSettings.general.bil",
+            "techSettings.general.iacClass",
+            "techSettings.general.ipRating",
+            "techSettings.general.controlVoltage",
+        ],
+    },
+    {
+        "id":    "wiring_size",
+        "label": "Cable & wire — sizes",
+        "hint":  "Control / CT / PT secondary cross-sections, mm².",
+        "fields": [
+            "techSettings.wireSize.controlCircuit",
+            "techSettings.wireSize.ctSecondary",
+            "techSettings.wireSize.ptSecondary",
+            "techSettings.wireSize.plcPowerSupply",
+        ],
+    },
+    {
+        "id":    "wiring_color",
+        "label": "Cable & wire — colour code",
+        "hint":  "Per IEC 60446: phases, neutral, DC ±, PLC I/O.",
+        "fields": [
+            "techSettings.wireColor.acPhase",
+            "techSettings.wireColor.acNeutral",
+            "techSettings.wireColor.dcPlus",
+            "techSettings.wireColor.dcMinus",
+            "techSettings.wireColor.plcInput",
+            "techSettings.wireColor.plcOutput",
+            "techSettings.wireColor.threePhase",
+        ],
+    },
+    {
+        "id":    "wiring_manufacturer",
+        "label": "Cable & wire — manufacturer",
+        "hint":  "Approved cable suppliers for LV / MV.",
+        "fields": [
+            "techSettings.wireManufacturer.mv",
+            "techSettings.wireManufacturer.lv",
+        ],
+    },
+    {
+        "id":    "finishes",
+        "label": "Finishes & labelling",
+        "hint":  "Paint coat, RAL, label background / writing colours.",
+        "fields": [
+            "techSettings.others.thicknessOfPainting",
+            "techSettings.others.colorType",
+            "techSettings.others.backgroundColor",
+            "techSettings.others.writingColor",
+        ],
+    },
+    {
+        "id":    "equipment",
+        "label": "Equipment & feeders",
+        "hint":  "Panels, feeders, devices (from TPMS or extracted from SLDs).",
+        "fields": ["equipments"],
+    },
+    {
+        "id":    "notes",
+        "label": "Notes",
+        "hint":  "Free-form comment / catch-all.",
+        "fields": ["comment"],
+    },
+]
+
+
+def category_for_field(field: str) -> str:
+    """Return the category id a field belongs to, or 'other' if no
+    explicit grouping. Used by the frontend to bucket proposals."""
+    for group in CATEGORY_GROUPS:
+        if field in group["fields"]:
+            return group["id"]
+    return "other"
+
+
+# ---------------------------------------------------------------------------
 # Provenance sidecar
 # ---------------------------------------------------------------------------
 class FieldProvenance(BaseModel):

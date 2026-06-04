@@ -51,63 +51,161 @@ WHOLE_DOC_MAX_OUTPUT_TOKENS = int(os.getenv("SOFT_WHOLE_DOC_MAX_TOKENS", "4000")
 WHOLE_DOC_TEMPERATURE = float(os.getenv("SOFT_WHOLE_DOC_TEMPERATURE", "1.0"))
 
 # Field-level human labels surfaced in the prompt so the model sees what
-# each cryptic key means. Keep in sync with frontend FIELD_LABELS.
+# each cryptic key means. Mirrors simorgh-soft's `ProjectData` schema
+# AND the IEC 61439-1 / 62271-200 canonical category taxonomy. The
+# frontend FIELD_META in ProposalsReviewDrawer.tsx is the user-facing
+# mirror — keep both in sync when adding fields.
 _FIELD_LABELS: Dict[str, str] = {
+    # ── Project Identity ───────────────────────────────────────────────
     "projectName":         "Project name (e.g. 'Mobarakeh Steel HSM-2 6.6kV Switchgear')",
     "projectDescription":  "Short description / scope, free-text",
-    "projectNumber":       "OE number / project code (e.g. '04A12065')",
+    "projectNumber":       "OE number / project code, format YYAXXXXX (e.g. '04A12065')",
     "projectId":           "Internal PID (often equals OE number)",
-    "client":              "End customer / owner",
-    "location":            "Plant or site location",
-    "standard":            "Primary standard family (e.g. 'IEC', 'IEEE', 'ANSI')",
-    "country":             "Country of installation",
-    "language":            "Document language (English / Persian / mixed)",
-    "noticeToProceedDate": "NTP date, ISO 8601 (YYYY-MM-DD)",
-    "deliveryDate":        "Delivery / contractual completion date, ISO 8601",
+    "client":              "End customer / owner / operating entity",
     "planner":             "Planner / design engineer / responsible person",
-    "designOffice":        "Design office or EPC",
+    "designOffice":        "Design office or EPC contractor",
     "comment":             "Any other freeform note worth capturing",
-    # Nested techSettings fields (dotted keys; reshaped after extraction).
+    # ── Regional & Dates ───────────────────────────────────────────────
+    "country":             "Country of installation (IEC: Iran / Germany / USA / France / China / ...)",
+    "language":            "Document language (English / Persian / Arabic / German / French / ...)",
+    "standard":            "Primary standard family (IEC / IEEE / ANSI / DIN / GOST / GB)",
+    "noticeToProceedDate": "NTP date, ISO 8601 YYYY-MM-DD (Jalali also accepted)",
+    "deliveryDate":        "Delivery / contractual completion date, ISO 8601",
+    # ── Site & Environmental (IEC 62271-1 §2) ──────────────────────────
+    "location":            "Plant or site location",
     "techSettings.general.designTemperature":
-        "Design ambient temperature, °C (e.g. '50' or '40/-10')",
+        "Design ambient temperature, °C (IEC envelope: -40 to +60)",
     "techSettings.general.altitudeAboveSeaLevel":
-        "Altitude above sea level, meters (e.g. '1800')",
+        "Altitude above sea level, m (0..5000; derate above 1000)",
+    # ── Network Characteristics (IEC 60909 inputs) ─────────────────────
     "techSettings.general.nominalVoltage":
-        "Nominal voltage of the medium-voltage system (e.g. '6.6 kV')",
+        "Nominal voltage of the medium-voltage system (kV, e.g. '6.6')",
     "techSettings.general.ratedFrequency":
-        "Rated frequency (e.g. '50 Hz')",
+        "Rated frequency, Hz (50 or 60)",
     "techSettings.general.shortCircuitCurrent":
-        "Short-circuit / fault current rating (e.g. '40 kA, 3 s')",
+        "Short-circuit current Icw, kA (e.g. '40' for 40 kA / 1 s)",
+    "technicalSettings.mediumVoltage.nominalVoltage":
+        "MV nominal voltage, kV (alt. nesting; same physical value)",
+    "technicalSettings.mediumVoltage.maxShortCircuitPower":
+        "MV max short-circuit power, MVA",
+    "technicalSettings.mediumVoltage.minShortCircuitPower":
+        "MV min short-circuit power, MVA",
+    "technicalSettings.lowVoltage.nominalVoltage":
+        "LV nominal voltage, V (e.g. '400')",
+    "technicalSettings.lowVoltage.frequency":
+        "LV frequency, Hz (50 or 60)",
+    "technicalSettings.lowVoltage.permissibleTouchVoltage":
+        "Permissible touch voltage, V",
+    "technicalSettings.lowVoltage.ambientTemperature":
+        "LV ambient temperature, °C",
+    "technicalSettings.lowVoltage.numberOfPoles":
+        "Number of poles (3 / 4)",
+    "technicalSettings.lowVoltage.earthFaultDetection":
+        "Earth-fault detection method",
+    # ── Type Testing & Compliance (IEC 62271-200) ──────────────────────
     "techSettings.general.bil":
-        "Basic insulation level (e.g. '75 kV')",
-    "techSettings.general.ipRating":
-        "IP / IK class (e.g. 'IP4X', 'IK10')",
+        "Basic insulation level Up, kV peak (1.2/50 µs impulse)",
     "techSettings.general.iacClass":
-        "Internal Arc Classification per IEC 62271-200",
+        "Internal Arc Classification per IEC 62271-200 (e.g. 'IAC AFLR 25 kA 1 s')",
+    # ── Panel / Enclosure Construction (IEC 61439-1 §8) ────────────────
+    "techSettings.general.ipRating":
+        "IP / IK class (IEC 60529 / IEC 62262, e.g. 'IP4X', 'IK10')",
     "techSettings.general.controlVoltage":
         "Control / auxiliary voltage (e.g. '110 V DC')",
+    # ── Wiring — Size (cross-section, mm²) ─────────────────────────────
+    "techSettings.wireSize.controlCircuit":
+        "Control circuit wire size, mm² (e.g. '1.5')",
+    "techSettings.wireSize.ctSecondary":
+        "CT secondary wire size, mm² (e.g. '2.5')",
+    "techSettings.wireSize.ptSecondary":
+        "PT/VT secondary wire size, mm² (e.g. '1.5')",
+    "techSettings.wireSize.plcPowerSupply":
+        "PLC power-supply wire size, mm²",
+    # ── Wiring — Colour (IEC 60446) ────────────────────────────────────
+    "techSettings.wireColor.acPhase":
+        "AC phase wire colour (e.g. 'L1 brown / L2 black / L3 grey')",
+    "techSettings.wireColor.acNeutral":
+        "AC neutral wire colour (IEC default: blue)",
+    "techSettings.wireColor.dcPlus":
+        "DC + wire colour",
+    "techSettings.wireColor.dcMinus":
+        "DC − wire colour",
+    "techSettings.wireColor.plcInput":
+        "PLC input wire colour",
+    "techSettings.wireColor.plcOutput":
+        "PLC output wire colour",
+    "techSettings.wireColor.threePhase":
+        "Three-phase wire colour-code system",
+    # ── Wiring — Manufacturer ──────────────────────────────────────────
     "techSettings.wireManufacturer.mv":
         "MV wire / cable manufacturer(s)",
     "techSettings.wireManufacturer.lv":
         "LV wire / cable manufacturer(s)",
+    # ── Construction / Finishes (RAL paint, dimensions) ────────────────
+    "techSettings.others.thicknessOfPainting":
+        "Paint coat thickness, µm (typical: 60-100)",
+    "techSettings.others.colorType":
+        "Paint colour standard (e.g. 'RAL 7032')",
+    "techSettings.others.backgroundColor":
+        "Background colour for labels",
+    "techSettings.others.writingColor":
+        "Engraving / lettering colour for labels",
 }
 
-# The list of (dotted) keys we EXTRACT — superset of CONFIRMABLE_FIELDS
-# plus the nested techSettings.* fields we know real engineering specs
-# always contain.
+# The list of (dotted) keys we EXTRACT. Superset of CONFIRMABLE_FIELDS
+# plus the nested techSettings / technicalSettings fields the LLM can
+# realistically read out of a typical IEC switchgear spec. Order
+# matches _FIELD_LABELS for readable prompt rendering.
 _EXTRACT_KEYS: List[str] = list(dict.fromkeys([
-    *CONFIRMABLE_FIELDS,
+    # Identity
+    "projectName", "projectDescription", "projectNumber", "projectId",
+    "client", "planner", "designOffice", "comment",
+    # Regional & dates
+    "country", "language", "standard",
+    "noticeToProceedDate", "deliveryDate",
+    # Site
+    "location",
     "techSettings.general.designTemperature",
     "techSettings.general.altitudeAboveSeaLevel",
+    # Network
     "techSettings.general.nominalVoltage",
     "techSettings.general.ratedFrequency",
     "techSettings.general.shortCircuitCurrent",
+    "technicalSettings.mediumVoltage.nominalVoltage",
+    "technicalSettings.mediumVoltage.maxShortCircuitPower",
+    "technicalSettings.mediumVoltage.minShortCircuitPower",
+    "technicalSettings.lowVoltage.nominalVoltage",
+    "technicalSettings.lowVoltage.frequency",
+    "technicalSettings.lowVoltage.permissibleTouchVoltage",
+    "technicalSettings.lowVoltage.ambientTemperature",
+    "technicalSettings.lowVoltage.numberOfPoles",
+    "technicalSettings.lowVoltage.earthFaultDetection",
+    # Compliance / construction
     "techSettings.general.bil",
-    "techSettings.general.ipRating",
     "techSettings.general.iacClass",
+    "techSettings.general.ipRating",
     "techSettings.general.controlVoltage",
+    # Wiring — size
+    "techSettings.wireSize.controlCircuit",
+    "techSettings.wireSize.ctSecondary",
+    "techSettings.wireSize.ptSecondary",
+    "techSettings.wireSize.plcPowerSupply",
+    # Wiring — colour
+    "techSettings.wireColor.acPhase",
+    "techSettings.wireColor.acNeutral",
+    "techSettings.wireColor.dcPlus",
+    "techSettings.wireColor.dcMinus",
+    "techSettings.wireColor.plcInput",
+    "techSettings.wireColor.plcOutput",
+    "techSettings.wireColor.threePhase",
+    # Wiring — manufacturer
     "techSettings.wireManufacturer.mv",
     "techSettings.wireManufacturer.lv",
+    # Finishes
+    "techSettings.others.thicknessOfPainting",
+    "techSettings.others.colorType",
+    "techSettings.others.backgroundColor",
+    "techSettings.others.writingColor",
 ]))
 
 

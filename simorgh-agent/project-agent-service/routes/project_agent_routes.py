@@ -1955,6 +1955,32 @@ class SoftCreateRequest(BaseModel):
 
 
 # =============================================================================
+# Category groups — frontend renders the proposals drawer as a sequence
+# of collapsible sections, one per IEC / SIMARIS taxonomy category. The
+# server is the single source of truth so the UI can't drift away from
+# the schema. No auth required (the list is metadata, not project data).
+# =============================================================================
+@router.get("/soft/categories")
+async def soft_categories():
+    """Returns the canonical CATEGORY_GROUPS list and a `field_to_category`
+    inverse map so the frontend can render proposals by category without
+    duplicating the field-mapping logic."""
+    from services.soft_spec import CATEGORY_GROUPS, category_for_field
+    inverse = {}
+    for g in CATEGORY_GROUPS:
+        for f in g["fields"]:
+            inverse[f] = g["id"]
+    return {
+        "groups": CATEGORY_GROUPS,
+        "field_to_category": inverse,
+        # Helper for the frontend: when a proposal arrives with a
+        # field not listed in any group, it lands in the 'other'
+        # bucket which is rendered last and collapsed by default.
+        "fallback": "other",
+    }
+
+
+# =============================================================================
 # HITL proposals — list + approve/edit/reject (the user is the WRITE gate).
 # =============================================================================
 @router.get("/projects/{project_id}/soft/proposals")
