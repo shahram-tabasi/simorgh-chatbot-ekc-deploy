@@ -45,6 +45,7 @@ import io
 import os
 import shlex
 import tarfile
+import threading
 import time
 import uuid
 from typing import Literal
@@ -82,6 +83,13 @@ PIDS_LIMIT       = int(os.getenv("BROKER_PIDS_LIMIT", "512"))
 # (the named volume stays — session_start rehydrates it). 0 disables.
 IDLE_TTL_SEC     = int(os.getenv("BROKER_IDLE_TTL_SEC", "86400"))   # 24h
 IDLE_SWEEP_SEC   = int(os.getenv("BROKER_IDLE_SWEEP_SEC", "600"))   # 10m
+
+# Concurrent-exec cap per project. Sized to the canonical 4-source
+# fan-out (gitlab + techserver + tpms + uploads); raise if you see
+# benign waves of 5+ session_exec calls queueing. Excess execs block
+# at the semaphore — they don't 429 the agent. 0 disables capping.
+MAX_CONCURRENT_EXECS_PER_PROJECT = int(
+    os.getenv("BROKER_MAX_CONCURRENT_EXECS", "4"))
 
 WORKING_DIR      = "/work"
 CONTAINER_PREFIX = "simorgh-proj-"
@@ -225,11 +233,41 @@ def _create_and_start(project_id: str, image: str, env: dict[str, str]):
         cap_drop=["ALL"],
         cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"],
         security_opt=["no-new-privileges"],
+        # tini as PID 1 (docker --init equivalent). Required for proper
+        # reaping of `docker exec` orphans: without it, any grandchild
+        # that outlives its exec parent becomes a zombie under the
+        # `sleep` keep-alive (which doesn't reap), and the project's
+        # PID table climbs against PIDS_LIMIT over days of use. See
+        # github.com/krallin/tini for the canonical writeup.
+        init=True,
         detach=True,
         restart_policy={"Name": "unless-stopped"},
     )
     container.start()
     return container
+
+
+# --------------------------------------------------------------------------
+# Per-project concurrent-exec semaphore. Caps simultaneous `docker exec`
+# calls per project_id so a runaway agent burst can't pin the project's
+# whole cgroup (all execs share the container's parent cgroup until we
+# wire per-exec child cgroups in Phase 4). Excess execs BLOCK at the
+# semaphore — they don't 429 the agent — so the request queues
+# gracefully under load.
+# --------------------------------------------------------------------------
+_exec_sems: dict[str, threading.Semaphore] = {}
+_exec_sems_lock = threading.Lock()
+
+
+def _get_exec_sem(project_id: str) -> threading.Semaphore | None:
+    if MAX_CONCURRENT_EXECS_PER_PROJECT <= 0:
+        return None
+    with _exec_sems_lock:
+        s = _exec_sems.get(project_id)
+        if s is None:
+            s = threading.Semaphore(MAX_CONCURRENT_EXECS_PER_PROJECT)
+            _exec_sems[project_id] = s
+        return s
 
 
 @app.post("/sessions/{project_id}/start", response_model=SessionStatus,
@@ -319,6 +357,11 @@ def delete_session(project_id: str, keep_volume: bool = False):
         except APIError as e:
             raise HTTPException(status_code=502, detail=f"docker rm: {e.explanation}")
 
+    # Drop the project's exec semaphore so we don't leak threading
+    # objects across project lifetimes.
+    with _exec_sems_lock:
+        _exec_sems.pop(project_id, None)
+
     removed_volume = False
     if not keep_volume:
         try:
@@ -365,6 +408,15 @@ def session_exec(project_id: str, req: ExecRequest):
     user = req.user or "root"
     cmd = ["/bin/bash", "-lc", req.command]
 
+    # Per-project concurrent-exec cap. Blocks (doesn't 429) so the
+    # agent's parallel-tool-call fan-out queues gracefully rather than
+    # erroring out under burst. None when capping is disabled.
+    sem = _get_exec_sem(project_id)
+    sem_held = False
+    if sem is not None:
+        sem.acquire()
+        sem_held = True
+
     started = time.perf_counter()
     timed_out = False
     try:
@@ -392,6 +444,9 @@ def session_exec(project_id: str, req: ExecRequest):
         exit_code = int(info.get("ExitCode") or (124 if timed_out else 0))
     except APIError as e:
         raise HTTPException(status_code=502, detail=f"docker exec: {e.explanation}")
+    finally:
+        if sem_held:
+            sem.release()
 
     stdout = b"".join(stdout_chunks).decode("utf-8", "replace")
     stderr = b"".join(stderr_chunks).decode("utf-8", "replace")
