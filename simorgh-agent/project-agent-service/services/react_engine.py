@@ -487,20 +487,64 @@ async def _llm_step(gateway_url: str, messages: List[Dict[str, Any]],
         "tools": tools,
         "tool_choice": "auto",
     }
+    # Jittered exponential backoff on transient gateway pressure.
+    # Previous code: 3 attempts, fixed 1.5*(n+1)s linear sleep, no
+    # jitter, no 429 handling, no Retry-After honoring — under burst
+    # every concurrent loop hit "gateway busy" simultaneously and
+    # backed off in lockstep, then re-burst together.
+    #
+    # New behaviour:
+    #   - 5 attempts.
+    #   - Treat 429 / 502 / 503 / 504 as transient (was only 502/3/4).
+    #   - Honor the gateway's Retry-After header if present.
+    #   - Otherwise sleep base * 2^attempt * jitter(0.5, 1.5) — full
+    #     decorrelated jitter (AWS Architecture Blog pattern) so two
+    #     callers that hit 503 at the same instant don't re-burst
+    #     in lockstep.
+    import asyncio as _asyncio, random as _random
+    _TRANSIENT = (429, 502, 503, 504)
+    _MAX_ATTEMPTS = int(os.getenv("LLM_GATEWAY_MAX_ATTEMPTS", "5"))
+    _BACKOFF_BASE = float(os.getenv("LLM_GATEWAY_BACKOFF_BASE_SEC", "0.8"))
+    _BACKOFF_CAP  = float(os.getenv("LLM_GATEWAY_BACKOFF_CAP_SEC", "20.0"))
     body = None
     last_err = None
-    for attempt in range(3):
+    for attempt in range(_MAX_ATTEMPTS):
         try:
             async with httpx.AsyncClient(timeout=STEP_TIMEOUT) as c:
                 r = await c.post(f"{gateway_url}/generate", json=payload)
-                if r.status_code in (502, 503, 504):
-                    raise httpx.HTTPStatusError("gateway busy", request=r.request, response=r)
+                if r.status_code in _TRANSIENT:
+                    retry_after = r.headers.get("Retry-After", "")
+                    sleep_for = None
+                    if retry_after.isdigit():
+                        sleep_for = min(float(retry_after), _BACKOFF_CAP)
+                    raise httpx.HTTPStatusError(
+                        f"gateway busy ({r.status_code})",
+                        request=r.request, response=r)
                 r.raise_for_status()
                 body = r.json()
                 break
         except Exception as e:
             last_err = e
-            await __import__("asyncio").sleep(1.5 * (attempt + 1))
+            if attempt == _MAX_ATTEMPTS - 1:
+                break
+            # Sleep: Retry-After if the response carried one (gateway
+            # is telling us when to come back), otherwise jittered
+            # exponential. Cap at _BACKOFF_CAP so we don't sleep
+            # multi-minutes on a long outage.
+            sleep_for = None
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                ra = resp.headers.get("Retry-After", "") if hasattr(
+                    resp, "headers") else ""
+                if ra and ra.isdigit():
+                    sleep_for = min(float(ra), _BACKOFF_CAP)
+            if sleep_for is None:
+                expo = _BACKOFF_BASE * (2 ** attempt)
+                sleep_for = min(expo, _BACKOFF_CAP) * _random.uniform(0.5, 1.5)
+            logger.info(
+                "react: gateway transient err=%s attempt=%d/%d sleep=%.2fs",
+                type(e).__name__, attempt + 1, _MAX_ATTEMPTS, sleep_for)
+            await _asyncio.sleep(sleep_for)
     if body is None:
         raise last_err or RuntimeError("gateway call failed")
 
