@@ -735,6 +735,35 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
     # Each iteration refreshes the block so the model always sees current
     # state without having to call todo_list explicitly.
     todos_store = _get_todos_store(chain_id)
+
+    # Cross-turn durability: hydrate the todo store from Redis using the
+    # CHAT id (stable across chain runs) so a multi-turn task — "open
+    # PR, fix CI feedback, re-push" — sees its prior plan instead of
+    # starting from an empty list every turn. Best-effort: a memory
+    # outage leaves us with the empty in-memory store.
+    chat_id = getattr(cot_request, "chat_id", None) or ""
+    _todos_key = f"todos:{chat_id}" if chat_id else ""
+    if _todos_key:
+        try:
+            saved = await agent.memory.get_working_memory(
+                project_id, _todos_key)
+            if isinstance(saved, dict) and saved.get("items"):
+                todos_store.load_payload(saved)
+                logger.info(
+                    "react: hydrated %d todos from chat=%s",
+                    len(saved["items"]), chat_id)
+        except Exception as e:
+            logger.debug("react: todos hydrate skipped: %s", e)
+
+    async def _persist_todos() -> None:
+        if not _todos_key:
+            return
+        try:
+            await agent.memory.store_working_memory(
+                project_id, _todos_key, todos_store.to_payload())
+        except Exception as e:
+            logger.debug("react: todos persist skipped: %s", e)
+
     _base_system = f"{facts_block}\n\n{system}"
 
     def _system_with_todos() -> str:
@@ -833,6 +862,12 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
             "role": "assistant", "content": "",
             "tool_calls": assistant_tool_calls,
         })
+        # Persist the todo list when this wave mutated it. todo_write
+        # is the only mutator; checking presence in the wave avoids
+        # an unconditional Redis write every turn.
+        if any(c["name"] == "todo_write" for c in tool_calls):
+            await _persist_todos()
+
         # Externalise long outputs to run-state (Redis). The transcript
         # gets a condensed envelope; the full output is fetchable by
         # ref via the read_run_state local tool. Short outputs inline
@@ -885,6 +920,12 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
             _, final_response = await _llm_step(gateway_url, messages, [], mode)
         except Exception as e:
             final_response = f"(reached step limit; synthesis failed: {e})"
+
+    # Final persist before releasing the per-chain in-memory store,
+    # so any mid-loop updates that didn't trigger a persist (e.g. a
+    # status change made by an iteration that crashed before its
+    # wave check) still survive into the next chat turn.
+    await _persist_todos()
 
     # Release the per-chain todo store so we don't accumulate state
     # across runs in long-lived workers.

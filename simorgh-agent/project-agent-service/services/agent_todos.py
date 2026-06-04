@@ -131,6 +131,21 @@ class AgentTodos:
         lines.append(TODOS_CLOSE)
         return "\n".join(lines)
 
+    # ---- persistence -----------------------------------------------------
+    def to_payload(self) -> Dict[str, Any]:
+        """Serializable snapshot for cross-turn / cross-process recovery."""
+        return {"chain_id": self.chain_id, "items": list(self._items)}
+
+    def load_payload(self, payload: Dict[str, Any]) -> None:
+        """Replace the in-memory state from a snapshot. Used when a new
+        ReAct chain in the same chat picks up where the previous one
+        left off."""
+        if not isinstance(payload, dict):
+            return
+        self._items = list(payload.get("items") or [])
+        self._index = {t["id"]: i for i, t in enumerate(self._items)
+                       if isinstance(t, dict) and t.get("id")}
+
     # ---- DAG view (used by the executor when it batches steps) ------------
     def ready(self) -> List[Dict[str, Any]]:
         """All pending todos whose dependencies are all done."""
