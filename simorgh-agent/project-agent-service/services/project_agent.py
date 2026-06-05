@@ -95,6 +95,34 @@ def _is_id_like(s: str) -> bool:
     return False
 
 
+def _content_kind_from_mcp(r: Any) -> str:
+    """Inspect an MCP response for the explicit content-kind contract
+    (added in Commit A — documents_rag returns content_kind ∈
+    {"indexed", "stub", "error"}). Returns the kind, or "" when the
+    caller doesn't speak the contract yet (mixed-rollout safety)."""
+    if not isinstance(r, dict):
+        return ""
+    # Direct field on the wrapper.
+    k = r.get("content_kind")
+    if isinstance(k, str) and k:
+        return k.strip().lower()
+    # Nested under output JSON (MCP tools return JSON-encoded strings).
+    out = r.get("output")
+    if isinstance(out, str):
+        s = out.strip()
+        if s.startswith("{"):
+            try:
+                import json as _json
+                parsed = _json.loads(s)
+                if isinstance(parsed, dict):
+                    k2 = parsed.get("content_kind")
+                    if isinstance(k2, str) and k2:
+                        return k2.strip().lower()
+            except Exception:
+                pass
+    return ""
+
+
 def _extract_text_from_mcp(r: Any) -> str:
     """Pull the textual `output` from an mcp_manager.call_tool result.
     Robust to:
@@ -4284,6 +4312,14 @@ class ProjectManagerAgent:
                     {"filename": fn, "user_id": "system",
                      "project_oenum": str(project_id),
                      "max_chars": self._PREFLIGHT_MAX_CHARS_PER_FILE})
+                # Honour the explicit content_kind contract first — a
+                # documents_rag "stub" (catalogued but not indexed) is
+                # rejected even if its text field happens to be a long
+                # ID-string. Falls back to heuristic stub detection
+                # when content_kind isn't reported (older services).
+                kind = _content_kind_from_mcp(r)
+                if kind in ("stub", "error"):
+                    return None
                 return _real_text_or_none(_extract_text_from_mcp(r))
             except Exception:
                 return None

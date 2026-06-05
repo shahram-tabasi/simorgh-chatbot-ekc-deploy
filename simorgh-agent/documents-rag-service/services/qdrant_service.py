@@ -576,8 +576,11 @@ class QdrantService:
                     points = names[best]
         except Exception as e:
             logger.error(f"❌ get_document_text failed: {e}")
+            # content_kind="error" — distinct from "stub" so the caller can
+            # choose to retry vs treat as no-content.
             return {"document_id": document_id, "filename": filename or "",
-                    "text": "", "chunk_count": 0}
+                    "text": "", "content": "", "content_kind": "error",
+                    "chunk_count": 0, "error": str(e)[:200]}
         chunks = sorted(
             (p.payload or {} for p in points),
             key=lambda pl: pl.get("chunk_index", 0),
@@ -589,10 +592,31 @@ class QdrantService:
                 or pl.get("section_title") or ""
             parts.append(pl.get("text", ""))
         text = "\n".join(parts)[:max_chars]
+
+        # Content-kind contract (Commit A of the grounding pipeline):
+        #   "indexed" → real document text reassembled from chunks
+        #   "stub"    → catalogued (filename known) but no extracted content
+        #               in Qdrant; common when a PDF was registered but not
+        #               text-indexed at upload time. Callers MUST treat
+        #               "stub" as no-content for grounding purposes and
+        #               fall back to a fresh extraction path (gitlab-mcp
+        #               via doc-processor, etc.).
+        #   "error"  → exception path above.
+        # The "text" key is retained for backwards-compat; "content" is
+        # the canonical field going forward.
+        has_chunks = len(chunks) > 0
+        has_text = bool(text.strip())
+        if has_text and has_chunks:
+            kind = "indexed"
+        else:
+            kind = "stub"
+
         return {
             "document_id": document_id or "",
             "filename": out_name,
-            "text": text,
+            "text": text,            # back-compat alias
+            "content": text,         # canonical
+            "content_kind": kind,
             "chunk_count": len(chunks),
         }
 
