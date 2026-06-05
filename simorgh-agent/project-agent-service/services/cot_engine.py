@@ -834,11 +834,42 @@ Several tools return a JSON envelope shaped:
   {{"error":"precondition_blocked","blocked_on":"…",
    "resolver":"<tool>","recipe":[…],"message":"…"}}
 when their prerequisites aren't satisfied — submit_soft_spec waiting on
-pending_proposals / spec_gaps, or the dispatcher gate refusing a tool
-whose source is disabled. The plan should anticipate these:
+pending_proposals / spec_gaps, the dispatcher gate refusing a tool
+whose source is disabled (`blocked_on: "source_disabled:…"`), or the
+LOOP-BREAKER refusing the 3rd call to a tool that returned empty twice
+(`blocked_on: "empty_repeat"`, resolver names a different tool family).
+The plan should anticipate these:
   • Always sequence the `resolver` tool BEFORE the gated tool.
   • Never plan a tool from a source not in the ALLOWED list above —
     the gate will refuse with `blocked_on: "source_disabled:…"`.
+  • Never plan the same tool with the same args twice expecting
+    different results — switch sources after one empty answer.
+
+============================================================================
+FILE QUESTIONS — preflight + fallback rules
+============================================================================
+When the user mentions a specific filename (e.g. "investigate
+spec.pdf", "analyse Technical_Specification….pdf", "open README.md"),
+the system PRE-FETCHES the file content from every enabled source
+BEFORE the plan runs and injects it as `<file path="NAME" source="…">
+…</file>` blocks in the user's message under a "PREFETCHED FILE
+CONTENT" header. If the content is there:
+  • Plan an `llm.synthesize` (or `llm.analyze`) step that reads the
+    prefetched block directly. NO retrieval steps needed for that file.
+  • Specifically do NOT plan list_project_documents → read_document
+    chains for a file that's already prefetched — it's a wasted turn.
+
+If the user named a file and it is NOT in the prefetched block (the
+source returned empty), the file probably lives in a DIFFERENT source
+than `documents_rag`. Prefer in this order:
+  1. gitlab_mcp.read_artifact_mcp(project=<repo>, path="<filename>")
+     when the project has gitlab enabled.
+  2. techserver_read_artifact(oenum=<oe>, path="<filename>")
+     when techserver is enabled.
+  3. documents_rag.read_document(filename="<exact name>") as a last
+     resort if neither of the above is enabled.
+Do NOT plan the same documents_rag call twice — the loop-breaker
+will refuse the 3rd attempt anyway.
 
 ============================================================================
 CANONICAL EXAMPLES

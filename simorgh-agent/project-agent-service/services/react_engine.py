@@ -137,7 +137,9 @@ LISTING / EXPLORING THE PROJECT — fan-out pattern:
 
 DOCUMENT / FILE QUESTIONS:
 - The uploaded files' FULL CONTENT is usually already provided in the CONTEXT block below (origin: upload). READ IT THERE FIRST and answer directly — often you need NO tool calls at all.
-- If you need a file that's not in CONTEXT: documents_rag.list_project_documents to see the exact filenames, then documents_rag.read_document(filename="<exact name>") for its full text. To compare two files, read EACH once by filename.
+- When the user mentions a specific filename, the system may have ALREADY pre-fetched its content for you. Check for a `<file path="...">...</file>` block (under "PREFETCHED FILE CONTENT") in the user's message FIRST — if present, answer from it directly with NO tool calls. Re-fetching wastes a turn and may not even succeed.
+- If `list_project_documents` / `read_document` returns empty/no-results AND the user mentioned a filename, the file lives in the GitLab REPO, not in uploads. Call `gitlab_mcp.read_artifact_mcp(project=<repo>, path="<filename>")` IMMEDIATELY — do NOT keep retrying the documents_rag path. Same logic for TechServer projects: call `techserver_read_artifact(oenum=<oe>, path="<filename>")`.
+- If you've called the same tool twice and both returned empty, the dispatcher will refuse the third call and return a `precondition_blocked` envelope naming a different tool to try — follow it.
 - NEVER use session_read_artifact_tool / workspace file tools to read uploads — uploaded files live in the document store, NOT the sandbox filesystem.
 - To COMPARE/aggregate across files: get both files' text (from CONTEXT or read_document), then reason over them; optionally use shell+python to match/sort items precisely.
 
