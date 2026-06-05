@@ -156,7 +156,7 @@ INSERT INTO system_settings (key, scope, value, value_type, category, descriptio
     ('OPENAI_MODEL',          'llm-gateway', 'gpt-4o',                    'string', 'ai',     'Default chat model in online mode.',                                 FALSE, FALSE, FALSE),
     ('OPENAI_EMBED_MODEL',    'llm-gateway', 'text-embedding-3-large',    'string', 'ai',     'Default embedding model in online mode.',                            FALSE, FALSE, FALSE),
     ('LOCAL_LLM_URL_TEXT',    'llm-gateway', 'http://192.168.1.61/v1',    'string', 'ai',     'Text LLM (.61) base URL.',                                           FALSE, FALSE, FALSE),
-    ('LOCAL_LLM_MODEL_TEXT',  'llm-gateway', 'gpt-oss-20b',               'string', 'ai',     'Text LLM served-model-name on .61.',                                 FALSE, FALSE, FALSE),
+    ('LOCAL_LLM_MODEL_TEXT',  'llm-gateway', 'qwen3-30b-a3b',             'string', 'ai',     'Text LLM served-model-name on .61.',                                 FALSE, FALSE, FALSE),
     ('LOCAL_LLM_URL_VLM',     'llm-gateway', 'http://192.168.1.62/v1',    'string', 'ai',     'VLM (.62) base URL.',                                                FALSE, FALSE, FALSE),
     ('LOCAL_LLM_MODEL_VLM',   'llm-gateway', 'qwen2.5-vl-7b',             'string', 'ai',     'VLM served-model-name on .62.',                                      FALSE, FALSE, FALSE),
     ('LOCAL_LLM_API_KEY',     'llm-gateway', NULL,                        'string', 'ai',     'Bearer token mirrored from vllm --api-key (if set on the GPU box).', TRUE,  FALSE, FALSE),

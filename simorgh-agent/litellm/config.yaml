@@ -21,11 +21,11 @@
 # =============================================================================
 
 model_list:
-  # Primary: gpt-oss-20b on .61 — used for CoT planner + project-agent synth.
-  # Production path through .61's nginx → ai_service:9000 (Harmony tool calls).
-  - model_name: gpt-oss-20b
+  # Primary: qwen3-30b-a3b on .61 — used for CoT planner + project-agent synth.
+  # Production path through .61's nginx → ai_service:9000 (hermes tool calls).
+  - model_name: qwen3-30b-a3b
     litellm_params:
-      model: openai/gpt-oss-20b
+      model: openai/qwen3-30b-a3b
       api_base: http://192.168.1.61/v1
       api_key: dummy-required-by-openai-sdk
       timeout: 180
@@ -44,7 +44,7 @@ model_list:
   # Alias that legacy clients use — points at the same .61 production path.
   - model_name: simorgh-default
     litellm_params:
-      model: openai/gpt-oss-20b
+      model: openai/qwen3-30b-a3b
       api_base: http://192.168.1.61/v1
       api_key: dummy
 
