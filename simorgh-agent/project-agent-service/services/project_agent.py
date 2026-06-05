@@ -61,6 +61,35 @@ from services.ekc_knowledge_service import EKCKnowledgeService, get_ekc_knowledg
 logger = logging.getLogger(__name__)
 
 
+def _extract_text_from_mcp(r: Any) -> str:
+    """Pull the textual `output` from an mcp_manager.call_tool result.
+    Robust to:
+      - the standard {"output": str, "metadata": {...}} shape
+      - error responses (returns empty so callers treat as 'not found')
+      - bytes/dict outputs that need stringification
+    """
+    if not isinstance(r, dict):
+        return ""
+    md = r.get("metadata") or {}
+    if md.get("is_error") or md.get("error"):
+        return ""
+    out = r.get("output")
+    if isinstance(out, str):
+        return out
+    if isinstance(out, (bytes, bytearray)):
+        try:
+            return out.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+    if isinstance(out, (dict, list)):
+        try:
+            import json as _json
+            return _json.dumps(out, ensure_ascii=False, default=str)
+        except Exception:
+            return ""
+    return str(out or "")
+
+
 def _format_tool_output_for_synth(tool_or_title: str, output: Any) -> str:
     """Compact common tool result shapes before they hit the synth prompt.
 
@@ -352,6 +381,28 @@ class ProjectManagerAgent:
             await self._ensure_session_container(project_id)
         except Exception as e:
             logger.debug("session warm-up skipped: %s", e)
+
+        # R2: preflight file-lookup. When the user mentions a specific
+        # filename (e.g. "Investigate Technical_Specification….pdf"),
+        # programmatically fetch the file content from every enabled
+        # source BEFORE the agent loop starts and inject it into
+        # user_input as <file path="NAME">…</file>. That way the agent
+        # has the ground-truth content from turn 1 and can't get stuck
+        # in a "list_project_documents returns empty, retry"
+        # fixation loop. Best-effort — any failure leaves user_input
+        # unchanged.
+        try:
+            preflight_blocks = await self._preflight_file_lookup(
+                project_id, user_input, project_for_ctx or {})
+            if preflight_blocks:
+                user_input = (user_input
+                              + "\n\n# PREFETCHED FILE CONTENT — "
+                              "answer from this directly; do NOT re-fetch:\n"
+                              + preflight_blocks)
+                logger.info("preflight: injected %d char(s) of file content",
+                            len(preflight_blocks))
+        except Exception as e:
+            logger.debug("preflight file-lookup skipped: %s", e)
 
         logger.info(
             f"Agent handling input: project={project_id}, "
@@ -4005,6 +4056,156 @@ class ProjectManagerAgent:
 
         output = json.dumps(result, indent=2, default=str)
         return {"output": output, "metadata": result}
+
+    # ------------------------------------------------------------------
+    # R2: Preflight file-lookup. The agent's main weak spot under the
+    # current model: when the user mentions a specific filename and
+    # uploads happens to be empty, the model fixates on
+    # list_project_documents/read_document instead of trying
+    # gitlab_mcp.read_artifact_mcp for a file that's clearly in the
+    # repo. Even with R1 (loop-breaker) and prompt hints, the loop
+    # wastes turns before recovering.
+    #
+    # This helper PRE-FETCHES the file content from every enabled
+    # source in parallel BEFORE the agent loop runs. Found content is
+    # injected into user_input as a clearly-tagged block, so the agent
+    # sees the ground-truth bytes from turn 1 and answers from them
+    # directly. If nothing is found in any source, user_input is
+    # untouched and the agent falls back to its normal exploration.
+    # ------------------------------------------------------------------
+    _FILENAME_RE = __import__("re").compile(
+        # Common content/config/image extensions the user is likely to
+        # ask the agent to "investigate" / "analyse" / "read" / "open".
+        # The negative lookbehind avoids matching URLs/paths.
+        r"(?<![\w/.-])[\w.-]{1,120}?"
+        r"\.(?:pdf|docx?|xlsx?|pptx?|md|txt|json|ya?ml|csv|tsv|"
+        r"jpe?g|png|svg|html?|xml|log|conf|toml|ini)\b",
+        __import__("re").IGNORECASE,
+    )
+    _PREFLIGHT_MAX_CHARS_PER_FILE = 12000
+    _PREFLIGHT_MAX_FILES = 2
+    _PREFLIGHT_TIMEOUT_SEC = 6.0
+
+    async def _preflight_file_lookup(
+        self, project_id: str, user_input: str,
+        project_meta: Dict[str, Any],
+    ) -> str:
+        """Detect filenames in user_input; parallel-fetch from every
+        enabled source; return a string block ready to append to
+        user_input. Returns '' when nothing was found or no filename
+        was mentioned (the caller leaves user_input unchanged)."""
+        import asyncio as _asyncio
+        if not isinstance(user_input, str) or not user_input:
+            return ""
+        matches = self._FILENAME_RE.findall(user_input)
+        if not matches:
+            return ""
+        # De-dup, preserve user order, cap at MAX_FILES.
+        seen, filenames = set(), []
+        for m in matches:
+            key = m.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            filenames.append(m)
+            if len(filenames) >= self._PREFLIGHT_MAX_FILES:
+                break
+
+        from services.project_facts import (
+            resolve_sources_enabled, resolve_repo_path,
+            resolve_techserver_oenum,
+        )
+        se = resolve_sources_enabled(project_meta)
+        repo = resolve_repo_path(project_meta)
+        ts_oe = resolve_techserver_oenum(project_meta)
+        has_gitlab = bool(se.get("gitlab") and repo)
+        has_techserver = bool(se.get("techserver") and ts_oe)
+        has_upload = bool(se.get("upload") or se.get("uploads"))
+
+        if not (has_gitlab or has_techserver or has_upload):
+            return ""
+
+        async def _fetch_gitlab(fn: str) -> Optional[str]:
+            if not has_gitlab or not self.mcp_manager:
+                return None
+            try:
+                r = await self.mcp_manager.call_tool(
+                    "read_artifact_mcp",
+                    {"project": repo, "path": fn,
+                     "max_chars": self._PREFLIGHT_MAX_CHARS_PER_FILE})
+                txt = _extract_text_from_mcp(r)
+                return txt if txt and len(txt) > 40 else None
+            except Exception:
+                return None
+
+        async def _fetch_techserver(fn: str) -> Optional[str]:
+            if not has_techserver or not self.mcp_manager:
+                return None
+            try:
+                r = await self.mcp_manager.call_tool(
+                    "techserver_read_artifact",
+                    {"oenum": str(ts_oe), "path": fn})
+                txt = _extract_text_from_mcp(r)
+                return txt if txt and len(txt) > 40 else None
+            except Exception:
+                return None
+
+        async def _fetch_upload(fn: str) -> Optional[str]:
+            if not has_upload or not self.mcp_manager:
+                return None
+            try:
+                r = await self.mcp_manager.call_tool(
+                    "read_document",
+                    {"filename": fn, "user_id": "system",
+                     "project_oenum": str(project_id),
+                     "max_chars": self._PREFLIGHT_MAX_CHARS_PER_FILE})
+                txt = _extract_text_from_mcp(r)
+                return txt if txt and len(txt) > 40 else None
+            except Exception:
+                return None
+
+        async def _race_one(fn: str) -> Optional[tuple]:
+            """Race the 3 source-fetchers, return the FIRST non-empty
+            (fn, source, content). asyncio.wait FIRST_COMPLETED keeps
+            the wall-clock to the fastest source. Pending tasks
+            cancelled to free the broker connection."""
+            tasks = [
+                _asyncio.create_task(_fetch_gitlab(fn)),
+                _asyncio.create_task(_fetch_techserver(fn)),
+                _asyncio.create_task(_fetch_upload(fn)),
+            ]
+            sources = ["gitlab", "techserver", "upload"]
+            try:
+                done, pending = await _asyncio.wait(
+                    tasks, timeout=self._PREFLIGHT_TIMEOUT_SEC,
+                    return_when=_asyncio.ALL_COMPLETED)
+                for t, src in zip(tasks, sources):
+                    if t in done:
+                        try:
+                            v = t.result()
+                            if v:
+                                return (fn, src, v[:self._PREFLIGHT_MAX_CHARS_PER_FILE])
+                        except Exception:
+                            continue
+                return None
+            finally:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+
+        results = await _asyncio.gather(
+            *[_race_one(fn) for fn in filenames],
+            return_exceptions=True,
+        )
+        blocks: List[str] = []
+        for r in results:
+            if isinstance(r, tuple) and r:
+                fn, src, content = r
+                blocks.append(
+                    f'<file path="{fn}" source="{src}">\n{content}\n</file>')
+                logger.info("preflight: fetched %r from %s (%d chars)",
+                            fn, src, len(content))
+        return "\n\n".join(blocks)
 
     async def _ensure_session_container(self, project_id: str) -> bool:
         """Idempotent warm-up of the project's runtime-broker session
