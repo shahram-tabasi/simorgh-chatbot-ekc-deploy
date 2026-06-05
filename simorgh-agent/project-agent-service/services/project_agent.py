@@ -61,6 +61,40 @@ from services.ekc_knowledge_service import EKCKnowledgeService, get_ekc_knowledg
 logger = logging.getLogger(__name__)
 
 
+def _walk_string_values(obj: Any):
+    """Yield every string-valued leaf in a nested dict/list structure.
+    Used by the stub detector to distinguish a metadata envelope from a
+    JSON-wrapped real document."""
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from _walk_string_values(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk_string_values(v)
+    elif isinstance(obj, str):
+        yield obj
+
+
+def _is_id_like(s: str) -> bool:
+    """Quick check: does this look like a UUID / hash / timestamp /
+    filename rather than human prose? Used by the stub detector so a
+    long ID isn't mistaken for content."""
+    if not s:
+        return False
+    s = s.strip()
+    # UUIDs / hex hashes (no spaces, mostly hex).
+    if len(s) >= 8 and " " not in s and \
+            sum(1 for c in s if c in "0123456789abcdefABCDEF-") / len(s) > 0.9:
+        return True
+    # Path-shaped.
+    if "/" in s and " " not in s and len(s) < 200:
+        return True
+    # ISO-ish timestamp.
+    if len(s) <= 32 and "T" in s and ":" in s and s[:4].isdigit():
+        return True
+    return False
+
+
 def _extract_text_from_mcp(r: Any) -> str:
     """Pull the textual `output` from an mcp_manager.call_tool result.
     Robust to:
@@ -4085,12 +4119,13 @@ class ProjectManagerAgent:
     _PREFLIGHT_MAX_CHARS_PER_FILE = 12000
     _PREFLIGHT_MAX_FILES = 2
     _PREFLIGHT_TIMEOUT_SEC = 12.0
-    # Floor for "this is real text, not a metadata stub".
-    # documents_rag.read_document on a catalogued-but-not-content-indexed PDF
-    # returns ~120 chars of {document_id, status, filename, ...} which beat
-    # the actual gitlab extraction in a first-non-empty race. 500 chars rules
-    # those stubs out; real document text easily clears it.
-    _PREFLIGHT_MIN_REAL_TEXT = 500
+    # Bare minimum — only rejects empty / whitespace / single-char responses.
+    # We DO NOT use a length floor for stub detection because legitimate
+    # client documents may be short (a one-line README, a config file, a
+    # title page, an abstract). Stub detection is by SHAPE, not length —
+    # see _looks_like_stub below. Length is only used as a tiebreaker
+    # signal in best-of-N selection.
+    _PREFLIGHT_MIN_REAL_TEXT = 20
     # Extensions where a "documents_rag" hit is almost never useful — the
     # PDF/DOCX bytes weren't text-indexed at upload time. For these, we
     # query upload as a LAST resort and only if gitlab+techserver returned
@@ -4139,25 +4174,77 @@ class ProjectManagerAgent:
         if not (has_gitlab or has_techserver or has_upload):
             return ""
 
-        # Reject metadata-stub responses (e.g. a documents_rag entry that's
-        # catalogued but not content-indexed: {document_id, status, filename
-        # …, ~120 chars total, no real prose). We detect by: short AND
-        # carrying tell-tale schema keys. Real text easily clears the floor.
+        # Stub detection by SHAPE, not length. Client documents may be
+        # legitimately short — we must NOT drop a one-line README or a
+        # config file just because it's brief. A "stub" is a documents-
+        # rag-style metadata response: a JSON-shaped envelope carrying
+        # ID + status + filename but no actual document prose. Three
+        # signals, all SHAPE-based:
+        #
+        #   1. Response is bracket-delimited JSON-shaped (starts with
+        #      `{`/`[`, ends with `}`/`]`) AND carries ≥2 schema-key
+        #      markers ("document_id", "chunk_count", etc.) — the
+        #      canonical documents-rag stub pattern.
+        #   2. Response parses as JSON AND the parsed object has no key
+        #      whose value is a substantial prose string (>40 chars).
+        #   3. Response is literally an error sentinel.
+        #
+        # Real prose — even short — has natural-language punctuation,
+        # capitalisation, and lacks JSON braces around its whole body.
         def _looks_like_stub(txt: str) -> bool:
-            if not txt or len(txt) >= self._PREFLIGHT_MIN_REAL_TEXT:
-                return False
-            low = txt.lower()
-            schema_markers = ("document_id", "doc_id", '"status"',
-                              '"indexed"', "filename", "chunk_count")
-            hits = sum(1 for m in schema_markers if m in low)
-            return hits >= 2  # short + ≥2 schema keys ⇒ stub
+            if not txt:
+                return True
+            s = txt.strip()
+            if not s:
+                return True
+            # Error sentinels — explicit, regardless of length.
+            low = s.lower()
+            for sentinel in ("not found", "no document found",
+                             "document not indexed", "no content available"):
+                if low.startswith(sentinel) or sentinel == low:
+                    return True
+            # Signal 1: bracket-delimited JSON envelope carrying schema keys.
+            if (s.startswith("{") and s.endswith("}")) or \
+               (s.startswith("[") and s.endswith("]")):
+                schema_markers = (
+                    '"document_id"', "'document_id'",
+                    '"doc_id"', "'doc_id'",
+                    '"chunk_count"', "'chunk_count'",
+                    '"is_indexed"', "'is_indexed'",
+                    '"status"', "'status'",
+                )
+                hits = sum(1 for m in schema_markers if m in s)
+                if hits >= 2:
+                    # Signal 2: try to parse + check there's no prose
+                    # value. JSON-shaped but containing a long "text" /
+                    # "content" field IS real content (just wrapped).
+                    try:
+                        parsed = json.loads(s)
+                    except Exception:
+                        return True  # malformed JSON-shaped ⇒ stub
+                    if isinstance(parsed, dict):
+                        # Walk all string values; if ANY is substantial
+                        # prose, this is real content in a JSON wrapper.
+                        for v in _walk_string_values(parsed):
+                            if isinstance(v, str) and len(v.strip()) > 40 \
+                                    and not _is_id_like(v):
+                                return False
+                        return True
+                    if isinstance(parsed, list) and not parsed:
+                        return True
+            return False
 
         def _real_text_or_none(txt: Optional[str]) -> Optional[str]:
+            """Accept any non-empty, non-stub response — length-blind.
+            A 30-char README is just as valid as a 30,000-char PDF."""
             if not txt:
                 return None
-            if len(txt) < self._PREFLIGHT_MIN_REAL_TEXT:
+            s = txt.strip()
+            if len(s) < self._PREFLIGHT_MIN_REAL_TEXT:
+                # 20 chars: keeps a "Hello world" README, drops empties
+                # and 1-char garbage.
                 return None
-            if _looks_like_stub(txt):
+            if _looks_like_stub(s):
                 return None
             return txt
 
