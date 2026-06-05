@@ -49,6 +49,25 @@ STEP_TIMEOUT = float(os.getenv("REACT_LLM_TIMEOUT_SEC", "90"))
 HISTORY_BUDGET = int(os.getenv("REACT_HISTORY_BUDGET_CHARS", "36000"))
 
 
+def _extract_documents_text(messages: List[Dict[str, Any]]) -> str:
+    """Pull the concatenated content from every <document_content>
+    block in the pinned user message (messages[1]). Used by the
+    grounding verifier as the source-of-truth corpus to check claims
+    against. Returns '' when no <documents> envelope is present
+    (verifier then no-ops)."""
+    if not messages or len(messages) < 2:
+        return ""
+    user_content = messages[1].get("content") or ""
+    if not isinstance(user_content, str) or "<document_content>" not in user_content:
+        return ""
+    import re as _re
+    blocks = _re.findall(
+        r"<document_content>(.*?)</document_content>",
+        user_content, _re.DOTALL,
+    )
+    return "\n\n".join(blocks).strip()
+
+
 def _trim_history(messages: List[Dict[str, Any]]) -> None:
     """Anthropic's clear_tool_results context-editing strategy adapted
     for the ReAct loop. Pins messages[0] (system, holds project_facts +
@@ -956,8 +975,35 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
     except Exception:
         pass
 
+    # Commit C: numeric / standards verbatim verification post-pass.
+    # Pull the source corpus from the prefetched <documents> block in
+    # the pinned user message (messages[1]). Fail-open: if sources can't
+    # be reconstructed or the verifier raises, the original final_response
+    # is preserved.
+    grounding_meta: Dict[str, Any] = {}
+    try:
+        if os.getenv("GROUNDING_VERIFY", "1") not in ("0", "false", "off"):
+            from services.grounding_verifier import (
+                verify_answer_against_sources, summarise_for_metadata)
+            sources_text = _extract_documents_text(messages)
+            if sources_text and final_response:
+                vr = verify_answer_against_sources(
+                    final_response, sources_text,
+                    rewrite_unverified=True)
+                grounding_meta = summarise_for_metadata(vr)
+                if not vr.ok and vr.answer_redacted:
+                    logger.info(
+                        "grounding verifier: rewriting answer — "
+                        "%d/%d claims unverified",
+                        len(vr.unverified), vr.claims_total,
+                    )
+                    final_response = vr.answer_redacted
+    except Exception as _ve:
+        logger.debug("grounding verifier skipped: %s", _ve)
+
     return {
         "response": final_response,
+        "grounding": grounding_meta,
         "chain_id": chain_id,
         "reasoning": "react",
         "tasks_created": len(steps),
