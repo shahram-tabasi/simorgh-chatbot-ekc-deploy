@@ -425,8 +425,30 @@ async def generate(req: GenerateRequest) -> Dict[str, Any]:
     primary_kind, primary_url, primary_model, primary_key = _resolve_backend(
         req.mode, msgs, req.force_backend,
     )
+    # Legacy-name aliasing. Some stragglers (background loops, stale
+    # cached configs, hardcoded model names in old service code) still
+    # send the OLD offline-text model in req.model — most commonly
+    # "gpt-oss-20b" after the Qwen3 swap. vLLM rejects those with
+    # NotFoundError 404 because it only advertises the new served-name.
+    # We coerce known-legacy names to the live primary_model so the
+    # call succeeds AND log the request shape so the operator can find
+    # and fix the actual caller.
+    _LEGACY_TEXT_MODELS = {
+        "gpt-oss-20b", "unsloth/gpt-oss-20b",
+        "openai/gpt-oss-20b", "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
+    }
+    effective_model = req.model
+    if effective_model in _LEGACY_TEXT_MODELS:
+        logger.warning(
+            "gateway: legacy model name %r received; aliasing to %r. "
+            "Caller fields: mode=%s force_backend=%s tools=%s "
+            "first_msg=%r — please find and update the caller.",
+            effective_model, primary_model, req.mode, req.force_backend,
+            bool(req.tools), (msgs[0].get("content") or "")[:80] if msgs else "",
+        )
+        effective_model = None
     payload = _build_payload(
-        msgs, model=req.model or primary_model,
+        msgs, model=effective_model or primary_model,
         temperature=req.temperature, max_tokens=req.max_tokens,
         extra=req.extra, stream=False,
         tools=req.tools, tool_choice=req.tool_choice,
@@ -635,8 +657,22 @@ async def generate_stream(req: GenerateRequest):
     backend_kind, base_url, model, api_key = _resolve_backend(
         req.mode, msgs, req.force_backend,
     )
+    # Same legacy-name alias as the /generate path (see comment there).
+    _LEGACY_TEXT_MODELS = {
+        "gpt-oss-20b", "unsloth/gpt-oss-20b",
+        "openai/gpt-oss-20b", "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
+    }
+    eff_model = req.model
+    if eff_model in _LEGACY_TEXT_MODELS:
+        logger.warning(
+            "gateway/stream: legacy model name %r received; aliasing to %r. "
+            "Caller fields: mode=%s force_backend=%s tools=%s — "
+            "please find and update the caller.",
+            eff_model, model, req.mode, req.force_backend, bool(req.tools),
+        )
+        eff_model = None
     payload = _build_payload(
-        msgs, model=req.model or model,
+        msgs, model=eff_model or model,
         temperature=req.temperature, max_tokens=req.max_tokens,
         extra=req.extra, stream=True,
         tools=req.tools, tool_choice=req.tool_choice,
