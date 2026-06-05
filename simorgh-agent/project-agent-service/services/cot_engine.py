@@ -872,6 +872,30 @@ Do NOT plan the same documents_rag call twice — the loop-breaker
 will refuse the 3rd attempt anyway.
 
 ============================================================================
+GROUNDING RULES FOR THE SYNTHESIS STEP
+============================================================================
+When the final `llm.synthesize` reads a `<file>` block (PREFETCHED FILE
+CONTENT) or a retrieval step's output, plan its `tool_input.prompt` so
+that the synthesizer is held to a STRICT grounding contract:
+
+  • Every concrete value reported (numbers with units like kV / kA / A /
+    Hz; standards like "IEC 62271-2"; named parts; dates; addresses)
+    MUST appear VERBATIM in the source. No paraphrasing into
+    "typical" or "textbook" values.
+  • If the user asks for a value not present in the source, the
+    synthesizer MUST write "not specified in the document" — NEVER
+    substitute a guess. A plausible-but-fabricated number is a
+    SERIOUS FAILURE worse than admitting "unknown".
+  • Every value should be attributed to its source location
+    (page number, section heading, table row).
+
+For document-analysis questions, the prompt for the synthesis step
+should explicitly include the above rules — terse phrasings like
+"summarise the specs" tend to let the model drift to priors. Use
+language like "extract ONLY the values present in the document; for
+any spec not listed, write 'not specified in the document'."
+
+============================================================================
 CANONICAL EXAMPLES
 ============================================================================
 Q: "what's in my project?" / "list files" / "list specs" / "where is the spec directory"

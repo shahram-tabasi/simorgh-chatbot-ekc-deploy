@@ -4084,7 +4084,21 @@ class ProjectManagerAgent:
     )
     _PREFLIGHT_MAX_CHARS_PER_FILE = 12000
     _PREFLIGHT_MAX_FILES = 2
-    _PREFLIGHT_TIMEOUT_SEC = 6.0
+    _PREFLIGHT_TIMEOUT_SEC = 12.0
+    # Floor for "this is real text, not a metadata stub".
+    # documents_rag.read_document on a catalogued-but-not-content-indexed PDF
+    # returns ~120 chars of {document_id, status, filename, ...} which beat
+    # the actual gitlab extraction in a first-non-empty race. 500 chars rules
+    # those stubs out; real document text easily clears it.
+    _PREFLIGHT_MIN_REAL_TEXT = 500
+    # Extensions where a "documents_rag" hit is almost never useful — the
+    # PDF/DOCX bytes weren't text-indexed at upload time. For these, we
+    # query upload as a LAST resort and only if gitlab+techserver returned
+    # nothing. Plain-text formats keep upload in the race.
+    _BINARY_EXTS_PREFER_EXTRACTOR = {
+        ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+        ".png", ".jpg", ".jpeg", ".svg",
+    }
 
     async def _preflight_file_lookup(
         self, project_id: str, user_input: str,
@@ -4125,7 +4139,33 @@ class ProjectManagerAgent:
         if not (has_gitlab or has_techserver or has_upload):
             return ""
 
+        # Reject metadata-stub responses (e.g. a documents_rag entry that's
+        # catalogued but not content-indexed: {document_id, status, filename
+        # …, ~120 chars total, no real prose). We detect by: short AND
+        # carrying tell-tale schema keys. Real text easily clears the floor.
+        def _looks_like_stub(txt: str) -> bool:
+            if not txt or len(txt) >= self._PREFLIGHT_MIN_REAL_TEXT:
+                return False
+            low = txt.lower()
+            schema_markers = ("document_id", "doc_id", '"status"',
+                              '"indexed"', "filename", "chunk_count")
+            hits = sum(1 for m in schema_markers if m in low)
+            return hits >= 2  # short + ≥2 schema keys ⇒ stub
+
+        def _real_text_or_none(txt: Optional[str]) -> Optional[str]:
+            if not txt:
+                return None
+            if len(txt) < self._PREFLIGHT_MIN_REAL_TEXT:
+                return None
+            if _looks_like_stub(txt):
+                return None
+            return txt
+
         async def _fetch_gitlab(fn: str) -> Optional[str]:
+            # gitlab-mcp.read_artifact auto-routes binary files
+            # (PDF/DOCX/XLSX/images) through doc-processor and returns
+            # extracted markdown — see gitlab-mcp-service/app.py:256
+            # "Callers always get markdown back, never bytes."
             if not has_gitlab or not self.mcp_manager:
                 return None
             try:
@@ -4133,8 +4173,7 @@ class ProjectManagerAgent:
                     "read_artifact_mcp",
                     {"project": repo, "path": fn,
                      "max_chars": self._PREFLIGHT_MAX_CHARS_PER_FILE})
-                txt = _extract_text_from_mcp(r)
-                return txt if txt and len(txt) > 40 else None
+                return _real_text_or_none(_extract_text_from_mcp(r))
             except Exception:
                 return None
 
@@ -4145,8 +4184,7 @@ class ProjectManagerAgent:
                 r = await self.mcp_manager.call_tool(
                     "techserver_read_artifact",
                     {"oenum": str(ts_oe), "path": fn})
-                txt = _extract_text_from_mcp(r)
-                return txt if txt and len(txt) > 40 else None
+                return _real_text_or_none(_extract_text_from_mcp(r))
             except Exception:
                 return None
 
@@ -4159,39 +4197,74 @@ class ProjectManagerAgent:
                     {"filename": fn, "user_id": "system",
                      "project_oenum": str(project_id),
                      "max_chars": self._PREFLIGHT_MAX_CHARS_PER_FILE})
-                txt = _extract_text_from_mcp(r)
-                return txt if txt and len(txt) > 40 else None
+                return _real_text_or_none(_extract_text_from_mcp(r))
             except Exception:
                 return None
 
         async def _race_one(fn: str) -> Optional[tuple]:
-            """Race the 3 source-fetchers, return the FIRST non-empty
-            (fn, source, content). asyncio.wait FIRST_COMPLETED keeps
-            the wall-clock to the fastest source. Pending tasks
-            cancelled to free the broker connection."""
-            tasks = [
+            """Fan out to every source-fetcher in parallel, then return the
+            source with the LONGEST real-text result (not first-non-empty).
+            Previously a 124-char metadata stub from documents_rag won the
+            race against the actual extracted PDF text from gitlab. Picking
+            the longest also tolerates a source that returns a useful but
+            short answer for a real text file, and a stub-source that
+            returns under MIN_REAL_TEXT (already nulled by
+            _real_text_or_none above).
+
+            For binary-extension files (.pdf, .docx, etc.) the upload
+            source is queried only after gitlab+techserver, as
+            documents_rag rarely has extracted text for those formats.
+            """
+            ext = "." + fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
+            is_binary_ext = ext in self._BINARY_EXTS_PREFER_EXTRACTOR
+
+            # First wave: extractor-backed sources for binary; all three
+            # otherwise.
+            tasks: List[Any] = [
                 _asyncio.create_task(_fetch_gitlab(fn)),
                 _asyncio.create_task(_fetch_techserver(fn)),
-                _asyncio.create_task(_fetch_upload(fn)),
             ]
-            sources = ["gitlab", "techserver", "upload"]
+            sources: List[str] = ["gitlab", "techserver"]
+            if not is_binary_ext:
+                tasks.append(_asyncio.create_task(_fetch_upload(fn)))
+                sources.append("upload")
+
+            best: Optional[tuple] = None
             try:
                 done, pending = await _asyncio.wait(
                     tasks, timeout=self._PREFLIGHT_TIMEOUT_SEC,
                     return_when=_asyncio.ALL_COMPLETED)
                 for t, src in zip(tasks, sources):
-                    if t in done:
-                        try:
-                            v = t.result()
-                            if v:
-                                return (fn, src, v[:self._PREFLIGHT_MAX_CHARS_PER_FILE])
-                        except Exception:
-                            continue
-                return None
+                    if t not in done:
+                        continue
+                    try:
+                        v = t.result()
+                    except Exception:
+                        continue
+                    if not v:
+                        continue
+                    if best is None or len(v) > len(best[2]):
+                        best = (fn, src,
+                                v[:self._PREFLIGHT_MAX_CHARS_PER_FILE])
             finally:
                 for t in tasks:
                     if not t.done():
                         t.cancel()
+            if best is not None:
+                return best
+
+            # Binary file and nothing extractor-backed succeeded — try
+            # upload as last resort. Saves a turn for cases where the doc
+            # actually was content-indexed at upload time.
+            if is_binary_ext and has_upload:
+                try:
+                    txt = await _fetch_upload(fn)
+                    if txt:
+                        return (fn, "upload",
+                                txt[:self._PREFLIGHT_MAX_CHARS_PER_FILE])
+                except Exception:
+                    pass
+            return None
 
         results = await _asyncio.gather(
             *[_race_one(fn) for fn in filenames],
