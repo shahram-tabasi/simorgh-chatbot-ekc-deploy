@@ -70,6 +70,15 @@ services:
       - "/models/${VLLM_MODEL_DIR:-Qwen3-30B-A3B-Instruct-2507-AWQ-4bit}"
       - "--served-model-name"
       - "${LOCAL_LLM_MODEL_TEXT:-qwen3-30b-a3b}"
+      # Legacy alias — vLLM accepts multiple --served-model-name values
+      # (argparse nargs='+'); all of them route to the same loaded
+      # weights. Without this, any straggler caller on .68 that still
+      # POSTs {"model":"gpt-oss-20b"} (background loops, stale cached
+      # configs, hardcoded literals) hammers ai_service with 404s
+      # forever. With it, the same call just succeeds against Qwen3.
+      # Costs nothing — same weights, same KV cache. Remove only after
+      # every legacy caller has been audited and updated.
+      - "gpt-oss-20b"
       - "--host"
       - "0.0.0.0"
       - "--port"
