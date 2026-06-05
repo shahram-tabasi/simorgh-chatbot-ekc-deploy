@@ -21,7 +21,7 @@ and translates on the fly.
 Configuration (env vars)
 ------------------------
   UPSTREAM_URL   default http://ai_service:9000  (vLLM serve)
-  UPSTREAM_MODEL default gpt-oss-20b
+  UPSTREAM_MODEL default qwen3-30b-a3b
   TIMEOUT_SEC    default 1800
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("ai-adapter")
 
 UPSTREAM_URL   = os.getenv("UPSTREAM_URL", "http://ai_service:9000").rstrip("/")
-UPSTREAM_MODEL = os.getenv("UPSTREAM_MODEL", "gpt-oss-20b")
+UPSTREAM_MODEL = os.getenv("UPSTREAM_MODEL", "qwen3-30b-a3b")
 TIMEOUT_SEC    = float(os.getenv("TIMEOUT_SEC", "1800"))
 
 app = FastAPI(title="ai-adapter", version="1.0.0")
