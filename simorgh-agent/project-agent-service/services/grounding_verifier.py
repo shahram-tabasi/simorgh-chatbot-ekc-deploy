@@ -85,6 +85,9 @@ class VerificationResult:
     # For telemetry — what claims were checked.
     standards_checked: List[str] = field(default_factory=list)
     numbers_checked: List[str] = field(default_factory=list)
+    # NLI layer (Commit D — populated when GROUNDING_NLI_URL is reachable).
+    nli_low_score_sentences: List[str] = field(default_factory=list)
+    nli_min_score: float = 1.0
 
 
 def verify_answer_against_sources(
@@ -256,4 +259,100 @@ def summarise_for_metadata(r: VerificationResult) -> Dict[str, Any]:
         "unverified_spans":     r.unverified[:20],
         "standards_checked":    r.standards_checked[:20],
         "numbers_checked":      r.numbers_checked[:20],
+        "nli_min_score":        r.nli_min_score,
+        "nli_low_score_sents":  r.nli_low_score_sentences[:10],
     }
+
+
+# ---------------------------------------------------------------------------
+# Commit D — NLI faithfulness check via HHEM-2.1-Open sidecar.
+#
+# The regex layer above catches NUMERIC + STANDARDS fabrications precisely.
+# It does NOT catch paraphrase-style hallucination (e.g. "the switchgear
+# is designed for outdoor installation" when the source says indoor —
+# no numbers to flag). The NLI layer fills that gap.
+#
+# Calls grounding-verifier:8055/verify (CPU sidecar on .68, see
+# compose/svc-grounding-verifier.yml). Fail-open: any error, timeout,
+# or unreachable endpoint leaves the result untouched. NEVER blocks the
+# user reply on a verifier outage.
+# ---------------------------------------------------------------------------
+
+async def verify_answer_with_nli(
+    answer: str,
+    sources: str,
+    *,
+    threshold: float = 0.5,
+    timeout_sec: float = 8.0,
+) -> Dict[str, Any]:
+    """Call the HHEM sidecar to score each answer-sentence against the
+    union of source chunks. Returns
+        {"min_score": float, "low_score_sentences": [str, ...]}
+    on success, or an empty dict on any failure (caller treats absent
+    keys as "NLI skipped")."""
+    import os as _os
+    import httpx as _httpx
+
+    nli_url = _os.getenv("GROUNDING_NLI_URL",
+                         "http://grounding-verifier:8055").rstrip("/")
+    if not nli_url:
+        return {}
+
+    # Build (premise=full source corpus, hypothesis=each answer sentence)
+    # pairs. Caps at 32 sentences to bound the sidecar's batch size and
+    # respect the verifier's CPU cost.
+    sentences = [s.strip() for s in _SENT_BOUNDARY_RE.split(answer)
+                 if s.strip()]
+    if not sentences:
+        return {}
+    sentences = sentences[:32]
+    pairs = [{"premise": sources, "hypothesis": s} for s in sentences]
+    payload = {"pairs": pairs, "threshold": threshold}
+    try:
+        async with _httpx.AsyncClient(timeout=timeout_sec) as c:
+            r = await c.post(f"{nli_url}/verify", json=payload)
+            r.raise_for_status()
+            body = r.json()
+    except Exception as e:
+        logger.debug("grounding NLI skipped (sidecar unreachable): %s", e)
+        return {}
+    results = body.get("results") or []
+    if not results:
+        return {}
+    scores = [float(x.get("score", 1.0)) for x in results]
+    low = [sentences[i] for i, x in enumerate(results)
+           if not x.get("verified", True)]
+    return {
+        "min_score": min(scores) if scores else 1.0,
+        "low_score_sentences": low,
+    }
+
+
+async def verify_answer_against_sources_with_nli(
+    answer: str, sources: str, *,
+    rewrite_unverified: bool = True,
+    abstention_text: str = "Not specified in the provided documents.",
+    nli_threshold: float = 0.5,
+) -> VerificationResult:
+    """Combined entry point: runs the regex pre-filter FIRST, then the
+    HHEM NLI sidecar over whatever sentences survived. NLI failures are
+    surfaced in the result metadata; they do NOT redact by default
+    (regex catches precise fabrications, NLI catches paraphrase drift
+    and is fail-open). Tune by reading nli_min_score in the result.
+
+    Asynchronous because the NLI sidecar call is HTTP-bound."""
+    base = verify_answer_against_sources(
+        answer, sources,
+        rewrite_unverified=rewrite_unverified,
+        abstention_text=abstention_text,
+    )
+    nli = await verify_answer_with_nli(
+        # Verify against the REDACTED answer to avoid scoring sentences
+        # already rewritten by the regex layer.
+        base.answer_redacted or base.answer,
+        sources, threshold=nli_threshold,
+    )
+    if nli:
+        base.nli_min_score = nli.get("min_score", 1.0)
+        base.nli_low_score_sentences = nli.get("low_score_sentences", [])
+    return base

@@ -136,6 +136,11 @@ services:
       - TPMS_FETCHER_URL=http://tpms-fetcher:8021
       # Hybrid (BM25 + kNN) search over ES — feeds high-quality LLM context.
       - CONTEXT_SEARCH_URL=${CONTEXT_SEARCH_URL:-http://context-search:8049}
+      # Document-grounded answer pipeline (Commits A-D).
+      # GROUNDING_VERIFY=0 disables the post-pass entirely (rollback knob).
+      # GROUNDING_NLI_URL points at the HHEM-2.1-Open CPU sidecar.
+      - GROUNDING_VERIFY=${GROUNDING_VERIFY:-1}
+      - GROUNDING_NLI_URL=${GROUNDING_NLI_URL:-http://grounding-verifier:8055}
       # Roles allowed to create projects (project-creation auth gate).
       - PROJECT_CREATE_ALLOWED_ROLES=${PROJECT_CREATE_ALLOWED_ROLES:-expert_technical}
       # Admin-managed restrictions file. Free-text constraints prepended to

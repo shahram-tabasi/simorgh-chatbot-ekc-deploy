@@ -1,0 +1,136 @@
+name: Download HHEM-2.1-Open (grounding verifier model)
+
+# Pre-downloads vectara/hallucination_evaluation_model — the 184M
+# DeBERTa-v3 derivative used by the grounding-verifier sidecar
+# (simorgh-agent/grounding-verifier) for NLI faithfulness scoring on
+# Qwen3's answers. Apache-2.0, ~600 MB at FP32.
+#
+# The download happens on a GitHub-hosted runner where HuggingFace
+# bandwidth is unmetered, then ships as a single ~600 MB artifact
+# (no splitting needed at this size). On the .68 host, drop the
+# extracted directory into the simorgh_huggingface_cache volume so
+# grounding-verifier sees the model in offline mode.
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Branch / tag / commit to pin (blank = main)"
+        type: string
+        default: ""
+      retention_days:
+        description: "Artifact retention (days)."
+        type: choice
+        default: "7"
+        options: ["3", "5", "7", "14"]
+
+permissions:
+  contents: read
+
+env:
+  MODEL: "vectara/hallucination_evaluation_model"
+  # HF-cache-conformant directory name. When extracted into the
+  # simorgh_huggingface_cache volume's `hub/` subdir, transformers
+  # finds it offline.
+  FNAME: "vectara__hallucination_evaluation_model"
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install --quiet "huggingface_hub[cli]==0.26.5"
+
+      - name: Download HHEM-2.1-Open as a flat directory
+        env:
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+          HF_HUB_DISABLE_XET: "1"
+          REVISION: ${{ inputs.revision }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -eu
+          # HF_TOKEN is optional (model is public) but improves rate
+          # limits when the workflow runs on busy days.
+          mkdir -p hf-cache
+          ARGS=( "$MODEL" --cache-dir hf-cache )
+          if [ -n "${REVISION:-}" ]; then ARGS+=( --revision "$REVISION" ); fi
+          if [ -n "${HF_TOKEN:-}" ]; then ARGS+=( --token "$HF_TOKEN" ); fi
+          echo "Fetching $MODEL …"
+          huggingface-cli download "${ARGS[@]}"
+          echo "----- snapshot contents -----"
+          find hf-cache -maxdepth 5 -printf '%y %p\n' | head -30
+          du -sh hf-cache
+
+      - name: Pack tarball with `hub/` root (matches HF cache layout)
+        id: pack
+        run: |
+          set -eu
+          # The archive root MUST be `hub/` so that extracting into the
+          # Docker volume mounted at /root/.cache/huggingface lands files
+          # at /root/.cache/huggingface/hub/models--vectara--…/ . The
+          # grounding-verifier sidecar then loads in offline mode.
+          mkdir -p staging/hub
+          mv hf-cache/* staging/hub/
+          OUT="${FNAME}.tar.gz"
+          tar -C staging -czf "$OUT" hub
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hhem-2.1-open
+          path: |
+            ${{ steps.pack.outputs.out }}
+            ${{ steps.pack.outputs.out }}.sha256
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          compression-level: 0
+
+      - name: Install instructions
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## HHEM-2.1-Open downloaded (~600 MB)
+
+          ### 1. Download the artifact
+          \`\`\`bash
+          gh run download \${{ github.run_id }} \\
+            -R ${{ github.repository }} \\
+            -n hhem-2.1-open
+          sha256sum -c ${FNAME}.tar.gz.sha256
+          \`\`\`
+
+          ### 2. Install into the shared HF cache volume on .68
+          \`\`\`bash
+          docker volume create simorgh_huggingface_cache || true
+          docker run --rm \\
+              -v simorgh_huggingface_cache:/dst \\
+              -v "\$(pwd)":/src:ro \\
+              alpine sh -c 'tar xzf /src/${FNAME}.tar.gz -C /dst'
+          \`\`\`
+
+          ### 3. Start the verifier sidecar
+          \`\`\`bash
+          cd ~/simorgh-chatbot-ekc-deploy/simorgh-agent
+          docker compose -f compose/svc-grounding-verifier.yml up -d
+          # Eager-load the model (avoid lazy-load latency on first query):
+          curl -fsS -X POST http://localhost:8055/warmup
+          curl -fsS http://localhost:8055/health | python3 -m json.tool
+          \`\`\`
+
+          ### 4. Plumb the agent
+          The agent already reads \`GROUNDING_NLI_URL\` from
+          svc-project-agent.yml (default
+          http://grounding-verifier:8055). After the sidecar is
+          healthy, restart project-agent-service so it picks up the
+          live endpoint:
+          \`\`\`bash
+          docker compose up -d --no-deps --force-recreate project-agent-service
+          \`\`\`
+          EOF

@@ -984,20 +984,32 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
     try:
         if os.getenv("GROUNDING_VERIFY", "1") not in ("0", "false", "off"):
             from services.grounding_verifier import (
-                verify_answer_against_sources, summarise_for_metadata)
+                verify_answer_against_sources_with_nli,
+                summarise_for_metadata,
+            )
             sources_text = _extract_documents_text(messages)
             if sources_text and final_response:
-                vr = verify_answer_against_sources(
+                vr = await verify_answer_against_sources_with_nli(
                     final_response, sources_text,
                     rewrite_unverified=True)
                 grounding_meta = summarise_for_metadata(vr)
                 if not vr.ok and vr.answer_redacted:
                     logger.info(
                         "grounding verifier: rewriting answer — "
-                        "%d/%d claims unverified",
+                        "%d/%d claims unverified (nli_min=%.2f)",
                         len(vr.unverified), vr.claims_total,
+                        vr.nli_min_score,
                     )
                     final_response = vr.answer_redacted
+                elif vr.nli_low_score_sentences:
+                    # Regex passed but NLI flagged paraphrase drift —
+                    # surface in telemetry, don't rewrite. Operator can
+                    # decide policy from logs.
+                    logger.info(
+                        "grounding NLI: %d sentence(s) below threshold "
+                        "(min=%.2f) — surfaced in metadata",
+                        len(vr.nli_low_score_sentences), vr.nli_min_score,
+                    )
     except Exception as _ve:
         logger.debug("grounding verifier skipped: %s", _ve)
 

@@ -1,0 +1,13 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+# Transformers + torch CPU. The transformers stack is heavy but vendored
+# only here — agents talk to /verify via HTTP and never import it.
+transformers==4.46.3
+# torch CPU build — keeps the image small and matches the design choice
+# of running HHEM on .68's CPU instead of contending for .61's A30.
+torch==2.5.1
+# HHEM-2.1-Open uses tokenizers >= 0.20 implicitly.
+tokenizers>=0.20
+# HF Hub for offline-mode model loading.
+huggingface_hub==0.26.5

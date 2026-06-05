@@ -1,0 +1,64 @@
+# =============================================================================
+# GROUNDING-VERIFIER — HHEM-2.1-Open NLI sidecar (CPU on .68).
+# Commit D of the document-grounded answer pipeline. Loads Vectara's
+# 184M-param hallucination evaluation model and exposes POST /verify so
+# project-agent-service can score (premise, hypothesis) pairs for
+# faithfulness AFTER the regex pre-filter has run.
+#
+# CPU-only by design — keeps .61's A30 free of model-juggling. The model
+# is ~600 MB at FP32 and runs comfortably in <1 GB resident; expect
+# ~2 s per 4 k-token batch on a modest x86 box, which is well inside
+# the post-pass latency budget.
+#
+# Reference: https://huggingface.co/vectara/hallucination_evaluation_model
+# =============================================================================
+services:
+  grounding-verifier:
+    image: simorgh-grounding-verifier:local
+    build: ../grounding-verifier
+    container_name: grounding-verifier
+    expose:
+      - "8055"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - NO_PROXY=*
+      - http_proxy=
+      - https_proxy=
+      - no_proxy=*
+      # Force offline so a missing model dir fails fast rather than
+      # trying to reach huggingface.co from inside an air-gapped network.
+      # Set to 0 only during initial model download on a privileged box.
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1}
+      - HHEM_MODEL=${HHEM_MODEL:-vectara/hallucination_evaluation_model}
+      - HHEM_THRESHOLD=${HHEM_THRESHOLD:-0.5}
+      - HF_HOME=/root/.cache/huggingface
+    volumes:
+      # Mount the SAME shared HF cache the other services use. The model
+      # gets dropped here once by the workflow-downloaded artifact; no
+      # service has to re-download it at runtime.
+      - huggingface_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8055/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # The first /verify after boot triggers a lazy ~10-20 s model load.
+      # start_period covers that without flapping the container.
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  huggingface_cache:
+    name: simorgh_huggingface_cache
+    driver: local
