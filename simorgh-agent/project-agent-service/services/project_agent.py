@@ -123,6 +123,66 @@ def _content_kind_from_mcp(r: Any) -> str:
     return ""
 
 
+# Anthropic-style grounding contract (Commit B). Prepended to the
+# preflight's <documents> block so the model sees the contract
+# IMMEDIATELY before the document content. The "quote-first" procedure
+# is the highest-evidence single-prompt anti-hallucination fix in the
+# 2024-2026 literature (Anthropic Citations API; RAGAS faithfulness;
+# HALT-RAG). Numeric-verbatim + IEC-verbatim rules target the exact
+# fabrications observed in production (20 kA → real doc says 40 kA;
+# IEC 62271-200 → real doc says IEC 62271-2).
+_GROUNDING_CONTRACT = (
+    "# DOCUMENT-GROUNDED ANSWER CONTRACT (MANDATORY)\n"
+    "You answer ONLY from the <documents> block below. If a value is\n"
+    "not present in the documents, you MUST respond exactly:\n"
+    '  "Not specified in the provided documents."\n'
+    "Do not infer typical or textbook values. Do not round, convert\n"
+    "units, or substitute similar standards (e.g. do NOT write\n"
+    "IEC 62271-200 if the source says IEC 62271-2).\n"
+    "\n"
+    "Procedure (in this order):\n"
+    "1. Identify the verbatim spans in the documents that answer the\n"
+    "   question. Quote each span literally; cite its [doc=N, source=…].\n"
+    "2. Write your answer ONLY from those quoted spans. Every numeric\n"
+    "   value (V, kV, A, kA, Hz, °C, mm, s, %) and every standards\n"
+    "   reference (IEC/IEEE/ANSI/ISO/EN ...) in your answer MUST\n"
+    "   appear VERBATIM in the quoted spans. If you cannot find a\n"
+    "   verbatim span for a value, write \"not specified in the\n"
+    "   provided documents\" for that field.\n"
+    "3. Attribute each value to its source location (e.g. \"page 11\n"
+    "   characteristics table\" or \"section 1.3.2\").\n"
+)
+
+
+def _build_documents_envelope(items) -> str:
+    """Render a list of (filename, source_kind, content) tuples into
+    Anthropic's documented <documents>/<document index>/<source>/
+    <content_kind>/<document_content> XML envelope. Per the Citations
+    API docs, Claude attends to these tags more reliably than markdown
+    headers; Qwen3's Hermes chat template behaves similarly.
+
+    Each <document> carries an index= attribute so the model can cite
+    it in the form [doc=N]. The <source> tag preserves the source
+    identifier end-to-end (a strict rule from the 'do not strip the
+    chunk source ID' anti-pattern in the research)."""
+    out = ["<documents>"]
+    for i, (fn, src, content) in enumerate(items, start=1):
+        # Escape only the angle brackets that would close the block early;
+        # leave the rest as-is so spec sheets with `<` or `>` in text
+        # render naturally. Conservative.
+        safe = (str(content) if content is not None else "").replace(
+            "</document_content>", "</document_content >")
+        out.append(f'  <document index="{i}">')
+        out.append(f'    <source>{fn}#source={src}</source>')
+        out.append(f'    <content_kind>extracted</content_kind>')
+        out.append(f'    <document_content>')
+        out.append(safe)
+        out.append(f'    </document_content>')
+        out.append(f'  </document>')
+    out.append("</documents>")
+    return "\n".join(out)
+
+
 def _extract_text_from_mcp(r: Any) -> str:
     """Pull the textual `output` from an mcp_manager.call_tool result.
     Robust to:
@@ -457,10 +517,22 @@ class ProjectManagerAgent:
             preflight_blocks = await self._preflight_file_lookup(
                 project_id, user_input, project_for_ctx or {})
             if preflight_blocks:
-                user_input = (user_input
-                              + "\n\n# PREFETCHED FILE CONTENT — "
-                              "answer from this directly; do NOT re-fetch:\n"
-                              + preflight_blocks)
+                # Commit B: wrap the prefetched content in Anthropic's
+                # documented <documents>/<document>/<source>/<content_kind>
+                # /<document_content> XML envelope AND prepend the
+                # quote-first / verbatim-value / abstention contract.
+                # Claude (and Qwen3 via the Hermes chat template) attends
+                # to XML tags more reliably than ad-hoc markdown headers,
+                # and the quote-first procedure is the highest-evidence
+                # single-prompt fix per the cited research (Anthropic
+                # Citations API, RAGAS, HALT-RAG).
+                user_input = (
+                    user_input
+                    + "\n\n"
+                    + _GROUNDING_CONTRACT
+                    + "\n\n"
+                    + preflight_blocks
+                )
                 logger.info("preflight: injected %d char(s) of file content",
                             len(preflight_blocks))
         except Exception as e:
@@ -4393,15 +4465,17 @@ class ProjectManagerAgent:
             *[_race_one(fn) for fn in filenames],
             return_exceptions=True,
         )
-        blocks: List[str] = []
-        for r in results:
-            if isinstance(r, tuple) and r:
-                fn, src, content = r
-                blocks.append(
-                    f'<file path="{fn}" source="{src}">\n{content}\n</file>')
-                logger.info("preflight: fetched %r from %s (%d chars)",
-                            fn, src, len(content))
-        return "\n\n".join(blocks)
+        items = [(r[0], r[1], r[2]) for r in results
+                 if isinstance(r, tuple) and r]
+        if not items:
+            return ""
+        for (fn, src, content) in items:
+            logger.info("preflight: fetched %r from %s (%d chars)",
+                        fn, src, len(content))
+        # Commit B: emit the Anthropic-style <documents>/<document index>
+        # envelope. The grounding contract that REFERENCES this block
+        # is prepended in handle_input where preflight_blocks is consumed.
+        return _build_documents_envelope(items)
 
     async def _ensure_session_container(self, project_id: str) -> bool:
         """Idempotent warm-up of the project's runtime-broker session

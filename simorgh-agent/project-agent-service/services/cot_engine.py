@@ -851,9 +851,12 @@ FILE QUESTIONS — preflight + fallback rules
 When the user mentions a specific filename (e.g. "investigate
 spec.pdf", "analyse Technical_Specification….pdf", "open README.md"),
 the system PRE-FETCHES the file content from every enabled source
-BEFORE the plan runs and injects it as `<file path="NAME" source="…">
-…</file>` blocks in the user's message under a "PREFETCHED FILE
-CONTENT" header. If the content is there:
+BEFORE the plan runs and injects it as an Anthropic-style
+`<documents>...<document index="N"><source>...</source>
+<content_kind>extracted</content_kind><document_content>...
+</document_content></document>...</documents>` envelope in the user's
+message, preceded by a "DOCUMENT-GROUNDED ANSWER CONTRACT" header.
+When the content is there:
   • Plan an `llm.synthesize` (or `llm.analyze`) step that reads the
     prefetched block directly. NO retrieval steps needed for that file.
   • Specifically do NOT plan list_project_documents → read_document
