@@ -833,6 +833,17 @@ async def react_loop(agent, project_id: str, cot_request, project_context: Dict[
                 logger.error("react: tool %s failed: %s", name, e)
                 result = {"output": f"[tool {name} failed: {e}]",
                           "metadata": {}}
+            # R1 loop-breaker: record (tool, args, was_empty) so the
+            # third same-signature call gets refused. No-op when the
+            # agent doesn't have the helper (defensive for older
+            # project_agent versions during a rolling deploy).
+            try:
+                if hasattr(agent, "_loop_breaker_record"):
+                    agent._loop_breaker_record(
+                        chain_id=chain_id, tool=name,
+                        tool_input=args or {}, result=result)
+            except Exception:
+                pass
             output_str = (result or {}).get("output", "") or ""
             await agent._notify_progress(project_id, "task_completed", {
                 "task_id": call_id, "tool": name,

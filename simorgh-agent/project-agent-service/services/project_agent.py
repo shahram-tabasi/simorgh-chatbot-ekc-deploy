@@ -179,6 +179,15 @@ class ProjectManagerAgent:
         # different projects can still commit concurrently.
         self._commit_locks: Dict[str, "asyncio.Lock"] = {}
 
+        # Loop-breaker (R1): per-chain history of recent (tool, args)
+        # signatures + whether each returned empty. After 2 consecutive
+        # empty results for the same signature, the THIRD call gets
+        # precondition_blocked with a suggested alternative tool. Kills
+        # the "model fixates on one tool that returns nothing" failure
+        # mode (e.g. 12× list_project_documents in a row when the file
+        # is in GitLab). Bounded per-chain: 16 most-recent calls only.
+        self._recent_calls: Dict[str, List[Dict[str, Any]]] = {}
+
         # Email
         self.email_service = email_service
 
@@ -679,6 +688,16 @@ class ProjectManagerAgent:
                 result = await self._execute_single_task(
                     project_id, task, accumulated_context
                 )
+                # R1 loop-breaker bookkeeping (sequential CoT path).
+                try:
+                    self._loop_breaker_record(
+                        chain_id=str(task.get("cot_chain_id") or chain_id or ""),
+                        tool=task.get("tool_used") or "",
+                        tool_input=task.get("tool_input") or {},
+                        result=result,
+                    )
+                except Exception:
+                    pass
 
                 # Store result
                 await self.memory.update_task(
@@ -940,6 +959,16 @@ class ProjectManagerAgent:
                 try:
                     result = await self._execute_single_task(
                         project_id, task, accumulated_context)
+                    # R1 loop-breaker bookkeeping (DAG path).
+                    try:
+                        self._loop_breaker_record(
+                            chain_id=str(task.get("cot_chain_id") or ""),
+                            tool=task.get("tool_used") or "",
+                            tool_input=task.get("tool_input") or {},
+                            result=result,
+                        )
+                    except Exception:
+                        pass
                     await self.memory.update_task(
                         task_id, project_id,
                         status=TaskStatus.COMPLETED.value,
@@ -1226,6 +1255,149 @@ class ProjectManagerAgent:
                 "EKC technical-knowledge search is disabled for this project.",
             )
         return None
+
+    # ------------------------------------------------------------------
+    # R1: Loop-breaker. The model fixation problem — Qwen3 (and any
+    # current open model under tight context) sometimes keeps calling
+    # the same tool with the same args after each empty result, instead
+    # of trying a different source. We see this most often as N×
+    # `list_project_documents()→empty` when the user actually wants a
+    # file from the GitLab repo. The model is "right" to ask uploads
+    # first; it's wrong to keep asking the same tool when given the
+    # same empty answer twice.
+    #
+    # The loop-breaker tracks (tool, args-hash) per chain. When the
+    # SAME signature is about to fire a third time AND the previous two
+    # both returned empty, the dispatcher refuses with a typed
+    # precondition_blocked envelope steering the model to a known
+    # alternative tool. The model already knows how to handle this
+    # envelope (HANDLING precondition_blocked recipe in the prompt).
+    # ------------------------------------------------------------------
+    _ALTERNATIVE_TOOL_FOR: Dict[str, str] = {
+        # Empty uploads → likely a repo file (or techserver).
+        "list_project_documents":   "gitlab_mcp.read_artifact_mcp",
+        "read_document":            "gitlab_mcp.read_artifact_mcp",
+        "search_project_documents": "gitlab_mcp.search_blobs",
+        "retrieve_chunks":          "gitlab_mcp.search_blobs",
+        # Empty TPMS → try gitlab/upload context.
+        "tpms_fetch":               "get_project_context",
+        "tpms_get_text":            "get_project_context",
+        # Empty repo content → try TechServer / uploads.
+        "search_blobs":             "techserver_search",
+        "search_context":           "techserver_search",
+        # Empty techserver → try uploads.
+        "techserver_get_tree":      "list_project_documents",
+        "techserver_search":        "search_project_documents",
+    }
+
+    @staticmethod
+    def _looks_empty_result(result: Optional[Dict[str, Any]]) -> bool:
+        """Heuristic 'this tool returned nothing useful'. Used by the
+        loop-breaker to decide whether to count a call as an empty.
+
+        We DON'T treat real errors as empty here — those have their
+        own retry path. Truly empty = the call succeeded but produced
+        no rows/content/files."""
+        if not isinstance(result, dict):
+            return False
+        out = result.get("output")
+        if isinstance(out, str):
+            s = out.strip()
+            if not s or len(s) < 4:
+                return True
+            low = s.lower()
+            # Common framework-emitted "no results" sentinels.
+            for marker in ("[]", "{}", "no files", "no documents",
+                           "no results", "not found", "0 results",
+                           "no matches", "empty result"):
+                if marker in low:
+                    return True
+        md = result.get("metadata") or {}
+        for k in ("rows", "hits", "count", "matched", "files"):
+            v = md.get(k)
+            if isinstance(v, int) and v == 0:
+                return True
+        return False
+
+    def _loop_breaker_check(
+        self, *, chain_id: str, tool: str, tool_input: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Return a precondition_blocked envelope when the same (tool,
+        args-hash) has returned empty twice already on this chain.
+        Returns None when the call should proceed normally."""
+        if not chain_id or tool == "read_run_state":
+            return None  # never block the externalised-output fetch
+        history = self._recent_calls.get(chain_id) or []
+        if not history:
+            return None
+        try:
+            # Stable hash — sort keys; strip executor-internal fields.
+            scrub = {k: v for k, v in (tool_input or {}).items()
+                     if not k.startswith("_")}
+            sig = (tool, json.dumps(scrub, sort_keys=True, default=str))
+        except Exception:
+            return None
+        empties = sum(
+            1 for h in history
+            if h.get("sig") == sig and h.get("empty"))
+        if empties < 2:
+            return None
+        alt = self._ALTERNATIVE_TOOL_FOR.get(tool)
+        message = (
+            f"Tool `{tool}` has been called {empties} times with the "
+            f"same arguments and returned empty results. Stop retrying "
+            f"the same source."
+        )
+        if alt:
+            message += f" Try `{alt}` instead — it queries a different source."
+        from services.project_facts import build_precondition_blocked
+        envelope = build_precondition_blocked(
+            blocked_on="empty_repeat",
+            resolver=alt or "ask_user",
+            tool_attempted=tool,
+            message=message,
+            recipe=[
+                f"1. Do NOT call {tool} with these arguments again.",
+                (f"2. Call {alt} next — likely a different source has "
+                 f"what you need.") if alt
+                else "2. Switch source — ask the user or use a different tool family.",
+                "3. If still no result, write your final answer "
+                "honestly describing what you DID check.",
+            ],
+            previous_empty_calls=empties,
+        )
+        logger.info(
+            "loop_breaker: tool=%s args_hash=%s empties=%d -> alt=%s",
+            tool, sig[1][:60], empties, alt,
+        )
+        return {
+            "output": json.dumps(envelope, ensure_ascii=False, default=str),
+            "metadata": {"tool": tool, "via": "loop_breaker",
+                         "blocked_on": "empty_repeat",
+                         "resolver": alt or "ask_user"},
+        }
+
+    def _loop_breaker_record(
+        self, *, chain_id: str, tool: str, tool_input: Dict[str, Any],
+        result: Optional[Dict[str, Any]],
+    ) -> None:
+        """Append this call's (sig, was_empty) to the chain's history.
+        Bounded to 16 entries — older than that the model has moved on."""
+        if not chain_id:
+            return
+        try:
+            scrub = {k: v for k, v in (tool_input or {}).items()
+                     if not k.startswith("_")}
+            sig = (tool, json.dumps(scrub, sort_keys=True, default=str))
+        except Exception:
+            return
+        history = self._recent_calls.setdefault(chain_id, [])
+        history.append({
+            "sig":   sig,
+            "empty": self._looks_empty_result(result),
+        })
+        if len(history) > 16:
+            del history[:-16]
 
     async def _maybe_fuzzy_retry_read(
         self, tool: str, tool_input: dict, result: Any,
@@ -2276,6 +2448,20 @@ class ProjectManagerAgent:
         _gate_block = self._can_use_tool(tool, tool_input)
         if _gate_block is not None:
             return _gate_block
+
+        # R1 loop-breaker. Refuse a 3rd identical call when the previous
+        # two returned empty — see _loop_breaker_check for the contract.
+        # chain_id is stamped on the task dict by both engines (ReAct
+        # at task creation, CoT via cot_chain_id on the task row).
+        _chain_id = str(task.get("cot_chain_id") or task.get("chain_id") or "")
+        if _chain_id:
+            _lb = self._loop_breaker_check(
+                chain_id=_chain_id, tool=tool, tool_input=tool_input or {})
+            if _lb is not None:
+                # Don't record this refusal as a call (it didn't actually
+                # hit the tool). Just return so the loop sees the typed
+                # envelope and follows the recipe.
+                return _lb
 
         has_mcp_tool = (
             self.mcp_manager
