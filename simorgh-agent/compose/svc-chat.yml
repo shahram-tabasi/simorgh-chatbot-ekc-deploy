@@ -33,7 +33,7 @@ services:
       # Same reason hr-kb-service's compose hardcodes it.
       - EMBEDDINGS_URL=http://embeddings-service:8031
       - HR_KB_COLLECTION=${HR_KB_COLLECTION:-hr_general_kb}
-      - HR_LLM_MODEL=${HR_LLM_MODEL:-gpt-oss-20b}
+      - HR_LLM_MODEL=${HR_LLM_MODEL:-qwen3-30b-a3b}
       # 0.15 matches the lowered Python default in hr_chat.py
       # (see commit f68db39).
       - HR_RELEVANCE_THRESHOLD=${HR_RELEVANCE_THRESHOLD:-0.15}

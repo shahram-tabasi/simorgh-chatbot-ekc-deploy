@@ -50,7 +50,7 @@ EMBEDDINGS_URL    = os.getenv("EMBEDDINGS_URL", "http://embeddings-service:8031"
 QDRANT_URL        = os.getenv("QDRANT_URL", "http://qdrant:6333")
 LLM_GATEWAY_URL   = os.getenv("LLM_GATEWAY_URL", "http://llm-gateway:8030")
 HR_KB_COLLECTION  = os.getenv("HR_KB_COLLECTION", "hr_general_kb")
-HR_LLM_MODEL      = os.getenv("HR_LLM_MODEL", "gpt-oss-20b")
+HR_LLM_MODEL      = os.getenv("HR_LLM_MODEL", "qwen3-30b-a3b")
 
 # Top-K retrieved from Qdrant. Wide net (15) so the re-ranker has
 # room to surface a high-value card that lost the raw-cosine race
