@@ -76,11 +76,14 @@ services:
       - "9000"
       - "--tensor-parallel-size"
       - "1"
-      # AWQ Marlin kernel — fastest AWQ path on Ampere (A30). vLLM
-      # auto-detects AWQ from the quant config too, but pinning it is
-      # explicit and avoids a fallback to the slower generic AWQ kernel.
-      - "--quantization"
-      - "awq_marlin"
+      # Let vLLM autodetect the quantization from config.json's
+      # quantization_config stanza. Pinning --quantization awq_marlin
+      # explicitly fights llm-compressor builds (incl. the
+      # cyankiwi/...-AWQ-4bit and stelterlab/...-AWQ repos) which declare
+      # themselves as "compressed-tensors" — a container format that
+      # wraps AWQ weights and still uses Marlin kernels at runtime, but
+      # rejects awq_marlin as a mismatch. Autodetect picks the right
+      # path for both pure-AWQ and llm-compressor builds.
       # 16k input+output. VRAM budget on 24GB: ~16GB weights + ~1.5GB KV
       # (16k, 1 seq) + ~2.5GB overhead ≈ 20GB. ~4GB headroom = 2-3
       # concurrent 16k sessions. For more concurrency add
