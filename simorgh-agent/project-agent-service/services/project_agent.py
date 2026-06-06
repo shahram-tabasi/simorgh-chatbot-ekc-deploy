@@ -4311,6 +4311,11 @@ class ProjectManagerAgent:
             ("techserver", has_techserver),
             ("upload", has_upload),
         ) if ok]
+        logger.info(
+            "preflight: sources=%s repo=%r ts_oe=%r "
+            "(has_gitlab=%s has_techserver=%s has_upload=%s)",
+            sources_enabled, repo, ts_oe,
+            has_gitlab, has_techserver, has_upload)
         if not sources_enabled:
             # No source is configured for this project — we can't even
             # try. Still emit a not_found envelope so the contract fires
@@ -4400,15 +4405,51 @@ class ProjectManagerAgent:
             # extracted markdown — see gitlab-mcp-service/app.py:256
             # "Callers always get markdown back, never bytes."
             if not has_gitlab or not self.mcp_manager:
+                logger.info("preflight gitlab: skipped — has_gitlab=%s "
+                            "mcp_manager=%s", has_gitlab,
+                            bool(self.mcp_manager))
                 return None
+            # First try: bare filename at repo root.
+            attempts: List[str] = [fn]
+            # If the bare path is likely to 404 (file is in a subdir),
+            # ask the gitlab tree once and find every path whose basename
+            # matches fn. One extra call buys robust subdir resolution
+            # so users don't have to put every doc at the root.
             try:
-                r = await self.mcp_manager.call_tool(
-                    "read_artifact_mcp",
-                    {"project": repo, "path": fn,
-                     "max_chars": self._PREFLIGHT_MAX_CHARS_PER_FILE})
-                return _real_text_or_none(_extract_text_from_mcp(r))
-            except Exception:
-                return None
+                tree_r = await self.mcp_manager.call_tool(
+                    "get_project_tree",
+                    {"project": repo, "recursive": True})
+                tree_text = _extract_text_from_mcp(tree_r) or ""
+                want = fn.lower()
+                for line in tree_text.splitlines():
+                    candidate = line.strip()
+                    if not candidate or candidate == fn:
+                        continue
+                    if candidate.lower().endswith("/" + want) \
+                            or candidate.lower() == want:
+                        if candidate not in attempts:
+                            attempts.append(candidate)
+            except Exception as e:
+                logger.info("preflight gitlab: tree lookup failed (%r) "
+                            "— will only try bare path", e)
+            for path in attempts:
+                try:
+                    r = await self.mcp_manager.call_tool(
+                        "read_artifact_mcp",
+                        {"project": repo, "path": path,
+                         "max_chars": self._PREFLIGHT_MAX_CHARS_PER_FILE})
+                    raw = _extract_text_from_mcp(r)
+                    txt = _real_text_or_none(raw)
+                    logger.info(
+                        "preflight gitlab: project=%r path=%r raw_len=%d "
+                        "real_len=%d", repo, path, len(raw or ""),
+                        len(txt or ""))
+                    if txt:
+                        return txt
+                except Exception as e:
+                    logger.info("preflight gitlab: project=%r path=%r "
+                                "FAILED %r", repo, path, e)
+            return None
 
         async def _fetch_techserver(fn: str) -> Optional[str]:
             if not has_techserver or not self.mcp_manager:
