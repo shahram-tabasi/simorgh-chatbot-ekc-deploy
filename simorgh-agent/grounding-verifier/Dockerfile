@@ -3,12 +3,17 @@
 # Hughes Hallucination Evaluation Model (HHEM-2.1-Open, 184M DeBERTa-v3
 # derivative, Apache-2.0) and exposes /verify so the agent can ask
 # "does this answer-sentence follow from this source-passage?"
-# CPU-only by design — keeps .61's A30 free of model-juggling. ~2 s per
-# 4 k-token request on a modest x86 box, comfortably under the
-# operator's verification-latency budget.
 #
-# Reference: https://www.vectara.com/blog/hhem-2-1-a-better-hallucination-detection-model
-FROM python:3.11-slim
+# Base image: pytorch/pytorch:2.6.0 — the SAME base project-agent and
+# documents-rag use. It already ships torch via conda, so we do NOT
+# pip-install torch (which would re-fetch the 906 MB CUDA wheel on the
+# operator's slow/unstable link). The base layer is already cached on
+# .68 from the other two services, so the FROM here is a zero-download
+# layer reuse. Torch runs on CPU here (no GPU on .68's container) —
+# the CUDA base works fine CPU-only; it just never finds a device.
+#
+# Reference: https://huggingface.co/vectara/hallucination_evaluation_model
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TRUSTED_HOST=
