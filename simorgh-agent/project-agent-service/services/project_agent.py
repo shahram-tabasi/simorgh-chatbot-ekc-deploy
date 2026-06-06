@@ -151,6 +151,16 @@ _GROUNDING_CONTRACT = (
     "   provided documents\" for that field.\n"
     "3. Attribute each value to its source location (e.g. \"page 11\n"
     "   characteristics table\" or \"section 1.3.2\").\n"
+    "\n"
+    "If a <document> carries <content_kind>not_found</content_kind>\n"
+    "(no <document_content> payload), the named file could NOT be\n"
+    "retrieved from any enabled source. In that case you MUST respond\n"
+    "EXACTLY in this shape and stop:\n"
+    '  "I could not find FILE in this project (checked: SOURCES).\n'
+    '   Please re-upload the file to the project\'s GitLab repository\n'
+    '   or attach it directly so I can analyse it."\n'
+    "Do NOT invent values from prior training data. Do NOT answer from\n"
+    "the filename or extension alone.\n"
 )
 
 
@@ -178,6 +188,29 @@ def _build_documents_envelope(items) -> str:
         out.append(f'    <document_content>')
         out.append(safe)
         out.append(f'    </document_content>')
+        out.append(f'  </document>')
+    out.append("</documents>")
+    return "\n".join(out)
+
+
+def _build_not_found_envelope(filenames, sources_tried) -> str:
+    """Render a <documents> envelope for files the user named that no
+    enabled source could return. Each entry carries
+    <content_kind>not_found</content_kind> and an empty
+    <document_content/>. Combined with _GROUNDING_CONTRACT, this forces
+    the model to respond "Not specified in the provided documents."
+    instead of hallucinating from its training data — the failure mode
+    proven in production (20 kA vs real 40 kA, IEC 62271-200 vs real
+    IEC 62271-2). `sources_tried` is a list like ["gitlab","upload"];
+    surfaced so the user sees WHICH stores were checked."""
+    tried = ",".join(sources_tried) if sources_tried else "none"
+    out = ["<documents>"]
+    for i, fn in enumerate(filenames, start=1):
+        out.append(f'  <document index="{i}">')
+        out.append(f'    <source>{fn}#source=missing</source>')
+        out.append(f'    <content_kind>not_found</content_kind>')
+        out.append(f'    <sources_tried>{tried}</sources_tried>')
+        out.append(f'    <document_content/>')
         out.append(f'  </document>')
     out.append("</documents>")
     return "\n".join(out)
@@ -4271,8 +4304,19 @@ class ProjectManagerAgent:
         has_techserver = bool(se.get("techserver") and ts_oe)
         has_upload = bool(se.get("upload") or se.get("uploads"))
 
-        if not (has_gitlab or has_techserver or has_upload):
-            return ""
+        sources_enabled = [n for (n, ok) in (
+            ("gitlab", has_gitlab),
+            ("techserver", has_techserver),
+            ("upload", has_upload),
+        ) if ok]
+        if not sources_enabled:
+            # No source is configured for this project — we can't even
+            # try. Still emit a not_found envelope so the contract fires
+            # and the model refuses instead of hallucinating.
+            logger.info(
+                "preflight: filenames=%s but NO source enabled — "
+                "emitting not_found envelope", filenames)
+            return _build_not_found_envelope(filenames, sources_enabled)
 
         # Stub detection by SHAPE, not length. Client documents may be
         # legitimately short — we must NOT drop a one-line README or a
@@ -4468,10 +4512,29 @@ class ProjectManagerAgent:
         items = [(r[0], r[1], r[2]) for r in results
                  if isinstance(r, tuple) and r]
         if not items:
-            return ""
+            # Every source returned empty/stub for every named file.
+            # Force abstention via a not_found envelope so the model
+            # cannot invent values from training data — that's exactly
+            # the failure path we keep observing (20 kA vs real 40 kA,
+            # IEC 62271-200 vs real IEC 62271-2).
+            logger.info(
+                "preflight: NONE of %s found in any source "
+                "(tried=%s) — emitting not_found envelope",
+                filenames, sources_enabled)
+            return _build_not_found_envelope(filenames, sources_enabled)
         for (fn, src, content) in items:
             logger.info("preflight: fetched %r from %s (%d chars)",
                         fn, src, len(content))
+        # If the user named more files than we resolved, mark the
+        # missing ones explicitly so the contract still bites for them.
+        resolved_keys = {fn.lower() for (fn, _, _) in items}
+        missing = [fn for fn in filenames if fn.lower() not in resolved_keys]
+        if missing:
+            logger.info("preflight: partial — missing %s from %s",
+                        missing, sources_enabled)
+            return (_build_documents_envelope(items)
+                    + "\n"
+                    + _build_not_found_envelope(missing, sources_enabled))
         # Commit B: emit the Anthropic-style <documents>/<document index>
         # envelope. The grounding contract that REFERENCES this block
         # is prepended in handle_input where preflight_blocks is consumed.
