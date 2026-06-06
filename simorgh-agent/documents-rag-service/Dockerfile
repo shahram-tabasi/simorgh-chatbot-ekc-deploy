@@ -1,4 +1,12 @@
-FROM pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+# Align with project-agent-service so both services share the same base
+# image layer (saves 12 GB of disk on a host that currently has 2.5.0 +
+# 2.6.0 = 24 GB of redundant base layers cached). Torch 2.6 is the
+# version `simorgh-project-agent-service` builds on; using the same
+# tag lets Docker reuse the FROM layer across both services and avoids
+# a re-download of torch on every requirements bump (the conda-shipped
+# torch in this image satisfies the import; we no longer pin torch in
+# requirements.txt to avoid a 906 MB pip-side re-fetch).
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 # ---- Air-gapped registry proxies (override at build with --build-arg) ----
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TRUSTED_HOST=

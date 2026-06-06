@@ -310,7 +310,16 @@ class IndustrialElectricalFlow:
             }
 
     def _extract_text(self, document_path: str) -> str:
-        """Extract text from PDF"""
+        """Extract text from PDF.
+
+        TODO(grounding-cleanup, June 2026): this is the ONLY remaining
+        in-process PDF extraction in documents-rag — every other path
+        delegates to the doc-processor service over HTTP
+        (services/doc_processor_client.py). Migrate this to the same
+        DocProcessorClient so the service drops pdfminer.six entirely;
+        the dependency is still in the image because removing it would
+        regress this opt-in CocoIndex flow.
+        """
         # Use pdfminer.six or PyPDF2 for text extraction
         try:
             from pdfminer.high_level import extract_text
