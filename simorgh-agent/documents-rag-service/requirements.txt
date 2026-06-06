@@ -54,9 +54,14 @@ pymongo==4.6.1
 
 # Embeddings + ML
 # Torch comes from the base image (pytorch/pytorch:2.6.0-…); do not pin.
-sentence-transformers>=3.0.0
-transformers>=4.36.0
-tokenizers>=0.15.0
+# Pin the major versions — sentence-transformers 5.x ships a new
+# `base.model` module that does `from transformers import PreTrainedModel`
+# at top level; transformers 4.x exposes it via lazy loader and the
+# combo blows up at import time ("Could not import module
+# 'PreTrainedModel'"). Match project-agent-service's working pair.
+sentence-transformers>=3.0.0,<5
+transformers>=4.46,<5
+tokenizers>=0.20
 
 # LLM
 openai>=1.3.0
