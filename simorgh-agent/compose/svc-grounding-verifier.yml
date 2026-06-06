@@ -54,11 +54,19 @@ services:
     restart: unless-stopped
 
 networks:
+  # Joins the existing simorgh_app_net created by the master
+  # docker-compose.yml. Marked external so direct `compose -f ...`
+  # invocations of THIS file don't redundantly try to (re)create it
+  # under a different project name (which would isolate the sidecar
+  # from project-agent-service and silently break NLI calls).
   app_net:
     name: simorgh_app_net
-    driver: bridge
+    external: true
 
 volumes:
+  # Shared HF cache where the operator's model-fetch workflow drops
+  # vectara/hallucination_evaluation_model. External for the same
+  # reason as above.
   huggingface_cache:
     name: simorgh_huggingface_cache
-    driver: local
+    external: true

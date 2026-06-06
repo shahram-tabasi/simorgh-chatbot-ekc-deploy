@@ -100,6 +100,7 @@ include:
   - compose/svc-context-search.yml     # Hybrid (BM25 + kNN) search over ES
   - compose/svc-tpms-context-agent.yml # On-demand TPMS context for CoT
   - compose/svc-mail-bridge.yml        # Mailcow IMAP/SMTP bridge (replaces mail-gateway + project-mail)
+  - compose/svc-grounding-verifier.yml # HHEM-2.1-Open NLI sidecar — fact-check answers against <documents> sources (Commit D of grounding pipeline)
 
   # ---- simorgh-soft (electrical design app) ---------------------------------
   - compose/soft-mongo.yml
