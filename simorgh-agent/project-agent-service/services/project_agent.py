@@ -569,7 +569,7 @@ class ProjectManagerAgent:
                 logger.info("preflight: injected %d char(s) of file content",
                             len(preflight_blocks))
         except Exception as e:
-            logger.debug("preflight file-lookup skipped: %s", e)
+            logger.warning("preflight file-lookup FAILED: %r", e, exc_info=True)
 
         logger.info(
             f"Agent handling input: project={project_id}, "
@@ -4280,6 +4280,8 @@ class ProjectManagerAgent:
         if not isinstance(user_input, str) or not user_input:
             return ""
         matches = self._FILENAME_RE.findall(user_input)
+        logger.info("preflight: scan input_len=%d matches=%s",
+                    len(user_input), matches[:5])
         if not matches:
             return ""
         # De-dup, preserve user order, cap at MAX_FILES.
