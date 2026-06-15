@@ -193,9 +193,20 @@ def _build_documents_envelope(items) -> str:
         # render naturally. Conservative.
         safe = (str(content) if content is not None else "").replace(
             "</document_content>", "</document_content >")
+        # content_kind tells the model HOW MUCH context this block carries:
+        #   "section"   → small-to-big: one heading-bounded section of a
+        #                 larger doc; other sections of the same file may
+        #                 NOT be present. The model must not assume the
+        #                 whole doc is here.
+        #   "extracted" → whole-document extraction (Phase 0 fallback or
+        #                 the named-file preflight). All sections present.
+        kind = "section" if src == "section" else "extracted"
+        # When the source label already includes "#section=…" (Phase 1
+        # query-targeted retrieval), use it verbatim; otherwise compose.
+        src_field = fn if "#source=" in fn or "#section=" in fn else f"{fn}#source={src}"
         out.append(f'  <document index="{i}">')
-        out.append(f'    <source>{fn}#source={src}</source>')
-        out.append(f'    <content_kind>extracted</content_kind>')
+        out.append(f'    <source>{src_field}</source>')
+        out.append(f'    <content_kind>{kind}</content_kind>')
         out.append(f'    <document_content>')
         out.append(safe)
         out.append(f'    </document_content>')
@@ -597,7 +608,7 @@ class ProjectManagerAgent:
         if not preflight_blocks:
             try:
                 upload_blocks = await self._upload_envelope_for_project(
-                    project_id)
+                    project_id, user_input=user_input)
                 if upload_blocks:
                     user_input = (
                         user_input
@@ -4625,19 +4636,27 @@ class ProjectManagerAgent:
         # is prepended in handle_input where preflight_blocks is consumed.
         return _build_documents_envelope(items)
 
-    async def _upload_envelope_for_project(self, project_id: str) -> str:
-        """Enumerate the project's uploaded documents and return a
-        <documents> envelope with each file's reassembled text. Used
-        as a fallback when no filename was named in the turn but the
-        project has uploads — the planner's gather_grounding already
-        loads these chunks into [G…] markdown, but the grounding
-        verifier in react_engine ONLY reads <document_content> XML
-        from messages[1], so without this the verifier has no source
-        corpus on follow-up questions and HHEM no-ops.
+    async def _upload_envelope_for_project(
+        self, project_id: str, user_input: str = ""
+    ) -> str:
+        """Build the verifier-visible <documents> envelope for this
+        project's uploaded docs.
 
-        Budget: same shape as cot_plans/upload_deep.gather_grounding
-        (TOTAL_BUDGET 24 000 chars, spread across docs) so we never
-        blow the context window even with many uploads."""
+        Phase 1: query-targeted section retrieval (small-to-big).
+        Instead of dumping every uploaded doc end-to-end, run a
+        semantic search against the per-section summaries and pull
+        ONLY the top-k full-section bodies. Sandwich-ordered
+        (highest-score first AND last) to mitigate the lost-in-the-
+        middle context degradation documented by Liu et al. 2023.
+
+        Falls back to whole-doc enumeration (the Phase 0 behaviour)
+        when:
+          - no user_input is available (back-compat), OR
+          - section search returns nothing (e.g. very generic query,
+            empty index, or older chunk-shaped uploads).
+
+        Budget: 24 000-char total payload, well under Qwen3's native
+        32K context and below the YaRN-128K degradation cliff."""
         if not project_id:
             return ""
         TOTAL_BUDGET = 24000
@@ -4649,6 +4668,54 @@ class ProjectManagerAgent:
             if qdrant is None:
                 return ""
             scope = str(project_id).strip()
+
+            # --- Phase 1: query-targeted section retrieval -----------------
+            sections: List[Dict[str, Any]] = []
+            if user_input and hasattr(qdrant, "search_relevant_sections"):
+                try:
+                    sections = qdrant.search_relevant_sections(
+                        query=user_input,
+                        project_oenum=scope,
+                        top_k=5,
+                        score_threshold=0.25,
+                    ) or []
+                except Exception as e:
+                    logger.info(
+                        "upload-preflight: section search failed (%r)", e)
+                    sections = []
+
+            if sections:
+                # Sandwich ordering: best score at position 1 and N,
+                # middle scores in the middle. Mitigates lost-in-the-
+                # middle (Liu 2023): -20-30 acc-pts for answers in
+                # position 10 of 20 vs position 1.
+                sections.sort(key=lambda s: -float(s.get("score") or 0))
+                # interleave: [s0, s2, s4, s3, s1] for 5 items
+                hi = sections[::2]                  # 0, 2, 4
+                lo = list(reversed(sections[1::2]))  # 3, 1
+                ordered = hi + lo
+                items: List[Any] = []
+                used = 0
+                for s in ordered:
+                    body = s.get("full_content") or s.get("summary") or ""
+                    if not body or used >= TOTAL_BUDGET:
+                        continue
+                    fname = s.get("filename") or "(unknown)"
+                    heading = (s.get("heading_path")
+                               or s.get("section_title") or "?")
+                    label = f"{fname}#section={heading}"
+                    # Cap each section to leave room for the others
+                    room = max(0, TOTAL_BUDGET - used)
+                    take = body[:min(len(body), room)]
+                    items.append((label, "section", take))
+                    used += len(take)
+                logger.info(
+                    "upload-preflight: hits=%d kept=%d total_chars=%d "
+                    "(query-targeted)", len(sections), len(items), used)
+                if items:
+                    return _build_documents_envelope(items)
+
+            # --- Phase 0 fallback: whole-doc enumeration -----------------
             try:
                 docs = qdrant.list_documents(
                     user_id="system", project_oenum=scope) or []
@@ -4682,7 +4749,8 @@ class ProjectManagerAgent:
                 items.append((fname, "upload", txt))
                 used += len(txt)
             logger.info(
-                "upload-preflight: enumerated=%d kept=%d total_chars=%d",
+                "upload-preflight: enumerated=%d kept=%d total_chars=%d "
+                "(whole-doc fallback)",
                 len(docs), len(items), used)
             if not items:
                 return ""
