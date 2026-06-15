@@ -744,25 +744,38 @@ class ProjectManagerAgent:
             return {"output": "Qdrant service not available", "metadata": {"error": True}}
 
         try:
-            # Chunk content into segments (~500 chars each)
-            chunk_dicts = []
-            chunk_size = 500
-            overlap = 50
-            text = content.strip()
-            i = 0
-            chunk_idx = 0
-            while i < len(text):
-                end = min(i + chunk_size, len(text))
-                chunk_text = text[i:end]
-                if chunk_text.strip():
-                    chunk_dicts.append({
-                        "text": chunk_text.strip(),
-                        "section_title": filename,
-                        "chunk_index": chunk_idx,
-                        "metadata": {"filename": filename},
-                    })
-                    chunk_idx += 1
-                i += chunk_size - overlap
+            # Phase 0: heading-aware chunking. Replaces the previous
+            # 500-char sliding-window splitter that hardcoded
+            # `section_title = filename` and discarded Docling's
+            # heading structure entirely. DocumentChunker parses
+            # markdown headings (# .. ######) and numbered sections
+            # (1.2.3 ...) and emits one chunk per section with the
+            # ACTUAL heading as section_title and the structural
+            # metadata the agent (and Phase 1 small-to-big retrieval)
+            # need. Filename is now a first-class field in the chunk
+            # payload — no longer overloaded into section_title.
+            from services.document_chunker import DocumentChunker
+            chunker = DocumentChunker(
+                max_chunk_size=1000,
+                min_chunk_size=100,
+                overlap_size=50,
+            )
+            doc_uuid_pre = document_id or ""
+            chunk_dicts = chunker.chunk_markdown(
+                markdown_content=content.strip(),
+                document_id=doc_uuid_pre,
+                filename=filename,
+            )
+            # DocumentChunker already puts filename in metadata; lift it
+            # to a top-level chunk field so add_document_chunks's Phase 0
+            # payload schema picks it up directly.
+            for c in chunk_dicts:
+                if "filename" not in c:
+                    c["filename"] = filename
+                meta = c.get("metadata") or {}
+                hp = meta.get("heading_path") or meta.get("section_path")
+                if hp:
+                    c["heading_path"] = hp
 
             # Store all chunks in Qdrant using add_document_chunks
             # Use OENUM for collection name to match search queries

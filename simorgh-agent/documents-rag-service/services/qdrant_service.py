@@ -327,12 +327,34 @@ class QdrantService:
 
                 embedding = self.generate_embedding(text)
 
-                # Prepare payload with session context
+                # Prepare payload with session context. Phase 0 schema:
+                # `filename` and `heading_path` are first-class fields so
+                # list_documents/get_document_text/_scroll_tenant don't
+                # have to dig through metadata or rely on the old
+                # "section_title = filename" hack (which made it
+                # impossible to also store the real heading).
+                #
+                # Backwards-compat: old chunks have filename=None and
+                # section_title=<filename>; readers fall back to
+                # section_title when filename is absent.
+                meta = chunk.get("metadata") or {}
+                filename_field = (
+                    chunk.get("filename")
+                    or meta.get("filename")
+                    or ""
+                )
+                heading_path = (
+                    chunk.get("heading_path")
+                    or meta.get("heading_path")
+                    or ""
+                )
                 payload = {
                     "document_id": document_id,
                     "user_id": user_id,
                     "text": text,
+                    "filename": filename_field,
                     "section_title": chunk.get("section_title", ""),
+                    "heading_path": heading_path,
                     "chunk_index": chunk.get("chunk_index", 0),
                 }
 
@@ -474,15 +496,17 @@ class QdrantService:
             must.append(
                 FieldCondition(key="document_id", match=MatchValue(value=document_id))
             )
+        should = None
         if filename:
-            # Upload stores section_title = filename on every chunk, so we
-            # can resolve a file by its name — which the planner KNOWS at
-            # plan time (it's in the user's message), unlike the runtime
-            # document_id UUID.
-            must.append(
-                FieldCondition(key="section_title", match=MatchValue(value=filename))
-            )
-        flt = Filter(must=must)
+            # Phase 0: new chunks carry `filename` as a first-class field.
+            # Old chunks (pre-Phase 0) store filename in `section_title`
+            # because of the original "section_title = filename" hack —
+            # match either with a should-clause so both schemas resolve.
+            should = [
+                FieldCondition(key="filename", match=MatchValue(value=filename)),
+                FieldCondition(key="section_title", match=MatchValue(value=filename)),
+            ]
+        flt = Filter(must=must, should=should) if should else Filter(must=must)
         out, offset = [], None
         while True:
             points, offset = self.client.scroll(
@@ -519,9 +543,13 @@ class QdrantService:
             did = pl.get("document_id") or ""
             if not did:
                 continue
+            # Filename resolution order (Phase 0): top-level `filename`
+            # (new chunks) → metadata.filename → section_title (legacy
+            # chunks where filename was stuffed into section_title).
             d = docs.setdefault(did, {
                 "document_id": did,
-                "filename": (pl.get("metadata") or {}).get("filename")
+                "filename": pl.get("filename")
+                            or (pl.get("metadata") or {}).get("filename")
                             or pl.get("section_title") or "",
                 "chunk_count": 0,
             })
