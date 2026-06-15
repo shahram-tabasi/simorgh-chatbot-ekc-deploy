@@ -152,6 +152,17 @@ _GROUNDING_CONTRACT = (
     "3. Attribute each value to its source location (e.g. \"page 11\n"
     "   characteristics table\" or \"section 1.3.2\").\n"
     "\n"
+    "BANNED MOVES (these are inference, not extraction):\n"
+    "  - \"implied by …\" / \"reasonable to infer\" / \"consistent with\"\n"
+    "  - \"standard for X systems\" / \"typical for this voltage class\"\n"
+    "  - \"based on the application described\" / \"in the context of\"\n"
+    "  - filling in a value from the document title or filename alone\n"
+    "  - taking a property of the parent assembly and assigning it to\n"
+    "    a child component (e.g. switchgear is air-insulated ≠ VTs are\n"
+    "    air-insulated unless the doc says so for the VTs themselves)\n"
+    "If you find yourself writing any of these phrases, STOP and\n"
+    "respond instead: \"Not specified in the provided documents.\"\n"
+    "\n"
     "If a <document> carries <content_kind>not_found</content_kind>\n"
     "(no <document_content> payload), the named file could NOT be\n"
     "retrieved from any enabled source. In that case you MUST respond\n"
@@ -570,6 +581,37 @@ class ProjectManagerAgent:
                             len(preflight_blocks))
         except Exception as e:
             logger.warning("preflight file-lookup FAILED: %r", e, exc_info=True)
+
+        # UPLOAD-PREFLIGHT FALLBACK. When the user did NOT name a file
+        # in this turn (e.g. follow-up question "what about CT accuracy
+        # class?") but the project HAS uploaded documents, the planner's
+        # upload_deep gather_grounding pulls those into a [G…] markdown
+        # block — invisible to react_engine's grounding verifier, which
+        # only reads <document_content> XML from messages[1]. Result:
+        # HHEM no-ops, the model uses training data, and the user gets
+        # a hallucinated answer that LOOKS cited (because the planner
+        # had the text). Fix: pull the SAME upload content into the
+        # verifier-visible <documents> envelope on every turn so the
+        # verifier always has a source corpus to check against.
+        # Skipped when preflight already injected blocks (no duplication).
+        if not preflight_blocks:
+            try:
+                upload_blocks = await self._upload_envelope_for_project(
+                    project_id)
+                if upload_blocks:
+                    user_input = (
+                        user_input
+                        + "\n\n"
+                        + _GROUNDING_CONTRACT
+                        + "\n\n"
+                        + upload_blocks
+                    )
+                    logger.info(
+                        "upload-preflight: injected %d char(s) of "
+                        "uploaded-doc content", len(upload_blocks))
+            except Exception as e:
+                logger.warning(
+                    "upload-preflight FAILED: %r", e, exc_info=True)
 
         logger.info(
             f"Agent handling input: project={project_id}, "
@@ -4582,6 +4624,72 @@ class ProjectManagerAgent:
         # envelope. The grounding contract that REFERENCES this block
         # is prepended in handle_input where preflight_blocks is consumed.
         return _build_documents_envelope(items)
+
+    async def _upload_envelope_for_project(self, project_id: str) -> str:
+        """Enumerate the project's uploaded documents and return a
+        <documents> envelope with each file's reassembled text. Used
+        as a fallback when no filename was named in the turn but the
+        project has uploads — the planner's gather_grounding already
+        loads these chunks into [G…] markdown, but the grounding
+        verifier in react_engine ONLY reads <document_content> XML
+        from messages[1], so without this the verifier has no source
+        corpus on follow-up questions and HHEM no-ops.
+
+        Budget: same shape as cot_plans/upload_deep.gather_grounding
+        (TOTAL_BUDGET 24 000 chars, spread across docs) so we never
+        blow the context window even with many uploads."""
+        if not project_id:
+            return ""
+        TOTAL_BUDGET = 24000
+        try:
+            from services.project_memory_service import (
+                get_project_memory_service,
+            )
+            qdrant = getattr(get_project_memory_service(), "qdrant", None)
+            if qdrant is None:
+                return ""
+            scope = str(project_id).strip()
+            try:
+                docs = qdrant.list_documents(
+                    user_id="system", project_oenum=scope) or []
+            except Exception as e:
+                logger.info("upload-preflight: list_documents failed (%r)", e)
+                return ""
+            if not docs:
+                return ""
+            per_doc = max(2000, TOTAL_BUDGET // max(1, len(docs)))
+            items: List[Any] = []
+            used = 0
+            for d in docs:
+                fname = d.get("filename") or ""
+                if not fname or used >= TOTAL_BUDGET:
+                    continue
+                try:
+                    doc = qdrant.get_document_text(
+                        user_id="system", project_oenum=scope,
+                        filename=fname, max_chars=per_doc,
+                    )
+                except Exception as e:
+                    logger.info(
+                        "upload-preflight: read %r failed (%r)", fname, e)
+                    continue
+                # Honour the explicit content_kind contract — never
+                # inject a stub envelope as if it were real content.
+                kind = (doc or {}).get("content_kind") or ""
+                txt = (doc or {}).get("content") or (doc or {}).get("text") or ""
+                if kind in ("stub", "error") or not txt:
+                    continue
+                items.append((fname, "upload", txt))
+                used += len(txt)
+            logger.info(
+                "upload-preflight: enumerated=%d kept=%d total_chars=%d",
+                len(docs), len(items), used)
+            if not items:
+                return ""
+            return _build_documents_envelope(items)
+        except Exception as e:
+            logger.warning("upload-preflight FAILED: %r", e, exc_info=True)
+            return ""
 
     async def _ensure_session_container(self, project_id: str) -> bool:
         """Idempotent warm-up of the project's runtime-broker session
