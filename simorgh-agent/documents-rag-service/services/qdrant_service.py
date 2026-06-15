@@ -1508,6 +1508,75 @@ class QdrantService:
             logger.error(f"❌ Section summary search failed: {e}")
             return []
 
+    def search_relevant_sections(
+        self,
+        query: str,
+        project_oenum: Optional[str] = None,
+        session_id: Optional[str] = None,
+        top_k: int = 5,
+        score_threshold: float = 0.25,
+    ) -> List[Dict[str, Any]]:
+        """Phase 1 (small-to-big): tenant-scoped section search over the
+        unified `project_documents` collection.
+
+        Why this exists alongside `search_section_summaries`:
+        the older helper uses `_get_collection_name`, which targets a
+        per-session collection — but `add_section_summaries` writes to
+        the UNIFIED `project_documents` collection with a `tenant_id`
+        payload filter. So the older helper searches an empty namespace
+        and silently returns []. This helper queries the right place.
+
+        Returns one hit per matching section with:
+          score, filename, section_title, heading_level, heading_path,
+          full_content, summary, parent_section_id, document_id.
+
+        Ordering is by descending similarity; the caller is expected to
+        re-order with the lost-in-the-middle sandwich pattern before
+        injecting into the prompt.
+        """
+        if not query or not query.strip():
+            return []
+        try:
+            tenant_id = _tenant_of(session_id, project_oenum)
+            qvec = self.generate_embedding(query)
+            must = [
+                FieldCondition(key=TENANT_FIELD,
+                               match=MatchValue(value=tenant_id)),
+                FieldCondition(key="storage_type",
+                               match=MatchValue(value="section_summary")),
+            ]
+            results = self.client.search(
+                collection_name=DOCS_COLLECTION,
+                query_vector=qvec,
+                limit=top_k,
+                query_filter=Filter(must=must),
+                score_threshold=score_threshold,
+            )
+            out: List[Dict[str, Any]] = []
+            for r in results:
+                pl = r.payload or {}
+                out.append({
+                    "score": float(r.score) if r.score is not None else 0.0,
+                    "filename": (pl.get("filename")
+                                 or (pl.get("metadata") or {}).get("filename")
+                                 or ""),
+                    "section_id": pl.get("section_id", ""),
+                    "section_title": pl.get("section_title", ""),
+                    "heading_level": pl.get("heading_level", 0),
+                    "heading_path": pl.get("heading_path", ""),
+                    "parent_section_id": pl.get("parent_section_id", ""),
+                    "full_content": pl.get("full_content") or pl.get("text", ""),
+                    "summary": pl.get("summary", ""),
+                    "document_id": pl.get("document_id", ""),
+                })
+            logger.info(
+                "search_relevant_sections: query_len=%d tenant=%s hits=%d",
+                len(query), tenant_id, len(out))
+            return out
+        except Exception as e:
+            logger.error(f"❌ search_relevant_sections failed: {e}")
+            return []
+
     def get_section_by_id(
         self,
         project_number: str,
