@@ -131,7 +131,8 @@ class SectionRetriever:
                 user_id="system",  # System-level storage for project documents
                 document_id=document_id,
                 section_summaries=section_data,
-                project_oenum=project_number  # Project OE number for session isolation
+                project_oenum=project_number,  # Project OE number for session isolation
+                filename=filename,  # Phase 0: first-class filename for list_documents
             )
 
             if not storage_success:

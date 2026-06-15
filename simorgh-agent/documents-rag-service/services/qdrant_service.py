@@ -588,8 +588,11 @@ class QdrantService:
                 names = {}
                 for p in all_pts:
                     pl = p.payload or {}
-                    nm = str(pl.get("section_title")
-                             or (pl.get("metadata") or {}).get("filename") or "")
+                    # Phase 0: prefer the first-class filename field; fall
+                    # back to legacy hiding spots for old chunks.
+                    nm = str(pl.get("filename")
+                             or (pl.get("metadata") or {}).get("filename")
+                             or pl.get("section_title") or "")
                     if nm:
                         names.setdefault(nm, []).append(p)
                 best, best_score = None, 0.0
@@ -609,17 +612,41 @@ class QdrantService:
             return {"document_id": document_id, "filename": filename or "",
                     "text": "", "content": "", "content_kind": "error",
                     "chunk_count": 0, "error": str(e)[:200]}
+        # Sort by chunk_index when present (legacy chunk schema), else by
+        # (heading_level, section_id) which mirrors document order for the
+        # section-summary schema (Phase 0 upload path stores those).
         chunks = sorted(
             (p.payload or {} for p in points),
-            key=lambda pl: pl.get("chunk_index", 0),
+            key=lambda pl: (
+                pl.get("chunk_index") if "chunk_index" in pl else 10**9,
+                pl.get("heading_level", 0),
+                str(pl.get("section_id") or ""),
+            ),
         )
         out_name = filename or ""
         parts: List[str] = []
         for pl in chunks:
-            out_name = out_name or (pl.get("metadata") or {}).get("filename") \
-                or pl.get("section_title") or ""
-            parts.append(pl.get("text", ""))
-        text = "\n".join(parts)[:max_chars]
+            # Phase 0: try the new first-class `filename` field before
+            # falling back to old hiding spots.
+            out_name = (out_name
+                        or pl.get("filename")
+                        or (pl.get("metadata") or {}).get("filename")
+                        or pl.get("section_title") or "")
+            # Section-summary points carry the real prose in `full_content`;
+            # legacy chunk points carry it in `text`. Prefer whichever has
+            # actual content. `summary` is the LLM-generated abstract —
+            # useful, but full_content is authoritative for grounding.
+            body = (
+                pl.get("full_content")
+                or pl.get("text")
+                or pl.get("summary")
+                or ""
+            )
+            if body:
+                # Prepend the section heading so the model can cite it.
+                hdr = pl.get("section_title") or ""
+                parts.append((f"## {hdr}\n{body}" if hdr else body))
+        text = "\n\n".join(parts)[:max_chars]
 
         # Content-kind contract (Commit A of the grounding pipeline):
         #   "indexed" → real document text reassembled from chunks
@@ -1249,7 +1276,8 @@ class QdrantService:
         document_id: str,
         section_summaries: List[Dict[str, Any]],
         session_id: Optional[str] = None,
-        project_oenum: Optional[str] = None
+        project_oenum: Optional[str] = None,
+        filename: Optional[str] = None,
     ) -> bool:
         """
         Add section summaries with dual storage model to session-specific collection
@@ -1300,13 +1328,33 @@ class QdrantService:
                 # This allows semantic search on high-level topics
                 embedding = self.generate_embedding(summary)
 
+                # Phase 0: filename + heading_path as first-class fields.
+                # filename comes from the caller (was completely missing
+                # before, leaving list_documents blind to summary-shaped
+                # uploads); heading_path falls back to section_title when
+                # the chunker hasn't computed it yet — Phase 1 will fill
+                # the full breadcrumb (e.g. "/2 Scope/2.1.3 CTs").
+                _meta = section_data.get("metadata") or {}
+                _fn = (
+                    filename
+                    or section_data.get("filename")
+                    or _meta.get("filename")
+                    or ""
+                )
+                _heading_path = (
+                    section_data.get("heading_path")
+                    or _meta.get("heading_path")
+                    or section_data.get("section_title", "")
+                )
                 # Prepare payload with both summary and full content
                 payload = {
                     "document_id": document_id,
                     "user_id": user_id,
+                    "filename": _fn,
                     "section_id": section_id,
                     "section_title": section_data.get("section_title", ""),
                     "heading_level": section_data.get("heading_level", 0),
+                    "heading_path": _heading_path,
                     "parent_section_id": section_data.get("parent_section_id", ""),
 
                     # Summary (used for vector search)
