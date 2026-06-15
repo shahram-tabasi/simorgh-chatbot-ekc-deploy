@@ -1313,9 +1313,43 @@ class QdrantService:
             return False
 
         try:
+            # Phase 1.3: precompute heading_path breadcrumbs by walking
+            # parent_section_id chains. Indexed once here so search-side
+            # retrieval doesn't need to do graph walks.
+            by_id = {
+                s.get("section_id"): s for s in section_summaries
+                if s.get("section_id")
+            }
+
+            def _breadcrumb(s: Dict[str, Any]) -> str:
+                titles: List[str] = []
+                cur = s
+                seen = set()
+                for _ in range(16):  # safety cap on chain depth
+                    sid = cur.get("section_id")
+                    if not sid or sid in seen:
+                        break
+                    seen.add(sid)
+                    t = (cur.get("section_title") or "").strip()
+                    if t:
+                        titles.append(t)
+                    pid = cur.get("parent_section_id")
+                    if not pid:
+                        break
+                    parent = by_id.get(pid)
+                    if not parent:
+                        break
+                    cur = parent
+                return "/" + "/".join(reversed(titles)) if titles else ""
+
             points = []
 
             for section_data in section_summaries:
+                # Inject the computed heading_path back into the section
+                # dict so the payload-build below picks it up via the
+                # heading_path fallback we added in Phase 0.
+                if not section_data.get("heading_path"):
+                    section_data["heading_path"] = _breadcrumb(section_data)
                 section_id = section_data.get("section_id")
                 summary = section_data.get("summary", "")
                 full_content = section_data.get("full_content", "")

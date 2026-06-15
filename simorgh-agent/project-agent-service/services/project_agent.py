@@ -172,6 +172,15 @@ _GROUNDING_CONTRACT = (
     '   or attach it directly so I can analyse it."\n'
     "Do NOT invent values from prior training data. Do NOT answer from\n"
     "the filename or extension alone.\n"
+    "\n"
+    "If a <document> carries <content_kind>section</content_kind>, the\n"
+    "block is ONE heading-bounded section of a larger file, retrieved\n"
+    "because it semantically matches the question. OTHER sections of\n"
+    "the same file are NOT present in this envelope. If the question's\n"
+    "answer would require a different section, respond:\n"
+    '  "Not specified in the provided section. The retrieved section is\n'
+    '   <HEADING_PATH>; ask again naming the topic or section you need."\n'
+    "Do NOT speculate based on the section's heading or filename alone.\n"
 )
 
 
