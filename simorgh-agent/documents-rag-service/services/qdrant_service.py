@@ -1579,9 +1579,16 @@ class QdrantService:
                 FieldCondition(key="storage_type",
                                match=MatchValue(value="section_summary")),
             ]
+            # The unified project_documents collection is configured with
+            # NAMED vectors ({"dense": ...}). client.search defaults to an
+            # unnamed vector, which Qdrant rejects with
+            # "Vector params for  are not specified in config". Use the
+            # (name, vector) tuple form to target the dense slot
+            # explicitly — works regardless of qdrant-client version since
+            # tuple/dict are both accepted.
             results = self.client.search(
                 collection_name=DOCS_COLLECTION,
-                query_vector=qvec,
+                query_vector=("dense", qvec),
                 limit=top_k,
                 query_filter=Filter(must=must),
                 score_threshold=score_threshold,
