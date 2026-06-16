@@ -2485,17 +2485,24 @@ class ProjectManagerAgent:
                     "(intent_classifier matched design_suite_create on user "
                     "input %r)", tool, _uin[:120])
                 tool = "submit_soft_spec"
-                # auto_approve_threshold=0.0 means "auto-approve ALL
-                # pending proposals before HITL gate" — when the user
-                # explicitly says "create the project", they're asking
-                # us to use what was extracted. Anything wrong can be
-                # edited inside Design Suite afterwards. Without 0.0,
-                # the previous 0.85 threshold left 2/31 proposals
-                # pending and blocked the create flow indefinitely.
-                raw_input = {"auto_approve_threshold": 0.0,
-                             "auto_approve_all": True}
-                tool_input = {"auto_approve_threshold": 0.0,
-                              "auto_approve_all": True}
+                # Confidence-routing per IDP best practice (AWS A2I /
+                # Google Doc AI / Azure FR all auto-accept ≥ threshold,
+                # queue the rest; STP >70% is the target). Auto-approve
+                # proposals with confidence ≥ 0.85 — these are the
+                # verbatim-quote extractions the model is NOT guessing
+                # about. Proposals < 0.85 (defaulted / inferred values)
+                # stay PENDING and are surfaced for one batched review
+                # in the drawer. This honours the user's "create"
+                # consent for the safe majority while protecting
+                # high-importance client data from silently accepting a
+                # guessed value (e.g. an inferred IAC class). Research:
+                # two independent passes converged on confidence-routing
+                # over all-or-nothing; all-approve "silently propagates
+                # wrong values", all-manual "trains users to rubber-
+                # stamp" (Anthropic Building Effective Agents; Hyperscience
+                # STP; AWS A2I core concepts).
+                raw_input = {"auto_approve_threshold": 0.85}
+                tool_input = {"auto_approve_threshold": 0.85}
 
         # Qwen2.5-VL sometimes wraps the real arg dict as a JSON string
         # inside a "prompt" key, e.g.
@@ -3393,6 +3400,7 @@ class ProjectManagerAgent:
             except (TypeError, ValueError):
                 _aat = -1.0
             _all = bool(tool_input.get("auto_approve_all", False))
+            _auto_summary = {"ran": False, "accepted": 0, "total": 0}
             # Sweep when EITHER the operator asked to approve everything
             # (auto_approve_all=True, the chat-driven create path) OR
             # there's a numeric threshold ≥ 0. -1 sentinel = OFF (the
@@ -3410,6 +3418,8 @@ class ProjectManagerAgent:
                                 _autoed += 1
                         except Exception:
                             continue
+                    _auto_summary = {"ran": True, "accepted": _autoed,
+                                     "total": len(_pend)}
                     if _autoed:
                         logger.info(
                             "submit_soft_spec: auto-approved %d/%d "
@@ -3446,35 +3456,59 @@ class ProjectManagerAgent:
                 pending = []
             if pending:
                 # Surface the pending list to the chat UI so the user can
-                # review (the existing inline form will render it).
+                # review (the existing inline drawer will render it).
                 await self._notify_progress(project_id, "ask_user", {
                     "kind": "proposals_pending",
                     "pending_count": len(pending),
+                    "auto_approved": _auto_summary.get("accepted", 0),
                 })
-                # Typed precondition_blocked envelope (canonical shape
-                # from project_facts.build_precondition_blocked — same
-                # contract as canUseTool gate and spec_gaps below, so
-                # the model's HANDLING precondition_blocked recipe
-                # pattern-matches uniformly across every refusal site).
                 from services.project_facts import build_precondition_blocked
+                # Confidence-routing UX: when the auto-approve sweep ran
+                # (chat-driven create), the stragglers are the LOW-
+                # confidence (inferred/defaulted) values — exactly the
+                # ones IDP best practice says a human SHOULD eyeball.
+                # Produce a friendly, user-facing message + a recipe that
+                # tells the model to STOP and let the user review in the
+                # drawer, rather than narrating raw tool names (the old
+                # recipe leaked "call list_pending_proposals + approve_
+                # proposals" into the chat as an ugly wall of text).
+                if _auto_summary.get("ran"):
+                    _msg = (
+                        f"I auto-accepted {_auto_summary['accepted']} "
+                        f"high-confidence value(s) from the document. "
+                        f"{len(pending)} value(s) were inferred rather "
+                        f"than quoted verbatim, so they need a quick "
+                        f"review before I create the project — I've "
+                        f"opened the review panel on the right. Approve "
+                        f"or edit those, then say \"create the design "
+                        f"suite project\" again and I'll finish."
+                    )
+                    _recipe = [
+                        "The high-confidence values are already approved.",
+                        "The review panel (drawer) now shows ONLY the "
+                        "low-confidence values that need a human glance.",
+                        "STOP here. Do NOT call any more tools. Tell the "
+                        "user — in plain language, no tool names — to "
+                        "review the highlighted values and re-issue the "
+                        "create request when ready.",
+                    ]
+                else:
+                    _msg = (f"Cannot submit yet — {len(pending)} extracted "
+                            "value(s) are waiting for review. The review "
+                            "panel has been opened; approve or edit them, "
+                            "then create the project.")
+                    _recipe = [
+                        "STOP. The review drawer is open for the user.",
+                        "Tell the user in plain language to review the "
+                        "pending values, then re-issue the create request.",
+                        "Do NOT narrate internal tool names.",
+                    ]
                 blocked = build_precondition_blocked(
                     blocked_on="pending_proposals",
-                    resolver="list_pending_proposals",
+                    resolver="user_review_in_drawer",
                     tool_attempted="submit_soft_spec",
-                    message=(f"Cannot submit yet — {len(pending)} "
-                             "extracted value(s) are waiting for "
-                             "review. Resolve them via "
-                             "list_pending_proposals + "
-                             "approve_proposals, then re-submit."),
-                    recipe=[
-                        "1. Call list_pending_proposals to see every "
-                        "field, value, source, and confidence.",
-                        "2. For each: action='approve' if relevant + "
-                        "correct, action='reject' if irrelevant, OR "
-                        "call ask_user when ambiguous.",
-                        "3. Call approve_proposals ONCE with the bundle.",
-                        "4. Re-attempt submit_soft_spec.",
-                    ],
+                    message=_msg,
+                    recipe=_recipe,
                     pending_count=len(pending),
                 )
                 return {
@@ -3484,7 +3518,8 @@ class ProjectManagerAgent:
                                  "via": "soft_bridge",
                                  "blocked_on": "pending_proposals",
                                  "pending_count": len(pending),
-                                 "resolver": "list_pending_proposals"},
+                                 "auto_approved": _auto_summary.get("accepted", 0),
+                                 "resolver": "user_review_in_drawer"},
                 }
             gaps = state.get("gaps") or []
             if gaps:
