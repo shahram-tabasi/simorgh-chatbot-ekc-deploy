@@ -495,6 +495,17 @@ class ProjectManagerAgent:
         if llm_mode is not None:
             _llm_mode_var.set(llm_mode)
 
+        # Capture the user's ORIGINAL message before any grounding-
+        # envelope injection. The preflight / upload-preflight steps
+        # below append a multi-KB <documents> envelope + grounding
+        # contract to `user_input` so the planner and verifier can see
+        # the source corpus — but that augmented string must NEVER be
+        # persisted to chat history or it renders as a giant blob in
+        # the UI on reload. We persist `user_input_original`; the
+        # augmented `user_input` only ever flows to the planner/ReAct
+        # loop in-memory.
+        user_input_original = user_input
+
         # Phase 2/3: master CoT router. Builds a PlanContext from
         # what we know about the request, picks a CotPlan via the
         # heuristic router, and installs it in the cot_router
@@ -682,11 +693,15 @@ class ProjectManagerAgent:
                 },
             })
 
-        # 1. Store the incoming message
+        # 1. Store the incoming message — the ORIGINAL user text, NOT
+        # the envelope-augmented `user_input`. Persisting the augmented
+        # string was leaking the multi-KB <documents> grounding block
+        # into chat history, which then rendered as a giant blob in the
+        # UI on reload.
         await self.memory.store_message(
             project_id=project_id,
             role="user",
-            content=user_input,
+            content=user_input_original,
             channel=channel.value,
             chat_id=chat_id,
             email_from=email_from,
@@ -697,7 +712,7 @@ class ProjectManagerAgent:
 
         await self._notify_progress(project_id, "input_received", {
             "channel": channel.value,
-            "input_preview": user_input[:100],
+            "input_preview": user_input_original[:100],
         })
 
         # 1b. IMAGE PERCEPTION (describe-then-reason / VIPER pattern).
