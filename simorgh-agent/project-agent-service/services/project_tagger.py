@@ -91,15 +91,20 @@ def apply_tag_to_spec(
 ) -> dict:
     """Return a MUTATED copy of `spec_dict` where:
 
-      - `projectName` is replaced with the docker-style tag.
-      - The previous projectName (the LLM-extracted human-readable
-        name) is prepended to projectDescription so it's still
-        visible in the simorgh-soft UI.
-      - Set `_tag_metadata` for downstream observability (not posted
-        to simorgh-soft — the caller strips it before POST).
+      - `projectName` is LEFT AS-IS (the human-readable name the user
+        typed or the LLM extracted). Users were confused when their
+        typed name ("test-shahram") disappeared and a docker tag
+        showed instead — and the old name got concatenated into
+        projectDescription as "[name]desc" with no separator.
+      - The docker-style catalog tag goes into `projectId` (PID),
+        which is otherwise empty, so traceability
+        (<chatbot-project>:<user>-<YYYYMMDD-HHMM>) is preserved
+        WITHOUT clobbering the human name or polluting the
+        description.
+      - `projectDescription` is NOT modified.
 
-    Idempotent: re-tagging an already-tagged spec just refreshes the
-    timestamp.
+    Idempotent: re-tagging refreshes the projectId timestamp; never
+    touches a projectName the user owns.
     """
     if not TAGGING_ENABLED:
         return spec_dict
@@ -107,33 +112,20 @@ def apply_tag_to_spec(
         return spec_dict
     out = dict(spec_dict)
 
-    original_name = (out.get("projectName") or "").strip()
     tag = format_tag(chatbot_project=chatbot_project, user=user, dt=dt)
 
-    # Idempotence guard: if projectName ALREADY looks like a tag we
-    # generated (`<slug>:<slug>-<YYYYMMDD-HHMM>`), don't treat it as
-    # a human-readable name — just refresh the tag's timestamp and
-    # leave the description alone.
-    is_already_tagged = bool(
-        re.fullmatch(r"[a-z0-9._-]+:[a-z0-9._-]+-\d{8}-\d{4}", original_name)
+    # Only fill projectId if it's empty or already a generated tag
+    # (so we don't overwrite a real PID the user/extractor supplied).
+    existing_pid = (out.get("projectId") or "").strip()
+    pid_is_tag = bool(
+        re.fullmatch(r"[a-z0-9._-]+:[a-z0-9._-]+-\d{8}-\d{4}", existing_pid)
     )
+    if not existing_pid or pid_is_tag:
+        out["projectId"] = tag
 
-    # Stash the human-readable extracted name in projectDescription so
-    # the simorgh-soft UI doesn't lose it. Only prepend when (a) the
-    # current projectName isn't already a generated tag, and (b) the
-    # description doesn't already carry that name marker.
-    desc = (out.get("projectDescription") or "").strip()
-    if original_name and not is_already_tagged:
-        marker = f"[{original_name}]"
-        if marker not in desc:
-            out["projectDescription"] = (
-                f"{marker}\n{desc}" if desc else marker
-            )
-
-    out["projectName"] = tag
     logger.info(
-        "project_tagger: tagged simorgh-soft project name='%s' "
-        "(was='%s', user='%s', chatbot_project='%s')",
-        tag, original_name, user, chatbot_project,
+        "project_tagger: catalog tag='%s' -> projectId "
+        "(projectName left as '%s', user='%s', chatbot_project='%s')",
+        tag, out.get("projectName"), user, chatbot_project,
     )
     return out

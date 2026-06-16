@@ -2317,6 +2317,25 @@ async def soft_answer(project_id: str, pending_id: str,
                 value=v, source="user", confidence=0.99,
                 note="user-provided via ask_user form"))
         spec, prov, gaps, conflicts = reconcile(bag)
+        # CRITICAL: persist each form answer as an APPROVED user proposal
+        # too. submit_soft_spec's auto-approve sweep calls
+        # _rederive_spec_from_approved, which rebuilds the spec from
+        # APPROVED PROPOSALS ONLY — so form answers that live only in
+        # spec_state get WIPED on the next create attempt, and the agent
+        # re-asks for projectName / projectDescription it already has.
+        # Writing them as approved proposals makes them survive the
+        # re-derive (one source of truth: the proposals table).
+        try:
+            from services import soft_proposals as _sp
+            for k, v in (req.answers or {}).items():
+                if v in (None, ""):
+                    continue
+                await _sp.add_user_value(
+                    project_id, field=k, value=v,
+                    note="user-provided via ask_user form")
+        except Exception as e:
+            logger.warning("soft_answer: persist answers as approved "
+                           "proposals failed: %s", e)
         # Completeness inline so we don't re-run extractors here.
         n = max(1, len(CONFIRMABLE_FIELDS))
         filled = sum(1 for f in CONFIRMABLE_FIELDS
