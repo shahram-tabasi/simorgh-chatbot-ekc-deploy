@@ -1573,11 +1573,19 @@ class QdrantService:
         try:
             tenant_id = _tenant_of(session_id, project_oenum)
             qvec = self.generate_embedding(query)
+            # Match ANY point for this tenant — uploads land in two
+            # different shapes depending on which path ran:
+            #   - /documents/upload REST  → add_section_summaries
+            #     writes storage_type="section_summary" + full_content.
+            #   - agent CoT semantic_store → add_document_chunks
+            #     writes chunk-shaped points (no storage_type, prose in
+            #     `text`). The agent path is what chat-attached uploads
+            #     actually go through, so filtering by storage_type
+            #     would lose all of them. The result mapper below reads
+            #     full_content OR text, so both schemas Just Work.
             must = [
                 FieldCondition(key=TENANT_FIELD,
                                match=MatchValue(value=tenant_id)),
-                FieldCondition(key="storage_type",
-                               match=MatchValue(value="section_summary")),
             ]
             # The unified project_documents collection is configured with
             # NAMED vectors ({"dense": ...}). client.search defaults to an
@@ -1596,15 +1604,31 @@ class QdrantService:
             out: List[Dict[str, Any]] = []
             for r in results:
                 pl = r.payload or {}
+                fn = (pl.get("filename")
+                      or (pl.get("metadata") or {}).get("filename")
+                      or "")
+                # Heading-shape resolution:
+                #   - section_summary: section_title is the real heading;
+                #     heading_path is the breadcrumb (Phase 1.3).
+                #   - chunk-shaped: section_title was filled with filename
+                #     under the old hack — useless as a heading. Synthesize
+                #     a "chunk #N" label so the model can at least cite
+                #     "chunk N of FILE" instead of nothing.
+                st = pl.get("section_title", "") or ""
+                hp = pl.get("heading_path", "") or ""
+                if not hp:
+                    if fn and st and st.strip() != fn.strip():
+                        hp = st
+                    else:
+                        ci = pl.get("chunk_index")
+                        hp = f"chunk #{ci}" if ci is not None else (st or "?")
                 out.append({
                     "score": float(r.score) if r.score is not None else 0.0,
-                    "filename": (pl.get("filename")
-                                 or (pl.get("metadata") or {}).get("filename")
-                                 or ""),
+                    "filename": fn,
                     "section_id": pl.get("section_id", ""),
-                    "section_title": pl.get("section_title", ""),
+                    "section_title": st,
                     "heading_level": pl.get("heading_level", 0),
-                    "heading_path": pl.get("heading_path", ""),
+                    "heading_path": hp,
                     "parent_section_id": pl.get("parent_section_id", ""),
                     "full_content": pl.get("full_content") or pl.get("text", ""),
                     "summary": pl.get("summary", ""),
