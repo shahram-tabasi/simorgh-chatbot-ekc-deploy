@@ -2452,8 +2452,16 @@ class ProjectManagerAgent:
                     "(intent_classifier matched design_suite_create on user "
                     "input %r)", tool, _uin[:120])
                 tool = "submit_soft_spec"
-                raw_input = {}
-                tool_input = {}
+                # auto_approve_threshold=0.85 lets the chat-driven
+                # "create the project" path bypass the 31-card review
+                # dance: high-confidence proposals (the model's NOT-
+                # guessing ones) auto-approve before the HITL gate; the
+                # rest stay pending in the drawer for explicit review.
+                # 0.85 was chosen because the extractor reports 1.0 for
+                # verbatim quotes and 0.5 for "filled by default"; the
+                # gap is clean.
+                raw_input = {"auto_approve_threshold": 0.85}
+                tool_input = {"auto_approve_threshold": 0.85}
 
         # Qwen2.5-VL sometimes wraps the real arg dict as a JSON string
         # inside a "prompt" key, e.g.
@@ -3337,6 +3345,55 @@ class ProjectManagerAgent:
                 return {"output": "submit_soft_spec: no state available",
                         "metadata": {"tool": "submit_soft_spec",
                                      "via": "soft_bridge", "error": "no_state"}}
+            # Auto-approve high-confidence proposals before the HITL gate
+            # so chat-driven "create the design suite project" works
+            # without forcing the user to click 31 Approve buttons. The
+            # threshold is a tool arg (default None = OFF, preserving
+            # the safe HITL behaviour for explicit submit_soft_spec
+            # calls). The soft-bridge intent remap sets it to 0.85 for
+            # natural-language create requests — the model's
+            # confidence ≥0.85 proposals are the ones it's not guessing
+            # about; lower-confidence stay pending for drawer review.
+            try:
+                _aat = float(tool_input.get("auto_approve_threshold", 0))
+            except (TypeError, ValueError):
+                _aat = 0.0
+            if _aat > 0:
+                try:
+                    from services import soft_proposals as sp
+                    _pend = await sp.list_pending(project_id) or []
+                    _autoed = 0
+                    for _p in _pend:
+                        try:
+                            if float(_p.get("confidence") or 0) >= _aat:
+                                await sp.approve(_p["id"])
+                                _autoed += 1
+                        except Exception:
+                            continue
+                    if _autoed:
+                        logger.info(
+                            "submit_soft_spec: auto-approved %d/%d "
+                            "high-confidence proposals (threshold=%.2f) "
+                            "before HITL gate",
+                            _autoed, len(_pend), _aat)
+                        # Re-derive the spec so the just-approved values
+                        # land in state.spec before the gap/required check.
+                        # Imported lazily because routes/* imports services/*
+                        # at startup and we'd hit a circular import otherwise.
+                        try:
+                            from routes.project_agent_routes import (
+                                _rederive_spec_from_approved,
+                            )
+                            await _rederive_spec_from_approved(project_id)
+                        except Exception as e:
+                            logger.warning(
+                                "submit_soft_spec: re-derive after auto-"
+                                "approve failed: %s", e)
+                        state = await collector_refresh(project_id, force=True)
+                except Exception as e:
+                    logger.warning(
+                        "submit_soft_spec: auto-approve sweep failed: %s", e)
+
             # HITL gate: under the new contract every field that ends up in
             # the spec MUST have a corresponding APPROVED proposal. If there
             # are pending (un-reviewed) proposals, refuse: the user must
