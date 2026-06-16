@@ -189,18 +189,24 @@ def _tier(v: Any) -> str:
 
 def _grouped(items: List[Dict[str, Any]], kind: str) -> Dict[str, List[Dict[str, Any]]]:
     """Shape a flat [{name,type,properties}] list into {LV,MV,HV: [...]}
-    with valid ids. `kind` is a short id prefix ('tpl' / 'lib')."""
+    with valid ids. `kind` is a short id prefix ('tpl' / 'lib').
+    Defensive: skips non-dict items (the LLM occasionally returns a
+    list of bare strings, which previously crashed with
+    'str' object has no attribute 'get')."""
     out: Dict[str, List[Dict[str, Any]]] = {"LV": [], "MV": [], "HV": []}
     for it in items or []:
+        if not isinstance(it, dict):
+            continue
         name = str(it.get("name") or "").strip()
         if not name:
             continue
         t = _tier(it.get("type"))
+        props = it.get("properties")
         out[t].append({
             "id": f"{kind}-{uuid.uuid4().hex[:8]}",
             "name": name,
             "type": t,
-            "properties": it.get("properties") or {},
+            "properties": props if isinstance(props, dict) else {},
         })
     return out
 
@@ -208,6 +214,8 @@ def _grouped(items: List[Dict[str, Any]], kind: str) -> Dict[str, List[Dict[str,
 def _shape_equipments(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for eq in items or []:
+        if not isinstance(eq, dict):
+            continue
         name = str(eq.get("name") or "").strip()
         if not name:
             continue
@@ -215,6 +223,9 @@ def _shape_equipments(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         eq_id = f"eq-{uuid.uuid4().hex[:8]}"
         rows: List[Dict[str, Any]] = []
         for i, d in enumerate(eq.get("devices") or [], start=1):
+            if not isinstance(d, dict):
+                # tolerate a bare string feeder name
+                d = {"feederNo": str(d)} if d else {}
             rows.append({
                 "id": f"row-{uuid.uuid4().hex[:8]}",
                 "rowNumber": i,
@@ -230,6 +241,7 @@ def _shape_equipments(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "description": str(d.get("description") or ""),
                 "cableSize": str(d.get("cableSize") or ""),
             })
+        props = eq.get("properties")
         out.append({
             "id": eq_id,
             "name": name,
@@ -237,7 +249,7 @@ def _shape_equipments(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "power": str(eq.get("power") or ""),
             "deviceCount": len(rows),
             "description": str(eq.get("description") or ""),
-            "properties": eq.get("properties") or {},
+            "properties": props if isinstance(props, dict) else {},
             "devices": rows,
         })
     return out
@@ -247,6 +259,59 @@ def _merge_grouped(a: Dict[str, List], b: Dict[str, List]) -> Dict[str, List]:
     for t in _VTYPE:
         a.setdefault(t, []).extend(b.get(t, []))
     return a
+
+
+_SLD_VLM_PROMPT = (
+    "You are reading a MEDIUM/LOW-VOLTAGE SINGLE-LINE DIAGRAM (SLD) of "
+    "switchgear. Transcribe it into structured Markdown a downstream "
+    "model can parse:\n"
+    "  1. The BUSBAR / switchboard header line verbatim (e.g. "
+    "'04BHV01 3PH 50Hz 20kV 3150A 31.5kA/3s').\n"
+    "  2. The FEEDER TABLE as a Markdown table — one row per cubicle/"
+    "column, with every column you can read: number, TAG (Incoming/"
+    "Outgoing/Bus-tie/Transformer/Spare), LOAD TYPE, Cable/OHL size, "
+    "LOAD kW, LOAD NAME/tag.\n"
+    "Transcribe codes, tags, cable sizes and ratings VERBATIM. Write "
+    "'(blank)' for empty cells. Output ONLY Markdown, no preamble."
+)
+
+
+async def _vlm_transcribe_pages(document_id: str, max_pages: int = 4
+                                ) -> str:
+    """Render an SLD/drawing PDF's pages to PNG and ask the VLM
+    (Qwen2.5-VL on .62) to transcribe each into structured Markdown.
+    Returns the concatenated transcription, or "" when no pages render
+    (e.g. the raw PDF wasn't stashed). SLDs are usually 1 page; we try
+    up to max_pages and stop at the first that fails to render."""
+    try:
+        from services.vlm_verifier import render_pdf_page, _call_vlm
+    except Exception as e:  # noqa: BLE001
+        logger.warning("soft.tier2: vlm_verifier unavailable: %s", e)
+        return ""
+    parts: List[str] = []
+    for page in range(1, max_pages + 1):
+        try:
+            img = render_pdf_page(document_id, page)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("soft.tier2: render page %d failed: %s", page, e)
+            break
+        if img is None:
+            break
+        try:
+            md = await _call_vlm(_SLD_VLM_PROMPT, img, timeout=TIER2_TIMEOUT)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("soft.tier2: VLM page %d failed: %s", page, e)
+            continue
+        if md and md.strip():
+            parts.append(f"--- SLD page {page} ---\n{md.strip()}")
+    return "\n\n".join(parts)
+
+
+def _is_drawing(filename: str, doc_type: str) -> bool:
+    fn = (filename or "").lower()
+    return (doc_type == "sld"
+            or "sld" in fn or "single-line" in fn or "single line" in fn
+            or "-el-" in fn or "diagram" in fn or "schematic" in fn)
 
 
 async def extract_tier2_for_project(
@@ -280,25 +345,35 @@ async def extract_tier2_for_project(
     typed = []
     for d in docs:
         fn = d.get("filename") or ""
+        did = d.get("document_id") or ""
         if fn:
             dt = _doc_type_of(fn)
-            typed.append((fn, rank.get(dt, 9)))
-    typed.sort(key=lambda x: x[1])
+            typed.append((fn, did, dt, rank.get(dt, 9)))
+    typed.sort(key=lambda x: x[3])
 
     equipments: List[Dict[str, Any]] = []
     templates: Dict[str, List] = {"LV": [], "MV": [], "HV": []}
     device_lib: Dict[str, List] = {"LV": [], "MV": [], "HV": []}
 
-    for fn, _ in typed[:TIER2_MAX_DOCS]:
-        try:
-            res = q.get_document_text(
-                user_id="system", project_oenum=scope,
-                filename=fn, max_chars=TIER2_MAX_CHARS)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("soft.tier2 read %s: %s", fn, e)
-            continue
-        text = (res or {}).get("content") or (res or {}).get("text") or ""
-        if not text or len(text.strip()) < 100:
+    for fn, did, dt, _ in typed[:TIER2_MAX_DOCS]:
+        # SLD / drawing → VLM transcription (the PDF text layer of a
+        # vector drawing is positional garbage; the VLM on .62 can
+        # actually SEE the diagram and transcribe the feeder table).
+        # Everything else → the indexed text from Qdrant.
+        text = ""
+        if _is_drawing(fn, dt) and did:
+            logger.info("soft.tier2: %s is a drawing — using VLM", fn)
+            text = await _vlm_transcribe_pages(did)
+        if not text:
+            try:
+                res = q.get_document_text(
+                    user_id="system", project_oenum=scope,
+                    filename=fn, max_chars=TIER2_MAX_CHARS)
+                text = (res or {}).get("content") or (res or {}).get("text") or ""
+            except Exception as e:  # noqa: BLE001
+                logger.warning("soft.tier2 read %s: %s", fn, e)
+                continue
+        if not text or len(text.strip()) < 80:
             continue
         parsed = await _call_llm(
             [{"role": "system", "content": _SYSTEM},
