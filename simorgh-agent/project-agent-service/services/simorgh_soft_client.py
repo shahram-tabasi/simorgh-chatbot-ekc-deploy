@@ -31,6 +31,29 @@ async def create_project(payload: Dict[str, Any], timeout: float = 15.0
         return r.json()
 
 
+async def update_project(project_id: str, payload: Dict[str, Any],
+                         timeout: float = 15.0) -> Dict[str, Any]:
+    """PUT /api/projects/:id. simorgh-soft deep-merges the partial body
+    with MongoDB `$set` (server.js:162) and stamps changedOn — so we can
+    push ONLY the fields we want to add/update (e.g. just `templates`,
+    `deviceLibrary`, `equipments`) without clobbering the rest of the
+    existing project. Returns the updated full document."""
+    async with httpx.AsyncClient(timeout=timeout) as c:
+        r = await c.put(f"{SOFT_BASE}/api/projects/{project_id}",
+                        json=payload)
+        r.raise_for_status()
+        return r.json()
+
+
+async def get_project(project_id: str, timeout: float = 10.0
+                      ) -> Dict[str, Any]:
+    """GET /api/projects/:id. Returns the full document (incl _id)."""
+    async with httpx.AsyncClient(timeout=timeout) as c:
+        r = await c.get(f"{SOFT_BASE}/api/projects/{project_id}")
+        r.raise_for_status()
+        return r.json()
+
+
 def deep_link(project_id: str) -> str:
     """Browser URL the chat returns to redirect the user into the project."""
     base = SOFT_PUBLIC_PATH if SOFT_PUBLIC_PATH.endswith("/") else SOFT_PUBLIC_PATH + "/"

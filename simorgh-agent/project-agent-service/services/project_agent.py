@@ -643,12 +643,16 @@ class ProjectManagerAgent:
         # classifier the soft-bridge remap uses).
         _skip_envelope = False
         try:
-            from services.intent_classifier import is_design_suite_create
-            if is_design_suite_create(user_input or ""):
+            from services.intent_classifier import (
+                is_design_suite_create, is_design_suite_update,
+            )
+            if is_design_suite_create(user_input or "") or \
+                    is_design_suite_update(user_input or ""):
                 _skip_envelope = True
                 logger.info(
-                    "upload-preflight: SKIPPED (intent=design_suite_create) "
-                    "— no doc context needed for create flow")
+                    "upload-preflight: SKIPPED (intent=design_suite_"
+                    "create/update) — no doc envelope needed; the soft-"
+                    "bridge tool reads docs directly")
         except Exception:
             pass
         if not preflight_blocks and not _skip_envelope:
@@ -2470,16 +2474,32 @@ class ProjectManagerAgent:
         # embeddings-service-down case.
         if (os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on")
                 and isinstance(tool, str)
-                and tool != "submit_soft_spec"):
+                and tool not in ("submit_soft_spec", "update_soft_spec")):
             _pc = getattr(self, "_active_plan_ctx", None)
             _uin = (getattr(_pc, "user_input", "") or "")
+            # UPDATE intent is checked FIRST and is more specific
+            # ("add templates/devices to my project") so it wins over the
+            # broader create intent when both could match.
             try:
-                from services.intent_classifier import is_design_suite_create
-                _design_create = is_design_suite_create(_uin)
+                from services.intent_classifier import (
+                    is_design_suite_create, is_design_suite_update,
+                )
+                _design_update = is_design_suite_update(_uin)
+                _design_create = (not _design_update
+                                  and is_design_suite_create(_uin))
             except Exception as e:
                 logger.debug("intent_classifier failed (%s); skipping remap", e)
                 _design_create = False
-            if _design_create:
+                _design_update = False
+            if _design_update:
+                logger.info(
+                    "soft-bridge remap: %s -> update_soft_spec "
+                    "(intent_classifier matched design_suite_update on user "
+                    "input %r)", tool, _uin[:120])
+                tool = "update_soft_spec"
+                raw_input = {}
+                tool_input = {}
+            elif _design_create:
                 logger.info(
                     "soft-bridge remap: %s -> submit_soft_spec "
                     "(intent_classifier matched design_suite_create on user "
@@ -3097,7 +3117,8 @@ class ProjectManagerAgent:
         # via a structured SSE event, and finally submit to simorgh-soft.
         # All three are no-ops when SOFT_BRIDGE_ENABLED is unset.
         if tool in ("read_soft_spec", "ask_user", "submit_soft_spec",
-                    "list_pending_proposals", "approve_proposals"):
+                    "list_pending_proposals", "approve_proposals",
+                    "update_soft_spec"):
             try:
                 return await self._execute_soft_bridge_tool(
                     project_id, tool, tool_input)
@@ -3642,6 +3663,86 @@ class ProjectManagerAgent:
                     default=str),
                 "metadata": {"tool": "submit_soft_spec", "via": "soft_bridge",
                              "deep_link": url},
+            }
+
+        if tool == "update_soft_spec":
+            # UPDATE an EXISTING Design Suite project with tier-2 data
+            # (templates / deviceLibrary / equipments) extracted from
+            # uploaded documents. PUT /api/projects/:id deep-merges, so
+            # we push ONLY the tier-2 keys and never clobber the
+            # identity / techSettings already in the project.
+            from services.simorgh_soft_client import (
+                update_project, deep_link as _deep_link,
+            )
+            # Resolve the existing soft project id (persisted at create).
+            proj_row = await self.memory.get_project(project_id) or {}
+            soft_id = str(proj_row.get("simorgh_soft_project_id") or "")
+            if not soft_id:
+                return {
+                    "output": json.dumps({
+                        "error": "no_existing_project",
+                        "message": ("No Design Suite project exists for this "
+                                    "chat yet. Create one first, then I can "
+                                    "add templates and devices to it."),
+                    }, default=str),
+                    "metadata": {"tool": "update_soft_spec",
+                                 "via": "soft_bridge",
+                                 "error": "no_existing_project"},
+                }
+            # Gather tier-2 extraction (templates / deviceLibrary /
+            # equipments) from the project's documents. Best-effort: any
+            # extractor failure yields an empty section rather than
+            # aborting the whole update.
+            try:
+                from services.soft_tier2_extractor import (
+                    extract_tier2_for_project,
+                )
+                tier2 = await extract_tier2_for_project(
+                    self, project_id, proj_row)
+            except Exception as e:
+                logger.warning("update_soft_spec: tier2 extract failed: %s", e)
+                tier2 = {}
+            payload = {k: v for k, v in (tier2 or {}).items() if v}
+            if not payload:
+                return {
+                    "output": json.dumps({
+                        "updated": False,
+                        "message": ("I couldn't extract any templates, "
+                                    "devices, or equipment from the current "
+                                    "documents. Upload an SLD drawing, panel "
+                                    "schedule, or load list and try again."),
+                    }, default=str),
+                    "metadata": {"tool": "update_soft_spec",
+                                 "via": "soft_bridge",
+                                 "updated": False},
+                }
+            try:
+                await update_project(soft_id, payload)
+            except Exception as e:
+                logger.error("update_soft_spec PUT failed: %s", e)
+                return {"output": f"update failed: {e}",
+                        "metadata": {"tool": "update_soft_spec",
+                                     "via": "soft_bridge", "error": str(e)}}
+            url = _deep_link(soft_id)
+            # Count what we pushed for a friendly summary.
+            _counts = {}
+            if isinstance(payload.get("equipments"), list):
+                _counts["equipments"] = len(payload["equipments"])
+            for _grp in ("templates", "deviceLibrary"):
+                _g = payload.get(_grp) or {}
+                if isinstance(_g, dict):
+                    _counts[_grp] = sum(len(v or []) for v in _g.values())
+            await self._notify_progress(project_id, "soft_updated", {
+                "soft_project_id": soft_id, "deep_link": url,
+                "counts": _counts,
+            })
+            return {
+                "output": json.dumps({
+                    "updated": True, "soft_project_id": soft_id,
+                    "deep_link": url, "counts": _counts},
+                    default=str),
+                "metadata": {"tool": "update_soft_spec", "via": "soft_bridge",
+                             "deep_link": url, "counts": _counts},
             }
 
         return {"output": f"unknown soft-bridge tool: {tool}",

@@ -52,6 +52,17 @@ _INTENT_PROTOTYPES: Dict[str, List[str]] = {
         "پروژه سیمرغ دیزاین رو بساز",
         "پروژه را در سیمرغ دیزاین ایجاد کن",
     ],
+    "design_suite_update": [
+        "add templates and devices to my design suite project",
+        "update my existing design suite project",
+        "populate the device selection tab from this document",
+        "add the equipment and device list to my project",
+        "fill the create template tab in design suite",
+        "extract templates and devices and add them to my project",
+        "update the design suite project with this data",
+        "تمپلیت و دیوایس‌ها رو به پروژه اضافه کن",
+        "پروژه سیمرغ دیزاین رو آپدیت کن",
+    ],
 }
 
 # Cache: intent name -> list of vectors. Populated once at first use.
@@ -139,5 +150,20 @@ def is_design_suite_create(user_input: str, threshold: float = 0.65) -> bool:
     s = score(user_input, "design_suite_create", fallback_keywords=[
         "design suite", "design-suite", "simorgh-soft", "simorgh soft",
         "سیمرغ دیزاین",
+    ])
+    return s >= threshold
+
+
+def is_design_suite_update(user_input: str, threshold: float = 0.62) -> bool:
+    """Match 'add templates/devices to / update my EXISTING design suite
+    project'. Distinct from create: this PUTs tier-2 data (templates,
+    deviceLibrary, equipments) into an already-created project rather
+    than building a new one. Keyword fallback keys on the update verbs +
+    the tab names so the offline path still fires."""
+    s = score(user_input, "design_suite_update", fallback_keywords=[
+        "add template", "add device", "device selection", "create template",
+        "update my design suite", "update the design suite",
+        "add to my design suite", "populate the device",
+        "تمپلیت", "دیوایس",
     ])
     return s >= threshold
