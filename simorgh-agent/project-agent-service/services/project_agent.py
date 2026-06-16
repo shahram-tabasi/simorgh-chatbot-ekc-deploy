@@ -622,7 +622,25 @@ class ProjectManagerAgent:
         # verifier-visible <documents> envelope on every turn so the
         # verifier always has a source corpus to check against.
         # Skipped when preflight already injected blocks (no duplication).
-        if not preflight_blocks:
+        #
+        # ALSO SKIPPED when the user's turn is a "create the design
+        # suite project" request. Injecting 24K chars of doc context
+        # on every create-flow turn (initial trigger, form fill,
+        # confirmation) overflows vLLM's 16K context and 502s. The
+        # create flow doesn't read the doc — it just bundles the
+        # already-approved spec and POSTs. Cheap intent check (same
+        # classifier the soft-bridge remap uses).
+        _skip_envelope = False
+        try:
+            from services.intent_classifier import is_design_suite_create
+            if is_design_suite_create(user_input or ""):
+                _skip_envelope = True
+                logger.info(
+                    "upload-preflight: SKIPPED (intent=design_suite_create) "
+                    "— no doc context needed for create flow")
+        except Exception:
+            pass
+        if not preflight_blocks and not _skip_envelope:
             try:
                 upload_blocks = await self._upload_envelope_for_project(
                     project_id, user_input=user_input)
@@ -2452,16 +2470,17 @@ class ProjectManagerAgent:
                     "(intent_classifier matched design_suite_create on user "
                     "input %r)", tool, _uin[:120])
                 tool = "submit_soft_spec"
-                # auto_approve_threshold=0.85 lets the chat-driven
-                # "create the project" path bypass the 31-card review
-                # dance: high-confidence proposals (the model's NOT-
-                # guessing ones) auto-approve before the HITL gate; the
-                # rest stay pending in the drawer for explicit review.
-                # 0.85 was chosen because the extractor reports 1.0 for
-                # verbatim quotes and 0.5 for "filled by default"; the
-                # gap is clean.
-                raw_input = {"auto_approve_threshold": 0.85}
-                tool_input = {"auto_approve_threshold": 0.85}
+                # auto_approve_threshold=0.0 means "auto-approve ALL
+                # pending proposals before HITL gate" — when the user
+                # explicitly says "create the project", they're asking
+                # us to use what was extracted. Anything wrong can be
+                # edited inside Design Suite afterwards. Without 0.0,
+                # the previous 0.85 threshold left 2/31 proposals
+                # pending and blocked the create flow indefinitely.
+                raw_input = {"auto_approve_threshold": 0.0,
+                             "auto_approve_all": True}
+                tool_input = {"auto_approve_threshold": 0.0,
+                              "auto_approve_all": True}
 
         # Qwen2.5-VL sometimes wraps the real arg dict as a JSON string
         # inside a "prompt" key, e.g.
@@ -3355,17 +3374,23 @@ class ProjectManagerAgent:
             # confidence ≥0.85 proposals are the ones it's not guessing
             # about; lower-confidence stay pending for drawer review.
             try:
-                _aat = float(tool_input.get("auto_approve_threshold", 0))
+                _aat = float(tool_input.get("auto_approve_threshold", -1))
             except (TypeError, ValueError):
-                _aat = 0.0
-            if _aat > 0:
+                _aat = -1.0
+            _all = bool(tool_input.get("auto_approve_all", False))
+            # Sweep when EITHER the operator asked to approve everything
+            # (auto_approve_all=True, the chat-driven create path) OR
+            # there's a numeric threshold ≥ 0. -1 sentinel = OFF (the
+            # default for explicit tool calls without auto-approve).
+            if _all or _aat >= 0:
                 try:
                     from services import soft_proposals as sp
                     _pend = await sp.list_pending(project_id) or []
                     _autoed = 0
                     for _p in _pend:
                         try:
-                            if float(_p.get("confidence") or 0) >= _aat:
+                            _conf = float(_p.get("confidence") or 0)
+                            if _all or _conf >= _aat:
                                 await sp.approve(_p["id"])
                                 _autoed += 1
                         except Exception:
