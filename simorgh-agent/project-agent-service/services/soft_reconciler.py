@@ -87,21 +87,54 @@ def reconcile(bag: Dict[str, List[FieldValue]]
 
     # ---- Build the ProjectSpec ----
     # projectName is REQUIRED by Pydantic; supply a placeholder if no
-    # source proposed one. Flat scalars + arrays get assigned directly;
-    # NESTED_GROUPS get hoisted into the right nested key.
+    # source proposed one.
+    #
+    # CRITICAL: proposals are stored with DOTTED SCALAR keys that mirror
+    # simorgh-soft's nested JSON schema, e.g.
+    #   techSettings.general.altitudeAboveSeaLevel  = "1000"
+    #   techSettings.wireColor.acPhase              = "L1 brown / L2 black …"
+    #   technicalSettings.mediumVoltage.nominalVoltage = "6.6"
+    # The simorgh-soft UI reads these at the NESTED path
+    # (techSettings → general → altitudeAboveSeaLevel). Previously the
+    # reconciler only hoisted four hard-coded GROUP keys (and only when
+    # the proposal VALUE was itself a dict), so every individual dotted
+    # SCALAR landed as a literal flat key named
+    # "techSettings.general.altitudeAboveSeaLevel" on the spec — which
+    # the UI's nested reader never found. Result: a project created from
+    # 31 extracted fields showed only the 2 flat scalars (language,
+    # nominalVoltage) that happened to map directly.
+    #
+    # Fix: walk EVERY dotted key into nested dicts. Scalar leaves are
+    # set at their full path; dict-valued group proposals are merged at
+    # their level (back-compat with extractors that emit whole groups).
     spec_kwargs: Dict[str, Any] = {"projectName": ""}
-    nested_accum: Dict[str, Dict[str, Any]] = {}
+
+    def _set_nested(root: Dict[str, Any], dotted: str, value: Any) -> None:
+        parts = dotted.split(".")
+        cursor = root
+        for p in parts[:-1]:
+            nxt = cursor.get(p)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                cursor[p] = nxt
+            cursor = nxt
+        leaf = parts[-1]
+        if isinstance(value, dict):
+            # Group-shaped proposal — merge into any existing dict so we
+            # don't clobber sibling keys set by other proposals.
+            existing = cursor.get(leaf)
+            if isinstance(existing, dict):
+                existing.update(value)
+            else:
+                cursor[leaf] = dict(value)
+        else:
+            cursor[leaf] = value
+
     for field, fv in chosen.items():
-        if field in NESTED_GROUPS:
-            parent, child = NESTED_GROUPS[field]
-            nested_accum.setdefault(parent, {}).setdefault(child, {})
-            if isinstance(fv.value, dict):
-                nested_accum[parent][child].update(fv.value)
+        if "." in field:
+            _set_nested(spec_kwargs, field, fv.value)
         else:
             spec_kwargs[field] = fv.value
-    # Merge any nested groups the extractors provided into the spec_kwargs.
-    for parent, kids in nested_accum.items():
-        spec_kwargs.setdefault(parent, {}).update(kids)
 
     spec = ProjectSpec(**spec_kwargs)
 

@@ -3605,7 +3605,7 @@ class ProjectManagerAgent:
                 # from the agent context for the tag components.
                 try:
                     from services.project_tagger import apply_tag_to_spec
-                    proj_row = await self.memory_service.get_project(project_id)
+                    proj_row = await self.memory.get_project(project_id)
                     user_hint = (proj_row or {}).get("owner_id") or "anonymous"
                     spec = apply_tag_to_spec(
                         spec,
