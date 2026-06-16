@@ -207,13 +207,33 @@ def _normalise_for_match(s: str) -> str:
     return re.sub(r"\s+", "", s).casefold()
 
 
+_NUM_UNIT_SPLIT_RE = re.compile(
+    r"^(\d+(?:[.,]\d+)?)\s*([A-Za-zΩ°%μ]+)$"
+)
+
+
 def _matches_verbatim(claim_span: str, normalised_sources: str) -> bool:
     """A claim matches if its whitespace-stripped, casefolded form
-    appears anywhere in the equivalently-normalised source corpus."""
+    appears anywhere in the equivalently-normalised source corpus.
+
+    Word-order tolerance for numeric claims: the model often writes
+    "12 kV" when a poorly-extracted table renders the cell as "kV 12"
+    (Docling output for the characteristics-table layout). Treat both
+    orders as the same claim — neither is a fabrication when the
+    number AND the unit both appear together (regardless of order)."""
     needle = _normalise_for_match(claim_span)
     if not needle:
         return True
-    return needle in normalised_sources
+    if needle in normalised_sources:
+        return True
+    # Numeric tolerance: try the reversed order for "N UNIT" / "UNIT N".
+    m = _NUM_UNIT_SPLIT_RE.match(claim_span.strip())
+    if m:
+        num, unit = m.group(1), m.group(2)
+        reversed_form = _normalise_for_match(f"{unit}{num}")
+        if reversed_form in normalised_sources:
+            return True
+    return False
 
 
 # Sentence-boundary regex. Cheap heuristic — full segmenter would be
@@ -224,29 +244,37 @@ _SENT_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 def _redact_unverified_sentences(
     answer: str, unverified_spans: List[str], *, abstention_text: str,
 ) -> str:
-    """Replace each sentence that contains an unverified span with the
-    abstention sentence. Sentences with no flagged spans are left alone."""
+    """DROP each sentence that contains an unverified span; keep the
+    rest unchanged. When every sentence would be dropped (the answer
+    is entirely unverifiable), fall back to the abstention text so the
+    user gets a clear "not in doc" message instead of an empty reply.
+
+    Production trace showed the previous behaviour
+    (REPLACE-with-abstention) producing self-contradictory output:
+    the model wrote a paraphrase ("12 kV") + the verbatim quote
+    ("kV 12"); regex flagged the paraphrase; that sentence became
+    "Not specified in the provided documents." while the verbatim
+    quote survived intact — user saw an answer that refused the
+    question and then quoted the answer. Dropping is cleaner: the
+    surviving verbatim quote stands alone."""
     if not answer or not unverified_spans:
         return answer
     flagged = set(unverified_spans)
     sents = _SENT_BOUNDARY_RE.split(answer)
-    out_sents: List[str] = []
-    redacted_any = False
+    kept: List[str] = []
+    dropped_any = False
     for s in sents:
         if any(span in s for span in flagged):
-            out_sents.append(abstention_text)
-            redacted_any = True
-        else:
-            out_sents.append(s)
-    redacted = " ".join(out_sents)
-    if redacted_any:
-        # De-duplicate runs of identical abstention sentences in case
-        # multiple flagged spans landed in adjacent sentences.
-        redacted = re.sub(
-            rf"(?:{re.escape(abstention_text)}\s*){{2,}}",
-            abstention_text + " ", redacted,
-        ).rstrip()
-    return redacted
+            dropped_any = True
+            continue
+        kept.append(s)
+    if not dropped_any:
+        return answer
+    # All sentences were flagged → fall back to abstention so the user
+    # still sees a clean explanation rather than an empty reply.
+    if not kept:
+        return abstention_text
+    return " ".join(kept).strip()
 
 
 def summarise_for_metadata(r: VerificationResult) -> Dict[str, Any]:
