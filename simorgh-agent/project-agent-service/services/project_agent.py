@@ -151,6 +151,14 @@ _GROUNDING_CONTRACT = (
     "   provided documents\" for that field.\n"
     "3. Attribute each value to its source location (e.g. \"page 11\n"
     "   characteristics table\" or \"section 1.3.2\").\n"
+    "4. If the SAME property appears with DIFFERENT values in different\n"
+    "   parts of the documents (e.g. a general design rule on page 5\n"
+    "   AND a characteristics-table row on page 11), report ALL of\n"
+    "   them with their contexts. Example:\n"
+    '     "Protection degree: IP42 (closed door) / IP20 (open door)\n'
+    '      per page 5 general design; the page 11 characteristics\n'
+    '      table additionally specifies IP42 indoor / IP54 outdoor."\n'
+    "   Do NOT pick just one and silently drop the others.\n"
     "\n"
     "BANNED MOVES (these are inference, not extraction):\n"
     "  - \"implied by …\" / \"reasonable to infer\" / \"consistent with\"\n"
@@ -4685,7 +4693,7 @@ class ProjectManagerAgent:
                     sections = qdrant.search_relevant_sections(
                         query=user_input,
                         project_oenum=scope,
-                        top_k=8,
+                        top_k=12,
                         score_threshold=0.0,
                     ) or []
                 except Exception as e:
