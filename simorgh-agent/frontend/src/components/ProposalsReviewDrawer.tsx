@@ -66,6 +66,12 @@ interface Props {
   categories?:    CategoriesResp | null;
   onApprove:      (proposal: Proposal, editedValue?: string) => void | Promise<void>;
   onReject:       (proposal: Proposal) => void | Promise<void>;
+  /** Push the approved spec to simorgh-soft. The drawer renders a
+   *  primary footer button that calls this; disabled while creating
+   *  or when no approvals exist yet. */
+  onCreate?:      () => void | Promise<void>;
+  creating?:      boolean;
+  canCreate?:     boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +493,7 @@ function GenericKeyValueView({ value }: { value: Record<string, any> }) {
 export default function ProposalsReviewDrawer({
   open, onClose, pendingByField, approvedCount = 0, busyIds,
   categories, onApprove, onReject,
+  onCreate, creating = false, canCreate = false,
 }: Props) {
   const fields = Object.keys(pendingByField).sort();
   const totalPending = fields.reduce(
@@ -715,10 +722,38 @@ export default function ProposalsReviewDrawer({
               })}
             </div>
 
-            <div className="px-5 py-3 border-t border-white/10 text-[11px] text-gray-500">
-              Approved values land in the project spec and become part of the
-              Design Suite project record. Rejected ones are dropped. The agent
-              will re-propose if new evidence shows up.
+            <div className="px-5 py-3 border-t border-white/10 space-y-2.5">
+              <div className="text-[11px] text-gray-500">
+                Approved values land in the project spec and become part of the
+                Design Suite project record. Rejected ones are dropped. The agent
+                will re-propose if new evidence shows up.
+              </div>
+              {onCreate && (
+                <button
+                  type="button"
+                  onClick={onCreate}
+                  disabled={!canCreate || creating}
+                  className="w-full inline-flex items-center justify-center gap-2
+                             px-3 py-2 rounded-lg text-sm font-semibold
+                             bg-gradient-to-r from-indigo-500 to-violet-500
+                             hover:from-indigo-400 hover:to-violet-400
+                             text-white shadow-lg shadow-indigo-500/20
+                             disabled:opacity-40 disabled:cursor-not-allowed
+                             transition-all"
+                  title={!canCreate
+                    ? "Approve at least one proposal first"
+                    : creating
+                      ? "Creating in simorgh-soft…"
+                      : "Push the approved spec to simorgh-soft and open it"}
+                >
+                  {creating
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <Wand2 className="w-4 h-4" />}
+                  {creating
+                    ? "Creating Design Suite Project…"
+                    : "Create Design Suite Project"}
+                </button>
+              )}
             </div>
           </motion.aside>
         </>

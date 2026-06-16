@@ -2425,16 +2425,19 @@ class ProjectManagerAgent:
 
         # SOFT-BRIDGE INTENT REMAP — embedding-based, not keyword. When the
         # user's input semantically matches "create my Simorgh Design Suite
-        # project" (paraphrases incl. Persian work), and the planner picked
-        # a project-creator-shaped tool that would fail or do the wrong
-        # thing here (project_init, tpms_fetch, tpms_get_text), redirect
-        # to submit_soft_spec. The classifier itself falls back to a
-        # keyword check when the embeddings-service is unreachable, so
-        # this never silently fails.
+        # project" (paraphrases incl. Persian work), redirect WHATEVER the
+        # planner picked to submit_soft_spec. The intent classifier is
+        # accurate enough (threshold 0.65 with a wide gap to unrelated
+        # chat ≤0.50) that we trust it as the sole gate; restricting the
+        # remap to only project-creator-shaped tools missed the case where
+        # the planner picked a tool that doesn't lexically resemble
+        # "create" (e.g. read_soft_spec, list_project_documents) on the
+        # FIRST turn after a user says "create the simorgh design suite
+        # project". The keyword fallback inside the classifier covers the
+        # embeddings-service-down case.
         if (os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on")
                 and isinstance(tool, str)
-                and tool in ("project_init", "create_project",
-                             "tpms_fetch", "tpms_get_text")):
+                and tool != "submit_soft_spec"):
             _pc = getattr(self, "_active_plan_ctx", None)
             _uin = (getattr(_pc, "user_input", "") or "")
             try:
@@ -2446,7 +2449,8 @@ class ProjectManagerAgent:
             if _design_create:
                 logger.info(
                     "soft-bridge remap: %s -> submit_soft_spec "
-                    "(intent_classifier matched design_suite_create)", tool)
+                    "(intent_classifier matched design_suite_create on user "
+                    "input %r)", tool, _uin[:120])
                 tool = "submit_soft_spec"
                 raw_input = {}
                 tool_input = {}

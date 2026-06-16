@@ -131,6 +131,49 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
   const onReject  = (prop: Proposal) =>
     decideProposal(prop, "reject");
 
+  // Create the Design Suite project from the currently-approved spec
+  // and open it in a new tab. Called by the "Create Design Suite
+  // Project" button in the drawer footer. Backend route does the
+  // docker-style tagging + POST to simorgh-soft and returns a deep
+  // link. We mirror the agent's submit_soft_spec path so both UIs
+  // produce identical project records.
+  const [creating, setCreating] = React.useState(false);
+  const onCreate = async () => {
+    const spec = state?.spec || {};
+    if (!Object.keys(spec).length) {
+      notify({ type: "error", title: "Nothing to create",
+        message: "No approved values yet. Approve at least one proposal first." });
+      return;
+    }
+    setCreating(true);
+    try {
+      const r = await axios.post(
+        `${API_BASE}/v2/agent/projects/${projectId}/soft/create`,
+        { spec },
+        { headers: { Authorization: `Bearer ${token()}` } },
+      );
+      const link = r?.data?.deep_link || "";
+      const sid  = r?.data?.soft_project_id || "";
+      notify({
+        type: "success",
+        title: "Design Suite project created",
+        message: sid ? `Opening project ${sid}…` : "Opening Design Suite…",
+      });
+      if (link) window.open(link, "_blank", "noopener,noreferrer");
+      onAnswered?.(
+        `Design Suite project created (id ${sid}). Deep link: ${link}`,
+      );
+      await fetchState();
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || e?.message ||
+                  "Could not create Design Suite project.";
+      setError(msg);
+      notify({ type: "error", title: "Create failed", message: msg });
+    } finally {
+      setCreating(false);
+    }
+  };
+
   React.useEffect(() => {
     fetchState();
     if (!isLegacy || !projectId) return;
@@ -333,6 +376,9 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
         categories={categories}
         onApprove={onApprove}
         onReject={onReject}
+        onCreate={onCreate}
+        creating={creating}
+        canCreate={approvedCount > 0}
       />
     </div>
   );
