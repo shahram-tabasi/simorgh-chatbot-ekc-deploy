@@ -1658,25 +1658,93 @@ async def upload_document(
         try:
             qdrant = memory.qdrant
             if qdrant:
-                # Chunk content into segments (~500 chars each with overlap)
+                # Phase 0/1: heading-aware chunker. Replaces the previous
+                # 500-char sliding window that
+                #   (a) hardcoded section_title=filename, destroying any
+                #       real heading metadata
+                #   (b) cut through tables and answer spans at arbitrary
+                #       byte offsets
+                # New behaviour: split the markdown by H1..H6 headings
+                # (and numbered "1.2.3 Title" sections) so each chunk
+                # respects document structure. heading_path is the full
+                # breadcrumb (e.g. "/1. Scope/1.2. Special features").
+                # When a section is too large (> 1500 chars) we fall back
+                # to paragraph-aware sub-splitting INSIDE that section so
+                # heading metadata is preserved on every sub-chunk.
+                import re as _re
                 chunk_dicts = []
-                chunk_size = 500
-                overlap = 50
-                text = indexable_content.strip()
-                i = 0
                 chunk_idx = 0
-                while i < len(text):
-                    end = min(i + chunk_size, len(text))
-                    chunk_text = text[i:end]
-                    if chunk_text.strip():
+                _HEAD_RE = _re.compile(
+                    r"^(?:(#{1,6})\s+(.+)"
+                    r"|(\d+(?:\.\d+)*)\.?\s+([A-Z][^\n]{1,200}))$",
+                    _re.MULTILINE,
+                )
+                MAX_CHUNK = 1500
+                lines = indexable_content.strip().splitlines()
+                # Section list of (heading_level, title, body_lines)
+                sections: list = []
+                cur_level = 1
+                cur_title = "Introduction"
+                cur_body: list = []
+                for line in lines:
+                    m = _HEAD_RE.match(line.strip())
+                    if m:
+                        # flush previous
+                        if cur_body or cur_title != "Introduction":
+                            sections.append((cur_level, cur_title, cur_body))
+                        if m.group(1):  # markdown heading
+                            cur_level = len(m.group(1))
+                            cur_title = m.group(2).strip()
+                        else:           # numbered heading
+                            num = m.group(3) or ""
+                            cur_level = len(num.split(".")) + 1
+                            cur_title = f"{num}. {(m.group(4) or '').strip()}"
+                        cur_body = []
+                    else:
+                        cur_body.append(line)
+                if cur_body or cur_title != "Introduction":
+                    sections.append((cur_level, cur_title, cur_body))
+
+                # Build breadcrumb heading_path per section using a stack.
+                breadcrumb: list = []
+                for (level, title, body) in sections:
+                    while breadcrumb and breadcrumb[-1][0] >= level:
+                        breadcrumb.pop()
+                    breadcrumb.append((level, title))
+                    heading_path = "/" + "/".join(t for _, t in breadcrumb)
+                    body_text = "\n".join(body).strip()
+                    if not body_text:
+                        continue
+                    # Sub-split oversized sections by paragraph; keep
+                    # heading_path stable across sub-chunks.
+                    if len(body_text) <= MAX_CHUNK:
+                        parts = [body_text]
+                    else:
+                        parts = []
+                        buf = ""
+                        for para in body_text.split("\n\n"):
+                            if len(buf) + len(para) + 2 > MAX_CHUNK and buf:
+                                parts.append(buf)
+                                buf = para
+                            else:
+                                buf = (buf + "\n\n" + para) if buf else para
+                        if buf:
+                            parts.append(buf)
+                    for part in parts:
                         chunk_dicts.append({
-                            "text": chunk_text.strip(),
-                            "section_title": file.filename,
+                            "text": part.strip(),
+                            "filename": file.filename,
+                            "section_title": title,
+                            "heading_path": heading_path,
                             "chunk_index": chunk_idx,
-                            "metadata": {"filename": file.filename, "document_id": doc_id_str},
+                            "metadata": {
+                                "filename": file.filename,
+                                "document_id": doc_id_str,
+                                "heading_path": heading_path,
+                                "heading_level": level,
+                            },
                         })
                         chunk_idx += 1
-                    i += chunk_size - overlap
 
                 if chunk_dicts:
                     # Tenant key = chatbot project UUID, ALWAYS. Using

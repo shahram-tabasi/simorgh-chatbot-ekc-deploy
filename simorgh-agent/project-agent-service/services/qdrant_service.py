@@ -382,12 +382,24 @@ class QdrantService:
                 # partition key for single-collection multitenancy; the
                 # original project_oenum/session_id/user_id are also kept
                 # for auditing and back-compat reads.
+                # Phase 0 schema (June 2026): top-level `filename` and
+                # `heading_path` fields so list_documents and
+                # search_relevant_sections can find files without digging
+                # through metadata or relying on the legacy
+                # "section_title = filename" overload.
+                _meta = chunk.get("metadata") or {}
+                _fn = (chunk.get("filename")
+                       or _meta.get("filename") or "")
+                _hp = (chunk.get("heading_path")
+                       or _meta.get("heading_path") or "")
                 payload = {
                     TENANT_FIELD: tenant_id,
                     "document_id": document_id,
                     "user_id": user_id,
                     "text": text,
+                    "filename": _fn,
                     "section_title": chunk.get("section_title", ""),
+                    "heading_path": _hp,
                     "chunk_index": chunk.get("chunk_index", 0),
                 }
 
@@ -605,14 +617,99 @@ class QdrantService:
             did = pl.get("document_id") or ""
             if not did:
                 continue
+            # Phase 0: top-level filename is now first-class. Fall back
+            # to metadata.filename (legacy) then section_title (oldest
+            # hack) so existing chunks keep resolving.
             d = docs.setdefault(did, {
                 "document_id": did,
-                "filename": (pl.get("metadata") or {}).get("filename")
+                "filename": pl.get("filename")
+                            or (pl.get("metadata") or {}).get("filename")
                             or pl.get("section_title") or "",
                 "chunk_count": 0,
             })
             d["chunk_count"] += 1
         return list(docs.values())
+
+    def search_relevant_sections(
+        self,
+        query: str,
+        project_oenum: Optional[str] = None,
+        session_id: Optional[str] = None,
+        top_k: int = 5,
+        score_threshold: float = 0.25,
+    ) -> List[Dict[str, Any]]:
+        """Phase 1: tenant-scoped semantic search returning the most
+        relevant content for a question. Used by the agent's
+        _upload_envelope_for_project to build a query-targeted
+        <documents> envelope (small prompt) instead of dumping every
+        uploaded doc end-to-end (24K+ chars, exceeds vLLM 16K context).
+
+        Matches BOTH storage shapes:
+          - chunk-shaped: text in `text` field, no storage_type (the
+            shape this service's own add_document_chunks writes).
+          - section_summary: text in `full_content`, storage_type set
+            (the shape documents-rag's enhanced pipeline writes).
+        The result mapper reads full_content OR text so callers don't
+        have to branch.
+
+        Uses query_vector=("dense", qvec) because the unified
+        project_documents collection has named vectors {"dense", ...}
+        — the unnamed default would be rejected with "Vector params
+        for  are not specified in config".
+        """
+        if not query or not query.strip():
+            return []
+        try:
+            tenant_id = _tenant_of(session_id, project_oenum)
+            qvec = self.generate_embedding(query)
+            must = [
+                FieldCondition(key=TENANT_FIELD,
+                               match=MatchValue(value=tenant_id)),
+            ]
+            results = self.client.search(
+                collection_name=DOCS_COLLECTION,
+                query_vector=("dense", qvec),
+                limit=top_k,
+                query_filter=Filter(must=must),
+                score_threshold=score_threshold,
+            )
+            out: List[Dict[str, Any]] = []
+            for r in results:
+                pl = r.payload or {}
+                fn = (pl.get("filename")
+                      or (pl.get("metadata") or {}).get("filename")
+                      or "")
+                st = pl.get("section_title", "") or ""
+                hp = pl.get("heading_path", "") or ""
+                # Heading-shape resolution: section_summary points have
+                # real headings; chunk-shaped points overload
+                # section_title with the filename. Synthesize a
+                # "chunk #N" label so the model has SOMETHING citeable.
+                if not hp:
+                    if fn and st and st.strip() != fn.strip():
+                        hp = st
+                    else:
+                        ci = pl.get("chunk_index")
+                        hp = f"chunk #{ci}" if ci is not None else (st or "?")
+                out.append({
+                    "score": float(r.score) if r.score is not None else 0.0,
+                    "filename": fn,
+                    "section_id": pl.get("section_id", ""),
+                    "section_title": st,
+                    "heading_level": pl.get("heading_level", 0),
+                    "heading_path": hp,
+                    "parent_section_id": pl.get("parent_section_id", ""),
+                    "full_content": pl.get("full_content") or pl.get("text", ""),
+                    "summary": pl.get("summary", ""),
+                    "document_id": pl.get("document_id", ""),
+                })
+            logger.info(
+                "search_relevant_sections: query_len=%d tenant=%s hits=%d",
+                len(query), tenant_id, len(out))
+            return out
+        except Exception as e:
+            logger.error(f"❌ search_relevant_sections failed: {e}")
+            return []
 
     def get_document_text(self, document_id: Optional[str] = None,
                           user_id: str = "system", session_id: Optional[str] = None,
