@@ -334,25 +334,54 @@ async def verify_answer_against_sources_with_nli(
     abstention_text: str = "Not specified in the provided documents.",
     nli_threshold: float = 0.5,
 ) -> VerificationResult:
-    """Combined entry point: runs the regex pre-filter FIRST, then the
-    HHEM NLI sidecar over whatever sentences survived. NLI failures are
-    surfaced in the result metadata; they do NOT redact by default
-    (regex catches precise fabrications, NLI catches paraphrase drift
-    and is fail-open). Tune by reading nli_min_score in the result.
+    """Combined entry point: regex + HHEM NLI with a TWO-SIGNAL veto on
+    rewriting. The regex layer is precise on numerics/standards but
+    over-flags on word-order variants ("kV 12" vs "12 kV", "IEC 62271
+    -2" vs "IEC 62271-2"); the NLI layer (HHEM-2.1-Open) is the
+    semantic ground truth. We only redact a sentence when the regex
+    flags it AND NLI scores it below threshold — otherwise we trust
+    the model and surface the flag in metadata.
 
-    Asynchronous because the NLI sidecar call is HTTP-bound."""
+    Without the NLI veto, the model's correct verbatim quote got
+    redacted on a regex false-positive (production trace: 'Highest
+    system voltage: kV 12' from page 11 was wholesale-rewritten to
+    'Not specified' even though nli_min=1.00).
+    """
+    # First pass: regex WITHOUT rewriting — just collect flagged spans.
     base = verify_answer_against_sources(
         answer, sources,
-        rewrite_unverified=rewrite_unverified,
+        rewrite_unverified=False,
         abstention_text=abstention_text,
     )
     nli = await verify_answer_with_nli(
-        # Verify against the REDACTED answer to avoid scoring sentences
-        # already rewritten by the regex layer.
-        base.answer_redacted or base.answer,
-        sources, threshold=nli_threshold,
+        answer, sources, threshold=nli_threshold,
     )
     if nli:
         base.nli_min_score = nli.get("min_score", 1.0)
         base.nli_low_score_sentences = nli.get("low_score_sentences", [])
+
+    # Two-signal veto on rewriting. Only redact when BOTH signals
+    # disagree with the model: regex flagged AND NLI scored a sentence
+    # below threshold. If NLI says it's entailed (min_score ≥ threshold),
+    # trust the model — the regex flag is a word-order false-positive.
+    if rewrite_unverified and base.unverified:
+        nli_disagrees = (
+            base.nli_min_score < nli_threshold
+            or bool(base.nli_low_score_sentences)
+        )
+        if nli_disagrees:
+            base.answer_redacted = _redact_unverified_sentences(
+                answer, base.unverified,
+                abstention_text=abstention_text,
+            )
+            base.ok = False
+        else:
+            # NLI vetoes the rewrite — keep the model's original answer
+            # but leave `unverified` populated so telemetry shows the
+            # regex flag for operator review.
+            base.answer_redacted = answer
+            base.ok = True
+    elif rewrite_unverified:
+        base.answer_redacted = answer
+
     return base
