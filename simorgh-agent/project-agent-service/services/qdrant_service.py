@@ -635,8 +635,8 @@ class QdrantService:
         query: str,
         project_oenum: Optional[str] = None,
         session_id: Optional[str] = None,
-        top_k: int = 5,
-        score_threshold: float = 0.25,
+        top_k: int = 8,
+        score_threshold: float = 0.0,
     ) -> List[Dict[str, Any]]:
         """Phase 1: tenant-scoped semantic search returning the most
         relevant content for a question. Used by the agent's
@@ -644,23 +644,73 @@ class QdrantService:
         <documents> envelope (small prompt) instead of dumping every
         uploaded doc end-to-end (24K+ chars, exceeds vLLM 16K context).
 
-        Matches BOTH storage shapes:
-          - chunk-shaped: text in `text` field, no storage_type (the
-            shape this service's own add_document_chunks writes).
-          - section_summary: text in `full_content`, storage_type set
-            (the shape documents-rag's enhanced pipeline writes).
-        The result mapper reads full_content OR text so callers don't
-        have to branch.
+        Uses HYBRID retrieval when available: dense (bge-m3) + sparse
+        (BM25) prefetch → Qdrant RRF fusion → bge-reranker-v2-m3
+        cross-encoder rerank. This catches both semantic matches AND
+        exact phrase hits — short queries like "Highest system voltage"
+        rely on BM25 to find the characteristics table where dense
+        embeddings score poorly against table-formatted text.
 
-        Uses query_vector=("dense", qvec) because the unified
-        project_documents collection has named vectors {"dense", ...}
-        — the unnamed default would be rejected with "Vector params
-        for  are not specified in config".
+        Falls back to dense-only named-vector search if the hybrid
+        stack is unavailable.
+
+        Matches BOTH storage shapes via the result mapper (full_content
+        OR text), so chunk-shaped and section_summary points both work.
         """
         if not query or not query.strip():
             return []
         try:
             tenant_id = _tenant_of(session_id, project_oenum)
+
+            # --- Hybrid path: dense + sparse + reranker ---------------
+            if QDRANT_HYBRID_ENABLED and _hybrid_search is not None:
+                try:
+                    hits = _hybrid_search(
+                        self.client,
+                        collection_name=DOCS_COLLECTION,
+                        query=query,
+                        tenant_id=tenant_id,
+                        limit=top_k,
+                        score_threshold=score_threshold,
+                        rerank=True,
+                    ) or []
+                    out: List[Dict[str, Any]] = []
+                    for h in hits:
+                        # HybridResult is a dataclass-like; defensive access.
+                        md = getattr(h, "metadata", {}) or {}
+                        fn = md.get("filename") or ""
+                        st = getattr(h, "section_title", "") or ""
+                        hp = md.get("heading_path") or ""
+                        if not hp:
+                            if fn and st and st.strip() != fn.strip():
+                                hp = st
+                            else:
+                                ci = getattr(h, "chunk_index", None)
+                                hp = (f"chunk #{ci}" if ci is not None
+                                      else (st or "?"))
+                        out.append({
+                            "score": float(getattr(h, "score", 0.0) or 0.0),
+                            "filename": fn,
+                            "section_id": md.get("section_id", ""),
+                            "section_title": st,
+                            "heading_level": md.get("heading_level", 0),
+                            "heading_path": hp,
+                            "parent_section_id": md.get("parent_section_id", ""),
+                            "full_content": getattr(h, "text", "") or "",
+                            "summary": "",
+                            "document_id": getattr(h, "document_id", "") or "",
+                        })
+                    logger.info(
+                        "search_relevant_sections HYBRID: query_len=%d "
+                        "tenant=%s hits=%d", len(query), tenant_id, len(out))
+                    if out:
+                        return out
+                except Exception as e:
+                    logger.warning(
+                        "hybrid search failed (%r) — falling back to dense",
+                        e)
+
+            # --- Fallback: dense-only named-vector search -------------
             qvec = self.generate_embedding(query)
             must = [
                 FieldCondition(key=TENANT_FIELD,
@@ -673,7 +723,7 @@ class QdrantService:
                 query_filter=Filter(must=must),
                 score_threshold=score_threshold,
             )
-            out: List[Dict[str, Any]] = []
+            out = []
             for r in results:
                 pl = r.payload or {}
                 fn = (pl.get("filename")
@@ -681,10 +731,6 @@ class QdrantService:
                       or "")
                 st = pl.get("section_title", "") or ""
                 hp = pl.get("heading_path", "") or ""
-                # Heading-shape resolution: section_summary points have
-                # real headings; chunk-shaped points overload
-                # section_title with the filename. Synthesize a
-                # "chunk #N" label so the model has SOMETHING citeable.
                 if not hp:
                     if fn and st and st.strip() != fn.strip():
                         hp = st
@@ -704,7 +750,7 @@ class QdrantService:
                     "document_id": pl.get("document_id", ""),
                 })
             logger.info(
-                "search_relevant_sections: query_len=%d tenant=%s hits=%d",
+                "search_relevant_sections DENSE: query_len=%d tenant=%s hits=%d",
                 len(query), tenant_id, len(out))
             return out
         except Exception as e:

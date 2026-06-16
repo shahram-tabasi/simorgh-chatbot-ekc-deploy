@@ -4685,8 +4685,8 @@ class ProjectManagerAgent:
                     sections = qdrant.search_relevant_sections(
                         query=user_input,
                         project_oenum=scope,
-                        top_k=5,
-                        score_threshold=0.25,
+                        top_k=8,
+                        score_threshold=0.0,
                     ) or []
                 except Exception as e:
                     logger.info(
