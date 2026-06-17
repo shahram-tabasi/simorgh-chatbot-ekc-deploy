@@ -32,9 +32,15 @@ sentence-transformers>=3.0.0,<5
 # Phase 4 dense encoder (bge-m3) ships pickled pytorch_model.bin. From
 # transformers>=4.46 the library refuses to call torch.load on pickled
 # weights with torch<2.6 (CVE: arbitrary pickle deserialisation under
-# weights_only=True). Pin both up so bge-m3 loads either via
-# safetensors (preferred when present) or the safer torch.load path.
-torch>=2.6,<2.8
+# weights_only=True). bge-m3 loads either via safetensors (preferred
+# when present) or the safer torch.load path.
+#
+# torch is NOT pip-pinned here: the Docker base image
+# (pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime) already ships torch
+# 2.6.0 via conda, which satisfies the >=2.6 CVE requirement. Pinning
+# it forced pip to re-download the 821 MB CUDA wheel (torch 2.7.1) on
+# every build — the conda-vs-pip trap documents-rag + grounding-verifier
+# also hit. To move torch, bump the BASE IMAGE tag, not this file.
 transformers>=4.46,<5
 # fastembed for the BM25 sparse encoder in services/qdrant_hybrid.
 # Pulls in onnxruntime; CPU-only path is ~120 MB. The hybrid path

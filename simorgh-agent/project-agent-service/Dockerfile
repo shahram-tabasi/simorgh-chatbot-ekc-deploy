@@ -1,4 +1,10 @@
-FROM pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+# Base ships torch 2.6.0 via conda — satisfies requirements' torch>=2.6
+# (needed for the transformers CVE guard on pickled bge-m3 weights)
+# WITHOUT pip re-downloading the 821 MB CUDA wheel. Bumped from 2.5.0:
+# the old base had torch 2.5.0, so the pip pin forced a fresh 2.7.1
+# download on every build. The 2.6.0 image is already cached on the
+# host. (Same fix applied to documents-rag + grounding-verifier.)
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 # ---- Air-gapped registry proxies (override at build with --build-arg) ----
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TRUSTED_HOST=
