@@ -2478,18 +2478,45 @@ class ProjectManagerAgent:
                                  "check_soft_conflicts")):
             _pc = getattr(self, "_active_plan_ctx", None)
             _uin = (getattr(_pc, "user_input", "") or "")
-            # Intent priority: CONFLICTS check is most specific, then
-            # UPDATE (add templates/devices), then the broad CREATE.
+            # Disambiguation guards — the embedding classifier alone
+            # mis-routed "continue to create project" to UPDATE because
+            # both prototypes mention "project". Use explicit lexical
+            # signals to break the tie deterministically:
+            #   - tier-2 words (template/device/equipment/SLD/feeder) →
+            #     the turn is about UPDATE (adding tier-2 data).
+            #   - create/build/submit verbs WITHOUT tier-2 words →
+            #     the turn is about CREATE.
+            _low = _uin.lower()
+            _has_tier2 = any(w in _low for w in (
+                "template", "device", "equipment", "feeder", "sld",
+                "diagram", "schematic", "single line", "single-line",
+                "تمپلیت", "دیوایس", "تجهیز"))
+            _has_create = any(w in _low for w in (
+                "create", "build", "submit", "finalize", "finalise",
+                "make the project", "بساز", "ایجاد"))
+            # Intent priority: CONFLICTS (most specific) > UPDATE
+            # (requires a tier-2 word) > CREATE.
             try:
                 from services.intent_classifier import (
                     is_design_suite_create, is_design_suite_update,
                     is_design_suite_conflicts,
                 )
                 _design_conflicts = is_design_suite_conflicts(_uin)
-                _design_update = (not _design_conflicts
-                                  and is_design_suite_update(_uin))
-                _design_create = (not _design_conflicts and not _design_update
-                                  and is_design_suite_create(_uin))
+                # UPDATE only when the embedding matches AND the turn
+                # actually mentions tier-2 data — never on a bare
+                # "create project" phrase.
+                _design_update = (
+                    not _design_conflicts
+                    and _has_tier2
+                    and not (_has_create and not _has_tier2)
+                    and is_design_suite_update(_uin))
+                # CREATE when the embedding matches OR a create verb is
+                # present without tier-2 words (covers "continue to
+                # create project").
+                _design_create = (
+                    not _design_conflicts and not _design_update
+                    and (is_design_suite_create(_uin)
+                         or (_has_create and not _has_tier2)))
             except Exception as e:
                 logger.debug("intent_classifier failed (%s); skipping remap", e)
                 _design_create = False

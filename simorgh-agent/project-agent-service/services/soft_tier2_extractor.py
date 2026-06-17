@@ -427,11 +427,21 @@ async def _vlm_transcribe_pages(document_id: str, max_pages: int = 6
         if png is None:
             break
 
-        # Full page (busbar header) + N feeder-table tiles.
-        jobs = [_call_vlm(_SLD_VLM_PROMPT, png, timeout=TIER2_TIMEOUT)]
+        # Full page (busbar header) + N feeder-table tiles. Cap
+        # concurrency with a semaphore: firing all 4 VLM calls at once
+        # saturates the single 7B VLM on .62 and the gateway returns
+        # 502s (observed). 2-at-a-time keeps latency reasonable without
+        # overwhelming the shared model.
+        _sem = asyncio.Semaphore(int(os.getenv("SOFT_TIER2_VLM_CONCURRENCY", "2")))
+
+        async def _vlm_job(prompt: str, image: bytes):
+            async with _sem:
+                return await _call_vlm(prompt, image, timeout=TIER2_TIMEOUT)
+
+        jobs = [_vlm_job(_SLD_VLM_PROMPT, png)]
         tiles = _png_to_tiles(png, TIER2_TILES, TIER2_TILE_OVERLAP)
         for t in tiles:
-            jobs.append(_call_vlm(_TILE_VLM_PROMPT, t, timeout=TIER2_TIMEOUT))
+            jobs.append(_vlm_job(_TILE_VLM_PROMPT, t))
         try:
             results = await asyncio.gather(*jobs, return_exceptions=True)
         except Exception as e:  # noqa: BLE001
