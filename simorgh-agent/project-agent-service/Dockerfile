@@ -19,6 +19,7 @@ RUN printf '%s\n' 'Acquire::Retries "20";' 'Acquire::http::Timeout "300";' 'Acqu
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         wget curl ca-certificates build-essential libpq-dev git openssh-client \
+        poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

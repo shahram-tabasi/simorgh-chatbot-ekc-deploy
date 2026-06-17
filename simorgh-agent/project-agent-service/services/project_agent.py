@@ -3736,11 +3736,33 @@ class ProjectManagerAgent:
                 "soft_project_id": soft_id, "deep_link": url,
                 "counts": _counts,
             })
+            _eq = _counts.get("equipments", 0)
+            _tpl = _counts.get("templates", 0)
+            _lib = _counts.get("deviceLibrary", 0)
             return {
                 "output": json.dumps({
                     "updated": True, "soft_project_id": soft_id,
-                    "deep_link": url, "counts": _counts},
-                    default=str),
+                    "deep_link": url, "counts": _counts,
+                    # Tell the model EXACTLY what to say: this is an UPDATE
+                    # to an existing project, not a create. Earlier the
+                    # model narrated "project created" which confused the
+                    # user. Also: these values are VLM/LLM extractions
+                    # from a drawing — flag them for review, not as
+                    # ground truth.
+                    "message": (
+                        f"Added {_eq} equipment item(s), {_tpl} template(s) "
+                        f"and {_lib} device-library item(s) to your EXISTING "
+                        f"Design Suite project (not a new project). These "
+                        f"were read from the diagram by the vision model — "
+                        f"please open the project and verify the feeder "
+                        f"numbers, voltage tier, and ratings before relying "
+                        f"on them."),
+                    "instruction_to_assistant": (
+                        "Say you UPDATED/added to the existing project (do "
+                        "NOT say 'created'). Give the counts and the deep "
+                        "link, and tell the user to verify the extracted "
+                        "values in the diagram."),
+                }, default=str),
                 "metadata": {"tool": "update_soft_spec", "via": "soft_bridge",
                              "deep_link": url, "counts": _counts},
             }

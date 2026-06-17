@@ -356,15 +356,42 @@ async def extract_tier2_for_project(
     device_lib: Dict[str, List] = {"LV": [], "MV": [], "HV": []}
 
     for fn, did, dt, _ in typed[:TIER2_MAX_DOCS]:
+        is_drawing = _is_drawing(fn, dt)
+        # Only DRAWINGS (SLD) and LOAD LISTS / panel schedules enumerate
+        # panels + feeders. A prose specification ("the CTs shall be
+        # 5P20…") does NOT — asking the LLM to pull equipments/devices
+        # from it just invents generic panels (observed: the 6.6kV spec
+        # PDF produced 4 fabricated equipments). Skip everything that
+        # isn't a drawing or a load list so tier-2 never hallucinates
+        # equipment from requirements prose.
+        if not (is_drawing or dt in ("loadlist", "panelschedule")):
+            logger.info(
+                "soft.tier2: skipping %s (doc_type=%s) — not a drawing or "
+                "load list; tier-2 data lives in SLDs / schedules only",
+                fn, dt)
+            continue
         # SLD / drawing → VLM transcription (the PDF text layer of a
         # vector drawing is positional garbage; the VLM on .62 can
         # actually SEE the diagram and transcribe the feeder table).
         # Everything else → the indexed text from Qdrant.
         text = ""
-        if _is_drawing(fn, dt) and did:
+        if is_drawing and did:
             logger.info("soft.tier2: %s is a drawing — using VLM", fn)
             text = await _vlm_transcribe_pages(did)
-        if not text:
+            if not text:
+                # CRITICAL: do NOT fall back to the PDF text layer for a
+                # drawing — it's positional garbage and the LLM will
+                # HALLUCINATE feeders/ratings from it (observed: an MV
+                # 20kV board extracted as LV with wrong feeder numbers
+                # because poppler was missing and the VLM never ran).
+                # Skip the doc and let the caller report that the SLD
+                # couldn't be read so the user can fix the input.
+                logger.warning(
+                    "soft.tier2: VLM produced no text for drawing %s — "
+                    "SKIPPING (will not extract from garbage text layer)",
+                    fn)
+                continue
+        else:
             try:
                 res = q.get_document_text(
                     user_id="system", project_oenum=scope,
