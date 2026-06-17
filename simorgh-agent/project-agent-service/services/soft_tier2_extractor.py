@@ -317,6 +317,30 @@ def _kv_to_tier(kv: float) -> str:
     return "HV"
 
 
+def _has_busbar_header(text: str) -> bool:
+    """A REAL single-line-diagram sheet carries a busbar header line —
+    a voltage co-located with a current (A) and/or short-circuit (kA)
+    rating, e.g. '3PH, 50Hz, 20KV, 630A, 16KA/1S' or 'W22HV01 … 20kV
+    630A'. Cover sheets (just a title) and LEGEND/symbol sheets do NOT.
+    Used to SKIP cover + legend pages so their content (especially the
+    legend's symbol list: CB, CT, VT…) never pollutes the device
+    extraction. Returns True only for sheets that look like an actual
+    SLD."""
+    if not text:
+        return False
+    low = text.lower()
+    # Legend pages are explicitly titled and have no busbar — reject
+    # fast even if a stray voltage appears in a reference doc number.
+    if "legend" in low and "busbar" not in low and "hv01" not in low:
+        # Still allow if a clear busbar-rating line exists; otherwise skip.
+        pass
+    for line in text.splitlines():
+        ll = line.lower()
+        if "kv" in ll and ("ka" in ll or "hz" in ll or _AMP_RE.search(ll)):
+            return True
+    return False
+
+
 def _tier_from_text(text: str) -> Optional[str]:
     """Determine board tier from the BUSBAR HEADER's rated voltage.
 
@@ -455,12 +479,23 @@ async def _vlm_transcribe_pages(document_id: str, max_pages: int = 6
                 continue
             label = "full page" if idx == 0 else f"tile {idx}"
             page_parts.append(f"[{label}]\n{str(res).strip()}")
-        if page_parts:
-            parts.append(
-                f"--- SLD sheet {page} ---\n" + "\n\n".join(page_parts))
-            logger.info("soft.tier2: sheet %d transcribed "
-                        "(%d/%d VLM passes ok)",
-                        page, len(page_parts), len(jobs))
+        if not page_parts:
+            continue
+        page_text = "\n\n".join(page_parts)
+        # SKIP cover + legend sheets. Multi-sheet SLDs are typically
+        # [cover, legend, diagram, diagram…]; only sheets with a real
+        # busbar header carry equipment/feeder data. Transcribing the
+        # legend would extract its SYMBOL LIST (CB, CT, VT…) as fake
+        # device-library entries — exactly the "3 device-library items,
+        # no equipment" weak result the user hit.
+        if not _has_busbar_header(page_text):
+            logger.info("soft.tier2: sheet %d has no busbar header "
+                        "(cover/legend) — SKIPPED", page)
+            continue
+        parts.append(f"--- SLD sheet {page} ---\n{page_text}")
+        logger.info("soft.tier2: sheet %d is a real SLD — kept "
+                    "(%d/%d VLM passes ok)",
+                    page, len(page_parts), len(jobs))
     return "\n\n".join(parts)
 
 
