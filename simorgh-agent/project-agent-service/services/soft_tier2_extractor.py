@@ -261,28 +261,66 @@ def _merge_grouped(a: Dict[str, List], b: Dict[str, List]) -> Dict[str, List]:
     return a
 
 
+# Higher DPI than the verifier default (180) — dense SLD feeder-table
+# cell text is 2-3 mm and illegible below ~300 DPI after the VLM's
+# internal resize (research: render so each glyph is ≥20 px tall).
+TIER2_SLD_DPI = int(os.getenv("SOFT_TIER2_SLD_DPI", "400"))
+
 _SLD_VLM_PROMPT = (
-    "You are reading a MEDIUM/LOW-VOLTAGE SINGLE-LINE DIAGRAM (SLD) of "
-    "switchgear. Transcribe it into structured Markdown a downstream "
-    "model can parse:\n"
-    "  1. The BUSBAR / switchboard header line verbatim (e.g. "
-    "'04BHV01 3PH 50Hz 20kV 3150A 31.5kA/3s').\n"
-    "  2. The FEEDER TABLE as a Markdown table — one row per cubicle/"
-    "column, with every column you can read: number, TAG (Incoming/"
-    "Outgoing/Bus-tie/Transformer/Spare), LOAD TYPE, Cable/OHL size, "
-    "LOAD kW, LOAD NAME/tag.\n"
-    "Transcribe codes, tags, cable sizes and ratings VERBATIM. Write "
-    "'(blank)' for empty cells. Output ONLY Markdown, no preamble."
+    "You are reading a MEDIUM/LOW-VOLTAGE SWITCHGEAR SINGLE-LINE "
+    "DIAGRAM (SLD). Transcribe EXACTLY what is drawn — never invent or "
+    "guess a value. Procedure:\n"
+    "STEP 1 — BUSBAR HEADER: find the busbar/switchboard label line and "
+    "transcribe it VERBATIM (e.g. '04BHV01 3PH 50Hz 20kV 3150A "
+    "31.5kA/3s'). The voltage there (e.g. 20kV) sets the WHOLE board's "
+    "class.\n"
+    "STEP 2 — COUNT: count the feeder/cubicle columns in the bottom "
+    "table. State the integer count.\n"
+    "STEP 3 — FEEDER TABLE: output a Markdown table with EXACTLY that "
+    "many rows, left-to-right, columns: Number | TAG (Incoming/"
+    "Outgoing/Bus-tie/Transformer/Spare) | LOAD TYPE | Cable/OHL | "
+    "LOAD kW | LOAD NAME. For ANY cell you cannot read clearly, write "
+    "the literal '(blank)' — do NOT guess. Transcribe codes, tags, "
+    "cable sizes and ratings character-for-character.\n"
+    "Output ONLY: the busbar header line, the count, then the Markdown "
+    "table. No commentary."
 )
 
+# Busbar voltage → board tier. Deterministic; eliminates the VLM
+# misclassifying a 20 kV (MV) board as LV. We regex the kV value out of
+# the transcribed busbar header and stamp the tier on every feeder.
+_KV_RE = __import__("re").compile(
+    r"(\d+(?:\.\d+)?)\s*k\s*v", __import__("re").IGNORECASE)
 
-async def _vlm_transcribe_pages(document_id: str, max_pages: int = 4
+
+def _tier_from_text(text: str) -> Optional[str]:
+    """Pull the highest kV value from the busbar header text and map to
+    LV/MV/HV. Returns None when no voltage is found (caller keeps the
+    VLM's per-equipment guess)."""
+    kvs = []
+    for m in _KV_RE.finditer(text or ""):
+        try:
+            kvs.append(float(m.group(1)))
+        except ValueError:
+            continue
+    if not kvs:
+        return None
+    kv = max(kvs)  # busbar rating is the highest voltage on the board
+    if kv <= 1.0:
+        return "LV"
+    if kv <= 36.0:
+        return "MV"
+    return "HV"
+
+
+async def _vlm_transcribe_pages(document_id: str, max_pages: int = 6
                                 ) -> str:
-    """Render an SLD/drawing PDF's pages to PNG and ask the VLM
-    (Qwen2.5-VL on .62) to transcribe each into structured Markdown.
-    Returns the concatenated transcription, or "" when no pages render
-    (e.g. the raw PDF wasn't stashed). SLDs are usually 1 page; we try
-    up to max_pages and stop at the first that fails to render."""
+    """Render an SLD/drawing PDF's pages to PNG at high DPI and ask the
+    VLM (Qwen2.5-VL on .62) to transcribe each into structured Markdown
+    (busbar header + counted feeder table). Returns the concatenated
+    transcription with per-page sheet markers, or "" when no pages
+    render. Multi-sheet SLDs: we transcribe every renderable page and
+    tag each with its sheet number so the caller can merge."""
     try:
         from services.vlm_verifier import render_pdf_page, _call_vlm
     except Exception as e:  # noqa: BLE001
@@ -291,7 +329,7 @@ async def _vlm_transcribe_pages(document_id: str, max_pages: int = 4
     parts: List[str] = []
     for page in range(1, max_pages + 1):
         try:
-            img = render_pdf_page(document_id, page)
+            img = render_pdf_page(document_id, page, dpi=TIER2_SLD_DPI)
         except Exception as e:  # noqa: BLE001
             logger.warning("soft.tier2: render page %d failed: %s", page, e)
             break
@@ -303,7 +341,7 @@ async def _vlm_transcribe_pages(document_id: str, max_pages: int = 4
             logger.warning("soft.tier2: VLM page %d failed: %s", page, e)
             continue
         if md and md.strip():
-            parts.append(f"--- SLD page {page} ---\n{md.strip()}")
+            parts.append(f"--- SLD sheet {page} ---\n{md.strip()}")
     return "\n\n".join(parts)
 
 
@@ -409,7 +447,19 @@ async def extract_tier2_for_project(
             timeout=TIER2_TIMEOUT)
         if not parsed:
             continue
-        equipments.extend(_shape_equipments(parsed.get("equipments") or []))
+        doc_equip = _shape_equipments(parsed.get("equipments") or [])
+        # MV/LV GROUNDING: derive the board tier from the busbar voltage
+        # in the (VLM-transcribed) text and STAMP it on every equipment +
+        # its devices. The busbar rating is authoritative; per-equipment
+        # VLM/LLM tier guesses are not (a 20 kV board kept coming back as
+        # LV). Deterministic regex, not model judgement.
+        board_tier = _tier_from_text(text)
+        if board_tier:
+            for eq in doc_equip:
+                eq["type"] = board_tier
+            logger.info("soft.tier2 %s: busbar tier=%s stamped on %d equip",
+                        fn, board_tier, len(doc_equip))
+        equipments.extend(doc_equip)
         _merge_grouped(templates,
                        _grouped(parsed.get("templates") or [], "tpl"))
         _merge_grouped(device_lib,
