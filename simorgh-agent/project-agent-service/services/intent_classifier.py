@@ -63,6 +63,16 @@ _INTENT_PROTOTYPES: Dict[str, List[str]] = {
         "تمپلیت و دیوایس‌ها رو به پروژه اضافه کن",
         "پروژه سیمرغ دیزاین رو آپدیت کن",
     ],
+    "design_suite_conflicts": [
+        "check my documents for conflicts",
+        "are my uploaded documents consistent",
+        "do these documents conflict with each other",
+        "check for deviations between the spec and the diagram",
+        "compare my documents and show any conflicting values",
+        "verify the documents are from the same project",
+        "تناقض بین مدارک رو بررسی کن",
+        "آیا مدارک با هم تناقض دارند",
+    ],
 }
 
 # Cache: intent name -> list of vectors. Populated once at first use.
@@ -165,5 +175,18 @@ def is_design_suite_update(user_input: str, threshold: float = 0.62) -> bool:
         "update my design suite", "update the design suite",
         "add to my design suite", "populate the device",
         "تمپلیت", "دیوایس",
+    ])
+    return s >= threshold
+
+
+def is_design_suite_conflicts(user_input: str, threshold: float = 0.62) -> bool:
+    """Match 'check my documents for conflicts / are they consistent /
+    are they from the same project'. Triggers the cross-document
+    deviation report (soft_consistency) so the user can catch a spec
+    and an SLD that belong to different projects before committing."""
+    s = score(user_input, "design_suite_conflicts", fallback_keywords=[
+        "conflict", "consistent", "consistency", "deviation",
+        "different project", "same project", "mismatch", "discrepanc",
+        "تناقض", "مغایرت",
     ])
     return s >= threshold

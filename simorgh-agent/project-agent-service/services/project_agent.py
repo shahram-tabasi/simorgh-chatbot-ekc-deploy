@@ -2474,24 +2474,36 @@ class ProjectManagerAgent:
         # embeddings-service-down case.
         if (os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on")
                 and isinstance(tool, str)
-                and tool not in ("submit_soft_spec", "update_soft_spec")):
+                and tool not in ("submit_soft_spec", "update_soft_spec",
+                                 "check_soft_conflicts")):
             _pc = getattr(self, "_active_plan_ctx", None)
             _uin = (getattr(_pc, "user_input", "") or "")
-            # UPDATE intent is checked FIRST and is more specific
-            # ("add templates/devices to my project") so it wins over the
-            # broader create intent when both could match.
+            # Intent priority: CONFLICTS check is most specific, then
+            # UPDATE (add templates/devices), then the broad CREATE.
             try:
                 from services.intent_classifier import (
                     is_design_suite_create, is_design_suite_update,
+                    is_design_suite_conflicts,
                 )
-                _design_update = is_design_suite_update(_uin)
-                _design_create = (not _design_update
+                _design_conflicts = is_design_suite_conflicts(_uin)
+                _design_update = (not _design_conflicts
+                                  and is_design_suite_update(_uin))
+                _design_create = (not _design_conflicts and not _design_update
                                   and is_design_suite_create(_uin))
             except Exception as e:
                 logger.debug("intent_classifier failed (%s); skipping remap", e)
                 _design_create = False
                 _design_update = False
-            if _design_update:
+                _design_conflicts = False
+            if _design_conflicts:
+                logger.info(
+                    "soft-bridge remap: %s -> check_soft_conflicts "
+                    "(intent matched design_suite_conflicts on %r)",
+                    tool, _uin[:120])
+                tool = "check_soft_conflicts"
+                raw_input = {}
+                tool_input = {}
+            elif _design_update:
                 logger.info(
                     "soft-bridge remap: %s -> update_soft_spec "
                     "(intent_classifier matched design_suite_update on user "
@@ -3118,7 +3130,7 @@ class ProjectManagerAgent:
         # All three are no-ops when SOFT_BRIDGE_ENABLED is unset.
         if tool in ("read_soft_spec", "ask_user", "submit_soft_spec",
                     "list_pending_proposals", "approve_proposals",
-                    "update_soft_spec"):
+                    "update_soft_spec", "check_soft_conflicts"):
             try:
                 return await self._execute_soft_bridge_tool(
                     project_id, tool, tool_input)
@@ -3407,6 +3419,52 @@ class ProjectManagerAgent:
                 return {"output": "submit_soft_spec: no state available",
                         "metadata": {"tool": "submit_soft_spec",
                                      "via": "soft_bridge", "error": "no_state"}}
+            # CROSS-DOCUMENT CONFLICT GUARD. Before auto-approving and
+            # creating, check whether the uploaded documents disagree on
+            # identity/electrical fields — the "uploaded a spec and an SLD
+            # from different projects" case. Silently letting the
+            # reconciler pick the highest-confidence value would bake one
+            # project's data into another. If the documents look mixed
+            # (≥2 identity fields conflict), STOP and surface the
+            # deviations so the user resolves them first. Bypassable: the
+            # user re-issuing "create" after seeing the note still has to
+            # resolve the conflicts in the drawer (they become pending),
+            # OR an explicit override could be added later.
+            if not tool_input.get("ignore_conflicts"):
+                try:
+                    from services import soft_proposals as _csp
+                    from services.soft_consistency import detect_conflicts
+                    _pend = await _csp.list_pending(project_id) or []
+                    _appr = await _csp.list_approved(project_id) or []
+                    _rep = detect_conflicts(_pend, _appr)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("submit_soft_spec conflict check: %s", e)
+                    _rep = {"mixed_projects": False, "conflict_count": 0}
+                if _rep.get("mixed_projects"):
+                    await self._notify_progress(
+                        project_id, "soft_conflicts", {
+                            "conflict_count": _rep["conflict_count"],
+                            "mixed_projects": True,
+                        })
+                    return {
+                        "output": json.dumps({
+                            "blocked": True,
+                            "reason": "documents_conflict",
+                            "note": _rep["note"],
+                            "instruction_to_assistant": (
+                                "STOP — do NOT create the project. The "
+                                "uploaded documents disagree on key "
+                                "identity fields and may be from different "
+                                "projects. Show the `note` verbatim, ask "
+                                "the user to confirm which values are "
+                                "correct (or remove the wrong document), "
+                                "then they can re-issue the create."),
+                        }, ensure_ascii=False, default=str),
+                        "metadata": {"tool": "submit_soft_spec",
+                                     "via": "soft_bridge",
+                                     "blocked_on": "documents_conflict",
+                                     "conflict_count": _rep["conflict_count"]},
+                    }
             # Auto-approve high-confidence proposals before the HITL gate
             # so chat-driven "create the design suite project" works
             # without forcing the user to click 31 Approve buttons. The
@@ -3765,6 +3823,52 @@ class ProjectManagerAgent:
                 }, default=str),
                 "metadata": {"tool": "update_soft_spec", "via": "soft_bridge",
                              "deep_link": url, "counts": _counts},
+            }
+
+        if tool == "check_soft_conflicts":
+            # Cross-document conflict / deviation report. Reads the stored
+            # proposals (each carries its source document) and flags
+            # fields where different documents disagree — catching the
+            # "uploaded a spec and an SLD from different projects" case
+            # before wrong data is committed.
+            try:
+                from services import soft_proposals as sp
+                from services.soft_consistency import detect_conflicts
+                pending = await sp.list_pending(project_id) or []
+                approved = await sp.list_approved(project_id) or []
+                report = detect_conflicts(pending, approved)
+            except Exception as e:
+                logger.warning("check_soft_conflicts failed: %s", e)
+                return {"output": json.dumps({
+                    "error": "conflict_check_failed", "message": str(e)},
+                    default=str),
+                    "metadata": {"tool": "check_soft_conflicts",
+                                 "via": "soft_bridge", "error": str(e)}}
+            # Surface to the UI so the review drawer opens for resolution.
+            if report.get("conflict_count"):
+                await self._notify_progress(project_id, "soft_conflicts", {
+                    "conflict_count": report["conflict_count"],
+                    "mixed_projects": report["mixed_projects"],
+                })
+            return {
+                "output": json.dumps({
+                    "conflicts": report["deviations"],
+                    "mixed_projects": report["mixed_projects"],
+                    "conflict_count": report["conflict_count"],
+                    "note": report["note"],
+                    "instruction_to_assistant": (
+                        "Present the `note` to the user verbatim (it lists "
+                        "each conflicting field with the competing values "
+                        "and which document each came from). Ask them to "
+                        "choose or type the correct value per field. Do NOT "
+                        "narrate tool names. If mixed_projects is true, "
+                        "stress that the documents may be from different "
+                        "projects and they should verify before continuing."),
+                }, ensure_ascii=False, default=str),
+                "metadata": {"tool": "check_soft_conflicts",
+                             "via": "soft_bridge",
+                             "conflict_count": report["conflict_count"],
+                             "mixed_projects": report["mixed_projects"]},
             }
 
         return {"output": f"unknown soft-bridge tool: {tool}",
