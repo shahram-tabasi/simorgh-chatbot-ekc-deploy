@@ -2475,7 +2475,8 @@ class ProjectManagerAgent:
         if (os.getenv("SOFT_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes", "on")
                 and isinstance(tool, str)
                 and tool not in ("submit_soft_spec", "update_soft_spec",
-                                 "check_soft_conflicts")):
+                                 "check_soft_conflicts",
+                                 "open_soft_proposals")):
             _pc = getattr(self, "_active_plan_ctx", None)
             _uin = (getattr(_pc, "user_input", "") or "")
             # Disambiguation guards — the embedding classifier alone
@@ -2494,19 +2495,22 @@ class ProjectManagerAgent:
             _has_create = any(w in _low for w in (
                 "create", "build", "submit", "finalize", "finalise",
                 "make the project", "بساز", "ایجاد"))
-            # Intent priority: CONFLICTS (most specific) > UPDATE
-            # (requires a tier-2 word) > CREATE.
+            # Intent priority: OPEN_PROPOSALS (most specific UI action) >
+            # CONFLICTS > UPDATE (requires tier-2 word) > CREATE.
             try:
                 from services.intent_classifier import (
                     is_design_suite_create, is_design_suite_update,
                     is_design_suite_conflicts,
+                    is_design_suite_open_proposals,
                 )
-                _design_conflicts = is_design_suite_conflicts(_uin)
+                _design_open = is_design_suite_open_proposals(_uin)
+                _design_conflicts = (not _design_open
+                                     and is_design_suite_conflicts(_uin))
                 # UPDATE only when the embedding matches AND the turn
                 # actually mentions tier-2 data — never on a bare
                 # "create project" phrase.
                 _design_update = (
-                    not _design_conflicts
+                    not _design_open and not _design_conflicts
                     and _has_tier2
                     and not (_has_create and not _has_tier2)
                     and is_design_suite_update(_uin))
@@ -2514,7 +2518,8 @@ class ProjectManagerAgent:
                 # present without tier-2 words (covers "continue to
                 # create project").
                 _design_create = (
-                    not _design_conflicts and not _design_update
+                    not _design_open and not _design_conflicts
+                    and not _design_update
                     and (is_design_suite_create(_uin)
                          or (_has_create and not _has_tier2)))
             except Exception as e:
@@ -2522,7 +2527,16 @@ class ProjectManagerAgent:
                 _design_create = False
                 _design_update = False
                 _design_conflicts = False
-            if _design_conflicts:
+                _design_open = False
+            if _design_open:
+                logger.info(
+                    "soft-bridge remap: %s -> open_soft_proposals "
+                    "(intent matched design_suite_open_proposals on %r)",
+                    tool, _uin[:120])
+                tool = "open_soft_proposals"
+                raw_input = {}
+                tool_input = {}
+            elif _design_conflicts:
                 logger.info(
                     "soft-bridge remap: %s -> check_soft_conflicts "
                     "(intent matched design_suite_conflicts on %r)",
@@ -3157,7 +3171,8 @@ class ProjectManagerAgent:
         # All three are no-ops when SOFT_BRIDGE_ENABLED is unset.
         if tool in ("read_soft_spec", "ask_user", "submit_soft_spec",
                     "list_pending_proposals", "approve_proposals",
-                    "update_soft_spec", "check_soft_conflicts"):
+                    "update_soft_spec", "check_soft_conflicts",
+                    "open_soft_proposals"):
             try:
                 return await self._execute_soft_bridge_tool(
                     project_id, tool, tool_input)
@@ -3896,6 +3911,43 @@ class ProjectManagerAgent:
                              "via": "soft_bridge",
                              "conflict_count": report["conflict_count"],
                              "mixed_projects": report["mixed_projects"]},
+            }
+
+        if tool == "open_soft_proposals":
+            # AG-UI / Claude-Artifacts pattern: chat agent emits a named
+            # tool call; the frontend listens on the SSE stream for that
+            # tool name and auto-opens the corresponding side panel
+            # (here, the proposals review drawer in DesignSuiteInline).
+            # This satisfies "CoT must can open proposal when need too"
+            # without bespoke control events the model isn't trained on.
+            try:
+                from services import soft_proposals as sp
+                pend = await sp.list_pending(project_id) or []
+                appr = await sp.list_approved(project_id) or []
+            except Exception:
+                pend, appr = [], []
+            counts = {
+                "pending": len(pend),
+                "approved": len(appr),
+                "total": len(pend) + len(appr),
+            }
+            await self._notify_progress(project_id, "soft_open_drawer", {
+                "open": True,
+                "counts": counts,
+            })
+            return {
+                "output": json.dumps({
+                    "opened": True,
+                    "counts": counts,
+                    "instruction_to_assistant": (
+                        "Tell the user the review panel is now open on "
+                        "the right and report the counts (e.g. 'opened — "
+                        "N values to review, M already approved'). Do "
+                        "NOT narrate tool names."),
+                }, default=str),
+                "metadata": {"tool": "open_soft_proposals",
+                             "via": "soft_bridge",
+                             "counts": counts},
             }
 
         return {"output": f"unknown soft-bridge tool: {tool}",

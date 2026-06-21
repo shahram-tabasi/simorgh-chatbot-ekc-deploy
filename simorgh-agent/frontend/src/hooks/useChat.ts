@@ -460,6 +460,21 @@ export function useChat(
                 : m));
             }
           } else {
+            // CHAT-DRIVEN PANEL OPEN. The agent's open_soft_proposals
+            // soft-bridge tool emits a `soft_open_drawer` progress
+            // event; re-broadcast it on window so the inline Design
+            // Suite component can listen and auto-open the drawer
+            // without restructuring the SSE plumbing. AG-UI /
+            // Claude-Artifacts pattern: named tool call → typed event
+            // → component opens panel.
+            if (curEvent === 'soft_open_drawer') {
+              try {
+                window.dispatchEvent(new CustomEvent(
+                  'simorgh:soft-open-drawer',
+                  { detail: { projectId, ...(payload || {}) } },
+                ));
+              } catch {}
+            }
             // progress / step / anything-else → surface as an agent step
             const step = (payload && typeof payload === 'object' && payload.title)
               ? payload

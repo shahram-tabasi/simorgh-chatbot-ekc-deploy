@@ -73,6 +73,18 @@ _INTENT_PROTOTYPES: Dict[str, List[str]] = {
         "تناقض بین مدارک رو بررسی کن",
         "آیا مدارک با هم تناقض دارند",
     ],
+    "design_suite_open_proposals": [
+        "open the review panel",
+        "show me the extracted values",
+        "show me what was extracted",
+        "open the proposals drawer",
+        "let me review the proposed values",
+        "show me the design-suite proposals",
+        "open the values for review",
+        "i want to review the extracted data",
+        "پیشنهادها رو نشون بده",
+        "پنل بازنگری رو باز کن",
+    ],
 }
 
 # Cache: intent name -> list of vectors. Populated once at first use.
@@ -188,5 +200,21 @@ def is_design_suite_conflicts(user_input: str, threshold: float = 0.62) -> bool:
         "conflict", "consistent", "consistency", "deviation",
         "different project", "same project", "mismatch", "discrepanc",
         "تناقض", "مغایرت",
+    ])
+    return s >= threshold
+
+
+def is_design_suite_open_proposals(user_input: str,
+                                   threshold: float = 0.62) -> bool:
+    """Match 'open the review panel / show me what was extracted'.
+    Triggers an SSE event the frontend listens for to auto-open the
+    proposals drawer — the AG-UI / Claude-artifacts pattern of letting
+    the chat agent surface a side panel on demand."""
+    s = score(user_input, "design_suite_open_proposals", fallback_keywords=[
+        "open the review", "open the panel", "open proposals",
+        "review panel", "review the proposals", "show me what was extracted",
+        "show me the extracted", "open the proposals drawer",
+        "review extracted", "extracted values",
+        "پیشنهادها رو", "پنل بازنگری",
     ])
     return s >= threshold

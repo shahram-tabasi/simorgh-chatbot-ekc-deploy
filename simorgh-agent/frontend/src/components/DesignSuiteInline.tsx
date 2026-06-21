@@ -194,6 +194,37 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
     return () => { cancelled = true; };
   }, [isLegacy]);
 
+  // CHAT-DRIVEN AUTO-OPEN. AG-UI / Claude-Artifacts pattern: when the
+  // backend dispatches the `soft_open_drawer` progress event (emitted
+  // by the open_soft_proposals soft-bridge tool the agent picks when
+  // the user says "show me the proposals" / "open the review panel"),
+  // a parent component re-broadcasts it on `window` as
+  // 'simorgh:soft-open-drawer' with the matching projectId, and we
+  // open the drawer here. Cross-project events are ignored so two
+  // open chats don't interfere. Falls back to a manual click on the
+  // chip if the event plumbing isn't wired.
+  React.useEffect(() => {
+    if (!projectId) return;
+    const onOpen = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail || {};
+      const targetId = detail.projectId || detail.project_id || "";
+      if (targetId && targetId !== projectId) return;
+      setDrawerOpen(true);
+      // Refresh so the drawer shows the latest counts the moment it
+      // opens (the polling cycle is 8s; the chat-driven open feels
+      // stale otherwise).
+      fetchState();
+      notify({
+        type: "info",
+        title: "Review panel opened",
+        message: "The chat opened the proposals panel for you.",
+      });
+    };
+    window.addEventListener("simorgh:soft-open-drawer", onOpen as any);
+    return () => window.removeEventListener(
+      "simorgh:soft-open-drawer", onOpen as any);
+  }, [projectId, fetchState]);
+
   // Compute these always (hooks-before-return rule).
   const pendingByField = proposals?.pending_by_field || {};
   const pendingFields  = Object.keys(pendingByField);

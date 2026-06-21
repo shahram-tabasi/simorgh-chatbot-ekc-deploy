@@ -150,6 +150,76 @@ _FIELD_LABELS: Dict[str, str] = {
         "Background colour for labels",
     "techSettings.others.writingColor":
         "Engraving / lettering colour for labels",
+    # ── Main characteristic (IEC 62271-1/-200 nameplate Table 101) ─────
+    "techSettings.mainCharacteristic.switchgearType":
+        "Switchgear type / construction (e.g. 'Metal-clad air-insulated, "
+        "withdrawable, indoor', 'GIS', 'AIS')",
+    "techSettings.mainCharacteristic.ratedVoltage":
+        "Rated voltage Ur, kV — IEC 62271-1 (highest voltage for equipment "
+        "Um, e.g. '7.2 kV' for a 6.6 kV service voltage)",
+    "techSettings.mainCharacteristic.ratedPowerFrequencyWithstandVoltage":
+        "Rated power-frequency (1-min) withstand voltage Ud, kV rms "
+        "(e.g. '28 kV / 1 min' for 7.2 kV)",
+    "techSettings.mainCharacteristic.mainBusbarRatedCurrent":
+        "Main busbar rated continuous current Ir, A (e.g. '1250', '2000', "
+        "'3150', '4000')",
+    "techSettings.mainCharacteristic.shortTimeWithstandCurrent":
+        "Rated short-time withstand current Icw, kA / duration s "
+        "(e.g. '40 kA / 3 s', '31.5 kA / 1 s') — IEC 62271-1",
+    "techSettings.mainCharacteristic.lscPartitionClass":
+        "LSC category + partition class per IEC 62271-200 (e.g. 'LSC2B-PM')",
+    "techSettings.mainCharacteristic.switchboardColor":
+        "Switchboard / cubicle paint colour (RAL code, e.g. 'RAL 7035 light grey')",
+    "techSettings.mainCharacteristic.connectionInPanel":
+        "Cable entry / connection direction (top / bottom / rear; front access)",
+    "techSettings.mainCharacteristic.sheetThickness":
+        "Enclosure sheet-steel thickness, mm (typical: 2.0 - 2.5)",
+    # ── Dimensions (H × W × D, mm) + cubicle count ─────────────────────
+    "techSettings.dimension.height":
+        "Cubicle height, mm (typical MV: 2100 - 2600)",
+    "techSettings.dimension.width":
+        "Cubicle width, mm (typical MV: 500 - 1200)",
+    "techSettings.dimension.depth":
+        "Cubicle depth, mm (typical MV: 1100 - 1800)",
+    "techSettings.dimension.numberOfCubicles":
+        "Total number of cubicles / panels / cells / bays in the switchboard",
+    # ── Type of Entrance (incoming + outgoing panel counts) ────────────
+    "techSettings.entrance.incomingPanels":
+        "Number / arrangement of incoming panels (e.g. '2 incomers, "
+        "top entry')",
+    "techSettings.entrance.outgoingPanels":
+        "Number / arrangement of outgoing feeders (e.g. '15 outgoing "
+        "transformer / motor feeders, bottom entry')",
+    # ── Busbar (ABB UniGear / Siemens NXAIR conventions) ───────────────
+    "techSettings.busbar.configuration":
+        "Busbar configuration (e.g. '3PH', '3PH + N', '3PH + N + PE', "
+        "single/double-busbar)",
+    "techSettings.busbar.coating":
+        "Busbar coating / surface (electrolytic copper bare / tin-plated / "
+        "silver-plated; per ABB UniGear)",
+    "techSettings.busbar.thermofitCover":
+        "Busbar insulation cover (yes/no; heat-shrink / insulating shell)",
+    "techSettings.busbar.mainBusbarSize":
+        "Main busbar cross-section or per-bar dimensions, mm² or mm×mm "
+        "(e.g. '40×10', '60×10', '80×10')",
+    "techSettings.busbar.neutralBusbarSize":
+        "Neutral busbar size, mm² or mm×mm (LV only; blank for MV ungrounded)",
+    "techSettings.busbar.earthBusbarSize":
+        "Earth / PE busbar size, mm² or mm×mm (e.g. '30×8', '40×10', "
+        "ABB UniGear standard)",
+    # ── Auxiliary voltage (Ua, IEC 62271-1 Tables 6/7) ─────────────────
+    "techSettings.auxiliaryVoltage.controlProtectionClosingTrippingSignalling":
+        "Auxiliary voltage Ua for control / protection / closing coil / "
+        "tripping coil / signalling (e.g. '110 V DC')",
+    "techSettings.auxiliaryVoltage.springChargingMotor":
+        "Auxiliary voltage for the CB spring-charging motor / motor "
+        "operating mechanism (e.g. '230 V AC' or '110 V DC')",
+    "techSettings.auxiliaryVoltage.panelLightingSpaceHeater":
+        "Auxiliary voltage for panel lighting + cubicle anti-condensation "
+        "space heater (typically '230 V AC')",
+    "techSettings.auxiliaryVoltage.motorSpaceHeater":
+        "Auxiliary voltage for motor anti-condensation heaters "
+        "(typically '230 V AC')",
 }
 
 # The list of (dotted) keys we EXTRACT. Superset of CONFIRMABLE_FIELDS
@@ -206,6 +276,36 @@ _EXTRACT_KEYS: List[str] = list(dict.fromkeys([
     "techSettings.others.colorType",
     "techSettings.others.backgroundColor",
     "techSettings.others.writingColor",
+    # Main characteristic (IEC 62271-1 nameplate)
+    "techSettings.mainCharacteristic.switchgearType",
+    "techSettings.mainCharacteristic.ratedVoltage",
+    "techSettings.mainCharacteristic.ratedPowerFrequencyWithstandVoltage",
+    "techSettings.mainCharacteristic.mainBusbarRatedCurrent",
+    "techSettings.mainCharacteristic.shortTimeWithstandCurrent",
+    "techSettings.mainCharacteristic.lscPartitionClass",
+    "techSettings.mainCharacteristic.switchboardColor",
+    "techSettings.mainCharacteristic.connectionInPanel",
+    "techSettings.mainCharacteristic.sheetThickness",
+    # Dimensions
+    "techSettings.dimension.height",
+    "techSettings.dimension.width",
+    "techSettings.dimension.depth",
+    "techSettings.dimension.numberOfCubicles",
+    # Entrance
+    "techSettings.entrance.incomingPanels",
+    "techSettings.entrance.outgoingPanels",
+    # Busbar
+    "techSettings.busbar.configuration",
+    "techSettings.busbar.coating",
+    "techSettings.busbar.thermofitCover",
+    "techSettings.busbar.mainBusbarSize",
+    "techSettings.busbar.neutralBusbarSize",
+    "techSettings.busbar.earthBusbarSize",
+    # Auxiliary voltage (IEC 62271-1 Tables 6/7)
+    "techSettings.auxiliaryVoltage.controlProtectionClosingTrippingSignalling",
+    "techSettings.auxiliaryVoltage.springChargingMotor",
+    "techSettings.auxiliaryVoltage.panelLightingSpaceHeater",
+    "techSettings.auxiliaryVoltage.motorSpaceHeater",
 ]))
 
 
