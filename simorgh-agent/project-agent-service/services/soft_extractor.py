@@ -318,9 +318,17 @@ async def from_chat_history(messages: List[Dict[str, Any]], timeout: float = 30.
                             ) -> Dict[str, FieldValue]:
     if not messages:
         return {}
+    # Extract over the FULL response, not a 12-message / 600-char window.
+    # The agent often emits the whole spec it inferred in one long reply
+    # (project name, client, ratings, panel list); a tight window silently
+    # dropped everything past the first few hundred characters. We keep a
+    # generous tail of the conversation and the full text of each message
+    # (capped only to protect the prompt budget on pathological pastes).
+    PER_MSG_CAP = 8000
+    TAIL = 40
     transcript = "\n".join(
-        f"{(m.get('role') or '?')}: {(m.get('content') or '')[:600]}"
-        for m in messages[-12:]
+        f"{(m.get('role') or '?')}: {(m.get('content') or '')[:PER_MSG_CAP]}"
+        for m in messages[-TAIL:]
     )
     return await _extract_via_llm(transcript, source="chat", confidence=0.7,
                                   note="from chat history", timeout=timeout)
@@ -486,12 +494,23 @@ async def from_uploads(project_id: str, project_oenum: str,
         "spec": 16000, "datasheet": 10000, "sld": 4000,
         "loadlist": 8000, "other": 8000,
     }
-    MAX_DOCS = 6
+    # Extract from every uploaded document (not just the first few). The
+    # cap is a guard against a project with dozens of attachments; the
+    # whole-doc extractor still sees each file's FULL text (max_chars below).
+    try:
+        MAX_DOCS = int(os.getenv("SOFT_MAX_DOCS", "20"))
+    except (TypeError, ValueError):
+        MAX_DOCS = 20
     bag: Dict[str, FieldValue] = {}
     for d in docs[:MAX_DOCS]:
         fn = d.get("filename") or ""
         if not fn:
             continue
+        # The qdrant document_id is the same id the upload route stashed
+        # the raw PDF under (redis `uploaded_pdf:{id}`). Carry it on every
+        # FieldValue so the proposals UI can re-open the source page and
+        # draw a rectangle around the extracted span.
+        doc_id = d.get("document_id") or d.get("doc_id") or None
         dt = _doc_type_of(fn)
         budget = PER_TYPE_BUDGET.get(dt, 8000)
         try:
@@ -516,6 +535,8 @@ async def from_uploads(project_id: str, project_oenum: str,
         try:
             for k, fv in extract_via_regex(fn, txt, dt).items():
                 if k not in bag:
+                    if doc_id and getattr(fv, "doc_id", None) is None:
+                        fv.doc_id = doc_id
                     bag[k] = fv
         except Exception as e:
             logger.warning("soft.extract.regex %s: %s", fn, e)
@@ -541,7 +562,7 @@ async def from_uploads(project_id: str, project_oenum: str,
                 full_md = (wd or {}).get("text") or txt
                 got = await extract_one_document(
                     filename=fn, doc_type=dt,
-                    markdown=full_md, timeout=timeout,
+                    markdown=full_md, timeout=timeout, doc_id=doc_id,
                 )
             except Exception as e:
                 logger.warning(
@@ -561,6 +582,8 @@ async def from_uploads(project_id: str, project_oenum: str,
         # Merge: regex already populated bag; LLM only fills new fields.
         for k, fv in got.items():
             if k not in bag:
+                if doc_id and getattr(fv, "doc_id", None) is None:
+                    fv.doc_id = doc_id
                 bag[k] = fv
     return bag
 

@@ -131,6 +131,37 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
   const onReject  = (prop: Proposal) =>
     decideProposal(prop, "reject");
 
+  // Bulk decide every pending proposal in one request (Approve all / Reject
+  // all). The approve endpoint already accepts an array, so we batch.
+  const [bulkBusy, setBulkBusy] = React.useState(false);
+  const decideAll = async (action: "approve" | "reject") => {
+    const pbf = proposals?.pending_by_field || {};
+    const all: Proposal[] = Object.values(pbf).flat();
+    if (!all.length) return;
+    setBulkBusy(true);
+    try {
+      await axios.post(
+        `${API_BASE}/v2/agent/projects/${projectId}/soft/approve`,
+        { approvals: all.map((p) => ({ proposal_id: p.id, action })) },
+        { headers: { Authorization: `Bearer ${token()}` } },
+      );
+      notify({
+        type: action === "approve" ? "success" : "info",
+        title: action === "approve" ? "All approved" : "All rejected",
+        message: `${all.length} value${all.length === 1 ? "" : "s"} ${action === "approve" ? "approved" : "rejected"}.`,
+      });
+      await fetchState();
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || e?.message || "Bulk action failed.";
+      setError(msg);
+      notify({ type: "error", title: "Bulk action failed", message: msg });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const onApproveAll = () => decideAll("approve");
+  const onRejectAll  = () => decideAll("reject");
+
   // Create the Design Suite project from the currently-approved spec
   // and open it in a new tab. Called by the "Create Design Suite
   // Project" button in the drawer footer. Backend route does the
@@ -139,7 +170,10 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
   // produce identical project records.
   const [creating, setCreating] = React.useState(false);
   const onCreate = async () => {
-    const spec = state?.spec || {};
+    // The compiled spec lives at state.state.spec (StateResp wraps it under
+    // `state`). Reading state.spec was always undefined, so Create wrongly
+    // reported "nothing to create" even after approvals.
+    const spec = state?.state?.spec || {};
     if (!Object.keys(spec).length) {
       notify({ type: "error", title: "Nothing to create",
         message: "No approved values yet. Approve at least one proposal first." });
@@ -410,6 +444,14 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
         onCreate={onCreate}
         creating={creating}
         canCreate={approvedCount > 0}
+        approved={proposals?.approved || []}
+        gaps={state.state.gaps || []}
+        onApproveAll={onApproveAll}
+        onRejectAll={onRejectAll}
+        bulkBusy={bulkBusy}
+        projectId={projectId}
+        apiBase={API_BASE}
+        getToken={token}
       />
     </div>
   );

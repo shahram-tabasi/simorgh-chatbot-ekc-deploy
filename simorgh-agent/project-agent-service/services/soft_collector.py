@@ -156,7 +156,10 @@ async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str,
         return None
 
     try:
-        recent = await memory.get_recent_context(project_id, limit=12)
+        # Pull a generous slice of the conversation so chat extraction sees
+        # the agent's full response(s), not just the last handful of turns
+        # (the extractor itself caps the per-message text, not the count).
+        recent = await memory.get_recent_context(project_id, limit=40)
     except Exception:
         recent = []
 
@@ -227,6 +230,7 @@ async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str,
                     "value":      getattr(fv, "value", None),
                     "confidence": float(getattr(fv, "confidence", 0.5) or 0.5),
                     "note":       getattr(fv, "note", None),
+                    "doc_id":     getattr(fv, "doc_id", None),
                 })
         total = 0
         for kind, proposals in by_kind.items():

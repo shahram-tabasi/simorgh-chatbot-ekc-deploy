@@ -112,6 +112,24 @@ async def list_approved(project_id: str) -> List[Dict[str, Any]]:
     return [_decode_row(dict(r)) for r in (rows or [])]
 
 
+async def get_proposal(proposal_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single proposal (any review state) by id — used by the
+    source-markup endpoint to resolve the document + evidence span."""
+    try:
+        row = await _pg().execute_one_async(
+            "SELECT id, project_id, source_kind, source_note, doc_id, field, "
+            "       COALESCE(approved_value, value) AS value, confidence, "
+            "       approved "
+            "  FROM soft_spec_proposal "
+            " WHERE id = $1",
+            proposal_id,
+        )
+    except Exception as e:
+        logger.warning("get_proposal %s: %s", proposal_id, e)
+        return None
+    return _decode_row(dict(row)) if row else None
+
+
 # ---------------------------------------------------------------------------
 # Approval actions.
 # ---------------------------------------------------------------------------

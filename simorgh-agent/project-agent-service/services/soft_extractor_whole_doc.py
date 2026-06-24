@@ -486,7 +486,8 @@ async def _call_gpt_oss(messages: List[Dict[str, Any]],
 
 
 def _to_field_values(extracted: Dict[str, Any], filename: str,
-                     doc_type: str) -> Dict[str, FieldValue]:
+                     doc_type: str,
+                     doc_id: Optional[str] = None) -> Dict[str, FieldValue]:
     """Convert the LLM's per-field record into the existing FieldValue
     contract so the reconciler and proposals layer don't change. Dotted
     keys (techSettings.general.foo) are passed through; the caller
@@ -517,6 +518,7 @@ def _to_field_values(extracted: Dict[str, Any], filename: str,
             value=str(value), source="uploads",
             confidence=max(0.0, min(1.0, conf)),
             note=" · ".join(note_parts),
+            doc_id=doc_id,
         )
     return out
 
@@ -527,6 +529,7 @@ def _to_field_values(extracted: Dict[str, Any], filename: str,
 async def extract_one_document(*, filename: str, doc_type: str,
                                markdown: str,
                                timeout: float = WHOLE_DOC_TIMEOUT,
+                               doc_id: Optional[str] = None,
                                ) -> Dict[str, FieldValue]:
     """Run the two-pass schema-driven extractor over one document's full
     markdown. Returns a dotted-key dict of FieldValue ready to merge with
@@ -617,7 +620,7 @@ async def extract_one_document(*, filename: str, doc_type: str,
         )
         validated = pass1 or {}
 
-    return _to_field_values(validated, filename, doc_type)
+    return _to_field_values(validated, filename, doc_type, doc_id=doc_id)
 
 
 async def from_uploads_whole_doc(project_id: str, project_oenum: str,

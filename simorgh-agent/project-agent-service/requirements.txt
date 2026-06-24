@@ -58,3 +58,9 @@ jdatetime>=4.1.0
 # render is wrapped in try/except so a missing poppler degrades to
 # "page image unavailable" rather than crashing the agent loop.
 pdf2image>=1.17.0
+
+# PyMuPDF (fitz) — used by services/sld_processor for high-DPI SLD rasters
+# and by services/soft_source_markup to locate an extracted value's text in
+# the PDF (page.search_for → bounding rects) and render the marked-up page
+# for the proposals "show source" viewer. Pure-Python wheel, no poppler.
+PyMuPDF>=1.24.0

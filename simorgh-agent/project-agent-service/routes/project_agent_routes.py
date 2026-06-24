@@ -2073,6 +2073,85 @@ async def soft_proposals(project_id: str,
     return {"pending_by_field": by_field, "approved": approved}
 
 
+# =============================================================================
+# Source markup — open the page a value was extracted from and draw a box
+# around the extracted region. Powers the "show source" button on each
+# proposal in the review drawer.
+# =============================================================================
+@router.get("/projects/{project_id}/soft/proposals/{proposal_id}/source")
+async def soft_proposal_source(project_id: str, proposal_id: str,
+                               current_user: str = Depends(get_current_user)):
+    """Return a rendered image of the source page with bounding rectangles
+    around the extracted span. JSON:
+       {ok, matched, page, page_count, image_b64, image_w, image_h,
+        rects:[[x0,y0,x1,y1]...], filename, field, section, evidence}
+    `ok=false` with a `reason` when no source document is linked / cached."""
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from services import soft_proposals as sp
+    prop = await sp.get_proposal(proposal_id)
+    if not prop or str(prop.get("project_id")) != str(project_id):
+        raise HTTPException(status_code=404, detail="proposal not found")
+
+    from services.soft_source_markup import parse_source_note, locate_in_pdf
+    note = parse_source_note(prop.get("source_note"))
+
+    # Resolve the source document id. Newer proposals carry doc_id directly;
+    # older ones only named the file in source_note — match it back to a
+    # document_id via the project's document list.
+    doc_id = prop.get("doc_id")
+    if not doc_id and note.get("filename"):
+        try:
+            q = getattr(memory, "qdrant", None)
+            docs = (q.list_documents(user_id="system",
+                                     project_oenum=str(project_id)) or []) if q else []
+            fn = note["filename"]
+            for d in docs:
+                if (d.get("filename") or "") == fn:
+                    doc_id = d.get("document_id"); break
+            if not doc_id:
+                for d in docs:
+                    if fn.lower() in (d.get("filename") or "").lower():
+                        doc_id = d.get("document_id"); break
+        except Exception as e:  # noqa: BLE001
+            logger.warning("soft_proposal_source: doc resolve failed: %s", e)
+
+    if not doc_id:
+        return {"ok": False,
+                "reason": "This value has no linked source document "
+                          "(it came from TPMS, chat, or manual entry).",
+                "filename": note.get("filename"), "evidence": note.get("evidence")}
+
+    rec = get_redis_service().get_uploaded_pdf(str(doc_id))
+    if not rec or not rec.get("b64"):
+        return {"ok": False,
+                "reason": "The source document is no longer cached "
+                          "(uploaded files are kept for 24 h). Re-upload it "
+                          "to view the marked-up source.",
+                "filename": (rec or {}).get("filename") or note.get("filename"),
+                "evidence": note.get("evidence")}
+
+    try:
+        import base64 as _b64
+        pdf_bytes = _b64.b64decode(rec["b64"])
+    except Exception:
+        return {"ok": False, "reason": "could not decode source document"}
+
+    result = locate_in_pdf(pdf_bytes, evidence=note.get("evidence"),
+                           value=prop.get("value"))
+    result["filename"] = rec.get("filename") or note.get("filename")
+    result["field"] = prop.get("field")
+    result["section"] = note.get("section")
+    return result
+
+
 class ApprovalRequest(BaseModel):
     approvals: List[Dict[str, Any]]   # [{proposal_id, action, value?}]
 

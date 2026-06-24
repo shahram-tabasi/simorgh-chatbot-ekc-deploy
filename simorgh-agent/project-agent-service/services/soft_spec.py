@@ -34,6 +34,11 @@ class FieldValue(BaseModel):
     source: Source = "default"
     confidence: float = 0.5   # 0..1; reconciler weights by source*confidence
     note: Optional[str] = None  # short human hint ("from OENUM 04A12065")
+    # Source document this value was lifted from (project_documents.id /
+    # the qdrant document_id). Set by the uploads extractor so the
+    # proposals UI can open the page and draw a rectangle around the
+    # extracted region. None for non-document sources (tpms/chat/user).
+    doc_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
