@@ -216,8 +216,23 @@ const FIELD_META: Record<string, FieldMeta> = {
     { label: "Label engraving / writing colour", icon: ShieldCheck },
 };
 
+// Prettify an unknown field key into a human label: drop a known prefix,
+// take the last dotted segment, split camelCase / snake_case, Title-case.
+// e.g. "parameters.ratedVoltage" → "Rated voltage",
+//      "techSettings.general.foo" → "Foo".
+function prettifyFieldKey(field: string): string {
+  const leaf = field.split(".").pop() || field;
+  const spaced = leaf
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!spaced) return field;
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 function fieldMeta(field: string): FieldMeta {
-  return FIELD_META[field] || { label: field };
+  return FIELD_META[field] || { label: prettifyFieldKey(field) };
 }
 
 // ---------------------------------------------------------------------------

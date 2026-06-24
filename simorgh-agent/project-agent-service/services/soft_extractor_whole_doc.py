@@ -727,3 +727,146 @@ async def from_uploads_whole_doc(project_id: str, project_oenum: str,
     # Reshape dotted-key entries (techSettings.general.foo) into nested
     # FieldValue payloads the existing reconciler understands.
     return _reshape_dotted(bag)
+
+
+# ===========================================================================
+# Response miner — turn the AGENT'S OWN ANSWER into proposals.
+#
+# When the user asks "tell me the key parameters" the agent reads the spec
+# (deep / vision plan) and replies with a cited, exhaustive list — far richer
+# than the background text-only extractor recovers. That answer IS the
+# extraction; we mine it directly so every parameter the agent surfaced
+# becomes a reviewable proposal (requirement: "extraction must run on the
+# result of the response"). Parameters that match a canonical spec field are
+# mapped to it; anything else is kept under `parameters.<name>` so nothing
+# the agent found is lost (ProjectSpec allows extra keys, and the reconciler
+# nests dotted keys, so approved extras still reach simorgh-soft).
+# ===========================================================================
+_MINE_MIN_CHARS = int(os.getenv("SOFT_MINE_MIN_CHARS", "350"))
+
+
+def _mine_schema() -> Dict[str, Any]:
+    return {
+        "type": "object", "additionalProperties": False,
+        "required": ["parameters"],
+        "properties": {
+            "parameters": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["name", "value"],
+                    "properties": {
+                        "name":            {"type": "string"},
+                        "canonical_field": {"type": ["string", "null"]},
+                        "value":           {"type": "string"},
+                        "unit":            {"type": ["string", "null"]},
+                        "page":            {"type": ["string", "null"]},
+                        "section":         {"type": ["string", "null"]},
+                        "evidence":        {"type": ["string", "null"]},
+                    },
+                },
+            },
+        },
+    }
+
+
+def _slug_param_key(name: str) -> str:
+    import re
+    s = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
+    return f"parameters.{s or 'value'}"
+
+
+# Assistant-side roles vary by code path (project_agent stores "assistant",
+# the CoT engine stores "agent"); treat them all as the agent's reply.
+_ASSISTANT_ROLES = {"assistant", "agent", "ai", "bot"}
+
+
+def _pick_answer(messages: List[Dict[str, Any]]) -> str:
+    """The substantial assistant reply to mine — the longest assistant
+    message in the tail, provided it's long enough to be an analysis."""
+    asst = [(m.get("content") or "") for m in (messages or [])
+            if str(m.get("role") or "").lower() in _ASSISTANT_ROLES]
+    asst = [c for c in asst if len(c) >= _MINE_MIN_CHARS]
+    if not asst:
+        return ""
+    return max(asst, key=len)[:WHOLE_DOC_MAX_CHARS]
+
+
+async def from_assistant_response(messages: List[Dict[str, Any]], *,
+                                  doc_id: Optional[str] = None,
+                                  timeout: float = WHOLE_DOC_TIMEOUT,
+                                  ) -> Dict[str, FieldValue]:
+    """Mine the agent's latest analytical answer into FieldValue proposals."""
+    answer = _pick_answer(messages)
+    if not answer:
+        return {}
+    allowed = ", ".join(_EXTRACT_KEYS)
+    system = (
+        "You convert an engineer's written analysis of electrical switchgear "
+        "specification documents into STRUCTURED parameters. The analysis "
+        "already states each parameter with its value and (often) a page and "
+        "section citation. Extract EVERY distinct parameter it states — do not "
+        "summarise, do not skip any. For each, return: name (the parameter "
+        "label), value, unit (if any), page, section, and a short verbatim "
+        "evidence snippet copied from the analysis. If a parameter clearly "
+        "corresponds to one of the CANONICAL FIELDS, set canonical_field to "
+        "that exact key; otherwise set canonical_field to null."
+    )
+    user = (
+        f"CANONICAL FIELDS (use the exact key when a parameter matches one):\n"
+        f"{allowed}\n\n"
+        f"ANALYSIS TEXT:\n{answer}\n\n"
+        "Return JSON: {\"parameters\": [ {name, canonical_field, value, unit, "
+        "page, section, evidence}, ... ] }. Include ALL parameters stated."
+    )
+    parsed = await _call_gpt_oss(
+        [{"role": "system", "content": system},
+         {"role": "user", "content": user}],
+        _mine_schema(), timeout=timeout,
+    )
+    if not parsed or not isinstance(parsed, dict):
+        return {}
+
+    allowed_set = set(_EXTRACT_KEYS)
+    out: Dict[str, FieldValue] = {}
+    for item in (parsed.get("parameters") or []):
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        value = item.get("value")
+        if not name or value in (None, "", []):
+            continue
+        cf = (item.get("canonical_field") or "").strip()
+        field = cf if cf in allowed_set else _slug_param_key(name)
+        if field in out:        # first mention wins — keep it deduped
+            continue
+        unit = (item.get("unit") or "").strip()
+        val_s = str(value).strip()
+        if unit and unit.lower() not in val_s.lower():
+            val_s = f"{val_s} {unit}".strip()
+        # Build a source note the drawer/Excel/Source-viewer understand:
+        #   "from analysis · § <section> · p.<page> · \"<evidence>\""
+        parts: List[str] = ["from analysis"]
+        sec = (item.get("section") or "").strip()
+        page = (item.get("page") or "").strip()
+        ev = (item.get("evidence") or "").strip()
+        if sec:
+            parts.append(f"§ {sec}")
+        if page:
+            parts.append(f"p.{page}")
+        if ev:
+            ev_short = ev[:240] + ("…" if len(ev) > 240 else "")
+            parts.append(f"\"{ev_short}\"")
+        out[field] = FieldValue(
+            value=val_s, source="chat",
+            confidence=0.8, note=" · ".join(parts),
+            # Link to the source PDF so the "Source" button can locate the
+            # evidence span and box it (search_for finds it regardless of the
+            # stated page). Only set when the caller resolved a single doc.
+            doc_id=doc_id,
+        )
+    logger.info("soft.mine_response: %d parameters from agent answer", len(out))
+    # Flat per-parameter keys (same contract as from_uploads) so each
+    # parameter is its own reviewable proposal. reconcile() nests the
+    # dotted keys when the user approves.
+    return out

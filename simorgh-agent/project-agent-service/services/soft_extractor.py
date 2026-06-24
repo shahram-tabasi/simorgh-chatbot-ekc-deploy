@@ -1108,9 +1108,29 @@ async def gather_all(*, project_id: str, tpms_oenum: Optional[str],
     # cause of "uploads never reached the form" (observed: chat + uploads
     # both 502'd while TPMS landed cleanly). One-at-a-time + 5xx retries
     # in _extract_via_llm trades a few seconds of latency for reliability.
+    # Mine the agent's own answer into proposals (requirement: extract on
+    # the result of the response). Link parameters to the source PDF when the
+    # project has a single uploaded document, so the "Source" button can box
+    # the evidence; ambiguous multi-doc projects leave doc_id unset.
+    mine_doc_id: Optional[str] = None
+    try:
+        from services.project_memory_service import get_project_memory_service
+        _q = getattr(get_project_memory_service(), "qdrant", None)
+        _docs = (_q.list_documents(user_id="system",
+                                   project_oenum=str(project_id)) or []) if _q else []
+        if len(_docs) == 1:
+            mine_doc_id = _docs[0].get("document_id") or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("soft.gather_all: doc resolve for miner failed: %s", e)
+
+    async def _mine_response():
+        from services.soft_extractor_whole_doc import from_assistant_response
+        return await from_assistant_response(recent_messages, doc_id=mine_doc_id)
+
     llm_results: List[Any] = []
     for coro in [
         from_chat_history(recent_messages),
+        _mine_response(),
         from_uploads(project_id, str(project_id)),
         from_techserver(techserver_oenum, mcp_manager=mcp_manager),
         from_sld_uploads(project_id, str(project_id)),
