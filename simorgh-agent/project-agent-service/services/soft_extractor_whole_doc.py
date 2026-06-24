@@ -760,6 +760,7 @@ def _mine_schema() -> Dict[str, Any]:
                         "canonical_field": {"type": ["string", "null"]},
                         "value":           {"type": "string"},
                         "unit":            {"type": ["string", "null"]},
+                        "document":        {"type": ["string", "null"]},
                         "page":            {"type": ["string", "null"]},
                         "section":         {"type": ["string", "null"]},
                         "evidence":        {"type": ["string", "null"]},
@@ -768,6 +769,37 @@ def _mine_schema() -> Dict[str, Any]:
             },
         },
     }
+
+
+def _norm_name(s: str) -> str:
+    """Lowercase and collapse separators/extension so a loose citation
+    ('the switchgear spec') matches a real filename ('...Switchgear_Spec.pdf')."""
+    import re
+    s = re.sub(r"\.(pdf|docx?|xlsx?)$", "", (s or "").strip().lower())
+    return re.sub(r"[^a-z0-9]+", " ", s).strip()
+
+
+def _resolve_doc(cited: str, docs: List[Dict[str, Any]],
+                 default_doc_id: Optional[str]) -> tuple:
+    """Match a cited document name to one of the project's uploads.
+    Returns (doc_id, filename). Falls back to the single-doc default when the
+    citation doesn't name a file (or names one we can't match)."""
+    cited_n = _norm_name(cited)
+    if cited_n and docs:
+        # Exact, then substring either direction (the agent may cite a short
+        # title or a full filename), all on separator-normalised names.
+        for d in docs:
+            if _norm_name(d.get("filename") or "") == cited_n:
+                return d.get("document_id") or None, d.get("filename") or ""
+        for d in docs:
+            fn = _norm_name(d.get("filename") or "")
+            if fn and (cited_n in fn or fn in cited_n):
+                return d.get("document_id") or None, d.get("filename") or ""
+    if default_doc_id:
+        fn = next((d.get("filename") for d in docs
+                   if d.get("document_id") == default_doc_id), "")
+        return default_doc_id, fn or ""
+    return None, ""
 
 
 def _slug_param_key(name: str) -> str:
@@ -793,21 +825,26 @@ def _pick_answer(messages: List[Dict[str, Any]]) -> str:
 
 
 async def from_assistant_response(messages: List[Dict[str, Any]], *,
-                                  doc_id: Optional[str] = None,
+                                  docs: Optional[List[Dict[str, Any]]] = None,
+                                  default_doc_id: Optional[str] = None,
                                   timeout: float = WHOLE_DOC_TIMEOUT,
                                   ) -> Dict[str, FieldValue]:
     """Mine the agent's latest analytical answer into FieldValue proposals."""
     answer = _pick_answer(messages)
     if not answer:
         return {}
+    docs = docs or []
     allowed = ", ".join(_EXTRACT_KEYS)
+    doc_names = ", ".join(
+        f"'{d.get('filename')}'" for d in docs if d.get("filename"))
     system = (
         "You convert an engineer's written analysis of electrical switchgear "
         "specification documents into STRUCTURED parameters. The analysis "
-        "already states each parameter with its value and (often) a page and "
-        "section citation. Extract EVERY distinct parameter it states — do not "
-        "summarise, do not skip any. For each, return: name (the parameter "
-        "label), value, unit (if any), page, section, and a short verbatim "
+        "already states each parameter with its value and (often) a document, "
+        "page and section citation. Extract EVERY distinct parameter it states "
+        "— do not summarise, do not skip any. For each, return: name (the "
+        "parameter label), value, unit (if any), document (the source file it "
+        "is cited from, if identifiable), page, section, and a short verbatim "
         "evidence snippet copied from the analysis. If a parameter clearly "
         "corresponds to one of the CANONICAL FIELDS, set canonical_field to "
         "that exact key; otherwise set canonical_field to null."
@@ -815,9 +852,12 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
     user = (
         f"CANONICAL FIELDS (use the exact key when a parameter matches one):\n"
         f"{allowed}\n\n"
-        f"ANALYSIS TEXT:\n{answer}\n\n"
+        + (f"SOURCE DOCUMENTS (use one of these names for `document`):\n"
+           f"{doc_names}\n\n" if doc_names else "")
+        + f"ANALYSIS TEXT:\n{answer}\n\n"
         "Return JSON: {\"parameters\": [ {name, canonical_field, value, unit, "
-        "page, section, evidence}, ... ] }. Include ALL parameters stated."
+        "document, page, section, evidence}, ... ] }. Include ALL parameters "
+        "stated."
     )
     parsed = await _call_gpt_oss(
         [{"role": "system", "content": system},
@@ -844,9 +884,16 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         val_s = str(value).strip()
         if unit and unit.lower() not in val_s.lower():
             val_s = f"{val_s} {unit}".strip()
+        # Resolve which uploaded document this parameter came from, so the
+        # "Source" button can box the evidence even in multi-doc projects.
+        doc_id, fname = _resolve_doc(item.get("document") or "", docs,
+                                     default_doc_id)
         # Build a source note the drawer/Excel/Source-viewer understand:
-        #   "from analysis · § <section> · p.<page> · \"<evidence>\""
-        parts: List[str] = ["from analysis"]
+        #   "from analysis 'file.pdf' · § <section> · p.<page> · \"<evidence>\""
+        # The leading "from analysis '<file>'" lets parseSourceNote() in the
+        # drawer surface the filename chip and the evidence pull-quote.
+        head = f"from analysis '{fname}'" if fname else "from analysis"
+        parts: List[str] = [head]
         sec = (item.get("section") or "").strip()
         page = (item.get("page") or "").strip()
         ev = (item.get("evidence") or "").strip()
@@ -860,9 +907,8 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         out[field] = FieldValue(
             value=val_s, source="chat",
             confidence=0.8, note=" · ".join(parts),
-            # Link to the source PDF so the "Source" button can locate the
-            # evidence span and box it (search_for finds it regardless of the
-            # stated page). Only set when the caller resolved a single doc.
+            # search_for locates the evidence regardless of the stated page,
+            # so any resolved doc_id is enough to box the region.
             doc_id=doc_id,
         )
     logger.info("soft.mine_response: %d parameters from agent answer", len(out))

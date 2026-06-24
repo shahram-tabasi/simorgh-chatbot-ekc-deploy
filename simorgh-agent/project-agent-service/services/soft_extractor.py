@@ -1109,23 +1109,32 @@ async def gather_all(*, project_id: str, tpms_oenum: Optional[str],
     # both 502'd while TPMS landed cleanly). One-at-a-time + 5xx retries
     # in _extract_via_llm trades a few seconds of latency for reliability.
     # Mine the agent's own answer into proposals (requirement: extract on
-    # the result of the response). Link parameters to the source PDF when the
-    # project has a single uploaded document, so the "Source" button can box
-    # the evidence; ambiguous multi-doc projects leave doc_id unset.
-    mine_doc_id: Optional[str] = None
+    # the result of the response). Resolve each cited parameter to its source
+    # document so the "Source" button can box the evidence — by filename when
+    # the agent names the file, else the single uploaded doc when unambiguous.
+    mine_docs: List[Dict[str, Any]] = []
+    mine_default_doc_id: Optional[str] = None
     try:
         from services.project_memory_service import get_project_memory_service
         _q = getattr(get_project_memory_service(), "qdrant", None)
         _docs = (_q.list_documents(user_id="system",
                                    project_oenum=str(project_id)) or []) if _q else []
-        if len(_docs) == 1:
-            mine_doc_id = _docs[0].get("document_id") or None
+        # Only PDFs can be rendered + boxed by the source viewer; restrict
+        # doc linking to them so the "Source" button is always meaningful.
+        mine_docs = [{"filename": d.get("filename") or "",
+                      "document_id": d.get("document_id") or ""}
+                     for d in _docs
+                     if d.get("document_id")
+                     and (d.get("filename") or "").lower().endswith(".pdf")]
+        if len(mine_docs) == 1:
+            mine_default_doc_id = mine_docs[0]["document_id"] or None
     except Exception as e:  # noqa: BLE001
         logger.warning("soft.gather_all: doc resolve for miner failed: %s", e)
 
     async def _mine_response():
         from services.soft_extractor_whole_doc import from_assistant_response
-        return await from_assistant_response(recent_messages, doc_id=mine_doc_id)
+        return await from_assistant_response(
+            recent_messages, docs=mine_docs, default_doc_id=mine_default_doc_id)
 
     llm_results: List[Any] = []
     for coro in [
