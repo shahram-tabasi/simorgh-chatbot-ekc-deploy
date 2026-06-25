@@ -293,6 +293,42 @@ class MessagePersistenceService:
             logger.error(f"Failed to get chat messages: {e}")
             return []
 
+    async def get_recent_messages_by_project(
+        self,
+        project_number: str,
+        limit: int = 40,
+    ) -> List[Dict[str, Any]]:
+        """Return the most recent {role, content} messages across all chats
+        of a project (chat_messages.project_number == the project id), oldest
+        first. Used by the Design Suite collector to mine the agent's answers
+        — which live in the V2 chat store, not project_messages."""
+        if not self._initialized:
+            await self.initialize()
+        sql = """
+        SELECT role, content, created_at
+        FROM chat_messages
+        WHERE project_number = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+        """
+        out: List[Dict[str, Any]] = []
+        try:
+            if ASYNC_PG_AVAILABLE and self._pool:
+                async with self._pool.acquire() as conn:
+                    rows = await conn.fetch(sql, project_number, limit)
+                    out = [{"role": r["role"], "content": r["content"]} for r in rows]
+            elif PSYCOPG2_AVAILABLE and self._sync_conn:
+                with self._sync_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql.replace('$1', '%s').replace('$2', '%s'),
+                                (project_number, limit))
+                    out = [{"role": r["role"], "content": r["content"]}
+                           for r in cur.fetchall()]
+        except Exception as e:
+            logger.warning(f"get_recent_messages_by_project failed: {e}")
+            return []
+        out.reverse()   # oldest first, matching get_recent_context
+        return out
+
     async def get_user_chats(
         self,
         user_id: str,

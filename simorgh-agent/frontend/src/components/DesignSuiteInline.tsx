@@ -215,6 +215,14 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
     return () => clearInterval(t);
   }, [fetchState, projectId, isLegacy]);
 
+  // Opening the review panel forces a fresh extraction pass (refresh=true)
+  // so the agent's latest cited answers get mined into proposals right then
+  // — the chat turns themselves don't trigger the collector (they run in a
+  // separate chat service), so this deliberate user action is the trigger.
+  React.useEffect(() => {
+    if (drawerOpen) fetchState(true);
+  }, [drawerOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch the category taxonomy once per session — the list is global
   // (not project-scoped) and very stable, so the polling above doesn't
   // need to refetch it. Drawer falls back to a flat layout if this

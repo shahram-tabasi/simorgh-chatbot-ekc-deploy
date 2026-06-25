@@ -164,6 +164,23 @@ async def refresh(project_id: str, *, force: bool = False,
     except Exception:
         recent = []
 
+    # The chatbot the user actually talks to (V2 chat sessions) persists its
+    # turns to the chat_messages store, NOT project_messages — so the agent's
+    # rich, cited analyses never reached the response-miner above. Pull that
+    # history too (chat_messages.project_number == project id) and merge it
+    # in so the miner can mine the answers and the signature reflects new
+    # chat activity.
+    try:
+        from services.message_persistence import get_message_persistence
+        chat_hist = await get_message_persistence().get_recent_messages_by_project(
+            str(project_id), limit=40)
+        logger.info("soft_collector: pulled %d V2 chat_messages for project=%s",
+                    len(chat_hist or []), project_id)
+        if chat_hist:
+            recent = list(recent) + chat_hist
+    except Exception as e:
+        logger.debug("soft_collector: chat_messages fetch failed: %s", e)
+
     # When the caller hands us the answer it just produced, fold it in
     # directly — the response-miner then sees it without waiting on the
     # message to be persisted, and the signature below changes so the
