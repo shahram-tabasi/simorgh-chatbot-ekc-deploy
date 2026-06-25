@@ -426,7 +426,9 @@ def _verify_user_prompt(filename: str, markdown: str,
 # ---------------------------------------------------------------------------
 async def _call_gpt_oss(messages: List[Dict[str, Any]],
                         schema: Dict[str, Any],
-                        timeout: float) -> Optional[Dict[str, Any]]:
+                        timeout: float,
+                        temperature: Optional[float] = None,
+                        ) -> Optional[Dict[str, Any]]:
     """One round-trip to the local gpt-oss-20b via llm-gateway. Uses
     guided_json for byte-valid JSON. Returns the parsed dict on success,
     None on any failure (logged)."""
@@ -434,7 +436,7 @@ async def _call_gpt_oss(messages: List[Dict[str, Any]],
         "messages":      messages,
         "mode":          "offline",
         "force_backend": "text",
-        "temperature":   WHOLE_DOC_TEMPERATURE,
+        "temperature":   WHOLE_DOC_TEMPERATURE if temperature is None else temperature,
         "max_tokens":    WHOLE_DOC_MAX_OUTPUT_TOKENS,
         # vLLM passthrough — guided_json enforces the schema at the
         # token sampler. response_format is the OpenAI-compatible alias.
@@ -812,6 +814,9 @@ def _slug_param_key(name: str) -> str:
 # the CoT engine stores "agent"); treat them all as the agent's reply.
 _ASSISTANT_ROLES = {"assistant", "agent", "ai", "bot"}
 _MINE_INPUT_MAX_CHARS = int(os.getenv("SOFT_MINE_INPUT_MAX_CHARS", "16000"))
+# Low temperature for structured extraction — the doc-extractor's 1.0 is
+# tuned for prose and intermittently yields empty/invalid JSON here.
+_MINE_TEMPERATURE = float(os.getenv("SOFT_MINE_TEMPERATURE", "0.2"))
 
 
 def _collect_answers(messages: List[Dict[str, Any]]) -> str:
@@ -952,7 +957,8 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         use_offline = (prefer == "offline") if primary else (prefer != "offline")
         try:
             if use_offline:
-                return await _call_gpt_oss(msgs, _mine_schema(), timeout=timeout)
+                return await _call_gpt_oss(msgs, _mine_schema(), timeout=timeout,
+                                           temperature=_MINE_TEMPERATURE)
             return await _call_online_json(msgs, timeout=timeout)
         except Exception as e:  # noqa: BLE001
             logger.debug("soft.mine_response backend error (offline=%s): %s",
