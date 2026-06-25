@@ -963,55 +963,29 @@ def _salvage_params(text: str) -> Optional[Dict[str, Any]]:
     return {"parameters": objs} if objs else None
 
 
-async def from_assistant_response(messages: List[Dict[str, Any]], *,
-                                  docs: Optional[List[Dict[str, Any]]] = None,
-                                  default_doc_id: Optional[str] = None,
-                                  timeout: float = WHOLE_DOC_TIMEOUT,
-                                  ) -> Dict[str, FieldValue]:
-    """Mine the agent's analytical answer(s) into FieldValue proposals."""
-    answer = _collect_answers(messages)
-    if not answer:
-        logger.info("soft.mine_response: no substantial assistant answer to mine")
-        return {}
-    docs = docs or []
-    allowed = ", ".join(_EXTRACT_KEYS)
-    doc_names = ", ".join(
-        f"'{d.get('filename')}'" for d in docs if d.get("filename"))
-    system = (
-        "You convert an engineer's written analysis of electrical switchgear "
-        "specification documents into STRUCTURED parameters. Extract EVERY "
-        "distinct parameter the analysis states — do not summarise, do not skip "
-        "any. For each, return ONLY these short fields: name (the parameter "
-        "label), value, unit (if any), page (if cited), and canonical_field — "
-        "set canonical_field to one of the CANONICAL FIELDS when a parameter "
-        "clearly matches one, otherwise null. Keep every value terse. "
-        "Respond with ONLY a JSON object, no prose, no code fences."
-    )
-    user = (
-        f"CANONICAL FIELDS (use the exact key when a parameter matches one):\n"
-        f"{allowed}\n\n"
-        + f"ANALYSIS TEXT:\n{answer}\n\n"
-        "Return compact JSON exactly like: {\"parameters\": [ {\"name\":\"...\","
-        "\"canonical_field\":null,\"value\":\"...\",\"unit\":null,"
-        "\"page\":null} ] }. Include ALL parameters stated. Copy each value "
-        "EXACTLY as written in the analysis (e.g. \"6.6 kV\", \"40 kA / 3 s\", "
-        "\"110 V DC\"); never abbreviate or drop digits. `page` may be a number. "
-        # Qwen3 soft-switch: the gateway hardcodes thinking_level=medium for
-        # the local model, so without this Qwen burns the output budget on a
-        # <think> block and the JSON is empty/buried. /no_think disables it.
-        "Output ONLY the JSON, beginning with { and nothing before it.\n/no_think"
-    )
-    msgs = [{"role": "system", "content": system},
-            {"role": "user", "content": user}]
-    # OFFLINE FIRST, PATIENTLY. The online model is disabled here, so the
-    # offline gpt-oss backend (what the chat uses) is the one that works —
-    # but it's the SAME model that just generated the chat answer, so right
-    # after a turn it's busy and returns nothing. Since this is a background
-    # task we can afford to wait it out: retry with exponential backoff until
-    # the model frees up (proven to then return the full parameter list).
-    prefer = os.getenv("SOFT_MINE_BACKEND", "offline").lower()
-    attempts = int(os.getenv("SOFT_MINE_RETRIES", "8"))
+def _chunk_text(text: str, max_chars: int) -> List[str]:
+    """Split on line boundaries into <=max_chars chunks so each mining call's
+    OUTPUT stays under the local model's token cap (a long analysis otherwise
+    truncates after ~10-15 params). Preserves the section structure."""
+    chunks: List[str] = []
+    cur = ""
+    for ln in text.splitlines(keepends=True):
+        if cur and len(cur) + len(ln) > max_chars:
+            chunks.append(cur)
+            cur = ""
+        cur += ln
+        while len(cur) > max_chars:           # a single oversized line
+            chunks.append(cur[:max_chars])
+            cur = cur[max_chars:]
+    if cur.strip():
+        chunks.append(cur)
+    return chunks or [text[:max_chars]]
 
+
+async def _mine_call(msgs: List[Dict[str, Any]], *, timeout: float,
+                     prefer: str, attempts: int) -> Optional[Dict[str, Any]]:
+    """Run one mining request with patient retries (offline-first), returning
+    the parsed {parameters:[...]} or None."""
     async def _try(primary: bool) -> Optional[Dict[str, Any]]:
         use_offline = (prefer == "offline") if primary else (prefer != "offline")
         mode = "offline" if use_offline else "online"
@@ -1030,22 +1004,75 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
     for i in range(max(1, attempts)):
         parsed = await _try(primary=True)
         if _ok(parsed):
-            break
+            return parsed
         await asyncio.sleep(min(2 ** (i + 1), 30))
-        logger.info("soft.mine_response: primary backend busy, retry %d/%d",
-                    i + 1, attempts)
-    # Only after exhausting the primary, try the other backend once (covers
-    # deployments where the OTHER backend is the enabled one).
-    if not _ok(parsed):
-        parsed = await _try(primary=False)
-    if not _ok(parsed):
-        logger.info("soft.mine_response: no parsable JSON after %d attempts "
-                    "(both backends)", attempts)
+        logger.info("soft.mine_response: backend busy, retry %d/%d", i + 1, attempts)
+    parsed = await _try(primary=False)
+    return parsed if _ok(parsed) else None
+
+
+async def from_assistant_response(messages: List[Dict[str, Any]], *,
+                                  docs: Optional[List[Dict[str, Any]]] = None,
+                                  default_doc_id: Optional[str] = None,
+                                  timeout: float = WHOLE_DOC_TIMEOUT,
+                                  ) -> Dict[str, FieldValue]:
+    """Mine the agent's analytical answer(s) into FieldValue proposals."""
+    answer = _collect_answers(messages)
+    if not answer:
+        logger.info("soft.mine_response: no substantial assistant answer to mine")
+        return {}
+    docs = docs or []
+    allowed = ", ".join(_EXTRACT_KEYS)
+    system = (
+        "You convert an engineer's written analysis of electrical switchgear "
+        "specification documents into STRUCTURED parameters. Extract EVERY "
+        "distinct parameter the analysis states — do not summarise, do not skip "
+        "any. For each, return ONLY these short fields: name (the parameter "
+        "label), value, unit (if any), page (if cited), and canonical_field — "
+        "set canonical_field to one of the CANONICAL FIELDS when a parameter "
+        "clearly matches one, otherwise null. "
+        "Respond with ONLY a JSON object, no prose, no code fences."
+    )
+
+    def _build_user(chunk: str) -> str:
+        return (
+            f"CANONICAL FIELDS (use the exact key when a parameter matches one):\n"
+            f"{allowed}\n\n"
+            f"ANALYSIS TEXT:\n{chunk}\n\n"
+            "Return compact JSON exactly like: {\"parameters\": [ {\"name\":\"...\","
+            "\"canonical_field\":null,\"value\":\"...\",\"unit\":null,"
+            "\"page\":null} ] }. Include ALL parameters stated. Copy each value "
+            "EXACTLY as written in the analysis (e.g. \"6.6 kV\", \"40 kA / 3 s\", "
+            "\"110 V DC\"); never abbreviate or drop digits. `page` may be a number. "
+            # Qwen3 soft-switch: the gateway hardcodes thinking_level=medium, so
+            # without this Qwen burns the output budget on a <think> block.
+            "Output ONLY the JSON, beginning with { and nothing before it.\n/no_think"
+        )
+
+    prefer = os.getenv("SOFT_MINE_BACKEND", "offline").lower()
+    attempts = int(os.getenv("SOFT_MINE_RETRIES", "6"))
+
+    # Mine the answer in CHUNKS — the local model caps output (~2k tokens), so
+    # a long multi-section analysis truncates after ~10-15 params in a single
+    # call. Splitting keeps each call's output complete; we merge the results.
+    chunk_chars = int(os.getenv("SOFT_MINE_CHUNK_CHARS", "2600"))
+    chunks = _chunk_text(answer, chunk_chars)
+    raw_items: List[Dict[str, Any]] = []
+    for ci, chunk in enumerate(chunks):
+        msgs = [{"role": "system", "content": system},
+                {"role": "user", "content": _build_user(chunk)}]
+        parsed = await _mine_call(msgs, timeout=timeout, prefer=prefer,
+                                  attempts=attempts)
+        got = (parsed or {}).get("parameters") or []
+        logger.info("soft.mine_response: chunk %d/%d → %d params",
+                    ci + 1, len(chunks), len(got))
+        raw_items.extend(got)
+    if not raw_items:
+        logger.info("soft.mine_response: no params after %d chunk(s)", len(chunks))
         return {}
 
     allowed_set = set(_EXTRACT_KEYS)
     out: Dict[str, FieldValue] = {}
-    raw_items = parsed.get("parameters") or []
     errors = 0
     for item in raw_items:
         # Bulletproof per-item: one malformed record must never sink the whole
