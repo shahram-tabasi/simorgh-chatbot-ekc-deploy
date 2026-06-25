@@ -937,27 +937,36 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         "\"document\": null, \"page\": null, \"section\": null, "
         "\"evidence\": \"...\"} ] }. Include ALL parameters stated."
     )
-    parsed = await _call_online_json(
-        [{"role": "system", "content": system},
-         {"role": "user", "content": user}],
-        timeout=timeout,
-    )
+    msgs = [{"role": "system", "content": system},
+            {"role": "user", "content": user}]
+    # OFFLINE FIRST. The online model is disabled in this deployment, so the
+    # offline gpt-oss backend (the one the chat itself uses) is what works.
+    # We use guided_json there for byte-valid output. Online is only a
+    # fallback in case a deployment has it enabled instead.
+    prefer = os.getenv("SOFT_MINE_BACKEND", "offline").lower()
+    parsed = None
+    try:
+        if prefer == "online":
+            parsed = await _call_online_json(msgs, timeout=timeout)
+        else:
+            parsed = await _call_gpt_oss(msgs, _mine_schema(), timeout=timeout)
+    except Exception as e:  # noqa: BLE001
+        logger.info("soft.mine_response: primary backend (%s) errored: %s", prefer, e)
+        parsed = None
     if not parsed or not isinstance(parsed, dict):
-        # Online model busy/unavailable — fall back to the offline gpt-oss
-        # backend with guided_json. One of the two backends is usually free.
-        logger.info("soft.mine_response: online failed, trying offline gpt-oss")
+        logger.info("soft.mine_response: primary backend (%s) gave nothing, "
+                    "trying the other", prefer)
         try:
-            parsed = await _call_gpt_oss(
-                [{"role": "system", "content": system},
-                 {"role": "user", "content": user}],
-                _mine_schema(), timeout=timeout,
-            )
+            if prefer == "online":
+                parsed = await _call_gpt_oss(msgs, _mine_schema(), timeout=timeout)
+            else:
+                parsed = await _call_online_json(msgs, timeout=timeout)
         except Exception as e:  # noqa: BLE001
-            logger.info("soft.mine_response: offline fallback errored: %s", e)
+            logger.info("soft.mine_response: secondary backend errored: %s", e)
             parsed = None
     if not parsed or not isinstance(parsed, dict):
         logger.info("soft.mine_response: model returned no parsable JSON "
-                    "(both online and offline)")
+                    "(both backends)")
         return {}
 
     allowed_set = set(_EXTRACT_KEYS)
