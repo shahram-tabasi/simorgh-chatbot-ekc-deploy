@@ -903,6 +903,15 @@ async def _call_plain_json(messages: List[Dict[str, Any]], *,
         try:
             return json.loads(text[start:end + 1])
         except json.JSONDecodeError as e:
+            # Most common Qwen failure: the local server truncated the output
+            # mid-object. Salvage every COMPLETE {...} object in the array so
+            # we still get all the parameters that did arrive.
+            salv = _salvage_params(text)
+            if salv and salv.get("parameters"):
+                logger.info("soft.mine_response: %s truncated at ~%d chars — "
+                            "salvaged %d complete parameters",
+                            mode, len(text), len(salv["parameters"]))
+                return salv
             logger.info("soft.mine_response: %s replied %d chars but JSON parse "
                         "failed (%s); head=%r", mode, len(text), e, text[:160])
             return None
@@ -911,6 +920,47 @@ async def _call_plain_json(messages: List[Dict[str, Any]], *,
     logger.info("soft.mine_response: %s replied %d chars with no JSON object; "
                 "head=%r", mode, len(text), text[:160])
     return None
+
+
+def _salvage_params(text: str) -> Optional[Dict[str, Any]]:
+    """Extract every complete {...} object inside the `parameters` array from a
+    truncated/malformed response (brace-matching, ignoring braces inside
+    strings). Lets a cut-off Qwen reply still yield all the params it managed
+    to emit before the output limit."""
+    lb = text.find("[")
+    if lb == -1:
+        return None
+    objs: List[Dict[str, Any]] = []
+    depth = 0
+    obj_start = -1
+    in_str = False
+    esc = False
+    for i in range(lb + 1, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0 and obj_start != -1:
+                frag = text[obj_start:i + 1]
+                try:
+                    objs.append(json.loads(frag))
+                except json.JSONDecodeError:
+                    pass
+                obj_start = -1
+    return {"parameters": objs} if objs else None
 
 
 async def from_assistant_response(messages: List[Dict[str, Any]], *,
@@ -929,27 +979,22 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         f"'{d.get('filename')}'" for d in docs if d.get("filename"))
     system = (
         "You convert an engineer's written analysis of electrical switchgear "
-        "specification documents into STRUCTURED parameters. The analysis "
-        "already states each parameter with its value and (often) a document, "
-        "page and section citation. Extract EVERY distinct parameter it states "
-        "— do not summarise, do not skip any. For each, return: name (the "
-        "parameter label), value, unit (if any), document (the source file it "
-        "is cited from, if identifiable), page, section, and a short verbatim "
-        "evidence snippet copied from the analysis. If a parameter clearly "
-        "corresponds to one of the CANONICAL FIELDS, set canonical_field to "
-        "that exact key; otherwise set canonical_field to null. "
+        "specification documents into STRUCTURED parameters. Extract EVERY "
+        "distinct parameter the analysis states — do not summarise, do not skip "
+        "any. For each, return ONLY these short fields: name (the parameter "
+        "label), value, unit (if any), page (if cited), and canonical_field — "
+        "set canonical_field to one of the CANONICAL FIELDS when a parameter "
+        "clearly matches one, otherwise null. Keep every value terse. "
         "Respond with ONLY a JSON object, no prose, no code fences."
     )
     user = (
         f"CANONICAL FIELDS (use the exact key when a parameter matches one):\n"
         f"{allowed}\n\n"
-        + (f"SOURCE DOCUMENTS (use one of these names for `document`):\n"
-           f"{doc_names}\n\n" if doc_names else "")
         + f"ANALYSIS TEXT:\n{answer}\n\n"
-        "Return JSON exactly like: {\"parameters\": [ {\"name\": \"...\", "
-        "\"canonical_field\": null, \"value\": \"...\", \"unit\": null, "
-        "\"document\": null, \"page\": null, \"section\": null, "
-        "\"evidence\": \"...\"} ] }. Include ALL parameters stated. "
+        "Return compact JSON exactly like: {\"parameters\": [ {\"name\":\"...\","
+        "\"canonical_field\":null,\"value\":\"...\",\"unit\":null,"
+        "\"page\":null} ] }. Include ALL parameters stated, terse values, no "
+        "extra whitespace. "
         # Qwen3 soft-switch: the gateway hardcodes thinking_level=medium for
         # the local model, so without this Qwen burns the output budget on a
         # <think> block and the JSON is empty/buried. /no_think disables it.
