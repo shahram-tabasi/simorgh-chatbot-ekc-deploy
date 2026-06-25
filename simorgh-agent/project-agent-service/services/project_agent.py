@@ -802,6 +802,16 @@ class ProjectManagerAgent:
                     content=result.get("response", ""),
                     channel=channel.value, chat_id=chat_id,
                 )
+                # Refresh the Design Suite spec after the ReAct turn too —
+                # this path returns early (before the plan-execute hook
+                # below), so without this the response-miner never sees
+                # answers produced in ReAct mode.
+                try:
+                    from services.soft_collector import schedule_refresh
+                    schedule_refresh(project_id,
+                                     latest_answer=result.get("response", ""))
+                except Exception as e:
+                    logger.debug("soft_collector schedule_refresh (react) failed: %s", e)
                 await self._notify_progress(project_id, "complete", {
                     "response_preview": (result.get("response") or "")[:200],
                     "tasks_completed": result.get("tasks_created", 0),
@@ -910,7 +920,7 @@ class ProjectManagerAgent:
         # circuits on a stable sources_signature, so this is cheap).
         try:
             from services.soft_collector import schedule_refresh
-            schedule_refresh(project_id)
+            schedule_refresh(project_id, latest_answer=final_response)
         except Exception as e:
             logger.debug("soft_collector schedule_refresh failed: %s", e)
 

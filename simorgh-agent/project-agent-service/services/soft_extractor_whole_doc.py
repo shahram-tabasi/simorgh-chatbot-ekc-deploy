@@ -811,17 +811,82 @@ def _slug_param_key(name: str) -> str:
 # Assistant-side roles vary by code path (project_agent stores "assistant",
 # the CoT engine stores "agent"); treat them all as the agent's reply.
 _ASSISTANT_ROLES = {"assistant", "agent", "ai", "bot"}
+_MINE_INPUT_MAX_CHARS = int(os.getenv("SOFT_MINE_INPUT_MAX_CHARS", "30000"))
 
 
-def _pick_answer(messages: List[Dict[str, Any]]) -> str:
-    """The substantial assistant reply to mine — the longest assistant
-    message in the tail, provided it's long enough to be an analysis."""
+def _collect_answers(messages: List[Dict[str, Any]]) -> str:
+    """Concatenate EVERY substantial assistant reply in the window (newest
+    first), so multi-turn analyses all contribute and a later turn doesn't
+    drop the parameters surfaced in an earlier one. Capped to protect the
+    prompt budget."""
     asst = [(m.get("content") or "") for m in (messages or [])
             if str(m.get("role") or "").lower() in _ASSISTANT_ROLES]
     asst = [c for c in asst if len(c) >= _MINE_MIN_CHARS]
     if not asst:
         return ""
-    return max(asst, key=len)[:WHOLE_DOC_MAX_CHARS]
+    seen: set = set()
+    chunks: List[str] = []
+    total = 0
+    for c in reversed(asst):           # newest first
+        key = c[:200]
+        if key in seen:
+            continue
+        seen.add(key)
+        if total + len(c) > _MINE_INPUT_MAX_CHARS:
+            c = c[: max(0, _MINE_INPUT_MAX_CHARS - total)]
+        if not c:
+            break
+        chunks.append(c)
+        total += len(c)
+        if total >= _MINE_INPUT_MAX_CHARS:
+            break
+    return "\n\n---\n\n".join(chunks)
+
+
+async def _call_online_json(messages: List[Dict[str, Any]],
+                            timeout: float) -> Optional[Dict[str, Any]]:
+    """One round-trip to the ONLINE model via llm-gateway (the same backend
+    the chat extractors use — reliable when the offline gpt-oss path is
+    down). Returns the parsed JSON dict, or None on failure."""
+    payload = {
+        "messages":    messages,
+        "mode":        "online",
+        "temperature": 0.0,
+        "max_tokens":  4000,
+    }
+    body = None
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(f"{LLM_GATEWAY_URL}/generate", json=payload)
+                if r.status_code in (502, 503, 504):
+                    raise httpx.HTTPStatusError("gateway busy",
+                                                request=r.request, response=r)
+                r.raise_for_status()
+                body = r.json()
+                break
+        except Exception as e:
+            last_err = e
+            await asyncio.sleep(1.5 * (attempt + 1))
+    if body is None:
+        logger.warning("soft.mine_response gateway failed: %s", last_err)
+        return None
+    text = (body.get("response") or body.get("text") or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError as e:
+            logger.warning("soft.mine_response JSON parse failed: %s", e)
+    return None
 
 
 async def from_assistant_response(messages: List[Dict[str, Any]], *,
@@ -829,9 +894,10 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
                                   default_doc_id: Optional[str] = None,
                                   timeout: float = WHOLE_DOC_TIMEOUT,
                                   ) -> Dict[str, FieldValue]:
-    """Mine the agent's latest analytical answer into FieldValue proposals."""
-    answer = _pick_answer(messages)
+    """Mine the agent's analytical answer(s) into FieldValue proposals."""
+    answer = _collect_answers(messages)
     if not answer:
+        logger.info("soft.mine_response: no substantial assistant answer to mine")
         return {}
     docs = docs or []
     allowed = ", ".join(_EXTRACT_KEYS)
@@ -847,7 +913,8 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         "is cited from, if identifiable), page, section, and a short verbatim "
         "evidence snippet copied from the analysis. If a parameter clearly "
         "corresponds to one of the CANONICAL FIELDS, set canonical_field to "
-        "that exact key; otherwise set canonical_field to null."
+        "that exact key; otherwise set canonical_field to null. "
+        "Respond with ONLY a JSON object, no prose, no code fences."
     )
     user = (
         f"CANONICAL FIELDS (use the exact key when a parameter matches one):\n"
@@ -855,16 +922,18 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         + (f"SOURCE DOCUMENTS (use one of these names for `document`):\n"
            f"{doc_names}\n\n" if doc_names else "")
         + f"ANALYSIS TEXT:\n{answer}\n\n"
-        "Return JSON: {\"parameters\": [ {name, canonical_field, value, unit, "
-        "document, page, section, evidence}, ... ] }. Include ALL parameters "
-        "stated."
+        "Return JSON exactly like: {\"parameters\": [ {\"name\": \"...\", "
+        "\"canonical_field\": null, \"value\": \"...\", \"unit\": null, "
+        "\"document\": null, \"page\": null, \"section\": null, "
+        "\"evidence\": \"...\"} ] }. Include ALL parameters stated."
     )
-    parsed = await _call_gpt_oss(
+    parsed = await _call_online_json(
         [{"role": "system", "content": system},
          {"role": "user", "content": user}],
-        _mine_schema(), timeout=timeout,
+        timeout=timeout,
     )
     if not parsed or not isinstance(parsed, dict):
+        logger.info("soft.mine_response: model returned no parsable JSON")
         return {}
 
     allowed_set = set(_EXTRACT_KEYS)

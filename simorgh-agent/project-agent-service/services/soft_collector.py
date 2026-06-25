@@ -128,7 +128,8 @@ async def _ensure_memory_pools(memory) -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str, Any]]:
+async def refresh(project_id: str, *, force: bool = False,
+                  latest_answer: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Re-run the extractors (sequential LLM calls, parallel non-LLM) and
     persist if the signature changed. Returns the new state row or the
     current row if nothing was recomputed; returns None when disabled or
@@ -162,6 +163,13 @@ async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str,
         recent = await memory.get_recent_context(project_id, limit=40)
     except Exception:
         recent = []
+
+    # When the caller hands us the answer it just produced, fold it in
+    # directly — the response-miner then sees it without waiting on the
+    # message to be persisted, and the signature below changes so the
+    # refresh can't short-circuit on a stale digest.
+    if latest_answer and len(latest_answer) >= 40:
+        recent = list(recent) + [{"role": "assistant", "content": latest_answer}]
 
     sig = await _build_signature(project_id=project_id, project_row=project,
                                  recent=recent)
@@ -258,18 +266,21 @@ async def refresh(project_id: str, *, force: bool = False) -> Optional[Dict[str,
     return await sss.get_state(project_id)
 
 
-def schedule_refresh(project_id: str) -> None:
+def schedule_refresh(project_id: str,
+                     latest_answer: Optional[str] = None) -> None:
     """Fire-and-forget. Safe to call from anywhere; survives shutdown.
-    Used as a post-hook in handle_input / upload_document / wizard."""
+    Used as a post-hook in handle_input / upload_document / wizard.
+    `latest_answer` (the reply the agent just produced) is fed straight to
+    the response-miner so its parameters are proposed on this same turn."""
     if not _enabled():
         return
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(refresh(project_id))
+        loop.create_task(refresh(project_id, latest_answer=latest_answer))
     except RuntimeError:
         # No running loop (sync caller) — best-effort: spin one off.
         try:
-            asyncio.run(refresh(project_id))
+            asyncio.run(refresh(project_id, latest_answer=latest_answer))
         except Exception as e:
             logger.warning("schedule_refresh sync fallback failed: %s", e)
     except Exception as e:
