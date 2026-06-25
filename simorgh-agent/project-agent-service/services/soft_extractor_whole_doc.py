@@ -880,6 +880,19 @@ async def _call_plain_json(messages: List[Dict[str, Any]], *,
     text = (body.get("response") or body.get("text") or "").strip()
     if not text:
         return None
+    # Defensive cleanup for Qwen3 output the gateway may not have stripped:
+    # reasoning blocks (closed or trailing) and markdown code fences.
+    import re as _re
+    text = _re.sub(r"<think>.*?</think>", "", text,
+                   flags=_re.DOTALL | _re.IGNORECASE)
+    text = _re.sub(r"<thinking>.*?</thinking>", "", text,
+                   flags=_re.DOTALL | _re.IGNORECASE)
+    if "</think>" in text:               # unclosed/truncated reasoning prefix
+        text = text.rsplit("</think>", 1)[-1]
+    text = _re.sub(r"^```(?:json)?|```$", "", text.strip(),
+                   flags=_re.MULTILINE).strip()
+    if not text:
+        return None
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -936,7 +949,11 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         "Return JSON exactly like: {\"parameters\": [ {\"name\": \"...\", "
         "\"canonical_field\": null, \"value\": \"...\", \"unit\": null, "
         "\"document\": null, \"page\": null, \"section\": null, "
-        "\"evidence\": \"...\"} ] }. Include ALL parameters stated."
+        "\"evidence\": \"...\"} ] }. Include ALL parameters stated. "
+        # Qwen3 soft-switch: the gateway hardcodes thinking_level=medium for
+        # the local model, so without this Qwen burns the output budget on a
+        # <think> block and the JSON is empty/buried. /no_think disables it.
+        "Output ONLY the JSON, beginning with { and nothing before it.\n/no_think"
     )
     msgs = [{"role": "system", "content": system},
             {"role": "user", "content": user}]
