@@ -848,44 +848,34 @@ def _collect_answers(messages: List[Dict[str, Any]]) -> str:
     return "\n\n---\n\n".join(chunks)
 
 
-async def _call_online_json(messages: List[Dict[str, Any]],
-                            timeout: float) -> Optional[Dict[str, Any]]:
-    """One round-trip to the ONLINE model via llm-gateway (the same backend
-    the chat extractors use — reliable when the offline gpt-oss path is
-    down). Returns the parsed JSON dict, or None on failure.
-
-    This is a background task, so it can afford to be patient: the online
-    model is often still busy finishing the chat turn that triggered the
-    refresh, returning 502/503/504. We retry with a long exponential backoff
-    rather than giving up after a few seconds."""
-    payload = {
+async def _call_plain_json(messages: List[Dict[str, Any]], *,
+                           mode: str, timeout: float,
+                           temperature: float = 0.2) -> Optional[Dict[str, Any]]:
+    """Single round-trip to llm-gateway in PLAIN generation mode (NO
+    guided_json) and parse JSON out of the text. The offline gpt-oss backend
+    handles plain generation reliably (it's how the chat itself runs), whereas
+    guided_json on an array schema intermittently returns nothing. The patient
+    retry loop in from_assistant_response controls re-tries, so this does a
+    single attempt and returns None on any failure."""
+    payload: Dict[str, Any] = {
         "messages":    messages,
-        "mode":        "online",
-        "temperature": 0.0,
-        # Keep generation bounded so a slow gateway doesn't 504; a compact
-        # JSON list of ~30 parameters fits comfortably under this.
+        "mode":        mode,
+        "temperature": temperature,
         "max_tokens":  2048,
     }
-    body = None
-    last_err: Optional[Exception] = None
-    attempts = int(os.getenv("SOFT_MINE_RETRIES", "6"))
-    for attempt in range(max(1, attempts)):
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as c:
-                r = await c.post(f"{LLM_GATEWAY_URL}/generate", json=payload)
-                if r.status_code in (502, 503, 504):
-                    raise httpx.HTTPStatusError("gateway busy",
-                                                request=r.request, response=r)
-                r.raise_for_status()
-                body = r.json()
-                break
-        except Exception as e:
-            last_err = e
-            # Exponential backoff capped at 30s — gives the shared online
-            # model time to free up after the chat turn.
-            await asyncio.sleep(min(2 ** (attempt + 1), 30))
-    if body is None:
-        logger.warning("soft.mine_response gateway failed: %s", last_err)
+    if mode == "offline":
+        payload["force_backend"] = "text"
+        # Keep gpt-oss from spending the budget on reasoning tokens.
+        payload["extra"] = {"reasoning_effort": "low"}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(f"{LLM_GATEWAY_URL}/generate", json=payload)
+            if r.status_code in (502, 503, 504):
+                return None          # busy — let the outer loop back off
+            r.raise_for_status()
+            body = r.json()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("soft.mine_response %s call failed: %s", mode, e)
         return None
     text = (body.get("response") or body.get("text") or "").strip()
     if not text:
@@ -900,7 +890,13 @@ async def _call_online_json(messages: List[Dict[str, Any]],
         try:
             return json.loads(text[start:end + 1])
         except json.JSONDecodeError as e:
-            logger.warning("soft.mine_response JSON parse failed: %s", e)
+            logger.info("soft.mine_response: %s replied %d chars but JSON parse "
+                        "failed (%s); head=%r", mode, len(text), e, text[:160])
+            return None
+    # Model responded but with no JSON object at all — log so we can tell this
+    # apart from a busy/timed-out backend.
+    logger.info("soft.mine_response: %s replied %d chars with no JSON object; "
+                "head=%r", mode, len(text), text[:160])
     return None
 
 
@@ -955,14 +951,13 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
 
     async def _try(primary: bool) -> Optional[Dict[str, Any]]:
         use_offline = (prefer == "offline") if primary else (prefer != "offline")
+        mode = "offline" if use_offline else "online"
+        temp = _MINE_TEMPERATURE if use_offline else 0.0
         try:
-            if use_offline:
-                return await _call_gpt_oss(msgs, _mine_schema(), timeout=timeout,
-                                           temperature=_MINE_TEMPERATURE)
-            return await _call_online_json(msgs, timeout=timeout)
+            return await _call_plain_json(msgs, mode=mode, timeout=timeout,
+                                          temperature=temp)
         except Exception as e:  # noqa: BLE001
-            logger.debug("soft.mine_response backend error (offline=%s): %s",
-                         use_offline, e)
+            logger.debug("soft.mine_response backend error (mode=%s): %s", mode, e)
             return None
 
     def _ok(p) -> bool:
