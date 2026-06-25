@@ -285,7 +285,10 @@ async def refresh(project_id: str, *, force: bool = False,
                 })
         total = 0
         for kind, proposals in by_kind.items():
-            total += await sp.replace_proposals(project_id, kind, proposals)
+            n = await sp.replace_proposals(project_id, kind, proposals)
+            logger.info("soft_collector: kind=%s candidates=%d inserted=%d",
+                        kind, len(proposals), n)
+            total += n
         # Persist the signature + counts on soft_spec_state for the chip,
         # but the spec dict itself stays empty until the user approves.
         # completeness here is "how many CONFIRMABLE_FIELDS have at least

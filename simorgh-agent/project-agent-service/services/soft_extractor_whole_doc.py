@@ -1044,49 +1044,49 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
 
     allowed_set = set(_EXTRACT_KEYS)
     out: Dict[str, FieldValue] = {}
-    for item in (parsed.get("parameters") or []):
-        if not isinstance(item, dict):
-            continue
-        name = (item.get("name") or "").strip()
-        value = item.get("value")
-        if not name or value in (None, "", []):
-            continue
-        cf = (item.get("canonical_field") or "").strip()
-        field = cf if cf in allowed_set else _slug_param_key(name)
-        if field in out:        # first mention wins — keep it deduped
-            continue
-        unit = (item.get("unit") or "").strip()
-        val_s = str(value).strip()
-        if unit and unit.lower() not in val_s.lower():
-            val_s = f"{val_s} {unit}".strip()
-        # Resolve which uploaded document this parameter came from, so the
-        # "Source" button can box the evidence even in multi-doc projects.
-        doc_id, fname = _resolve_doc(item.get("document") or "", docs,
-                                     default_doc_id)
-        # Build a source note the drawer/Excel/Source-viewer understand:
-        #   "from analysis 'file.pdf' · § <section> · p.<page> · \"<evidence>\""
-        # The leading "from analysis '<file>'" lets parseSourceNote() in the
-        # drawer surface the filename chip and the evidence pull-quote.
-        head = f"from analysis '{fname}'" if fname else "from analysis"
-        parts: List[str] = [head]
-        sec = (item.get("section") or "").strip()
-        page = (item.get("page") or "").strip()
-        ev = (item.get("evidence") or "").strip()
-        if sec:
-            parts.append(f"§ {sec}")
-        if page:
-            parts.append(f"p.{page}")
-        if ev:
-            ev_short = ev[:240] + ("…" if len(ev) > 240 else "")
-            parts.append(f"\"{ev_short}\"")
-        out[field] = FieldValue(
-            value=val_s, source="analysis",
-            confidence=0.8, note=" · ".join(parts),
-            # search_for locates the evidence regardless of the stated page,
-            # so any resolved doc_id is enough to box the region.
-            doc_id=doc_id,
-        )
-    logger.info("soft.mine_response: %d parameters from agent answer", len(out))
+    raw_items = parsed.get("parameters") or []
+    errors = 0
+    for item in raw_items:
+        # Bulletproof per-item: one malformed record must never sink the whole
+        # batch (that would silently drop 60+ good params).
+        try:
+            if not isinstance(item, dict):
+                continue
+            name = (item.get("name") or "").strip()
+            value = item.get("value")
+            if not name or value in (None, "", []):
+                continue
+            cf = (item.get("canonical_field") or "").strip()
+            field = cf if cf in allowed_set else _slug_param_key(name)
+            if field in out:        # first mention wins — keep it deduped
+                continue
+            unit = (item.get("unit") or "").strip()
+            val_s = str(value).strip()
+            if unit and unit.lower() not in val_s.lower():
+                val_s = f"{val_s} {unit}".strip()
+            # Link to the source doc (single-doc projects) so the "Source"
+            # button can box the value. doc_id may be a UUID string or None.
+            doc_id, fname = _resolve_doc(item.get("document") or "", docs,
+                                         default_doc_id)
+            head = f"from analysis '{fname}'" if fname else "from analysis"
+            parts: List[str] = [head]
+            sec = (item.get("section") or "").strip()
+            page = (item.get("page") or "").strip()
+            if sec:
+                parts.append(f"§ {sec}")
+            if page:
+                parts.append(f"p.{page}")
+            out[field] = FieldValue(
+                value=val_s, source="analysis",
+                confidence=0.8, note=" · ".join(parts),
+                doc_id=str(doc_id) if doc_id else None,
+            )
+        except Exception as e:  # noqa: BLE001
+            errors += 1
+            if errors <= 3:
+                logger.warning("soft.mine_response: skipped a param (%s): %r", e, item)
+    logger.info("soft.mine_response: %d parameters from agent answer "
+                "(%d raw, %d skipped)", len(out), len(raw_items), errors)
     # Flat per-parameter keys (same contract as from_uploads) so each
     # parameter is its own reviewable proposal. reconcile() nests the
     # dotted keys when the user approves.
