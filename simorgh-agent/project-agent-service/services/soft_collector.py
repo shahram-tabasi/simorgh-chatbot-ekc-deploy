@@ -164,22 +164,48 @@ async def refresh(project_id: str, *, force: bool = False,
     except Exception:
         recent = []
 
-    # The chatbot the user actually talks to (V2 chat sessions) persists its
-    # turns to the chat_messages store, NOT project_messages — so the agent's
-    # rich, cited analyses never reached the response-miner above. Pull that
-    # history too (chat_messages.project_number == project id) and merge it
-    # in so the miner can mine the answers and the signature reflects new
-    # chat activity.
+    # The chatbot the user actually talks to (chat-service V2 sessions)
+    # persists turns to project_messages keyed by `project_number`, which is
+    # the project's tpms_oenum when it has one, else the UUID. The collector
+    # runs on the UUID, so when a project has an OE number the chat history
+    # lands under a DIFFERENT key and the response-miner never sees it.
+    # Read under EVERY candidate key (UUID + tpms_oenum) and merge.
+    candidate_keys = [str(project_id)]
+    oe = (project.get("tpms_oenum") or "").strip() if project else ""
+    if oe and oe not in candidate_keys:
+        candidate_keys.append(oe)
+    for k in candidate_keys[1:]:
+        try:
+            extra = await memory.get_recent_context(k, limit=40)
+            if extra:
+                recent = list(recent) + list(extra)
+        except Exception as e:
+            logger.debug("soft_collector: get_recent_context(%s) failed: %s", k, e)
+
+    # Also try the secondary chat_messages store (message_persistence) under
+    # every candidate key — some deployments write there instead.
     try:
         from services.message_persistence import get_message_persistence
-        chat_hist = await get_message_persistence().get_recent_messages_by_project(
-            str(project_id), limit=40)
-        logger.info("soft_collector: pulled %d V2 chat_messages for project=%s",
-                    len(chat_hist or []), project_id)
-        if chat_hist:
-            recent = list(recent) + chat_hist
+        mp = get_message_persistence()
+        for k in candidate_keys:
+            chat_hist = await mp.get_recent_messages_by_project(k, limit=40)
+            if chat_hist:
+                recent = list(recent) + chat_hist
     except Exception as e:
         logger.debug("soft_collector: chat_messages fetch failed: %s", e)
+
+    # Diagnostics: how much conversation, and the longest assistant turn —
+    # this single line tells us whether the agent's answer reached the miner.
+    try:
+        _asst = [len(m.get("content") or "") for m in recent
+                 if str(m.get("role") or "").lower() in
+                 ("assistant", "agent", "ai", "bot")]
+        logger.info("soft_collector: project=%s keys=%s recent=%d assistant_msgs=%d "
+                    "max_assistant_len=%d",
+                    project_id, candidate_keys, len(recent), len(_asst),
+                    max(_asst) if _asst else 0)
+    except Exception:
+        pass
 
     # When the caller hands us the answer it just produced, fold it in
     # directly — the response-miner then sees it without waiting on the

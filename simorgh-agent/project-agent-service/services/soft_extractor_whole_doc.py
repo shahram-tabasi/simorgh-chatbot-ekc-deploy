@@ -811,7 +811,7 @@ def _slug_param_key(name: str) -> str:
 # Assistant-side roles vary by code path (project_agent stores "assistant",
 # the CoT engine stores "agent"); treat them all as the agent's reply.
 _ASSISTANT_ROLES = {"assistant", "agent", "ai", "bot"}
-_MINE_INPUT_MAX_CHARS = int(os.getenv("SOFT_MINE_INPUT_MAX_CHARS", "30000"))
+_MINE_INPUT_MAX_CHARS = int(os.getenv("SOFT_MINE_INPUT_MAX_CHARS", "16000"))
 
 
 def _collect_answers(messages: List[Dict[str, Any]]) -> str:
@@ -943,7 +943,21 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         timeout=timeout,
     )
     if not parsed or not isinstance(parsed, dict):
-        logger.info("soft.mine_response: model returned no parsable JSON")
+        # Online model busy/unavailable — fall back to the offline gpt-oss
+        # backend with guided_json. One of the two backends is usually free.
+        logger.info("soft.mine_response: online failed, trying offline gpt-oss")
+        try:
+            parsed = await _call_gpt_oss(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": user}],
+                _mine_schema(), timeout=timeout,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.info("soft.mine_response: offline fallback errored: %s", e)
+            parsed = None
+    if not parsed or not isinstance(parsed, dict):
+        logger.info("soft.mine_response: model returned no parsable JSON "
+                    "(both online and offline)")
         return {}
 
     allowed_set = set(_EXTRACT_KEYS)
