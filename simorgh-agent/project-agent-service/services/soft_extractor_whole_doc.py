@@ -993,8 +993,9 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         + f"ANALYSIS TEXT:\n{answer}\n\n"
         "Return compact JSON exactly like: {\"parameters\": [ {\"name\":\"...\","
         "\"canonical_field\":null,\"value\":\"...\",\"unit\":null,"
-        "\"page\":null} ] }. Include ALL parameters stated, terse values, no "
-        "extra whitespace. "
+        "\"page\":null} ] }. Include ALL parameters stated. Copy each value "
+        "EXACTLY as written in the analysis (e.g. \"6.6 kV\", \"40 kA / 3 s\", "
+        "\"110 V DC\"); never abbreviate or drop digits. `page` may be a number. "
         # Qwen3 soft-switch: the gateway hardcodes thinking_level=medium for
         # the local model, so without this Qwen burns the output budget on a
         # <think> block and the JSON is empty/buried. /no_think disables it.
@@ -1052,26 +1053,28 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
         try:
             if not isinstance(item, dict):
                 continue
-            name = (item.get("name") or "").strip()
+            # Qwen returns numeric fields (page, sometimes value/unit) as
+            # ints/floats, so str()-coerce everything before any .strip().
+            name = str(item.get("name") or "").strip()
             value = item.get("value")
             if not name or value in (None, "", []):
                 continue
-            cf = (item.get("canonical_field") or "").strip()
+            cf = str(item.get("canonical_field") or "").strip()
             field = cf if cf in allowed_set else _slug_param_key(name)
             if field in out:        # first mention wins — keep it deduped
                 continue
-            unit = (item.get("unit") or "").strip()
+            unit = str(item.get("unit") or "").strip()
             val_s = str(value).strip()
             if unit and unit.lower() not in val_s.lower():
                 val_s = f"{val_s} {unit}".strip()
             # Link to the source doc (single-doc projects) so the "Source"
             # button can box the value. doc_id may be a UUID string or None.
-            doc_id, fname = _resolve_doc(item.get("document") or "", docs,
+            doc_id, fname = _resolve_doc(str(item.get("document") or ""), docs,
                                          default_doc_id)
             head = f"from analysis '{fname}'" if fname else "from analysis"
             parts: List[str] = [head]
-            sec = (item.get("section") or "").strip()
-            page = (item.get("page") or "").strip()
+            sec = str(item.get("section") or "").strip()
+            page = str(item.get("page") or "").strip()
             if sec:
                 parts.append(f"§ {sec}")
             if page:
