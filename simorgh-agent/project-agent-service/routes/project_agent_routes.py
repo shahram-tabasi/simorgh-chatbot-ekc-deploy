@@ -2152,6 +2152,30 @@ async def soft_proposal_source(project_id: str, proposal_id: str,
     return result
 
 
+@router.post("/projects/{project_id}/soft/refresh")
+async def soft_refresh(project_id: str,
+                       current_user: str = Depends(get_current_user)):
+    """Fire-and-forget: schedule a FORCED extraction pass (re-mines the
+    agent's latest answers) and return immediately. The drawer calls this on
+    open so the patient, possibly-slow miner runs in the background while the
+    UI keeps polling /soft/state for the new proposals — instead of blocking
+    a long request on a busy model."""
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        from services.soft_collector import schedule_refresh
+        schedule_refresh(project_id, force=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("soft_refresh schedule failed: %s", e)
+    return {"ok": True, "scheduled": True}
+
+
 class ApprovalRequest(BaseModel):
     approvals: List[Dict[str, Any]]   # [{proposal_id, action, value?}]
 

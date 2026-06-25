@@ -310,20 +310,26 @@ async def refresh(project_id: str, *, force: bool = False,
 
 
 def schedule_refresh(project_id: str,
-                     latest_answer: Optional[str] = None) -> None:
+                     latest_answer: Optional[str] = None,
+                     force: bool = False) -> None:
     """Fire-and-forget. Safe to call from anywhere; survives shutdown.
     Used as a post-hook in handle_input / upload_document / wizard.
     `latest_answer` (the reply the agent just produced) is fed straight to
-    the response-miner so its parameters are proposed on this same turn."""
+    the response-miner so its parameters are proposed on this same turn.
+    `force` bypasses the signature short-circuit — needed when a prior run
+    persisted the signature but its miner call failed (busy model), so a
+    later trigger must re-run instead of short-circuiting."""
     if not _enabled():
         return
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(refresh(project_id, latest_answer=latest_answer))
+        loop.create_task(refresh(project_id, latest_answer=latest_answer,
+                                 force=force))
     except RuntimeError:
         # No running loop (sync caller) — best-effort: spin one off.
         try:
-            asyncio.run(refresh(project_id, latest_answer=latest_answer))
+            asyncio.run(refresh(project_id, latest_answer=latest_answer,
+                                force=force))
         except Exception as e:
             logger.warning("schedule_refresh sync fallback failed: %s", e)
     except Exception as e:

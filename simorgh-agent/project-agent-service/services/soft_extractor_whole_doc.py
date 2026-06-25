@@ -939,34 +939,44 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
     )
     msgs = [{"role": "system", "content": system},
             {"role": "user", "content": user}]
-    # OFFLINE FIRST. The online model is disabled in this deployment, so the
-    # offline gpt-oss backend (the one the chat itself uses) is what works.
-    # We use guided_json there for byte-valid output. Online is only a
-    # fallback in case a deployment has it enabled instead.
+    # OFFLINE FIRST, PATIENTLY. The online model is disabled here, so the
+    # offline gpt-oss backend (what the chat uses) is the one that works —
+    # but it's the SAME model that just generated the chat answer, so right
+    # after a turn it's busy and returns nothing. Since this is a background
+    # task we can afford to wait it out: retry with exponential backoff until
+    # the model frees up (proven to then return the full parameter list).
     prefer = os.getenv("SOFT_MINE_BACKEND", "offline").lower()
-    parsed = None
-    try:
-        if prefer == "online":
-            parsed = await _call_online_json(msgs, timeout=timeout)
-        else:
-            parsed = await _call_gpt_oss(msgs, _mine_schema(), timeout=timeout)
-    except Exception as e:  # noqa: BLE001
-        logger.info("soft.mine_response: primary backend (%s) errored: %s", prefer, e)
-        parsed = None
-    if not parsed or not isinstance(parsed, dict):
-        logger.info("soft.mine_response: primary backend (%s) gave nothing, "
-                    "trying the other", prefer)
+    attempts = int(os.getenv("SOFT_MINE_RETRIES", "8"))
+
+    async def _try(primary: bool) -> Optional[Dict[str, Any]]:
+        use_offline = (prefer == "offline") if primary else (prefer != "offline")
         try:
-            if prefer == "online":
-                parsed = await _call_gpt_oss(msgs, _mine_schema(), timeout=timeout)
-            else:
-                parsed = await _call_online_json(msgs, timeout=timeout)
+            if use_offline:
+                return await _call_gpt_oss(msgs, _mine_schema(), timeout=timeout)
+            return await _call_online_json(msgs, timeout=timeout)
         except Exception as e:  # noqa: BLE001
-            logger.info("soft.mine_response: secondary backend errored: %s", e)
-            parsed = None
-    if not parsed or not isinstance(parsed, dict):
-        logger.info("soft.mine_response: model returned no parsable JSON "
-                    "(both backends)")
+            logger.debug("soft.mine_response backend error (offline=%s): %s",
+                         use_offline, e)
+            return None
+
+    def _ok(p) -> bool:
+        return bool(p and isinstance(p, dict) and p.get("parameters"))
+
+    parsed = None
+    for i in range(max(1, attempts)):
+        parsed = await _try(primary=True)
+        if _ok(parsed):
+            break
+        await asyncio.sleep(min(2 ** (i + 1), 30))
+        logger.info("soft.mine_response: primary backend busy, retry %d/%d",
+                    i + 1, attempts)
+    # Only after exhausting the primary, try the other backend once (covers
+    # deployments where the OTHER backend is the enabled one).
+    if not _ok(parsed):
+        parsed = await _try(primary=False)
+    if not _ok(parsed):
+        logger.info("soft.mine_response: no parsable JSON after %d attempts "
+                    "(both backends)", attempts)
         return {}
 
     allowed_set = set(_EXTRACT_KEYS)
