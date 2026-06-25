@@ -847,16 +847,24 @@ async def _call_online_json(messages: List[Dict[str, Any]],
                             timeout: float) -> Optional[Dict[str, Any]]:
     """One round-trip to the ONLINE model via llm-gateway (the same backend
     the chat extractors use — reliable when the offline gpt-oss path is
-    down). Returns the parsed JSON dict, or None on failure."""
+    down). Returns the parsed JSON dict, or None on failure.
+
+    This is a background task, so it can afford to be patient: the online
+    model is often still busy finishing the chat turn that triggered the
+    refresh, returning 502/503/504. We retry with a long exponential backoff
+    rather than giving up after a few seconds."""
     payload = {
         "messages":    messages,
         "mode":        "online",
         "temperature": 0.0,
-        "max_tokens":  4000,
+        # Keep generation bounded so a slow gateway doesn't 504; a compact
+        # JSON list of ~30 parameters fits comfortably under this.
+        "max_tokens":  2048,
     }
     body = None
     last_err: Optional[Exception] = None
-    for attempt in range(3):
+    attempts = int(os.getenv("SOFT_MINE_RETRIES", "6"))
+    for attempt in range(max(1, attempts)):
         try:
             async with httpx.AsyncClient(timeout=timeout) as c:
                 r = await c.post(f"{LLM_GATEWAY_URL}/generate", json=payload)
@@ -868,7 +876,9 @@ async def _call_online_json(messages: List[Dict[str, Any]],
                 break
         except Exception as e:
             last_err = e
-            await asyncio.sleep(1.5 * (attempt + 1))
+            # Exponential backoff capped at 30s — gives the shared online
+            # model time to free up after the chat turn.
+            await asyncio.sleep(min(2 ** (attempt + 1), 30))
     if body is None:
         logger.warning("soft.mine_response gateway failed: %s", last_err)
         return None
@@ -974,7 +984,7 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
             ev_short = ev[:240] + ("…" if len(ev) > 240 else "")
             parts.append(f"\"{ev_short}\"")
         out[field] = FieldValue(
-            value=val_s, source="chat",
+            value=val_s, source="analysis",
             confidence=0.8, note=" · ".join(parts),
             # search_for locates the evidence regardless of the stated page,
             # so any resolved doc_id is enough to box the region.

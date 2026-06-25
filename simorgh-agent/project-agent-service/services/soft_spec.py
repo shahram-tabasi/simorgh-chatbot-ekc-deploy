@@ -22,8 +22,11 @@ from pydantic import BaseModel, ConfigDict, Field
 # Sources we recognize. The reconciler uses this order as a default tiebreak
 # when two sources both supply a value with identical confidence:
 #   tpms beats user-input only when explicitly fixed; otherwise user wins.
-Source = Literal["user", "tpms", "uploads", "chat", "gitlab", "techserver", "default"]
-SOURCE_RANK = {"user": 100, "tpms": 80, "uploads": 70,
+Source = Literal["user", "tpms", "uploads", "analysis", "chat", "gitlab", "techserver", "default"]
+# `analysis` = parameters mined from the agent's own cited answer about the
+# uploaded docs. Ranked just under direct upload extraction (the agent read
+# the same source) and above raw chat mentions.
+SOURCE_RANK = {"user": 100, "tpms": 80, "uploads": 70, "analysis": 68,
                "gitlab": 65, "techserver": 60, "chat": 50, "default": 10}
 
 

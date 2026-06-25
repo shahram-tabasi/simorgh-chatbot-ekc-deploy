@@ -2213,8 +2213,8 @@ async def _rederive_spec_from_approved(project_id: str) -> None:
             bag.setdefault(a["field"], []).append(FieldValue(
                 value=a["value"],
                 source=(a["source_kind"] if a["source_kind"] in
-                        ("user", "tpms", "uploads", "chat", "gitlab",
-                         "techserver", "default") else "default"),
+                        ("user", "tpms", "uploads", "analysis", "chat",
+                         "gitlab", "techserver", "default") else "default"),
                 confidence=float(a.get("confidence") or 0.5),
                 note=a.get("source_note"),
             ))

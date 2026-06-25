@@ -244,6 +244,8 @@ const SOURCE_META: Record<string, { label: string; icon: React.FC<{ className?: 
                 tip:    "Direct from TPMS database — typed columns, high confidence" },
   uploads:    { label: "Spec document",       icon: FileText,       accent: "bg-violet-500/15 text-violet-200 border-violet-400/30",
                 tip:    "Extracted from an uploaded specification / datasheet" },
+  analysis:   { label: "Doc analysis",         icon: FileText,       accent: "bg-violet-500/15 text-violet-200 border-violet-400/30",
+                tip:    "Mined from the agent's cited analysis of the uploaded document(s)" },
   chat:       { label: "From chat",           icon: MessagesSquare, accent: "bg-amber-500/15 text-amber-200 border-amber-400/30",
                 tip:    "Pulled from earlier conversation with the agent" },
   techserver: { label: "Tech server",         icon: Server,         accent: "bg-emerald-500/15 text-emerald-200 border-emerald-400/30",
