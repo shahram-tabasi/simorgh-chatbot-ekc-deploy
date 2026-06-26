@@ -2989,6 +2989,23 @@ class ProjectManagerAgent:
             f"input_keys={list(tool_input.keys()) if isinstance(tool_input, dict) else None}"
         )
 
+        # LOCAL-CLONE FIRST for the repo file tree (best-practice source
+        # handling). The gitlab-mcp service account can't read a user's
+        # PRIVATE repo (500), and its MCP transport has been timing out and
+        # HANGING the turn. The repo is already cloned into the session
+        # container by project-init, so read it there directly — private-safe,
+        # fast, no remote creds. Falls through to gitlab-mcp only when there's
+        # no usable clone (e.g. Simorgh-managed repos).
+        if tool == "get_project_tree" and isinstance(tool_input, dict):
+            _sid = tool_input.get("project_id") or locals().get("project_id")
+            try:
+                clone = await self._list_repo_from_clone(str(_sid)) if _sid else None
+            except Exception as e:  # noqa: BLE001
+                logger.info("get_project_tree local-clone read errored: %s", e)
+                clone = None
+            if clone:
+                return clone
+
         # Short-circuit known-invalid file-read calls before they hit MCP.
         # The LLM sometimes plans a redundant "read project files" step
         # after get_project_tree and fills `path` with '/' or '' (i.e.
