@@ -2505,39 +2505,64 @@ class ProjectManagerAgent:
             _has_create = any(w in _low for w in (
                 "create", "build", "submit", "finalize", "finalise",
                 "make the project", "بساز", "ایجاد"))
-            # Intent priority: OPEN_PROPOSALS (most specific UI action) >
-            # CONFLICTS > UPDATE (requires tier-2 word) > CREATE.
-            try:
-                from services.intent_classifier import (
-                    is_design_suite_create, is_design_suite_update,
-                    is_design_suite_conflicts,
-                    is_design_suite_open_proposals,
-                )
-                _design_open = is_design_suite_open_proposals(_uin)
-                _design_conflicts = (not _design_open
-                                     and is_design_suite_conflicts(_uin))
-                # UPDATE only when the embedding matches AND the turn
-                # actually mentions tier-2 data — never on a bare
-                # "create project" phrase.
-                _design_update = (
-                    not _design_open and not _design_conflicts
-                    and _has_tier2
-                    and not (_has_create and not _has_tier2)
-                    and is_design_suite_update(_uin))
-                # CREATE when the embedding matches OR a create verb is
-                # present without tier-2 words (covers "continue to
-                # create project").
-                _design_create = (
-                    not _design_open and not _design_conflicts
-                    and not _design_update
-                    and (is_design_suite_create(_uin)
-                         or (_has_create and not _has_tier2)))
-            except Exception as e:
-                logger.debug("intent_classifier failed (%s); skipping remap", e)
-                _design_create = False
-                _design_update = False
-                _design_conflicts = False
-                _design_open = False
+            # GUARD: never let the soft-bridge hijack a genuine repo / file /
+            # content question. The embedding classifier scores "what's in my
+            # project?" ≥ threshold against the conflicts prototypes purely
+            # because both mention "project", which was throwing away the
+            # planner's correct get_project_tree and making the agent
+            # hallucinate a file list. If the turn looks like a repo/content
+            # query and carries no explicit design-suite signal, skip the
+            # remap entirely and let the planner's tool stand.
+            _repo_signal = any(w in _low for w in (
+                "what's in", "whats in", "what is in", "what files",
+                "which files", "list file", "list the file", "show files",
+                "show the file", "show me the file", "files in", "file tree",
+                "files", "tree", "repo", "repository", "readme", "directory",
+                "folder", "contents of", "what is inside", "what's inside",
+                "محتوا", "فایل", "مخزن", "درخت"))
+            _design_signal = any(w in _low for w in (
+                "design suite", "design-suite", "proposal", "extracted",
+                "review panel", "conflict", "deviation", "consisten",
+                "mismatch", "دیزاین", "پیشنهاد", "تناقض", "مغایرت"))
+            _design_open = _design_conflicts = _design_update = _design_create = False
+            if _repo_signal and not _design_signal:
+                logger.info(
+                    "soft-bridge: skipping remap — repo/content query %r "
+                    "(planner tool %s kept)", _uin[:120], tool)
+            else:
+                # Intent priority: OPEN_PROPOSALS (most specific UI action) >
+                # CONFLICTS > UPDATE (requires tier-2 word) > CREATE.
+                try:
+                    from services.intent_classifier import (
+                        is_design_suite_create, is_design_suite_update,
+                        is_design_suite_conflicts,
+                        is_design_suite_open_proposals,
+                    )
+                    _design_open = is_design_suite_open_proposals(_uin)
+                    _design_conflicts = (not _design_open
+                                         and is_design_suite_conflicts(_uin))
+                    # UPDATE only when the embedding matches AND the turn
+                    # actually mentions tier-2 data — never on a bare
+                    # "create project" phrase.
+                    _design_update = (
+                        not _design_open and not _design_conflicts
+                        and _has_tier2
+                        and not (_has_create and not _has_tier2)
+                        and is_design_suite_update(_uin))
+                    # CREATE when the embedding matches OR a create verb is
+                    # present without tier-2 words (covers "continue to
+                    # create project").
+                    _design_create = (
+                        not _design_open and not _design_conflicts
+                        and not _design_update
+                        and (is_design_suite_create(_uin)
+                             or (_has_create and not _has_tier2)))
+                except Exception as e:
+                    logger.debug("intent_classifier failed (%s); skipping remap", e)
+                    _design_create = False
+                    _design_update = False
+                    _design_conflicts = False
+                    _design_open = False
             if _design_open:
                 logger.info(
                     "soft-bridge remap: %s -> open_soft_proposals "
