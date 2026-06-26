@@ -485,6 +485,11 @@ async def from_uploads(project_id: str, project_oenum: str,
     except Exception as e:
         logger.warning("soft.extract.uploads list failed: %s", e)
         return {}
+    # Provenance log: prove WHICH documents (and under which tenant scope)
+    # feed the proposals, so a project's parameters can be traced to its own
+    # indexed docs and cross-project leakage would be visible here.
+    logger.info("soft.extract.uploads: scope=%s docs=%s", scope,
+                [d.get("filename") for d in docs])
     if not docs:
         return {}
 

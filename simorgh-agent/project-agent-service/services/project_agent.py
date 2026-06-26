@@ -1962,22 +1962,27 @@ class ProjectManagerAgent:
             return None
         q = rel.replace("'", "'\\''")
         cap = 25 * 1024 * 1024  # 25 MB raw — a spec PDF is well under this
+        # Use ONLY portable tools: `wc -c` (not GNU `stat -c`) for size and
+        # plain `base64` (not GNU `base64 -w0`, which busybox/alpine reject).
+        # base64 may wrap at 76 cols — we strip whitespace in Python.
         cmd = (
             "f='/work/gitlab/" + q + "'; "
             "if [ ! -f \"$f\" ]; then echo __NOFILE__; "
-            "elif [ \"$(stat -c %s \"$f\")\" -gt " + str(cap) + " ]; "
+            "elif [ \"$(wc -c < \"$f\")\" -gt " + str(cap) + " ]; "
             "then echo __TOOBIG__; "
-            "else base64 -w0 \"$f\"; fi"
+            "else base64 \"$f\" 2>/dev/null || openssl base64 -in \"$f\"; fi"
         )
         try:
             res = await self.shell.session_exec(session_id, cmd, timeout_sec=60)
         except Exception as e:  # noqa: BLE001
             logger.info("clone-doc base64 read failed for %r: %s", path, e)
             return None
-        b64 = (res.get("stdout") or "").strip() if isinstance(res, dict) else ""
+        raw_out = (res.get("stdout") or "") if isinstance(res, dict) else ""
+        # Collapse any wrapping/newlines the base64 tool may have added.
+        b64 = "".join(raw_out.split())
         if not b64 or b64 in ("__NOFILE__", "__TOOBIG__"):
             logger.info("clone-doc: %r unreadable from clone (%s)",
-                        path, b64 or "empty")
+                        path, (raw_out.strip()[:40] or "empty"))
             return None
         try:
             import base64 as _b64
