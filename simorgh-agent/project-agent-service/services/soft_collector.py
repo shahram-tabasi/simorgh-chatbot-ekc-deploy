@@ -266,10 +266,13 @@ async def refresh(project_id: str, *, force: bool = False,
 
     # HITL contract: extractors PROPOSE, the user APPROVES, only THEN does
     # the spec change. Write each FieldValue into soft_spec_proposal grouped
-    # by source_kind (so a re-extraction from the same source replaces its
-    # pending proposals atomically — no duplicate buildup). We deliberately
-    # do NOT call reconcile / upsert_state here — that would silently push
-    # opportunistic values into the spec the user can't see.
+    # by source_kind and ACCUMULATE (merge_proposals) — the extractor is an
+    # LLM whose output varies turn to turn, so an atomic replace would LOSE
+    # parameters whenever a later run surfaced fewer of them (the 105 -> 64
+    # regression). Merging unions new (field, value) pairs in and never
+    # deletes, while a value the user already approved/rejected is not
+    # re-proposed. We deliberately do NOT call reconcile / upsert_state here
+    # — that would silently push values into the spec the user can't see.
     try:
         from services import soft_proposals as sp
         by_kind: Dict[str, List[Dict[str, Any]]] = {}
@@ -285,8 +288,8 @@ async def refresh(project_id: str, *, force: bool = False,
                 })
         total = 0
         for kind, proposals in by_kind.items():
-            n = await sp.replace_proposals(project_id, kind, proposals)
-            logger.info("soft_collector: kind=%s candidates=%d inserted=%d",
+            n = await sp.merge_proposals(project_id, kind, proposals)
+            logger.info("soft_collector: kind=%s candidates=%d new=%d (accumulated)",
                         kind, len(proposals), n)
             total += n
         # Persist the signature + counts on soft_spec_state for the chip,

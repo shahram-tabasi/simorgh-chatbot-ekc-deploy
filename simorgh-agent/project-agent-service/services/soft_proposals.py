@@ -76,6 +76,80 @@ async def replace_proposals(project_id: str, source_kind: str,
     return n
 
 
+def _value_key(value: Any) -> str:
+    """Stable, whitespace/case-insensitive key for a proposal value so the
+    SAME parameter extracted on two different turns dedups, but genuinely
+    different values for the same field are both kept."""
+    try:
+        if isinstance(value, str):
+            return " ".join(value.split()).strip().lower()
+        return json.dumps(value, sort_keys=True, ensure_ascii=False).lower()
+    except Exception:
+        return str(value).strip().lower()
+
+
+async def merge_proposals(project_id: str, source_kind: str,
+                          proposals: List[Dict[str, Any]]) -> int:
+    """ACCUMULATE proposals from this source — never delete.
+
+    The extractor is an LLM and its output varies turn to turn; an atomic
+    replace therefore *loses* parameters whenever a later run happens to
+    surface fewer of them (the 105 -> 64 regression). Instead we union:
+    a (field, value) pair is inserted only if it isn't already present for
+    this project+source in ANY review state. That means:
+
+      * a re-extraction of the same parameter does NOT pile up duplicates,
+      * a value the user already APPROVED or REJECTED is NOT re-proposed,
+      * the pending set only ever grows as new parameters are discovered.
+
+    Each entry in `proposals`: {field, value, confidence, note?, doc_id?}
+    Returns the number of genuinely-new rows inserted.
+    """
+    if not proposals:
+        return 0
+    # Existing (field, value-key) pairs for this source, ALL states — so
+    # approvals and rejections both suppress a re-propose.
+    seen: set = set()
+    try:
+        rows = await _pg().execute_async(
+            "SELECT field, COALESCE(approved_value, value) AS value "
+            "  FROM soft_spec_proposal "
+            " WHERE project_id = $1 AND source_kind = $2",
+            project_id, source_kind,
+        )
+        for r in (rows or []):
+            d = _decode_row(dict(r))
+            seen.add((d.get("field"), _value_key(d.get("value"))))
+    except Exception as e:
+        logger.warning("merge_proposals preload %s/%s: %s",
+                       project_id, source_kind, e)
+    n = 0
+    for p in proposals:
+        field = p.get("field")
+        if not field:
+            continue
+        key = (field, _value_key(p.get("value")))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            await _pg().execute_one_async(
+                "INSERT INTO soft_spec_proposal "
+                "  (project_id, source_kind, source_note, doc_id, "
+                "   field, value, confidence) "
+                "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING id",
+                project_id, source_kind, p.get("note"),
+                p.get("doc_id"), field,
+                json.dumps(p.get("value")),
+                float(p.get("confidence") or 0.5),
+            )
+            n += 1
+        except Exception as e:
+            logger.warning("merge_proposals insert %s/%s: %s",
+                           project_id, field, e)
+    return n
+
+
 # ---------------------------------------------------------------------------
 # Read proposals — pending (for review) and approved (for spec build).
 # ---------------------------------------------------------------------------

@@ -1985,20 +1985,39 @@ class ProjectManagerAgent:
         except Exception as e:  # noqa: BLE001
             logger.info("clone-doc: base64 decode failed for %r: %s", path, e)
             return None
+        md = ""
         try:
             from services.doc_processor_client import DocProcessorClient
             dp = DocProcessorClient()
             result = await dp.process_bytes(raw, os.path.basename(path), "system")
+            if result and result.get("success"):
+                md = result.get("content") or ""
+                logger.info("clone-doc: extracted %d chars from %r via "
+                            "doc-processor", len(md), path)
+            else:
+                logger.info("clone-doc: doc-processor no content for %r (%s)",
+                            path, (result or {}).get("error"))
         except Exception as e:  # noqa: BLE001
             logger.info("clone-doc: doc-processor call failed for %r: %s", path, e)
-            return None
-        if not result or not result.get("success"):
-            logger.info("clone-doc: doc-processor returned no content for %r (%s)",
-                        path, (result or {}).get("error"))
-            return None
-        md = result.get("content") or ""
-        logger.info("clone-doc: extracted %d chars from %r via doc-processor",
-                    len(md), path)
+        # Fallback: PDFs can be extracted in-process with PyMuPDF so analysis
+        # still works when doc-processor is down or flaky. Page-tagged so the
+        # downstream "attribute to page N" grounding rule keeps working.
+        if not md and ext == ".pdf":
+            try:
+                import fitz  # PyMuPDF
+                doc = fitz.open(stream=raw, filetype="pdf")
+                pages = []
+                for i, pg in enumerate(doc, start=1):
+                    t = pg.get_text("text") or ""
+                    if t.strip():
+                        pages.append(f"\n\n===== Page {i} =====\n{t}")
+                doc.close()
+                md = "".join(pages)
+                logger.info("clone-doc: extracted %d chars from %r via PyMuPDF "
+                            "fallback", len(md), path)
+            except Exception as e:  # noqa: BLE001
+                logger.info("clone-doc: PyMuPDF fallback failed for %r: %s",
+                            path, e)
         return md or None
 
     @staticmethod
