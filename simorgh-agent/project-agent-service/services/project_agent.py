@@ -1915,6 +1915,92 @@ class ProjectManagerAgent:
                          "path": rel, "bytes": len(out)},
         }
 
+    async def _fetch_doc_text_from_clone(
+        self, session_id: str, filename: str,
+    ) -> Optional[str]:
+        """Resolve a named file in the LOCAL CLONE (/work/gitlab) and return
+        its TEXT. Plain-text files are returned verbatim; binary documents
+        (PDF / DOCX / XLSX / images) are routed through doc-processor for
+        markdown extraction — the same conversion gitlab-mcp would do, but
+        private-safe and without the flaky MCP transport.
+
+        Returns None when the file isn't in the clone, is too large, or
+        extraction yields nothing — so the caller falls back to other
+        sources (techserver / upload) or the not_found contract."""
+        if not session_id or not filename:
+            return None
+        clone = await self._list_repo_from_clone(session_id)
+        if not clone:
+            return None
+        files = [ln for ln in (clone.get("output") or "").splitlines()
+                 if ln.strip()]
+        want = filename.strip().lower()
+        path = None
+        for f in files:
+            fl = f.lower()
+            if (fl == want or fl.endswith("/" + want)
+                    or os.path.basename(fl) == want):
+                path = f
+                break
+        if not path:
+            logger.info("clone-doc: %r not present in /work/gitlab tree", filename)
+            return None
+        ext = ("." + path.rsplit(".", 1)[-1].lower()) if "." in path else ""
+        # Plain text — serve directly from the clone.
+        if ext not in self._BINARY_EXTS_PREFER_EXTRACTOR:
+            got = await self._read_file_from_clone(session_id, path)
+            if got and not (got.get("metadata") or {}).get("binary"):
+                return got.get("output") or None
+            # surprise-binary text falls through to the extractor below.
+
+        # Binary document — pull the bytes (base64, size-guarded) and run
+        # them through doc-processor.
+        rel = path.lstrip("/")
+        if rel.startswith("./"):
+            rel = rel[2:]
+        if ".." in rel.split("/"):
+            return None
+        q = rel.replace("'", "'\\''")
+        cap = 25 * 1024 * 1024  # 25 MB raw — a spec PDF is well under this
+        cmd = (
+            "f='/work/gitlab/" + q + "'; "
+            "if [ ! -f \"$f\" ]; then echo __NOFILE__; "
+            "elif [ \"$(stat -c %s \"$f\")\" -gt " + str(cap) + " ]; "
+            "then echo __TOOBIG__; "
+            "else base64 -w0 \"$f\"; fi"
+        )
+        try:
+            res = await self.shell.session_exec(session_id, cmd, timeout_sec=60)
+        except Exception as e:  # noqa: BLE001
+            logger.info("clone-doc base64 read failed for %r: %s", path, e)
+            return None
+        b64 = (res.get("stdout") or "").strip() if isinstance(res, dict) else ""
+        if not b64 or b64 in ("__NOFILE__", "__TOOBIG__"):
+            logger.info("clone-doc: %r unreadable from clone (%s)",
+                        path, b64 or "empty")
+            return None
+        try:
+            import base64 as _b64
+            raw = _b64.b64decode(b64)
+        except Exception as e:  # noqa: BLE001
+            logger.info("clone-doc: base64 decode failed for %r: %s", path, e)
+            return None
+        try:
+            from services.doc_processor_client import DocProcessorClient
+            dp = DocProcessorClient()
+            result = await dp.process_bytes(raw, os.path.basename(path), "system")
+        except Exception as e:  # noqa: BLE001
+            logger.info("clone-doc: doc-processor call failed for %r: %s", path, e)
+            return None
+        if not result or not result.get("success"):
+            logger.info("clone-doc: doc-processor returned no content for %r (%s)",
+                        path, (result or {}).get("error"))
+            return None
+        md = result.get("content") or ""
+        logger.info("clone-doc: extracted %d chars from %r via doc-processor",
+                    len(md), path)
+        return md or None
+
     @staticmethod
     def _read_returned_nothing(result: Any) -> bool:
         """True when the result of a read tool indicates 404 / empty
@@ -5097,6 +5183,24 @@ class ProjectManagerAgent:
             return txt
 
         async def _fetch_gitlab(fn: str) -> Optional[str]:
+            # LOCAL CLONE FIRST (best-practice source handling). The repo is
+            # already cloned into the session container; reading it there is
+            # private-safe and never blocks on the flaky gitlab-mcp MCP
+            # transport (which 500s on private repos and has been hanging
+            # turns). Binary docs are extracted via doc-processor.
+            if has_gitlab:
+                try:
+                    clone_txt = await self._fetch_doc_text_from_clone(
+                        str(project_id), fn)
+                except Exception as e:  # noqa: BLE001
+                    logger.info("preflight gitlab: local-clone fetch errored "
+                                "for %r: %s", fn, e)
+                    clone_txt = None
+                real = _real_text_or_none(clone_txt)
+                if real:
+                    logger.info("preflight gitlab: served %r from local clone "
+                                "(%d chars)", fn, len(real))
+                    return real
             # gitlab-mcp.read_artifact auto-routes binary files
             # (PDF/DOCX/XLSX/images) through doc-processor and returns
             # extracted markdown — see gitlab-mcp-service/app.py:256
