@@ -373,6 +373,11 @@ async def create_project(
             "oenum":              (data.tpms_oenum
                                    or sources_enabled.get("techserver_oenum")),
         }
+        # Forward the user's GitLab token ONLY to clone a private repo. It is
+        # NOT stored on the project row (create_document_record above never
+        # received it) — project-init uses it once for the clone/push.
+        if data.gitlab_user_token and data.gitlab_repo_url:
+            init_payload["gitlab_user_token"] = data.gitlab_user_token
         # Forward TPMS credentials only when a TPMS-backed source is
         # ticked. The wizard only collects them in that case.
         if data.tpms_auth and (

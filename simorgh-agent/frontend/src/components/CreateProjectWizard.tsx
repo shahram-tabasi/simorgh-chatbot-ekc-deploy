@@ -249,6 +249,9 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
         gitlab_repo_path: selectedRepo?.path || null,
         gitlab_repo_url: selectedRepo?.http_url || selectedRepo?.ssh_url || null,
         gitlab_base_branch: selectedRepo ? selectedBranch : null,
+        // The user's GitLab token, forwarded ONLY so the container can clone
+        // a PRIVATE repo (used once at clone time; not stored on the project).
+        gitlab_user_token: selectedRepo ? (userGitlabToken || null) : null,
         sources: {
           gitlab: !!selectedRepo,
           tpms: sources.tpms,

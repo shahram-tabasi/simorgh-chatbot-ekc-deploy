@@ -152,6 +152,7 @@ class ProjectCreate(BaseModel):
     gitlab_repo_path: Optional[str] = Field(None, description="'group/repo' user picked")
     gitlab_repo_url: Optional[str] = Field(None, description="clone URL for the user's repo")
     gitlab_base_branch: Optional[str] = Field(None, description="branch to fork simorgh/<hex> from")
+    gitlab_user_token: Optional[str] = Field(None, description="user's GitLab PAT — used ONCE to clone a private repo; not persisted")
     tpms_auth: Optional[TpmsAuth] = Field(None, description="only when tpms/techserver ticked")
 
 

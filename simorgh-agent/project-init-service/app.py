@@ -95,6 +95,7 @@ class InitRequest(BaseModel):
     # New flow inputs
     gitlab_repo_path: str | None = None       # 'group/repo' chosen by the user
     gitlab_repo_url: str | None = None        # full clone URL (https or git@)
+    gitlab_user_token: str | None = None      # user PAT — used once to clone a private repo
     gitlab_base_branch: str | None = None     # branch the user wants to fork from
     # Anything Git understands: branch / tag / SHA. Wins over
     # gitlab_base_branch when both are set, so the wizard can pin a
@@ -208,6 +209,7 @@ async def _exec(client: httpx.AsyncClient, project_id: str, command: str,
 async def _clone_user_repo(
     client: httpx.AsyncClient, project_id: str,
     repo_url: str, base_ref: str | None, simorgh_branch: str,
+    user_token: str | None = None,
 ) -> dict:
     """Clone the user's repo into /work/gitlab, branch from ``base_ref``,
     and push the new simorgh branch so ``origin`` tracks it.
@@ -215,10 +217,20 @@ async def _clone_user_repo(
     ``base_ref`` may be a branch, tag, or SHA. The clone is unconfigured
     (no ``--branch``); we resolve the ref locally with ``git checkout -B``
     after a full ``fetch --all`` so tags and arbitrary SHAs both work.
+
+    A user PAT (``user_token``), when supplied, is embedded in the HTTPS
+    clone URL so a PRIVATE repo can be cloned (and the simorgh branch
+    pushed). The token lives only in this per-project ephemeral container's
+    git remote — it is never written to the project record.
     """
+    clone_url = repo_url
+    if user_token and repo_url.startswith("https://"):
+        # https://gitlab.example/group/repo.git ->
+        # https://oauth2:<token>@gitlab.example/group/repo.git
+        clone_url = "https://oauth2:" + user_token + "@" + repo_url[len("https://"):]
     safe_ref = shlex.quote(base_ref) if base_ref else ""
     safe_branch = shlex.quote(simorgh_branch)
-    safe_url = shlex.quote(repo_url)
+    safe_url = shlex.quote(clone_url)
     checkout = (
         f"git checkout -B {safe_branch} {safe_ref}\n"
         if base_ref
@@ -707,6 +719,7 @@ async def _run_init(init_id: str, req: InitRequest) -> None:
                     res = await _clone_user_repo(
                         client, req.project_id, req.gitlab_repo_url,
                         base_ref, simorgh_branch,
+                        user_token=req.gitlab_user_token,
                     )
                     cloned_ok = True
                     _record("clone_user_repo", "ok",
