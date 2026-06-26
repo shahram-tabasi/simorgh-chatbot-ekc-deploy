@@ -153,10 +153,32 @@ def list_user_projects(user_token: str | None = None, search: str | None = None,
 
 
 @app.get("/branches")
-def list_branches(project: str, search: str | None = None, per_page: int = 100):
+def list_branches(project: str, search: str | None = None, per_page: int = 100,
+                  user_token: str | None = None,
+                  x_user_gitlab_token: str | None = Header(default=None)):
     """List branches for a project. Used by the project-creation wizard so
-    the user can pick which branch to clone into the container."""
-    p = _project(project)
+    the user can pick which branch to clone into the container.
+
+    When the end user's GitLab token is supplied (header
+    `X-User-Gitlab-Token`, or `user_token` query fallback) we use it — the
+    repos in the wizard are the USER's private projects, which the service
+    account can't see, so without this every private repo returned
+    "No branches found".
+    """
+    token = x_user_gitlab_token or user_token
+    if token:
+        try:
+            ugl = gitlab.Gitlab(GITLAB_URL, private_token=token, timeout=30,
+                                keep_base_url=True)
+            ugl.auth()
+        except gitlab.exceptions.GitlabAuthenticationError:
+            raise HTTPException(status_code=401, detail="invalid gitlab token")
+        try:
+            p = ugl.projects.get(project)
+        except gitlab.exceptions.GitlabGetError:
+            raise HTTPException(status_code=404, detail="project not found / no access")
+    else:
+        p = _project(project)
     items = p.branches.list(search=search, per_page=per_page, all=False)
     return [{"name": b.name,
              "default": getattr(b, "default", False),

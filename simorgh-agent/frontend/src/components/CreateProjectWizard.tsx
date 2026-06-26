@@ -164,9 +164,14 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
           'X-User-Gitlab-Token': userGitlabToken,
         },
       });
-      setRepos(r.data || []);
-      if ((r.data || []).length === 0) {
+      const list = r.data || [];
+      setRepos(list);
+      if (list.length === 0) {
         setReposError('هیچ مخزنی برای این توکن گیت‌لب پیدا نشد.');
+      } else {
+        // Default to the first real repo (not "No repository") when the
+        // user has repos — they clicked "List repos" because they want one.
+        setSelectedRepo((prev) => prev || list[0]);
       }
     } catch (e: any) {
       setReposError(humanizeProjectError(e));
@@ -194,7 +199,12 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
         const token = localStorage.getItem('simorgh_token');
         const r = await axios.get(`${API_BASE}/gitlab/branches`, {
           params: { project: selectedRepo.path, per_page: 100 },
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            // The repos are the user's PRIVATE projects; the branches
+            // endpoint needs the user's GitLab token to see them.
+            ...(userGitlabToken ? { 'X-User-Gitlab-Token': userGitlabToken } : {}),
+          },
         });
         if (cancelled) return;
         setBranches(r.data || []);
@@ -207,7 +217,7 @@ export default function CreateProjectWizard({ isOpen, onClose, onCreated }: Prop
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedRepo]);
+  }, [selectedRepo, userGitlabToken]);
 
   const handleSubmit = useCallback(async () => {
     setError('');
