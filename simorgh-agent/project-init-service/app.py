@@ -231,11 +231,27 @@ async def _clone_user_repo(
     safe_ref = shlex.quote(base_ref) if base_ref else ""
     safe_branch = shlex.quote(simorgh_branch)
     safe_url = shlex.quote(clone_url)
-    checkout = (
-        f"git checkout -B {safe_branch} {safe_ref}\n"
-        if base_ref
-        else f"git checkout -B {safe_branch}\n"
-    )
+    # Resolve the start point ROBUSTLY. After `git clone`, a user-selected
+    # branch like `test` exists ONLY as the remote-tracking ref
+    # `origin/test` — there is no local `test`. `git checkout -B X test`
+    # resolves the start point with rev-parse rules, which look at
+    # refs/heads, refs/tags and refs/remotes/<name> but NOT
+    # refs/remotes/origin/<name>; so a bare branch name silently fails to
+    # resolve and HEAD stays on the clone's default branch (master). Prefer
+    # origin/<ref>, then fall back to <ref> (covers tags and SHAs), then to
+    # the default branch.
+    if base_ref:
+        checkout = (
+            f"START={safe_ref}\n"
+            'if git rev-parse --verify --quiet "refs/remotes/origin/$START^{commit}" '
+            ">/dev/null; then REF=\"origin/$START\"; "
+            'elif git rev-parse --verify --quiet "$START^{commit}" >/dev/null; '
+            'then REF="$START"; '
+            'else echo "base ref $START not found — using default branch"; REF=""; fi\n'
+            f"git checkout -B {safe_branch} $REF\n"
+        )
+    else:
+        checkout = f"git checkout -B {safe_branch}\n"
     script = (
         "set -e\n"
         "rm -rf /work/gitlab\n"
