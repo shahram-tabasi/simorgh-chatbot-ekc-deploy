@@ -1853,6 +1853,68 @@ class ProjectManagerAgent:
                          "count": len(files)},
         }
 
+    async def _read_file_from_clone(
+        self, session_id: str, path: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Read a single file from the LOCAL CLONE in the session container
+        (/work/gitlab/<path>) via runtime-broker. Private-safe, no remote
+        creds, and never blocks on the flaky gitlab-mcp transport.
+
+        Returns the standard {output, metadata} shape for a readable text
+        file, a short note for a binary file, or None to fall through to the
+        normal MCP path (file missing, no clone, or read error)."""
+        if not session_id or not path:
+            return None
+        # Normalise: strip a leading slash / "./" so it joins under the clone
+        # root, and reject traversal so we can only read inside /work/gitlab.
+        rel = path.strip().lstrip("/")
+        if rel.startswith("./"):
+            rel = rel[2:]
+        if ".." in rel.split("/"):
+            logger.info("local-clone read: rejecting traversal path %r", path)
+            return None
+        # Single-quote the path for the shell; escape any embedded quotes.
+        q = rel.replace("'", "'\\''")
+        # 1) missing file -> sentinel (fall through); 2) binary -> note;
+        # 3) text -> cat the first ~200 KB so a huge file can't blow the turn.
+        cmd = (
+            "f='/work/gitlab/" + q + "'; "
+            "if [ ! -f \"$f\" ]; then echo __NOFILE__; "
+            "elif LC_ALL=C grep -qI . \"$f\" 2>/dev/null || [ ! -s \"$f\" ]; then "
+            "head -c 204800 \"$f\"; "
+            "else echo __BINARY__; fi"
+        )
+        try:
+            res = await self.shell.session_exec(session_id, cmd, timeout_sec=30)
+        except Exception as e:  # noqa: BLE001
+            logger.info("local-clone file read failed for %s %r: %s",
+                        session_id, path, e)
+            return None
+        out = (res.get("stdout") or "") if isinstance(res, dict) else ""
+        stripped = out.strip()
+        if stripped == "__NOFILE__" or stripped == "":
+            logger.info("local-clone file read: %r not found under /work/gitlab "
+                        "for %s (falling through)", path, session_id)
+            return None
+        if stripped == "__BINARY__":
+            logger.info("local-clone file read: %r is binary for %s", path,
+                        session_id)
+            return {
+                "output": (
+                    "[binary file — " + rel + " — not shown as text. "
+                    "It is present in the repository clone.]"
+                ),
+                "metadata": {"via": "local_clone", "tool": "read_file_mcp",
+                             "path": rel, "binary": True},
+            }
+        logger.info("local-clone file read: %d bytes from %r for %s",
+                    len(out), path, session_id)
+        return {
+            "output": out,
+            "metadata": {"via": "local_clone", "tool": "read_file_mcp",
+                         "path": rel, "bytes": len(out)},
+        }
+
     @staticmethod
     def _read_returned_nothing(result: Any) -> bool:
         """True when the result of a read tool indicates 404 / empty
@@ -3005,6 +3067,24 @@ class ProjectManagerAgent:
                 clone = None
             if clone:
                 return clone
+
+        # Same idea for file reads: serve them from the local clone so a
+        # single_repo turn never blocks on the flaky gitlab-mcp MCP transport.
+        # Empty/placeholder paths are left to the short-circuit below.
+        if (tool in ("read_file_mcp", "read_artifact_mcp")
+                and isinstance(tool_input, dict)):
+            _sid = tool_input.get("project_id") or locals().get("project_id")
+            _path = (tool_input.get("path") or "").strip()
+            _bad = (not _path or _path in ("/", ".", "*")
+                    or "<" in _path or "{" in _path or "'" in _path or "\n" in _path)
+            if _sid and not _bad:
+                try:
+                    got = await self._read_file_from_clone(str(_sid), _path)
+                except Exception as e:  # noqa: BLE001
+                    logger.info("%s local-clone read errored: %s", tool, e)
+                    got = None
+                if got:
+                    return got
 
         # Short-circuit known-invalid file-read calls before they hit MCP.
         # The LLM sometimes plans a redundant "read project files" step
