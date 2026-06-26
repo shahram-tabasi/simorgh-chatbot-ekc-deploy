@@ -82,7 +82,8 @@ def _value_key(value: Any) -> str:
     different values for the same field are both kept."""
     try:
         if isinstance(value, str):
-            return " ".join(value.split()).strip().lower()
+            # Whitespace-insensitive + case-folded so '40 kA' == '40kA'.
+            return "".join(value.split()).lower()
         return json.dumps(value, sort_keys=True, ensure_ascii=False).lower()
     except Exception:
         return str(value).strip().lower()

@@ -2075,7 +2075,18 @@ async def soft_proposals(project_id: str,
     by_field: Dict[str, List[Dict[str, Any]]] = {}
     for p in pending:
         by_field.setdefault(p["field"], []).append(p)
-    return {"pending_by_field": by_field, "approved": approved}
+    # MDM-style review model: merge identical values (the same parameter
+    # extracted over and over collapses to one corroborated row) and route
+    # fields that carry >=2 DISTINCT values into a dedicated `conflicts`
+    # section for the user to decide. Additive — older UIs ignore `review`.
+    try:
+        from services.soft_review import build_review
+        review = build_review(pending)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("soft_proposals build_review failed: %s", e)
+        review = {"conflicts": [], "agreed": [], "counts": {}}
+    return {"pending_by_field": by_field, "approved": approved,
+            "review": review}
 
 
 # =============================================================================

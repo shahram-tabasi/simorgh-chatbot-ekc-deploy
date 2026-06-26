@@ -41,9 +41,15 @@ type StateResp = {
   };
   pending: Pending[];
 };
+type ReviewModel = {
+  conflicts: { field: string; candidates: Proposal[] }[];
+  agreed:    Proposal[];
+  counts?:   Record<string, number>;
+};
 type ProposalsResp = {
   pending_by_field: Record<string, Proposal[]>;
   approved:         any[];
+  review?:          ReviewModel;
 };
 
 interface Props {
@@ -136,7 +142,12 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
   const [bulkBusy, setBulkBusy] = React.useState(false);
   const decideAll = async (action: "approve" | "reject") => {
     const pbf = proposals?.pending_by_field || {};
-    const all: Proposal[] = Object.values(pbf).flat();
+    // Conflicting fields (>=2 distinct values) must be decided by hand, so
+    // "Approve all" skips them; "Reject all" still clears everything.
+    const conflictFields = new Set(
+      (proposals?.review?.conflicts || []).map((c) => c.field));
+    const all: Proposal[] = Object.values(pbf).flat().filter(
+      (p) => action === "reject" || !conflictFields.has(p.field));
     if (!all.length) return;
     setBulkBusy(true);
     try {
@@ -161,6 +172,45 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
   };
   const onApproveAll = () => decideAll("approve");
   const onRejectAll  = () => decideAll("reject");
+
+  // Resolve a conflict in ONE request: approve the value the user picked
+  // (optionally edited) and reject the competing values for that field, so
+  // the field leaves the conflicts section with a single surviving value.
+  const onResolveConflict = async (
+    chosen: Proposal, siblings: Proposal[], editedValue?: string,
+  ) => {
+    const chosenIds = new Set<string>([
+      chosen.id, ...((chosen as any).proposal_ids || []),
+    ]);
+    const approvals: any[] = [{
+      proposal_id: chosen.id,
+      action: editedValue !== undefined ? "edit" : "approve",
+      value: editedValue,
+    }];
+    for (const s of siblings) {
+      for (const id of [s.id, ...(((s as any).proposal_ids) || [])]) {
+        if (id && !chosenIds.has(id)) approvals.push({ proposal_id: id, action: "reject" });
+      }
+    }
+    const busy = approvals.map((a) => a.proposal_id);
+    setBusyIds((prev) => { const n = new Set(prev); busy.forEach((b) => n.add(b)); return n; });
+    try {
+      await axios.post(
+        `${API_BASE}/v2/agent/projects/${projectId}/soft/approve`,
+        { approvals },
+        { headers: { Authorization: `Bearer ${token()}` } },
+      );
+      notify({ type: "success", title: "Conflict resolved",
+        message: `Kept one value for "${chosen.field}" and dropped ${approvals.length - 1} alternative${approvals.length - 1 === 1 ? "" : "s"}.` });
+      await fetchState();
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || e?.message || "Could not resolve conflict.";
+      setError(msg);
+      notify({ type: "error", title: "Resolve failed", message: msg });
+    } finally {
+      setBusyIds((prev) => { const n = new Set(prev); busy.forEach((b) => n.delete(b)); return n; });
+    }
+  };
 
   // Create the Design Suite project from the currently-approved spec
   // and open it in a new tab. Called by the "Create Design Suite
@@ -452,11 +502,13 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         pendingByField={pendingByField}
+        review={proposals?.review || null}
         approvedCount={approvedCount}
         busyIds={busyIds}
         categories={categories}
         onApprove={onApprove}
         onReject={onReject}
+        onResolveConflict={onResolveConflict}
         onCreate={onCreate}
         creating={creating}
         canCreate={approvedCount > 0}
