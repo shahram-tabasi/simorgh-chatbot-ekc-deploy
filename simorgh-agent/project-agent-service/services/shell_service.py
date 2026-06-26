@@ -98,6 +98,17 @@ class ShellServiceClient:
             "working_dir": working_dir or "/work",
         })
 
+    async def session_exec(self, project_id: str, command: str,
+                           timeout_sec: int = 30,
+                           workdir: str | None = None) -> dict:
+        """Run a command in the LIVE per-project session container (the
+        persistent /work volume that holds the GitLab clone, uploads, etc.) —
+        NOT the stateless /run sandbox. Mirrors project-init's _exec."""
+        body: dict = {"command": command, "timeout_sec": timeout_sec}
+        if workdir:
+            body["workdir"] = workdir
+        return await self._broker_post(f"/sessions/{project_id}/exec", body)
+
     # ---- git --------------------------------------------------------------
     async def git_init(self, project_id: str) -> dict:
         # GitLab projects are created with an initial commit — git-init is a no-op.

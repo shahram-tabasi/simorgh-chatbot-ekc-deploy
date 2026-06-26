@@ -1817,6 +1817,42 @@ class ProjectManagerAgent:
             # MCP path failed for the retry too — try REST.
             return await self._try_gitlab_rest(tool, retry_input)
 
+    async def _list_repo_from_clone(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """List the user's repo from its LOCAL CLONE in the session container
+        (/work/gitlab) via runtime-broker. This is the source of truth for
+        private repos and needs no remote credentials. Returns the standard
+        {output, metadata} shape, or None when there's no usable clone."""
+        if not session_id:
+            return None
+        # git ls-files = tracked files on the checked-out branch; fall back to
+        # find for an un-committed / shallow tree. Quiet on missing dir.
+        cmd = (
+            "if [ -d /work/gitlab ]; then "
+            "cd /work/gitlab && "
+            "(git ls-files 2>/dev/null || find . -type f -not -path './.git/*' "
+            "| sed 's|^\\./||'); "
+            "fi"
+        )
+        try:
+            res = await self.shell.session_exec(session_id, cmd, timeout_sec=30)
+        except Exception as e:  # noqa: BLE001
+            logger.info("local-clone read failed for %s: %s", session_id, e)
+            return None
+        out = (res.get("stdout") or "").strip() if isinstance(res, dict) else ""
+        files = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if not files:
+            logger.info("local-clone read: /work/gitlab empty or absent for %s "
+                        "(clone may have failed — check repo URL / deploy key)",
+                        session_id)
+            return None
+        logger.info("local-clone read: %d files from /work/gitlab for %s",
+                    len(files), session_id)
+        return {
+            "output": "\n".join(files),
+            "metadata": {"via": "local_clone", "tool": "get_project_tree",
+                         "count": len(files)},
+        }
+
     @staticmethod
     def _read_returned_nothing(result: Any) -> bool:
         """True when the result of a read tool indicates 404 / empty
@@ -1981,12 +2017,29 @@ class ProjectManagerAgent:
         """Fallback path for gitlab_mcp tools when the streamable-HTTP
         transport misbehaves. gitlab-mcp exposes equivalent REST routes
         we can hit directly. Returns the same {output, metadata} shape
-        the MCP path returns, or None if the tool isn't covered."""
+        the MCP path returns, or None if the tool isn't covered.
+
+        For get_project_tree we additionally read the LOCAL CLONE first — see
+        _list_repo_from_clone — because the gitlab-mcp service account can't
+        see a user's private repo."""
         import httpx
         base = os.getenv("GITLAB_MCP_URL", "http://gitlab-mcp:8047").rstrip("/")
         project = tool_input.get("project") or tool_input.get("project_id")
         if not project:
             return None
+        # BEST PRACTICE (private-repo source handling): read the project's
+        # LOCAL CLONE first. The repo is cloned into the session container by
+        # project-init at the user's selected branch; reading it there needs
+        # no remote credentials and works for PRIVATE repos — whereas the
+        # gitlab-mcp API uses the shared service account, which 500s/404s on
+        # a user's private project. The remote API stays as a fallback (for
+        # Simorgh-managed repos the service account *can* see, or when the
+        # clone is absent).
+        if tool == "get_project_tree":
+            _sid = tool_input.get("project_id")
+            clone = await self._list_repo_from_clone(_sid) if _sid else None
+            if clone:
+                return clone
         try:
             async with httpx.AsyncClient(timeout=30) as c:
                 if tool == "get_project_tree":
