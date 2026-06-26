@@ -24,7 +24,8 @@
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.0",
     "sweetalert2": "^11.26.4",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {
     "@types/ioredis": "^4.28.10",

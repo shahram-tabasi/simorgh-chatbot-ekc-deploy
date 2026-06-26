@@ -24,7 +24,7 @@
  */
 import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import {
   X, Wand2, Check, Trash2, Pencil, Loader2, ChevronDown,
   FileText, Database, MessagesSquare, GitBranch, Server, User as UserIcon,
@@ -91,6 +91,10 @@ interface Props {
   projectId?:     string;
   apiBase?:       string;
   getToken?:      () => string;
+
+  // ── Excel report header metadata ───────────────────────────────────
+  projectName?:   string;
+  completeness?:  number;
 }
 
 // ---------------------------------------------------------------------------
@@ -547,67 +551,217 @@ function valueToCell(value: any): string {
   return String(value);
 }
 
-type ReportRow = {
-  Parameter: string; Field: string; Value: string; Status: string;
-  Source: string; "Confidence %": number | string; Document: string;
-  Section: string; Evidence: string;
+// Pull document / section / page / evidence out of a source_note like
+//   "from analysis 'X.pdf' · § Power circuit · p.17 · \"6.6 kV\""
+function parseNote(note?: string): {
+  filename: string; section: string; page: string; evidence: string;
+} {
+  const parts = parseSourceNote(note);
+  let page = "";
+  const m = (note || "").match(/·\s*p\.?\s*([A-Za-z0-9.\-]+)/i)
+        || (note || "").match(/\bpage\s*([A-Za-z0-9.\-]+)/i);
+  if (m) page = m[1];
+  return {
+    filename: parts.filename || "", section: parts.section || "",
+    page, evidence: parts.evidence || "",
+  };
+}
+
+type RRow = {
+  category: string; parameter: string; field: string; value: string;
+  status: "Approved" | "Pending review" | "Not found"; source: string;
+  confidence: number | "";  document: string; page: string;
+  section: string; evidence: string;
 };
 
-function buildReportRows(
+const STATUS_ORDER: Record<RRow["status"], number> = {
+  "Approved": 0, "Pending review": 1, "Not found": 2,
+};
+
+function buildRRows(
   pendingByField: Record<string, Proposal[]>,
   approved: Proposal[],
   gaps: string[],
-): ReportRow[] {
-  const rows: ReportRow[] = [];
+  categories?: CategoriesResp | null,
+): RRow[] {
   const sourceLabel = (k: string) => SOURCE_META[k]?.label || k || "—";
-  const push = (p: Proposal, status: string) => {
-    const note = parseSourceNote(p.source_note);
+  const catOf = (field: string): string => {
+    const id = categories?.field_to_category?.[field] || categories?.fallback || "other";
+    const g = categories?.groups?.find((x) => x.id === id);
+    return g?.label || "Other";
+  };
+  const rows: RRow[] = [];
+  const push = (p: Proposal, status: RRow["status"]) => {
+    const n = parseNote(p.source_note);
     rows.push({
-      Parameter: fieldMeta(p.field).label || p.field,
-      Field: p.field,
-      Value: valueToCell(p.value),
-      Status: status,
-      Source: sourceLabel(p.source_kind),
-      "Confidence %": Math.round((p.confidence ?? 0) * 100),
-      Document: note.filename || "",
-      Section: note.section || "",
-      Evidence: note.evidence || "",
+      category: catOf(p.field),
+      parameter: fieldMeta(p.field).label || p.field,
+      field: p.field,
+      value: valueToCell(p.value),
+      status,
+      source: sourceLabel(p.source_kind),
+      confidence: Math.round((p.confidence ?? 0) * 100),
+      document: n.filename, page: n.page, section: n.section, evidence: n.evidence,
     });
   };
   for (const p of approved || []) push(p, "Approved");
-  for (const f of Object.keys(pendingByField || {})) {
+  for (const f of Object.keys(pendingByField || {}))
     for (const p of pendingByField[f] || []) push(p, "Pending review");
-  }
-  const known = new Set(rows.map((r) => r.Field));
+  const known = new Set(rows.map((r) => r.field));
   for (const f of gaps || []) {
     if (known.has(f)) continue;
     rows.push({
-      Parameter: fieldMeta(f).label || f, Field: f, Value: "",
-      Status: "Not found yet", Source: "—", "Confidence %": "",
-      Document: "", Section: "", Evidence: "",
+      category: catOf(f), parameter: fieldMeta(f).label || f, field: f,
+      value: "", status: "Not found", source: "—", confidence: "",
+      document: "", page: "", section: "", evidence: "",
     });
   }
+  // Group by category (in the backend's canonical order), then status, then name.
+  const catOrder: Record<string, number> = {};
+  (categories?.groups || []).forEach((g, i) => { catOrder[g.label] = i; });
+  rows.sort((a, b) =>
+    (catOrder[a.category] ?? 99) - (catOrder[b.category] ?? 99) ||
+    STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
+    a.parameter.localeCompare(b.parameter));
   return rows;
 }
+
+// ── styling helpers (xlsx-js-style) ────────────────────────────────────────
+const C = {
+  brand: "1E3A8A", brand2: "3730A3", head: "1E293B", headTxt: "FFFFFF",
+  stripe: "F1F5F9", white: "FFFFFF", border: "CBD5E1", line: "E2E8F0",
+  okFill: "DCFCE7", okTxt: "166534", pendFill: "FEF3C7", pendTxt: "92400E",
+  gapFill: "F1F5F9", gapTxt: "64748B", kpiFill: "EEF2FF", label: "475569",
+};
+const THIN = (rgb = C.line) => ({ style: "thin", color: { rgb } });
+const BORDER_ALL = { top: THIN(), bottom: THIN(), left: THIN(), right: THIN() };
 
 function exportProposalsExcel(
   pendingByField: Record<string, Proposal[]>,
   approved: Proposal[],
   gaps: string[],
+  categories?: CategoriesResp | null,
+  meta?: { projectName?: string; completeness?: number },
 ): void {
-  const rows = buildReportRows(pendingByField, approved, gaps);
-  const ws = XLSX.utils.json_to_sheet(rows, {
-    header: ["Parameter", "Field", "Value", "Status", "Source",
-             "Confidence %", "Document", "Section", "Evidence"],
-  });
+  const rows = buildRRows(pendingByField, approved, gaps, categories);
+  const HEAD = ["Category", "Parameter", "Value", "Status", "Source",
+                "Confidence", "Document", "Page", "Section",
+                "Evidence / note", "Field key"];
+  const NCOL = HEAD.length;
+  const total = rows.length;
+  const nApproved = rows.filter((r) => r.status === "Approved").length;
+  const nPending = rows.filter((r) => r.status === "Pending review").length;
+  const nGap = rows.filter((r) => r.status === "Not found").length;
+  const srcCount: Record<string, number> = {};
+  rows.forEach((r) => { if (r.source && r.source !== "—") srcCount[r.source] = (srcCount[r.source] || 0) + 1; });
+  const topSources = Object.entries(srcCount).sort((a, b) => b[1] - a[1])
+    .slice(0, 3).map(([s, n]) => `${s} (${n})`).join(", ") || "—";
+  const now = new Date();
+  const stamp = now.toISOString().slice(0, 10);
+  const projectName = meta?.projectName || "Design Suite Project";
+  const completeness = typeof meta?.completeness === "number" ? `${meta.completeness}%` : "—";
+
+  const blank = () => Array(NCOL).fill("");
+  const aoa: any[][] = [];
+  aoa.push(["SIMORGH AI  ·  Design Suite — Project Parameter Report", ...Array(NCOL - 1).fill("")]); // 0
+  aoa.push([`${projectName}    —    generated ${now.toLocaleString()}`, ...Array(NCOL - 1).fill("")]); // 1
+  aoa.push(blank());                                                          // 2
+  aoa.push(["Total parameters", "Approved", "Pending review", "Not found",
+            "Completeness", "Top sources", "", "", "", "", ""]);             // 3 KPI labels
+  aoa.push([total, nApproved, nPending, nGap, completeness, topSources,
+            "", "", "", "", ""]);                                            // 4 KPI values
+  aoa.push(blank());                                                          // 5
+  const HEAD_ROW = aoa.length;                                                // 6
+  aoa.push(HEAD);
+  const DATA_ROW = aoa.length;                                               // 7
+  for (const r of rows)
+    aoa.push([r.category, r.parameter, r.value, r.status, r.source,
+              r.confidence === "" ? "" : r.confidence / 100, r.document,
+              r.page, r.section, r.evidence, r.field]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws["!cols"] = [
-    { wch: 28 }, { wch: 30 }, { wch: 34 }, { wch: 15 }, { wch: 14 },
-    { wch: 12 }, { wch: 26 }, { wch: 20 }, { wch: 50 },
+    { wch: 22 }, { wch: 30 }, { wch: 26 }, { wch: 15 }, { wch: 14 },
+    { wch: 11 }, { wch: 26 }, { wch: 7 }, { wch: 22 }, { wch: 46 }, { wch: 34 },
   ];
+  ws["!rows"] = [{ hpt: 30 }, { hpt: 18 }, { hpt: 6 }, { hpt: 16 }, { hpt: 22 },
+                 { hpt: 6 }, { hpt: 22 }];
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: NCOL - 1 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: NCOL - 1 } },
+  ];
+  ws["!autofilter"] = { ref: `${XLSX.utils.encode_cell({ r: HEAD_ROW, c: 0 })}:${XLSX.utils.encode_cell({ r: aoa.length - 1, c: NCOL - 1 })}` };
+
+  const set = (r: number, c: number, s: any) => {
+    const a = XLSX.utils.encode_cell({ r, c });
+    if (!ws[a]) ws[a] = { t: "s", v: "" };
+    ws[a].s = s;
+  };
+  // Title + subtitle
+  set(0, 0, { font: { bold: true, sz: 16, color: { rgb: C.white } },
+              fill: { fgColor: { rgb: C.brand } },
+              alignment: { horizontal: "center", vertical: "center" } });
+  set(1, 0, { font: { italic: true, sz: 10.5, color: { rgb: C.white } },
+              fill: { fgColor: { rgb: C.brand2 } },
+              alignment: { horizontal: "center", vertical: "center" } });
+  // KPI band
+  for (let c = 0; c < 6; c++) {
+    set(3, c, { font: { bold: true, sz: 9, color: { rgb: C.label } },
+                fill: { fgColor: { rgb: C.kpiFill } },
+                alignment: { horizontal: "center" }, border: BORDER_ALL });
+    const isCount = c < 4;
+    set(4, c, { font: { bold: true, sz: isCount ? 14 : 11, color: { rgb: c === 1 ? C.okTxt : c === 2 ? C.pendTxt : c === 3 ? C.gapTxt : C.head } },
+                fill: { fgColor: { rgb: C.white } },
+                alignment: { horizontal: "center", vertical: "center" }, border: BORDER_ALL });
+  }
+  // Table header
+  for (let c = 0; c < NCOL; c++)
+    set(HEAD_ROW, c, { font: { bold: true, sz: 10, color: { rgb: C.headTxt } },
+                       fill: { fgColor: { rgb: C.head } },
+                       alignment: { horizontal: "center", vertical: "center", wrapText: true },
+                       border: { top: THIN(C.head), bottom: THIN(C.head), left: THIN(C.border), right: THIN(C.border) } });
+  // Data rows
+  for (let i = 0; i < rows.length; i++) {
+    const r = DATA_ROW + i;
+    const rr = rows[i];
+    const stripe = i % 2 === 1;
+    const baseFill = stripe ? C.stripe : C.white;
+    for (let c = 0; c < NCOL; c++) {
+      const left = c === 1 || c === 2 || c === 9; // text columns left-aligned
+      set(r, c, {
+        font: { sz: 9.5, color: { rgb: "0F172A" } },
+        fill: { fgColor: { rgb: baseFill } },
+        alignment: { horizontal: left ? "left" : "center", vertical: "center", wrapText: c === 9 },
+        border: BORDER_ALL,
+      });
+    }
+    // Category — subtle emphasis
+    set(r, 0, { font: { sz: 9, bold: true, color: { rgb: C.brand2 } },
+                fill: { fgColor: { rgb: baseFill } },
+                alignment: { horizontal: "left", vertical: "center" }, border: BORDER_ALL });
+    // Status — colour chip
+    const sFill = rr.status === "Approved" ? C.okFill : rr.status === "Pending review" ? C.pendFill : C.gapFill;
+    const sTxt = rr.status === "Approved" ? C.okTxt : rr.status === "Pending review" ? C.pendTxt : C.gapTxt;
+    set(r, 3, { font: { sz: 9, bold: true, color: { rgb: sTxt } },
+                fill: { fgColor: { rgb: sFill } },
+                alignment: { horizontal: "center", vertical: "center" }, border: BORDER_ALL });
+    // Confidence — percent + colour
+    if (rr.confidence !== "") {
+      const conf = rr.confidence as number;
+      const cTxt = conf >= 80 ? C.okTxt : conf >= 50 ? C.pendTxt : "B91C1C";
+      const a = XLSX.utils.encode_cell({ r, c: 5 });
+      ws[a].z = "0%";
+      ws[a].s = { font: { sz: 9.5, bold: true, color: { rgb: cTxt } },
+                  fill: { fgColor: { rgb: baseFill } },
+                  alignment: { horizontal: "center", vertical: "center" }, border: BORDER_ALL };
+    }
+  }
+
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Project parameters");
-  const stamp = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `project-parameters-${stamp}.xlsx`);
+  wb.Props = { Title: "Design Suite Parameter Report", Author: "Simorgh AI",
+               CreatedDate: now };
+  XLSX.utils.book_append_sheet(wb, ws, "Parameters");
+  XLSX.writeFile(wb, `${projectName.replace(/[^\w.-]+/g, "_")}-parameters-${stamp}.xlsx`);
 }
 
 // ===========================================================================
@@ -618,7 +772,7 @@ export default function ProposalsReviewDrawer({
   categories, onApprove, onReject,
   onCreate, creating = false, canCreate = false,
   approved = [], gaps = [], onApproveAll, onRejectAll, bulkBusy = false,
-  projectId, apiBase, getToken,
+  projectId, apiBase, getToken, projectName, completeness,
 }: Props) {
   const fields = Object.keys(pendingByField).sort();
   const totalPending = fields.reduce(
@@ -765,7 +919,8 @@ export default function ProposalsReviewDrawer({
               <div className="flex-1" />
 
               <button
-                onClick={() => exportProposalsExcel(pendingByField, approved, gaps)}
+                onClick={() => exportProposalsExcel(pendingByField, approved, gaps,
+                  categories, { projectName, completeness })}
                 disabled={totalPending === 0 && approved.length === 0 && gapFields.length === 0}
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px]
                            bg-sky-500/15 hover:bg-sky-500/30 border border-sky-400/40

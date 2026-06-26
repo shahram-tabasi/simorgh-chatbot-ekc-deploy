@@ -468,6 +468,8 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
         projectId={projectId}
         apiBase={API_BASE}
         getToken={token}
+        projectName={state.state.spec?.projectName || state.state.spec?.projectNumber}
+        completeness={state.state.completeness}
       />
     </div>
   );
