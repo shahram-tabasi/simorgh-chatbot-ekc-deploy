@@ -307,7 +307,16 @@ async def refresh(project_id: str, *, force: bool = False,
             try:
                 from services.soft_grounding import verify_against_docs
                 scope = (project.get("tpms_oenum") or project_id)
-                by_kind = await verify_against_docs(by_kind, project_id, str(scope))
+                # Clean answer corpus — analysis/chat values are verified
+                # against the AI's own answer (the text the miner read), NOT
+                # the scrambled PDF, so good values aren't wrongly dropped.
+                answer_corpus = "\n".join(
+                    str(m.get("content") or "") for m in recent
+                    if str(m.get("role") or "").lower()
+                    in ("assistant", "agent", "ai", "bot")
+                )
+                by_kind = await verify_against_docs(
+                    by_kind, project_id, str(scope), answer_text=answer_corpus)
             except Exception as e:  # noqa: BLE001
                 logger.warning("soft_collector: grounding verify skipped: %s", e)
         total = 0

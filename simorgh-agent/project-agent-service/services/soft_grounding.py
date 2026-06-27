@@ -46,47 +46,72 @@ _DIGIT_MAP[ord("،")] = ","
 _NUM_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 _WORD_RE = re.compile(r"[a-z؀-ۿ]{2,}")
 
+# Ubiquitous filler + UNIT words. Units are excluded from the distinctive-token
+# set on purpose: otherwise a hallucinated "125 kV" or "20 kA" scores ~0.5 for
+# free just because the source is full of "kV"/"kA" — the NUMBER is what has to
+# be grounded, not the unit.
+_STOP = {
+    "the", "and", "for", "per", "with", "from", "min", "max", "approx",
+    # units / suffixes
+    "kv", "kva", "mva", "mvar", "kvar", "mw", "kw", "hz", "khz", "ka", "ma",
+    "mm", "cm", "km", "ms", "sec", "deg", "vac", "vdc", "dc", "ac", "db",
+    "rms", "mm2", "sqmm", "no", "nos", "off",
+}
+
+
+def _fold(s: str) -> str:
+    """Lowercase + fold Persian/Arabic digits, keeping spacing/punctuation
+    (needed for whole-number boundary matching)."""
+    return str(s or "").translate(_DIGIT_MAP).lower()
+
 
 def _norm(s: str) -> str:
-    """Lowercase, fold Persian/Arabic digits, drop whitespace."""
-    s = str(s or "").translate(_DIGIT_MAP).lower()
-    return re.sub(r"\s+", "", s)
+    """Lowercase, fold digits, drop ALL whitespace (for verbatim substring)."""
+    return re.sub(r"\s+", "", _fold(s))
 
 
-def _significant_tokens(value: Any) -> List[str]:
-    """Numbers (with decimals) and ≥2-char words — the parts that make a
-    value distinctive. Pure punctuation / 1-char noise is ignored."""
-    raw = str(value or "").translate(_DIGIT_MAP).lower()
-    toks = _NUM_RE.findall(raw) + _WORD_RE.findall(raw)
-    # De-dup, preserve order, and drop a few ubiquitous filler words that
-    # would otherwise inflate coverage for free.
-    stop = {"the", "and", "for", "per", "with", "from", "min", "max"}
-    out: List[str] = []
-    for t in toks:
-        if t in stop or t in out:
-            continue
-        out.append(t)
-    return out
+def _significant_tokens(value: Any) -> Dict[str, List[str]]:
+    """Split a value into the parts that make it distinctive:
+    {"nums": [...], "words": [...]}, excluding units + filler. Numbers are
+    matched as whole numbers; words as substrings."""
+    raw = _fold(value)
+    nums = _NUM_RE.findall(raw)
+    words = [w for w in _WORD_RE.findall(raw) if w not in _STOP]
+    # de-dup, preserve order
+    nums = list(dict.fromkeys(nums))
+    words = list(dict.fromkeys(words))
+    return {"nums": nums, "words": words}
 
 
 def grounded_score(value: Any, source_text: str,
                    evidence: Optional[str] = None) -> float:
-    """0..1 — fraction of the value's significant tokens found in the source.
-    Returns 1.0 immediately on a whitespace-insensitive verbatim hit. Uses the
-    better of (value, evidence) so a good evidence span can rescue a value
-    whose own surface form was reformatted."""
-    snorm = _norm(source_text)
+    """0..1 — fraction of the value's distinctive tokens found in the source.
+
+    A NUMBER must match as a WHOLE number (not as a digit inside another
+    number — so "6" does not match "6.6", and a fabricated "125" is not
+    rescued by the document merely containing a "12" or "1"). Unit words are
+    ignored. Returns 1.0 on a whitespace-insensitive verbatim hit. Uses the
+    better of (value, evidence)."""
+    sfold = _fold(source_text)
+    snorm = re.sub(r"\s+", "", sfold)
     if not snorm:
         return 0.0
 
+    def num_in(num: str) -> bool:
+        # Whole-number match: not preceded/followed by a digit or decimal dot.
+        return re.search(r"(?<![\d.])" + re.escape(num) + r"(?![\d.])",
+                         sfold) is not None
+
     def score_one(v: Any) -> float:
-        toks = _significant_tokens(v)
-        if not toks:
-            return 0.0
         vnorm = _norm(v)
         if len(vnorm) >= 3 and vnorm in snorm:
-            return 1.0           # contiguous match — strongest evidence
-        hit = sum(1 for t in toks if t in snorm)
+            return 1.0                      # contiguous verbatim — strongest
+        tk = _significant_tokens(v)
+        toks = tk["nums"] + tk["words"]
+        if not toks:
+            return 1.0                      # nothing distinctive → don't penalise
+        hit = sum(1 for n in tk["nums"] if num_in(n)) \
+            + sum(1 for w in tk["words"] if w in snorm)
         return hit / len(toks)
 
     best = score_one(value)
@@ -95,18 +120,34 @@ def grounded_score(value: Any, source_text: str,
     return best
 
 
+# Which source kinds are verified against WHAT. The guiding rule: verify a
+# value against the text it was ACTUALLY extracted from.
+#   * analysis / chat  → the AI's own answer (clean text). The miner pulls
+#     values out of that answer, so an analysis value that is NOT in the
+#     answer is stale (left over from an old turn) or hallucinated → drop.
+#     Verifying these against the PDF instead would wrongly drop good values
+#     because the PDF text layer is RTL/LTR-scrambled.
+#   * uploads / gitlab / techserver → the source document's text.
+#   * tpms / user / default / (anything else) → trusted, not verified.
+_ANSWER_KINDS = {"analysis", "chat"}
+_DOC_KINDS = {"uploads", "gitlab", "techserver"}
+
+
 async def verify_against_docs(
     by_kind: Dict[str, List[Dict[str, Any]]],
     project_id: str,
     scope: str,
     *,
+    answer_text: str = "",
     threshold: float = _DEFAULT_THRESHOLD,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Prune proposal candidates that are not grounded in their cited source
-    document. `by_kind` maps source_kind → list of candidate dicts
-    {field, value, confidence, note, doc_id}. Returns a pruned copy and logs
-    what was dropped. Never raises — on any error the input is returned
-    unchanged (fail-open: precision gate must not break extraction)."""
+    """Prune proposal candidates that are not grounded in their actual source.
+    `by_kind` maps source_kind → list of candidate dicts
+    {field, value, confidence, note, doc_id}. `answer_text` is the clean AI
+    answer corpus used to verify analysis/chat values. Returns a pruned copy
+    and logs what was dropped. Never raises — on any error the input is
+    returned unchanged (fail-open: a precision gate must not break
+    extraction)."""
     if not by_kind:
         return by_kind
     try:
@@ -117,6 +158,8 @@ async def verify_against_docs(
         logger.warning("soft_grounding: deps unavailable (%s) — skipping", e)
         return by_kind
 
+    answer_norm = _norm(answer_text or "")
+    have_answer = len(answer_norm) >= _MIN_SOURCE_CHARS
     text_cache: Dict[str, str] = {}
 
     def text_for(fn: str) -> str:
@@ -141,31 +184,45 @@ async def verify_against_docs(
         out: List[Dict[str, Any]] = []
         for c in cands:
             note = parse_source_note(c.get("note"))
-            fn = note.get("filename")
-            if not fn:
-                out.append(c)            # no cited doc → unverifiable, keep
+            value = c.get("value")
+            score: Optional[float] = None
+
+            if kind in _ANSWER_KINDS:
+                # Verify against the clean AI answer the miner read from.
+                if have_answer:
+                    score = grounded_score(value, answer_text,
+                                           evidence=note.get("evidence"))
+                # else: no answer corpus → can't verify → keep (fail-open)
+            elif kind in _DOC_KINDS:
+                fn = note.get("filename")
+                src = text_for(fn) if fn else ""
+                if len(src) >= _MIN_SOURCE_CHARS:
+                    score = grounded_score(value, src,
+                                           evidence=note.get("evidence"))
+                # An answer match can still rescue a doc value whose own text
+                # layer was unreadable / scrambled.
+                if (score is None or score < threshold) and have_answer:
+                    a = grounded_score(value, answer_text,
+                                       evidence=note.get("evidence"))
+                    score = a if score is None else max(score, a)
+            # else: trusted kind (tpms/user/default) — leave score None.
+
+            if score is None:
+                out.append(c)                     # unverifiable → keep
                 continue
-            src = text_for(fn)
-            if len(src) < _MIN_SOURCE_CHARS:
-                out.append(c)            # couldn't read the doc → keep
-                continue
-            score = grounded_score(c.get("value"), src,
-                                   evidence=note.get("evidence"))
             verified += 1
             if score < threshold:
                 dropped += 1
-                logger.debug("soft_grounding: drop %s=%r score=%.2f (doc=%s)",
-                             c.get("field"), c.get("value"), score, fn)
+                logger.debug("soft_grounding: drop [%s] %s=%r score=%.2f",
+                             kind, c.get("field"), value, score)
                 continue
-            # Calibrate: a strongly-grounded value earns a small confidence
-            # bump; a weakly-grounded one is nudged down (still kept).
-            if score >= 0.99:
+            if score >= 0.99:                     # calibration bump
                 c["confidence"] = min(0.99, float(c.get("confidence") or 0.5) + 0.1)
             out.append(c)
         if out:
             kept[kind] = out
     if verified:
         logger.info("soft_grounding: verified=%d dropped=%d kept=%d "
-                    "(threshold=%.2f)", verified, dropped,
-                    verified - dropped, threshold)
+                    "(threshold=%.2f, answer=%s)", verified, dropped,
+                    verified - dropped, threshold, have_answer)
     return kept
