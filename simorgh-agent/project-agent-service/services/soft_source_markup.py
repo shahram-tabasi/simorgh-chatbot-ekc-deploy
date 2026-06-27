@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import os
 import re
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
@@ -71,48 +72,91 @@ def parse_source_note(note: Optional[str]) -> Dict[str, Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Search-string candidates — search_for needs a contiguous, single-line-ish
-# string. A long multi-line evidence span rarely matches verbatim, so we try
-# the value, then progressively shorter prefixes of the evidence, then a few
-# distinctive tokens. First hit wins.
+# Token-level localisation. `search_for` needs the value as ONE contiguous
+# string, which fails on this corpus because the PDF text layer is RTL/LTR
+# reading-order-scrambled ("6.6 kV" extracts as "6.kV 6"). But PyMuPDF still
+# reports the CORRECT bounding box for every individual word. So instead of
+# searching for a phrase we match the value's distinctive tokens (whole
+# numbers + non-unit words) to the page's words and highlight the LINES those
+# tokens sit on. This is the PAWLS / token-bbox grounding approach and is
+# robust to scramble. (See services/soft_grounding for the token logic.)
 # ---------------------------------------------------------------------------
-def _candidates(evidence: Optional[str], value: Any) -> List[str]:
-    cands: List[str] = []
+_PG_NUM_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?")
+_PG_WORD_RE = re.compile(r"[a-z؀-ۿ]{2,}")
 
-    # Never search the PDF for an abstention/null-like — that's what made the
-    # viewer highlight the word "specified" all over the page.
+
+def _value_targets(value: Any, evidence: Optional[str]):
+    """Distinctive (numbers, words) the value is made of — units/filler
+    excluded — used to find the value's words on a page."""
+    from services.soft_grounding import _significant_tokens
+    t = _significant_tokens(value)
+    nums, words = set(t["nums"]), set(t["words"])
+    if evidence:
+        te = _significant_tokens(evidence)
+        nums |= set(te["nums"])
+        words |= set(te["words"])
+    return nums, words
+
+
+def _locate_on_page(page, nums: set, words: set, *, max_lines: int = 6):
+    """Return highlight Rects (whole-line boxes) for the lines that carry the
+    value's tokens. A line holding one of the value's NUMBERS is a strong
+    anchor; lines with ≥2 distinctive word matches also qualify. Empty when
+    the value's tokens aren't on this page (image-only page / wrong page)."""
+    import fitz
+    from services.soft_grounding import _fold
+    if not nums and not words:
+        return []
     try:
-        from services.soft_value_filter import is_meaningful_value
-    except Exception:  # pragma: no cover
-        def is_meaningful_value(_v):  # type: ignore
-            return True
+        page_words = page.get_text("words")  # (x0,y0,x1,y1,word,block,line,n)
+    except Exception:
+        return []
+    line_box: Dict[Any, Any] = {}
+    line_hits: Dict[Any, Dict[str, int]] = {}
+    line_nums: Dict[Any, set] = {}
+    for w in page_words:
+        try:
+            x0, y0, x1, y1, txt, bno, lno = w[0], w[1], w[2], w[3], w[4], w[5], w[6]
+        except Exception:
+            continue
+        key = (bno, lno)
+        r = fitz.Rect(x0, y0, x1, y1)
+        line_box[key] = (line_box[key] | r) if key in line_box else r
+        wn = _fold(txt)
+        wnums = set(_PG_NUM_RE.findall(wn))
+        line_nums.setdefault(key, set()).update(wnums)
+        nm = bool(nums & wnums)
+        wm = bool(words & set(_PG_WORD_RE.findall(wn)))
+        if nm or wm:
+            d = line_hits.setdefault(key, {"num": 0, "word": 0})
+            d["num"] += int(nm)
+            d["word"] += int(wm)
+    # Decimal rescue: the scrambled text layer splits "7.2" into "7.kV 2", so
+    # the whole number never appears — but BOTH its parts land on the same
+    # line. Treat a line carrying all parts of a decimal target as a strong
+    # number anchor.
+    decimals = [n for n in nums if "." in n]
+    if decimals:
+        for key, lnums in line_nums.items():
+            for dec in decimals:
+                parts = [p for p in dec.split(".") if p]
+                if len(parts) >= 2 and all(p in lnums for p in parts):
+                    d = line_hits.setdefault(key, {"num": 0, "word": 0})
+                    d["num"] += 2
+    if not line_hits:
+        return []
 
-    def add(s: Optional[str]) -> None:
-        if not s:
-            return
-        s = re.sub(r"\s+", " ", str(s)).strip()
-        if not is_meaningful_value(s):
-            return
-        if 2 <= len(s) <= 90 and s not in cands:
-            cands.append(s)
+    def score(k):
+        d = line_hits[k]
+        return d["num"] * 3 + d["word"]
 
-    val = "" if value is None else str(value)
-    add(val)
-
-    ev = re.sub(r"\s+", " ", (evidence or "")).strip()
-    if ev:
-        add(ev)
-        # Progressive prefixes, trimmed to a word boundary.
-        for n in (70, 50, 35, 24):
-            if len(ev) > n:
-                cut = ev[:n].rsplit(" ", 1)[0]
-                add(cut)
-
-    # Distinctive tokens from the value: doc-codes, numbers-with-units.
-    for tok in re.findall(r"[A-Za-z0-9][A-Za-z0-9.\-/]{3,}", val):
-        add(tok)
-
-    return cands
+    anchors = [k for k, d in line_hits.items() if d["num"] > 0]
+    if not anchors:
+        anchors = [k for k, d in line_hits.items() if d["word"] >= 2]
+    if not anchors:
+        anchors = sorted(line_hits, key=score, reverse=True)[:1]
+    anchors = sorted(anchors, key=score, reverse=True)[:max_lines]
+    return [line_box[k] for k in anchors if k in line_box]
 
 
 def _render_page(doc, pno: int, rects, zoom: float, matched: bool,
@@ -153,16 +197,11 @@ def _render_page(doc, pno: int, rects, zoom: float, matched: bool,
     }
 
 
-def _search_page(page, cands: List[str]):
-    """First candidate that hits on this page → its rects (capped)."""
-    for cand in cands:
-        try:
-            hits = page.search_for(cand)
-        except Exception:
-            hits = []
-        if hits:
-            return hits[:8]
-    return []
+def _search_page(page, nums: set, words: set):
+    """Token-level locate on a page → whole-line Rects (or verbatim hits as a
+    bonus). Empty when none of the value's tokens are on the page."""
+    rects = _locate_on_page(page, nums, words)
+    return rects
 
 
 def locate_in_pdf(pdf_bytes: bytes, *, evidence: Optional[str],
@@ -193,7 +232,7 @@ def locate_in_pdf(pdf_bytes: bytes, *, evidence: Optional[str],
         return {"ok": False, "reason": "empty document"}
 
     doc_hash = hashlib.sha1(pdf_bytes).hexdigest()[:16]
-    cands = _candidates(evidence, value)
+    nums, words = _value_targets(value, evidence)
 
     # Normalise the page hint to a 0-based index inside the doc.
     hint_idx: Optional[int] = None
@@ -206,17 +245,17 @@ def locate_in_pdf(pdf_bytes: bytes, *, evidence: Optional[str],
         hint_idx = None
 
     try:
-        # FAST PATH: we know the page. Search just it; render it either way.
+        # FAST PATH: we know the page. Locate on just it; render it either way.
         if hint_idx is not None:
-            hits = _search_page(doc[hint_idx], cands)
+            hits = _search_page(doc[hint_idx], nums, words)
             return _render_page(doc, hint_idx, hits, zoom,
                                 matched=bool(hits), evidence=evidence,
                                 doc_hash=doc_hash)
 
-        # No hint — scan, but bounded. First page with a textual hit wins.
+        # No hint — scan, but bounded. First page with a token hit wins.
         pages = min(doc.page_count, _MAX_PAGES)
         for pno in range(pages):
-            hits = _search_page(doc[pno], cands)
+            hits = _search_page(doc[pno], nums, words)
             if hits:
                 return _render_page(doc, pno, hits, zoom,
                                     matched=True, evidence=evidence,
@@ -225,6 +264,91 @@ def locate_in_pdf(pdf_bytes: bytes, *, evidence: Optional[str],
         # source document (image-only page, or a paraphrased span).
         return _render_page(doc, 0, [], zoom, matched=False, evidence=evidence,
                             doc_hash=doc_hash)
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# LLM fallback — for DESCRIPTIVE parameters (interlocks, materials, control
+# features) that carry no distinctive number/code, token matching finds
+# nothing. Here we ask the offline model which LINE on the cited page best
+# states the parameter, and box that line. Best-effort + tightly timed so the
+# viewer never hangs; gated by SOFT_SOURCE_LLM_FALLBACK (default on).
+# ---------------------------------------------------------------------------
+_LLM_GATEWAY_URL = os.getenv("LLM_GATEWAY_URL", "http://llm-gateway:8030")
+
+
+async def llm_locate_rects(pdf_bytes: bytes, page_1based: int, field: str,
+                           value: Any, *, zoom: float = _ZOOM,
+                           timeout: float = 12.0) -> List[List[float]]:
+    """Return pixel rects for the single page line the LLM judges to best
+    state (field=value). [] on any failure or when disabled."""
+    if os.getenv("SOFT_SOURCE_LLM_FALLBACK", "1").lower() not in (
+            "1", "true", "yes", "on"):
+        return []
+    try:
+        import fitz
+        import httpx
+    except Exception:
+        return []
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return []
+    try:
+        pno = max(0, min(doc.page_count - 1, int(page_1based) - 1))
+        page = doc[pno]
+        d = page.get_text("dict")
+        lines: List[Any] = []           # (rect, text)
+        for b in d.get("blocks", []):
+            for ln in b.get("lines", []):
+                txt = "".join(s.get("text", "") for s in ln.get("spans", []))
+                if txt.strip():
+                    lines.append((ln["bbox"], txt.strip()))
+        if not lines:
+            return []
+        numbered = "\n".join(f"{i}: {t[:140]}" for i, (_b, t) in enumerate(lines))
+        system = (
+            "You locate where a parameter is stated on one page of an "
+            "engineering document whose text may be slightly garbled. Reply "
+            "with ONLY the integer index of the single line that best states "
+            "the parameter, or -1 if no line does. No words, only the number."
+        )
+        user = (
+            f"PARAMETER: {field}\nVALUE: {value}\n\nLINES:\n{numbered}\n\n"
+            "Return ONLY the best line index.\n/no_think"
+        )
+        payload = {
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "mode": "offline", "temperature": 0.0, "max_tokens": 16,
+            "force_backend": "text", "extra": {"reasoning_effort": "low"},
+        }
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(f"{_LLM_GATEWAY_URL}/generate", json=payload)
+            if r.status_code >= 400:
+                return []
+            body = r.json()
+        text = (body.get("response") or body.get("text") or "")
+        text = re.sub(r"<think>.*?</think>", "", text,
+                      flags=re.DOTALL | re.IGNORECASE)
+        m = re.search(r"-?\d+", text)
+        if not m:
+            return []
+        idx = int(m.group(0))
+        if idx < 0 or idx >= len(lines):
+            return []
+        x0, y0, x1, y1 = lines[idx][0]
+        logger.info("soft_source_markup: LLM located %r on page %d line %d",
+                    field, page_1based, idx)
+        return [[round(x0 * zoom, 1), round(y0 * zoom, 1),
+                 round(x1 * zoom, 1), round(y1 * zoom, 1)]]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("soft_source_markup: LLM locate failed: %s", e)
+        return []
     finally:
         try:
             doc.close()

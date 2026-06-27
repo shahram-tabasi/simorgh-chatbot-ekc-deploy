@@ -2162,6 +2162,20 @@ async def soft_proposal_source(project_id: str, proposal_id: str,
 
     result = locate_in_pdf(pdf_bytes, evidence=note.get("evidence"),
                            value=prop.get("value"), page_hint=note.get("page"))
+    # LLM fallback: token matching can't box a purely-descriptive parameter
+    # (interlocks, materials...) that has no distinctive number/code. Ask the
+    # model which line on the rendered page states it, and box that line.
+    if result.get("ok") and not result.get("matched"):
+        try:
+            from services.soft_source_markup import llm_locate_rects
+            rects = await llm_locate_rects(
+                pdf_bytes, result.get("page") or 1,
+                prop.get("field") or "", prop.get("value"))
+            if rects:
+                result["rects"] = rects
+                result["matched"] = True
+        except Exception as e:  # noqa: BLE001
+            logger.debug("soft_proposal_source: LLM fallback failed: %s", e)
     result["filename"] = rec.get("filename") or note.get("filename")
     result["field"] = prop.get("field")
     result["section"] = note.get("section")
