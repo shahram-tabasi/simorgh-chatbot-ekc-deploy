@@ -60,10 +60,21 @@ export default function SourceViewer({
   const [data, setData]       = React.useState<SourceResp | null>(null);
   const [err, setErr]         = React.useState("");
 
+  // Keep token/apiBase in refs so their (unstable) identities do NOT retrigger
+  // the fetch effect. The parent re-renders every few seconds from polling;
+  // when the VLM locate is slow, an effect keyed on getToken/target/apiBase
+  // would cancel and re-fire the in-flight request on every poll, so the
+  // source never finished loading. We key ONLY on the immutable proposal id.
+  const getTokenRef = React.useRef(getToken);
+  const apiBaseRef  = React.useRef(apiBase);
+  getTokenRef.current = getToken;
+  apiBaseRef.current = apiBase;
+  const proposalId = target?.proposalId;
+
   React.useEffect(() => {
-    if (!open || !target) return;
+    if (!open || !proposalId) return;
     let cancelled = false;
-    const cacheKey = `${projectId}:${target.proposalId}`;
+    const cacheKey = `${projectId}:${proposalId}`;
     const cached = _sourceCache.get(cacheKey);
     if (cached) {
       // Instant re-open — no spinner, no refetch.
@@ -72,8 +83,8 @@ export default function SourceViewer({
     }
     setLoading(true); setErr(""); setData(null);
     axios.get<SourceResp>(
-      `${apiBase}/v2/agent/projects/${projectId}/soft/proposals/${target.proposalId}/source`,
-      { headers: { Authorization: `Bearer ${getToken()}` } },
+      `${apiBaseRef.current}/v2/agent/projects/${projectId}/soft/proposals/${proposalId}/source`,
+      { headers: { Authorization: `Bearer ${getTokenRef.current()}` }, timeout: 90000 },
     )
       .then((r) => {
         if (cancelled) return;
@@ -86,7 +97,8 @@ export default function SourceViewer({
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open, target, projectId, apiBase, getToken]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, proposalId, projectId]);
 
   React.useEffect(() => {
     if (!open) return;
