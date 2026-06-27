@@ -124,10 +124,19 @@ async def merge_proposals(project_id: str, source_kind: str,
     except Exception as e:
         logger.warning("merge_proposals preload %s/%s: %s",
                        project_id, source_kind, e)
+    # Defence in depth: never persist an abstention / null-like, even if a
+    # caller forgets to pre-filter.
+    try:
+        from services.soft_value_filter import is_meaningful_value
+    except Exception:  # pragma: no cover
+        def is_meaningful_value(_v):  # type: ignore
+            return True
     n = 0
     for p in proposals:
         field = p.get("field")
         if not field:
+            continue
+        if not is_meaningful_value(p.get("value")):
             continue
         key = (field, _value_key(p.get("value")))
         if key in seen:

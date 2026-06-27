@@ -275,17 +275,30 @@ async def refresh(project_id: str, *, force: bool = False,
     # — that would silently push values into the spec the user can't see.
     try:
         from services import soft_proposals as sp
+        from services.soft_value_filter import is_meaningful_value
         by_kind: Dict[str, List[Dict[str, Any]]] = {}
+        dropped = 0
         for field, fvs in (bag or {}).items():
             for fv in fvs:
+                val = getattr(fv, "value", None)
+                # Abstentions / null-likes ("not specified", "N/A", "") are
+                # MISSING, not values — never propose them. They were the
+                # source of the "not specified" proposals and the bogus
+                # source-viewer highlight of the word "specified".
+                if not is_meaningful_value(val):
+                    dropped += 1
+                    continue
                 kind = (getattr(fv, "source", None) or "uploads")
                 by_kind.setdefault(kind, []).append({
                     "field":      field,
-                    "value":      getattr(fv, "value", None),
+                    "value":      val,
                     "confidence": float(getattr(fv, "confidence", 0.5) or 0.5),
                     "note":       getattr(fv, "note", None),
                     "doc_id":     getattr(fv, "doc_id", None),
                 })
+        if dropped:
+            logger.info("soft_collector: dropped %d non-value/abstention "
+                        "candidate(s) before proposing", dropped)
         total = 0
         for kind, proposals in by_kind.items():
             n = await sp.merge_proposals(project_id, kind, proposals)

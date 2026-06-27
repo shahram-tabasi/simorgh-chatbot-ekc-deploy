@@ -79,10 +79,20 @@ def parse_source_note(note: Optional[str]) -> Dict[str, Optional[str]]:
 def _candidates(evidence: Optional[str], value: Any) -> List[str]:
     cands: List[str] = []
 
+    # Never search the PDF for an abstention/null-like — that's what made the
+    # viewer highlight the word "specified" all over the page.
+    try:
+        from services.soft_value_filter import is_meaningful_value
+    except Exception:  # pragma: no cover
+        def is_meaningful_value(_v):  # type: ignore
+            return True
+
     def add(s: Optional[str]) -> None:
         if not s:
             return
         s = re.sub(r"\s+", " ", str(s)).strip()
+        if not is_meaningful_value(s):
+            return
         if 2 <= len(s) <= 90 and s not in cands:
             cands.append(s)
 
