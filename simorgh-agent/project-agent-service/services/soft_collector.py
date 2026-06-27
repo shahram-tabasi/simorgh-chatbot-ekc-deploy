@@ -299,6 +299,17 @@ async def refresh(project_id: str, *, force: bool = False,
         if dropped:
             logger.info("soft_collector: dropped %d non-value/abstention "
                         "candidate(s) before proposing", dropped)
+        # Extract-then-VERIFY precision gate: drop values that aren't grounded
+        # in their cited source document (likely hallucinated or attributed to
+        # the wrong doc). Tolerant matcher + fail-open, gated by env so it can
+        # be turned off if it ever over-prunes on a pathological PDF.
+        if os.getenv("SOFT_GROUNDING_VERIFY", "1").lower() in ("1", "true", "yes", "on"):
+            try:
+                from services.soft_grounding import verify_against_docs
+                scope = (project.get("tpms_oenum") or project_id)
+                by_kind = await verify_against_docs(by_kind, project_id, str(scope))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("soft_collector: grounding verify skipped: %s", e)
         total = 0
         for kind, proposals in by_kind.items():
             n = await sp.merge_proposals(project_id, kind, proposals)
