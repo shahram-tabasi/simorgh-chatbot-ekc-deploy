@@ -2171,25 +2171,27 @@ async def soft_proposal_source(project_id: str, proposal_id: str,
     # SOFT_SOURCE_VLM (default on) so it can be turned off for speed.
     _vlm_on = os.getenv("SOFT_SOURCE_VLM", "1").lower() in ("1", "true", "yes", "on")
     if result.get("ok") and _vlm_on:
-        box = None
+        page_no = result.get("page") or 1
+        field = prop.get("field") or ""
+        value = prop.get("value")
+        word_rects = []
         try:
-            from services.vlm_verifier import locate_value_box
-            box = await locate_value_box(
-                pdf_bytes, result.get("page") or 1,
-                prop.get("field") or "", prop.get("value"))
+            # STAGE 1: VLM transcribes the exact line where the value sits.
+            from services.vlm_verifier import locate_value_text
+            line_text = await locate_value_text(pdf_bytes, page_no, field, value)
+            # STAGE 2: pixel-exact box via PyMuPDF word matching of that line.
+            if line_text:
+                from services.soft_source_markup import rects_for_text_on_page
+                word_rects = rects_for_text_on_page(pdf_bytes, page_no, line_text)
         except Exception as e:  # noqa: BLE001
-            logger.debug("soft_proposal_source: VLM locate failed: %s", e)
-        W = result.get("image_w") or 1
-        H = result.get("image_h") or 1
-        if box:
-            result["rects"] = [[round(box[0] * W, 1), round(box[1] * H, 1),
-                                round(box[2] * W, 1), round(box[3] * H, 1)]]
+            logger.debug("soft_proposal_source: two-stage VLM locate failed: %s", e)
+        if word_rects:
+            result["rects"] = word_rects
             result["matched"] = True
-            result["via"] = "vlm"
-        else:
-            # Don't show a wrong token box; render the page honestly.
-            result["rects"] = []
-            result["matched"] = False
+            result["via"] = "vlm_wordbox"
+        # else: keep the value-token rects locate_in_pdf already computed
+        # (matched flag unchanged) — a best-effort box rather than none.
+        elif not result.get("matched"):
             result["via"] = "vlm_miss"
     elif result.get("ok") and not result.get("matched"):
         # VLM disabled — LLM line fallback for descriptive parameters.

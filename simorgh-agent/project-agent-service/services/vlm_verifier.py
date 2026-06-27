@@ -351,6 +351,61 @@ async def locate_value_box(pdf_bytes: bytes, page_1based: int,
     return [x0, y0, x1, y1]
 
 
+async def locate_value_text(pdf_bytes: bytes, page_1based: int,
+                            field: str, value: Any,
+                            *, zoom: float = 2.0,
+                            timeout: float = 45.0) -> Optional[str]:
+    """STAGE 1 of the two-stage locator. Show Qwen-VL the page and ask it to
+    TRANSCRIBE the exact text of the line/row/cell where the value appears —
+    NOT a bounding box. The caller then word-matches that text to get a
+    precise pixel box (PyMuPDF bboxes are exact even on scrambled text). The
+    VLM is good at reading WHICH line; it is poor at coordinates, so we only
+    use it for the text. Returns the line text, or None on miss/failure."""
+    try:
+        import fitz
+    except Exception:
+        return None
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return None
+    try:
+        pno = max(0, min(doc.page_count - 1, int(page_1based) - 1))
+        pix = doc[pno].get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        png = pix.tobytes("png")
+    except Exception:
+        return None
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+    prompt = (
+        "You are reading one page of an engineering specification (the text "
+        "may be garbled or in a table).\n\n"
+        f"Find where the value `{value}` for the parameter `{field}` appears. "
+        "TRANSCRIBE the single line / table row / cell that states it, copying "
+        "the characters EXACTLY as printed on the page (including any odd "
+        "spacing or order). Do NOT give coordinates.\n\n"
+        'Return ONLY JSON: {"found": true, "line_text": "<verbatim line>"}. '
+        'If the value is not on this page, return {"found": false}.'
+    )
+    raw = await _call_vlm(prompt, png, timeout=timeout)
+    if not raw:
+        return None
+    parsed = _parse_vlm_json(raw)
+    if not parsed or not parsed.get("found"):
+        return None
+    txt = parsed.get("line_text") or parsed.get("text") or ""
+    txt = str(txt).translate(_PERSIAN_DIGITS).strip()
+    if len(txt) < 2:
+        return None
+    logger.info("locate_value_text: VLM read %r for %r on page %d",
+                txt[:80], field, page_1based)
+    return txt
+
+
 async def describe_page(*, document_id: str, page: int,
                         language: Optional[str] = None,
                         timeout: float = VLM_TIMEOUT_SEC,

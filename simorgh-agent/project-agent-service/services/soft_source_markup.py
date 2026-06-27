@@ -204,6 +204,42 @@ def _search_page(page, nums: set, words: set):
     return rects
 
 
+def rects_for_text_on_page(pdf_bytes: bytes, page_1based: int, text: str,
+                           *, zoom: float = _ZOOM,
+                           max_lines: int = 2) -> List[List[float]]:
+    """STAGE 2 of the two-stage locator. Given the line text the VLM read at
+    the value's location, find that exact text's bounding box on the page via
+    PyMuPDF word matching and return PIXEL rects (scaled by `zoom`).
+
+    The VLM supplies WHICH line (reliable visually); PyMuPDF supplies the
+    EXACT box (word bboxes are correct even on this RTL/LTR-scrambled text
+    layer). Returns [] when the text can't be located (caller falls back)."""
+    if not text or not str(text).strip():
+        return []
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return []
+    try:
+        pno = max(0, min(doc.page_count - 1, int(page_1based) - 1))
+        nums, words = _value_targets(text, None)
+        rects = _locate_on_page(doc[pno], nums, words, max_lines=max_lines)
+        out: List[List[float]] = []
+        for r in rects:
+            out.append([round(r.x0 * zoom, 1), round(r.y0 * zoom, 1),
+                        round(r.x1 * zoom, 1), round(r.y1 * zoom, 1)])
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.debug("rects_for_text_on_page failed: %s", e)
+        return []
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+
 def locate_in_pdf(pdf_bytes: bytes, *, evidence: Optional[str],
                   value: Any, page_hint: Any = None,
                   zoom: float = _ZOOM) -> Dict[str, Any]:

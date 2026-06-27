@@ -188,7 +188,7 @@ export default function SourceViewer({
                         Couldn't pinpoint the exact region on this page — showing the source page.
                       </div>
                     )}
-                    {data.matched && data.via === "vlm" && (
+                    {data.matched && (data.via || "").startsWith("vlm") && (
                       <div className="text-[11px] text-violet-200/90 bg-violet-500/10 border border-violet-400/20
                                       rounded px-2 py-1 inline-flex items-center gap-1">
                         <Crosshair className="w-3 h-3" />
