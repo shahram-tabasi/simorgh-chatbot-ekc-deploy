@@ -263,6 +263,33 @@ function fieldMeta(field: string): FieldMeta {
   return FIELD_META[field] || { label: prettifyFieldKey(field) };
 }
 
+// Deterministic keyword → category-id mapping for AI-named (slug) fields the
+// backend taxonomy doesn't list explicitly. Ordered: first match wins, so the
+// more specific buckets come before the broad ones. Targets the real group
+// ids from CATEGORY_GROUPS so these fields render in proper sections instead
+// of an invisible "other" bucket.
+const CATEGORY_KEYWORDS: [RegExp, string][] = [
+  [/(client|owner|projectname|project_name|projectnumber|description|scope|switchgeartype|switchgear_type|designation|manufacturer_name)/, "identity"],
+  [/(standard|\biec\b|\bansi\b|\bieee\b|compliance|country|language|date|revision)/, "regional"],
+  [/(altitude|ambient|temperature|humidity|seismic|indoor|outdoor|installation|location|site|substation|room|pollution|environment)/, "site"],
+  [/(ground|earth|busbarmaterial|busbar_material|copper|crosssection|cross_section|bonding)/, "busbar"],
+  [/(auxiliary|aux_|\b110\b|controlvoltage|control_voltage|dcsupply|dc_supply|closing|battery)/, "auxiliary_voltage"],
+  [/(colour|color)/, "wiring_color"],
+  [/(wir|cable|core|conductor|terminal|\bpvc\b|gauge|mm2)/, "wiring_size"],
+  [/(paint|\bral\b|finish|coating|galvan)/, "finishes"],
+  [/(arc|partition|\blsc\b|\bip\d|\bik\d|degreeofprotection|typetest|accuracy|class|protection|relay|idmt|dmt|overcurrent|earthfault|trip|\bct\b|\bvt\b|transformer|fuse|insulat|withstand|impulse|\bbil\b)/, "compliance"],
+  [/(voltage|\bkv\b|frequency|\bhz\b|shortcircuit|short_circuit|fault|\bicw\b|current|\bamp|busbar|rated|poles?|neutral|touch|making|peak|\bka\b)/, "network"],
+  [/(interlock|shutter|\block|door|\bkey|nameplate|name_plate|label|identif|mounting|frame|sheet|thickness|enclosure|compartment|cell|heating|thermostat|lighting|socket|material|fire|construction|dimension|depth|height|width)/, "construction"],
+  [/(equipment|panel|feeder|breaker|contactor|incomer|outgoing|cubicle|bay)/, "equipment"],
+];
+function categorizeField(field: string,
+                         fieldToCat: Record<string, string>): string {
+  if (fieldToCat[field]) return fieldToCat[field];
+  const leaf = (field.split(".").pop() || field).toLowerCase();
+  for (const [re, id] of CATEGORY_KEYWORDS) if (re.test(leaf)) return id;
+  return "other";
+}
+
 // ---------------------------------------------------------------------------
 // Source-pill styling — same intent as the previous version, but with
 // friendlier labels for the engineering audience.
@@ -610,9 +637,9 @@ function buildRRows(
 ): RRow[] {
   const sourceLabel = (k: string) => SOURCE_META[k]?.label || k || "—";
   const catOf = (field: string): string => {
-    const id = categories?.field_to_category?.[field] || categories?.fallback || "other";
+    const id = categorizeField(field, categories?.field_to_category || {});
     const g = categories?.groups?.find((x) => x.id === id);
-    return g?.label || "Other";
+    return g?.label || "Other parameters";
   };
   const rows: RRow[] = [];
   const push = (p: Proposal, status: RRow["status"]) => {
@@ -858,7 +885,9 @@ export default function ProposalsReviewDrawer({
     buckets[fallback] = [];
     for (const f of fields) {
       if (!effPending[f]?.length) continue;
-      const cat = map[f] || fallback;
+      // Keyword-categorise AI-named slugs so they land in a real section
+      // instead of the (previously un-rendered) 'other' bucket.
+      const cat = categorizeField(f, map) || fallback;
       (buckets[cat] = buckets[cat] || []).push(f);
     }
     return buckets;
@@ -1122,7 +1151,18 @@ export default function ProposalsReviewDrawer({
               {/* Category-grouped layout (preferred) — falls back to the
                   flat per-field cards below when /soft/categories was
                   unreachable at app load. */}
-              {bucketed && categories && categories.groups.map((group) => {
+              {bucketed && categories && [
+                ...categories.groups,
+                // Always append the fallback bucket so AI-named parameters
+                // that didn't match a category are STILL shown (this bucket
+                // used to be built but never rendered → items went missing).
+                ...(categories.groups.some((g) => g.id === (categories.fallback || "other"))
+                    ? []
+                    : [{ id: categories.fallback || "other",
+                         label: "Other parameters",
+                         hint: "Values the AI extracted that don't map to a standard category",
+                         fields: [] }]),
+              ].map((group) => {
                 const groupFields = bucketed[group.id] || [];
                 const groupPendingCount = groupFields.reduce(
                   (n, f) => n + (effPending[f]?.length || 0), 0);

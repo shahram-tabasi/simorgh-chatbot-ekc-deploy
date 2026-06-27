@@ -806,7 +806,13 @@ def _resolve_doc(cited: str, docs: List[Dict[str, Any]],
 
 def _slug_param_key(name: str) -> str:
     import re
-    s = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
+    s = (name or "").strip()
+    # Split camelCase BEFORE lowercasing so "GroundingBusbarMaterial" keeps its
+    # word boundaries → "grounding_busbar_material" (the UI re-splits the
+    # underscores into a readable label). Without this the label rendered as
+    # one run-together word.
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    s = re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_").lower()
     return f"parameters.{s or 'value'}"
 
 
