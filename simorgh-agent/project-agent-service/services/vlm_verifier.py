@@ -264,6 +264,93 @@ async def verify_value(*, document_id: str, page: int,
     }
 
 
+async def locate_value_box(pdf_bytes: bytes, page_1based: int,
+                           field: str, value: Any,
+                           *, zoom: float = 2.0,
+                           timeout: float = 60.0) -> Optional[list]:
+    """Ask Qwen-VL to LOCATE where `value` for `field` sits on the page and
+    return its bounding box as fractions of the page image, [x0,y0,x1,y1] in
+    0..1 (top-left → bottom-right). None when not found / on any failure.
+
+    This is the reliable locator for this corpus: the PDF text layer is
+    RTL/LTR-scrambled and table-heavy, so token/word matching mis-fires on
+    stray numbers (e.g. a table row label "40"). The VLM reads the page
+    visually and points at the actual region, which is what the user asked
+    for. Renders the page itself (fitz) so it needs no Redis stash; normalized
+    coords are renderer-independent and map onto whatever image the viewer
+    shows."""
+    try:
+        import fitz  # PyMuPDF
+    except Exception as e:  # noqa: BLE001
+        logger.debug("locate_value_box: fitz unavailable: %s", e)
+        return None
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("locate_value_box: open failed: %s", e)
+        return None
+    try:
+        pno = max(0, min(doc.page_count - 1, int(page_1based) - 1))
+        pix = doc[pno].get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        png = pix.tobytes("png")
+        iw, ih = pix.width, pix.height
+    except Exception as e:  # noqa: BLE001
+        logger.debug("locate_value_box: render failed: %s", e)
+        return None
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+    prompt = (
+        "You are a precise visual locator for engineering specification "
+        "pages (the text may be garbled or in a table).\n\n"
+        f"Find on this page the region that states the value `{value}` for "
+        f"the parameter `{field}`. Look for the value, its number, or the "
+        "row/cell/sentence that contains it.\n\n"
+        "Return ONLY a JSON object with the bounding box of that region as "
+        "FRACTIONS of the image size, each between 0 and 1:\n"
+        '{"found": true, "box": [x0, y0, x1, y1]}\n'
+        "where x0,y0 is the TOP-LEFT and x1,y1 the BOTTOM-RIGHT corner "
+        "(x = left→right, y = top→bottom). If the value is not on this page, "
+        'return {"found": false}. No other text.'
+    )
+    raw = await _call_vlm(prompt, png, timeout=timeout)
+    if not raw:
+        return None
+    parsed = _parse_vlm_json(raw)
+    if not parsed or not parsed.get("found"):
+        return None
+    box = parsed.get("box") or parsed.get("bbox") or parsed.get("bbox_2d")
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        return None
+    try:
+        x0, y0, x1, y1 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return None
+    # Normalise to fractions. Qwen-VL may answer in fractions (0..1),
+    # 0..1000 grid units, or absolute pixels of the sent image — detect by
+    # magnitude and divide accordingly.
+    mx = max(abs(x0), abs(y0), abs(x1), abs(y1))
+    if mx <= 1.5:
+        sx = sy = 1.0
+    elif mx <= 1000.0:
+        sx = sy = 1000.0
+    else:
+        sx, sy = float(iw), float(ih)
+    x0, x1 = x0 / sx, x1 / sx
+    y0, y1 = y0 / sy, y1 / sy
+    # Order + clamp; reject degenerate boxes.
+    x0, x1 = sorted((max(0.0, min(1.0, x0)), max(0.0, min(1.0, x1))))
+    y0, y1 = sorted((max(0.0, min(1.0, y0)), max(0.0, min(1.0, y1))))
+    if (x1 - x0) < 0.005 or (y1 - y0) < 0.005:
+        return None
+    logger.info("locate_value_box: VLM located %r on page %d box=%s",
+                field, page_1based, [round(v, 3) for v in (x0, y0, x1, y1)])
+    return [x0, y0, x1, y1]
+
+
 async def describe_page(*, document_id: str, page: int,
                         language: Optional[str] = None,
                         timeout: float = VLM_TIMEOUT_SEC,

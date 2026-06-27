@@ -2162,10 +2162,37 @@ async def soft_proposal_source(project_id: str, proposal_id: str,
 
     result = locate_in_pdf(pdf_bytes, evidence=note.get("evidence"),
                            value=prop.get("value"), page_hint=note.get("page"))
-    # LLM fallback: token matching can't box a purely-descriptive parameter
-    # (interlocks, materials...) that has no distinctive number/code. Ask the
-    # model which line on the rendered page states it, and box that line.
-    if result.get("ok") and not result.get("matched"):
+
+    # PRIMARY locator: Qwen-VL reads the rendered page and points at the
+    # region that states the value. Token/word matching mis-fires on this
+    # corpus (scrambled text + tables — e.g. it boxed a table row label "40"),
+    # so when the VLM is enabled it OVERRIDES the token box: a VLM hit is used,
+    # and a VLM miss shows the page without a misleading box. Gated by
+    # SOFT_SOURCE_VLM (default on) so it can be turned off for speed.
+    _vlm_on = os.getenv("SOFT_SOURCE_VLM", "1").lower() in ("1", "true", "yes", "on")
+    if result.get("ok") and _vlm_on:
+        box = None
+        try:
+            from services.vlm_verifier import locate_value_box
+            box = await locate_value_box(
+                pdf_bytes, result.get("page") or 1,
+                prop.get("field") or "", prop.get("value"))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("soft_proposal_source: VLM locate failed: %s", e)
+        W = result.get("image_w") or 1
+        H = result.get("image_h") or 1
+        if box:
+            result["rects"] = [[round(box[0] * W, 1), round(box[1] * H, 1),
+                                round(box[2] * W, 1), round(box[3] * H, 1)]]
+            result["matched"] = True
+            result["via"] = "vlm"
+        else:
+            # Don't show a wrong token box; render the page honestly.
+            result["rects"] = []
+            result["matched"] = False
+            result["via"] = "vlm_miss"
+    elif result.get("ok") and not result.get("matched"):
+        # VLM disabled — LLM line fallback for descriptive parameters.
         try:
             from services.soft_source_markup import llm_locate_rects
             rects = await llm_locate_rects(

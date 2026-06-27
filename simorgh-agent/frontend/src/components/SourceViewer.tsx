@@ -36,6 +36,7 @@ interface SourceResp {
   filename?:  string;
   section?:   string;
   evidence?:  string;
+  via?:       string;   // "vlm" when the region was located by the vision model
 }
 
 interface Props {
@@ -145,8 +146,10 @@ export default function SourceViewer({
               {/* Body */}
               <div className="flex-1 overflow-auto p-4 bg-black/20">
                 {loading && (
-                  <div className="h-64 flex items-center justify-center text-gray-400 text-sm gap-2">
-                    <Loader2 className="w-5 h-5 animate-spin" /> Loading source page…
+                  <div className="h-64 flex flex-col items-center justify-center text-gray-400 text-sm gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>Locating the value on the source page…</span>
+                    <span className="text-[11px] text-gray-500">Vision AI is reading the page — this can take a few seconds.</span>
                   </div>
                 )}
 
@@ -171,6 +174,13 @@ export default function SourceViewer({
                                       rounded px-2 py-1 inline-flex items-center gap-1">
                         <FileWarning className="w-3 h-3" />
                         Couldn't pinpoint the exact region on this page — showing the source page.
+                      </div>
+                    )}
+                    {data.matched && data.via === "vlm" && (
+                      <div className="text-[11px] text-violet-200/90 bg-violet-500/10 border border-violet-400/20
+                                      rounded px-2 py-1 inline-flex items-center gap-1">
+                        <Crosshair className="w-3 h-3" />
+                        Region located by vision AI.
                       </div>
                     )}
                     {/* Image + overlay. The wrapper is position:relative and the
