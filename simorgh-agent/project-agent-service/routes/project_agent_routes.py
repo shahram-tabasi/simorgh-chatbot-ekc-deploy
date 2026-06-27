@@ -2161,7 +2161,7 @@ async def soft_proposal_source(project_id: str, proposal_id: str,
         return {"ok": False, "reason": "could not decode source document"}
 
     result = locate_in_pdf(pdf_bytes, evidence=note.get("evidence"),
-                           value=prop.get("value"))
+                           value=prop.get("value"), page_hint=note.get("page"))
     result["filename"] = rec.get("filename") or note.get("filename")
     result["field"] = prop.get("field")
     result["section"] = note.get("section")

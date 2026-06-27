@@ -47,6 +47,11 @@ interface Props {
   onClose:    () => void;
 }
 
+// Module-level cache: a proposal's source page is immutable, so re-opening
+// the same item should be instant instead of re-fetching the (large) page
+// PNG. Keyed by `${projectId}:${proposalId}`.
+const _sourceCache = new Map<string, SourceResp>();
+
 export default function SourceViewer({
   open, target, projectId, apiBase, getToken, onClose,
 }: Props) {
@@ -57,12 +62,23 @@ export default function SourceViewer({
   React.useEffect(() => {
     if (!open || !target) return;
     let cancelled = false;
+    const cacheKey = `${projectId}:${target.proposalId}`;
+    const cached = _sourceCache.get(cacheKey);
+    if (cached) {
+      // Instant re-open — no spinner, no refetch.
+      setData(cached); setErr(""); setLoading(false);
+      return;
+    }
     setLoading(true); setErr(""); setData(null);
     axios.get<SourceResp>(
       `${apiBase}/v2/agent/projects/${projectId}/soft/proposals/${target.proposalId}/source`,
       { headers: { Authorization: `Bearer ${getToken()}` } },
     )
-      .then((r) => { if (!cancelled) setData(r.data); })
+      .then((r) => {
+        if (cancelled) return;
+        if (r.data?.ok) _sourceCache.set(cacheKey, r.data);  // cache hits only
+        setData(r.data);
+      })
       .catch((e) => {
         if (cancelled) return;
         setErr(e?.response?.data?.detail || e?.message || "Could not load source.");

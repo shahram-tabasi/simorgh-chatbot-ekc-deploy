@@ -19,9 +19,11 @@ raster pages would need the vision model and are deferred.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,13 @@ _ZOOM = 2.0
 # Don't scan a 200-page drawing set end-to-end looking for a phrase.
 _MAX_PAGES = 80
 
+# Rendered-page cache. The page IMAGE is identical no matter which value the
+# user inspects (only the overlay rectangles differ, and those are cheap), so
+# caching the PNG makes the 2nd+ "show source" on the same page instant. Keyed
+# by (pdf-hash, page-index, zoom); small LRU so a few open documents stay hot.
+_PAGE_CACHE: "OrderedDict[Tuple[str, int, float], Tuple[bytes, int, int]]" = OrderedDict()
+_PAGE_CACHE_MAX = 64
+
 
 # ---------------------------------------------------------------------------
 # source_note parsing — mirror of the frontend parseSourceNote() so the
@@ -39,7 +48,7 @@ _MAX_PAGES = 80
 def parse_source_note(note: Optional[str]) -> Dict[str, Optional[str]]:
     raw = (note or "").strip()
     out: Dict[str, Optional[str]] = {"filename": None, "section": None,
-                                     "evidence": None, "raw": raw}
+                                     "evidence": None, "page": None, "raw": raw}
     if not raw:
         return out
     m = re.search(r"from\s+\w+\s+['\"]([^'\"]+)['\"]", raw, re.IGNORECASE)
@@ -48,6 +57,12 @@ def parse_source_note(note: Optional[str]) -> Dict[str, Optional[str]]:
     m = re.search(r"§\s*([^·\n]+?)(?:\s*·|$)", raw)
     if m:
         out["section"] = m.group(1).strip()
+    # Page hint — the extractor stamps "· p.17" / "page 17" on the note. This
+    # is what lets the viewer jump to the right page even when the scrambled
+    # (RTL/LTR-mixed) text layer defeats a verbatim search.
+    m = re.search(r"(?:·\s*)?p(?:age|\.|\b)\s*([0-9]{1,4})", raw, re.IGNORECASE)
+    if m:
+        out["page"] = m.group(1)
     # Evidence — last quoted run (the extractor appends it at the end).
     quotes = re.findall(r"[“\"](.+?)[”\"]", raw)
     if quotes:
@@ -91,12 +106,24 @@ def _candidates(evidence: Optional[str], value: Any) -> List[str]:
 
 
 def _render_page(doc, pno: int, rects, zoom: float, matched: bool,
-                 evidence: Optional[str]) -> Dict[str, Any]:
+                 evidence: Optional[str],
+                 doc_hash: Optional[str] = None) -> Dict[str, Any]:
     import fitz  # PyMuPDF — available (also used by services/sld_processor)
-    page = doc[pno]
-    mat = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-    png = pix.tobytes("png")
+    png: Optional[bytes] = None
+    w = h = 0
+    ck = (doc_hash, pno, zoom) if doc_hash else None
+    if ck is not None and ck in _PAGE_CACHE:
+        png, w, h = _PAGE_CACHE[ck]
+        _PAGE_CACHE.move_to_end(ck)          # LRU touch
+    if png is None:
+        page = doc[pno]
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        png, w, h = pix.tobytes("png"), pix.width, pix.height
+        if ck is not None:
+            _PAGE_CACHE[ck] = (png, w, h)
+            while len(_PAGE_CACHE) > _PAGE_CACHE_MAX:
+                _PAGE_CACHE.popitem(last=False)
     # search_for returns Rects in PDF points; the pixmap is zoomed, so pixel
     # coordinates are the point coordinates times the zoom factor.
     out_rects: List[List[float]] = []
@@ -109,18 +136,36 @@ def _render_page(doc, pno: int, rects, zoom: float, matched: bool,
         "page": pno + 1,                 # 1-based for display
         "page_count": doc.page_count,
         "image_b64": base64.b64encode(png).decode("ascii"),
-        "image_w": pix.width,
-        "image_h": pix.height,
+        "image_w": w,
+        "image_h": h,
         "rects": out_rects,
         "evidence": evidence,
     }
 
 
+def _search_page(page, cands: List[str]):
+    """First candidate that hits on this page → its rects (capped)."""
+    for cand in cands:
+        try:
+            hits = page.search_for(cand)
+        except Exception:
+            hits = []
+        if hits:
+            return hits[:8]
+    return []
+
+
 def locate_in_pdf(pdf_bytes: bytes, *, evidence: Optional[str],
-                  value: Any, zoom: float = _ZOOM) -> Dict[str, Any]:
+                  value: Any, page_hint: Any = None,
+                  zoom: float = _ZOOM) -> Dict[str, Any]:
     """Open the PDF, find the evidence/value text, and return the rendered
-    page + rectangles. Falls back to rendering page 1 (matched=False) when
-    nothing matches (image-only page, or the LLM paraphrased the span)."""
+    page + rectangles.
+
+    When `page_hint` (1-based) is given — the extractor stamps the source
+    page on every proposal — we jump straight to that page: search ONLY it
+    for a box, and render it regardless. This both fixes the "shows the
+    cover page" bug and removes the 80-page scan that made the viewer lag.
+    Falls back to a whole-document scan only when there is no page hint."""
     try:
         import fitz  # noqa: F401
     except Exception as e:  # noqa: BLE001
@@ -137,24 +182,39 @@ def locate_in_pdf(pdf_bytes: bytes, *, evidence: Optional[str],
     if doc.page_count == 0:
         return {"ok": False, "reason": "empty document"}
 
+    doc_hash = hashlib.sha1(pdf_bytes).hexdigest()[:16]
     cands = _candidates(evidence, value)
-    pages = min(doc.page_count, _MAX_PAGES)
+
+    # Normalise the page hint to a 0-based index inside the doc.
+    hint_idx: Optional[int] = None
     try:
+        if page_hint not in (None, ""):
+            n = int(str(page_hint).strip())
+            if 1 <= n <= doc.page_count:
+                hint_idx = n - 1
+    except (TypeError, ValueError):
+        hint_idx = None
+
+    try:
+        # FAST PATH: we know the page. Search just it; render it either way.
+        if hint_idx is not None:
+            hits = _search_page(doc[hint_idx], cands)
+            return _render_page(doc, hint_idx, hits, zoom,
+                                matched=bool(hits), evidence=evidence,
+                                doc_hash=doc_hash)
+
+        # No hint — scan, but bounded. First page with a textual hit wins.
+        pages = min(doc.page_count, _MAX_PAGES)
         for pno in range(pages):
-            page = doc[pno]
-            for cand in cands:
-                try:
-                    hits = page.search_for(cand)
-                except Exception:
-                    hits = []
-                if hits:
-                    # Cap the number of boxes so a value that appears many
-                    # times (e.g. "IEC") doesn't paint the whole page.
-                    return _render_page(doc, pno, hits[:8], zoom,
-                                        matched=True, evidence=evidence)
-        # No textual match — render the first page so the user still sees
-        # the source document (Phase 1: no box for image-only pages).
-        return _render_page(doc, 0, [], zoom, matched=False, evidence=evidence)
+            hits = _search_page(doc[pno], cands)
+            if hits:
+                return _render_page(doc, pno, hits, zoom,
+                                    matched=True, evidence=evidence,
+                                    doc_hash=doc_hash)
+        # Nothing matched — render the first page so the user still sees the
+        # source document (image-only page, or a paraphrased span).
+        return _render_page(doc, 0, [], zoom, matched=False, evidence=evidence,
+                            doc_hash=doc_hash)
     finally:
         try:
             doc.close()
