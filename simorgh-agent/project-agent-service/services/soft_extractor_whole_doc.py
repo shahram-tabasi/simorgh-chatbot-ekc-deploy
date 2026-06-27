@@ -1086,8 +1086,16 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
             value = item.get("value")
             if not name or value in (None, "", []):
                 continue
-            cf = str(item.get("canonical_field") or "").strip()
-            field = cf if cf in allowed_set else _slug_param_key(name)
+            # Use the AI's OWN parameter name as the field key — DO NOT trust
+            # the LLM's canonical_field assignment. In the field it mis-maps
+            # values to unrelated schema keys (e.g. "6.6 kV" landing under
+            # shortCircuitPower / ratedFrequency / lscPartitionClass, a CT
+            # class "5P" under ratedPowerFrequencyWithstandVoltage), which
+            # exploded ~50 clean answer params into 300 mislabelled rows.
+            # Mirroring the answer's own labels keeps proposals faithful to
+            # what the AI actually said. (canonical mapping, when needed for
+            # the simorgh-soft spec, is done deterministically at approval.)
+            field = _slug_param_key(name)
             if field in out:        # first mention wins — keep it deduped
                 continue
             unit = str(item.get("unit") or "").strip()

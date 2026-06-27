@@ -89,6 +89,27 @@ def _value_key(value: Any) -> str:
         return str(value).strip().lower()
 
 
+async def clear_proposals(project_id: str, *,
+                          include_approved: bool = False) -> int:
+    """Delete proposals for a project — used by the 'clear & re-extract'
+    action so stale/mislabelled rows from earlier extractions don't linger
+    next to fresh ones. By default only PENDING rows are removed; approved
+    rows (project history) are kept unless include_approved is set."""
+    sql = "DELETE FROM soft_spec_proposal WHERE project_id = $1"
+    if not include_approved:
+        sql += " AND approved IS NULL"
+    sql += " RETURNING id"
+    try:
+        rows = await _pg().execute_async(sql, project_id)
+        n = len(rows or [])
+        logger.info("clear_proposals: deleted %d row(s) for %s "
+                    "(include_approved=%s)", n, project_id, include_approved)
+        return n
+    except Exception as e:  # noqa: BLE001
+        logger.warning("clear_proposals %s: %s", project_id, e)
+        return 0
+
+
 async def merge_proposals(project_id: str, source_kind: str,
                           proposals: List[Dict[str, Any]]) -> int:
     """ACCUMULATE proposals from this source — never delete.

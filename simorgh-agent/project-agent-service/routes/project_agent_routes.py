@@ -2209,6 +2209,34 @@ async def soft_proposal_source(project_id: str, proposal_id: str,
     return result
 
 
+@router.delete("/projects/{project_id}/soft/proposals")
+async def soft_clear_proposals(project_id: str,
+                               include_approved: bool = False,
+                               current_user: str = Depends(get_current_user)):
+    """Clear this project's pending proposals (optionally approved too) and
+    reset the spec state, so a 'clear & re-extract' wipes stale/mislabelled
+    rows from earlier extraction runs. The next refresh re-mines cleanly."""
+    if not _soft_bridge_enabled():
+        raise HTTPException(status_code=404, detail="design-suite bridge disabled")
+    memory = get_project_memory_service()
+    project = await memory.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project["owner_id"] != current_user:
+        raise HTTPException(status_code=403, detail="Access denied")
+    from services import soft_proposals as sp
+    deleted = await sp.clear_proposals(project_id, include_approved=include_approved)
+    # Reset the cached signature so the very next refresh actually re-runs.
+    try:
+        from services import soft_spec_state as sss
+        await sss.upsert_state(project_id, spec={}, prov=[], gaps=[],
+                               conflicts=[], completeness=0,
+                               sources_signature="")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("soft_clear_proposals: state reset failed: %s", e)
+    return {"ok": True, "deleted": deleted}
+
+
 @router.post("/projects/{project_id}/soft/refresh")
 async def soft_refresh(project_id: str,
                        current_user: str = Depends(get_current_user)):

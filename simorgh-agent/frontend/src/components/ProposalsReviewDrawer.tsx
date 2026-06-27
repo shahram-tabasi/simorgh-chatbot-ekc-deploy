@@ -30,7 +30,7 @@ import {
   FileText, Database, MessagesSquare, GitBranch, Server, User as UserIcon,
   Quote, Zap, Thermometer, Mountain, Activity, ShieldCheck,
   Gauge, Cable, CircuitBoard, CheckCheck, Download, Crosshair, CheckCircle2,
-  AlertTriangle,
+  AlertTriangle, RefreshCw,
 } from "lucide-react";
 import SourceViewer, { SourceTarget } from "./SourceViewer";
 
@@ -107,6 +107,8 @@ interface Props {
   /** Bulk decisions over every pending proposal. */
   onApproveAll?:  () => void | Promise<void>;
   onRejectAll?:   () => void | Promise<void>;
+  /** Wipe all pending proposals and re-extract from the latest AI answers. */
+  onClearAll?:    () => void | Promise<void>;
   bulkBusy?:      boolean;
 
   // ── Source markup ("show source" per item) ─────────────────────────
@@ -793,7 +795,7 @@ export default function ProposalsReviewDrawer({
   open, onClose, pendingByField, review, approvedCount = 0, busyIds,
   categories, onApprove, onReject, onResolveConflict,
   onCreate, creating = false, canCreate = false,
-  approved = [], gaps = [], onApproveAll, onRejectAll, bulkBusy = false,
+  approved = [], gaps = [], onApproveAll, onRejectAll, onClearAll, bulkBusy = false,
   projectId, apiBase, getToken, projectName, completeness,
 }: Props) {
   // When the backend supplies the MDM review model, render the MERGED view:
@@ -955,6 +957,22 @@ export default function ProposalsReviewDrawer({
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Reject all
+              </button>
+              <button
+                onClick={() => {
+                  if (window.confirm(
+                    "Clear all current proposals and re-extract from the latest "
+                    + "analysis? This removes stale/mislabelled values and rebuilds "
+                    + "the list from the AI's answers.")) onClearAll?.();
+                }}
+                disabled={bulkBusy || !onClearAll}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px]
+                           bg-amber-500/10 hover:bg-amber-500/25 border border-amber-400/30
+                           text-amber-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Delete all proposals and re-extract cleanly from the AI's latest analysis"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Clear &amp; re-extract
               </button>
 
               <div className="flex-1" />

@@ -173,6 +173,32 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
   const onApproveAll = () => decideAll("approve");
   const onRejectAll  = () => decideAll("reject");
 
+  // Wipe stale/mislabelled proposals and re-mine cleanly from the latest AI
+  // answers. Useful after an extraction-quality fix so old rows don't linger.
+  const onClearAll = async () => {
+    setBulkBusy(true);
+    try {
+      const r = await axios.delete(
+        `${API_BASE}/v2/agent/projects/${projectId}/soft/proposals`,
+        { headers: { Authorization: `Bearer ${token()}` } },
+      );
+      // Kick a fresh extraction pass over the existing AI answers.
+      await axios.post(
+        `${API_BASE}/v2/agent/projects/${projectId}/soft/refresh`,
+        {}, { headers: { Authorization: `Bearer ${token()}` } },
+      ).catch(() => {});
+      notify({ type: "success", title: "Proposals cleared",
+        message: `Removed ${r.data?.deleted ?? 0} value${(r.data?.deleted ?? 0) === 1 ? "" : "s"}. Re-extracting from the latest analysis…` });
+      await fetchState();
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || e?.message || "Clear failed.";
+      setError(msg);
+      notify({ type: "error", title: "Clear failed", message: msg });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   // Resolve a conflict in ONE request: approve the value the user picked
   // (optionally edited) and reject the competing values for that field, so
   // the field leaves the conflicts section with a single surviving value.
@@ -516,6 +542,7 @@ export default function DesignSuiteInline({ projectId, isLegacy, onAnswered }: P
         gaps={state.state.gaps || []}
         onApproveAll={onApproveAll}
         onRejectAll={onRejectAll}
+        onClearAll={onClearAll}
         bulkBusy={bulkBusy}
         projectId={projectId}
         apiBase={API_BASE}
