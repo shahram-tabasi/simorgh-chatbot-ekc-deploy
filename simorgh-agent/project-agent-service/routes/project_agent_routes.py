@@ -2255,7 +2255,15 @@ async def soft_refresh(project_id: str,
         raise HTTPException(status_code=403, detail="Access denied")
     try:
         from services.soft_collector import schedule_refresh
-        schedule_refresh(project_id, force=True)
+        # force=False: re-mine ONLY when the conversation/doc signature has
+        # actually changed. Opening the drawer must NOT re-run the LLM miner —
+        # the miner is non-deterministic, so each forced re-run invented
+        # slightly different parameter names, creating new field keys and
+        # making the proposal count climb on its own (the "175 with no new
+        # input" bug). The signature short-circuit makes re-opening a no-op.
+        # (The 'Clear & re-extract' action resets the signature, so it still
+        # forces a fresh pass on demand.)
+        schedule_refresh(project_id, force=False)
     except Exception as e:  # noqa: BLE001
         logger.warning("soft_refresh schedule failed: %s", e)
     return {"ok": True, "scheduled": True}

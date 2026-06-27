@@ -1092,16 +1092,19 @@ async def from_assistant_response(messages: List[Dict[str, Any]], *,
             value = item.get("value")
             if not name or value in (None, "", []):
                 continue
-            # Use the AI's OWN parameter name as the field key — DO NOT trust
-            # the LLM's canonical_field assignment. In the field it mis-maps
-            # values to unrelated schema keys (e.g. "6.6 kV" landing under
-            # shortCircuitPower / ratedFrequency / lscPartitionClass, a CT
-            # class "5P" under ratedPowerFrequencyWithstandVoltage), which
-            # exploded ~50 clean answer params into 300 mislabelled rows.
-            # Mirroring the answer's own labels keeps proposals faithful to
-            # what the AI actually said. (canonical mapping, when needed for
-            # the simorgh-soft spec, is done deterministically at approval.)
-            field = _slug_param_key(name)
+            # Map the parameter to the operator's canonical "important items"
+            # checklist when it matches one — this pins the same concept to a
+            # STABLE key across runs (so the count can't grow on re-mine and
+            # "service voltage" / "rated voltage" / "operating voltage" don't
+            # become three rows). Unmatched params keep their own readable slug
+            # under "Other". We DO NOT trust the LLM's canonical_field guess
+            # (it mis-mapped values to unrelated schema keys).
+            try:
+                from services.soft_important_items import match_item
+                _m = match_item(name)
+            except Exception:
+                _m = None
+            field = _m["field"] if _m else _slug_param_key(name)
             if field in out:        # first mention wins — keep it deduped
                 continue
             unit = str(item.get("unit") or "").strip()

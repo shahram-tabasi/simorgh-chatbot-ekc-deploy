@@ -282,8 +282,27 @@ const CATEGORY_KEYWORDS: [RegExp, string][] = [
   [/(interlock|shutter|\block|door|\bkey|nameplate|name_plate|label|identif|mounting|frame|sheet|thickness|enclosure|compartment|cell|heating|thermostat|lighting|socket|material|fire|construction|dimension|depth|height|width)/, "construction"],
   [/(equipment|panel|feeder|breaker|contactor|incomer|outgoing|cubicle|bay)/, "equipment"],
 ];
+// Canonical "important item" subjects → drawer category id. Keeps the
+// operator's important-items checklist grouped in the standard sections.
+const IMPORTANT_SUBJECT_TO_CAT: Record<string, string> = {
+  main_characteristic: "network",
+  busbar: "busbar",
+  wire_size: "wiring_size",
+  wire_color: "wiring_color",
+  wire_spec: "wiring_size",
+  label_color: "wiring_color",
+  auxiliary_voltage: "auxiliary_voltage",
+  ct_pt: "compliance",
+  cb: "compliance",
+  protection: "compliance",
+  interlocks: "construction",
+};
 function categorizeField(field: string,
                          fieldToCat: Record<string, string>): string {
+  if (field.startsWith("important.")) {
+    const subj = field.split(".")[1] || "";
+    return IMPORTANT_SUBJECT_TO_CAT[subj] || "other";
+  }
   if (fieldToCat[field]) return fieldToCat[field];
   const leaf = (field.split(".").pop() || field).toLowerCase();
   for (const [re, id] of CATEGORY_KEYWORDS) if (re.test(leaf)) return id;
