@@ -120,16 +120,19 @@ def grounded_score(value: Any, source_text: str,
     return best
 
 
-# Which source kinds are verified against WHAT. The guiding rule: verify a
-# value against the text it was ACTUALLY extracted from.
-#   * analysis / chat  → the AI's own answer (clean text). The miner pulls
-#     values out of that answer, so an analysis value that is NOT in the
-#     answer is stale (left over from an old turn) or hallucinated → drop.
-#     Verifying these against the PDF instead would wrongly drop good values
-#     because the PDF text layer is RTL/LTR-scrambled.
-#   * uploads / gitlab / techserver → the source document's text.
+# Which source kinds are verified against WHAT.
+#   * analysis / chat  → TRUSTED, never dropped. These come from the agent's
+#     own answer, which the chat pipeline ALREADY grounded (react_engine's
+#     grounding_verifier runs on it). The proposal set must MIRROR that
+#     answer — the user asked for exactly the parameters the AI extracted.
+#     Re-verifying here was wrong: the miner correctly DE-SCRAMBLES a value
+#     (answer quotes "7.kV 2"; miner emits "7.2 kV"), then a token check
+#     against the scrambled answer fails and a real parameter gets dropped.
+#   * uploads / gitlab / techserver → verified against the source document
+#     (with an answer-match rescue). These are independent schema extractors
+#     that can drift OFF the answer, so they still need the precision gate.
 #   * tpms / user / default / (anything else) → trusted, not verified.
-_ANSWER_KINDS = {"analysis", "chat"}
+_ANSWER_KINDS = {"analysis", "chat"}        # trusted — see above
 _DOC_KINDS = {"uploads", "gitlab", "techserver"}
 
 
@@ -188,11 +191,9 @@ async def verify_against_docs(
             score: Optional[float] = None
 
             if kind in _ANSWER_KINDS:
-                # Verify against the clean AI answer the miner read from.
-                if have_answer:
-                    score = grounded_score(value, answer_text,
-                                           evidence=note.get("evidence"))
-                # else: no answer corpus → can't verify → keep (fail-open)
+                # Trusted — the answer is already grounded by the chat
+                # pipeline; mirror it verbatim. Leave score None → keep.
+                pass
             elif kind in _DOC_KINDS:
                 fn = note.get("filename")
                 src = text_for(fn) if fn else ""
