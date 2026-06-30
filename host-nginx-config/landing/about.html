@@ -186,6 +186,27 @@
       line-height: 1.8;
     }
 
+    /* Intro Video */
+    .intro-video {
+      margin-bottom: 2.5rem;
+    }
+
+    .video-wrapper {
+      position: relative;
+      border-radius: 20px;
+      overflow: hidden;
+      border: 1px solid rgba(96, 165, 250, 0.2);
+      box-shadow: 0 20px 60px rgba(96, 165, 250, 0.15);
+      background: #0f1525;
+    }
+
+    .video-wrapper video {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 20px;
+    }
+
     /* Mission Card */
     .mission-card {
       background: linear-gradient(160deg, #141b2d 0%, #0f1525 100%);
@@ -573,6 +594,21 @@
 
   <!-- Content -->
   <main class="content">
+
+    <!-- Intro Video -->
+    <section class="section intro-video">
+      <h2 class="section-title">Get to Know Us</h2>
+      <p class="section-text" style="margin-bottom: 1.25rem;">
+        Watch our short introduction to learn who we are and how Simorgh AI is transforming
+        electrical engineering.
+      </p>
+      <div class="video-wrapper">
+        <video controls preload="metadata" playsinline poster="Contents/electrokavir_logo.jpg">
+          <source src="Contents/simorgh-intro.mp4" type="video/mp4">
+          Your browser does not support the video tag.
+        </video>
+      </div>
+    </section>
 
     <!-- Mission Card -->
     <div class="mission-card">
