@@ -1,5 +1,5 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
-import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy } from '../types/project';
+import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, Revision } from '../types/project';
 import { projectService } from '../services/projectService';
 
 interface ProjectContextType {
@@ -18,15 +18,16 @@ interface ProjectContextType {
   copyEquipment: (equipmentId: string) => void;
   selectedEquipment: Equipment | null;
   setSelectedEquipment: (equipment: Equipment | null) => void;
+  // Revision management
+  currentRevision: Revision | null;
+  revisions: Revision[];
+  loadRevisions: (projectId: string) => Promise<void>;
+  createRevision: (revisionName: string, description: string) => Promise<Revision>;
+  switchRevision: (revisionId: string) => Promise<void>;
+  getNextRevisionNumber: () => number;
 }
 
-// EMPTY DEFAULTS. Previously this object was full of demo values
-// ("New Project", "SIMORGH", standard "IEC", country "Iran", 20 kV MV,
-// "Brown/Black/Grey", etc.). They leaked into every newly-opened project
-// — even when the chatbot bridge sent specific extracted values, any
-// missing keys fell back to the demo. Per requirements: rely on REAL
-// data only. Nested keys are kept (empty) so existing UI components
-// that read `projectData.technicalSettings.mediumVoltage.X` don't crash.
+// EMPTY DEFAULTS - no demo values
 const defaultProjectData: ProjectData = {
   projectName: '',
   projectId: '',
@@ -86,17 +87,22 @@ const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 interface ProjectProviderProps {
   children: ReactNode;
   initialProject?: ProjectData | null;
+  initialRevision?: Revision | null;
 }
 
-export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, initialProject }) => {
-  // Merge supplied initial project with defaults so new/optional fields always exist
+export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, initialProject, initialRevision }) => {
   const [projectData, setProjectData] = useState<ProjectData>(
     initialProject
       ? { ...defaultProjectData, ...initialProject }
       : defaultProjectData
   );
   const [projectId, setProjectId] = useState<string | null>(initialProject?._id || null);
-  const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null); // ⭐ جدید
+  const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null);
+  
+  // Revision state - centralized source of truth
+  const [currentRevision, setCurrentRevision] = useState<Revision | null>(initialRevision || null);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [isLoadingRevisions, setIsLoadingRevisions] = useState(false);
 
   // Deep-link hydrate: the chatbot creates a project on simorgh-soft's
   // backend, then redirects the user to /simorgh-design-suite/?projectId=<_id>.
@@ -311,6 +317,86 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     }
   };
 
+  // ============================================
+  // Revision Management - Centralized Source of Truth
+  // ============================================
+
+  const loadRevisions = async (pid: string) => {
+    if (!pid) return;
+    try {
+      setIsLoadingRevisions(true);
+      const revisionsData = await projectService.getRevisions(pid);
+      setRevisions(revisionsData);
+      
+      // Auto-create Revision 0 if no revisions exist
+      if (revisionsData.length === 0 && pid) {
+        console.log('No revisions found, creating Revision 0...');
+        await createRevisionForProject(pid, 'Initial', 'Base revision created automatically');
+      } else if (revisionsData.length > 0 && !currentRevision) {
+        // Set current revision to latest (first after sort by revisionNumber desc)
+        setCurrentRevision(revisionsData[0]);
+      }
+    } catch (err) {
+      console.error('Failed to load revisions:', err);
+      setRevisions([]);
+    } finally {
+      setIsLoadingRevisions(false);
+    }
+  };
+
+  const getNextRevisionNumber = (): number => {
+    if (revisions.length === 0) return 0;
+    const maxRev = Math.max(...revisions.map(r => parseInt(r.revisionNumber) || 0));
+    return maxRev + 1;
+  };
+
+  const createRevisionForProject = async (pid: string, revName: string, desc: string): Promise<Revision> => {
+    const nextNum = getNextRevisionNumber();
+    
+    const newRevision = await projectService.createRevision({
+      projectId: pid,
+      revisionNumber: nextNum.toString(),
+      revisionName: revName || `Revision ${nextNum}`,
+      description: desc || '',
+      createdBy: 'user',
+      projectSnapshot: projectData,
+      isLocked: false,
+    });
+    
+    // Reload revisions and set new one as current
+    await loadRevisions(pid);
+    setCurrentRevision(newRevision);
+    return newRevision;
+  };
+
+  const createRevision = async (revName: string, desc: string): Promise<Revision> => {
+    if (!projectId) {
+      throw new Error('Project must be saved before creating a revision');
+    }
+    return createRevisionForProject(projectId, revName, desc);
+  };
+
+  const switchRevision = async (revisionId: string) => {
+    const revision = revisions.find(r => r._id === revisionId);
+    if (!revision) {
+      throw new Error('Revision not found');
+    }
+    
+    // Load the project snapshot from the selected revision
+    if (revision.projectSnapshot) {
+      setProjectData({ ...defaultProjectData, ...revision.projectSnapshot });
+      setCurrentRevision(revision);
+    }
+  };
+
+  // Load revisions when project ID changes
+  React.useEffect(() => {
+    if (projectId && !initialRevision) {
+      loadRevisions(projectId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
   return (
     <ProjectContext.Provider
       value={{
@@ -323,13 +409,19 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         addDevice,
         updateDevice,
         deleteDevice,
-        // ⭐ جدید
         addEquipment,
         updateEquipment,
         deleteEquipment,
         copyEquipment,
         selectedEquipment,
-        setSelectedEquipment
+        setSelectedEquipment,
+        // Revision management
+        currentRevision,
+        revisions,
+        loadRevisions,
+        createRevision,
+        switchRevision,
+        getNextRevisionNumber
       }}
     >
       {children}

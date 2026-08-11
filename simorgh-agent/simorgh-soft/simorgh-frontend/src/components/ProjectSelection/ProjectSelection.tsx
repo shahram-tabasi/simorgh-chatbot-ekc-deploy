@@ -18,9 +18,15 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [selectedRevision, setSelectedRevision] = useState<Revision | null>(null);
-  const [showRevisionDropdown, setShowRevisionDropdown] = useState(false);
-  const [selectedProjectForRevision, setSelectedProjectForRevision] = useState<ProjectData | null>(null);
   const [showRevisionSelector, setShowRevisionSelector] = useState(false);
+  const [selectedProjectForRevision, setSelectedProjectForRevision] = useState<ProjectData | null>(null);
+  
+  // Create revision modal state
+  const [showCreateRevisionModal, setShowCreateRevisionModal] = useState(false);
+  const [newRevisionNumber, setNewRevisionNumber] = useState<string>('0');
+  const [newRevisionName, setNewRevisionName] = useState<string>('');
+  const [newRevisionDescription, setNewRevisionDescription] = useState<string>('');
+  const [creatingRevision, setCreatingRevision] = useState(false);
 
   useEffect(() => {
     loadProjects();
@@ -42,10 +48,14 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     try {
       const revisionsData = await projectService.getRevisions(projectId);
       setRevisions(revisionsData);
-      if (revisionsData.length > 0) {
-        setSelectedRevision(revisionsData[0]); // Default to latest (first after sort)
-      } else {
+      
+      // Auto-create Revision 0 if none exist
+      if (revisionsData.length === 0) {
+        // Will be created when opening or explicitly by user
         setSelectedRevision(null);
+      } else {
+        // Default to latest (first after sort by revisionNumber desc)
+        setSelectedRevision(revisionsData[0]);
       }
     } catch (err) {
       console.error('Failed to load revisions:', err);
@@ -68,42 +78,45 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     }
   };
 
+  const openCreateRevisionModal = () => {
+    if (!selectedProjectForRevision) return;
+    
+    // Calculate next revision number automatically
+    let nextNum = 0;
+    if (revisions.length > 0) {
+      const maxRev = Math.max(...revisions.map(r => parseInt(r.revisionNumber) || 0));
+      nextNum = maxRev + 1;
+    }
+    
+    setNewRevisionNumber(nextNum.toString());
+    setNewRevisionName(`Revision ${nextNum}`);
+    setNewRevisionDescription('');
+    setShowCreateRevisionModal(true);
+  };
+
   const handleCreateRevision = async () => {
     if (!selectedProjectForRevision) return;
     
+    setCreatingRevision(true);
     try {
-      // Get existing revisions to determine next revision number
-      const existingRevisions = await projectService.getRevisions(selectedProjectForRevision._id!);
-      
-      // Find the highest revision number and increment
-      let nextRevisionNum = 0;
-      if (existingRevisions.length > 0) {
-        const maxRev = Math.max(...existingRevisions.map(r => parseInt(r.revisionNumber) || 0));
-        nextRevisionNum = maxRev + 1;
-      }
-      
-      const revisionNumber = prompt('Enter revision number:', nextRevisionNum.toString());
-      if (!revisionNumber) return;
-      
-      const revisionName = prompt('Enter revision name:', `Revision ${revisionNumber}`);
-      if (!revisionName) return;
-      
-      const description = prompt('Enter revision description:', 'New revision');
-      
       const newRevision = await projectService.createRevision({
         projectId: selectedProjectForRevision._id!,
-        revisionNumber,
-        revisionName: revisionName || `Revision ${revisionNumber}`,
-        description: description || '',
+        revisionNumber: newRevisionNumber,
+        revisionName: newRevisionName || `Revision ${newRevisionNumber}`,
+        description: newRevisionDescription || '',
         createdBy: 'user',
         projectSnapshot: selectedProjectForRevision,
         isLocked: false,
       });
       
-      alert(`✅ Revision ${revisionNumber} created successfully!`);
+      // Reload revisions and select the new one
       await loadRevisions(selectedProjectForRevision._id!);
+      setSelectedRevision(newRevision);
+      setShowCreateRevisionModal(false);
     } catch (err) {
       alert('❌ Failed to create revision: ' + (err as Error).message);
+    } finally {
+      setCreatingRevision(false);
     }
   };
 
@@ -256,7 +269,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
               </div>
               <button
                 className="px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 font-medium"
-                onClick={handleCreateRevision}
+                onClick={openCreateRevisionModal}
               >
                 + New Revision
               </button>
@@ -265,38 +278,53 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
             <div className="flex-1 overflow-y-auto px-6 py-4">
               {revisions.length === 0 ? (
                 <div className="text-center py-8 text-gray-500 text-sm">
-                  No revisions available. Create a new revision or open the current project.
+                  No revisions available. Create a new revision to start.
+                  <br/>
+                  <span className="text-xs">Revision 0 will be created automatically as the base revision.</span>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {revisions.map((revision, idx) => (
-                    <div
-                      key={revision._id || idx}
-                      className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                        selectedRevision?._id === revision._id
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:bg-gray-50'
-                      }`}
-                      onClick={() => setSelectedRevision(revision)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-gray-800">
-                            Revision {revision.revisionNumber}: {revision.revisionName}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">{revision.description}</p>
-                          <p className="text-xs text-gray-400 mt-1">
-                            Created: {new Date(revision.createdOn).toLocaleString()}
-                          </p>
+                  {revisions.map((revision, idx) => {
+                    const isLatest = idx === 0;
+                    const isBase = parseInt(revision.revisionNumber) === 0;
+                    return (
+                      <div
+                        key={revision._id || idx}
+                        className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                          selectedRevision?._id === revision._id
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:bg-gray-50'
+                        }`}
+                        onClick={() => setSelectedRevision(revision)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium text-gray-800">
+                                REV {revision.revisionNumber}
+                              </p>
+                              {isLatest && (
+                                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded font-medium">LATEST</span>
+                              )}
+                              {isBase && (
+                                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">BASE</span>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-700 mt-0.5">{revision.revisionName}</p>
+                            <p className="text-xs text-gray-500 mt-1">{revision.description}</p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              Created: {new Date(revision.createdOn).toLocaleString()}
+                            </p>
+                          </div>
+                          {revision.isLocked && (
+                            <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
+                              🔒 Locked
+                            </span>
+                          )}
                         </div>
-                        {revision.isLocked && (
-                          <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
-                            🔒 Locked
-                          </span>
-                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -319,6 +347,77 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                   Open Selected Revision
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Revision Modal */}
+      {showCreateRevisionModal && selectedProjectForRevision && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-[500px] flex flex-col">
+            <div className="px-6 py-4 border-b">
+              <h3 className="font-semibold text-lg">Create New Revision</h3>
+              <p className="text-xs text-gray-500 mt-1">Create a new revision for "{selectedProjectForRevision.projectName}"</p>
+            </div>
+            
+            <div className="px-6 py-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
+                <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded text-sm text-gray-600">
+                  {selectedProjectForRevision.projectName}
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Revision Number</label>
+                <input
+                  type="text"
+                  value={newRevisionNumber}
+                  readOnly
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">Automatically calculated as the next revision number</p>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Revision Name</label>
+                <input
+                  type="text"
+                  value={newRevisionName}
+                  onChange={(e) => setNewRevisionName(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                  placeholder="e.g., Electrical design update"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
+                <textarea
+                  value={newRevisionDescription}
+                  onChange={(e) => setNewRevisionDescription(e.target.value)}
+                  rows={3}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                  placeholder="Describe the changes in this revision..."
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+              <button
+                className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
+                onClick={() => setShowCreateRevisionModal(false)}
+                disabled={creatingRevision}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleCreateRevision}
+                disabled={creatingRevision}
+              >
+                {creatingRevision ? 'Creating...' : 'Create Revision'}
+              </button>
             </div>
           </div>
         </div>

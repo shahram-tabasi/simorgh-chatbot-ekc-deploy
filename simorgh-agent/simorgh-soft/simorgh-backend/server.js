@@ -1520,10 +1520,35 @@ app.post('/api/chat-online', chatUpload.array('files', 10), async (req, res) => 
 app.get('/api/projects/:projectId/revisions', async (req, res) => {
   try {
     const { projectId } = req.params;
+    
+    // Get all revisions for the project sorted by revisionNumber descending (latest first)
     const revisions = await db.collection('revisions')
       .find({ projectId })
       .sort({ revisionNumber: -1 })
       .toArray();
+    
+    // Auto-create Revision 0 if no revisions exist for this project
+    if (revisions.length === 0) {
+      console.log(`No revisions found for project ${projectId}, creating Revision 0...`);
+      
+      const revision0Data = {
+        projectId,
+        revisionNumber: '0',
+        revisionName: 'Initial',
+        description: 'Base revision created automatically',
+        createdBy: 'system',
+        projectSnapshot: null,
+        isLocked: false,
+        createdOn: new Date().toISOString(),
+        changedOn: new Date().toISOString()
+      };
+      
+      const result = await db.collection('revisions').insertOne(revision0Data);
+      const revision0 = { _id: result.insertedId, ...revision0Data };
+      
+      return res.json([revision0]);
+    }
+    
     res.json(revisions);
   } catch (error) {
     console.error('Error fetching revisions:', error);
@@ -1559,17 +1584,25 @@ app.post('/api/revisions', async (req, res) => {
       changedOn: new Date().toISOString() 
     };
     
-    // Check if revision number already exists for this project
+    // Validate required fields
+    if (!revisionData.projectId || !revisionData.revisionNumber) {
+      return res.status(400).json({ error: 'projectId and revisionNumber are required' });
+    }
+    
+    // Check if revision number already exists for this project (unique constraint)
     const existing = await db.collection('revisions').findOne({
       projectId: revisionData.projectId,
       revisionNumber: revisionData.revisionNumber
     });
     
     if (existing) {
-      return res.status(409).json({ error: 'Revision number already exists for this project' });
+      return res.status(409).json({ error: `Revision ${revisionData.revisionNumber} already exists for this project` });
     }
     
+    // Insert the revision
     const result = await db.collection('revisions').insertOne(revisionData);
+    
+    // Return the created revision with its ID
     res.status(201).json({ _id: result.insertedId, ...revisionData });
   } catch (error) {
     console.error('Error creating revision:', error);
