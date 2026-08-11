@@ -1,132 +1,127 @@
-##############################################
-# Global ignores for multi-service workspace #
-##############################################
+```
+# Dependencies
+node_modules/
 
-# OS files
+# Build artifacts
+dist/
+build/
+target/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py.class
+*.py.backup
+
+# Virtual environments
+venv/
+.venv/
+env/
+.ENV/
+
+# Logs
+*.log
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # Editor files
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
 
-##############################################
-# Python backend + LLM services              #
-##############################################
+# Environment variables
+.env
+.env.local
+.env.*
 
-# Bytecode + Cache
-**/__pycache__/
-**/*.pyc
-**/*.pyo
-**/*.pyd
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
 
-# Virtual environments
-venv/
-env/
-.venv/
+# Temporary files
+*.tmp
+*.temp
+*.bak
 
-# Local dev tools
-pip-log.txt
-pip-wheel-metadata/
-*.egg-info/
-.eggs/
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 
-# Python compiled libraries
-build/
-dist/
+# Testing
+.pytest_cache/
+.mypy_cache/
+.nyc_output/
+coverage.xml
 
-##############################################
-# React frontend (Vite)                      #
-##############################################
-
-# Node modules (ALL)
-node_modules/
-**/node_modules/
-
-# Build output
-dist/
-frontend/react/dist/
-frontend/static/temp/
-
-# Logs
+# Node.js
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Local environment variables
-# .env
-# .env.local
-# .env.*.local
+# Java
+*.class
+*.jar
+*.war
+*.ear
+hs_err_pid*
 
-##############################################
-# Docker                                     
-##############################################
+# C/C++
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+*.exe
+*.out
 
-# Local-only Docker files
-docker-compose.override.yml
-*.pid
-*.sock
+# Go
+*.exe
+*.test
+*.prof
 
-##############################################
-# Nginx                                       #
-##############################################
-# nginx.conf~
-# frontend/nginx_configs/conf.d/*.tmp
-# backend/nginx_configs/conf.d/*.tmp
-# llms/nginx_configs/conf.d/*.tmp
+# Ruby
+*.gem
+*.rbc
+.bundle/
 
-##############################################
-# Vagrant + VirtualBox                        #
-##############################################
+# Rust
+Cargo.lock
 
-.vagrant/
-vagrant/eplan-vms/old/
-*.box
+# Julia
+.julia/
 
-##############################################
-# Logs                                        #
-##############################################
-
-logs/
-*.log
-backend/**/*.log
-llms/**/*.log
-
-##############################################
-# Temporary / misc                             #
-##############################################
-
-tmp/
-temp/
-*.tmp
-*.bak
-*.old
-
-##############################################
-# Project-specific exclusions                  #
-##############################################
-
-# Python parser test caches
-backend/flask/test_pdf_output/
-backend/flask/chunks_temp/
-
-# Frontend static old folder
-frontend/static/old/
-
-##############################################
-# END                                         #
-##############################################
-
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?simorgh-agent/.env
-**/.env
+# Zig
+zig-cache/
+```
