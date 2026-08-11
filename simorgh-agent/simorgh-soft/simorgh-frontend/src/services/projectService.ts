@@ -1,4 +1,4 @@
-import { ProjectData } from '../types/project';
+import { ProjectData, Revision, RevisionComparison } from '../types/project';
 
 const API_BASE_URL = `${import.meta.env.VITE_API_URL || ''}/api`;
 
@@ -96,5 +96,103 @@ export const projectService = {
       throw new Error('Server health check failed');
     }
     return response.json();
+  },
+
+  // ==============================
+  // Revision Management APIs
+  // ==============================
+
+  // Get all revisions for a project
+  async getRevisions(projectId: string): Promise<Revision[]> {
+    const response = await fetch(`${API_BASE_URL}/projects/${projectId}/revisions`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch revisions');
+    }
+    return response.json();
+  },
+
+  // Get a specific revision
+  async getRevision(revisionId: string): Promise<Revision> {
+    const response = await fetch(`${API_BASE_URL}/revisions/${revisionId}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch revision');
+    }
+    return response.json();
+  },
+
+  // Create a new revision
+  async createRevision(revisionData: Omit<Revision, '_id' | 'createdOn' | 'changedOn'>): Promise<Revision> {
+    const response = await fetch(`${API_BASE_URL}/revisions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(revisionData),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to create revision');
+    }
+    return response.json();
+  },
+
+  // Update a revision
+  async updateRevision(revisionId: string, revisionData: Partial<Revision>): Promise<Revision> {
+    const response = await fetch(`${API_BASE_URL}/revisions/${revisionId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(revisionData),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to update revision');
+    }
+    return response.json();
+  },
+
+  // Delete a revision
+  async deleteRevision(revisionId: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/revisions/${revisionId}`, {
+      method: 'DELETE',
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to delete revision');
+    }
+  },
+
+  // Compare two revisions
+  async compareRevisions(baseRevisionId: string, targetRevisionId: string): Promise<RevisionComparison> {
+    const response = await fetch(
+      `${API_BASE_URL}/revisions/compare?base=${baseRevisionId}&target=${targetRevisionId}`
+    );
+    if (!response.ok) {
+      throw new Error('Failed to compare revisions');
+    }
+    return response.json();
+  },
+
+  // Export comparison report (PDF or Excel)
+  async exportComparisonReport(
+    baseRevisionId: string,
+    targetRevisionId: string,
+    format: 'pdf' | 'excel'
+  ): Promise<Blob> {
+    const response = await fetch(
+      `${API_BASE_URL}/revisions/compare/export?base=${baseRevisionId}&target=${targetRevisionId}&format=${format}`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': `application/${format === 'pdf' ? 'pdf' : 'vnd.openxmlformats-officedocument.spreadsheetml.sheet'}`,
+        },
+      }
+    );
+    
+    if (!response.ok) {
+      throw new Error('Failed to export comparison report');
+    }
+    return response.blob();
   }
 };

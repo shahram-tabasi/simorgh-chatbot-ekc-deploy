@@ -264,3 +264,35 @@ export interface OutputType {
   template: string;
   enabled: boolean;
 }
+
+// ==============================
+// Revision Management
+// ==============================
+
+export interface Revision {
+  _id?: string;
+  projectId: string;
+  revisionNumber: string;
+  revisionName: string;
+  description: string;
+  createdOn: string;
+  changedOn: string;
+  createdBy: string;
+  projectSnapshot: ProjectData;
+  isLocked: boolean;
+  parentRevisionId?: string;
+}
+
+export interface RevisionComparison {
+  baseRevision: Revision;
+  targetRevision: Revision;
+  differences: {
+    added: string[];
+    removed: string[];
+    modified: Array<{
+      field: string;
+      oldValue: any;
+      newValue: any;
+    }>;
+  };
+}

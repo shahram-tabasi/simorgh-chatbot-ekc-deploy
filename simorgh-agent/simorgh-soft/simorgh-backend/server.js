@@ -7,6 +7,8 @@ import sql from 'mssql';
 import mysql from 'mysql2/promise';
 import multer from 'multer';
 import { PDFParse } from 'pdf-parse';
+import PDFDocument from 'pdfkit';
+import ExcelJS from 'exceljs';
 
 dotenv.config();
 
@@ -1460,6 +1462,373 @@ app.post('/api/chat-online', chatUpload.array('files', 10), async (req, res) => 
 });
 
 // ============================================
+// Revision Management APIs
+// ============================================
+
+/**
+ * GET /api/projects/:projectId/revisions - Get all revisions for a project
+ */
+app.get('/api/projects/:projectId/revisions', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const revisions = await db.collection('revisions')
+      .find({ projectId })
+      .sort({ revisionNumber: -1 })
+      .toArray();
+    res.json(revisions);
+  } catch (error) {
+    console.error('Error fetching revisions:', error);
+    res.status(500).json({ error: 'Failed to fetch revisions' });
+  }
+});
+
+/**
+ * GET /api/revisions/:revisionId - Get a specific revision
+ */
+app.get('/api/revisions/:revisionId', async (req, res) => {
+  try {
+    const { revisionId } = req.params;
+    const revision = await db.collection('revisions').findOne({ _id: new ObjectId(revisionId) });
+    if (!revision) {
+      return res.status(404).json({ error: 'Revision not found' });
+    }
+    res.json(revision);
+  } catch (error) {
+    console.error('Error fetching revision:', error);
+    res.status(500).json({ error: 'Failed to fetch revision' });
+  }
+});
+
+/**
+ * POST /api/revisions - Create a new revision
+ */
+app.post('/api/revisions', async (req, res) => {
+  try {
+    const revisionData = { 
+      ...req.body, 
+      createdOn: new Date().toISOString(), 
+      changedOn: new Date().toISOString() 
+    };
+    
+    // Check if revision number already exists for this project
+    const existing = await db.collection('revisions').findOne({
+      projectId: revisionData.projectId,
+      revisionNumber: revisionData.revisionNumber
+    });
+    
+    if (existing) {
+      return res.status(409).json({ error: 'Revision number already exists for this project' });
+    }
+    
+    const result = await db.collection('revisions').insertOne(revisionData);
+    res.status(201).json({ _id: result.insertedId, ...revisionData });
+  } catch (error) {
+    console.error('Error creating revision:', error);
+    res.status(500).json({ error: 'Failed to create revision' });
+  }
+});
+
+/**
+ * PUT /api/revisions/:revisionId - Update a revision
+ */
+app.put('/api/revisions/:revisionId', async (req, res) => {
+  try {
+    const { revisionId } = req.params;
+    const result = await db.collection('revisions').findOneAndUpdate(
+      { _id: new ObjectId(revisionId) },
+      { $set: { ...req.body, changedOn: new Date().toISOString() } },
+      { returnDocument: 'after' }
+    );
+    if (!result) {
+      return res.status(404).json({ error: 'Revision not found' });
+    }
+    res.json(result);
+  } catch (error) {
+    console.error('Error updating revision:', error);
+    res.status(500).json({ error: 'Failed to update revision' });
+  }
+});
+
+/**
+ * DELETE /api/revisions/:revisionId - Delete a revision
+ */
+app.delete('/api/revisions/:revisionId', async (req, res) => {
+  try {
+    const { revisionId } = req.params;
+    const revision = await db.collection('revisions').findOne({ _id: new ObjectId(revisionId) });
+    
+    if (!revision) {
+      return res.status(404).json({ error: 'Revision not found' });
+    }
+    
+    // Cannot delete locked revision
+    if (revision.isLocked) {
+      return res.status(400).json({ error: 'Cannot delete a locked revision' });
+    }
+    
+    const result = await db.collection('revisions').deleteOne({ _id: new ObjectId(revisionId) });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Revision not found' });
+    }
+    res.json({ message: 'Revision deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting revision:', error);
+    res.status(500).json({ error: 'Failed to delete revision' });
+  }
+});
+
+/**
+ * GET /api/revisions/compare - Compare two revisions
+ */
+app.get('/api/revisions/compare', async (req, res) => {
+  try {
+    const { base, target } = req.query;
+    
+    if (!base || !target) {
+      return res.status(400).json({ error: 'Both base and target revision IDs are required' });
+    }
+    
+    const baseRevision = await db.collection('revisions').findOne({ _id: new ObjectId(base) });
+    const targetRevision = await db.collection('revisions').findOne({ _id: new ObjectId(target) });
+    
+    if (!baseRevision || !targetRevision) {
+      return res.status(404).json({ error: 'One or both revisions not found' });
+    }
+    
+    // Simple comparison logic - compare project snapshots
+    const differences = {
+      added: [],
+      removed: [],
+      modified: []
+    };
+    
+    const baseSnapshot = baseRevision.projectSnapshot;
+    const targetSnapshot = targetRevision.projectSnapshot;
+    
+    // Compare equipments
+    const baseEqIds = new Set((baseSnapshot.equipments || []).map(e => e.id));
+    const targetEqIds = new Set((targetSnapshot.equipments || []).map(e => e.id));
+    
+    targetEqIds.forEach(id => {
+      if (!baseEqIds.has(id)) {
+        differences.added.push(`Equipment: ${id}`);
+      }
+    });
+    
+    baseEqIds.forEach(id => {
+      if (!targetEqIds.has(id)) {
+        differences.removed.push(`Equipment: ${id}`);
+      }
+    });
+    
+    // Compare templates
+    ['LV', 'MV', 'HV'].forEach(tier => {
+      const baseTemplates = baseSnapshot.templates?.[tier] || [];
+      const targetTemplates = targetSnapshot.templates?.[tier] || [];
+      
+      baseTemplates.forEach(bt => {
+        const targetT = targetTemplates.find(tt => tt.id === bt.id);
+        if (!targetT) {
+          differences.removed.push(`Template (${tier}): ${bt.name}`);
+        } else if (JSON.stringify(bt.properties) !== JSON.stringify(targetT.properties)) {
+          differences.modified.push({
+            field: `Template (${tier}): ${bt.name}`,
+            oldValue: bt.properties,
+            newValue: targetT.properties
+          });
+        }
+      });
+    });
+    
+    res.json({
+      baseRevision,
+      targetRevision,
+      differences
+    });
+  } catch (error) {
+    console.error('Error comparing revisions:', error);
+    res.status(500).json({ error: 'Failed to compare revisions' });
+  }
+});
+
+/**
+ * GET /api/revisions/compare/export - Export comparison report (PDF or Excel)
+ */
+app.get('/api/revisions/compare/export', async (req, res) => {
+  try {
+    const { base, target, format } = req.query;
+    
+    if (!base || !target || !format) {
+      return res.status(400).json({ error: 'base, target, and format parameters are required' });
+    }
+    
+    // Fetch revisions
+    const baseRevision = await db.collection('revisions').findOne({ _id: new ObjectId(base) });
+    const targetRevision = await db.collection('revisions').findOne({ _id: new ObjectId(target) });
+    
+    if (!baseRevision || !targetRevision) {
+      return res.status(404).json({ error: 'One or both revisions not found' });
+    }
+    
+    // Build comparison data
+    const differences = {
+      added: [],
+      removed: [],
+      modified: []
+    };
+    
+    const baseSnapshot = baseRevision.projectSnapshot;
+    const targetSnapshot = targetRevision.projectSnapshot;
+    
+    // Compare equipments
+    const baseEqIds = new Set((baseSnapshot.equipments || []).map(e => e.id));
+    const targetEqIds = new Set((targetSnapshot.equipments || []).map(e => e.id));
+    
+    targetEqIds.forEach(id => {
+      if (!baseEqIds.has(id)) {
+        differences.added.push(`Equipment: ${id}`);
+      }
+    });
+    
+    baseEqIds.forEach(id => {
+      if (!targetEqIds.has(id)) {
+        differences.removed.push(`Equipment: ${id}`);
+      }
+    });
+    
+    // Compare templates
+    ['LV', 'MV', 'HV'].forEach(tier => {
+      const baseTemplates = baseSnapshot.templates?.[tier] || [];
+      const targetTemplates = targetSnapshot.templates?.[tier] || [];
+      
+      baseTemplates.forEach(bt => {
+        const targetT = targetTemplates.find(tt => tt.id === bt.id);
+        if (!targetT) {
+          differences.removed.push(`Template (${tier}): ${bt.name}`);
+        } else if (JSON.stringify(bt.properties) !== JSON.stringify(targetT.properties)) {
+          differences.modified.push({
+            field: `Template (${tier}): ${bt.name}`,
+            oldValue: bt.properties,
+            newValue: targetT.properties
+          });
+        }
+      });
+    });
+    
+    if (format === 'pdf') {
+      // Generate PDF report
+      const doc = new PDFDocument({ margin: 50 });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="revision_comparison_${baseRevision.revisionNumber}_vs_${targetRevision.revisionNumber}.pdf"`);
+      doc.pipe(res);
+      
+      // Title
+      doc.fontSize(20).text('Revision Comparison Report', { align: 'center' });
+      doc.moveDown();
+      doc.fontSize(12).text(`Project: ${baseSnapshot.projectName}`, { align: 'center' });
+      doc.text(`Base Revision: ${baseRevision.revisionNumber} - ${baseRevision.revisionName}`, { align: 'center' });
+      doc.text(`Target Revision: ${targetRevision.revisionNumber} - ${targetRevision.revisionName}`, { align: 'center' });
+      doc.text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
+      doc.moveDown(2);
+      
+      // Summary
+      doc.fontSize(14).text('Summary', { underline: true });
+      doc.moveDown();
+      doc.fontSize(11).text(`Added Items: ${differences.added.length}`);
+      doc.text(`Removed Items: ${differences.removed.length}`);
+      doc.text(`Modified Items: ${differences.modified.length}`);
+      doc.moveDown(2);
+      
+      // Added section
+      if (differences.added.length > 0) {
+        doc.fontSize(14).text('Added Items', { underline: true });
+        doc.moveDown();
+        differences.added.forEach(item => {
+          doc.fontSize(10).text(`• ${item}`, { bullet: true });
+        });
+        doc.moveDown(2);
+      }
+      
+      // Removed section
+      if (differences.removed.length > 0) {
+        doc.fontSize(14).text('Removed Items', { underline: true });
+        doc.moveDown();
+        differences.removed.forEach(item => {
+          doc.fontSize(10).text(`• ${item}`, { bullet: true });
+        });
+        doc.moveDown(2);
+      }
+      
+      // Modified section
+      if (differences.modified.length > 0) {
+        doc.fontSize(14).text('Modified Items', { underline: true });
+        doc.moveDown();
+        differences.modified.forEach((mod, idx) => {
+          doc.fontSize(10).text(`${idx + 1}. ${mod.field}`, { bold: true });
+          doc.text(`   Old: ${JSON.stringify(mod.oldValue)}`, { continued: false });
+          doc.text(`   New: ${JSON.stringify(mod.newValue)}`);
+          doc.moveDown(0.5);
+        });
+      }
+      
+      doc.end();
+    } else if (format === 'excel') {
+      // Generate Excel report
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Comparison Report');
+      
+      // Title row
+      worksheet.addRow(['Revision Comparison Report']);
+      worksheet.addRow(['Project:', baseSnapshot.projectName]);
+      worksheet.addRow(['Base Revision:', `${baseRevision.revisionNumber} - ${baseRevision.revisionName}`]);
+      worksheet.addRow(['Target Revision:', `${targetRevision.revisionNumber} - ${targetRevision.revisionName}`]);
+      worksheet.addRow(['Generated:', new Date().toLocaleString()]);
+      worksheet.addRow([]);
+      
+      // Summary
+      worksheet.addRow(['Summary']);
+      worksheet.addRow(['Added Items', differences.added.length]);
+      worksheet.addRow(['Removed Items', differences.removed.length]);
+      worksheet.addRow(['Modified Items', differences.modified.length]);
+      worksheet.addRow([]);
+      
+      // Added items
+      worksheet.addRow(['Added Items']);
+      differences.added.forEach(item => {
+        worksheet.addRow([item]);
+      });
+      worksheet.addRow([]);
+      
+      // Removed items
+      worksheet.addRow(['Removed Items']);
+      differences.removed.forEach(item => {
+        worksheet.addRow([item]);
+      });
+      worksheet.addRow([]);
+      
+      // Modified items
+      worksheet.addRow(['Modified Items']);
+      worksheet.addRow(['Field', 'Old Value', 'New Value']);
+      differences.modified.forEach(mod => {
+        worksheet.addRow([mod.field, JSON.stringify(mod.oldValue), JSON.stringify(mod.newValue)]);
+      });
+      
+      // Set headers
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="revision_comparison_${baseRevision.revisionNumber}_vs_${targetRevision.revisionNumber}.xlsx"`);
+      
+      await workbook.xlsx.write(res);
+      res.end();
+    } else {
+      return res.status(400).json({ error: 'Invalid format. Use "pdf" or "excel"' });
+    }
+  } catch (error) {
+    console.error('Error exporting comparison:', error);
+    res.status(500).json({ error: 'Failed to export comparison' });
+  }
+});
+
+// ============================================
 // Server Startup
 // ============================================
 async function startServer() {
@@ -1485,6 +1854,9 @@ async function startServer() {
     console.log(`   Projects: http://localhost:${PORT}/api/tpms/projects`);
     console.log(`   Scopes: http://localhost:${PORT}/api/tpms/scopes/:projectId`);
     console.log(`   Revisions: http://localhost:${PORT}/api/tpms/revisions/:scopeId`);
+    console.log(`\n🔄 Revision Management:`);
+    console.log(`   Revisions: http://localhost:${PORT}/api/projects/:projectId/revisions`);
+    console.log(`   Compare: http://localhost:${PORT}/api/revisions/compare?base=&target=`);
   });
 }
 
