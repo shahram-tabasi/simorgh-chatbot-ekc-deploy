@@ -20,6 +20,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const [selectedRevision, setSelectedRevision] = useState<Revision | null>(null);
   const [showRevisionDropdown, setShowRevisionDropdown] = useState(false);
   const [selectedProjectForRevision, setSelectedProjectForRevision] = useState<ProjectData | null>(null);
+  const [showRevisionSelector, setShowRevisionSelector] = useState(false);
 
   useEffect(() => {
     loadProjects();
@@ -43,23 +44,56 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       setRevisions(revisionsData);
       if (revisionsData.length > 0) {
         setSelectedRevision(revisionsData[0]); // Default to latest (first after sort)
+      } else {
+        setSelectedRevision(null);
       }
     } catch (err) {
       console.error('Failed to load revisions:', err);
+      setRevisions([]);
+      setSelectedRevision(null);
     }
   };
 
   const handleProjectClick = async (project: ProjectData) => {
     setSelectedProjectForRevision(project);
     await loadRevisions(project._id!);
-    setShowRevisionDropdown(true);
+    setShowRevisionSelector(true);
   };
 
   const handleConfirmSelect = () => {
     if (selectedProjectForRevision) {
       onProjectSelect(selectedProjectForRevision, selectedRevision || undefined);
-      setShowRevisionDropdown(false);
+      setShowRevisionSelector(false);
       setSelectedProjectForRevision(null);
+    }
+  };
+
+  const handleCreateRevision = async () => {
+    if (!selectedProjectForRevision) return;
+    
+    const revisionNumber = prompt('Enter revision number (e.g., 0, 1, 2):', '0');
+    if (!revisionNumber) return;
+    
+    const revisionName = prompt('Enter revision name:', `Revision ${revisionNumber}`);
+    if (!revisionName) return;
+    
+    const description = prompt('Enter revision description:', 'Initial revision');
+    
+    try {
+      const newRevision = await projectService.createRevision({
+        projectId: selectedProjectForRevision._id!,
+        revisionNumber,
+        revisionName: revisionName || `Revision ${revisionNumber}`,
+        description: description || '',
+        createdBy: 'user',
+        projectSnapshot: selectedProjectForRevision,
+        isLocked: false,
+      });
+      
+      alert(`✅ Revision ${revisionNumber} created successfully!`);
+      await loadRevisions(selectedProjectForRevision._id!);
+    } catch (err) {
+      alert('❌ Failed to create revision: ' + (err as Error).message);
     }
   };
 
@@ -202,18 +236,26 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       </div>
 
       {/* Revision Selection Modal */}
-      {showRevisionDropdown && selectedProjectForRevision && (
+      {showRevisionSelector && selectedProjectForRevision && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl w-[500px] max-h-[80vh] flex flex-col">
-            <div className="px-6 py-4 border-b">
-              <h3 className="font-semibold text-lg">Select Revision for "{selectedProjectForRevision.projectName}"</h3>
-              <p className="text-xs text-gray-500 mt-1">Choose which version of this project to open</p>
+          <div className="bg-white rounded-lg shadow-2xl w-[600px] max-h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-lg">Select Revision for "{selectedProjectForRevision.projectName}"</h3>
+                <p className="text-xs text-gray-500 mt-1">Choose which version of this project to open</p>
+              </div>
+              <button
+                className="px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 font-medium"
+                onClick={handleCreateRevision}
+              >
+                + New Revision
+              </button>
             </div>
             
             <div className="flex-1 overflow-y-auto px-6 py-4">
               {revisions.length === 0 ? (
                 <div className="text-center py-8 text-gray-500 text-sm">
-                  No revisions available. Opening the current project.
+                  No revisions available. Create a new revision or open the current project.
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -249,22 +291,24 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
               )}
             </div>
 
-            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+            <div className="flex justify-between items-center px-6 py-4 border-t bg-gray-50">
               <button
                 className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
                 onClick={() => {
-                  setShowRevisionDropdown(false);
+                  setShowRevisionSelector(false);
                   setSelectedProjectForRevision(null);
                 }}
               >
                 Cancel
               </button>
-              <button
-                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
-                onClick={handleConfirmSelect}
-              >
-                Open Selected Revision
-              </button>
+              <div className="flex gap-2">
+                <button
+                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                  onClick={handleConfirmSelect}
+                >
+                  Open Selected Revision
+                </button>
+              </div>
             </div>
           </div>
         </div>

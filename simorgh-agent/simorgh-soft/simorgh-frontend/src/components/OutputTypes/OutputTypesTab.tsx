@@ -930,7 +930,7 @@ export const OutputTypesTab: React.FC = () => {
           <p className="text-sm text-gray-500 mt-0.5">{projectData.projectName}</p>
         </div>
         {/* Export Buttons */}
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
           <button
             disabled={!!downloading}
             onClick={() => trigger('xlsx', () => exportExcel(projectData))}
@@ -960,6 +960,13 @@ export const OutputTypesTab: React.FC = () => {
               ? <span className="animate-spin">⏳</span>
               : <FileCode2Icon className="w-4 h-4" />}
             HTML Report
+          </button>
+          <div className="h-8 w-px bg-gray-300 mx-1"></div>
+          <button
+            onClick={() => setShowCompareModal(true)}
+            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm font-medium text-sm transition-colors"
+          >
+            🔄 Compare Revisions
           </button>
         </div>
       </div>
@@ -1116,6 +1123,75 @@ export const OutputTypesTab: React.FC = () => {
         <DownloadIcon className="w-3.5 h-3.5 ml-2" />
         HTML report includes a "Print / Save as PDF" button for browser-based PDF export.
       </div>
+
+      {/* Compare Revisions Modal */}
+      {showCompareModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-[700px] max-h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b">
+              <h3 className="font-semibold text-lg">Compare Revisions</h3>
+              <p className="text-xs text-gray-500 mt-1">Select two revisions to compare and generate PDF/Excel reports</p>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Base Revision (Reference)</label>
+                <select
+                  value={compareBaseRevision}
+                  onChange={(e) => setCompareBaseRevision(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                >
+                  <option value="">Select base revision...</option>
+                  {/* Revisions will be populated dynamically */}
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Target Revision (To Compare)</label>
+                <select
+                  value={compareTargetRevision}
+                  onChange={(e) => setCompareTargetRevision(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                >
+                  <option value="">Select target revision...</option>
+                  {/* Revisions will be populated dynamically */}
+                </select>
+              </div>
+              
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p className="text-sm text-blue-800">
+                  <strong>Note:</strong> Comparison will generate both PDF and Excel reports showing:
+                </p>
+                <ul className="text-sm text-blue-700 mt-2 list-disc list-inside space-y-1">
+                  <li>Added equipment/templates</li>
+                  <li>Removed equipment/templates</li>
+                  <li>Modified properties with old/new values</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+              <button
+                className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
+                onClick={() => {
+                  setShowCompareModal(false);
+                  setCompareBaseRevision('');
+                  setCompareTargetRevision('');
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                disabled={!compareBaseRevision || !compareTargetRevision}
+                onClick={handleCompareRevisions}
+              >
+                Generate Reports (PDF + Excel)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
