@@ -377,8 +377,25 @@ const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
                   <DetailRow label="Designation 3" value={selectedPart.Designation3} />
                   <DetailRow label="Manufacturer" value={selectedPart.Manufacturer} highlight />
                   <DetailRow label="Supplier" value={selectedPart.Supplier} />
-                  <DetailRow label="Order number" value={selectedPart.OrderNumber} />
-                  <DetailRow label="Description" value={selectedPart.Description} multiline />
+                  
+                  {/* Eplanix section with Order Number */}
+                  <div className="mt-4 border-t pt-3">
+                    <div className="text-sm font-semibold text-gray-700 mb-2">Eplanix</div>
+                    <DetailRow label="Order Number" value={selectedPart.OrderNumber} />
+                    {/* Show Designation 3 if OrderNumber is empty, "-", or "_" */}
+                    {(!selectedPart.OrderNumber || 
+                      selectedPart.OrderNumber === '-' || 
+                      selectedPart.OrderNumber === '_' || 
+                      selectedPart.OrderNumber.trim() === '') && (
+                      <DetailRow label="Designation 3" value={selectedPart.Designation3} />
+                    )}
+                  </div>
+                  
+                  {/* Description from SQL Server */}
+                  <div className="mt-4 border-t pt-3">
+                    <div className="text-sm font-semibold text-gray-700 mb-2">Description</div>
+                    <DetailRow label="" value={selectedPart.Description} multiline />
+                  </div>
                 </div>
               </div>
             ) : (
@@ -476,7 +493,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   }, [template]);
 
   // ── LV property layout (per spec) ──────────────────────────────────────────
-  // Fixed rows (cannot be renamed)
+  // All LV rows are now renamable (user can edit all property names)
   const lvFixed = [
     'CB ORDER',          // first row → auto-label "Q" when a part is added
     'ACCESSORY',
@@ -502,6 +519,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   const lvExtendedSpares  = ['SPARE 4', 'SPARE 5', 'SPARE 6', 'SPARE 7'];
 
   // ── MV property layout (per spec) ──────────────────────────────────────────
+  // All MV rows are now renamable (user can edit all property names)
   const mvFixed = [
     'VCB OR VC/FUSE',    // first row → auto-label "Q" when a part is added
     'ACCESSORY',
@@ -754,6 +772,12 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-20">
                 Priority
               </th>
+              <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-32">
+                Eplanix
+              </th>
+              <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-40">
+                Description
+              </th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-12">
                 Del
               </th>
@@ -772,7 +796,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               const manufacturerLabel = manufacturers.join(' / ');
 
               const displayLabel = getDisplayName(property);
-              const isRenamable  = renamableSpares.includes(property) || extendedSpares.includes(property);
+              // For LV and MV, all rows are renamable (including fixed rows)
+              const isRenamable  = template.type === 'LV' || template.type === 'MV';
               const isExtended   = extendedSpares.includes(property);
               const isLocked     = isRowLocked(property);
               const isEnabled    = !isLocked && (!isExtended || isExtendedEnabled(property));
@@ -933,6 +958,33 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                               handleUpdatePart(property, partIndex, 'priority', parseInt(e.target.value) || 1)
                             }
                             min="1"
+                          />
+                        </td>
+                        {/* Eplanix column: OrderNumber or Designation3 */}
+                        <td className="px-4 py-2 border-b">
+                          <input
+                            type="text"
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-blue-50"
+                            value={
+                              (part.fullData?.OrderNumber && 
+                               part.fullData.OrderNumber !== '-' && 
+                               part.fullData.OrderNumber !== '_' && 
+                               part.fullData.OrderNumber.trim() !== '') 
+                                ? part.fullData.OrderNumber 
+                                : (part.fullData?.Designation3 || '')
+                            }
+                            readOnly
+                            title="Eplanix (Order Number or Designation 3)"
+                          />
+                        </td>
+                        {/* Description column from SQL Server */}
+                        <td className="px-4 py-2 border-b">
+                          <input
+                            type="text"
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-gray-50"
+                            value={part.fullData?.Description || ''}
+                            readOnly
+                            title="Description from SQL Server"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">
