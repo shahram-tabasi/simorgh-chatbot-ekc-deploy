@@ -5,7 +5,8 @@ import {
   FileSpreadsheetIcon, FileTextIcon, FileCode2Icon,
   DownloadIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon
 } from 'lucide-react';
-import { ProjectData } from '../../types/project';
+import { ProjectData, Revision } from '../../types/project';
+import { projectService } from '../../services/projectService';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
 const DEVICE_PROP_LABELS: Record<string, string> = {
@@ -846,6 +847,33 @@ export const OutputTypesTab: React.FC = () => {
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [compareBaseRevision, setCompareBaseRevision] = useState<string>('');
   const [compareTargetRevision, setCompareTargetRevision] = useState<string>('');
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [compareDeviceType, setCompareDeviceType] = useState<'LV' | 'MV' | 'Total'>('Total');
+  const [loadingRevisions, setLoadingRevisions] = useState(false);
+
+  // Load revisions on mount
+  React.useEffect(() => {
+    loadRevisions();
+  }, []);
+
+  const loadRevisions = async () => {
+    if (!projectData._id) return;
+    try {
+      setLoadingRevisions(true);
+      const revisionsData = await projectService.getRevisions(projectData._id!);
+      setRevisions(revisionsData);
+      if (revisionsData.length > 0) {
+        setCompareBaseRevision(revisionsData[0]._id!);
+        if (revisionsData.length > 1) {
+          setCompareTargetRevision(revisionsData[1]._id!);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load revisions:', err);
+    } finally {
+      setLoadingRevisions(false);
+    }
+  };
 
   const trigger = async (key: string, fn: () => void) => {
     setDownloading(key);
@@ -1134,15 +1162,34 @@ export const OutputTypesTab: React.FC = () => {
             </div>
             
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {/* Device Type Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
+                <select
+                  value={compareDeviceType}
+                  onChange={(e) => setCompareDeviceType(e.target.value as 'LV' | 'MV' | 'Total')}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                >
+                  <option value="Total">Total (All Devices)</option>
+                  <option value="LV">LV Devices</option>
+                  <option value="MV">MV Devices</option>
+                </select>
+              </div>
+              
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Base Revision (Reference)</label>
                 <select
                   value={compareBaseRevision}
                   onChange={(e) => setCompareBaseRevision(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                  disabled={loadingRevisions}
                 >
                   <option value="">Select base revision...</option>
-                  {/* Revisions will be populated dynamically */}
+                  {revisions.map((rev, idx) => (
+                    <option key={rev._id || idx} value={rev._id}>
+                      Revision {rev.revisionNumber}: {rev.revisionName}
+                    </option>
+                  ))}
                 </select>
               </div>
               
@@ -1152,9 +1199,14 @@ export const OutputTypesTab: React.FC = () => {
                   value={compareTargetRevision}
                   onChange={(e) => setCompareTargetRevision(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                  disabled={loadingRevisions}
                 >
                   <option value="">Select target revision...</option>
-                  {/* Revisions will be populated dynamically */}
+                  {revisions.map((rev, idx) => (
+                    <option key={rev._id || idx} value={rev._id}>
+                      Revision {rev.revisionNumber}: {rev.revisionName}
+                    </option>
+                  ))}
                 </select>
               </div>
               
