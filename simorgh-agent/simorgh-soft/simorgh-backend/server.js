@@ -151,12 +151,61 @@ app.get('/api/projects', async (req, res) => {
   }
 });
 
+// Search projects by name or description
+app.get('/api/projects/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) {
+      return res.json([]);
+    }
+    const projects = await db.collection('projects')
+      .find({
+        $or: [
+          { projectName: { $regex: q, $options: 'i' } },
+          { projectDescription: { $regex: q, $options: 'i' } }
+        ]
+      })
+      .toArray();
+    res.json(projects);
+  } catch (error) {
+    console.error('Error searching projects:', error);
+    res.status(500).json({ error: 'Failed to search projects' });
+  }
+});
+
+// Get project by exact name
+app.get('/api/projects/name/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const project = await db.collection('projects').findOne({ 
+      projectName: { $regex: new RegExp('^' + name + '$', 'i') } 
+    });
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json(project);
+  } catch (error) {
+    console.error('Error fetching project by name:', error);
+    res.status(500).json({ error: 'Failed to fetch project by name' });
+  }
+});
+
 app.post('/api/projects', async (req, res) => {
   try {
+    // Check if project with same name already exists
+    const existing = await db.collection('projects').findOne({
+      projectName: { $regex: new RegExp('^' + req.body.projectName + '$', 'i') }
+    });
+    
+    if (existing) {
+      return res.status(409).json({ error: 'Project with this name already exists' });
+    }
+    
     const projectData = { ...req.body, createdOn: new Date().toISOString(), changedOn: new Date().toISOString() };
     const result = await db.collection('projects').insertOne(projectData);
     res.status(201).json({ _id: result.insertedId, ...projectData });
   } catch (error) {
+    console.error('Error creating project:', error);
     res.status(500).json({ error: 'Failed to create project' });
   }
 });
