@@ -57,15 +57,25 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
       return;
     }
 
-    const revisionNumber = prompt('Enter revision number (starts from 0):', '0');
-    if (!revisionNumber) return;
-
-    const revisionName = prompt('Enter revision name:', `Revision ${revisionNumber}`);
-    if (!revisionName) return;
-
-    const description = prompt('Enter revision description:', 'New revision');
-
     try {
+      // Get existing revisions to determine next revision number
+      const existingRevisions = await projectService.getRevisions(projectData._id!);
+      
+      // Find the highest revision number and increment
+      let nextRevisionNum = 0;
+      if (existingRevisions.length > 0) {
+        const maxRev = Math.max(...existingRevisions.map(r => parseInt(r.revisionNumber) || 0));
+        nextRevisionNum = maxRev + 1;
+      }
+      
+      const revisionNumber = prompt('Enter revision number:', nextRevisionNum.toString());
+      if (!revisionNumber) return;
+
+      const revisionName = prompt('Enter revision name:', `Revision ${revisionNumber}`);
+      if (!revisionName) return;
+
+      const description = prompt('Enter revision description:', 'New revision');
+
       const newRevision = await projectService.createRevision({
         projectId: projectData._id!,
         revisionNumber,
@@ -94,8 +104,28 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
       // Load the selected revision's project snapshot
       // In a real implementation, you would reload the project with the snapshot data
       setCurrentRevision(revision);
-      alert(`Switched to Revision ${revision.revisionNumber}: ${revision.revisionName}`);
+      
+      // Show warning if trying to edit an old revision
+      const latestRevision = revisions.length > 0 ? revisions[0] : null;
+      if (latestRevision && revision._id !== latestRevision._id) {
+        const shouldProceed = confirm(
+          `⚠️ Warning: You are switching to an older revision (R${revision.revisionNumber}).\n\n` +
+          `Any changes you make will be based on this older version.\n` +
+          `To preserve the current latest revision (R${latestRevision.revisionNumber}), ` +
+          `consider creating a new revision instead.\n\n` +
+          `Do you want to proceed?`
+        );
+        if (!shouldProceed) {
+          setShowRevisionModal(false);
+          return;
+        }
+      }
+      
+      alert(`✅ Switched to Revision ${revision.revisionNumber}: ${revision.revisionName}`);
       setShowRevisionModal(false);
+      
+      // TODO: Reload project data from revision snapshot
+      // This would require calling a parent callback to reload the project
     } catch (err) {
       alert('❌ Failed to switch revision: ' + (err as Error).message);
     }

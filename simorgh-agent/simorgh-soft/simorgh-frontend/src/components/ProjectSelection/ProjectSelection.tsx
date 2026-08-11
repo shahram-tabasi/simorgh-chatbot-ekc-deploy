@@ -71,15 +71,25 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const handleCreateRevision = async () => {
     if (!selectedProjectForRevision) return;
     
-    const revisionNumber = prompt('Enter revision number (e.g., 0, 1, 2):', '0');
-    if (!revisionNumber) return;
-    
-    const revisionName = prompt('Enter revision name:', `Revision ${revisionNumber}`);
-    if (!revisionName) return;
-    
-    const description = prompt('Enter revision description:', 'Initial revision');
-    
     try {
+      // Get existing revisions to determine next revision number
+      const existingRevisions = await projectService.getRevisions(selectedProjectForRevision._id!);
+      
+      // Find the highest revision number and increment
+      let nextRevisionNum = 0;
+      if (existingRevisions.length > 0) {
+        const maxRev = Math.max(...existingRevisions.map(r => parseInt(r.revisionNumber) || 0));
+        nextRevisionNum = maxRev + 1;
+      }
+      
+      const revisionNumber = prompt('Enter revision number:', nextRevisionNum.toString());
+      if (!revisionNumber) return;
+      
+      const revisionName = prompt('Enter revision name:', `Revision ${revisionNumber}`);
+      if (!revisionName) return;
+      
+      const description = prompt('Enter revision description:', 'New revision');
+      
       const newRevision = await projectService.createRevision({
         projectId: selectedProjectForRevision._id!,
         revisionNumber,
