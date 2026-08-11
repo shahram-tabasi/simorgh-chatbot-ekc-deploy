@@ -843,6 +843,9 @@ export const OutputTypesTab: React.FC = () => {
   const { projectData } = useProject();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['project', 'tech', 'devices', 'equipment']));
+  const [showCompareModal, setShowCompareModal] = useState(false);
+  const [compareBaseRevision, setCompareBaseRevision] = useState<string>('');
+  const [compareTargetRevision, setCompareTargetRevision] = useState<string>('');
 
   const trigger = async (key: string, fn: () => void) => {
     setDownloading(key);
@@ -861,6 +864,37 @@ export const OutputTypesTab: React.FC = () => {
   const devices = [...(lib?.LV ?? []), ...(lib?.MV ?? []), ...(lib?.HV ?? [])];
   const eqs     = projectData.equipments ?? [];
   const rowTotal = eqs.reduce((s, eq) => s + (eq.devices?.length ?? 0), 0);
+
+  const handleCompareRevisions = async () => {
+    if (!compareBaseRevision || !compareTargetRevision) {
+      alert('Please select both base and target revisions.');
+      return;
+    }
+    
+    try {
+      // Download PDF comparison
+      const pdfBlob = await projectService.exportComparisonReport(compareBaseRevision, compareTargetRevision, 'pdf');
+      const pdfUrl = URL.createObjectURL(pdfBlob);
+      const pdfLink = document.createElement('a');
+      pdfLink.href = pdfUrl;
+      pdfLink.download = `revision_comparison_${compareBaseRevision}_${compareTargetRevision}.pdf`;
+      pdfLink.click();
+      
+      // Download Excel comparison
+      const excelBlob = await projectService.exportComparisonReport(compareBaseRevision, compareTargetRevision, 'excel');
+      const excelUrl = URL.createObjectURL(excelBlob);
+      const excelLink = document.createElement('a');
+      excelLink.href = excelUrl;
+      excelLink.download = `revision_comparison_${compareBaseRevision}_${compareTargetRevision}.xlsx`;
+      excelLink.click();
+      
+      setShowCompareModal(false);
+      alert('✅ Comparison reports downloaded successfully!');
+    } catch (error) {
+      console.error('Failed to export comparison:', error);
+      alert('❌ Failed to generate comparison reports. Please try again.');
+    }
+  };
 
   const Section: React.FC<{ id: string; title: string; badge: string; color: string; children: React.ReactNode }> = ({ id, title, badge, color, children }) => {
     const open = expandedSections.has(id);

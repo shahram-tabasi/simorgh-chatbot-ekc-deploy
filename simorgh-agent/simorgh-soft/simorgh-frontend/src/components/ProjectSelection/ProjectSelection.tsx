@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ProjectData } from '../../types/project';
+import { ProjectData, Revision } from '../../types/project';
 import { projectService } from '../../services/projectService';
 import simorghLogo from '../../assets/simrgh.jpg';
 
 interface ProjectSelectionProps {
-  onProjectSelect: (project: ProjectData) => void;
+  onProjectSelect: (project: ProjectData, revision?: Revision) => void;
   onNewProject:    (projectName: string) => void;
 }
 
@@ -16,6 +16,10 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [selectedRevision, setSelectedRevision] = useState<Revision | null>(null);
+  const [showRevisionDropdown, setShowRevisionDropdown] = useState(false);
+  const [selectedProjectForRevision, setSelectedProjectForRevision] = useState<ProjectData | null>(null);
 
   useEffect(() => {
     loadProjects();
@@ -30,6 +34,32 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       setError('Failed to load projects');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadRevisions = async (projectId: string) => {
+    try {
+      const revisionsData = await projectService.getRevisions(projectId);
+      setRevisions(revisionsData);
+      if (revisionsData.length > 0) {
+        setSelectedRevision(revisionsData[0]); // Default to latest (first after sort)
+      }
+    } catch (err) {
+      console.error('Failed to load revisions:', err);
+    }
+  };
+
+  const handleProjectClick = async (project: ProjectData) => {
+    setSelectedProjectForRevision(project);
+    await loadRevisions(project._id!);
+    setShowRevisionDropdown(true);
+  };
+
+  const handleConfirmSelect = () => {
+    if (selectedProjectForRevision) {
+      onProjectSelect(selectedProjectForRevision, selectedRevision || undefined);
+      setShowRevisionDropdown(false);
+      setSelectedProjectForRevision(null);
     }
   };
 
@@ -145,7 +175,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                 <li
                   key={project._id}
                   className="flex items-center justify-between px-5 py-4 hover:bg-blue-50 cursor-pointer transition-colors group"
-                  onClick={() => onProjectSelect(project)}
+                  onClick={() => handleProjectClick(project)}
                 >
                   <div className="min-w-0">
                     <p className="font-medium text-blue-900 truncate">{project.projectName}</p>
@@ -170,6 +200,75 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
           )}
         </div>
       </div>
+
+      {/* Revision Selection Modal */}
+      {showRevisionDropdown && selectedProjectForRevision && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-[500px] max-h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b">
+              <h3 className="font-semibold text-lg">Select Revision for "{selectedProjectForRevision.projectName}"</h3>
+              <p className="text-xs text-gray-500 mt-1">Choose which version of this project to open</p>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {revisions.length === 0 ? (
+                <div className="text-center py-8 text-gray-500 text-sm">
+                  No revisions available. Opening the current project.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {revisions.map((revision, idx) => (
+                    <div
+                      key={revision._id || idx}
+                      className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                        selectedRevision?._id === revision._id
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 hover:bg-gray-50'
+                      }`}
+                      onClick={() => setSelectedRevision(revision)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-800">
+                            Revision {revision.revisionNumber}: {revision.revisionName}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">{revision.description}</p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Created: {new Date(revision.createdOn).toLocaleString()}
+                          </p>
+                        </div>
+                        {revision.isLocked && (
+                          <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
+                            🔒 Locked
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+              <button
+                className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
+                onClick={() => {
+                  setShowRevisionDropdown(false);
+                  setSelectedProjectForRevision(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                onClick={handleConfirmSelect}
+              >
+                Open Selected Revision
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

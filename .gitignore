@@ -2,42 +2,52 @@
 # Dependencies
 node_modules/
 
+# Build artifacts
+dist/
+build/
+*.js
+*.ts
+*.tsx
+
 # Environment
 .env
 .env.local
 .env.*
 
-# Logs and temp files
-*.log
-*.tmp
-
 # Editors
 .vscode/
 .idea/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-venv/
-.venv/
-.env
 
-# Build outputs
-dist/
-build/
-coverage/
-htmlcov/
-*.out
+# Compiled
+*.o
+*.obj
 *.exe
 *.dll
 *.so
 *.a
-*.obj
+*.out
 
-# System files
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# System
 .DS_Store
 Thumbs.db
+
+# Testing
+.mypy_cache/
+.pytest_cache/
 ```

@@ -39,7 +39,12 @@ const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
 };
 
 // کامپوننت MenuBar
-const MenuBar: React.FC<{ onShowProjectSelection: () => void }> = ({ onShowProjectSelection }) => {
+interface MenuBarProps {
+  onShowProjectSelection: () => void;
+  onCreateNewRevision: () => void;
+  currentRevision?: string;
+}
+const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, currentRevision }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const { projectData, saveProject } = useProject();
@@ -110,6 +115,9 @@ const MenuBar: React.FC<{ onShowProjectSelection: () => void }> = ({ onShowProje
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleSave}>
                   💾 Save
+                </button>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={onCreateNewRevision}>
+                  📝 Create Revision
                 </button>
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleExport}>
@@ -198,6 +206,9 @@ const MenuBar: React.FC<{ onShowProjectSelection: () => void }> = ({ onShowProje
             <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
             Project: <strong className="ml-1 text-white">{projectData.projectName}</strong>
           </span>
+          {currentRevision && (
+            <span>Revision: <strong className="text-blue-300">{currentRevision}</strong></span>
+          )}
           <span>Standard: <strong>{projectData.standard}</strong></span>
           <span>Last saved: <strong>{new Date(projectData.changedOn).toLocaleTimeString()}</strong></span>
         </div>
@@ -288,10 +299,20 @@ const MainApp: React.FC = () => {
   // the viewport. Without this the chatbot's `flex-1 overflow-y-auto`
   // message list grows past the viewport and ends up scrolling the
   // document instead of staying inside its own column.
+  const [currentRevision, setCurrentRevision] = useState<string | undefined>(undefined);
+
+  const handleCreateNewRevision = () => {
+    alert('📝 Create Revision feature coming soon!\n\nThis will save a snapshot of the current project state as a new revision.');
+  };
+
   return (
     <div className="flex flex-col w-full h-screen overflow-hidden bg-gray-100">
       {/* Menu Bar */}
-      <MenuBar onShowProjectSelection={() => window.location.reload()} />
+      <MenuBar 
+        onShowProjectSelection={() => window.location.reload()} 
+        onCreateNewRevision={handleCreateNewRevision}
+        currentRevision={currentRevision}
+      />
       
       {/* Header */}
       <div className="bg-white shadow-md">
@@ -384,8 +405,13 @@ export function App() {
     return () => { cancelled = true; };
   }, [initialPidFromUrl]);
 
-  const handleProjectSelect = (project: any) => {
-    setCurrentProject(project);
+  const handleProjectSelect = (project: any, revision?: any) => {
+    // If a revision is selected, load the project snapshot from that revision
+    if (revision && revision.projectSnapshot) {
+      setCurrentProject(revision.projectSnapshot);
+    } else {
+      setCurrentProject(project);
+    }
     setShowProjectSelection(false);
   };
 
