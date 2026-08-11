@@ -331,7 +331,8 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       // Auto-create Revision 0 if no revisions exist
       if (revisionsData.length === 0 && pid) {
         console.log('No revisions found, creating Revision 0...');
-        await createRevisionForProject(pid, 'Initial', 'Base revision created automatically');
+        const rev0 = await createRevisionForProject(pid, 'Initial', 'Base revision created automatically');
+        setCurrentRevision(rev0);
       } else if (revisionsData.length > 0 && !currentRevision) {
         // Set current revision to latest (first after sort by revisionNumber desc)
         setCurrentRevision(revisionsData[0]);
@@ -365,6 +366,8 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     
     // Reload revisions and set new one as current
     await loadRevisions(pid);
+    // currentRevision will be set by loadRevisions -> it's already the first in list
+    // But we explicitly set it here to ensure it's the newly created one
     setCurrentRevision(newRevision);
     return newRevision;
   };
@@ -386,6 +389,8 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     if (revision.projectSnapshot) {
       setProjectData({ ...defaultProjectData, ...revision.projectSnapshot });
       setCurrentRevision(revision);
+      // Update project ID to ensure consistency
+      setProjectId(revision.projectId);
     }
   };
 

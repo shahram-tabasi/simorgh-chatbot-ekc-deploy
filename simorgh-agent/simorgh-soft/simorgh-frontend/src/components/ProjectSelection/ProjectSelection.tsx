@@ -78,7 +78,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     }
   };
 
-  const openCreateRevisionModal = () => {
+  const openCreateRevisionModal = async () => {
     if (!selectedProjectForRevision) return;
     
     // Calculate next revision number automatically
@@ -114,7 +114,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       setSelectedRevision(newRevision);
       setShowCreateRevisionModal(false);
     } catch (err) {
-      alert('❌ Failed to create revision: ' + (err as Error).message);
+      console.error('Failed to create revision:', err);
+      throw err; // Re-throw so caller can handle error display
     } finally {
       setCreatingRevision(false);
     }
@@ -268,10 +269,11 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                 <p className="text-xs text-gray-500 mt-1">Choose which version of this project to open</p>
               </div>
               <button
-                className="px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 font-medium"
+                className="px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={openCreateRevisionModal}
+                disabled={creatingRevision}
               >
-                + New Revision
+                {creatingRevision ? 'Creating...' : '+ New Revision'}
               </button>
             </div>
             

@@ -28,6 +28,11 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [currentRevision, setCurrentRevision] = useState<Revision | null>(null);
   const [showRevisionModal, setShowRevisionModal] = useState(false);
+  const [showCreateRevisionModal, setShowCreateRevisionModal] = useState(false);
+  const [newRevisionNumber, setNewRevisionNumber] = useState<string>('0');
+  const [newRevisionName, setNewRevisionName] = useState<string>('');
+  const [newRevisionDescription, setNewRevisionDescription] = useState<string>('');
+  const [creatingRevision, setCreatingRevision] = useState(false);
 
   useClickOutside(menuRef, () => setActiveMenu(null));
 
@@ -68,29 +73,42 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
         nextRevisionNum = maxRev + 1;
       }
       
-      const revisionNumber = prompt('Enter revision number:', nextRevisionNum.toString());
-      if (!revisionNumber) return;
+      // Open modal instead of prompts
+      setNewRevisionNumber(nextRevisionNum.toString());
+      setNewRevisionName(`Revision ${nextRevisionNum}`);
+      setNewRevisionDescription('');
+      setShowCreateRevisionModal(true);
+      setActiveMenu(null);
+    } catch (err) {
+      console.error('Failed to prepare revision creation:', err);
+    }
+  };
 
-      const revisionName = prompt('Enter revision name:', `Revision ${revisionNumber}`);
-      if (!revisionName) return;
+  const handleConfirmCreateRevision = async () => {
+    if (!projectData._id) return;
 
-      const description = prompt('Enter revision description:', 'New revision');
-
+    setCreatingRevision(true);
+    try {
       const newRevision = await projectService.createRevision({
         projectId: projectData._id!,
-        revisionNumber,
-        revisionName: revisionName || `Revision ${revisionNumber}`,
-        description: description || '',
+        revisionNumber: newRevisionNumber,
+        revisionName: newRevisionName || `Revision ${newRevisionNumber}`,
+        description: newRevisionDescription || '',
         createdBy: 'user',
         projectSnapshot: projectData,
         isLocked: false,
       });
 
-      alert(`✅ Revision ${revisionNumber} created successfully!`);
-      await loadRevisions(projectData._id!);
-      setActiveMenu(null);
+      // Reload revisions and update current revision
+      const revisionsData = await projectService.getRevisions(projectData._id!);
+      setRevisions(revisionsData);
+      setCurrentRevision(newRevision);
+      setShowCreateRevisionModal(false);
     } catch (err) {
-      alert('❌ Failed to create revision: ' + (err as Error).message);
+      console.error('Failed to create revision:', err);
+      throw err;
+    } finally {
+      setCreatingRevision(false);
     }
   };
 
@@ -475,34 +493,47 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {revisions.map((revision, idx) => (
-                    <div
-                      key={revision._id || idx}
-                      className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                        currentRevision?._id === revision._id
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:bg-gray-50'
-                      }`}
-                      onClick={() => handleSelectRevision(revision)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-gray-800">
-                            Revision {revision.revisionNumber}: {revision.revisionName}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">{revision.description}</p>
-                          <p className="text-xs text-gray-400 mt-1">
-                            Created: {new Date(revision.createdOn).toLocaleString()}
-                          </p>
+                  {revisions.map((revision, idx) => {
+                    const isLatest = idx === 0;
+                    const isBase = parseInt(revision.revisionNumber) === 0;
+                    return (
+                      <div
+                        key={revision._id || idx}
+                        className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                          currentRevision?._id === revision._id
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:bg-gray-50'
+                        }`}
+                        onClick={() => handleSelectRevision(revision)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium text-gray-800">
+                                REV {revision.revisionNumber}
+                              </p>
+                              {isLatest && (
+                                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded font-medium">LATEST</span>
+                              )}
+                              {isBase && (
+                                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">BASE</span>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-700 mt-0.5">{revision.revisionName}</p>
+                            <p className="text-xs text-gray-500 mt-1">{revision.description}</p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              Created: {new Date(revision.createdOn).toLocaleString()}
+                            </p>
+                          </div>
+                          {revision.isLocked && (
+                            <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
+                              🔒 Locked
+                            </span>
+                          )}
                         </div>
-                        {revision.isLocked && (
-                          <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
-                            🔒 Locked
-                          </span>
-                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -515,6 +546,77 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
                 }}
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Revision Modal */}
+      {showCreateRevisionModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-[500px] flex flex-col">
+            <div className="px-6 py-4 border-b">
+              <h3 className="font-semibold text-lg">Create New Revision</h3>
+              <p className="text-xs text-gray-500 mt-1">Create a new revision for "{projectData.projectName}"</p>
+            </div>
+            
+            <div className="px-6 py-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
+                <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded text-sm text-gray-600">
+                  {projectData.projectName}
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Revision Number</label>
+                <input
+                  type="text"
+                  value={newRevisionNumber}
+                  readOnly
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">Automatically calculated as the next revision number</p>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Revision Name</label>
+                <input
+                  type="text"
+                  value={newRevisionName}
+                  onChange={(e) => setNewRevisionName(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                  placeholder="e.g., Electrical design update"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
+                <textarea
+                  value={newRevisionDescription}
+                  onChange={(e) => setNewRevisionDescription(e.target.value)}
+                  rows={3}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                  placeholder="Describe the changes in this revision..."
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+              <button
+                className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
+                onClick={() => setShowCreateRevisionModal(false)}
+                disabled={creatingRevision}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleConfirmCreateRevision}
+                disabled={creatingRevision}
+              >
+                {creatingRevision ? 'Creating...' : 'Create Revision'}
               </button>
             </div>
           </div>
