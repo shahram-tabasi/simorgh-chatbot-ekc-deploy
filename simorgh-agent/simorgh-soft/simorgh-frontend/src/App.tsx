@@ -46,7 +46,7 @@ interface MenuBarProps {
 const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const { projectData, saveProject } = useProject();
+  const { projectData, saveProject, currentRevision } = useProject();
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Click outside handler
