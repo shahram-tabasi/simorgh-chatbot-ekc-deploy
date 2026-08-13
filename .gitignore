@@ -1,1 +1,3 @@
-Nothing should be ignored based on the provided file changes. The only modified file is a source code file (`simorgh-agent/simorgh-soft/simorgh-frontend/src/App.tsx`) which should not be added to .gitignore.
+```ts
+
+```

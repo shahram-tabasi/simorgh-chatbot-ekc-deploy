@@ -116,6 +116,9 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleSave}>
                   💾 Save
                 </button>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={onCreateNewRevision}>
+                  ➕ Create New Revision
+                </button>
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleExport}>
                   📤 Export JSON
@@ -438,22 +441,6 @@ const MainApp: React.FC = () => {
                             </button>
                           );
                         })}
-                      </div>
-                      
-                      {/* Create New Revision Button */}
-                      <div className="border-t border-gray-200 p-2">
-                        <button
-                          onClick={() => {
-                            setShowRevisionDropdown(false);
-                            handleCreateNewRevision();
-                          }}
-                          className="w-full flex items-center justify-center space-x-2 px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-sm"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                          </svg>
-                          <span>Create New Revision</span>
-                        </button>
                       </div>
                     </div>
                   )}
