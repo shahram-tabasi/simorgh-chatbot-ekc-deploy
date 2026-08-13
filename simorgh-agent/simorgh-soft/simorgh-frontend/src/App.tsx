@@ -116,14 +116,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleSave}>
                   💾 Save
                 </button>
-                {currentRevision && (
-                  <button 
-                    className="block w-full text-left px-4 py-2 hover:bg-gray-600" 
-                    onClick={onCreateNewRevision}
-                  >
-                    📝 Create Revision
-                  </button>
-                )}
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleExport}>
                   📤 Export JSON
