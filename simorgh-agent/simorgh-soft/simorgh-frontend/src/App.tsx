@@ -118,13 +118,10 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 </button>
                 {currentRevision && (
                   <button 
-                    className="block w-full text-left px-4 py-2 hover:bg-gray-600 flex items-center justify-between" 
+                    className="block w-full text-left px-4 py-2 hover:bg-gray-600" 
                     onClick={onCreateNewRevision}
                   >
-                    <span>📝 Create Revision</span>
-                    <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded ml-2">
-                      REV {currentRevision.revisionNumber + 1}
-                    </span>
+                    📝 Create Revision
                   </button>
                 )}
                 <div className="border-t border-gray-600 my-1"></div>
