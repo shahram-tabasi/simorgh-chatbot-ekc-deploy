@@ -116,10 +116,10 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       await loadRevisions(selectedProjectForRevision._id!);
       setSelectedRevision(newRevision);
       setShowCreateRevisionModal(false);
-      return newRevision;
     } catch (err) {
       console.error('Failed to create revision:', err);
-      throw err; // Re-throw so caller can handle error display
+      // Show error message using existing UI pattern
+      alert('Failed to create revision: ' + (err as Error).message);
     } finally {
       setCreatingRevision(false);
     }

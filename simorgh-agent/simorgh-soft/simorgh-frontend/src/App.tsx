@@ -206,7 +206,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
             Project: <strong className="ml-1 text-white">{projectData.projectName}</strong>
           </span>
           {currentRevision && (
-            <span>Revision: <strong className="text-blue-300">{currentRevision}</strong></span>
+            <span>Revision: <strong className="text-blue-300">REV {currentRevision.revisionNumber}</strong></span>
           )}
           <span>Standard: <strong>{projectData.standard}</strong></span>
           <span>Last saved: <strong>{new Date(projectData.changedOn).toLocaleTimeString()}</strong></span>

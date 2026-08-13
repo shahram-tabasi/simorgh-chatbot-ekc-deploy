@@ -87,4 +87,73 @@ async function startServer() {
   });
 }
 
+
+// ============================================
+// Revision Management APIs
+// ============================================
+
+// Get all revisions for a project
+app.get('/api/projects/:projectId/revisions', async (req, res) => {
+  try {
+    const projectId = req.params.projectId;
+    const revisions = await db.collection('revisions')
+      .find({ projectId })
+      .sort({ revisionNumber: -1 })
+      .toArray();
+    res.json(revisions);
+  } catch (error) {
+    console.error('Failed to fetch revisions:', error);
+    res.status(500).json({ error: 'Failed to fetch revisions' });
+  }
+});
+
+// Create a new revision
+app.post('/api/revisions', async (req, res) => {
+  try {
+    const { projectId, revisionNumber, revisionName, description, createdBy, projectSnapshot, isLocked } = req.body;
+    
+    if (!projectId || revisionNumber === undefined) {
+      return res.status(400).json({ error: 'projectId and revisionNumber are required' });
+    }
+    
+    // Check for duplicate revision number
+    const existing = await db.collection('revisions').findOne({ projectId, revisionNumber });
+    if (existing) {
+      return res.status(409).json({ error: `Revision ${revisionNumber} already exists for this project` });
+    }
+    
+    const newRevision = {
+      projectId,
+      revisionNumber: revisionNumber.toString(),
+      revisionName: revisionName || `Revision ${revisionNumber}`,
+      description: description || '',
+      createdBy: createdBy || 'system',
+      projectSnapshot: projectSnapshot || null,
+      isLocked: isLocked || false,
+      createdOn: new Date().toISOString(),
+      changedOn: new Date().toISOString()
+    };
+    
+    const result = await db.collection('revisions').insertOne(newRevision);
+    res.status(201).json({ _id: result.insertedId, ...newRevision });
+  } catch (error) {
+    console.error('Failed to create revision:', error);
+    res.status(500).json({ error: 'Failed to create revision' });
+  }
+});
+
+// Get a specific revision
+app.get('/api/revisions/:revisionId', async (req, res) => {
+  try {
+    const revision = await db.collection('revisions').findOne({ _id: new ObjectId(req.params.revisionId) });
+    if (!revision) {
+      return res.status(404).json({ error: 'Revision not found' });
+    }
+    res.json(revision);
+  } catch (error) {
+    console.error('Failed to fetch revision:', error);
+    res.status(500).json({ error: 'Failed to fetch revision' });
+  }
+});
+
 startServer();
