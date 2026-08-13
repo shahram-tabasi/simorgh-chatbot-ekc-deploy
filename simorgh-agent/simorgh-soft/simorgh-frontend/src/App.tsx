@@ -274,10 +274,7 @@ const MainApp: React.FC = () => {
   const [switchingRevision, setSwitchingRevision] = useState(false);
 
   const handleCreateNewRevision = async () => {
-    if (!projectData._id) {
-      alert('Please save the project first before creating a revision.');
-      return;
-    }
+    // Auto-save handles saving, so we can proceed directly
     const nextNum = getNextRevisionNumber();
     setNewRevisionName(`Revision ${nextNum}`);
     setNewRevisionDescription('');
