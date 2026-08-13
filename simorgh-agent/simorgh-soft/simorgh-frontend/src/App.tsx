@@ -42,9 +42,8 @@ const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
 interface MenuBarProps {
   onShowProjectSelection: () => void;
   onCreateNewRevision: () => void;
-  currentRevision?: string;
 }
-const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, currentRevision }) => {
+const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const { projectData, saveProject } = useProject();
@@ -234,11 +233,24 @@ const MainApp: React.FC = () => {
     updateEquipment,
     addEquipment,
     deleteEquipment,
-    copyEquipment
+    copyEquipment,
+    currentRevision,
+    revisions,
+    loadRevisions,
+    switchRevision,
+    createRevision,
+    getNextRevisionNumber
   } = useProject();
 
   // Auto-save
   useAutoSave(projectData, saveProject);
+
+  // Load revisions when project changes
+  React.useEffect(() => {
+    if (projectData._id) {
+      loadRevisions(projectData._id);
+    }
+  }, [projectData._id]);
 
   // Navigate to Template Creation tab
   const handleNavigateToTemplate = (templateId: string) => {
@@ -251,6 +263,54 @@ const MainApp: React.FC = () => {
     setProjDefSubTab('device-library');
     setNavigatingToDeviceId(deviceId);
     setActiveTab(0);
+  };
+
+  const [showRevisionDropdown, setShowRevisionDropdown] = useState(false);
+  const [showCreateRevisionModal, setShowCreateRevisionModal] = useState(false);
+  const [newRevisionName, setNewRevisionName] = useState('');
+  const [newRevisionDescription, setNewRevisionDescription] = useState('');
+  const [creatingRevision, setCreatingRevision] = useState(false);
+  const [switchingRevision, setSwitchingRevision] = useState(false);
+
+  const handleCreateNewRevision = async () => {
+    if (!projectData._id) {
+      alert('Please save the project first before creating a revision.');
+      return;
+    }
+    const nextNum = getNextRevisionNumber();
+    setNewRevisionName(`Revision ${nextNum}`);
+    setNewRevisionDescription('');
+    setShowCreateRevisionModal(true);
+  };
+
+  const handleConfirmCreateRevision = async () => {
+    if (!projectData._id) return;
+    
+    setCreatingRevision(true);
+    try {
+      const newRev = await createRevision(newRevisionName || `Revision ${getNextRevisionNumber()}`, newRevisionDescription);
+      setShowCreateRevisionModal(false);
+      setNewRevisionName('');
+      setNewRevisionDescription('');
+    } catch (err) {
+      console.error('Failed to create revision:', err);
+      alert('Failed to create revision: ' + (err as Error).message);
+    } finally {
+      setCreatingRevision(false);
+    }
+  };
+
+  const handleSwitchRevision = async (revisionId: string) => {
+    setSwitchingRevision(true);
+    try {
+      await switchRevision(revisionId);
+      setShowRevisionDropdown(false);
+    } catch (err) {
+      console.error('Failed to switch revision:', err);
+      alert('Failed to switch revision: ' + (err as Error).message);
+    } finally {
+      setSwitchingRevision(false);
+    }
   };
 
   const tabs = [
@@ -295,15 +355,6 @@ const MainApp: React.FC = () => {
     }
   ];
 
-  // h-screen + overflow-hidden on the outer shell pins the whole app to
-  // the viewport. Without this the chatbot's `flex-1 overflow-y-auto`
-  // message list grows past the viewport and ends up scrolling the
-  // document instead of staying inside its own column.
-  const [currentRevision, setCurrentRevision] = useState<string | undefined>(undefined);
-
-  const handleCreateNewRevision = () => {
-    alert('📝 Create Revision feature coming soon!\n\nThis will save a snapshot of the current project state as a new revision.');
-  };
 
   return (
     <div className="flex flex-col w-full h-screen overflow-hidden bg-gray-100">
@@ -311,20 +362,112 @@ const MainApp: React.FC = () => {
       <MenuBar 
         onShowProjectSelection={() => window.location.reload()} 
         onCreateNewRevision={handleCreateNewRevision}
-        currentRevision={currentRevision}
       />
       
-      {/* Header */}
-      <div className="bg-white shadow-md">
+      {/* Header with Revision Dropdown */}
+      <div className="bg-white shadow-md border-b">
         <div className="container mx-auto px-4">
           <div className="flex items-center py-3">
             <img src={simorghLogo} alt="Simorgh logo" className="max-h-10 w-auto mr-3 object-contain" />
             <h1 className="text-xl font-bold text-blue-800">Simorgh Electrical Design Software</h1>
-            <div className="ml-auto flex items-center space-x-3">
-              <div className="text-sm text-gray-600 bg-blue-50 border border-blue-200 px-3 py-1 rounded">
-                <strong className="text-blue-800">Active Project:</strong> {projectData.projectName}
+            <div className="ml-auto flex items-center space-x-4">
+              {/* Project Name */}
+              <div className="text-sm text-gray-700">
+                <span className="font-medium">Project:</span> {projectData.projectName}
               </div>
-              <div className="text-xs text-gray-500">
+              
+              {/* Revision Dropdown */}
+              {revisions.length > 0 && currentRevision && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowRevisionDropdown(!showRevisionDropdown)}
+                    disabled={switchingRevision}
+                    className="flex items-center space-x-2 px-3 py-1.5 bg-blue-50 border border-blue-300 rounded hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span className="text-sm font-semibold text-blue-800">
+                      REV {currentRevision.revisionNumber}
+                    </span>
+                    <svg className={`w-4 h-4 text-blue-600 transition-transform ${showRevisionDropdown ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  
+                  {/* Revision Dropdown Menu */}
+                  {showRevisionDropdown && (
+                    <div className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-80 overflow-y-auto">
+                      <div className="py-2">
+                        <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-100 mb-1">
+                          Select Revision
+                        </div>
+                        {revisions.map((revision, idx) => {
+                          const isLatest = idx === 0;
+                          const isBase = parseInt(revision.revisionNumber) === 0;
+                          const isActive = currentRevision._id === revision._id;
+                          
+                          return (
+                            <button
+                              key={revision._id}
+                              onClick={() => handleSwitchRevision(revision._id)}
+                              disabled={switchingRevision}
+                              className={`w-full text-left px-4 py-2.5 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                                isActive ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex-1">
+                                  <div className="flex items-center space-x-2">
+                                    <span className={`font-medium ${isActive ? 'text-blue-800' : 'text-gray-800'}`}>
+                                      REV {revision.revisionNumber}
+                                    </span>
+                                    {isLatest && (
+                                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded font-medium">LATEST</span>
+                                    )}
+                                    {isBase && (
+                                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">BASE</span>
+                                    )}
+                                  </div>
+                                  {revision.revisionName && (
+                                    <p className="text-xs text-gray-600 mt-0.5">{revision.revisionName}</p>
+                                  )}
+                                </div>
+                                {isActive && (
+                                  <svg className="w-4 h-4 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                  </svg>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      
+                      {/* Create New Revision Button */}
+                      <div className="border-t border-gray-200 p-2">
+                        <button
+                          onClick={() => {
+                            setShowRevisionDropdown(false);
+                            handleCreateNewRevision();
+                          }}
+                          className="w-full flex items-center justify-center space-x-2 px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-sm"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          </svg>
+                          <span>Create New Revision</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Standard */}
+              <div className="text-sm text-gray-700">
+                <span className="font-medium">Standard:</span> {projectData.standard || 'N/A'}
+              </div>
+              
+              {/* Device Count */}
+              <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
                 {projectData.devices.length} devices
               </div>
             </div>

@@ -1,43 +1,62 @@
-```
-# Dependencies
+```ts
+// App-specific frontend ignores
+simorgh-agent/simorgh-soft/simorgh-frontend/build/
+simorgh-agent/simorgh-soft/simorgh-frontend/dist/
+simorgh-agent/simorgh-soft/simorrh-frontend/node_modules/
+simorgh-agent/simorgh-soft/simorgh-frontend/.next/
+simorgh-agent/simorgh-soft/simorgh-frontend/out/
+
+// General TypeScript/React ignores
+*.tsbuildinfo
+*.tsx.snap
+*.jsx.snap
+
+// Dependencies
 node_modules/
 
-# Build artifacts
-dist/
+// Build outputs
 build/
-*.js
-*.ts
-*.tsx
+dist/
+out/
+.next/
+.nuxt/
+public/build/
 
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment
+// Environment variables
 .env
 .env.local
-*.env.*
+.env.*
+!.env.example
 
-# Editors
+// IDE files
 .vscode/
 .idea/
+*.swp
+*.swo
+*.tmp
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# OS
+// OS files
 .DS_Store
 Thumbs.db
 
-# Testing
-.mypy_cache/
-.pytest_cache/
+// Logs
+*.log
+
+// Coverage
+coverage/
+.nyc_output/
+istanbul/
+.jest/
+
+// Package manager
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+// TypeScript cache
+*.tsbuildinfo
+.cache/
+
+// Browser-sync
+.browser-sync*
 ```
