@@ -99,13 +99,16 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     
     setCreatingRevision(true);
     try {
+      // Get the latest project data for the snapshot
+      const latestProject = await projectService.getProjectById(selectedProjectForRevision._id!);
+      
       const newRevision = await projectService.createRevision({
         projectId: selectedProjectForRevision._id!,
         revisionNumber: newRevisionNumber,
         revisionName: newRevisionName || `Revision ${newRevisionNumber}`,
         description: newRevisionDescription || '',
         createdBy: 'user',
-        projectSnapshot: selectedProjectForRevision,
+        projectSnapshot: latestProject,
         isLocked: false,
       });
       
@@ -113,6 +116,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       await loadRevisions(selectedProjectForRevision._id!);
       setSelectedRevision(newRevision);
       setShowCreateRevisionModal(false);
+      return newRevision;
     } catch (err) {
       console.error('Failed to create revision:', err);
       throw err; // Re-throw so caller can handle error display
@@ -311,6 +315,9 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                               {isBase && (
                                 <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">BASE</span>
                               )}
+                              {isLatest && isBase && (
+                                <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-medium">INITIAL</span>
+                              )}
                             </div>
                             <p className="text-sm text-gray-700 mt-0.5">{revision.revisionName}</p>
                             <p className="text-xs text-gray-500 mt-1">{revision.description}</p>
@@ -343,8 +350,9 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
               </button>
               <div className="flex gap-2">
                 <button
-                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={handleConfirmSelect}
+                  disabled={!selectedRevision && revisions.length > 0}
                 >
                   Open Selected Revision
                 </button>
