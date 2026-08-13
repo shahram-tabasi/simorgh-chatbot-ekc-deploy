@@ -1,4 +1,4 @@
-import { ProjectData } from '../types/project';
+import { ProjectData, Revision, RevisionCreateData } from '../types/project';
 
 const API_BASE_URL = `${import.meta.env.VITE_API_URL || ''}/api`;
 
@@ -96,5 +96,68 @@ export const projectService = {
       throw new Error('Server health check failed');
     }
     return response.json();
+  },
+
+  // ==============================
+  // Revision API Methods
+  // ==============================
+
+  // Get all revisions for a project
+  async getRevisions(projectId: string): Promise<Revision[]> {
+    const response = await fetch(`${API_BASE_URL}/revisions/${projectId}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch revisions');
+    }
+    return response.json();
+  },
+
+  // Create a new revision (takes a snapshot of current project state)
+  async createRevision(revisionData: RevisionCreateData): Promise<Revision> {
+    const response = await fetch(`${API_BASE_URL}/revisions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(revisionData),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to create revision');
+    }
+    return response.json();
+  },
+
+  // Get a specific revision
+  async getRevision(revisionId: string): Promise<Revision> {
+    const response = await fetch(`${API_BASE_URL}/revisions/detail/${revisionId}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch revision');
+    }
+    return response.json();
+  },
+
+  // Load project data from a revision (restore)
+  async loadRevision(revisionId: string): Promise<ProjectData> {
+    const response = await fetch(`${API_BASE_URL}/revisions/${revisionId}/load`);
+    if (!response.ok) {
+      throw new Error('Failed to load revision');
+    }
+    return response.json();
+  },
+
+  // Delete a revision (password protected)
+  async deleteRevision(revisionId: string, password: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/revisions/${revisionId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ password }),
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Failed to delete revision');
+    }
   }
 };

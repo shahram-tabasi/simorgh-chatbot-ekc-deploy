@@ -221,3 +221,25 @@ export interface OutputType {
   template: string;
   enabled: boolean;
 }
+
+// ==============================
+// Revision System Types
+// ==============================
+
+export interface Revision {
+  _id?: string;
+  projectId: string;
+  revisionNumber: number;  // 0, 1, 2, ...
+  revisionLabel: string;   // "REV 0", "REV 1", ...
+  description?: string;
+  snapshot: ProjectData;   // Full project snapshot at this revision
+  createdAt: string;
+  createdBy?: string;
+  isLatest: boolean;
+}
+
+export interface RevisionCreateData {
+  projectId: string;
+  description?: string;
+  projectSnapshot: ProjectData;
+}

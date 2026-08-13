@@ -2,11 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { TabNavigation } from './components/Tabs/TabNavigation';
 import { ProjectDefinitionTab } from './components/ProjectDefinition/ProjectDefinitionTab';
 import { TemplateCreationTab, KeyboardShortcutsDialog } from './components/TemplateCreation/TemplateCreationTab';
-import DeviceSelectionTab from './components/DeviceSelection/DeviceSelectionTab'; // Changed from named to default import
+import DeviceSelectionTab from './components/DeviceSelection/DeviceSelectionTab';
 import { OutputTypesTab } from './components/OutputTypes/OutputTypesTab';
 import { ProjectSelection } from './components/ProjectSelection/ProjectSelection';
 import { ProjectProvider, useProject } from './context/ProjectContext';
+import { RevisionProvider, useRevision } from './context/RevisionContext';
+import { RevisionDropdown } from './components/shared/RevisionDropdown';
+import { CreateRevisionModal } from './components/shared/CreateRevisionModal';
 import simorghLogo from './assets/simrgh.jpg';
+import { ProjectData, RevisionCreateData } from './types/project';
 
 // هوک Auto-save
 const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
@@ -36,8 +40,13 @@ const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
   }, [projectData, saveProject]);
 };
 
-// کامپوننت MenuBar
-const MenuBar: React.FC<{ onShowProjectSelection: () => void }> = ({ onShowProjectSelection }) => {
+// کامپوننت MenuBar با قابلیت Create Revision
+interface MenuBarProps {
+  onShowProjectSelection: () => void;
+  onCreateRevision: () => void;
+}
+
+const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateRevision }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const { projectData, saveProject } = useProject();
@@ -108,6 +117,15 @@ const MenuBar: React.FC<{ onShowProjectSelection: () => void }> = ({ onShowProje
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleSave}>
                   💾 Save
+                </button>
+                <button 
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600" 
+                  onClick={() => {
+                    onCreateRevision();
+                    setActiveMenu(null);
+                  }}
+                >
+                  ➕ Create New Revision
                 </button>
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleExport}>
@@ -190,7 +208,7 @@ const MenuBar: React.FC<{ onShowProjectSelection: () => void }> = ({ onShowProje
           )}
         </div>
 
-        {/* Project Info - نمایش نام پروژه */}
+        {/* Project Info - نمایش نام پروژه و Revision */}
         <div className="ml-auto flex items-center space-x-4 text-xs text-gray-300 px-4">
           <span className="flex items-center">
             <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
@@ -205,13 +223,64 @@ const MenuBar: React.FC<{ onShowProjectSelection: () => void }> = ({ onShowProje
   );
 };
 
-// کامپوننت اصلی اپ
-const MainApp: React.FC = () => {
+// کامپوننت Header با Revision Dropdown
+const Header: React.FC = () => {
+  const { projectData } = useProject();
+  const { revisions, currentRevision, switchToRevision, deleteRevision } = useRevision();
+
+  const handleSwitchRevision = async (revisionId: string) => {
+    try {
+      const projectSnapshot = await switchToRevision(revisionId);
+      // Parent component will handle updating project data
+      console.log('Switched to revision:', revisionId);
+    } catch (error) {
+      console.error('Failed to switch revision:', error);
+      alert('Failed to switch revision');
+    }
+  };
+
+  const handleDeleteRevision = async (revisionId: string) => {
+    try {
+      await deleteRevision(revisionId, ''); // Password will be entered in modal
+    } catch (error: any) {
+      throw error; // Error handled in RevisionDropdown
+    }
+  };
+
+  return (
+    <div className="bg-white shadow-md">
+      <div className="container mx-auto px-4">
+        <div className="flex items-center py-3">
+          <img src={simorghLogo} alt="Simorgh logo" className="max-h-10 w-auto mr-3 object-contain" />
+          <h1 className="text-xl font-bold text-blue-800">Simorgh Electrical Design Software</h1>
+          <div className="ml-auto flex items-center space-x-3">
+            <div className="text-sm text-gray-600 bg-blue-50 border border-blue-200 px-3 py-1 rounded">
+              <strong className="text-blue-800">Active Project:</strong> {projectData.projectName}
+            </div>
+            {/* Revision Dropdown */}
+            <RevisionDropdown
+              revisions={revisions}
+              currentRevision={currentRevision}
+              onSwitchRevision={handleSwitchRevision}
+              onDeleteRevision={handleDeleteRevision}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// کامپوننت اصلی اپ با Revision support
+const MainApp: React.FC<{ 
+  projectId: string;
+  onShowProjectSelection: () => void;
+}> = ({ projectId, onShowProjectSelection }) => {
   const [activeTab,               setActiveTab]               = useState(0);
   const [navigatingToTemplateId,  setNavigatingToTemplateId]  = useState<string | null>(null);
-  // Controls which sub-tab ProjectDefinitionTab opens on
   const [projDefSubTab, setProjDefSubTab] = useState<'project-data' | 'device-library'>('project-data');
   const [navigatingToDeviceId,    setNavigatingToDeviceId]    = useState<string | undefined>(undefined);
+  const [showCreateRevision, setShowCreateRevision] = useState(false);
 
   const {
     projectData,
@@ -223,6 +292,21 @@ const MainApp: React.FC = () => {
     deleteEquipment,
     copyEquipment
   } = useProject();
+
+  const {
+    revisions,
+    currentRevision,
+    loadRevisions,
+    createRevision,
+    switchToRevision
+  } = useRevision();
+
+  // Load revisions when project changes
+  useEffect(() => {
+    if (projectId) {
+      loadRevisions(projectId);
+    }
+  }, [projectId]);
 
   // Auto-save
   useAutoSave(projectData, saveProject);
@@ -239,6 +323,29 @@ const MainApp: React.FC = () => {
     setNavigatingToDeviceId(deviceId);
     setActiveTab(0);
   };
+
+  // Handle Create Revision
+  const handleCreateRevision = async (revisionData: RevisionCreateData) => {
+    // Include current project snapshot
+    const fullRevisionData = {
+      ...revisionData,
+      projectSnapshot: { ...projectData }
+    };
+    
+    const result = await createRevision(fullRevisionData);
+    
+    // After successful creation, switch to the new revision and load its data
+    if (result._id) {
+      const projectSnapshot = await switchToRevision(result._id);
+      // Update would be handled by parent context
+      console.log('Created and switched to revision:', result.revisionLabel);
+    }
+  };
+
+  // Calculate next revision number
+  const nextRevisionNumber = revisions.length > 0 
+    ? Math.max(...revisions.map(r => r.revisionNumber)) + 1 
+    : 0;
 
   const tabs = [
     {
@@ -284,31 +391,18 @@ const MainApp: React.FC = () => {
 
   return (
     <div className="flex flex-col w-full min-h-screen bg-gray-100">
-      {/* Menu Bar */}
-      <MenuBar onShowProjectSelection={() => window.location.reload()} />
+      {/* Menu Bar with Create Revision */}
+      <MenuBar 
+        onShowProjectSelection={onShowProjectSelection} 
+        onCreateRevision={() => setShowCreateRevision(true)}
+      />
       
-      {/* Header */}
-      <div className="bg-white shadow-md">
-        <div className="container mx-auto px-4">
-          <div className="flex items-center py-3">
-            <img src={simorghLogo} alt="Simorgh logo" className="max-h-10 w-auto mr-3 object-contain" />
-            <h1 className="text-xl font-bold text-blue-800">Simorgh Electrical Design Software</h1>
-            <div className="ml-auto flex items-center space-x-3">
-              <div className="text-sm text-gray-600 bg-blue-50 border border-blue-200 px-3 py-1 rounded">
-                <strong className="text-blue-800">Active Project:</strong> {projectData.projectName}
-              </div>
-              <div className="text-xs text-gray-500">
-                {projectData.devices.length} devices
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* Header with Revision Dropdown */}
+      <Header />
 
       {/* محتوای اصلی */}
       <div className="container mx-auto px-4 py-4 flex-1">
         <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={(tabId) => {
-          // When user manually clicks the Project Definition tab, reset to Project Data sub-tab
           if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
           setActiveTab(tabId);
         }} />
@@ -321,9 +415,19 @@ const MainApp: React.FC = () => {
       <div className="bg-gray-800 text-white text-xs py-2">
         <div className="container mx-auto px-4 flex justify-between items-center">
           <span>© 2025 Simorgh Software - Professional Electrical Design</span>
-          <span>Version 1.0.0 | Auto-save: Enabled</span>
+          <span>Version 1.0.0 | Auto-save: Enabled | Revisions: {revisions.length}</span>
         </div>
       </div>
+
+      {/* Create Revision Modal */}
+      <CreateRevisionModal
+        isOpen={showCreateRevision}
+        onClose={() => setShowCreateRevision(false)}
+        onCreate={handleCreateRevision}
+        projectName={projectData.projectName}
+        projectId={projectId}
+        nextRevisionNumber={nextRevisionNumber}
+      />
     </div>
   );
 };
@@ -338,19 +442,30 @@ export function App() {
     setShowProjectSelection(false);
   };
 
-  // projectName is the name typed by the user in the "Create New Project" dialog
   const handleNewProject = (projectName: string) => {
     setCurrentProject({ projectName });
     setShowProjectSelection(false);
+  };
+
+  const handleCloseProject = () => {
+    setCurrentProject(null);
+    setShowProjectSelection(true);
   };
 
   if (showProjectSelection) {
     return <ProjectSelection onProjectSelect={handleProjectSelect} onNewProject={handleNewProject} />;
   }
 
+  const projectId = currentProject?._id || '';
+
   return (
     <ProjectProvider initialProject={currentProject}>
-      <MainApp />
+      <RevisionProvider projectId={projectId}>
+        <MainApp 
+          projectId={projectId} 
+          onShowProjectSelection={handleCloseProject}
+        />
+      </RevisionProvider>
     </ProjectProvider>
   );
 }

@@ -970,3 +970,237 @@ async function startServer() {
 }
 
 startServer();
+
+// ============================================
+// Revision System API (MongoDB-based)
+// ============================================
+
+/**
+ * POST /api/revisions - Create a new revision with project snapshot
+ * Request body: { projectId, description?, projectSnapshot }
+ */
+app.post('/api/revisions', async (req, res) => {
+  console.log('📥 POST /api/revisions - Create revision request received');
+  
+  try {
+    const { projectId, description, projectSnapshot } = req.body;
+    
+    if (!projectId || !projectSnapshot) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'projectId and projectSnapshot are required' 
+      });
+    }
+    
+    // Get all existing revisions for this project to find the latest revision number
+    const existingRevisions = await db.collection('revisions')
+      .find({ projectId })
+      .sort({ revisionNumber: -1 })
+      .toArray();
+    
+    // Calculate next revision number
+    const nextRevisionNumber = existingRevisions.length > 0 
+      ? existingRevisions[0].revisionNumber + 1 
+      : 0;
+    
+    // Mark all previous revisions as not latest
+    if (existingRevisions.length > 0) {
+      await db.collection('revisions').updateMany(
+        { projectId },
+        { $set: { isLatest: false } }
+      );
+    }
+    
+    const newRevision = {
+      projectId,
+      revisionNumber: nextRevisionNumber,
+      revisionLabel: `REV ${nextRevisionNumber}`,
+      description: description || '',
+      snapshot: projectSnapshot,
+      createdAt: new Date().toISOString(),
+      createdBy: 'system', // Can be extended to include user info
+      isLatest: true
+    };
+    
+    const result = await db.collection('revisions').insertOne(newRevision);
+    
+    console.log(`✅ Created revision ${newRevision.revisionLabel} for project ${projectId}`);
+    
+    res.status(201).json({
+      _id: result.insertedId,
+      ...newRevision
+    });
+    
+  } catch (err) {
+    console.error("❌ Error creating revision:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * GET /api/revisions/:projectId - Get all revisions for a project
+ */
+app.get('/api/revisions/:projectId', async (req, res) => {
+  console.log(`📥 GET /api/revisions/${req.params.projectId} - Request received`);
+  
+  try {
+    const { projectId } = req.params;
+    
+    const revisions = await db.collection('revisions')
+      .find({ projectId })
+      .sort({ revisionNumber: -1 })
+      .toArray();
+    
+    res.json({
+      success: true,
+      count: revisions.length,
+      revisions
+    });
+    
+  } catch (err) {
+    console.error("❌ Error fetching revisions:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * GET /api/revisions/detail/:revisionId - Get a specific revision
+ */
+app.get('/api/revisions/detail/:revisionId', async (req, res) => {
+  console.log(`📥 GET /api/revisions/detail/${req.params.revisionId} - Request received`);
+  
+  try {
+    const { revisionId } = req.params;
+    
+    const revision = await db.collection('revisions').findOne({ 
+      _id: new ObjectId(revisionId) 
+    });
+    
+    if (!revision) {
+      return res.status(404).json({
+        success: false,
+        error: 'Revision not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      revision
+    });
+    
+  } catch (err) {
+    console.error("❌ Error fetching revision:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * GET /api/revisions/:revisionId/load - Load project data from a revision
+ */
+app.get('/api/revisions/:revisionId/load', async (req, res) => {
+  console.log(`📥 GET /api/revisions/${req.params.revisionId}/load - Request received`);
+  
+  try {
+    const { revisionId } = req.params;
+    
+    const revision = await db.collection('revisions').findOne({ 
+      _id: new ObjectId(revisionId) 
+    });
+    
+    if (!revision) {
+      return res.status(404).json({
+        success: false,
+        error: 'Revision not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      projectData: revision.snapshot
+    });
+    
+  } catch (err) {
+    console.error("❌ Error loading revision:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * DELETE /api/revisions/:revisionId - Delete a revision (password protected)
+ * Password: 987654321 (configurable via REVISION_DELETE_PASSWORD env var)
+ */
+app.delete('/api/revisions/:revisionId', async (req, res) => {
+  console.log(`📥 DELETE /api/revisions/${req.params.revisionId} - Request received`);
+  
+  try {
+    const { revisionId } = req.params;
+    const { password } = req.body;
+    
+    // Check password - configurable via environment variable
+    const correctPassword = process.env.REVISION_DELETE_PASSWORD || '987654321';
+    
+    if (password !== correctPassword) {
+      return res.status(403).json({
+        success: false,
+        message: 'Incorrect password. Deletion not authorized.'
+      });
+    }
+    
+    const result = await db.collection('revisions').deleteOne({ 
+      _id: new ObjectId(revisionId) 
+    });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Revision not found'
+      });
+    }
+    
+    // After deletion, update the latest flag on remaining revisions
+    const remainingRevisions = await db.collection('revisions')
+      .find({ projectId: result.deletedItem?.projectId || req.body.projectId })
+      .sort({ revisionNumber: -1 })
+      .toArray();
+    
+    if (remainingRevisions.length > 0) {
+      await db.collection('revisions').updateMany(
+        { projectId: remainingRevisions[0].projectId },
+        { $set: { isLatest: false } }
+      );
+      
+      // Mark the highest numbered revision as latest
+      await db.collection('revisions').updateOne(
+        { _id: remainingRevisions[0]._id },
+        { $set: { isLatest: true } }
+      );
+    }
+    
+    console.log(`✅ Deleted revision ${revisionId}`);
+    
+    res.json({
+      success: true,
+      message: 'Revision deleted successfully'
+    });
+    
+  } catch (err) {
+    console.error("❌ Error deleting revision:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
