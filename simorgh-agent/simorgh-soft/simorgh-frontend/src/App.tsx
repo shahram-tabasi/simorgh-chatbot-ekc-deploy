@@ -42,11 +42,12 @@ const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
 interface MenuBarProps {
   onShowProjectSelection: () => void;
   onCreateNewRevision: () => void;
+  currentRevision?: any;
 }
-const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision }) => {
+const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, currentRevision }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const { projectData, saveProject, currentRevision } = useProject();
+  const { projectData, saveProject } = useProject();
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Click outside handler
@@ -115,9 +116,17 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleSave}>
                   💾 Save
                 </button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={onCreateNewRevision}>
-                  📝 Create Revision
-                </button>
+                {currentRevision && (
+                  <button 
+                    className="block w-full text-left px-4 py-2 hover:bg-gray-600 flex items-center justify-between" 
+                    onClick={onCreateNewRevision}
+                  >
+                    <span>📝 Create Revision</span>
+                    <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded ml-2">
+                      REV {currentRevision.revisionNumber + 1}
+                    </span>
+                  </button>
+                )}
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleExport}>
                   📤 Export JSON
@@ -362,6 +371,7 @@ const MainApp: React.FC = () => {
       <MenuBar 
         onShowProjectSelection={() => window.location.reload()} 
         onCreateNewRevision={handleCreateNewRevision}
+        currentRevision={currentRevision}
       />
       
       {/* Header with Revision Dropdown */}
