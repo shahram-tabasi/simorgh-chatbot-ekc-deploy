@@ -96,7 +96,7 @@ export const RevisionProvider: React.FC<RevisionProviderProps> = ({ children, pr
         setCurrentRevisionId(revisionId);
       }
       
-      return result.projectData || result;
+      return result;
     } catch (error) {
       console.error('Failed to switch revision:', error);
       throw error;

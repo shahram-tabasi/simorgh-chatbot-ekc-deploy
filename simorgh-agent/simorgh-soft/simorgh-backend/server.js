@@ -1171,7 +1171,7 @@ app.delete('/api/revisions/:revisionId', async (req, res) => {
     
     // After deletion, update the latest flag on remaining revisions
     const remainingRevisions = await db.collection('revisions')
-      .find({ projectId: result.deletedItem?.projectId || req.body.projectId })
+      .find({ _id: new ObjectId(revisionId) }).limit(1)
       .sort({ revisionNumber: -1 })
       .toArray();
     

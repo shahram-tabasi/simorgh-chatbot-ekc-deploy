@@ -108,7 +108,9 @@ export const projectService = {
     if (!response.ok) {
       throw new Error('Failed to fetch revisions');
     }
-    return response.json();
+    const result = await response.json();
+    // Backend returns { success: true, count: ..., revisions: [...] }
+    return result.revisions || result || [];
   },
 
   // Create a new revision (takes a snapshot of current project state)
@@ -142,7 +144,9 @@ export const projectService = {
     if (!response.ok) {
       throw new Error('Failed to load revision');
     }
-    return response.json();
+    const result = await response.json();
+    // Backend returns { success: true, projectData: {...} }
+    return result.projectData || result || {};
   },
 
   // Delete a revision (password protected)
