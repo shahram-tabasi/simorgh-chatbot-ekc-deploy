@@ -1,131 +1,73 @@
-##############################################
-# Global ignores for multi-service workspace #
-##############################################
+```
+# Dependencies
+node_modules/
 
-# OS files
-.DS_Store
-Thumbs.db
+# Build directories
+dist/
+build/
+target/
 
-# Editor files
-.vscode/
-.idea/
-*.swp
-
-##############################################
-# Python backend + LLM services              #
-##############################################
-
-# Bytecode + Cache
-**/__pycache__/
-**/*.pyc
-**/*.pyo
-**/*.pyd
-
-# Virtual environments
-venv/
-env/
-.venv/
-
-# Local dev tools
-pip-log.txt
-pip-wheel-metadata/
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
 *.egg-info/
 .eggs/
 
-# Python compiled libraries
-build/
-dist/
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
 
-##############################################
-# React frontend (Vite)                      #
-##############################################
-
-# Node modules (ALL)
-node_modules/
-**/node_modules/
-
-# Build output
-dist/
-frontend/react/dist/
-frontend/static/temp/
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
 
 # Logs
+*.log
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Environment variables
+.env*
+!.env.example
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Package manager
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Local environment variables
-# .env
-# .env.local
-# .env.*.local
+# TypeScript/JavaScript build output
+*.tsbuildinfo
+out/
+lib/
 
-##############################################
-# Docker                                     
-##############################################
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-# Local-only Docker files
-docker-compose.override.yml
-*.pid
-*.sock
-
-##############################################
-# Nginx                                       #
-##############################################
-# nginx.conf~
-# frontend/nginx_configs/conf.d/*.tmp
-# backend/nginx_configs/conf.d/*.tmp
-# llms/nginx_configs/conf.d/*.tmp
-
-##############################################
-# Vagrant + VirtualBox                        #
-##############################################
-
-.vagrant/
-vagrant/eplan-vms/old/
-*.box
-
-##############################################
-# Logs                                        #
-##############################################
-
-logs/
-*.log
-backend/**/*.log
-llms/**/*.log
-
-##############################################
-# Temporary / misc                             #
-##############################################
-
-tmp/
-temp/
-*.tmp
-*.bak
-*.old
-
-##############################################
-# Project-specific exclusions                  #
-##############################################
-
-# Python parser test caches
-backend/flask/test_pdf_output/
-backend/flask/chunks_temp/
-
-# Frontend static old folder
-frontend/static/old/
-
-##############################################
-# END                                         #
-##############################################
-
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# Compression artifacts
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+```
