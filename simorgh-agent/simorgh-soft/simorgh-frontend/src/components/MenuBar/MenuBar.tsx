@@ -23,7 +23,7 @@ interface MenuBarProps {
 
 export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
-  const { projectData, saveProject } = useProject();
+  const { projectData, saveProject, projectId } = useProject();
   const menuRef = useRef<HTMLDivElement>(null);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [currentRevision, setCurrentRevision] = useState<Revision | null>(null);
@@ -57,14 +57,21 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
   };
 
   const handleCreateRevision = async () => {
-    if (!projectData._id) {
+    if (!projectData._id && !projectId) {
       alert('Please save the project first before creating a revision.');
+      return;
+    }
+
+    // Check if there's a higher revision
+    const latestRevision = revisions.length > 0 ? revisions[0] : null;
+    if (latestRevision && currentRevision && currentRevision._id !== latestRevision._id) {
+      alert('⚠️ ریویژن بالاتر ساخته شده است و امکان تغییرات در این ریویژن نمی‌باشد');
       return;
     }
 
     try {
       // Get existing revisions to determine next revision number
-      const existingRevisions = await projectService.getRevisions(projectData._id!);
+      const existingRevisions = await projectService.getRevisions(projectId || projectData._id!);
       
       // Find the highest revision number and increment
       let nextRevisionNum = 0;
@@ -85,12 +92,13 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
   };
 
   const handleConfirmCreateRevision = async () => {
-    if (!projectData._id) return;
+    const pid = projectId || projectData._id;
+    if (!pid) return;
 
     setCreatingRevision(true);
     try {
       const newRevision = await projectService.createRevision({
-        projectId: projectData._id!,
+        projectId: pid,
         revisionNumber: newRevisionNumber,
         revisionName: newRevisionName || `Revision ${newRevisionNumber}`,
         description: newRevisionDescription || '',
@@ -100,7 +108,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
       });
 
       // Reload revisions and update current revision
-      const revisionsData = await projectService.getRevisions(projectData._id!);
+      const revisionsData = await projectService.getRevisions(pid);
       setRevisions(revisionsData);
       setCurrentRevision(newRevision);
       setShowCreateRevisionModal(false);
@@ -119,25 +127,18 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
 
   const handleSelectRevision = async (revision: Revision) => {
     try {
-      // Load the selected revision's project snapshot
-      // In a real implementation, you would reload the project with the snapshot data
-      setCurrentRevision(revision);
-      
-      // Show warning if trying to edit an old revision
+      // Check if trying to switch to an older revision when there's a newer one
       const latestRevision = revisions.length > 0 ? revisions[0] : null;
+      
+      // Show error if trying to switch to an older revision
       if (latestRevision && revision._id !== latestRevision._id) {
-        const shouldProceed = confirm(
-          `⚠️ Warning: You are switching to an older revision (R${revision.revisionNumber}).\n\n` +
-          `Any changes you make will be based on this older version.\n` +
-          `To preserve the current latest revision (R${latestRevision.revisionNumber}), ` +
-          `consider creating a new revision instead.\n\n` +
-          `Do you want to proceed?`
-        );
-        if (!shouldProceed) {
-          setShowRevisionModal(false);
-          return;
-        }
+        alert('⚠️ ریویژن بالاتر ساخته شده است و امکان تغییرات در این ریویژن نمی‌باشد');
+        setShowRevisionModal(false);
+        return;
       }
+      
+      // Load the selected revision's project snapshot
+      setCurrentRevision(revision);
       
       alert(`✅ Switched to Revision ${revision.revisionNumber}: ${revision.revisionName}`);
       setShowRevisionModal(false);
