@@ -44,7 +44,7 @@ interface MenuBarProps {
   onCreateNewRevision: () => void;
   currentRevision?: any;
 }
-const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, currentRevision }) => {
+const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, currentRevision, isLatestRevision }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const { projectData, saveProject } = useProject();
@@ -77,7 +77,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
 
   const handleExport = () => {
     // Export به JSON
-    const dataStr = JSON.stringify(projectData, null, 2);
+    const dataStr = JSON.stringify(projectData, { type: 'application/json' });
     const dataBlob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(dataBlob);
     const link = document.createElement('a');
@@ -90,6 +90,16 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const handlePrint = () => {
     window.print();
     setActiveMenu(null);
+  };
+
+  const canCreateRevision = isLatestRevision !== false;
+
+  const handleCreateRevisionClick = () => {
+    if (!canCreateRevision) {
+      alert('⚠️ ریویژن بالاتر ساخته شده است و امکان تغییرات در این ریویژن نمی‌باشد.');
+      return;
+    }
+    onCreateNewRevision();
   };
 
   return (
@@ -116,7 +126,11 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleSave}>
                   💾 Save
                 </button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={onCreateNewRevision}>
+                <button 
+                  className={`block w-full text-left px-4 py-2 hover:bg-gray-600 ${!canCreateRevision ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                  onClick={handleCreateRevisionClick}
+                  disabled={!canCreateRevision}
+                >
                   ➕ Create New Revision
                 </button>
                 <div className="border-t border-gray-600 my-1"></div>
@@ -303,6 +317,12 @@ const MainApp: React.FC = () => {
     try {
       await switchRevision(revisionId);
       setShowRevisionDropdown(false);
+      // Show warning if switching to an older revision
+      const selectedRev = revisions.find(r => r._id === revisionId);
+      const latestRev = revisions[0];
+      if (selectedRev && latestRev && selectedRev._id !== latestRev._id) {
+        alert('⚠️ ریویژن بالاتر ساخته شده است و امکان تغییرات در این ریویژن نمی‌باشد.');
+      }
     } catch (err) {
       console.error('Failed to switch revision:', err);
       alert('Failed to switch revision: ' + (err as Error).message);
@@ -361,6 +381,7 @@ const MainApp: React.FC = () => {
         onShowProjectSelection={() => window.location.reload()} 
         onCreateNewRevision={handleCreateNewRevision}
         currentRevision={currentRevision}
+        isLatestRevision={revisions.length === 0 || (currentRevision && revisions[0]._id === currentRevision._id)}
       />
       
       {/* Header with Revision Dropdown */}
