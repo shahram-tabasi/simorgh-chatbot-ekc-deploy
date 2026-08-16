@@ -1,42 +1,44 @@
-# Compiled and build artifacts
-*.pyc
-__pycache__/
-*.o
-*.obj
+```
+# Dependencies
+node_modules/
+
+# Build outputs
 dist/
 build/
-target/
+*.js
+*.ts
+*.tsx
+*.jsx
 
-# Dependencies
-.venv/
-venv/
-node_modules/
-.pip/
-.mypy_cache/
-.pytest_cache/
-.coverage
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-*.swo
-
-# Environment
+# Environment variables
 .env
 .env.local
 .env.*
 
-# Editors
+# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# System files
-.DS_Store
-Thumbs.db
+# Logs
+*.log
 
-# Coverage
+# Temp files
+*.tmp
+
+# Python cache (if any Python files exist in project)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Coverage reports
 coverage/
 htmlcov/
+.coverage
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```
