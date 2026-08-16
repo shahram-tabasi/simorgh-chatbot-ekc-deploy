@@ -23,10 +23,17 @@ interface MenuBarProps {
 
 export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
-  const { projectData, saveProject, projectId } = useProject();
+  const { 
+    projectData, 
+    saveProject, 
+    projectId, 
+    currentRevision, 
+    revisions, 
+    createRevision: ctxCreateRevision,
+    switchRevision: ctxSwitchRevision,
+    loadRevisions
+  } = useProject();
   const menuRef = useRef<HTMLDivElement>(null);
-  const [revisions, setRevisions] = useState<Revision[]>([]);
-  const [currentRevision, setCurrentRevision] = useState<Revision | null>(null);
   const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [showCreateRevisionModal, setShowCreateRevisionModal] = useState(false);
   const [newRevisionNumber, setNewRevisionNumber] = useState<string>('0');
@@ -36,33 +43,20 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
 
   useClickOutside(menuRef, () => setActiveMenu(null));
 
-  // Load revisions when project changes
+  // Load revisions when project changes - use ProjectContext's loadRevisions
   useEffect(() => {
-    if (projectData._id) {
-      loadRevisions(projectData._id);
+    if (projectId) {
+      loadRevisions(projectId);
     }
-  }, [projectData._id]);
-
-  const loadRevisions = async (projectId: string) => {
-    try {
-      const revisionsData = await projectService.getRevisions(projectId);
-      setRevisions(revisionsData);
-      if (revisionsData.length > 0) {
-        setCurrentRevision(revisionsData[0]); // Latest revision
-      }
-    } catch (err) {
-      console.error('Failed to load revisions:', err);
-      setRevisions([]);
-    }
-  };
+  }, [projectId, loadRevisions]);
 
   const handleCreateRevision = async () => {
-    if (!projectData._id && !projectId) {
+    if (!projectId) {
       alert('Please save the project first before creating a revision.');
       return;
     }
 
-    // Check if there's a higher revision
+    // Check if there's a higher revision - only allow creating from latest
     const latestRevision = revisions.length > 0 ? revisions[0] : null;
     if (latestRevision && currentRevision && currentRevision._id !== latestRevision._id) {
       alert('⚠️ ریویژن بالاتر ساخته شده است و امکان تغییرات در این ریویژن نمی‌باشد');
@@ -70,13 +64,10 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
     }
 
     try {
-      // Get existing revisions to determine next revision number
-      const existingRevisions = await projectService.getRevisions(projectId || projectData._id!);
-      
-      // Find the highest revision number and increment
+      // Calculate next revision number from loaded revisions
       let nextRevisionNum = 0;
-      if (existingRevisions.length > 0) {
-        const maxRev = Math.max(...existingRevisions.map(r => parseInt(r.revisionNumber) || 0));
+      if (revisions.length > 0) {
+        const maxRev = Math.max(...revisions.map(r => parseInt(r.revisionNumber) || 0));
         nextRevisionNum = maxRev + 1;
       }
       
@@ -92,29 +83,28 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
   };
 
   const handleConfirmCreateRevision = async () => {
-    const pid = projectId || projectData._id;
-    if (!pid) return;
+    const pid = projectId;
+    if (!pid) {
+      console.error('No projectId available for creating revision');
+      return;
+    }
 
     setCreatingRevision(true);
     try {
-      const newRevision = await projectService.createRevision({
+      console.log('Creating revision with projectData:', {
         projectId: pid,
         revisionNumber: newRevisionNumber,
-        revisionName: newRevisionName || `Revision ${newRevisionNumber}`,
-        description: newRevisionDescription || '',
-        createdBy: 'user',
-        projectSnapshot: projectData,
-        isLocked: false,
+        projectName: projectData.projectName
       });
 
-      // Reload revisions and update current revision
-      const revisionsData = await projectService.getRevisions(pid);
-      setRevisions(revisionsData);
-      setCurrentRevision(newRevision);
+      // Use ProjectContext's createRevision which handles everything
+      const newRevision = await ctxCreateRevision(newRevisionName, newRevisionDescription);
+
+      console.log('Revision created successfully:', newRevision);
       setShowCreateRevisionModal(false);
     } catch (err) {
       console.error('Failed to create revision:', err);
-      throw err;
+      alert('Failed to create revision: ' + (err as Error).message);
     } finally {
       setCreatingRevision(false);
     }
@@ -137,14 +127,11 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
         return;
       }
       
-      // Load the selected revision's project snapshot
-      setCurrentRevision(revision);
+      // Use ProjectContext's switchRevision to load the selected revision's project snapshot
+      await ctxSwitchRevision(revision._id!);
       
       alert(`✅ Switched to Revision ${revision.revisionNumber}: ${revision.revisionName}`);
       setShowRevisionModal(false);
-      
-      // TODO: Reload project data from revision snapshot
-      // This would require calling a parent callback to reload the project
     } catch (err) {
       alert('❌ Failed to switch revision: ' + (err as Error).message);
     }

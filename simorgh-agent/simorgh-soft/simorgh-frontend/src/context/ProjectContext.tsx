@@ -325,7 +325,9 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     if (!pid) return;
     try {
       setIsLoadingRevisions(true);
+      console.log('Loading revisions for project:', pid);
       const revisionsData = await projectService.getRevisions(pid);
+      console.log('Loaded revisions:', revisionsData.length);
       setRevisions(revisionsData);
       
       // Auto-create Revision 0 if no revisions exist
@@ -335,6 +337,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         setCurrentRevision(rev0);
       } else if (revisionsData.length > 0 && !currentRevision) {
         // Set current revision to latest (first after sort by revisionNumber desc)
+        console.log('Setting current revision to latest:', revisionsData[0].revisionNumber);
         setCurrentRevision(revisionsData[0]);
       }
     } catch (err) {
@@ -354,6 +357,12 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const createRevisionForProject = async (pid: string, revName: string, desc: string): Promise<Revision> => {
     const nextNum = getNextRevisionNumber();
     
+    console.log('Creating revision:', {
+      projectId: pid,
+      revisionNumber: nextNum.toString(),
+      projectName: projectData.projectName
+    });
+    
     const newRevision = await projectService.createRevision({
       projectId: pid,
       revisionNumber: nextNum.toString(),
@@ -363,6 +372,8 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       projectSnapshot: projectData,
       isLocked: false,
     });
+    
+    console.log('Revision created successfully:', newRevision);
     
     // Reload revisions and set new one as current
     await loadRevisions(pid);
@@ -374,23 +385,32 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
 
   const createRevision = async (revName: string, desc: string): Promise<Revision> => {
     if (!projectId) {
+      console.error('No projectId available for creating revision');
       throw new Error('Project must be saved before creating a revision');
     }
+    console.log('createRevision called with:', { projectId, revName, desc });
     return createRevisionForProject(projectId, revName, desc);
   };
 
   const switchRevision = async (revisionId: string) => {
+    console.log('Switching to revision:', revisionId);
     const revision = revisions.find(r => r._id === revisionId);
     if (!revision) {
+      console.error('Revision not found:', revisionId);
       throw new Error('Revision not found');
     }
     
     // Load the project snapshot from the selected revision
     if (revision.projectSnapshot) {
+      console.log('Loading project snapshot from revision:', revision.revisionNumber);
       setProjectData({ ...defaultProjectData, ...revision.projectSnapshot });
       setCurrentRevision(revision);
       // Update project ID to ensure consistency
       setProjectId(revision.projectId);
+      console.log('Successfully switched to revision:', revision.revisionNumber);
+    } else {
+      console.error('Revision has no projectSnapshot:', revision);
+      throw new Error('Revision has no project snapshot');
     }
   };
 
