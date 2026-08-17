@@ -24,7 +24,13 @@ interface ProjectContextType {
   loadRevisions: (projectId: string) => Promise<void>;
   createRevision: (revisionName: string, description: string) => Promise<Revision>;
   switchRevision: (revisionId: string) => Promise<void>;
+  deleteRevision: (revisionId: string, password: string) => Promise<void>;
   getNextRevisionNumber: () => number;
+  // True when the currently selected revision may be saved/edited — i.e.
+  // there is no revision selected yet (new project), or the selected
+  // revision is the latest one. A non-latest revision (including
+  // Revision 0 once higher revisions exist) is view-only.
+  isCurrentRevisionEditable: boolean;
 }
 
 // EMPTY DEFAULTS - no demo values
@@ -104,6 +110,11 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [isLoadingRevisions, setIsLoadingRevisions] = useState(false);
 
+  // revisions is kept sorted latest-first by the backend/loadRevisions, so
+  // revisions[0] is always the latest revision when any exist.
+  const isCurrentRevisionEditable =
+    !currentRevision || revisions.length === 0 || revisions[0]._id === currentRevision._id;
+
   // Deep-link hydrate: the chatbot creates a project on simorgh-soft's
   // backend, then redirects the user to /simorgh-design-suite/?projectId=<_id>.
   // If we see that query param on mount AND we don't already have a project
@@ -139,9 +150,16 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const saveProject = async (): Promise<void> => {
+    // Revision 0 (or any older revision) becomes read-only once a newer
+    // revision exists — the user must delete the newer revisions first.
+    if (currentRevision && !isCurrentRevisionEditable) {
+      throw new Error(
+        `Revision ${currentRevision.revisionNumber} is locked because newer revisions exist. Delete the newer revisions to edit it again.`
+      );
+    }
     try {
       console.log('Saving project...', projectData);
-      
+
       const { _id, ...projectDataWithoutId } = projectData;
       const projectToSave = {
         ...projectDataWithoutId,
@@ -149,7 +167,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       };
 
       let savedProject;
-      
+
       if (projectId) {
         console.log('Updating existing project with ID:', projectId);
         savedProject = await projectService.updateProject(projectId, projectToSave);
@@ -160,6 +178,18 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       }
 
       setProjectData(savedProject);
+
+      // Revisions are otherwise frozen at creation time. Keep the active
+      // revision's stored snapshot in sync with further edits so that
+      // switching away and back to it preserves the latest changes.
+      if (currentRevision) {
+        const updatedRevision = await projectService.updateRevision(currentRevision._id!, {
+          projectSnapshot: savedProject
+        });
+        setCurrentRevision(updatedRevision);
+        setRevisions(prev => prev.map(r => (r._id === updatedRevision._id ? updatedRevision : r)));
+      }
+
       console.log('Project saved successfully:', savedProject);
     } catch (error) {
       console.error('Error saving project:', error);
@@ -414,6 +444,27 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     }
   };
 
+  const deleteRevision = async (revisionId: string, password: string): Promise<void> => {
+    if (!projectId) {
+      throw new Error('No project loaded');
+    }
+    await projectService.deleteRevision(revisionId, password);
+
+    const updatedRevisions = await projectService.getRevisions(projectId);
+    setRevisions(updatedRevisions);
+
+    // If the deleted revision was the active one, fall back to the new
+    // latest revision and load its snapshot.
+    if (currentRevision && currentRevision._id === revisionId) {
+      const newCurrent = updatedRevisions.length > 0 ? updatedRevisions[0] : null;
+      setCurrentRevision(newCurrent);
+      if (newCurrent && newCurrent.projectSnapshot) {
+        setProjectData({ ...defaultProjectData, ...newCurrent.projectSnapshot });
+        setProjectId(newCurrent.projectId);
+      }
+    }
+  };
+
   // Load revisions when project ID changes
   React.useEffect(() => {
     if (projectId && !initialRevision) {
@@ -446,7 +497,9 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         loadRevisions,
         createRevision,
         switchRevision,
-        getNextRevisionNumber
+        deleteRevision,
+        getNextRevisionNumber,
+        isCurrentRevisionEditable
       }}
     >
       {children}

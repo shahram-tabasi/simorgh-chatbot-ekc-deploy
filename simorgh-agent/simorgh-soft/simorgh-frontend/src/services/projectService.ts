@@ -152,14 +152,20 @@ export const projectService = {
     return response.json();
   },
 
-  // Delete a revision
-  async deleteRevision(revisionId: string): Promise<void> {
+  // Delete a revision (requires the revision-delete password, see
+  // REVISION_DELETE_PASSWORD in server/server.js)
+  async deleteRevision(revisionId: string, password: string): Promise<void> {
     const response = await fetch(`${API_BASE_URL}/revisions/${revisionId}`, {
       method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ password }),
     });
-    
+
     if (!response.ok) {
-      throw new Error('Failed to delete revision');
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to delete revision');
     }
   },
 

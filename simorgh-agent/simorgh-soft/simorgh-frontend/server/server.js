@@ -10,6 +10,10 @@ const PORT = process.env.PORT || 3001;
 const MONGODB_URI = process.env.MONGODB_URI;
 const DATABASE_NAME = process.env.DATABASE_NAME || 'simorgh_db';
 
+// Single source of truth for the revision-delete password. Change this
+// value (or set REVISION_DELETE_PASSWORD in .env) to update it everywhere.
+const REVISION_DELETE_PASSWORD = process.env.REVISION_DELETE_PASSWORD || '1234';
+
 app.use(cors());
 app.use(express.json());
 
@@ -39,6 +43,22 @@ app.get('/api/projects', async (req, res) => {
     res.json(projects);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch projects' });
+  }
+});
+
+// Get a single project by ID (required by the frontend's deep-link
+// hydration and revision flows — was previously missing, causing
+// "Failed to fetch project" errors)
+app.get('/api/projects/:id', async (req, res) => {
+  try {
+    const project = await db.collection('projects').findOne({ _id: new ObjectId(req.params.id) });
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json(project);
+  } catch (error) {
+    console.error('Failed to fetch project:', error);
+    res.status(500).json({ error: 'Failed to fetch project' });
   }
 });
 
@@ -98,8 +118,11 @@ app.get('/api/projects/:projectId/revisions', async (req, res) => {
     const projectId = req.params.projectId;
     const revisions = await db.collection('revisions')
       .find({ projectId })
-      .sort({ revisionNumber: -1 })
       .toArray();
+    // revisionNumber is stored as a string, so sort numerically here
+    // instead of relying on Mongo's lexicographic string sort (which
+    // would order "10" before "2").
+    revisions.sort((a, b) => (parseInt(b.revisionNumber, 10) || 0) - (parseInt(a.revisionNumber, 10) || 0));
     res.json(revisions);
   } catch (error) {
     console.error('Failed to fetch revisions:', error);
@@ -153,6 +176,67 @@ app.get('/api/revisions/:revisionId', async (req, res) => {
   } catch (error) {
     console.error('Failed to fetch revision:', error);
     res.status(500).json({ error: 'Failed to fetch revision' });
+  }
+});
+
+// Update a revision (used to keep the active revision's snapshot in sync
+// as the user keeps editing, and to rename/annotate it)
+app.put('/api/revisions/:revisionId', async (req, res) => {
+  try {
+    const { revisionName, description, projectSnapshot, isLocked } = req.body;
+    const update = { changedOn: new Date().toISOString() };
+    if (revisionName !== undefined) update.revisionName = revisionName;
+    if (description !== undefined) update.description = description;
+    if (projectSnapshot !== undefined) update.projectSnapshot = projectSnapshot;
+    if (isLocked !== undefined) update.isLocked = isLocked;
+
+    const result = await db.collection('revisions').findOneAndUpdate(
+      { _id: new ObjectId(req.params.revisionId) },
+      { $set: update },
+      { returnDocument: 'after' }
+    );
+    if (!result) return res.status(404).json({ error: 'Revision not found' });
+    res.json(result);
+  } catch (error) {
+    console.error('Failed to update revision:', error);
+    res.status(500).json({ error: 'Failed to update revision' });
+  }
+});
+
+// Delete a revision. Requires the delete password and enforces strict
+// reverse-order deletion (only the current latest revision may be
+// deleted), and a project must always keep at least one revision.
+app.delete('/api/revisions/:revisionId', async (req, res) => {
+  try {
+    const { password } = req.body || {};
+    if (password !== REVISION_DELETE_PASSWORD) {
+      return res.status(403).json({ error: 'Incorrect password' });
+    }
+
+    const revision = await db.collection('revisions').findOne({ _id: new ObjectId(req.params.revisionId) });
+    if (!revision) {
+      return res.status(404).json({ error: 'Revision not found' });
+    }
+
+    const allRevisions = await db.collection('revisions')
+      .find({ projectId: revision.projectId })
+      .toArray();
+
+    if (allRevisions.length <= 1) {
+      return res.status(400).json({ error: 'Cannot delete the only remaining revision. A project must always have at least one revision.' });
+    }
+
+    const highestNumber = Math.max(...allRevisions.map(r => parseInt(r.revisionNumber, 10) || 0));
+    const thisNumber = parseInt(revision.revisionNumber, 10) || 0;
+    if (thisNumber !== highestNumber) {
+      return res.status(400).json({ error: 'Only the latest revision can be deleted. Delete newer revisions first.' });
+    }
+
+    await db.collection('revisions').deleteOne({ _id: new ObjectId(req.params.revisionId) });
+    res.json({ success: true, deletedId: req.params.revisionId });
+  } catch (error) {
+    console.error('Failed to delete revision:', error);
+    res.status(500).json({ error: 'Failed to delete revision' });
   }
 });
 

@@ -337,7 +337,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
   const handleSave = async () => {
     try   { await saveProject(); alert('Project saved successfully!'); }
-    catch { alert('Error saving project'); }
+    catch (error) { alert((error as Error)?.message || 'Error saving project'); }
   };
 
   // ── Device Library CRUD ──────────────────────────────────────
