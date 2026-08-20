@@ -170,6 +170,8 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
     setActiveMenu(null);
   };
 
+  const helpUrl = `${import.meta.env.BASE_URL}help.html`;
+
   return (
     <div className="bg-gray-800 text-white text-sm font-sans" ref={menuRef}>
       <div className="flex items-center h-8">
@@ -436,17 +438,29 @@ export const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection }) => {
           {activeMenu === 'help' && (
             <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
               <div className="py-1">
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">
+                <a
+                  href={helpUrl}
+                  target="_blank"
+                  rel="noopener"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => setActiveMenu(null)}
+                >
                   ❓ Help Contents
-                </button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">
+                </a>
+                <button className="block w-full text-left px-4 py-2 opacity-40 cursor-not-allowed" disabled title="Coming soon">
                   ℹ️ About Simorgh
                 </button>
                 <div className="border-t border-gray-600 my-1"></div>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">
+                <a
+                  href={helpUrl}
+                  target="_blank"
+                  rel="noopener"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => setActiveMenu(null)}
+                >
                   📚 Tutorials
-                </button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">
+                </a>
+                <button className="block w-full text-left px-4 py-2 opacity-40 cursor-not-allowed" disabled title="Coming soon">
                   🌐 Online Support
                 </button>
               </div>

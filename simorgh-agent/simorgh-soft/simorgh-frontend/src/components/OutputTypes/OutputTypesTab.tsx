@@ -7,6 +7,11 @@ import {
 } from 'lucide-react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService } from '../../services/projectService';
+import {
+  LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
+  LV_DEVICE_COLS, MV_DEVICE_COLS,
+  buildTierMatrix,
+} from '../../utils/tierEquipmentMatrix';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
 const DEVICE_PROP_LABELS: Record<string, string> = {
@@ -46,137 +51,6 @@ const DEVICE_PROP_LABELS: Record<string, string> = {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const v = (val: any) => (val == null || val === '' ? '—' : String(val));
 const boolStr = (val: any) => (val ? '✓' : '—');
-
-// ─── Per-tier template property lists (must mirror TemplateProperties.tsx &
-//     DeviceSelection so the wide LV/MV report tables align with the editor) ─
-const LV_TEMPLATE_PROPERTIES = [
-  'CB ORDER', 'ACCESSORY', 'CONTACTOR. ORDER', 'OVER LOAD RELAY',
-  'EARTH FAULT', 'COREBALANCE CT', 'PROTECTION RELAY', 'CT RATING',
-  'AMMETER', 'AMMETER selector', 'PT RATING', 'VOLTMETER',
-  'VOLTMETER selector', 'MULTIMETER', 'TEST BLOCK', 'TRANSDUSER',
-  'ALARM ANUNCIATOR',
-  'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5', 'SPARE 6', 'SPARE 7',
-];
-const MV_TEMPLATE_PROPERTIES = [
-  'VCB OR VC/FUSE', 'ACCESSORY', 'VOLTAGE INDICATOR', 'COREBALANCE CT',
-  'PROTECTION RELAY', 'CT RATING', 'AMMETER', 'AMMETER selector',
-  'PT RATING', 'VOLTMETER', 'VOLTMETER selector', 'MULTIMETER',
-  'TEST BLOCK', 'TRANSDUSER', 'ALARM WINDDOW', 'SURGE ARRESTER',
-  'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5',
-];
-
-// Per-tier "device row identifier" columns (left side of the wide table)
-// LV-only columns (SIZE, SFD/HFD, MODULE NO.) are absent in MV.
-interface DeviceColSpec { key: string; header: string; }
-const LV_DEVICE_COLS: DeviceColSpec[] = [
-  { key: 'rowNumber',    header: 'ORDER NO.' },   // matches device row's rowNumber (= equipment label idx)
-  { key: 'templateName', header: 'TEMPLATE' },
-  { key: 'size',         header: 'SIZE' },
-  { key: 'sfdHfd',       header: 'SFD/HFD' },
-  { key: 'cableSize',    header: 'CABLE SIZE' },
-  { key: 'wiringType',   header: 'WIRING TYPE' },
-  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
-  { key: 'flc',          header: 'FLC (A)' },
-  { key: 'feederNo',     header: 'FEEDER NO.' },
-  { key: 'busSection',   header: 'BUS SECTION' },
-  { key: 'moduleNo',     header: 'MODULE NO.' },
-  { key: 'tag',          header: 'TAG' },
-  { key: 'description',  header: 'DESCRIPTION' },
-];
-const MV_DEVICE_COLS: DeviceColSpec[] = [
-  { key: 'rowNumber',    header: 'ORDER NO.' },
-  { key: 'templateName', header: 'TEMPLATE' },
-  { key: 'cableSize',    header: 'CABLE SIZE' },
-  { key: 'wiringType',   header: 'WIRING TYPE' },
-  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
-  { key: 'flc',          header: 'FLC (A)' },
-  { key: 'feederNo',     header: 'FEEDER NO.' },
-  { key: 'busSection',   header: 'BUS SECTION' },
-  { key: 'tag',          header: 'TAG' },
-  { key: 'description',  header: 'DESCRIPTION' },
-];
-
-// Extract a part's "alt / catalog" number from arbitrary fullData shapes.
-// `partNumber` carries the (typically Siemens-style) ORDER NUMBER, while the
-// raw imported records often also expose a separate catalog/article number.
-function partAltNumber(part: any): string {
-  const d = part?.fullData ?? {};
-  return (
-    d['Article Number'] || d['ArticleNumber'] ||
-    d['Part Number']    || d['PartNumber']    ||
-    d['Designation1']   || d['Catalog Number'] || ''
-  );
-}
-
-// Compose the multi-line text for one Property cell across export targets:
-//   ORDER NO. | PART NO. | LABEL | ×QTY
-// Lines that are empty / redundant are skipped. Joined with the separator.
-function partsCellText(parts: any[], separator = '\n'): string {
-  if (!parts || parts.length === 0) return '';
-  return parts.map(p => {
-    const lines: string[] = [];
-    if (p.partNumber) lines.push(`Order: ${p.partNumber}`);
-    const alt = partAltNumber(p);
-    if (alt && alt !== p.partNumber) lines.push(`Part: ${alt}`);
-    if (p.label) lines.push(`Label: ${p.label}`);
-    const q = p.quantity ?? 1;
-    lines.push(`×${q}`);
-    return lines.join(separator);
-  }).join(`${separator}— —${separator}`);
-}
-
-// Build {propKey → parts[]} for a single template, ignoring metadata keys.
-function templateParts(template: any): Record<string, any[]> {
-  const out: Record<string, any[]> = {};
-  const props = (template?.properties ?? {}) as Record<string, any>;
-  for (const [k, val] of Object.entries(props)) {
-    if (k === '__displayNames' || k === '__locked') continue;
-    if (val && Array.isArray((val as any).parts) && (val as any).parts.length > 0) {
-      out[k] = (val as any).parts;
-    }
-  }
-  return out;
-}
-
-// Flatten LV/MV equipment + device rows into a 2-D array for Excel + table
-// rendering. The number of columns is fixed; cells without a matching
-// template property come out empty (per spec).
-function buildTierMatrix(
-  data: ProjectData,
-  tier: 'LV' | 'MV'
-): { headers: string[]; rows: (string | number)[][] } {
-  const deviceCols = tier === 'LV' ? LV_DEVICE_COLS : MV_DEVICE_COLS;
-  const propCols   = tier === 'LV' ? LV_TEMPLATE_PROPERTIES : MV_TEMPLATE_PROPERTIES;
-  const headers = ['EQUIPMENT', ...deviceCols.map(c => c.header), ...propCols];
-
-  const tierTemplates = (data.templates?.[tier] ?? []);
-  const tmplById = new Map(tierTemplates.map(t => [t.id, t]));
-
-  const rows: (string | number)[][] = [];
-  const eqs = (data.equipments ?? []).filter(e => e.type === tier);
-  for (const eq of eqs) {
-    const devices = eq.devices ?? [];
-    if (devices.length === 0) {
-      rows.push([eq.name, ...deviceCols.map(() => ''), ...propCols.map(() => '')]);
-      continue;
-    }
-    devices.forEach((row, ri) => {
-      const tmpl  = row.templateId ? tmplById.get(row.templateId) : undefined;
-      const parts = tmpl ? templateParts(tmpl) : {};
-      const baseValues = deviceCols.map(c => {
-        const raw = (row as any)[c.key];
-        return raw == null ? '' : String(raw);
-      });
-      const propValues = propCols.map(p => partsCellText(parts[p] || []));
-      rows.push([
-        ri === 0 ? eq.name : '',
-        ...baseValues,
-        ...propValues,
-      ]);
-    });
-  }
-  return { headers, rows };
-}
 
 // ─── Per-section Excel export ─────────────────────────────────────────────────
 function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {

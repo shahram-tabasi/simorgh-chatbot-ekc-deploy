@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
-import { PlusIcon, UploadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon } from 'lucide-react';
+import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon } from 'lucide-react';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
+import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';
 
 // ===== PROPS INTERFACES =====
 interface DeviceTableProps {
@@ -536,6 +537,13 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const [moveToRow, setMoveToRow] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedCellRowId, setSelectedCellRowId] = useState<string | null>(null);
+  // Appends read-only "template item" columns (one per template property of
+  // the CURRENT equipment's type) to the right of the existing columns —
+  // same table, more columns, not a separate section.
+  const [showTemplateColumns, setShowTemplateColumns] = useState(false);
+  // How many columns (from the left, counting the # column) stay pinned in
+  // place while the rest of the table scrolls horizontally.
+  const [freezeCount, setFreezeCount] = useState(0);
 
   // Track previous equipment ID to only reload rows when equipment changes
   const prevEquipmentIdRef = useRef<string | null>(null);
@@ -579,6 +587,60 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // optional row-colour filter. Both are bypassed entirely when filtering is
   // disabled at the toolbar level.
   const activeColumns = getColumnsForType(selectedEquipment?.type ?? 'MV');
+
+  // Template-item columns (read-only) — property list matches the CURRENT
+  // equipment's type, mirroring TemplateProperties.tsx's per-type layout.
+  const templatePropertyNames = !showTemplateColumns ? [] : (
+    selectedEquipment?.type === 'LV' ? LV_TEMPLATE_PROPERTIES :
+    selectedEquipment?.type === 'MV' ? MV_TEMPLATE_PROPERTIES :
+    selectedEquipment?.type === 'HV' ? HV_TEMPLATE_PROPERTIES : []
+  );
+  const templatesById = useMemo(() => {
+    const list = selectedEquipment ? (projectData.templates[selectedEquipment.type] || []) : [];
+    return new Map(list.map(t => [t.id, t]));
+  }, [projectData.templates, selectedEquipment?.type]);
+  const getTemplatePropertyText = (row: DeviceTableRow, propName: string): string => {
+    const tmpl = row.templateId ? templatesById.get(row.templateId) : undefined;
+    if (!tmpl) return '';
+    return partsCellText(templateParts(tmpl)[propName] || []);
+  };
+
+  // ── Freeze-columns (sticky panes) ───────────────────────────────────────
+  // Column order is: # | ...activeColumns | ...templatePropertyNames (when
+  // shown). We measure each header cell's real rendered width (fluid table
+  // layout — no fixed widths) and sticky-position the first `freezeCount`
+  // columns using those measured offsets, so freeze works whether or not
+  // the extra template columns are visible.
+  const totalColumnCount = 1 + activeColumns.length + templatePropertyNames.length;
+  const colHeaderRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+  const [stickyLefts, setStickyLefts] = useState<number[]>([]);
+
+  useLayoutEffect(() => {
+    const recompute = () => {
+      const lefts: number[] = [];
+      let acc = 0;
+      for (let i = 0; i < totalColumnCount; i++) {
+        lefts[i] = acc;
+        acc += colHeaderRefs.current[i]?.offsetWidth || 0;
+      }
+      setStickyLefts(lefts);
+    };
+    recompute();
+    const observer = new ResizeObserver(recompute);
+    colHeaderRefs.current.slice(0, totalColumnCount).forEach(el => el && observer.observe(el));
+    return () => observer.disconnect();
+  }, [totalColumnCount, freezeCount, rows.length, showTemplateColumns]);
+
+  const stickyStyle = (colIndex: number, bg: string): React.CSSProperties | undefined =>
+    colIndex < freezeCount
+      ? {
+          position: 'sticky',
+          left: stickyLefts[colIndex] ?? 0,
+          zIndex: 2,
+          background: bg,
+          boxShadow: colIndex === freezeCount - 1 ? '2px 0 4px -2px rgba(0,0,0,0.25)' : undefined,
+        }
+      : undefined;
   const getFilteredRows = () => {
     if (!filtersEnabled) return rows;
     return rows.filter(row => {
@@ -890,6 +952,24 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     }
   };
 
+  // Excel export mirrors handleFileUpload's expected headers exactly, so a
+  // round-trip (export → fill in Excel → import) works. The Template column
+  // is intentionally excluded — templates can only be assigned inside the
+  // software (drag-and-drop or right-click), never via Excel.
+  const handleExportExcel = () => {
+    if (!selectedEquipment) {
+      alert('Please select an equipment first!');
+      return;
+    }
+    const fillableColumns = activeColumns.filter(col => !col.isTemplate);
+    const headerRow = fillableColumns.map(col => col.header);
+    const dataRows = rows.map(row => fillableColumns.map(col => (row as any)[col.key] ?? ''));
+    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Devices');
+    XLSX.writeFile(wb, `${selectedEquipment.name}_Devices.xlsx`);
+  };
+
   const updateRowField = (rowId: string, field: keyof DeviceTableRow, value: string) => {
     setRows(rows.map(row =>
       row.id === rowId ? { ...row, [field]: value } : row
@@ -946,6 +1026,22 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             <UploadIcon className="w-4 h-4 inline mr-1" />
             Import Excel
           </button>
+          <button
+            className="px-3 py-1 bg-teal-600 text-white rounded text-sm hover:bg-teal-700"
+            onClick={handleExportExcel}
+            title="Export the current device rows to Excel, with the same headers Import Excel expects. Template column is excluded — it can only be assigned inside the software."
+          >
+            <DownloadIcon className="w-4 h-4 inline mr-1" />
+            Export Excel
+          </button>
+          <button
+            className="px-3 py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700"
+            onClick={() => setShowTemplateColumns(v => !v)}
+            title={`Append read-only ${selectedEquipment.type} template item columns to the right of this table, formatted like the Output Types tab`}
+          >
+            <LayersIcon className="w-4 h-4 inline mr-1" />
+            {showTemplateColumns ? 'Hide Template Items' : 'Show Template Items'}
+          </button>
           {clipboardRows.length > 0 && (
             <button
               className="px-3 py-1 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600"
@@ -989,6 +1085,30 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           {filtersEnabled ? 'Filters: ON' : 'Filters: OFF'}
         </button>
 
+        <div
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded border font-medium ${
+            freezeCount > 0
+              ? 'bg-amber-500 text-white border-amber-600'
+              : 'bg-white text-gray-700 border-gray-300'
+          }`}
+          title="Freeze this many columns from the left (including #) so they stay put while you scroll the rest horizontally"
+        >
+          <PinIcon className="w-3.5 h-3.5" />
+          <span>Freeze</span>
+          <input
+            type="number"
+            min={0}
+            max={totalColumnCount}
+            value={freezeCount}
+            onChange={e => {
+              const n = parseInt(e.target.value, 10);
+              setFreezeCount(Number.isNaN(n) ? 0 : Math.max(0, Math.min(totalColumnCount, n)));
+            }}
+            className="w-12 border border-gray-300 rounded px-1 py-0.5 text-xs text-gray-900"
+          />
+          <span>/ {totalColumnCount} cols</span>
+        </div>
+
         {filtersEnabled && (
           <button
             onClick={e => {
@@ -1020,13 +1140,21 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50">
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b w-12">#</th>
-              {activeColumns.map(col => {
+              <th
+                ref={el => { colHeaderRefs.current[0] = el; }}
+                className="px-4 py-2 text-left font-medium text-gray-600 border-b w-12"
+                style={stickyStyle(0, '#f9fafb')}
+              >
+                #
+              </th>
+              {activeColumns.map((col, i) => {
                 const hasActiveFilter = filtersEnabled && !!filters[col.key];
                 return (
                   <th
                     key={col.key}
+                    ref={el => { colHeaderRefs.current[1 + i] = el; }}
                     className="px-4 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap"
+                    style={stickyStyle(1 + i, '#f9fafb')}
                   >
                     <div className="flex items-center gap-1">
                       <span>{col.header}</span>
@@ -1054,68 +1182,101 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                   </th>
                 );
               })}
+              {showTemplateColumns && templatePropertyNames.map((propName, i) => {
+                const colIdx = 1 + activeColumns.length + i;
+                return (
+                  <th
+                    key={`tmpl-${propName}`}
+                    ref={el => { colHeaderRefs.current[colIdx] = el; }}
+                    className="px-3 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap bg-indigo-50"
+                    style={stickyStyle(colIdx, '#eef2ff')}
+                    title={`Template item — read-only (${selectedEquipment.type})`}
+                  >
+                    {propName}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
-            {getFilteredRows().map(row => (
-              <tr
-                key={row.id}
-                className={`cursor-pointer ${selectedRows.has(row.id) ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
-                style={row.rowColor && !selectedRows.has(row.id) ? { backgroundColor: row.rowColor } : undefined}
-                onClick={(e) => handleRowClick(row.id, e)}
-                onContextMenu={(e) => handleContextMenu(e, 'row', row.id)}
-              >
-                <td className="px-4 py-2 border-b text-center font-medium bg-gray-50">
-                  {row.rowNumber}
-                </td>
-                {activeColumns.map(col => {
-                  const cellBg = row.cellColors?.[col.key];
-                  const cellStyle = cellBg ? { backgroundColor: cellBg } : undefined;
-                  if (col.isTemplate) {
+            {getFilteredRows().map(row => {
+              const rowBg = selectedRows.has(row.id) ? '#dbeafe' : (row.rowColor || '#ffffff');
+              return (
+                <tr
+                  key={row.id}
+                  className={`cursor-pointer ${selectedRows.has(row.id) ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
+                  style={row.rowColor && !selectedRows.has(row.id) ? { backgroundColor: row.rowColor } : undefined}
+                  onClick={(e) => handleRowClick(row.id, e)}
+                  onContextMenu={(e) => handleContextMenu(e, 'row', row.id)}
+                >
+                  <td
+                    className="px-4 py-2 border-b text-center font-medium bg-gray-50"
+                    style={stickyStyle(0, '#f9fafb')}
+                  >
+                    {row.rowNumber}
+                  </td>
+                  {activeColumns.map((col, i) => {
+                    const colIdx = 1 + i;
+                    const cellBg = row.cellColors?.[col.key];
+                    const cellStyle = { ...(cellBg ? { backgroundColor: cellBg } : undefined), ...stickyStyle(colIdx, cellBg || rowBg) };
+                    if (col.isTemplate) {
+                      return (
+                        <td
+                          key={col.key}
+                          className="px-4 py-2 border-b"
+                          style={cellStyle}
+                          onDragOver={handleDragOver}
+                          onDrop={e => handleDrop(e, row.id)}
+                          onContextMenu={(e) => handleContextMenu(e, 'cell', row.id)}
+                        >
+                          <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
+                            {row.templateName || 'Drop here or right-click'}
+                          </div>
+                        </td>
+                      );
+                    }
                     return (
                       <td
                         key={col.key}
                         className="px-4 py-2 border-b"
                         style={cellStyle}
-                        onDragOver={handleDragOver}
-                        onDrop={e => handleDrop(e, row.id)}
-                        onContextMenu={(e) => handleContextMenu(e, 'cell', row.id)}
+                        onContextMenu={(e) => {
+                          // Right-click on a data cell: open the row context menu
+                          // AND mark this cell as the colorize target so the
+                          // "Highlight Cell" palette appears alongside row ops.
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (!selectedRows.has(row.id)) {
+                            setSelectedRows(new Set([row.id]));
+                          }
+                          setColorTarget({ rowId: row.id, colKey: col.key });
+                          setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'row' });
+                        }}
                       >
-                        <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
-                          {row.templateName || 'Drop here or right-click'}
-                        </div>
+                        <input
+                          type="text"
+                          className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-transparent"
+                          value={(row as any)[col.key] ?? ''}
+                          onChange={e => updateRowField(row.id, col.key as any, e.target.value)}
+                        />
                       </td>
                     );
-                  }
-                  return (
-                    <td
-                      key={col.key}
-                      className="px-4 py-2 border-b"
-                      style={cellStyle}
-                      onContextMenu={(e) => {
-                        // Right-click on a data cell: open the row context menu
-                        // AND mark this cell as the colorize target so the
-                        // "Highlight Cell" palette appears alongside row ops.
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (!selectedRows.has(row.id)) {
-                          setSelectedRows(new Set([row.id]));
-                        }
-                        setColorTarget({ rowId: row.id, colKey: col.key });
-                        setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'row' });
-                      }}
-                    >
-                      <input
-                        type="text"
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-transparent"
-                        value={(row as any)[col.key] ?? ''}
-                        onChange={e => updateRowField(row.id, col.key as any, e.target.value)}
-                      />
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+                  })}
+                  {showTemplateColumns && templatePropertyNames.map((propName, i) => {
+                    const colIdx = 1 + activeColumns.length + i;
+                    return (
+                      <td
+                        key={`tmpl-${propName}`}
+                        className="px-3 py-2 border-b text-xs text-gray-700 whitespace-pre-wrap bg-indigo-50/40"
+                        style={stickyStyle(colIdx, '#eef2ff')}
+                      >
+                        {getTemplatePropertyText(row, propName)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
 
@@ -2009,14 +2170,18 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
     <div>
       <h2 className="text-xl font-semibold mb-4">Device Selection - {projectData.projectName}</h2>
 
-      <div className="grid grid-cols-4 gap-4">
+      {/* Templates and Equipment Tree get just enough fixed width for their
+          content (names/tree labels); Device Specifications takes all the
+          remaining space so the wide device table isn't squeezed into a
+          fixed 50% column. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_260px] gap-3 items-start">
         {renderTemplateLeftPanel()}
 
-        <div className="col-span-2 border rounded">
+        <div className="border rounded min-w-0">
           <div className="bg-gray-50 px-4 py-2 border-b">
             <h3 className="font-medium">Device Specifications</h3>
           </div>
-          <div className="p-4">
+          <div className="p-3">
             <DeviceTable
               selectedEquipment={currentEquipment}
               updateEquipment={updateEquipment}

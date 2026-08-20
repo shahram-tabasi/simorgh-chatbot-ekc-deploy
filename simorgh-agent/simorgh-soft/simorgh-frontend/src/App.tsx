@@ -6,8 +6,9 @@ import { TemplateCreationTab, KeyboardShortcutsDialog } from './components/Templ
 import DeviceSelectionTab from './components/DeviceSelection/DeviceSelectionTab'; // Changed from named to default import
 import { OutputTypesTab } from './components/OutputTypes/OutputTypesTab';
 import { ProjectSelection } from './components/ProjectSelection/ProjectSelection';
+import { SplashScreen } from './components/SplashScreen/SplashScreen';
 import { ProjectProvider, useProject } from './context/ProjectContext';
-import simorghLogo from './assets/simrgh.jpg';
+import simorghLogo from './assets/logo.jpeg';
 import { Chatbot } from './components/Chatbot/Chatbot';
 import { Revision } from './types/project';
 
@@ -417,9 +418,20 @@ const MainApp: React.FC = () => {
       {/* Header with Revision Dropdown */}
       <div className="bg-white shadow-md border-b">
         <div className="container mx-auto px-4">
+          <style>{`
+            @keyframes headerWordmarkReveal {
+              from { opacity: 0; transform: translateX(-10px) scaleX(0.85); }
+              to   { opacity: 1; transform: translateX(0) scaleX(1); }
+            }
+            .header-wordmark { transform-origin: left center; animation: headerWordmarkReveal 0.7s cubic-bezier(0.22,1,0.36,1) 0.2s both; }
+          `}</style>
           <div className="flex items-center py-3">
-            <img src={simorghLogo} alt="Simorgh logo" className="max-h-10 w-auto mr-3 object-contain" />
-            <h1 className="text-xl font-bold text-blue-800">Simorgh Electrical Design Software</h1>
+            <img src={simorghLogo} alt="Simorgh logo" className="h-12 w-auto object-contain" />
+            <div className="mx-4 h-10 w-px bg-gray-300 self-center" />
+            <div className="header-wordmark">
+              <div className="text-xl font-extrabold tracking-tight text-blue-900 leading-none">Simorgh</div>
+              <div className="text-sm font-medium text-blue-600 leading-none mt-1">Design Suite</div>
+            </div>
             <div className="ml-auto flex items-center space-x-4">
               {/* Project Name */}
               <div className="text-sm text-gray-700">
@@ -532,16 +544,23 @@ const MainApp: React.FC = () => {
         </div>
       </div>
 
+      {/* Engineering workflow navigation — a distinct toolbar band (not an
+          in-page stepper), same pattern as the logo header above it. */}
+      <div className="bg-white border-b shadow-sm">
+        <div className="container mx-auto px-4">
+          <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={(tabId) => {
+            // When user manually clicks the Project Definition tab, reset to Project Data sub-tab
+            if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
+            setActiveTab(tabId);
+          }} />
+        </div>
+      </div>
+
       {/* محتوای اصلی + پنل چت‌بات (split layout) */}
       <div className="flex flex-row flex-1 min-h-0">
         <div className="flex-1 min-w-0 overflow-auto">
           <div className="container mx-auto px-4 py-4">
-            <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={(tabId) => {
-              // When user manually clicks the Project Definition tab, reset to Project Data sub-tab
-              if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
-              setActiveTab(tabId);
-            }} />
-            <div className="mt-4 bg-white rounded-lg shadow-md p-6">
+            <div className="bg-white rounded-lg shadow-md p-6">
               {tabs[activeTab].component}
             </div>
           </div>
@@ -672,6 +691,12 @@ export function App() {
     catch { return null; }
   }, []);
 
+  // Splash screen gate — runs real startup checks (backend health, font
+  // readiness, asset preload) before anything else renders. The deep-link
+  // effect below still starts immediately in parallel (hooks always run),
+  // so it isn't slowed down by the splash.
+  const [booted, setBooted] = useState(false);
+
   const [currentProject, setCurrentProject] = useState<any>(null);
   const [showProjectSelection, setShowProjectSelection] = useState(!initialPidFromUrl);
   const [deepLinkLoading, setDeepLinkLoading] = useState(!!initialPidFromUrl);
@@ -716,6 +741,10 @@ export function App() {
     setCurrentProject({ projectName });
     setShowProjectSelection(false);
   };
+
+  if (!booted) {
+    return <SplashScreen onComplete={() => setBooted(true)} />;
+  }
 
   if (deepLinkLoading) {
     return (

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService } from '../../services/projectService';
-import simorghLogo from '../../assets/simrgh.jpg';
+import simorghLogo from '../../assets/logo.jpeg';
 
 interface ProjectSelectionProps {
   onProjectSelect: (project: ProjectData, revision?: Revision) => void;
@@ -147,27 +147,49 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-100">
-        <div className="text-gray-500 text-sm">Loading projects…</div>
+      <div
+        className="flex items-center justify-center min-h-screen"
+        style={{ background: 'radial-gradient(1200px 800px at 10% 10%, #14335f 0%, #0a1a33 45%, #060e1e 100%)' }}
+      >
+        <div className="text-slate-300 text-sm">Loading projects…</div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-100">
+    <div
+      className="relative flex flex-col min-h-screen"
+      style={{ background: 'radial-gradient(1200px 800px at 10% 10%, #14335f 0%, #0a1a33 45%, #060e1e 100%)' }}
+    >
+      <style>{`
+        @keyframes projSelWordmarkReveal {
+          from { opacity: 0; transform: translateX(-10px) scaleX(0.85); }
+          to   { opacity: 1; transform: translateX(0) scaleX(1); }
+        }
+        .proj-sel-wordmark { transform-origin: left center; animation: projSelWordmarkReveal 0.7s cubic-bezier(0.22,1,0.36,1) 0.2s both; }
+      `}</style>
+
+      {/* Faint dot grid, matching the loading screen's texture */}
+      <div
+        className="absolute inset-0 opacity-[0.12] pointer-events-none"
+        style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.5) 1px, transparent 1px)', backgroundSize: '22px 22px' }}
+      />
+
       {/* Header */}
-      <div className="bg-white border-b shadow-sm">
-        <div className="container mx-auto px-6 py-4 flex items-center gap-3">
-          <img src={simorghLogo} alt="Simorgh" className="h-10 w-auto object-contain" />
-          <div>
-            <h1 className="text-xl font-bold text-blue-900 leading-tight">Simorgh Design Software</h1>
-            <p className="text-xs text-gray-500">Electrical Engineering Design Platform</p>
+      <div className="relative border-b border-white/10">
+        <div className="container mx-auto px-6 py-4 flex items-center gap-4">
+          <img src={simorghLogo} alt="Simorgh" className="h-12 w-auto object-contain" />
+          <div className="h-10 w-px bg-white/25" />
+          <div className="proj-sel-wordmark">
+            <div className="text-xl font-extrabold tracking-tight text-white leading-none">Simorgh</div>
+            <div className="text-sm font-medium text-blue-400 leading-none mt-1">Design Suite</div>
+            <p className="text-xs text-slate-400 mt-1">Electrical Engineering Design Platform</p>
           </div>
         </div>
       </div>
 
       {/* Body */}
-      <div className="flex-1 container mx-auto px-6 py-8 max-w-3xl">
+      <div className="relative flex-1 container mx-auto px-6 py-10 max-w-3xl">
 
         {error && (
           <div className="mb-4 bg-red-50 border border-red-300 text-red-700 text-sm px-4 py-3 rounded">

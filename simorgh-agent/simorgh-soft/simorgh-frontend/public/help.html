@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>راهنمای نرم‌افزار Simorgh Electrical Design</title>
+<style>
+  :root {
+    --navy: #0f1f3d;
+    --orange: #f97316;
+    --teal: #0f766e;
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text: #1f2937;
+    --muted: #64748b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.8;
+  }
+  header {
+    background: linear-gradient(135deg, var(--navy), #1e3a6e);
+    color: #fff;
+    padding: 28px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  header img { height: 52px; width: auto; border-radius: 8px; background: #fff; padding: 4px; }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 4px 0 0; font-size: 13px; opacity: .85; }
+  .layout { display: flex; max-width: 1200px; margin: 0 auto; align-items: flex-start; gap: 24px; padding: 24px; }
+  nav {
+    position: sticky;
+    top: 24px;
+    flex: 0 0 240px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  nav div.nav-title { font-weight: 700; color: var(--navy); margin-bottom: 8px; font-size: 13px; }
+  nav a {
+    display: block;
+    padding: 7px 10px;
+    border-radius: 6px;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  nav a:hover { background: #fff7ed; color: var(--orange); }
+  main { flex: 1; min-width: 0; }
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  section h2 {
+    margin-top: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--navy);
+    font-size: 19px;
+  }
+  section h2 .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px; height: 30px;
+    border-radius: 999px;
+    border: 2px solid var(--orange);
+    color: var(--orange);
+    font-weight: 700;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  section h3 { color: var(--teal); font-size: 15px; margin: 18px 0 8px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-inline-start: 22px; }
+  li { margin: 4px 0; }
+  .tip, .warn {
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  .tip { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+  .warn { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; }
+  code {
+    background: #f1f5f9;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 13px;
+    direction: ltr;
+    display: inline-block;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: right; }
+  th { background: #f8fafc; color: var(--navy); }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
+  @media (max-width: 860px) {
+    .layout { flex-direction: column; }
+    nav { position: static; width: 100%; flex-basis: auto; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="favicon.jpg" alt="Simorgh" onerror="this.style.display='none'" />
+  <div>
+    <h1>راهنمای نرم‌افزار طراحی برق سیمرغ (Simorgh Electrical Design)</h1>
+    <p>مسیر کامل کار: تعریف پروژه ← ساخت تمپلیت ← انتخاب تجهیزات ← خروجی‌ها</p>
+  </div>
+</header>
+
+<div class="layout">
+  <nav>
+    <div class="nav-title">فهرست مطالب</div>
+    <a href="#overview">۱. آشنایی کلی</a>
+    <a href="#project-def">۲. تعریف پروژه</a>
+    <a href="#templates">۳. ساخت تمپلیت</a>
+    <a href="#device-selection">۴. انتخاب تجهیزات</a>
+    <a href="#excel">&nbsp;&nbsp;&nbsp;• ورودی/خروجی اکسل</a>
+    <a href="#template-items">&nbsp;&nbsp;&nbsp;• نمایش آیتم‌های تمپلیت</a>
+    <a href="#freeze">&nbsp;&nbsp;&nbsp;• فریز ستون‌ها</a>
+    <a href="#output-types">۵. خروجی‌ها (Output Types)</a>
+    <a href="#revisions">۶. مدیریت ریویژن</a>
+    <a href="#faq">۷. سوالات پرتکرار</a>
+  </nav>
+
+  <main>
+    <section id="overview">
+      <h2><span class="num">۱</span>آشنایی کلی</h2>
+      <p>نرم‌افزار سیمرغ در چهار مرحله (تب) کار می‌کند که از بالای صفحه به ترتیب طی می‌شوند:</p>
+      <table>
+        <thead><tr><th>#</th><th>مرحله</th><th>هدف</th></tr></thead>
+        <tbody>
+          <tr><td>۱</td><td>Project Definition</td><td>اطلاعات کلی پروژه، تنظیمات فنی و کتابخانه تجهیزات</td></tr>
+          <tr><td>۲</td><td>Create Template</td><td>ساخت تمپلیت‌های LV/MV/HV و اختصاص پارت از SQL Server به هر ردیف</td></tr>
+          <tr><td>۳</td><td>Device Selection</td><td>تعریف تجهیزات (Equipment)، ردیف‌های دستگاه و اتصال هر ردیف به یک تمپلیت</td></tr>
+          <tr><td>۴</td><td>Output Types</td><td>گزارش‌گیری نهایی (Excel / PDF / HTML) و مقایسه ریویژن‌ها</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">تمام تغییرات به‌صورت خودکار ذخیره می‌شوند (Auto-save)، اما بهتر است هر چند وقت یک‌بار از منوی <code>File → Save</code> هم استفاده کنید.</div>
+    </section>
+
+    <section id="project-def">
+      <h2><span class="num">۲</span>تعریف پروژه</h2>
+      <p>در این تب اطلاعات پایه پروژه (نام، کارفرما، استاندارد، محل اجرا)، تنظیمات فنی (ولتاژ، فرکانس، سطح مقطع کابل و ...) و کتابخانه تجهیزات (Device Library) وارد می‌شود. این اطلاعات در گزارش‌های نهایی (تب Output Types) استفاده می‌شوند.</p>
+    </section>
+
+    <section id="templates">
+      <h2><span class="num">۳</span>ساخت تمپلیت (Create Template)</h2>
+      <p>هر تمپلیت مجموعه‌ای از ردیف‌های تجهیزاتی (Property) است — مثلاً برای LV: <code>CB ORDER</code>, <code>ACCESSORY</code>, <code>PROTECTION RELAY</code> و ... . برای هر ردیف می‌توانید:</p>
+      <ul>
+        <li>روی «Add Part from SQL Server» کلیک کرده و پارت مورد نظر را از دیتابیس Eplan جستجو و انتخاب کنید.</li>
+        <li>Label، Quantity و Priority هر پارت را ویرایش کنید.</li>
+        <li>با کلیک روی آیکون مداد ✎، نام ردیف را تغییر دهید (Rename) — این تغییر همه‌جا (Device Selection، Output Types) به‌روز می‌شود.</li>
+        <li>ردیف‌های SPARE اضافه (SPARE 4 به بعد) فقط وقتی فعال می‌شوند که ردیف‌های اصلی خالی مانده باشند.</li>
+      </ul>
+      <h3>ستون Eplanix چیست؟</h3>
+      <p>مقدار این ستون از <code>Order Number</code> پارت انتخاب‌شده گرفته می‌شود؛ اگر خالی یا <code>-</code>/<code>_</code> باشد، به‌جای آن <code>Designation 3</code> نمایش داده می‌شود. همین مقدار در تب Output Types و در ستون‌های «Template Items» تب Device Selection هم استفاده می‌شود.</p>
+    </section>
+
+    <section id="device-selection">
+      <h2><span class="num">۴</span>انتخاب تجهیزات (Device Selection)</h2>
+      <p>در این تب سه پنل کنار هم قرار دارند:</p>
+      <ul>
+        <li><b>Templates</b> (سمت چپ): لیست تمپلیت‌های ساخته‌شده — با drag & drop روی سلول Template هر ردیف رها می‌شوند.</li>
+        <li><b>Device Specifications</b> (وسط): جدول ردیف‌های دستگاه برای Equipment انتخاب‌شده.</li>
+        <li><b>Equipment Tree</b> (راست): درخت تجهیزات پروژه به تفکیک LV/MV/HV.</li>
+      </ul>
+
+      <h3 id="excel">ورودی و خروجی اکسل</h3>
+      <p>دو دکمه در بالای جدول وجود دارد:</p>
+      <ul>
+        <li><b>Import Excel</b>: فایل اکسل/CSV را می‌خواند و همه ردیف‌های جدول فعلی را با محتوای فایل جایگزین می‌کند. ستون‌های شناخته‌شده: Bus Section، Feeder No، Wiring Type، Rating Power، FLC (A)، TAG، DESCRIPTION، CABLE SIZE و برای LV: SFD/HFD، MODULE NO.، SIZE.</li>
+        <li><b>Export Excel</b>: همان ردیف‌های فعلی جدول را با همان هدرهایی که Import انتظار دارد، به یک فایل اکسل خروجی می‌دهد — می‌توانید فایل را پر کرده و دوباره Import کنید (چرخه خروجی → پرکردن → ورودی).</li>
+      </ul>
+      <div class="warn">ستون <b>Template</b> در هیچ‌کدام از خروجی/ورودی اکسل شرکت نمی‌کند — تمپلیت فقط از داخل خود نرم‌افزار (کشیدن‌ورهاکردن یا راست‌کلیک) قابل اتصال است.</div>
+
+      <h3 id="template-items">نمایش آیتم‌های تمپلیت (Show Template Items)</h3>
+      <p>با کلیک روی دکمه بنفش «Show Template Items»، ستون‌های خواندنی مربوط به ردیف‌های تمپلیت (متناسب با نوع تجهیز انتخاب‌شده — LV یا MV یا HV) به انتهای همان جدول اضافه می‌شوند. هر سلول به فرمت زیر نمایش داده می‌شود:</p>
+      <p style="text-align:center"><code>لیبل:مقدار‌Eplanix xتعداد</code> &nbsp;مثال:&nbsp; <code>Q:3VA2116-5JP32-0AA0 x2</code></p>
+      <p>وقتی تعداد (Qty) برابر ۱ باشد، «xN» نمایش داده نمی‌شود.</p>
+
+      <h3 id="freeze">فریز کردن ستون‌ها (Freeze)</h3>
+      <p>چون با فعال کردن «Show Template Items» تعداد ستون‌ها زیاد می‌شود، از کنترل «Freeze» (کنار فیلترها) استفاده کنید: عددی وارد کنید تا همان تعداد ستون از سمت چپ (شامل ستون #) هنگام اسکرول افقی ثابت بماند و بقیه ستون‌ها رد شوند — دقیقاً مثل Freeze Panes در اکسل.</p>
+    </section>
+
+    <section id="output-types">
+      <h2><span class="num">۵</span>خروجی‌ها (Output Types)</h2>
+      <p>در این تب می‌توانید گزارش کامل پروژه را در سه فرمت بگیرید:</p>
+      <ul>
+        <li><b>Excel</b>: شامل چند شیت (Project Overview، Technical Settings، Device Library، Equipment & Selections، Template Components).</li>
+        <li><b>PDF</b>: با دکمه «Print / Save as PDF» در پنجره باز‌شده.</li>
+        <li><b>HTML</b>: گزارش تک‌فایلی قابل مشاهده در مرورگر.</li>
+      </ul>
+      <p>بخش‌های «LV Equipment & Templates» و «MV Equipment & Templates» ماتریسی از همه تجهیزات و ستون‌های تمپلیت هر ردیف نشان می‌دهند — با همان فرمت <code>لیبل:Eplanix xتعداد</code> که در Device Selection هم دیدید.</p>
+    </section>
+
+    <section id="revisions">
+      <h2><span class="num">۶</span>مدیریت ریویژن (Revision)</h2>
+      <p>از منوی <code>Project → New Revision</code> می‌توانید یک اسنپ‌شات جدید از پروژه بسازید. فقط از روی آخرین ریویژن می‌توان ریویژن تازه ساخت؛ سوییچ به ریویژن قدیمی‌تر با پیام خطا مسدود می‌شود. مقایسه دو ریویژن (Excel/PDF) از تب Output Types در دسترس است.</p>
+    </section>
+
+    <section id="faq">
+      <h2><span class="num">۷</span>سوالات پرتکرار</h2>
+      <h3>چرا ستون Template در اکسل نیست؟</h3>
+      <p>عمداً حذف شده — اتصال تمپلیت باید همیشه از داخل نرم‌افزار انجام شود تا خطای انسانی در تایپ اسم تمپلیت رخ ندهد.</p>
+      <h3>چرا بعضی ردیف‌های SPARE غیرفعال هستند؟</h3>
+      <p>ردیف‌های SPARE اضافه فقط زمانی فعال می‌شوند که ردیف‌های اصلی بالای آن‌ها خالی مانده باشند؛ آیکون قفل 🔒 روی ردیف نشان می‌دهد که با یک SPARE گسترده جایگزین شده است.</p>
+      <h3>چطور نام یک ردیف تجهیز را تغییر بدهم؟</h3>
+      <p>در تب Create Template، کنار نام ردیف، آیکون مداد را بزنید. این تغییر همه‌جا (از جمله گزارش‌های Output Types) به‌روز می‌شود چون همه بخش‌ها از یک منبع داده مشترک می‌خوانند.</p>
+    </section>
+  </main>
+</div>
+
+<footer>© Simorgh Electrical Design Software — راهنمای داخلی نرم‌افزار</footer>
+
+</body>
+</html>

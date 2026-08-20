@@ -1,14 +1,9 @@
-```
 # Dependencies
 node_modules/
 
 # Build outputs
 dist/
 build/
-*.js
-*.ts
-*.tsx
-*.jsx
 
 # Environment variables
 .env
@@ -41,4 +36,3 @@ htmlcov/
 # OS generated files
 .DS_Store
 Thumbs.db
-```
