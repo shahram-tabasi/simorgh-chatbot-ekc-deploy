@@ -362,7 +362,20 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   };
 
   const deleteLib = (id: string, t: 'LV' | 'MV' | 'HV') => {
-    if (!confirm('Delete this device from the library?')) return;
+    // Check if device is used in any equipment
+    const usedInEquipments = (projectData.equipments ?? []).filter(eq => 
+      eq.devices?.some(d => {
+        const tmpl = (t === 'LV' ? projectData.templates?.LV : t === 'MV' ? projectData.templates?.MV : projectData.templates?.HV)?.find(tm => tm.id === d.templateId);
+        const parts = tmpl?.properties ? Object.values(tmpl.properties as any).flatMap((p: any) => p.parts || []) : [];
+        return parts.some((part: any) => part.fullData?.id === id || part.partNumber === (deviceLibrary[t]?.find(d => d.id === id)?.partNumber));
+      })
+    );
+    
+    if (usedInEquipments.length > 0) {
+      const equipmentNames = usedInEquipments.map(eq => eq.name).join(', ');
+      if (!confirm(`⚠️ این دستگاه در تجهیزات زیر استفاده شده است:\n${equipmentNames}\n\nآیا مطمئن هستید که می‌خواهید حذف کنید؟`)) return;
+    } else if (!confirm('Delete this device from the library?')) return;
+    
     updateProjectData({
       deviceLibrary: {
         ...deviceLibrary,
