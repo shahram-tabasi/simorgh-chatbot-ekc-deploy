@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon } from 'lucide-react';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
 import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';
+import { useProject } from '../../context/ProjectContext';
 
 // ===== PROPS INTERFACES =====
 interface DeviceTableProps {
@@ -506,7 +507,15 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   clipboardRows,
   onCopyRows
 }) => {
-  const [rows, setRows] = useState<DeviceTableRow[]>([]);
+  const [rows, setRowsRaw] = useState<DeviceTableRow[]>([]);
+  // Every table edit goes through setRows, so gating it here makes the whole
+  // grid read-only on a locked (non-latest) revision — with the warning
+  // dialog instead of a silently dropped change.
+  const { isCurrentRevisionEditable, notifyRevisionLocked } = useProject();
+  const setRows: React.Dispatch<React.SetStateAction<DeviceTableRow[]>> = value => {
+    if (!isCurrentRevisionEditable) { notifyRevisionLocked(); return; }
+    setRowsRaw(value);
+  };
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [lastSelectedIdx, setLastSelectedIdx] = useState<number>(-1);
   // Per-column Excel-style filters. A column has an active filter iff its
@@ -547,21 +556,29 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
   // Track previous equipment ID to only reload rows when equipment changes
   const prevEquipmentIdRef = useRef<string | null>(null);
+  // The exact rows array last loaded from an equipment, so the write-back
+  // effect below can tell "freshly loaded" from "edited by the user".
+  const loadedRowsRef = useRef<DeviceTableRow[] | null>(null);
 
   useEffect(() => {
     // Only reload rows when the selected equipment ID changes (different equipment selected)
     // NOT when the same equipment's data is updated (would cause infinite loop)
     if (selectedEquipment?.id !== prevEquipmentIdRef.current) {
       prevEquipmentIdRef.current = selectedEquipment?.id || null;
-      setRows(selectedEquipment?.devices || []);
+      // Loading rows for a newly selected equipment is not a user edit —
+      // bypass the read-only gate so viewing an old revision still works.
+      const loaded = selectedEquipment?.devices || [];
+      loadedRowsRef.current = loaded;
+      setRowsRaw(loaded);
       setSelectedRows(new Set());
     }
   }, [selectedEquipment]);
 
   useEffect(() => {
-    if (selectedEquipment) {
-      updateEquipment(selectedEquipment.id, { devices: rows });
-    }
+    // Skip the write-back right after loading an equipment's rows: `rows` is
+    // still the very array we got from it, so there is nothing to persist.
+    if (!selectedEquipment || rows === loadedRowsRef.current) return;
+    updateEquipment(selectedEquipment.id, { devices: rows });
   }, [rows]);
 
   const handleRowClick = (id: string, e: React.MouseEvent) => {
@@ -1521,6 +1538,9 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
     y: number;
     equipment: Equipment | null
   }>({ visible: false, x: 0, y: 0, equipment: null });
+  // Pending equipment removal from the project tree. This direction never
+  // touches the Device Library — the dialog says so explicitly.
+  const [equipDeleteTarget, setEquipDeleteTarget] = useState<Equipment | null>(null);
   const [expandedEquipment, setExpandedEquipment] = useState<Set<string>>(new Set());
   // key: `${equipmentId}::${templateName}`
   const [expandedTemplates, setExpandedTemplates] = useState<Set<string>>(new Set());
@@ -1788,9 +1808,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
           <button
             className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 text-red-600"
             onClick={() => {
-              if (confirm('Delete this equipment?')) {
-                deleteEquipment(contextMenu.equipment!.id);
-              }
+              setEquipDeleteTarget(contextMenu.equipment);
               setContextMenu({ visible: false, x: 0, y: 0, equipment: null });
             }}
           >
@@ -1807,6 +1825,56 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
           </button>
         </div>
       )}
+
+      {/* ── Delete equipment from the project arrangement ── */}
+      {equipDeleteTarget && (() => {
+        const rowCount = equipDeleteTarget.devices?.length ?? 0;
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]">
+            <div className="bg-white rounded-lg shadow-2xl w-[520px] flex flex-col">
+              <div className="flex items-start justify-between px-6 py-4 border-b bg-red-50 rounded-t-lg">
+                <div>
+                  <h3 className="font-semibold text-lg text-red-800">Delete Equipment</h3>
+                  <p className="text-sm text-red-700 mt-0.5">{equipDeleteTarget.name}</p>
+                </div>
+                <button className="p-1 hover:bg-red-100 rounded" onClick={() => setEquipDeleteTarget(null)}>
+                  <XIcon className="w-5 h-5 text-red-500" />
+                </button>
+              </div>
+              <div className="px-6 py-4 space-y-3">
+                <p className="text-sm text-gray-700">
+                  This removes the equipment from the project arrangement together with its{' '}
+                  <strong>{rowCount}</strong> device row{rowCount === 1 ? '' : 's'}.
+                </p>
+                <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                  <p className="text-sm text-blue-900">
+                    The Device Library entry it was created from is <strong>kept</strong>, so you can lay
+                    the same device out again from <em>Add</em>.
+                  </p>
+                  <p className="text-sm text-blue-800 mt-1" dir="rtl">
+                    این حذف فقط از چیدمان پروژه است — دستگاه در قسمت Device Library باقی می‌ماند و
+                    می‌توانید دوباره آن را اضافه و چیدمان کنید.
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+                <button
+                  className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
+                  onClick={() => setEquipDeleteTarget(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+                  onClick={() => { deleteEquipment(equipDeleteTarget.id); setEquipDeleteTarget(null); }}
+                >
+                  Delete from project
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Add Equipment – pick from Device Library ── */}
       {showAddModal && (() => {

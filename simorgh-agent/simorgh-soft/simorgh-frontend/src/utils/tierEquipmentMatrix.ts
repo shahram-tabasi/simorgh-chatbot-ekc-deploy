@@ -81,10 +81,12 @@ export function formatPartEntry(part: any): string {
 }
 
 // Compose the multi-line text for one Property cell across export/preview
-// targets. Multiple parts under the same property are separated by "— —".
+// targets. Multiple parts under the same property are stacked one per line
+// with no filler between them, so a cell holding several codes reads as a
+// simple vertical list (e.g. "Q:3RT2016-1BB41" above "Q:3RV2321-4EC10").
 export function partsCellText(parts: any[], separator = '\n'): string {
   if (!parts || parts.length === 0) return '';
-  return parts.map(p => formatPartEntry(p)).join(`${separator}— —${separator}`);
+  return parts.map(p => formatPartEntry(p)).join(separator);
 }
 
 // Build {propKey → parts[]} for a single template, ignoring metadata keys.

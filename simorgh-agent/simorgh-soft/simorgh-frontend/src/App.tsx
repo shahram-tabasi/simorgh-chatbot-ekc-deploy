@@ -10,10 +10,11 @@ import { SplashScreen } from './components/SplashScreen/SplashScreen';
 import { ProjectProvider, useProject } from './context/ProjectContext';
 import simorghLogo from './assets/logo.jpeg';
 import { Chatbot } from './components/Chatbot/Chatbot';
+import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
 import { Revision } from './types/project';
 
 // هوک Auto-save
-const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
+const useAutoSave = (projectData: any, saveProject: () => Promise<void>, enabled = true) => {
   const timeoutRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
@@ -21,6 +22,10 @@ const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
+
+    // A revision that is no longer the latest one is read-only — there is
+    // nothing to auto-save, and trying would only raise the lock warning.
+    if (!enabled) return;
 
     // Set new timeout for auto-save (5 seconds after last change)
     timeoutRef.current = setTimeout(async () => {
@@ -37,7 +42,7 @@ const useAutoSave = (projectData: any, saveProject: () => Promise<void>) => {
         clearTimeout(timeoutRef.current);
       }
     };
-  }, [projectData, saveProject]);
+  }, [projectData, saveProject, enabled]);
 };
 
 // کامپوننت MenuBar
@@ -50,7 +55,7 @@ interface MenuBarProps {
 const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, currentRevision, isCurrentRevisionEditable }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const { projectData, saveProject } = useProject();
+  const { projectData, saveProject, notifyRevisionLocked } = useProject();
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Click outside handler
@@ -74,7 +79,11 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
       alert('✅ Project saved successfully!');
       setActiveMenu(null);
     } catch (error) {
-      alert('❌ ' + ((error as Error)?.message || 'Error saving project'));
+      // A locked revision raises its own dialog from the context — don't
+      // stack a second alert on top of it.
+      if (isCurrentRevisionEditable !== false) {
+        alert('❌ ' + ((error as Error)?.message || 'Error saving project'));
+      }
     }
   };
 
@@ -99,7 +108,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
 
   const handleCreateRevisionClick = () => {
     if (!canCreateRevision) {
-      alert('⚠️ ریویژن بالاتر ساخته شده است و امکان تغییرات در این ریویژن نمی‌باشد.');
+      notifyRevisionLocked();
       return;
     }
     onCreateNewRevision();
@@ -259,11 +268,15 @@ const MainApp: React.FC = () => {
     createRevision,
     deleteRevision,
     getNextRevisionNumber,
-    isCurrentRevisionEditable
+    isCurrentRevisionEditable,
+    blockingRevisionNumbers,
+    revisionLockNotice,
+    notifyRevisionLocked,
+    dismissRevisionLockNotice
   } = useProject();
 
-  // Auto-save
-  useAutoSave(projectData, saveProject);
+  // Auto-save — disabled while a locked (non-latest) revision is selected.
+  useAutoSave(projectData, saveProject, isCurrentRevisionEditable);
 
   // Load revisions when project changes
   React.useEffect(() => {
@@ -284,6 +297,18 @@ const MainApp: React.FC = () => {
     setNavigatingToDeviceId(deviceId);
     setActiveTab(0);
   };
+
+  // Set when the user deliberately switches to an older revision. The lock
+  // dialog is raised from an effect (not inline) so it reads the freshly
+  // applied revision state rather than the pre-switch one.
+  const [pendingLockWarning, setPendingLockWarning] = useState(false);
+
+  React.useEffect(() => {
+    if (!pendingLockWarning) return;
+    if (!isCurrentRevisionEditable) notifyRevisionLocked();
+    setPendingLockWarning(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingLockWarning, isCurrentRevisionEditable, blockingRevisionNumbers]);
 
   const [showRevisionDropdown, setShowRevisionDropdown] = useState(false);
   const [showCreateRevisionModal, setShowCreateRevisionModal] = useState(false);
@@ -325,11 +350,11 @@ const MainApp: React.FC = () => {
     try {
       await switchRevision(revisionId);
       setShowRevisionDropdown(false);
-      // Show warning if switching to an older revision
+      // Warn right away when the user lands on an older, read-only revision
       const selectedRev = revisions.find(r => r._id === revisionId);
       const latestRev = revisions[0];
       if (selectedRev && latestRev && selectedRev._id !== latestRev._id) {
-        alert('⚠️ ریویژن بالاتر ساخته شده است و امکان تغییرات در این ریویژن نمی‌باشد.');
+        setPendingLockWarning(true);
       }
     } catch (err) {
       console.error('Failed to switch revision:', err);
@@ -556,6 +581,25 @@ const MainApp: React.FC = () => {
         </div>
       </div>
 
+      {/* Read-only banner — a non-latest revision cannot be edited until the
+          newer revisions are deleted. */}
+      {!isCurrentRevisionEditable && currentRevision && (
+        <div className="bg-amber-50 border-b border-amber-300 px-4 py-2">
+          <div className="container mx-auto flex items-center gap-2 text-sm text-amber-900">
+            <span>🔒</span>
+            <span>
+              <strong>REV {currentRevision.revisionNumber}</strong> is read-only
+              {blockingRevisionNumbers.length > 0
+                ? ` — a newer revision (${blockingRevisionNumbers.map(n => `REV ${n}`).join(', ')}) exists.`
+                : ' — a newer revision exists.'}
+            </span>
+            <span dir="rtl" className="ml-auto text-amber-800">
+              برای اعمال تغییرات، ابتدا ریویژن‌های بالاتر را حذف کنید.
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* محتوای اصلی + پنل چت‌بات (split layout) */}
       <div className="flex flex-row flex-1 min-h-0">
         <div className="flex-1 min-w-0 overflow-auto">
@@ -674,6 +718,11 @@ const MainApp: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Revision-locked warning — raised by any blocked edit attempt */}
+      {revisionLockNotice && (
+        <RevisionLockedModal notice={revisionLockNotice} onClose={dismissRevisionLockNotice} />
       )}
     </div>
   );

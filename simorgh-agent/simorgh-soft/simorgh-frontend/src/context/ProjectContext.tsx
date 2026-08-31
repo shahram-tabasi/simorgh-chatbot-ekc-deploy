@@ -1,6 +1,7 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
 import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, Revision } from '../types/project';
 import { projectService } from '../services/projectService';
+import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 
 interface ProjectContextType {
   projectData: ProjectData;
@@ -31,6 +32,20 @@ interface ProjectContextType {
   // revision is the latest one. A non-latest revision (including
   // Revision 0 once higher revisions exist) is view-only.
   isCurrentRevisionEditable: boolean;
+  // The revisions that block editing the current one (all newer ones), plus
+  // the helpers a screen needs to react to a blocked edit attempt:
+  // `notifyRevisionLocked()` raises the warning dialog, `revisionLockNotice`
+  // drives it, `dismissRevisionLockNotice()` closes it.
+  blockingRevisionNumbers: string[];
+  revisionLockNotice: RevisionLockNotice | null;
+  notifyRevisionLocked: () => void;
+  dismissRevisionLockNotice: () => void;
+}
+
+// Details shown by the "this revision is locked" dialog.
+export interface RevisionLockNotice {
+  currentRevisionNumber: string;
+  blockingRevisionNumbers: string[];
 }
 
 // EMPTY DEFAULTS - no demo values
@@ -115,6 +130,36 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const isCurrentRevisionEditable =
     !currentRevision || revisions.length === 0 || revisions[0]._id === currentRevision._id;
 
+  // Every revision newer than the selected one — these are exactly the
+  // revisions the user has to delete before this one becomes editable again.
+  const blockingRevisionNumbers = React.useMemo(() => {
+    if (!currentRevision || isCurrentRevisionEditable) return [];
+    const currentNum = parseInt(currentRevision.revisionNumber) || 0;
+    return revisions
+      .filter(r => (parseInt(r.revisionNumber) || 0) > currentNum)
+      .map(r => r.revisionNumber)
+      .sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+  }, [revisions, currentRevision, isCurrentRevisionEditable]);
+
+  const [revisionLockNotice, setRevisionLockNotice] = useState<RevisionLockNotice | null>(null);
+  const dismissRevisionLockNotice = () => setRevisionLockNotice(null);
+
+  const notifyRevisionLocked = () => {
+    setRevisionLockNotice({
+      currentRevisionNumber: currentRevision?.revisionNumber ?? '',
+      blockingRevisionNumbers,
+    });
+  };
+
+  // Every project mutation goes through this gate. Once a newer revision
+  // exists the selected one is frozen: the change is dropped and the user is
+  // told which revisions have to be deleted first.
+  const guardEdit = (): boolean => {
+    if (isCurrentRevisionEditable) return true;
+    notifyRevisionLocked();
+    return false;
+  };
+
   // Deep-link hydrate: the chatbot creates a project on simorgh-soft's
   // backend, then redirects the user to /simorgh-design-suite/?projectId=<_id>.
   // If we see that query param on mount AND we don't already have a project
@@ -142,6 +187,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   }, []);
 
   const updateProjectData = (data: Partial<ProjectData>) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       ...data,
@@ -153,8 +199,11 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     // Revision 0 (or any older revision) becomes read-only once a newer
     // revision exists — the user must delete the newer revisions first.
     if (currentRevision && !isCurrentRevisionEditable) {
+      notifyRevisionLocked();
       throw new Error(
-        `Revision ${currentRevision.revisionNumber} is locked because newer revisions exist. Delete the newer revisions to edit it again.`
+        `Revision ${currentRevision.revisionNumber} is locked because newer revision(s) ` +
+        `${blockingRevisionNumbers.map(n => `REV ${n}`).join(', ')} exist. ` +
+        `Delete the newer revisions to edit it again.`
       );
     }
     try {
@@ -203,6 +252,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     hierarchy?: TemplateHierarchy,
     copyFromId?: string,
   ) => {
+    if (!guardEdit()) return;
     setProjectData(prev => {
       // Optional clone of an existing template's properties (deep enough for
       // our value tree). Used by the hierarchical wizard's "use as a starting
@@ -231,6 +281,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const updateTemplate = (templateId: string, properties: Record<string, string>) => {
+    if (!guardEdit()) return;
     setProjectData(prev => {
       const updatedTemplates = { ...prev.templates };
       for (const type of ['LV', 'MV', 'HV'] as const) {
@@ -246,23 +297,20 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     });
   };
 
+  // Deleting a template also clears the device rows that were built on it —
+  // a row pointing at a template that no longer exists would keep a name in
+  // the grid while all of its property columns come out blank.
   const deleteTemplate = (templateId: string) => {
-    setProjectData(prev => {
-      const updatedTemplates = { ...prev.templates };
-      for (const type of ['LV', 'MV', 'HV'] as const) {
-        updatedTemplates[type] = updatedTemplates[type].filter(
-          template => template.id !== templateId
-        );
-      }
-      return {
-        ...prev,
-        templates: updatedTemplates,
-        changedOn: new Date().toISOString()
-      };
-    });
+    if (!guardEdit()) return;
+    setProjectData(prev => ({
+      ...prev,
+      ...removeTemplateEverywhere(prev, templateId),
+      changedOn: new Date().toISOString()
+    }));
   };
 
   const addDevice = (device: Partial<DeviceItem>) => {
+    if (!guardEdit()) return;
     const newDevice: DeviceItem = {
       id: `device-${Date.now()}`,
       rowNumber: projectData.devices.length + 1,
@@ -285,6 +333,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const updateDevice = (deviceId: string, data: Partial<DeviceItem>) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       devices: prev.devices.map(device =>
@@ -295,6 +344,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const deleteDevice = (deviceId: string) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       devices: prev.devices.filter(device => device.id !== deviceId),
@@ -304,6 +354,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
 
   // ⭐ جدید - Equipment Methods
   const addEquipment = (equipment: Equipment) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       equipments: [...prev.equipments, equipment],
@@ -312,6 +363,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const updateEquipment = (equipmentId: string, data: Partial<Equipment>) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       equipments: prev.equipments.map(eq =>
@@ -322,7 +374,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const deleteEquipment = (equipmentId: string) => {
-    // حذف دستگاه‌های مربوط به این Equipment
+    if (!guardEdit()) return;
+    // Removes the equipment from the project arrangement together with its
+    // device rows. The Device Library entry it was created from is NOT
+    // touched — the user may want to lay the same device out again.
     setProjectData(prev => ({
       ...prev,
       equipments: prev.equipments.filter(eq => eq.id !== equipmentId),
@@ -336,6 +391,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const copyEquipment = (equipmentId: string) => {
+    if (!guardEdit()) return;
     const equipment = projectData.equipments.find(eq => eq.id === equipmentId);
     if (equipment) {
       const copiedEquipment: Equipment = {
@@ -499,7 +555,11 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         switchRevision,
         deleteRevision,
         getNextRevisionNumber,
-        isCurrentRevisionEditable
+        isCurrentRevisionEditable,
+        blockingRevisionNumbers,
+        revisionLockNotice,
+        notifyRevisionLocked,
+        dismissRevisionLockNotice
       }}
     >
       {children}
