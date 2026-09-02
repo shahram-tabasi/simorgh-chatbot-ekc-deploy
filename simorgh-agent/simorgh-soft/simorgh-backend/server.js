@@ -190,6 +190,25 @@ app.get('/api/projects/name/:name', async (req, res) => {
   }
 });
 
+// Get one project by its _id. Declared after /search and /name/:name so those
+// literal paths keep matching first — this one only catches real ids.
+app.get('/api/projects/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  try {
+    const project = await db.collection('projects').findOne({ _id: new ObjectId(id) });
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json(project);
+  } catch (error) {
+    console.error('Error fetching project by id:', error);
+    res.status(500).json({ error: 'Failed to fetch project' });
+  }
+});
+
 app.post('/api/projects', async (req, res) => {
   try {
     // Check if project with same name already exists

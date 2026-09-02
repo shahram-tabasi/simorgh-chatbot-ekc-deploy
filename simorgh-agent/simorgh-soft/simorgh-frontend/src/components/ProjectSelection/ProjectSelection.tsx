@@ -105,7 +105,15 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     if (!selectedProject?._id) return;
     setCreatingRevision(true);
     try {
-      const latestProject = await projectService.getProjectById(selectedProject._id);
+      // Snapshot the freshest copy of the project, but don't fail the whole
+      // operation if that read is unavailable — the project document we
+      // already listed is a complete one and works as the snapshot.
+      let latestProject = selectedProject;
+      try {
+        latestProject = await projectService.getProjectById(selectedProject._id);
+      } catch (fetchErr) {
+        console.warn('Falling back to the listed project for the snapshot:', fetchErr);
+      }
       const created = await projectService.createRevision({
         projectId: selectedProject._id,
         revisionNumber: newRevNumber,
