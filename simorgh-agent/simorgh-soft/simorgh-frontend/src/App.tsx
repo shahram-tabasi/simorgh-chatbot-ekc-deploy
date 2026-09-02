@@ -8,7 +8,7 @@ import { OutputTypesTab } from './components/OutputTypes/OutputTypesTab';
 import { ProjectSelection } from './components/ProjectSelection/ProjectSelection';
 import { SplashScreen } from './components/SplashScreen/SplashScreen';
 import { ProjectProvider, useProject } from './context/ProjectContext';
-import simorghLogo from './assets/logo.jpeg';
+import logoMark from './assets/logo-mark.png';
 import { Chatbot } from './components/Chatbot/Chatbot';
 import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
 import { Revision } from './types/project';
@@ -449,13 +449,41 @@ const MainApp: React.FC = () => {
               to   { opacity: 1; transform: translateX(0) scaleX(1); }
             }
             .header-wordmark { transform-origin: left center; animation: headerWordmarkReveal 0.7s cubic-bezier(0.22,1,0.36,1) 0.2s both; }
+
+            /* Light sweeping across "Design Suite", same effect as the splash. */
+            @keyframes headerSuiteSheen {
+              0%   { background-position: -180% 0; }
+              100% { background-position:  180% 0; }
+            }
+            .header-suite-sheen {
+              background-image: linear-gradient(100deg,
+                #1d4ed8 0%, #1d4ed8 38%, #7dd3fc 50%, #1d4ed8 62%, #1d4ed8 100%);
+              background-size: 220% 100%;
+              -webkit-background-clip: text;
+              background-clip: text;
+              color: transparent;
+              animation: headerSuiteSheen 3.4s linear infinite;
+            }
+            @keyframes headerSuiteBeam {
+              0%, 100% { opacity: .3; transform: scaleX(.75); }
+              50%      { opacity: 1;  transform: scaleX(1); }
+            }
+            .header-suite-beam {
+              transform-origin: left center;
+              background: linear-gradient(90deg, rgba(37,99,235,0) 0%, #60a5fa 25%, #38bdf8 50%, #60a5fa 75%, rgba(37,99,235,0) 100%);
+              box-shadow: 0 0 8px 1px rgba(56,189,248,0.5);
+              animation: headerSuiteBeam 3.4s ease-in-out infinite;
+            }
           `}</style>
           <div className="flex items-center py-3">
-            <img src={simorghLogo} alt="Simorgh logo" className="h-12 w-auto object-contain" />
-            <div className="mx-4 h-10 w-px bg-gray-300 self-center" />
+            {/* Transparent, cropped logo mark — no white plate, so the bird
+                itself is what you see and it reads noticeably larger. */}
+            <img src={logoMark} alt="Simorgh logo" className="h-16 w-auto object-contain" />
+            <div className="mx-4 h-12 w-px bg-gray-300 self-center" />
             <div className="header-wordmark">
               <div className="text-xl font-extrabold tracking-tight text-blue-900 leading-none">Simorgh</div>
-              <div className="text-sm font-medium text-blue-600 leading-none mt-1">Design Suite</div>
+              <div className="header-suite-sheen text-sm font-medium leading-none mt-1">Design Suite</div>
+              <div className="header-suite-beam h-[2px] w-full mt-1 rounded-full" />
             </div>
             <div className="ml-auto flex items-center space-x-4">
               {/* Project Name */}

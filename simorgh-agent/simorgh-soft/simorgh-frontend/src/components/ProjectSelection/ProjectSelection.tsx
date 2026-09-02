@@ -1,43 +1,64 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService } from '../../services/projectService';
-import simorghLogo from '../../assets/logo.jpeg';
+import logoMark from '../../assets/logo-mark.png';
 
 interface ProjectSelectionProps {
   onProjectSelect: (project: ProjectData, revision?: Revision) => void;
   onNewProject:    (projectName: string) => void;
 }
 
+// Label shown for a project in the combo box: its code followed by its name
+// (e.g. "EKC001  ElectroKavir"), the code muted so the two stay readable.
+const projectCode = (p: ProjectData) => (p.projectId || p.projectNumber || '').trim();
+
+// Everything the startup flow needs lives in ONE dialog: pick the project from
+// a searchable combo box, pick (or create) its revision underneath, then open.
+// No second modal opens on top of this one at any point.
 export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   onProjectSelect,
   onNewProject,
 }) => {
   const [projects, setProjects] = useState<ProjectData[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [revisions, setRevisions] = useState<Revision[]>([]);
-  const [selectedRevision, setSelectedRevision] = useState<Revision | null>(null);
-  const [showRevisionSelector, setShowRevisionSelector] = useState(false);
-  const [selectedProjectForRevision, setSelectedProjectForRevision] = useState<ProjectData | null>(null);
-  
-  // Create revision modal state
-  const [showCreateRevisionModal, setShowCreateRevisionModal] = useState(false);
-  const [newRevisionNumber, setNewRevisionNumber] = useState<string>('0');
-  const [newRevisionName, setNewRevisionName] = useState<string>('');
-  const [newRevisionDescription, setNewRevisionDescription] = useState<string>('');
-  const [creatingRevision, setCreatingRevision] = useState(false);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState<string | null>(null);
 
+  // ── Project combo box ───────────────────────────────────────────────
+  const [comboOpen, setComboOpen] = useState(false);
+  const [search, setSearch]       = useState('');
+  const [selectedProject, setSelectedProject] = useState<ProjectData | null>(null);
+  const comboRef = useRef<HTMLDivElement>(null);
+
+  // ── Revisions of the selected project ───────────────────────────────
+  const [revisions, setRevisions]               = useState<Revision[]>([]);
+  const [selectedRevision, setSelectedRevision] = useState<Revision | null>(null);
+  const [loadingRevisions, setLoadingRevisions] = useState(false);
+
+  // ── Inline "new revision" form (same dialog, not a nested modal) ─────
+  const [newRevOpen, setNewRevOpen]               = useState(false);
+  const [newRevNumber, setNewRevNumber]           = useState('0');
+  const [newRevName, setNewRevName]               = useState('');
+  const [newRevDescription, setNewRevDescription] = useState('');
+  const [creatingRevision, setCreatingRevision]   = useState(false);
+
+  useEffect(() => { loadProjects(); }, []);
+
+  // Close the dropdown when clicking anywhere outside it.
   useEffect(() => {
-    loadProjects();
-  }, []);
+    if (!comboOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (comboRef.current && !comboRef.current.contains(e.target as Node)) setComboOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [comboOpen]);
 
   const loadProjects = async () => {
     try {
       setLoading(true);
-      const projectsData = await projectService.getAllProjects();
-      setProjects(projectsData);
-    } catch (err) {
+      setProjects(await projectService.getAllProjects());
+      setError(null);
+    } catch {
       setError('Failed to load projects');
     } finally {
       setLoading(false);
@@ -46,127 +67,112 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
   const loadRevisions = async (projectId: string) => {
     try {
-      const revisionsData = await projectService.getRevisions(projectId);
-      setRevisions(revisionsData);
-      
-      // Auto-create Revision 0 if none exist
-      if (revisionsData.length === 0) {
-        // Will be created when opening or explicitly by user
-        setSelectedRevision(null);
-      } else {
-        // Default to latest (first after sort by revisionNumber desc)
-        setSelectedRevision(revisionsData[0]);
-      }
+      setLoadingRevisions(true);
+      const list = await projectService.getRevisions(projectId);
+      setRevisions(list);
+      // Default to the latest revision (the backend returns them newest-first).
+      setSelectedRevision(list.length > 0 ? list[0] : null);
     } catch (err) {
       console.error('Failed to load revisions:', err);
       setRevisions([]);
       setSelectedRevision(null);
+    } finally {
+      setLoadingRevisions(false);
     }
   };
 
-  const handleProjectClick = async (project: ProjectData) => {
-    setSelectedProjectForRevision(project);
-    await loadRevisions(project._id!);
-    setShowRevisionSelector(true);
+  const handlePickProject = async (project: ProjectData | null) => {
+    setSelectedProject(project);
+    setComboOpen(false);
+    setSearch('');
+    setNewRevOpen(false);
+    setRevisions([]);
+    setSelectedRevision(null);
+    if (project?._id) await loadRevisions(project._id);
   };
 
-  const handleConfirmSelect = () => {
-    if (selectedProjectForRevision) {
-      onProjectSelect(selectedProjectForRevision, selectedRevision || undefined);
-      setShowRevisionSelector(false);
-      setSelectedProjectForRevision(null);
-    }
-  };
-
-  const openCreateRevisionModal = async () => {
-    if (!selectedProjectForRevision) return;
-    
-    // Calculate next revision number automatically
-    let nextNum = 0;
-    if (revisions.length > 0) {
-      const maxRev = Math.max(...revisions.map(r => parseInt(r.revisionNumber) || 0));
-      nextNum = maxRev + 1;
-    }
-    
-    setNewRevisionNumber(nextNum.toString());
-    setNewRevisionName(`Revision ${nextNum}`);
-    setNewRevisionDescription('');
-    setShowCreateRevisionModal(true);
+  const openNewRevisionForm = () => {
+    const nextNum = revisions.length > 0
+      ? Math.max(...revisions.map(r => parseInt(r.revisionNumber) || 0)) + 1
+      : 0;
+    setNewRevNumber(String(nextNum));
+    setNewRevName(`Revision ${nextNum}`);
+    setNewRevDescription('');
+    setNewRevOpen(true);
   };
 
   const handleCreateRevision = async () => {
-    if (!selectedProjectForRevision) return;
-    
+    if (!selectedProject?._id) return;
     setCreatingRevision(true);
     try {
-      // Get the latest project data for the snapshot
-      const latestProject = await projectService.getProjectById(selectedProjectForRevision._id!);
-      
-      const newRevision = await projectService.createRevision({
-        projectId: selectedProjectForRevision._id!,
-        revisionNumber: newRevisionNumber,
-        revisionName: newRevisionName || `Revision ${newRevisionNumber}`,
-        description: newRevisionDescription || '',
+      const latestProject = await projectService.getProjectById(selectedProject._id);
+      const created = await projectService.createRevision({
+        projectId: selectedProject._id,
+        revisionNumber: newRevNumber,
+        revisionName: newRevName || `Revision ${newRevNumber}`,
+        description: newRevDescription || '',
         createdBy: 'user',
         projectSnapshot: latestProject,
         isLocked: false,
       });
-      
-      // Reload revisions and select the new one
-      await loadRevisions(selectedProjectForRevision._id!);
-      setSelectedRevision(newRevision);
-      setShowCreateRevisionModal(false);
+      await loadRevisions(selectedProject._id);
+      setSelectedRevision(created);
+      setNewRevOpen(false);
     } catch (err) {
-      console.error('Failed to create revision:', err);
-      // Show error message using existing UI pattern
-      alert('Failed to create revision: ' + (err as Error).message);
+      setError('Failed to create revision: ' + (err as Error).message);
     } finally {
       setCreatingRevision(false);
     }
   };
 
-  const trimmed = searchTerm.trim();
-
-  const filteredProjects = projects.filter(p =>
-    p.projectName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.projectDescription.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  // Exact name match (case-insensitive) — used for duplicate check
-  const exactMatch = projects.some(
-    p => p.projectName.toLowerCase() === trimmed.toLowerCase()
-  );
-
-  // Show create button when user has typed something that doesn't fully match an existing project name
-  const canCreate = trimmed.length > 0 && !exactMatch;
-
-  const handleCreate = () => {
-    if (!canCreate) return;
-    onNewProject(trimmed);
-  };
-
-  if (loading) {
+  const trimmed = search.trim();
+  const filteredProjects = projects.filter(p => {
+    const q = trimmed.toLowerCase();
+    if (!q) return true;
     return (
-      <div
-        className="flex items-center justify-center min-h-screen"
-        style={{ background: 'radial-gradient(1200px 800px at 10% 10%, #14335f 0%, #0a1a33 45%, #060e1e 100%)' }}
-      >
-        <div className="text-slate-300 text-sm">Loading projects…</div>
-      </div>
+      p.projectName.toLowerCase().includes(q) ||
+      (p.projectDescription || '').toLowerCase().includes(q) ||
+      projectCode(p).toLowerCase().includes(q)
     );
-  }
+  });
+
+  const exactMatch = projects.some(p => p.projectName.toLowerCase() === trimmed.toLowerCase());
+  const canCreate  = trimmed.length > 0 && !exactMatch;
+
+  const handleOpen = () => {
+    if (!selectedProject) return;
+    onProjectSelect(selectedProject, selectedRevision || undefined);
+  };
 
   return (
     <div
-      className="relative flex flex-col min-h-screen"
+      className="fixed inset-0 flex items-center justify-center overflow-auto p-6"
       style={{ background: 'radial-gradient(1200px 800px at 10% 10%, #14335f 0%, #0a1a33 45%, #060e1e 100%)' }}
     >
       <style>{`
-        @keyframes projSelWordmarkReveal {
-          from { opacity: 0; transform: translateX(-10px) scaleX(0.85); }
-          to   { opacity: 1; transform: translateX(0) scaleX(1); }
+        @keyframes suiteSheen {
+          0%   { background-position: -180% 0; }
+          100% { background-position:  180% 0; }
         }
-        .proj-sel-wordmark { transform-origin: left center; animation: projSelWordmarkReveal 0.7s cubic-bezier(0.22,1,0.36,1) 0.2s both; }
+        .suite-sheen-light {
+          background-image: linear-gradient(100deg,
+            #1d4ed8 0%, #1d4ed8 38%, #7dd3fc 50%, #1d4ed8 62%, #1d4ed8 100%);
+          background-size: 220% 100%;
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+          animation: suiteSheen 3.4s linear infinite;
+        }
+        @keyframes suiteBeam {
+          0%, 100% { opacity: .35; transform: scaleX(.75); }
+          50%      { opacity: 1;   transform: scaleX(1); }
+        }
+        .suite-beam-light {
+          transform-origin: left center;
+          background: linear-gradient(90deg, rgba(37,99,235,0) 0%, #60a5fa 25%, #38bdf8 50%, #60a5fa 75%, rgba(37,99,235,0) 100%);
+          box-shadow: 0 0 10px 1px rgba(56,189,248,0.55);
+          animation: suiteBeam 3.4s ease-in-out infinite;
+        }
       `}</style>
 
       {/* Faint dot grid, matching the loading screen's texture */}
@@ -175,285 +181,228 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
         style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.5) 1px, transparent 1px)', backgroundSize: '22px 22px' }}
       />
 
-      {/* Header */}
-      <div className="relative border-b border-white/10">
-        <div className="container mx-auto px-6 py-4 flex items-center gap-4">
-          <img src={simorghLogo} alt="Simorgh" className="h-12 w-auto object-contain" />
-          <div className="h-10 w-px bg-white/25" />
-          <div className="proj-sel-wordmark">
-            <div className="text-xl font-extrabold tracking-tight text-white leading-none">Simorgh</div>
-            <div className="text-sm font-medium text-blue-400 leading-none mt-1">Design Suite</div>
-            <p className="text-xs text-slate-400 mt-1">Electrical Engineering Design Platform</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className="relative flex-1 container mx-auto px-6 py-10 max-w-3xl">
-
-        {error && (
-          <div className="mb-4 bg-red-50 border border-red-300 text-red-700 text-sm px-4 py-3 rounded">
-            {error}
-          </div>
-        )}
-
-        {/* Search / Create bar */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-5">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Search or create a project
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              autoFocus
-              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
-              placeholder="Type a project name…"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleCreate(); }}
-            />
-            {canCreate && (
-              <button
-                className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 whitespace-nowrap font-medium"
-                onClick={handleCreate}
-              >
-                + Create "{trimmed}"
-              </button>
-            )}
-            {exactMatch && trimmed.length > 0 && (
-              <span className="self-center text-xs text-amber-600 whitespace-nowrap font-medium">
-                Name already exists
-              </span>
-            )}
+      {/* ── The single dialog ── */}
+      <div className="relative bg-white rounded-2xl shadow-2xl w-[600px] max-w-full flex flex-col my-auto">
+        {/* Header */}
+        <div className="flex items-center gap-4 px-6 py-5 border-b border-gray-100">
+          <img src={logoMark} alt="Simorgh" className="h-20 w-auto" />
+          <div className="h-14 w-px bg-gray-200" />
+          <div>
+            <div className="text-2xl font-extrabold tracking-tight text-blue-900 leading-none">Simorgh</div>
+            <div className="suite-sheen-light text-lg font-medium leading-none mt-1">Design Suite</div>
+            <div className="suite-beam-light h-[2px] w-full mt-1.5 rounded-full" />
+            <p className="text-[11px] text-gray-400 mt-1.5">Electrical Engineering Design Platform</p>
           </div>
         </div>
 
-        {/* Projects list */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-          <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-700">
-              {trimmed ? `Results for "${trimmed}"` : 'All Projects'}
-            </h2>
-            <span className="text-xs text-gray-400">{filteredProjects.length} project{filteredProjects.length !== 1 ? 's' : ''}</span>
-          </div>
-
-          {filteredProjects.length === 0 ? (
-            <div className="py-12 text-center">
-              <p className="text-sm text-gray-500">
-                {trimmed
-                  ? <>No project named <strong>"{trimmed}"</strong>.</>
-                  : 'No projects yet.'}
-              </p>
-              {canCreate && (
-                <button
-                  className="mt-3 text-sm text-blue-600 hover:text-blue-800 font-medium"
-                  onClick={handleCreate}
-                >
-                  Create "{trimmed}" as a new project →
-                </button>
-              )}
+        {/* No overflow clipping here — the combo box dropdown has to be able to
+            hang over the dialog's edge. Every inner list caps its own height. */}
+        <div className="px-6 py-5">
+          {error && (
+            <div className="mb-4 bg-red-50 border border-red-300 text-red-700 text-sm px-4 py-2.5 rounded">
+              {error}
             </div>
-          ) : (
-            <ul className="divide-y divide-gray-100">
-              {filteredProjects.map(project => (
-                <li
-                  key={project._id}
-                  className="flex items-center justify-between px-5 py-4 hover:bg-blue-50 cursor-pointer transition-colors group"
-                  onClick={() => handleProjectClick(project)}
-                >
-                  <div className="min-w-0">
-                    <p className="font-medium text-blue-900 truncate">{project.projectName}</p>
-                    {project.projectDescription && (
-                      <p className="text-xs text-gray-500 mt-0.5 truncate">{project.projectDescription}</p>
-                    )}
-                    <div className="flex gap-3 mt-1 text-xs text-gray-400">
-                      {project.client   && <span>Client: {project.client}</span>}
-                      {project.location && <span>Location: {project.location}</span>}
-                      {project.standard && <span>{project.standard}</span>}
-                    </div>
-                  </div>
-                  <div className="ml-4 text-right text-xs text-gray-400 flex-shrink-0">
-                    <div>Modified: {new Date(project.changedOn).toLocaleDateString()}</div>
-                    <div className="mt-0.5 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                      Open →
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
           )}
-        </div>
-      </div>
 
-      {/* Revision Selection Modal */}
-      {showRevisionSelector && selectedProjectForRevision && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl w-[600px] max-h-[80vh] flex flex-col">
-            <div className="px-6 py-4 border-b flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-lg">Select Revision for "{selectedProjectForRevision.projectName}"</h3>
-                <p className="text-xs text-gray-500 mt-1">Choose which version of this project to open</p>
+          {/* ── Project combo box (search lives inside the dropdown) ── */}
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Project</label>
+          <div className="relative" ref={comboRef}>
+            <button
+              type="button"
+              className="w-full flex items-center justify-between gap-2 border border-gray-400 rounded px-3 py-2 text-sm bg-white hover:border-blue-400 focus:outline-none focus:border-blue-500"
+              onClick={() => setComboOpen(o => !o)}
+              disabled={loading}
+            >
+              <span className={`truncate ${selectedProject ? 'text-gray-800' : 'text-gray-500'}`}>
+                {loading
+                  ? 'Loading projects…'
+                  : selectedProject
+                    ? <>
+                        {projectCode(selectedProject) && (
+                          <span className="text-gray-400 mr-1.5">{projectCode(selectedProject)}</span>
+                        )}
+                        {selectedProject.projectName}
+                      </>
+                    : '-- Select Project --'}
+              </span>
+              <span className="text-gray-500 text-[10px] leading-none">{comboOpen ? '▲' : '▼'}</span>
+            </button>
+
+            {comboOpen && (
+              <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-400 rounded shadow-2xl flex flex-col max-h-72">
+                {/* Search field — part of the combo box itself */}
+                <div className="p-1.5 border-b border-gray-200 bg-white">
+                  <input
+                    type="text"
+                    autoFocus
+                    className="w-full border-2 border-gray-800 rounded-sm px-2 py-1.5 text-sm focus:outline-none focus:border-blue-600"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && filteredProjects.length > 0) handlePickProject(filteredProjects[0]);
+                      if (e.key === 'Enter' && filteredProjects.length === 0 && canCreate) onNewProject(trimmed);
+                      if (e.key === 'Escape') setComboOpen(false);
+                    }}
+                  />
+                </div>
+
+                <ul className="overflow-y-auto text-sm">
+                  <li
+                    className="px-3 py-1.5 cursor-pointer text-gray-600 hover:bg-blue-50"
+                    onClick={() => handlePickProject(null)}
+                  >
+                    -- Select Project --
+                  </li>
+
+                  {filteredProjects.map(p => {
+                    const isSel = selectedProject?._id === p._id;
+                    return (
+                      <li
+                        key={p._id}
+                        className={`px-3 py-1.5 cursor-pointer truncate ${
+                          isSel ? 'bg-blue-500 text-white' : 'hover:bg-blue-50 text-gray-800'
+                        }`}
+                        onClick={() => handlePickProject(p)}
+                        title={p.projectDescription || p.projectName}
+                      >
+                        {projectCode(p) && (
+                          <span className={isSel ? 'text-blue-100 mr-1.5' : 'text-gray-400 mr-1.5'}>
+                            {projectCode(p)}
+                          </span>
+                        )}
+                        {p.projectName}
+                      </li>
+                    );
+                  })}
+
+                  {filteredProjects.length === 0 && !canCreate && (
+                    <li className="px-3 py-3 text-gray-400 italic">No projects found.</li>
+                  )}
+
+                  {canCreate && (
+                    <li
+                      className="px-3 py-2 cursor-pointer text-blue-700 hover:bg-blue-50 border-t border-gray-100 font-medium"
+                      onClick={() => onNewProject(trimmed)}
+                    >
+                      ➕ Create new project “{trimmed}”
+                    </li>
+                  )}
+                </ul>
               </div>
-              <button
-                className="px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={openCreateRevisionModal}
-                disabled={creatingRevision}
-              >
-                {creatingRevision ? 'Creating...' : '+ New Revision'}
-              </button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto px-6 py-4">
-              {revisions.length === 0 ? (
-                <div className="text-center py-8 text-gray-500 text-sm">
-                  No revisions available. Create a new revision to start.
-                  <br/>
-                  <span className="text-xs">Revision 0 will be created automatically as the base revision.</span>
+            )}
+          </div>
+
+          {/* ── Revision of the selected project ── */}
+          {selectedProject && (
+            <div className="mt-5">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-sm font-medium text-gray-700">Revision</label>
+                <button
+                  type="button"
+                  className="text-xs text-green-700 hover:text-green-800 font-medium disabled:opacity-50"
+                  onClick={openNewRevisionForm}
+                  disabled={loadingRevisions || newRevOpen}
+                >
+                  + New Revision
+                </button>
+              </div>
+
+              {loadingRevisions ? (
+                <div className="border border-gray-300 rounded px-3 py-3 text-sm text-gray-500">Loading revisions…</div>
+              ) : revisions.length === 0 ? (
+                <div className="border border-gray-300 rounded px-3 py-3 text-sm text-gray-500">
+                  No revisions yet — REV 0 is created automatically when the project opens.
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {revisions.map((revision, idx) => {
+                <div className="border border-gray-300 rounded max-h-40 overflow-y-auto divide-y divide-gray-100">
+                  {revisions.map((rev, idx) => {
                     const isLatest = idx === 0;
-                    const isBase = parseInt(revision.revisionNumber) === 0;
+                    const isBase   = parseInt(rev.revisionNumber) === 0;
+                    const isSel    = selectedRevision?._id === rev._id;
                     return (
                       <div
-                        key={revision._id || idx}
-                        className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                          selectedRevision?._id === revision._id
-                            ? 'border-blue-500 bg-blue-50'
-                            : 'border-gray-200 hover:bg-gray-50'
-                        }`}
-                        onClick={() => setSelectedRevision(revision)}
+                        key={rev._id || idx}
+                        className={`px-3 py-2 cursor-pointer ${isSel ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                        onClick={() => setSelectedRevision(rev)}
                       >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium text-gray-800">
-                                REV {revision.revisionNumber}
-                              </p>
-                              {isLatest && (
-                                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded font-medium">LATEST</span>
-                              )}
-                              {isBase && (
-                                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">BASE</span>
-                              )}
-                              {isLatest && isBase && (
-                                <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-medium">INITIAL</span>
-                              )}
-                            </div>
-                            <p className="text-sm text-gray-700 mt-0.5">{revision.revisionName}</p>
-                            <p className="text-xs text-gray-500 mt-1">{revision.description}</p>
-                            <p className="text-xs text-gray-400 mt-1">
-                              Created: {new Date(revision.createdOn).toLocaleString()}
-                            </p>
-                          </div>
-                          {revision.isLocked && (
-                            <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
-                              🔒 Locked
-                            </span>
-                          )}
+                        <div className="flex items-center gap-2">
+                          <input type="radio" readOnly checked={isSel} className="accent-blue-600" />
+                          <span className="text-sm font-medium text-gray-800">REV {rev.revisionNumber}</span>
+                          {isLatest && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-medium">LATEST</span>}
+                          {isBase   && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">BASE</span>}
+                          {rev.revisionName && <span className="text-xs text-gray-500 truncate">— {rev.revisionName}</span>}
                         </div>
                       </div>
                     );
                   })}
                 </div>
               )}
-            </div>
 
-            <div className="flex justify-between items-center px-6 py-4 border-t bg-gray-50">
-              <button
-                className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
-                onClick={() => {
-                  setShowRevisionSelector(false);
-                  setSelectedProjectForRevision(null);
-                }}
-              >
-                Cancel
-              </button>
-              <div className="flex gap-2">
-                <button
-                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={handleConfirmSelect}
-                  disabled={!selectedRevision && revisions.length > 0}
-                >
-                  Open Selected Revision
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Create Revision Modal */}
-      {showCreateRevisionModal && selectedProjectForRevision && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl w-[500px] flex flex-col">
-            <div className="px-6 py-4 border-b">
-              <h3 className="font-semibold text-lg">Create New Revision</h3>
-              <p className="text-xs text-gray-500 mt-1">Create a new revision for "{selectedProjectForRevision.projectName}"</p>
-            </div>
-            
-            <div className="px-6 py-4 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
-                <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded text-sm text-gray-600">
-                  {selectedProjectForRevision.projectName}
+              {/* Inline new-revision form — stays inside this same dialog */}
+              {newRevOpen && (
+                <div className="mt-3 border border-green-200 bg-green-50/60 rounded p-3 space-y-2">
+                  <div className="grid grid-cols-3 gap-2 items-center">
+                    <label className="text-xs text-gray-600">Revision Number</label>
+                    <input
+                      readOnly
+                      value={newRevNumber}
+                      className="col-span-2 border border-gray-300 rounded px-2 py-1 text-sm bg-gray-100 text-gray-500"
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 items-center">
+                    <label className="text-xs text-gray-600">Revision Name</label>
+                    <input
+                      value={newRevName}
+                      onChange={e => setNewRevName(e.target.value)}
+                      className="col-span-2 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:border-blue-400"
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="text-xs text-gray-600 pt-1">Description</label>
+                    <textarea
+                      rows={2}
+                      value={newRevDescription}
+                      onChange={e => setNewRevDescription(e.target.value)}
+                      className="col-span-2 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:border-blue-400"
+                      placeholder="Describe the changes in this revision…"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      className="px-3 py-1.5 border rounded text-xs hover:bg-gray-100"
+                      onClick={() => setNewRevOpen(false)}
+                      disabled={creatingRevision}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-3 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700 disabled:opacity-50"
+                      onClick={handleCreateRevision}
+                      disabled={creatingRevision}
+                    >
+                      {creatingRevision ? 'Creating…' : 'Create Revision'}
+                    </button>
+                  </div>
                 </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Revision Number</label>
-                <input
-                  type="text"
-                  value={newRevisionNumber}
-                  readOnly
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500"
-                />
-                <p className="text-xs text-gray-500 mt-1">Automatically calculated as the next revision number</p>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Revision Name</label>
-                <input
-                  type="text"
-                  value={newRevisionName}
-                  onChange={(e) => setNewRevisionName(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
-                  placeholder="e.g., Electrical design update"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
-                <textarea
-                  value={newRevisionDescription}
-                  onChange={(e) => setNewRevisionDescription(e.target.value)}
-                  rows={3}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
-                  placeholder="Describe the changes in this revision..."
-                />
-              </div>
+              )}
             </div>
-
-            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
-              <button
-                className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
-                onClick={() => setShowCreateRevisionModal(false)}
-                disabled={creatingRevision}
-              >
-                Cancel
-              </button>
-              <button
-                className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={handleCreateRevision}
-                disabled={creatingRevision}
-              >
-                {creatingRevision ? 'Creating...' : 'Create Revision'}
-              </button>
-            </div>
-          </div>
+          )}
         </div>
-      )}
+
+        {/* Footer */}
+        <div className="flex items-center justify-between px-6 py-4 border-t bg-gray-50 rounded-b-2xl">
+          <span className="text-xs text-gray-400">
+            {projects.length} project{projects.length === 1 ? '' : 's'}
+          </span>
+          <button
+            className="px-5 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={handleOpen}
+            disabled={!selectedProject}
+          >
+            Open Project
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

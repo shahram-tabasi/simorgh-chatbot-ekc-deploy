@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Loader2, Circle } from 'lucide-react';
-import simorghLogo from '../../assets/logo.jpeg';
+import logoMark from '../../assets/logo-mark.png';
 import { projectService } from '../../services/projectService';
 
 interface Step {
@@ -34,7 +34,7 @@ const buildSteps = (): Step[] => [
       const img = new Image();
       img.onload = () => resolve();
       img.onerror = () => resolve();
-      img.src = simorghLogo;
+      img.src = logoMark;
     }),
   },
   {
@@ -46,6 +46,11 @@ const buildSteps = (): Step[] => [
     }),
   },
 ];
+
+// The startup checks below can all resolve in a few hundred milliseconds on a
+// warm backend, which made the splash flash past unseen. Hold it on screen for
+// at least this long — the checks still run for as long as they really need.
+const MIN_VISIBLE_MS = 2400;
 
 interface SplashScreenProps {
   onComplete: () => void;
@@ -60,6 +65,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
     if (startedRef.current) return;
     startedRef.current = true;
     let cancelled = false;
+    const startedAt = Date.now();
     (async () => {
       for (let i = 0; i < steps.length; i++) {
         if (cancelled) return;
@@ -68,6 +74,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
       }
       if (cancelled) return;
       setStepIndex(steps.length);
+      const remaining = MIN_VISIBLE_MS - (Date.now() - startedAt);
+      if (remaining > 0) await new Promise(r => setTimeout(r, remaining));
+      if (cancelled) return;
       onComplete();
     })();
     return () => { cancelled = true; };
@@ -90,6 +99,32 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
           to   { opacity: 1; transform: translateX(0) scaleX(1); }
         }
         .splash-wordmark { transform-origin: left center; animation: splashWordmarkReveal 0.8s cubic-bezier(0.22,1,0.36,1) 0.2s both; }
+
+        /* Light sweeping across the "Design Suite" wordmark. */
+        @keyframes suiteSheen {
+          0%   { background-position: -180% 0; }
+          100% { background-position:  180% 0; }
+        }
+        .suite-sheen {
+          background-image: linear-gradient(100deg,
+            #60a5fa 0%, #60a5fa 38%, #ffffff 50%, #60a5fa 62%, #60a5fa 100%);
+          background-size: 220% 100%;
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+          animation: suiteSheen 3.4s linear infinite;
+        }
+        /* The glow bar that runs under it, like a light bar catching the edge. */
+        @keyframes suiteBeam {
+          0%, 100% { opacity: .35; transform: scaleX(.75); }
+          50%      { opacity: 1;   transform: scaleX(1); }
+        }
+        .suite-beam {
+          transform-origin: left center;
+          background: linear-gradient(90deg, rgba(96,165,250,0) 0%, #93c5fd 25%, #ffffff 50%, #93c5fd 75%, rgba(96,165,250,0) 100%);
+          box-shadow: 0 0 14px 2px rgba(96,165,250,0.65);
+          animation: suiteBeam 3.4s ease-in-out infinite;
+        }
       `}</style>
 
       {/* Faint dot grid for texture */}
@@ -104,16 +139,21 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
       <div className="relative flex-1 flex items-center px-10 md:px-20">
         <div>
           <div className="flex items-center gap-5">
+            {/* Transparent logo mark (no white plate behind it), so the bird
+                itself fills the space and reads much larger. */}
             <img
-              src={simorghLogo}
+              src={logoMark}
               alt=""
-              className="h-16 md:h-20 w-auto"
-              style={{ filter: 'drop-shadow(0 0 18px rgba(59,130,246,0.45))' }}
+              className="h-24 md:h-36 w-auto"
+              style={{
+                filter: 'brightness(0) invert(1) drop-shadow(0 0 22px rgba(59,130,246,0.55))',
+              }}
             />
-            <div className="h-14 md:h-16 w-px bg-white/25" />
+            <div className="h-20 md:h-28 w-px bg-white/25" />
             <div className="splash-wordmark">
               <div className="text-4xl md:text-6xl font-extrabold tracking-tight leading-none">Simorgh</div>
-              <div className="text-2xl md:text-4xl font-light text-blue-400 leading-none mt-1">Design Suite</div>
+              <div className="suite-sheen text-2xl md:text-4xl font-light leading-none mt-1">Design Suite</div>
+              <div className="suite-beam h-[2px] w-full mt-2 rounded-full" />
             </div>
           </div>
           <div className="mt-5 h-px w-72 bg-blue-400/40" />
