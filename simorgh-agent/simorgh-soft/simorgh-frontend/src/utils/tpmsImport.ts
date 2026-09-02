@@ -1,0 +1,334 @@
+// src/utils/tpmsImport.ts
+//
+// Turns the TPMS payload (everything Eplanix reads out of MySQL) into a patch
+// for the open project. Pure — the dialog decides what to apply, this decides
+// what each piece becomes:
+//
+//   payload.project      → project master data (OE number, name, planner…)
+//   payload.techSettings → Technical Settings
+//   payload.device       → a Device Library entry for the switchgear
+//   payload.lines        → the switchgear in Device Selection, one row per line
+//   line.parts           → a template per distinct part set, with the parts on it
+//
+// Nothing is deleted: importing the same switchgear again replaces that
+// switchgear's rows and refreshes its library entry, and leaves every other
+// piece of the project alone.
+import {
+  ProjectData, DeviceLibraryItem, Equipment, DeviceTableRow, TemplateItem,
+} from '../types/project';
+
+export interface TpmsPart {
+  slot: number;
+  label: string;
+  code: string;
+  quantity: number;
+  priority: number;
+  ecode: string;
+  scode: string;
+  secDes: string;
+  engDes: string;
+  shrDes: string;
+}
+
+export interface TpmsLine {
+  draftId: number;
+  ordering: number;
+  busSection: string;
+  feederNo: string;
+  wiringType: string;
+  ratingPower: string;
+  flc: string;
+  tag: string;
+  description: string;
+  moduleNo: string;
+  size: string;
+  sfdHfd: string;
+  cableSize: string;
+  cbRating: string;
+  contactorRating: string;
+  overloadRating: string;
+  moduleType: string;
+  templateName: string;
+  parts: Record<string, TpmsPart[]>;
+}
+
+export interface TpmsPayload {
+  success?: boolean;
+  project: {
+    projectMainId: number | null;
+    oeNumber: string;
+    projectName: string;
+    projectNameFa: string;
+    orderCategory: string;
+    oeDate: string;
+    projectExpert: string;
+    technicalSupervisor: string;
+    technicalExpert: string;
+  };
+  scope: {
+    scopeId: number | null;
+    scopeName: string;
+    switchgearType: string;
+    panelType: 'LV' | 'MV';
+    cellCount: string;
+    revision: number | null;
+    tag: string;
+  };
+  techSettings: ProjectData['techSettings'];
+  device: { name: string; type: 'LV' | 'MV' | 'HV'; properties: Record<string, any> };
+  columnNames: Record<string, string>;
+  slotProperties: Record<string, string>;
+  lines: TpmsLine[];
+  counts: { lines: number; parts: number; templates: number };
+}
+
+export interface TpmsImportOptions {
+  projectData: boolean;
+  techSettings: boolean;
+  deviceLibrary: boolean;
+  equipment: boolean;
+}
+
+export interface TpmsImportResult {
+  patch: Partial<ProjectData>;
+  /** Id of the equipment the import created or refreshed, for selecting it. */
+  equipmentId?: string;
+  summary: {
+    templates: number;
+    rows: number;
+    parts: number;
+    replacedEquipment: boolean;
+    replacedTemplates: number;
+  };
+}
+
+// One part as Create Template stores it. `fullData` mirrors an EPLAN record so
+// the part reads the same everywhere — the exports and the template screen both
+// go through getEplanixValue/formatPartEntry.
+function toTemplatePart(part: TpmsPart) {
+  return {
+    partNumber: part.code,
+    label: part.label,
+    quantity: part.quantity > 0 ? part.quantity : 1,
+    priority: part.priority || 1,
+    fullData: {
+      PartNumber: part.code,
+      OrderNumber: part.code,
+      Designation1: part.secDes,
+      Designation2: part.engDes,
+      Designation3: part.shrDes,
+      TypeNumber: part.ecode,
+      Manufacturer: '',
+      __tpms: { ecode: part.ecode, scode: part.scode, slot: part.slot },
+    },
+  };
+}
+
+// The signature of a line's part set — two lines with the same parts in the
+// same slots share one template, which is how the drafts are actually drawn.
+function templateSignature(line: TpmsLine, slotProperties: Record<string, string>): string {
+  return Object.keys(line.parts)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map(slot => {
+      const name = slotProperties[String(slot)] || `SLOT ${slot}`;
+      const parts = line.parts[String(slot)]
+        .map(p => `${p.label}:${p.code}:${p.quantity}`)
+        .join('|');
+      return `${name}=${parts}`;
+    })
+    .join(';');
+}
+
+// A readable name for a template built from a line: what TPMS calls it, else
+// the wiring type, else a number.
+function templateNameFor(line: TpmsLine, index: number): string {
+  return line.templateName || line.wiringType || `TPMS Template ${index + 1}`;
+}
+
+export function buildTpmsImport(
+  projectData: ProjectData,
+  payload: TpmsPayload,
+  options: TpmsImportOptions,
+): TpmsImportResult {
+  const stamp = Date.now();
+  const tier = payload.scope.panelType;
+  const patch: Partial<ProjectData> = {};
+  const summary = { templates: 0, rows: 0, parts: 0, replacedEquipment: false, replacedTemplates: 0 };
+
+  // ── Project master data ───────────────────────────────────────────────
+  if (options.projectData) {
+    patch.projectName = payload.project.projectName || projectData.projectName;
+    patch.projectNumber = payload.project.oeNumber || projectData.projectNumber;
+    patch.projectId = payload.project.projectMainId != null
+      ? String(payload.project.projectMainId)
+      : projectData.projectId;
+    patch.planner = payload.project.projectExpert || projectData.planner;
+    patch.designOffice = payload.project.technicalSupervisor || projectData.designOffice;
+    if (payload.project.projectNameFa) {
+      patch.projectDescription = payload.project.projectNameFa;
+    }
+  }
+
+  if (options.techSettings && payload.techSettings) {
+    // Merge section by section over what the project already has. TPMS does
+    // not carry every field (wire manufacturer, for one), and a section left
+    // out of the patch would otherwise arrive as undefined on screens that
+    // read straight through it.
+    const current = projectData.techSettings;
+    const incoming = payload.techSettings as any;
+    const merged: any = { ...(current ?? {}) };
+    for (const section of Object.keys(incoming)) {
+      merged[section] = { ...((current as any)?.[section] ?? {}), ...incoming[section] };
+    }
+    patch.techSettings = merged;
+  }
+
+  // ── Device Library entry for the switchgear ───────────────────────────
+  const library = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
+  let libraryItemId: string | undefined;
+
+  if (options.deviceLibrary && payload.device?.name) {
+    const existing = (library[tier] ?? []).find(d => d.name === payload.device.name);
+    libraryItemId = existing?.id ?? `lib-tpms-${stamp}`;
+    const item: DeviceLibraryItem = {
+      id: libraryItemId,
+      name: payload.device.name,
+      type: tier,
+      properties: { ...(existing?.properties ?? {}), ...payload.device.properties },
+    };
+    patch.deviceLibrary = {
+      ...library,
+      [tier]: existing
+        ? (library[tier] ?? []).map(d => (d.id === existing.id ? item : d))
+        : [...(library[tier] ?? []), item],
+    };
+  } else {
+    libraryItemId = (library[tier] ?? []).find(d => d.name === payload.device?.name)?.id;
+  }
+
+  // ── Templates and the switchgear's rows ───────────────────────────────
+  if (options.equipment) {
+    const templates = { ...projectData.templates };
+    const tierTemplates = [...(templates[tier] ?? [])];
+
+    // Names TPMS gives the part columns for this project ride along as the
+    // template's display names, exactly as they appear in Eplanix's headers.
+    const displayNames: Record<string, string> = {};
+    for (const [slot, name] of Object.entries(payload.columnNames ?? {})) {
+      const property = payload.slotProperties[slot];
+      if (property && name) displayNames[property] = name;
+    }
+
+    const bySignature = new Map<string, TemplateItem>();
+    const rows: DeviceTableRow[] = [];
+    // Two lines can carry the same TPMS name with different parts; each part
+    // set is its own template, so the second one onwards gets a suffix rather
+    // than a second template with the same name.
+    const namesUsed = new Map<string, number>();
+    // A previous import's template is reused once, by the template that now
+    // carries its name — never claimed twice.
+    const claimed = new Set<string>();
+
+    payload.lines.forEach((line, index) => {
+      const signature = templateSignature(line, payload.slotProperties);
+      let template = bySignature.get(signature);
+
+      if (!template) {
+        const properties: Record<string, any> = {};
+        for (const [slot, parts] of Object.entries(line.parts)) {
+          const property = payload.slotProperties[slot] || `SLOT ${slot}`;
+          properties[property] = { parts: parts.map(toTemplatePart) };
+          summary.parts += parts.length;
+        }
+        if (Object.keys(displayNames).length > 0) properties.__displayNames = displayNames;
+
+        const baseName = templateNameFor(line, bySignature.size);
+        const seen = namesUsed.get(baseName) ?? 0;
+        namesUsed.set(baseName, seen + 1);
+        const name = seen === 0 ? baseName : `${baseName} (${seen + 1})`;
+
+        // Re-importing the same switchgear replaces the templates it made
+        // before, matched by name, instead of piling up duplicates.
+        const previous = tierTemplates.find(
+          t => t.name === name && !claimed.has(t.id) && (t as any).hierarchy?.path?.[0] === 'TPMS',
+        );
+        if (previous) claimed.add(previous.id);
+        template = {
+          id: previous?.id ?? `${tier}-tpms-${stamp}-${bySignature.size}`,
+          name,
+          type: tier,
+          properties,
+          hierarchy: { path: ['TPMS', payload.scope.scopeName], params: { notes: signature.slice(0, 200) } },
+        } as TemplateItem;
+        if (previous) summary.replacedTemplates += 1;
+        bySignature.set(signature, template);
+      }
+
+      rows.push({
+        id: `row-tpms-${stamp}-${index}`,
+        rowNumber: index + 1,
+        templateId: template.id,
+        templateName: template.name,
+        busSection: line.busSection,
+        feederNo: line.feederNo,
+        wiringType: line.wiringType,
+        ratingPower: line.ratingPower,
+        flc: line.flc,
+        tag: line.tag,
+        description: line.description,
+        moduleNo: line.moduleNo,
+        size: line.size,
+        sfdHfd: line.sfdHfd,
+        cableSize: line.cableSize,
+        equipmentId: '',
+      });
+    });
+
+    const built = [...bySignature.values()];
+    summary.templates = built.length;
+    summary.rows = rows.length;
+
+    const keptTemplates = tierTemplates.filter(t => !built.some(b => b.id === t.id));
+    templates[tier] = [...keptTemplates, ...built];
+    patch.templates = templates;
+
+    // The switchgear itself: refresh the one already imported under this
+    // name, otherwise add it.
+    const equipments = projectData.equipments ?? [];
+    const existingEquipment = equipments.find(
+      eq => eq.type === tier && eq.name === payload.scope.scopeName,
+    );
+    const equipmentId = existingEquipment?.id ?? `eq-tpms-${stamp}`;
+    summary.replacedEquipment = !!existingEquipment;
+
+    const equipment: Equipment = {
+      id: equipmentId,
+      name: payload.scope.scopeName,
+      type: tier,
+      power: '',
+      description: payload.scope.switchgearType,
+      properties: {
+        ...(existingEquipment?.properties ?? {}),
+        ...(libraryItemId ? { deviceLibraryItemId: libraryItemId } : {}),
+        tpms: {
+          projectMainId: payload.project.projectMainId,
+          scopeId: payload.scope.scopeId,
+          revision: payload.scope.revision,
+          switchgearType: payload.scope.switchgearType,
+          cellCount: payload.scope.cellCount,
+          importedAt: new Date().toISOString(),
+        },
+      },
+      devices: rows.map(row => ({ ...row, equipmentId })),
+    };
+
+    patch.equipments = existingEquipment
+      ? equipments.map(eq => (eq.id === equipmentId ? equipment : eq))
+      : [...equipments, equipment];
+
+    return { patch, equipmentId, summary };
+  }
+
+  return { patch, summary };
+}

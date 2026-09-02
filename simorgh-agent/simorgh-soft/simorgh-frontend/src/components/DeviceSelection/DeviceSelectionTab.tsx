@@ -19,6 +19,7 @@ interface DeviceTableProps {
 }
 
 interface EquipmentTreeProps {
+  onImportFromTpms?: () => void;
   projectData: ProjectData;
   addEquipment: (equipment: Equipment) => void;
   deleteEquipment: (id: string) => void;
@@ -29,6 +30,7 @@ interface EquipmentTreeProps {
 }
 
 interface DeviceSelectionTabProps {
+  onImportFromTpms?: () => void;
   projectData: ProjectData;
   selectedEquipment: Equipment | null;
   setSelectedEquipment: (equipment: Equipment | null) => void;
@@ -1517,6 +1519,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
 // ===== EQUIPMENT TREE COMPONENT =====
 const EquipmentTree: React.FC<EquipmentTreeProps> = ({
+  onImportFromTpms,
   projectData,
   addEquipment,
   deleteEquipment,
@@ -1615,13 +1618,24 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
     <div className="h-full p-4 bg-gray-50">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-sm">Equipment</h3>
-        <button
-          className="px-2 py-1 bg-blue-600 text-white rounded text-xs"
-          onClick={() => setShowAddModal(true)}
-        >
-          <PlusIcon className="w-3 h-3 inline mr-1" />
-          Add
-        </button>
+        <div className="flex gap-1">
+          {onImportFromTpms && (
+            <button
+              className="px-2 py-1 bg-sky-700 text-white rounded text-xs"
+              onClick={onImportFromTpms}
+              title="Import a switchgear from TPMS — lines, parts and panel specification"
+            >
+              🗄️ TPMS
+            </button>
+          )}
+          <button
+            className="px-2 py-1 bg-blue-600 text-white rounded text-xs"
+            onClick={() => setShowAddModal(true)}
+          >
+            <PlusIcon className="w-3 h-3 inline mr-1" />
+            Add
+          </button>
+        </div>
       </div>
 
       <div className="space-y-1">
@@ -2054,6 +2068,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
 
 // ===== DEVICE SELECTION TAB (MAIN COMPONENT) =====
 const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
+  onImportFromTpms,
   projectData,
   selectedEquipment,
   setSelectedEquipment,
@@ -2268,6 +2283,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
             <h3 className="font-medium">Equipment Tree</h3>
           </div>
           <EquipmentTree
+            onImportFromTpms={onImportFromTpms}
             projectData={projectData}
             addEquipment={addEquipment}
             deleteEquipment={deleteEquipment}

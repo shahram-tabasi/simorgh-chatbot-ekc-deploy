@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerDesktopRoutes } from './desktopDownload.js';
+import { registerTpmsImportRoutes } from './tpmsImport.js';
 
 dotenv.config();
 
@@ -250,6 +251,9 @@ app.put('/api/projects/:id', async (req, res) => {
 // Windows desktop client — the installer drop folder and its two routes.
 registerDesktopRoutes(app);
 
+// TPMS import — the same MySQL reads Eplanix does, mapped for this app.
+registerTpmsImportRoutes(app, connectToMySql);
+
 app.get('/api/health', async (req, res) => {
   try {
     const count = await db.collection('projects').countDocuments();
@@ -303,119 +307,16 @@ app.get('/', (req, res) => {
  * Returns: [{ value: IdprojectMain, text: Oenum + ProjectName }]
  * Equivalent to C#: _tpmsContext.ViewProjectMains.Select(p => new SelectListItem { Value = p.IdprojectMain.ToString(), Text = p.Oenum + p.ProjectName })
  */
-app.get('/api/tpms/projects', async (req, res) => {
-  console.log('📥 GET /api/tpms/projects - Request received');
-
-  try {
-    const pool = await connectToMySql();
-
-    // Query ViewProjectMains table (READ-ONLY)
-    // Matches C# query: Select(p => new SelectListItem { Value = p.IdprojectMain.ToString(), Text = p.Oenum + p.ProjectName })
-    const [rows] = await pool.execute(`
-      SELECT
-        IdprojectMain as value,
-        CONCAT(COALESCE(Oenum, ''), COALESCE(ProjectName, '')) as text
-      FROM ViewProjectMains
-      ORDER BY ProjectName
-    `);
-
-    console.log(`✅ Loaded ${rows.length} projects from TPMS`);
-
-    res.json({
-      success: true,
-      count: rows.length,
-      projects: rows
-    });
-
-  } catch (err) {
-    console.error("❌ Error in /api/tpms/projects:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      projects: []
-    });
-  }
-});
 
 /**
  * GET /api/tpms/scopes/:projectId - Get scopes for a project
  * For future implementation when needed
  */
-app.get('/api/tpms/scopes/:projectId', async (req, res) => {
-  console.log('📥 GET /api/tpms/scopes - Request received');
-
-  try {
-    const pool = await connectToMySql();
-    const { projectId } = req.params;
-
-    // Query for scopes based on project (READ-ONLY)
-    // Adjust table/column names based on your actual schema
-    const [rows] = await pool.execute(`
-      SELECT
-        IdScope as value,
-        ScopeName as text
-      FROM ViewScopes
-      WHERE IdprojectMain = ?
-      ORDER BY ScopeName
-    `, [projectId]);
-
-    console.log(`✅ Loaded ${rows.length} scopes for project ${projectId}`);
-
-    res.json({
-      success: true,
-      count: rows.length,
-      scopes: rows
-    });
-
-  } catch (err) {
-    console.error("❌ Error in /api/tpms/scopes:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      scopes: []
-    });
-  }
-});
 
 /**
  * GET /api/tpms/revisions/:scopeId - Get revisions for a scope
  * For future implementation when needed
  */
-app.get('/api/tpms/revisions/:scopeId', async (req, res) => {
-  console.log('📥 GET /api/tpms/revisions - Request received');
-
-  try {
-    const pool = await connectToMySql();
-    const { scopeId } = req.params;
-
-    // Query for revisions based on scope (READ-ONLY)
-    // Adjust table/column names based on your actual schema
-    const [rows] = await pool.execute(`
-      SELECT
-        IdRevision as value,
-        RevName as text
-      FROM ViewRevisions
-      WHERE IdScope = ?
-      ORDER BY RevName
-    `, [scopeId]);
-
-    console.log(`✅ Loaded ${rows.length} revisions for scope ${scopeId}`);
-
-    res.json({
-      success: true,
-      count: rows.length,
-      revisions: rows
-    });
-
-  } catch (err) {
-    console.error("❌ Error in /api/tpms/revisions:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      revisions: []
-    });
-  }
-});
 
 // ============================================
 // ADDED: SQL Parts API with Manufacturer Filter

@@ -2,6 +2,41 @@ import { ProjectData, Revision, RevisionComparison } from '../types/project';
 
 const API_BASE_URL = `${import.meta.env.VITE_API_URL || ''}/api`;
 
+// ── TPMS (MySQL) — the same data Eplanix reads ──────────────────────────────
+export interface TpmsOption { value: number; text: string }
+
+export const tpmsService = {
+  async getProjects(): Promise<TpmsOption[]> {
+    const r = await fetch(`${API_BASE_URL}/tpms/projects`);
+    if (!r.ok) throw new Error('Could not read the TPMS project list');
+    return (await r.json()).items ?? [];
+  },
+
+  async getScopes(projectId: number): Promise<TpmsOption[]> {
+    const r = await fetch(`${API_BASE_URL}/tpms/scopes/${projectId}`);
+    if (!r.ok) throw new Error('Could not read the switchgears for this project');
+    return (await r.json()).items ?? [];
+  },
+
+  async getRevisions(scopeId: number): Promise<TpmsOption[]> {
+    const r = await fetch(`${API_BASE_URL}/tpms/revisions/${scopeId}`);
+    if (!r.ok) throw new Error('Could not read the revisions for this switchgear');
+    return (await r.json()).items ?? [];
+  },
+
+  // The whole switchgear: project, technical settings, panel specification,
+  // every feeder line and the parts on it.
+  async getImport(projectId: number, scopeId: number, revisionId: number): Promise<any> {
+    const r = await fetch(
+      `${API_BASE_URL}/tpms/import?projectId=${projectId}&scopeId=${scopeId}&revisionId=${revisionId}`);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.success === false) {
+      throw new Error(body.error || 'Could not read this switchgear from TPMS');
+    }
+    return body;
+  },
+};
+
 export interface DesktopInstallerInfo {
   available: boolean;
   fileName?: string;

@@ -12,6 +12,7 @@ import logoMark from './assets/logo-mark.png';
 import { Chatbot } from './components/Chatbot/Chatbot';
 import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
 import { FeederDuplicateModal } from './components/DeviceSelection/FeederDuplicateModal';
+import { TpmsImportModal } from './components/TpmsImport/TpmsImportModal';
 import { findFeederDuplicates, DuplicateGroup } from './utils/feederDuplicates';
 import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
@@ -72,10 +73,11 @@ const formatSize = (bytes?: number) =>
 interface MenuBarProps {
   onShowProjectSelection: () => void;
   onCreateNewRevision: () => void;
+  onImportFromTpms: () => void;
   currentRevision?: any;
   isCurrentRevisionEditable?: boolean;
 }
-const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, currentRevision, isCurrentRevisionEditable }) => {
+const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, onImportFromTpms, currentRevision, isCurrentRevisionEditable }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const { projectData, saveProject, notifyRevisionLocked } = useProject();
@@ -168,6 +170,13 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                   disabled={!canCreateRevision}
                 >
                   ➕ Create New Revision
+                </button>
+                <div className="border-t border-gray-600 my-1"></div>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => { onImportFromTpms(); setActiveMenu(null); }}
+                >
+                  🗄️ Import from TPMS…
                 </button>
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleExport}>
@@ -413,6 +422,7 @@ const MainApp: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingLockWarning, isCurrentRevisionEditable, blockingRevisionNumbers]);
 
+  const [showTpmsImport, setShowTpmsImport] = useState(false);
   const [showRevisionDropdown, setShowRevisionDropdown] = useState(false);
   const [showCreateRevisionModal, setShowCreateRevisionModal] = useState(false);
   const [newRevisionName, setNewRevisionName] = useState('');
@@ -522,6 +532,7 @@ const MainApp: React.FC = () => {
           onNext={() => requestTab(3)}
           onNavigateToTemplate={handleNavigateToTemplate}
           onNavigateToDeviceLibrary={handleNavigateToDeviceLibrary}
+          onImportFromTpms={() => setShowTpmsImport(true)}
         />
       )
     },
@@ -539,6 +550,7 @@ const MainApp: React.FC = () => {
       <MenuBar
         onShowProjectSelection={() => window.location.reload()}
         onCreateNewRevision={handleCreateNewRevision}
+        onImportFromTpms={() => setShowTpmsImport(true)}
         currentRevision={currentRevision}
         isCurrentRevisionEditable={isCurrentRevisionEditable}
       />
@@ -856,6 +868,14 @@ const MainApp: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* TPMS import — the switchgear data Eplanix reads from MySQL */}
+      {showTpmsImport && (
+        <TpmsImportModal
+          onClose={() => setShowTpmsImport(false)}
+          onImported={() => setActiveTab(DEVICE_SELECTION_TAB)}
+        />
       )}
 
       {/* Duplicate FEEDER NO. — raised on the way out of Device Selection */}
