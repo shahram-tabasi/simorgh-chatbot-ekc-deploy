@@ -12,6 +12,7 @@ import {
   LV_DEVICE_COLS, MV_DEVICE_COLS,
   buildTierMatrix,
 } from '../../utils/tierEquipmentMatrix';
+import { buildBpmsSheets, sheetName, BPMS_COL_WIDTHS } from '../../utils/bpmsExport';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
 const DEVICE_PROP_LABELS: Record<string, string> = {
@@ -59,6 +60,26 @@ function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
   XLSX.utils.book_append_sheet(wb, ws, `${tier} Equipment`);
   XLSX.writeFile(wb, `${data.projectName}_${tier}_Equipment.xlsx`);
+}
+
+// ─── BPMS export (LV only) ────────────────────────────────────────────────────
+// One sheet per LV switchgear, laid out like the hand-made BPMS workbook: the
+// line columns from Device Selection, then one row per part on that line's
+// template from Create Template.
+function exportBpmsExcel(data: ProjectData) {
+  const sheets = buildBpmsSheets(data);
+  if (sheets.length === 0) {
+    alert('No LV equipment in this project — the BPMS report covers LV switchgears only.');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  const taken = new Set<string>();
+  for (const sheet of sheets) {
+    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
+    ws['!cols'] = BPMS_COL_WIDTHS.map(wch => ({ wch }));
+    XLSX.utils.book_append_sheet(wb, ws, sheetName(sheet.name, taken));
+  }
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_BPMS.xlsx`);
 }
 
 // ─── Per-section PDF (print-to-PDF window) ────────────────────────────────────
@@ -994,6 +1015,41 @@ export const OutputTypesTab: React.FC = () => {
           )
         }
       </Section>
+
+      {/* ── BPMS export (LV only) ─────────────────────────────────────────── */}
+      {(() => {
+        const lvSheets = buildBpmsSheets(projectData);
+        const lvLines = lvSheets.reduce((sum, s) => sum + s.lineCount, 0);
+        const lvPartRows = lvSheets.reduce(
+          (sum, s) => sum + Math.max(0, s.rows.length - 3), 0);
+        return (
+          <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: '#0f766e' }}>
+                BPMS
+              </span>
+              <div className="min-w-0">
+                <p className="font-medium text-sm text-gray-800">BPMS Report — LV only</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {lvSheets.length === 0
+                    ? 'No LV equipment yet.'
+                    : `${lvSheets.length} switchgear${lvSheets.length === 1 ? '' : 's'} · ${lvLines} line${lvLines === 1 ? '' : 's'} · ${lvPartRows} row${lvPartRows === 1 ? '' : 's'} — one sheet each, one row per part.`}
+                </p>
+              </div>
+            </div>
+            <button
+              disabled={!!downloading || lvSheets.length === 0}
+              onClick={() => trigger('bpms', () => exportBpmsExcel(projectData))}
+              className="flex items-center gap-2 px-4 py-2 bg-teal-700 text-white rounded-lg hover:bg-teal-800 disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap"
+            >
+              {downloading === 'bpms'
+                ? <span className="animate-spin">⏳</span>
+                : <FileSpreadsheetIcon className="w-4 h-4" />}
+              BPMS Excel
+            </button>
+          </div>
+        );
+      })()}
 
       {/* ── Section 04: LV Equipment & Template Matrix ─────────────────────
           Wide table — every row is one device-row from an LV equipment, and

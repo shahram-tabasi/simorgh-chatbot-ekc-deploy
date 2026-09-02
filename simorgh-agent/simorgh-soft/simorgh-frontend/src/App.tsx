@@ -756,6 +756,9 @@ const MainApp: React.FC = () => {
   );
 };
 
+// Marks that the loading screen has already played for this run of the app.
+const SPLASH_SHOWN_KEY = 'simorgh-splash-shown';
+
 // کامپوننت اصلی با Project Selection
 export function App() {
   // Deep-link bootstrap: if the URL carries `?projectId=<mongo-id>` (set by
@@ -772,7 +775,19 @@ export function App() {
   // readiness, asset preload) before anything else renders. The deep-link
   // effect below still starts immediately in parallel (hooks always run),
   // so it isn't slowed down by the splash.
-  const [booted, setBooted] = useState(false);
+  //
+  // It belongs to opening the software, not to moving around inside it:
+  // New Project / Open Project reload the page, and this flag (kept for the
+  // lifetime of the window) is what stops the splash from playing again.
+  // Closing the app and starting it again shows it, as it should.
+  const [booted, setBooted] = useState(() => {
+    try { return sessionStorage.getItem(SPLASH_SHOWN_KEY) === '1'; }
+    catch { return false; }
+  });
+  const markBooted = () => {
+    try { sessionStorage.setItem(SPLASH_SHOWN_KEY, '1'); } catch { /* private mode */ }
+    setBooted(true);
+  };
 
   const [currentProject, setCurrentProject] = useState<any>(null);
   const [showProjectSelection, setShowProjectSelection] = useState(!initialPidFromUrl);
@@ -820,7 +835,7 @@ export function App() {
   };
 
   if (!booted) {
-    return <SplashScreen onComplete={() => setBooted(true)} />;
+    return <SplashScreen onComplete={markBooted} />;
   }
 
   if (deepLinkLoading) {

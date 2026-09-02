@@ -1,0 +1,54 @@
+{
+  "name": "simorgh-design-suite-desktop",
+  "productName": "Simorgh Design Suite",
+  "version": "1.0.0",
+  "description": "Windows desktop client for Simorgh Design Suite",
+  "author": "شرکت سیمرغ فناوری هوشمند ایرانیان",
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win --x64",
+    "pack": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "ir.simorghfanavari.designsuite",
+    "productName": "Simorgh Design Suite",
+    "copyright": "© Simorgh Smart Technology of Iranians Co.",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "setup.html",
+      "build/icon.png",
+      "build/icon.ico"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "SimorghDesignSuite-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Simorgh Design Suite"
+    }
+  }
+}

@@ -52,7 +52,7 @@ const buildSteps = (): Step[] => [
 // The startup checks below can all resolve in a few hundred milliseconds on a
 // warm backend, which made the splash flash past unseen. Hold it on screen for
 // at least this long — the checks still run for as long as they really need.
-const MIN_VISIBLE_MS = 2400;
+const MIN_VISIBLE_MS = 4500;
 
 interface SplashScreenProps {
   onComplete: () => void;
