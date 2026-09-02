@@ -17,7 +17,7 @@ import {
   ImageIcon, FileTextIcon, FileSpreadsheetIcon, FileIcon, Loader2Icon,
   MaximizeIcon, MinimizeIcon, UserIcon, ZapIcon,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
   chatToolSchemas, executeChatToolBatch, ChatToolCall, ChatToolResult,

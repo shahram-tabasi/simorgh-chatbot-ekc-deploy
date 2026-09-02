@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
   FileSpreadsheetIcon, FileTextIcon, FileCode2Icon,
@@ -12,7 +12,7 @@ import {
   LV_DEVICE_COLS, MV_DEVICE_COLS,
   buildTierMatrix,
 } from '../../utils/tierEquipmentMatrix';
-import { buildBpmsSheets, sheetName, BPMS_COL_WIDTHS } from '../../utils/bpmsExport';
+import { buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
 const DEVICE_PROP_LABELS: Record<string, string> = {
@@ -66,8 +66,8 @@ function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {
 // One sheet per LV switchgear, laid out like the hand-made BPMS workbook: the
 // line columns from Device Selection, then one row per part on that line's
 // template from Create Template.
-function exportBpmsExcel(data: ProjectData) {
-  const sheets = buildBpmsSheets(data);
+function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
+  const sheets = buildBpmsSheets(data, { revisionNumber });
   if (sheets.length === 0) {
     alert('No LV equipment in this project — the BPMS report covers LV switchgears only.');
     return;
@@ -76,10 +76,11 @@ function exportBpmsExcel(data: ProjectData) {
   const taken = new Set<string>();
   for (const sheet of sheets) {
     const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
-    ws['!cols'] = BPMS_COL_WIDTHS.map(wch => ({ wch }));
+    styleBpmsSheet(ws, sheet);
     XLSX.utils.book_append_sheet(wb, ws, sheetName(sheet.name, taken));
   }
-  XLSX.writeFile(wb, `${data.projectName || 'project'}_BPMS.xlsx`);
+  const rev = revisionNumber ? `_REV${revisionNumber}` : '';
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_BPMS${rev}.xlsx`);
 }
 
 // ─── Per-section PDF (print-to-PDF window) ────────────────────────────────────
@@ -736,7 +737,7 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
 // MAIN TAB COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export const OutputTypesTab: React.FC = () => {
-  const { projectData } = useProject();
+  const { projectData, currentRevision } = useProject();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['project', 'tech', 'devices', 'equipment']));
   const [showCompareModal, setShowCompareModal] = useState(false);
@@ -1039,7 +1040,7 @@ export const OutputTypesTab: React.FC = () => {
             </div>
             <button
               disabled={!!downloading || lvSheets.length === 0}
-              onClick={() => trigger('bpms', () => exportBpmsExcel(projectData))}
+              onClick={() => trigger('bpms', () => exportBpmsExcel(projectData, currentRevision?.revisionNumber))}
               className="flex items-center gap-2 px-4 py-2 bg-teal-700 text-white rounded-lg hover:bg-teal-800 disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap"
             >
               {downloading === 'bpms'

@@ -57,23 +57,46 @@ export const MV_DEVICE_COLS: DeviceColSpec[] = [
   { key: 'description',  header: 'DESCRIPTION' },
 ];
 
+// EPLAN keeps multilingual text as locale-tagged runs — "en_US@Motor@de_DE@…@"
+// — and those tags leak straight into exports as literal "en_US@" prefixes.
+// Take the English run when there is one, otherwise the first run, and fall
+// back to stripping the tags out of whatever is left.
+const LOCALE_RUN = /([a-z]{2}_[A-Z]{2})@([^@]*)@?/g;
+export function stripLocaleTags(raw: any): string {
+  const value = raw == null ? '' : String(raw);
+  if (!/[a-z]{2}_[A-Z]{2}@/.test(value)) return value.trim();
+
+  const runs: Record<string, string> = {};
+  let first = '';
+  let match: RegExpExecArray | null;
+  LOCALE_RUN.lastIndex = 0;
+  while ((match = LOCALE_RUN.exec(value)) !== null) {
+    const text = match[2].trim();
+    if (!runs[match[1]]) runs[match[1]] = text;
+    if (!first && text) first = text;
+  }
+  return (
+    runs['en_US'] ||
+    first ||
+    value.replace(/[a-z]{2}_[A-Z]{2}@/g, '').replace(/@/g, ' ').trim()
+  );
+}
+
 // The "eplanix" value for a part: Order Number unless it's blank/'-'/'_',
 // in which case it falls back to Designation 3. Mirrors the Eplanix cell in
 // TemplateProperties.tsx (Create Template) so every place that shows this
 // value derives it the same way.
 export function getEplanixValue(fullData: any): string {
-  const order = fullData?.OrderNumber;
-  if (order && order !== '-' && order !== '_' && String(order).trim() !== '') {
-    return String(order);
-  }
-  return fullData?.Designation3 ? String(fullData.Designation3) : '';
+  const order = stripLocaleTags(fullData?.OrderNumber);
+  if (order && order !== '-' && order !== '_') return order;
+  return stripLocaleTags(fullData?.Designation3);
 }
 
 // One part's display text: "label:eplanixValue", falling back to just the
 // label (or just the eplanix value) when the other side is empty. "xN" is
 // appended only when quantity is greater than 1.
 export function formatPartEntry(part: any): string {
-  const label = part?.label ? String(part.label) : '';
+  const label = stripLocaleTags(part?.label);
   const eplanix = getEplanixValue(part?.fullData);
   const base = label && eplanix ? `${label}:${eplanix}` : (label || eplanix);
   const q = part?.quantity ?? 1;

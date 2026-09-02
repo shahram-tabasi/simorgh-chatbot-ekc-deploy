@@ -2,7 +2,32 @@ import { ProjectData, Revision, RevisionComparison } from '../types/project';
 
 const API_BASE_URL = `${import.meta.env.VITE_API_URL || ''}/api`;
 
+export interface DesktopInstallerInfo {
+  available: boolean;
+  fileName?: string;
+  size?: number;
+  modified?: string;
+  version?: string;
+}
+
 export const projectService = {
+  // The Windows desktop installer published on the server, if there is one.
+  // Never throws — a missing endpoint or an empty folder simply means the
+  // download link stays hidden.
+  async getDesktopInstaller(): Promise<DesktopInstallerInfo> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/desktop/latest`);
+      if (!response.ok) return { available: false };
+      return await response.json();
+    } catch {
+      return { available: false };
+    }
+  },
+
+  desktopDownloadUrl(): string {
+    return `${API_BASE_URL}/desktop/download`;
+  },
+
   // دریافت تمام پروژه‌ها
   async getAllProjects(): Promise<ProjectData[]> {
     const response = await fetch(`${API_BASE_URL}/projects`);

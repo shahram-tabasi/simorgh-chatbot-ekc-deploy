@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon } from 'lucide-react';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
 import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';

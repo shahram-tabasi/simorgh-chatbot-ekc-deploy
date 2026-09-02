@@ -9,6 +9,10 @@ import multer from 'multer';
 import { PDFParse } from 'pdf-parse';
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { registerDesktopRoutes } from './desktopDownload.js';
 
 dotenv.config();
 
@@ -242,6 +246,9 @@ app.put('/api/projects/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to update project' });
   }
 });
+
+// Windows desktop client — the installer drop folder and its two routes.
+registerDesktopRoutes(app);
 
 app.get('/api/health', async (req, res) => {
   try {

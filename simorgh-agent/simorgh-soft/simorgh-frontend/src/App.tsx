@@ -11,6 +11,9 @@ import { ProjectProvider, useProject } from './context/ProjectContext';
 import logoMark from './assets/logo-mark.png';
 import { Chatbot } from './components/Chatbot/Chatbot';
 import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
+import { FeederDuplicateModal } from './components/DeviceSelection/FeederDuplicateModal';
+import { findFeederDuplicates, DuplicateGroup } from './utils/feederDuplicates';
+import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
 
 // هوک Auto-save
@@ -45,6 +48,26 @@ const useAutoSave = (projectData: any, saveProject: () => Promise<void>, enabled
   }, [projectData, saveProject, enabled]);
 };
 
+// Looks up the Windows installer published on the server. Checked once per
+// window; if nothing is published the link simply never appears.
+const useDesktopInstaller = (): DesktopInstallerInfo => {
+  const [info, setInfo] = useState<DesktopInstallerInfo>({ available: false });
+  useEffect(() => {
+    let cancelled = false;
+    projectService.getDesktopInstaller().then(result => {
+      if (!cancelled) setInfo(result);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  return info;
+};
+
+// Human-readable file size for the download link ("86.4 MB").
+const formatSize = (bytes?: number) =>
+  !bytes ? '' : bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.round(bytes / 1024)} KB`;
+
 // کامپوننت MenuBar
 interface MenuBarProps {
   onShowProjectSelection: () => void;
@@ -56,6 +79,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const { projectData, saveProject, notifyRevisionLocked } = useProject();
+  const desktopInstaller = useDesktopInstaller();
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Click outside handler
@@ -220,6 +244,15 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
             <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
               <div className="py-1">
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">❓ Help Contents</button>
+                {desktopInstaller.available && (
+                  <a
+                    className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                    href={projectService.desktopDownloadUrl()}
+                    onClick={() => setActiveMenu(null)}
+                  >
+                    🪟 Windows app{desktopInstaller.version ? ` (${desktopInstaller.version})` : ''}
+                  </a>
+                )}
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">ℹ️ About Simorgh</button>
               </div>
             </div>
@@ -278,12 +311,82 @@ const MainApp: React.FC = () => {
   // Auto-save — disabled while a locked (non-latest) revision is selected.
   useAutoSave(projectData, saveProject, isCurrentRevisionEditable);
 
+  const desktopInstaller = useDesktopInstaller();
+
   // Load revisions when project changes
   React.useEffect(() => {
     if (projectData._id) {
       loadRevisions(projectData._id);
     }
   }, [projectData._id]);
+
+  // ── Leaving Device Selection: FEEDER NO. must be unique per switchgear ──
+  // Nothing interrupts the user while they work on the tab; the check runs
+  // once, on the way out, and the dialog carries the whole picture.
+  const [feederDuplicates, setFeederDuplicates] = useState<DuplicateGroup[]>([]);
+  const [pendingTab, setPendingTab] = useState<number | null>(null);
+
+  const goToTab = (tabId: number) => {
+    // Clicking Project Definition directly starts on its Project Data sub-tab.
+    if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
+    setActiveTab(tabId);
+  };
+
+  const requestTab = (tabId: number) => {
+    const leavingDeviceSelection = activeTab === DEVICE_SELECTION_TAB && tabId !== DEVICE_SELECTION_TAB;
+    if (leavingDeviceSelection) {
+      const duplicates = findFeederDuplicates(projectData);
+      if (duplicates.length > 0) {
+        setFeederDuplicates(duplicates);
+        setPendingTab(tabId);
+        return;
+      }
+    }
+    goToTab(tabId);
+  };
+
+  const closeFeederDialog = () => { setFeederDuplicates([]); setPendingTab(null); };
+
+  const continuePastFeederDialog = () => {
+    const target = pendingTab;
+    closeFeederDialog();
+    if (target !== null) goToTab(target);
+  };
+
+  // Feeder numbers already in use per equipment, so the dialog can tell whether
+  // a value typed into it collides with a row it isn't showing.
+  const feederUsage = React.useMemo(() => {
+    const usage: Record<string, string[]> = {};
+    for (const eq of projectData.equipments ?? []) {
+      usage[eq.id] = (eq.devices ?? []).map(d => String(d.feederNo ?? ''));
+    }
+    return usage;
+  }, [projectData.equipments]);
+
+  // Write the dialog's corrections into the real rows, then re-check: if
+  // something still collides the dialog stays up, showing the new state.
+  const applyFeederEdits = (edits: Record<string, string>) => {
+    const touched = new Set(Object.keys(edits));
+    for (const eq of projectData.equipments ?? []) {
+      const devices = eq.devices ?? [];
+      if (!devices.some(d => touched.has(d.id))) continue;
+      updateEquipment(eq.id, {
+        devices: devices.map(d => (touched.has(d.id) ? { ...d, feederNo: edits[d.id] } : d)),
+      });
+    }
+    setPendingFeederRecheck(true);
+  };
+
+  // Re-check after React has applied the edits above.
+  const [pendingFeederRecheck, setPendingFeederRecheck] = useState(false);
+  React.useEffect(() => {
+    if (!pendingFeederRecheck) return;
+    setPendingFeederRecheck(false);
+    const duplicates = findFeederDuplicates(projectData);
+    if (duplicates.length === 0) continuePastFeederDialog();
+    else setFeederDuplicates(duplicates);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingFeederRecheck, projectData]);
 
   // Navigate to Template Creation tab
   const handleNavigateToTemplate = (templateId: string) => {
@@ -416,7 +519,7 @@ const MainApp: React.FC = () => {
           addEquipment={addEquipment}
           deleteEquipment={deleteEquipment}
           copyEquipment={copyEquipment}
-          onNext={() => setActiveTab(3)}
+          onNext={() => requestTab(3)}
           onNavigateToTemplate={handleNavigateToTemplate}
           onNavigateToDeviceLibrary={handleNavigateToDeviceLibrary}
         />
@@ -601,11 +704,7 @@ const MainApp: React.FC = () => {
           in-page stepper), same pattern as the logo header above it. */}
       <div className="bg-white border-b shadow-sm">
         <div className="container mx-auto px-4">
-          <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={(tabId) => {
-            // When user manually clicks the Project Definition tab, reset to Project Data sub-tab
-            if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
-            setActiveTab(tabId);
-          }} />
+          <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={requestTab} />
         </div>
       </div>
 
@@ -648,7 +747,18 @@ const MainApp: React.FC = () => {
       <div className="bg-gray-800 text-white text-xs py-2">
         <div className="container mx-auto px-4 flex justify-between items-center">
           <span>© 2025 Simorgh Software - Professional Electrical Design</span>
-          <span>Version 1.0.0 | Auto-save: Enabled</span>
+          <span className="flex items-center gap-3">
+            {desktopInstaller.available && (
+              <a
+                href={projectService.desktopDownloadUrl()}
+                className="text-gray-400 hover:text-white transition-colors"
+                title={`Windows installer${desktopInstaller.size ? ` — ${formatSize(desktopInstaller.size)}` : ''}`}
+              >
+                🪟 Windows app{desktopInstaller.version ? ` ${desktopInstaller.version}` : ''}
+              </a>
+            )}
+            <span>Version 1.0.0 | Auto-save: Enabled</span>
+          </span>
         </div>
       </div>
 
@@ -748,6 +858,17 @@ const MainApp: React.FC = () => {
         </div>
       )}
 
+      {/* Duplicate FEEDER NO. — raised on the way out of Device Selection */}
+      {feederDuplicates.length > 0 && (
+        <FeederDuplicateModal
+          groups={feederDuplicates}
+          usedByEquipment={feederUsage}
+          onApply={applyFeederEdits}
+          onIgnore={continuePastFeederDialog}
+          onCancel={closeFeederDialog}
+        />
+      )}
+
       {/* Revision-locked warning — raised by any blocked edit attempt */}
       {revisionLockNotice && (
         <RevisionLockedModal notice={revisionLockNotice} onClose={dismissRevisionLockNotice} />
@@ -755,6 +876,9 @@ const MainApp: React.FC = () => {
     </div>
   );
 };
+
+// Device Selection's position in the tab strip.
+const DEVICE_SELECTION_TAB = 2;
 
 // Marks that the loading screen has already played for this run of the app.
 const SPLASH_SHOWN_KEY = 'simorgh-splash-shown';

@@ -235,8 +235,16 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         const updatedRevision = await projectService.updateRevision(currentRevision._id!, {
           projectSnapshot: savedProject
         });
-        setCurrentRevision(updatedRevision);
-        setRevisions(prev => prev.map(r => (r._id === updatedRevision._id ? updatedRevision : r)));
+        // Only take the response when it really is a revision. A malformed
+        // reply used to replace the active revision with something that had no
+        // _id, which reads as "not the latest revision" — and the whole
+        // project silently went read-only.
+        if (updatedRevision && (updatedRevision as any)._id) {
+          setCurrentRevision(updatedRevision);
+          setRevisions(prev => prev.map(r => (r._id === updatedRevision._id ? updatedRevision : r)));
+        } else {
+          console.warn('updateRevision returned no revision; keeping the current one.');
+        }
       }
 
       console.log('Project saved successfully:', savedProject);
