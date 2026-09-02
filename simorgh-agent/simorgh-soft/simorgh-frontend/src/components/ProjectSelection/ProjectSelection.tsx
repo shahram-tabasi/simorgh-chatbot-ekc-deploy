@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ProjectData, Revision } from '../../types/project';
-import { projectService } from '../../services/projectService';
+import { projectService, tpmsService, TpmsOption } from '../../services/projectService';
+import { defaultProjectData } from '../../context/ProjectContext';
+import { buildTpmsImport } from '../../utils/tpmsImport';
 import logoMark from '../../assets/logo-mark.png';
 
 interface ProjectSelectionProps {
@@ -15,6 +17,12 @@ const projectCode = (p: ProjectData) => (p.projectId || p.projectNumber || '').t
 // Everything the startup flow needs lives in ONE dialog: pick the project from
 // a searchable combo box, pick (or create) its revision underneath, then open.
 // No second modal opens on top of this one at any point.
+//
+// The combo box lists two kinds of project: this suite's own (MongoDB) and the
+// ones TPMS holds — the very list Eplanix shows. Picking a TPMS project asks
+// for its switchgear and revision instead of a revision, and opening it reads
+// the switchgear out of MySQL and lands it in the project. TPMS is only ever
+// read; nothing is written back to it.
 export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   onProjectSelect,
   onNewProject,
@@ -34,6 +42,17 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const [selectedRevision, setSelectedRevision] = useState<Revision | null>(null);
   const [loadingRevisions, setLoadingRevisions] = useState(false);
 
+  // ── TPMS (Eplanix's MySQL) — the second half of the combo box ────────
+  const [tpmsProjects, setTpmsProjects] = useState<TpmsOption[]>([]);
+  const [tpmsListError, setTpmsListError] = useState<string | null>(null);
+  const [selectedTpms, setSelectedTpms] = useState<TpmsOption | null>(null);
+  const [scopes, setScopes]                     = useState<TpmsOption[]>([]);
+  const [selectedScope, setSelectedScope]       = useState<TpmsOption | null>(null);
+  const [tpmsRevisions, setTpmsRevisions]       = useState<TpmsOption[]>([]);
+  const [selectedTpmsRev, setSelectedTpmsRev]   = useState<TpmsOption | null>(null);
+  const [tpmsBusy, setTpmsBusy]                 = useState(false);
+  const [opening, setOpening]                   = useState(false);
+
   // ── Inline "new revision" form (same dialog, not a nested modal) ─────
   const [newRevOpen, setNewRevOpen]               = useState(false);
   const [newRevNumber, setNewRevNumber]           = useState('0');
@@ -41,7 +60,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const [newRevDescription, setNewRevDescription] = useState('');
   const [creatingRevision, setCreatingRevision]   = useState(false);
 
-  useEffect(() => { loadProjects(); }, []);
+  useEffect(() => { loadProjects(); loadTpmsProjects(); }, []);
 
   // Close the dropdown when clicking anywhere outside it.
   useEffect(() => {
@@ -65,6 +84,18 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     }
   };
 
+  // The TPMS list is optional: if this server has no MySQL behind it, the
+  // section simply doesn't appear — the suite's own projects still open.
+  const loadTpmsProjects = async () => {
+    try {
+      setTpmsProjects(await tpmsService.getProjects());
+      setTpmsListError(null);
+    } catch (err) {
+      setTpmsProjects([]);
+      setTpmsListError((err as Error).message);
+    }
+  };
+
   const loadRevisions = async (projectId: string) => {
     try {
       setLoadingRevisions(true);
@@ -83,12 +114,100 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
   const handlePickProject = async (project: ProjectData | null) => {
     setSelectedProject(project);
+    setSelectedTpms(null);
+    setScopes([]); setSelectedScope(null);
+    setTpmsRevisions([]); setSelectedTpmsRev(null);
     setComboOpen(false);
     setSearch('');
     setNewRevOpen(false);
     setRevisions([]);
     setSelectedRevision(null);
     if (project?._id) await loadRevisions(project._id);
+  };
+
+  // A TPMS project: its switchgears take the place of the revision list.
+  const handlePickTpms = async (option: TpmsOption) => {
+    setSelectedTpms(option);
+    setSelectedProject(null);
+    setRevisions([]); setSelectedRevision(null);
+    setNewRevOpen(false);
+    setComboOpen(false);
+    setSearch('');
+    setScopes([]); setSelectedScope(null);
+    setTpmsRevisions([]); setSelectedTpmsRev(null);
+    setTpmsBusy(true);
+    try {
+      const list = await tpmsService.getScopes(option.value);
+      setScopes(list);
+      if (list.length === 1) await handlePickScope(list[0]);
+    } catch (err) {
+      setError('Could not read the switchgears of this TPMS project: ' + (err as Error).message);
+    } finally {
+      setTpmsBusy(false);
+    }
+  };
+
+  const handlePickScope = async (scope: TpmsOption) => {
+    setSelectedScope(scope);
+    setTpmsRevisions([]); setSelectedTpmsRev(null);
+    setTpmsBusy(true);
+    try {
+      const list = await tpmsService.getRevisions(scope.value);
+      setTpmsRevisions(list);
+      // Newest revision first, as Eplanix opens it.
+      const newest = [...list].sort((a, b) => Number(b.value) - Number(a.value))[0];
+      setSelectedTpmsRev(newest ?? null);
+    } catch (err) {
+      setError('Could not read the revisions of this switchgear: ' + (err as Error).message);
+    } finally {
+      setTpmsBusy(false);
+    }
+  };
+
+  // Open a TPMS switchgear as a project: read it, land it in the project that
+  // already stands for this TPMS project (matched on PID, OE number or name),
+  // or in a fresh one, then open that.
+  const handleOpenFromTpms = async () => {
+    if (!selectedTpms || !selectedScope || !selectedTpmsRev) return;
+    setOpening(true);
+    setError(null);
+    try {
+      const payload = await tpmsService.getImport(
+        selectedTpms.value, selectedScope.value, Number(selectedTpmsRev.value));
+
+      const pid = payload.project?.projectMainId != null ? String(payload.project.projectMainId) : '';
+      const oe  = (payload.project?.oeNumber || '').trim();
+      const name = (payload.project?.projectName || '').trim().toLowerCase();
+      let existing = projects.find(p =>
+        (pid && (p.projectId || '').trim() === pid) ||
+        (oe && (p.projectNumber || '').trim() === oe) ||
+        (name && p.projectName.trim().toLowerCase() === name)) ?? null;
+
+      if (existing?._id) {
+        try { existing = await projectService.getProjectById(existing._id); }
+        catch (err) { console.warn('Using the listed copy of the project:', err); }
+      }
+
+      const seed: ProjectData = { ...defaultProjectData, ...(existing ?? {}) };
+      const { patch } = buildTpmsImport(seed, payload, {
+        projectData: true, techSettings: true, deviceLibrary: true, equipment: true,
+      });
+      const merged: ProjectData = { ...seed, ...patch };
+
+      let saved: ProjectData = merged;
+      if (existing?._id) {
+        const { _id, ...body } = merged as any;   // _id is immutable in the update
+        saved = await projectService.updateProject(existing._id, body);
+      } else {
+        const { _id, ...body } = merged as any;
+        saved = await projectService.createProject(body);
+      }
+      onProjectSelect(saved ?? merged);
+    } catch (err) {
+      setError('Could not open this switchgear from TPMS: ' + (err as Error).message);
+    } finally {
+      setOpening(false);
+    }
   };
 
   const openNewRevisionForm = () => {
@@ -144,8 +263,19 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     );
   });
 
-  const exactMatch = projects.some(p => p.projectName.toLowerCase() === trimmed.toLowerCase());
+  const tpmsLabel = (o: TpmsOption) => (o.name || o.text || '').trim();
+  const tpmsCode  = (o: TpmsOption) => (o.code || '').trim();
+  const filteredTpms = tpmsProjects.filter(o => {
+    const q = trimmed.toLowerCase();
+    if (!q) return true;
+    return (o.text || '').toLowerCase().includes(q);
+  });
+
+  const exactMatch =
+    projects.some(p => p.projectName.toLowerCase() === trimmed.toLowerCase()) ||
+    tpmsProjects.some(o => tpmsLabel(o).toLowerCase() === trimmed.toLowerCase());
   const canCreate  = trimmed.length > 0 && !exactMatch;
+  const nothingFound = filteredProjects.length === 0 && filteredTpms.length === 0;
 
   const handleOpen = () => {
     if (!selectedProject) return;
@@ -221,7 +351,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
               onClick={() => setComboOpen(o => !o)}
               disabled={loading}
             >
-              <span className={`truncate ${selectedProject ? 'text-gray-800' : 'text-gray-500'}`}>
+              <span className={`truncate ${selectedProject || selectedTpms ? 'text-gray-800' : 'text-gray-500'}`}>
                 {loading
                   ? 'Loading projects…'
                   : selectedProject
@@ -231,7 +361,15 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                         )}
                         {selectedProject.projectName}
                       </>
-                    : '-- Select Project --'}
+                    : selectedTpms
+                      ? <>
+                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold mr-1.5">TPMS</span>
+                          {tpmsCode(selectedTpms) && (
+                            <span className="text-gray-400 mr-1.5">{tpmsCode(selectedTpms)}</span>
+                          )}
+                          {tpmsLabel(selectedTpms)}
+                        </>
+                      : '-- Select Project --'}
               </span>
               <span className="text-gray-500 text-[10px] leading-none">{comboOpen ? '▲' : '▼'}</span>
             </button>
@@ -248,7 +386,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                     onChange={e => setSearch(e.target.value)}
                     onKeyDown={e => {
                       if (e.key === 'Enter' && filteredProjects.length > 0) handlePickProject(filteredProjects[0]);
-                      if (e.key === 'Enter' && filteredProjects.length === 0 && canCreate) onNewProject(trimmed);
+                      else if (e.key === 'Enter' && filteredTpms.length > 0) handlePickTpms(filteredTpms[0]);
+                      else if (e.key === 'Enter' && canCreate) onNewProject(trimmed);
                       if (e.key === 'Escape') setComboOpen(false);
                     }}
                   />
@@ -261,6 +400,12 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                   >
                     -- Select Project --
                   </li>
+
+                  {filteredProjects.length > 0 && (
+                    <li className="px-3 py-1 text-[10px] uppercase tracking-wide text-gray-400 bg-gray-50 border-y border-gray-100">
+                      Design Suite
+                    </li>
+                  )}
 
                   {filteredProjects.map(p => {
                     const isSel = selectedProject?._id === p._id;
@@ -283,7 +428,34 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                     );
                   })}
 
-                  {filteredProjects.length === 0 && !canCreate && (
+                  {filteredTpms.length > 0 && (
+                    <li className="px-3 py-1 text-[10px] uppercase tracking-wide text-purple-500 bg-purple-50 border-y border-purple-100">
+                      TPMS — {filteredTpms.length} project{filteredTpms.length === 1 ? '' : 's'}
+                    </li>
+                  )}
+
+                  {filteredTpms.map(o => {
+                    const isSel = selectedTpms?.value === o.value;
+                    return (
+                      <li
+                        key={`tpms-${o.value}`}
+                        className={`px-3 py-1.5 cursor-pointer truncate ${
+                          isSel ? 'bg-purple-600 text-white' : 'hover:bg-purple-50 text-gray-800'
+                        }`}
+                        onClick={() => handlePickTpms(o)}
+                        title={o.text}
+                      >
+                        {tpmsCode(o) && (
+                          <span className={isSel ? 'text-purple-100 mr-1.5' : 'text-gray-400 mr-1.5'}>
+                            {tpmsCode(o)}
+                          </span>
+                        )}
+                        {tpmsLabel(o)}
+                      </li>
+                    );
+                  })}
+
+                  {nothingFound && !canCreate && (
                     <li className="px-3 py-3 text-gray-400 italic">No projects found.</li>
                   )}
 
@@ -395,20 +567,89 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
               )}
             </div>
           )}
+
+          {/* ── A TPMS project: pick the switchgear and its revision ── */}
+          {selectedTpms && (
+            <div className="mt-5 border border-purple-200 bg-purple-50/50 rounded p-3 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold">TPMS</span>
+                <span className="text-sm text-gray-700">
+                  Read straight from TPMS — the same data Eplanix shows. Nothing is written back.
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Switchgear</label>
+                <select
+                  className="w-full border border-gray-400 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-purple-500"
+                  value={selectedScope?.value ?? ''}
+                  disabled={tpmsBusy || scopes.length === 0}
+                  onChange={e => {
+                    const found = scopes.find(x => String(x.value) === e.target.value);
+                    if (found) handlePickScope(found);
+                  }}
+                >
+                  <option value="">
+                    {tpmsBusy && scopes.length === 0
+                      ? 'Reading switchgears…'
+                      : scopes.length === 0 ? 'No switchgear on this project' : '-- Select Switchgear --'}
+                  </option>
+                  {scopes.map(o => <option key={o.value} value={o.value}>{o.text}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Revision</label>
+                <select
+                  className="w-full border border-gray-400 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-purple-500"
+                  value={selectedTpmsRev?.value ?? ''}
+                  disabled={tpmsBusy || tpmsRevisions.length === 0}
+                  onChange={e => setSelectedTpmsRev(
+                    tpmsRevisions.find(x => String(x.value) === e.target.value) ?? null)}
+                >
+                  <option value="">
+                    {!selectedScope ? 'Pick a switchgear first'
+                      : tpmsBusy ? 'Reading revisions…'
+                      : tpmsRevisions.length === 0 ? 'No revision on this switchgear' : '-- Select Revision --'}
+                  </option>
+                  {tpmsRevisions.map(o => (
+                    <option key={o.value} value={o.value}>REV {o.text}</option>
+                  ))}
+                </select>
+              </div>
+
+              <p className="text-xs text-gray-500">
+                Opening it brings in the project data, technical settings, the panel specification
+                as a Device Library entry, every feeder line and the parts on it.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-4 border-t bg-gray-50 rounded-b-2xl">
           <span className="text-xs text-gray-400">
             {projects.length} project{projects.length === 1 ? '' : 's'}
+            {tpmsProjects.length > 0 && <> · {tpmsProjects.length} in TPMS</>}
+            {tpmsListError && <span className="text-amber-600" title={tpmsListError}> · TPMS unavailable</span>}
           </span>
-          <button
-            className="px-5 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
-            onClick={handleOpen}
-            disabled={!selectedProject}
-          >
-            Open Project
-          </button>
+          {selectedTpms ? (
+            <button
+              className="px-5 py-2 bg-purple-600 text-white rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={handleOpenFromTpms}
+              disabled={!selectedScope || !selectedTpmsRev || opening}
+            >
+              {opening ? 'Reading from TPMS…' : 'Open from TPMS'}
+            </button>
+          ) : (
+            <button
+              className="px-5 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={handleOpen}
+              disabled={!selectedProject}
+            >
+              Open Project
+            </button>
+          )}
         </div>
       </div>
     </div>

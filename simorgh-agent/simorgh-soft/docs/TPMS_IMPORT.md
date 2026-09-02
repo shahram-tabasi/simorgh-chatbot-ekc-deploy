@@ -4,9 +4,21 @@ Eplanix (the switchgear company's .NET app) reads **only** from the TPMS MySQL
 database. Simorgh Design Suite now reads the same tables, through the same
 queries, and puts the result where it belongs in a project.
 
-Open it from **File → Import from TPMS…**, or the **🗄️ TPMS** button above the
-equipment tree in Device Selection. Pick project → switchgear → revision, read
-it, tick what to bring in, import. Nothing is ever written back to TPMS.
+There are two ways in:
+
+- **On the project screen.** The project combo box lists the suite's own
+  projects and, underneath them, every project TPMS holds — the same list
+  Eplanix shows. Pick a TPMS project, pick its switchgear and revision, and
+  **Open from TPMS** reads it and opens it as a project. If a project for it
+  already exists (same PID, OE number or name), it is refreshed rather than
+  duplicated; otherwise a new one is created.
+- **Inside an open project**, from **File → Import from TPMS…** or the
+  **🗄️ TPMS** button above the equipment tree in Device Selection — project →
+  switchgear → revision, read it, tick what to bring in, import.
+
+Nothing is ever written back to TPMS. If the server has no MySQL behind it,
+the TPMS section simply doesn't appear and the suite's own projects open as
+they always did.
 
 ## What is read
 
@@ -77,4 +89,6 @@ Everything else in the project is left alone.
 `/api/tpms/revisions/:scopeId` used to query `ViewProjectMains`, `ViewScopes`
 and `ViewRevisions` — the names of the C# model classes, not of the database
 objects. They now query `View_Project_Main` and `View_draft`, which is what
-TPMS actually has.
+TPMS actually has. The project list also returns `code` (OE number) and
+`name` separately, so the combo box can show the OE number muted in front of
+the name the way it does for the suite's own projects.

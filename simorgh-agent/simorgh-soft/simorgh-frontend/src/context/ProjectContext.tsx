@@ -49,7 +49,9 @@ export interface RevisionLockNotice {
 }
 
 // EMPTY DEFAULTS - no demo values
-const defaultProjectData: ProjectData = {
+// Exported so a project can be seeded from outside the provider — the project
+// selection dialog builds one this way when it opens a switchgear from TPMS.
+export const defaultProjectData: ProjectData = {
   projectName: '',
   projectId: '',
   projectNumber: '',

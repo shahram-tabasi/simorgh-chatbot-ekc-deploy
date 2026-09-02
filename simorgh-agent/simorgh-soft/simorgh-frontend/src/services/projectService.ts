@@ -3,7 +3,14 @@ import { ProjectData, Revision, RevisionComparison } from '../types/project';
 const API_BASE_URL = `${import.meta.env.VITE_API_URL || ''}/api`;
 
 // ── TPMS (MySQL) — the same data Eplanix reads ──────────────────────────────
-export interface TpmsOption { value: number; text: string }
+export interface TpmsOption {
+  value: number;
+  text: string;
+  /** OE number, when the row carries one separately (the project list does). */
+  code?: string;
+  /** The plain name, without the OE number in front of it. */
+  name?: string;
+}
 
 export const tpmsService = {
   async getProjects(): Promise<TpmsOption[]> {

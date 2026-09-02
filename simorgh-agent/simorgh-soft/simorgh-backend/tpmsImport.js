@@ -395,6 +395,8 @@ export const SQL = {
   // The three pickers, straight from Eplanix's GetScopes / GetRevisions.
   projectList: `
     SELECT IDProjectMain AS value,
+           COALESCE(OENUM, '') AS code,
+           COALESCE(Project_Name, '') AS name,
            CONCAT(COALESCE(OENUM, ''), ' ', COALESCE(Project_Name, '')) AS text
     FROM View_Project_Main
     ORDER BY Project_Name`,
