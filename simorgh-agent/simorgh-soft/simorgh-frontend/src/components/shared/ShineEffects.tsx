@@ -104,8 +104,22 @@ export const ShineImage: React.FC<ShineImageProps> = ({
     glow ? `drop-shadow(0 0 22px ${glow})` : '',
   ].filter(Boolean).join(' ');
 
+  // The moving band lives inside a box masked by the artwork itself, so the
+  // light lands on the picture and never on the empty space around it — a
+  // transparent PNG doesn't pick up a glowing rectangle.
+  const maskToArtwork: React.CSSProperties = {
+    WebkitMaskImage: `url("${src}")`,
+    maskImage: `url("${src}")`,
+    WebkitMaskSize: 'contain',
+    maskSize: 'contain',
+    WebkitMaskRepeat: 'no-repeat',
+    maskRepeat: 'no-repeat',
+    WebkitMaskPosition: 'center',
+    maskPosition: 'center',
+  };
+
   return (
-    <span className={`relative inline-block overflow-hidden ${wrapperClassName}`}>
+    <span className={`relative inline-block ${wrapperClassName}`}>
       <img
         src={src}
         alt={alt}
@@ -117,12 +131,18 @@ export const ShineImage: React.FC<ShineImageProps> = ({
         }}
       />
       <span
-        className="shine-sweep"
-        style={{
-          left: 0,
-          animation: `shineSweep ${sweepSeconds}s ease-in-out ${sweepDelay}s infinite`,
-        }}
-      />
+        className="absolute inset-0 overflow-hidden pointer-events-none"
+        style={maskToArtwork}
+        aria-hidden
+      >
+        <span
+          className="shine-sweep"
+          style={{
+            left: 0,
+            animation: `shineSweep ${sweepSeconds}s ease-in-out ${sweepDelay}s infinite`,
+          }}
+        />
+      </span>
     </span>
   );
 };

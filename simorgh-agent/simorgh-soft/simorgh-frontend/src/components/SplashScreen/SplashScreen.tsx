@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Loader2, Circle } from 'lucide-react';
 import logoMark from '../../assets/logo-mark.png';
+import splashArtwork from '../../assets/splash-artwork.png';
+import { ShineStyles, ShineImage, SheenText, LightBeam, COMPANY_RIGHTS_FA } from '../shared/ShineEffects';
 import { projectService } from '../../services/projectService';
 
 interface Step {
@@ -28,14 +30,14 @@ const buildSteps = (): Step[] => [
   },
   {
     label: 'Preparing Workspace',
-    // Real asset preparation — decode the logo so it's cached and ready
-    // before the header renders it.
-    run: () => new Promise<void>(resolve => {
+    // Real asset preparation — decode the logo and the switchgear artwork so
+    // both are cached and ready before anything renders them.
+    run: () => Promise.all([logoMark, splashArtwork].map(src => new Promise<void>(resolve => {
       const img = new Image();
       img.onload = () => resolve();
       img.onerror = () => resolve();
-      img.src = logoMark;
-    }),
+      img.src = src;
+    }))).then(() => undefined),
   },
   {
     label: 'Finalizing',
@@ -100,32 +102,31 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         }
         .splash-wordmark { transform-origin: left center; animation: splashWordmarkReveal 0.8s cubic-bezier(0.22,1,0.36,1) 0.2s both; }
 
-        /* Light sweeping across the "Design Suite" wordmark. */
-        @keyframes suiteSheen {
-          0%   { background-position: -180% 0; }
-          100% { background-position:  180% 0; }
-        }
-        .suite-sheen {
-          background-image: linear-gradient(100deg,
-            #60a5fa 0%, #60a5fa 38%, #ffffff 50%, #60a5fa 62%, #60a5fa 100%);
-          background-size: 220% 100%;
-          -webkit-background-clip: text;
-          background-clip: text;
-          color: transparent;
-          animation: suiteSheen 3.4s linear infinite;
-        }
-        /* The glow bar that runs under it, like a light bar catching the edge. */
-        @keyframes suiteBeam {
-          0%, 100% { opacity: .35; transform: scaleX(.75); }
-          50%      { opacity: 1;   transform: scaleX(1); }
-        }
-        .suite-beam {
-          transform-origin: left center;
-          background: linear-gradient(90deg, rgba(96,165,250,0) 0%, #93c5fd 25%, #ffffff 50%, #93c5fd 75%, rgba(96,165,250,0) 100%);
-          box-shadow: 0 0 14px 2px rgba(96,165,250,0.65);
-          animation: suiteBeam 3.4s ease-in-out infinite;
-        }
       `}</style>
+      <ShineStyles />
+
+      {/* Switchgear artwork on the right, lifted from the approved splash
+          design. Its flat navy backdrop was keyed out when the asset was cut,
+          so there is no rectangle edge — this screen's own navy is what shows
+          around the cabinets, at any window size. */}
+      <div
+        className="hidden lg:block absolute right-0 top-[46%] -translate-y-1/2 w-[66%] max-w-[1250px] pointer-events-none select-none"
+        style={{
+          // Fade the edge nearest the wordmark so the two never fight for the
+          // same pixels on a narrower window.
+          maskImage: 'linear-gradient(to right, transparent 0%, #000 13%)',
+          WebkitMaskImage: 'linear-gradient(to right, transparent 0%, #000 13%)',
+        }}
+      >
+        <ShineImage
+          src={splashArtwork}
+          className="w-full h-auto"
+          wrapperClassName="block w-full"
+          glow=""
+          sweepSeconds={2.8}
+          sweepDelay={1.2}
+        />
+      </div>
 
       {/* Faint dot grid for texture */}
       <div
@@ -141,19 +142,12 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
           <div className="flex items-center gap-5">
             {/* Transparent logo mark (no white plate behind it), so the bird
                 itself fills the space and reads much larger. */}
-            <img
-              src={logoMark}
-              alt=""
-              className="h-24 md:h-36 w-auto"
-              style={{
-                filter: 'brightness(0) invert(1) drop-shadow(0 0 22px rgba(59,130,246,0.55))',
-              }}
-            />
+            <ShineImage src={logoMark} className="h-24 md:h-36 w-auto" whiteOut />
             <div className="h-20 md:h-28 w-px bg-white/25" />
             <div className="splash-wordmark">
               <div className="text-4xl md:text-6xl font-extrabold tracking-tight leading-none">Simorgh</div>
-              <div className="suite-sheen text-2xl md:text-4xl font-light leading-none mt-1">Design Suite</div>
-              <div className="suite-beam h-[2px] w-full mt-2 rounded-full" />
+              <SheenText className="block text-2xl md:text-4xl font-light leading-none mt-1">Design Suite</SheenText>
+              <LightBeam className="w-full mt-2" />
             </div>
           </div>
           <div className="mt-5 h-px w-72 bg-blue-400/40" />
@@ -191,7 +185,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         </div>
 
         <div className="mt-8 flex items-center justify-between text-[11px] text-slate-500">
-          <span>Simorgh Technology. All rights reserved.</span>
+          <span dir="rtl">{COMPANY_RIGHTS_FA}</span>
           <span>Version 1.0.0</span>
         </div>
       </div>
