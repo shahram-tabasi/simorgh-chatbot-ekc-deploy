@@ -24,7 +24,12 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const DATABASE_NAME = process.env.DATABASE_NAME || 'simorgh_db';
 
 app.use(cors());
-app.use(express.json());
+// A project's snapshot is the whole project — for a switchgear plant with a
+// dozen panels that is megabytes, and express.json()'s default 100 KB was
+// rejecting every save of one with 413 "entity.too.large". Reads were fine,
+// which is exactly why a big project appeared to open and then never landed.
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.JSON_BODY_LIMIT || '100mb' }));
 
 let db;
 

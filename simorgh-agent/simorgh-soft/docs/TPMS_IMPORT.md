@@ -136,9 +136,25 @@ open at all. Three things were in the way, and all three are fixed:
   seconds; the project read on a big project takes longer than that and came
   back as a 504. It is 600s now, matching the container's own nginx.
 
+- **The body-size limits — the one that actually stopped them.** Reading a
+  project was never the problem; *saving* it was. A project's snapshot is the
+  whole project, and for 01A11766 (14 switchgears, 14 revisions, 2968 lines,
+  38 000 part rows) each write is about **1.15 MB** — one for the project and
+  one per revision. `express.json()` defaults to **100 KB** and nginx's
+  `client_max_body_size` to **1 MB**, so every one of those writes came back
+  413 while the reads sailed through in milliseconds. The backend now takes
+  100 MB (`JSON_BODY_LIMIT`), and both nginx layers say `client_max_body_size
+  100M`.
+
 The dialog also offers **Newest only** instead of all revisions — the quick
 way into a project with a long history; the revisions already stored here are
 left untouched.
+
+MongoDB itself was never the limit: 1.15 MB is a fourteenth of what one
+document holds. A snapshot that did approach 16 MB is now reported by name
+instead of failing as a database error, and a revision that will not save
+costs only itself — the rest of the project still lands, and the dialog lists
+what did not.
 
 ## Engineering outputs
 
