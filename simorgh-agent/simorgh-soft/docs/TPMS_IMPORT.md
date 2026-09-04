@@ -202,28 +202,54 @@ single line follows that instead of guessing from the slot the part sits in:
 
 ### The symbol library
 
-`src/utils/iecSymbols.ts` is the library the drawing uses — 36 IEC single-line
-symbols, every one drawn to the same cell so they stack on a branch: entered
-at the top, left at the bottom, and whatever reaches sideways (a CT's
-secondary, a relay box) goes right, where the tag and the code are written.
-The whole set is on screen under **Eplanix → Symbols**, and prints from there.
+`src/utils/iecSymbols.ts` is the library the drawing uses — 61 single-line
+symbols drawn from **the office's own legend sheet** (the `SYMBOL /
+DESCRIPTION` table the SLD set carries on its last sheet), not from a generic
+IEC list, so a sheet this app produces reads the same as the sheets the office
+already issues. Every symbol is drawn to the same cell so they stack on a
+branch: entered at the top, left at the bottom, and whatever reaches sideways
+(a CT's secondary, a relay box) goes right, where the tag and the code are
+written. The whole set is on screen under **Eplanix → Symbols**, and prints
+from there.
 
-The shapes are the IEC ones:
+The shapes, as the legend draws them:
 
 | Device | Symbol |
 |---|---|
+| V.C.B | isolating contacts top and bottom, the blade open to the upper left, the trip cross on the line |
+| V.C.B with racking | the same, with the motor circle and the racking box beside it |
+| Vacuum contactor with HRC fuse | the isolating contacts, the fuse, the contactor arc |
+| Circuit breaker | the blade with the cross on the fixed contact |
 | Disconnector | an open blade between two contacts |
 | Switch disconnector | the blade with the load-break bar on the fixed contact |
-| Circuit breaker | the blade with the cross on the fixed contact |
-| Withdrawable CB | the same, inside the drawout brackets |
-| Contactor | the open contact with the small rectangle on it |
+| Contactor | the open contact with the contactor arc under it |
+| Miniature circuit breaker | the hooked blade with the arrow |
+| Earth switch | the blade down to the earth symbol |
+| HRC fuse | a rectangle with the diagonal through it, marked `3` |
 | Thermal overload (bimetal) | a rectangle with the half-split square inside it |
-| Fuse | a rectangle across the line |
-| Current transformer | one circle sitting on the line, secondary to the side |
-| Voltage transformer | two interlocking circles, secondary to the side |
-| Transformer | two interlocking circles, in the line |
-| Meters | a circle carrying A, V, kW |
-| Motor / generator | a circle carrying M or G |
+| Surge limiter / surge arrester | a box with the cross / with the filled triangle |
+| Protection relay | a box carrying `PROTECTION RELAY` |
+| Current transformer | one circle on the line, secondary to the side, marked `1` |
+| Core balance CT | an ellipse with the three phases through it |
+| Two-winding transformer | interlocking circles with their star points |
+| Meters | a square carrying `A`, `V`, `M`, `TD`, `F`, `H.M`, `W`, `VAR`, `COSΦ`, `PTC` |
+| kWh / kVArh meter | a box with the band across the top |
+| Selector switches | a box carrying `V.S` or `A.S` |
+| Alarm annunciator | the four-by-four window grid |
+| Test box | a circle with the dot, in the line |
+| Motor / generator | a circle carrying `M` or `G` |
+| Capacitor delta, magnet, heating element, LCS, ATS, bus duct, key interlock, capacitive divider | as the legend draws them |
+
+### The sheet
+
+A sheet is drawn the way the office draws one: the incoming column on the
+left, the busbar across with its rating written above it (`BUS A, 400 V,
+3P + N + PE, 4000 A, 50 kA / 1 Sec`, from the panel specification), one dashed
+cubicle per feeder with its device chain inside — tag in black, part code in
+blue, accessories listed under the device — and under the drawing the data
+block: one row per property (BUS, Line, Type, Power, Nominal Current,
+Position, Tag, Description, Cable) and one column per feeder, each column
+standing under its own cubicle.
 
 ### One slot, one device
 

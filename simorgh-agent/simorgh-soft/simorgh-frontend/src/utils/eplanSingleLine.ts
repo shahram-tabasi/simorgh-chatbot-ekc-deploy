@@ -19,7 +19,7 @@ import {
   templateParts, formatPartEntry, stripLocaleTags, getEplanixValue,
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
 } from './tierEquipmentMatrix';
-import { CELL, SymbolId, drawIecSymbol, buildSymbolCatalogueSvg } from './iecSymbols';
+import { CELL, SymbolId, drawIecSymbol, symbolRight, buildSymbolCatalogueSvg } from './iecSymbols';
 
 export const EPLAN_HEADERS = [
   'Page', 'Higher-level function', 'Location', 'DT', 'Function text',
@@ -137,7 +137,7 @@ export type EplanSymbolMap = Record<string, EplanSymbolInfo>;
 // The slot a part sits in says what the device is, unless EPLAN says better.
 const SLOT_SYMBOL: Record<string, SymbolId> = {
   'CB ORDER': 'circuit-breaker',
-  'VCB OR VC/FUSE': 'withdrawable-cb',
+  'VCB OR VC/FUSE': 'vcb',              // MV: the vacuum breaker of the legend
   'CONTACTOR. ORDER': 'contactor',
   'OVER LOAD RELAY': 'thermal-overload',
   'EARTH FAULT': 'earth-fault-relay',
@@ -149,13 +149,13 @@ const SLOT_SYMBOL: Record<string, SymbolId> = {
   'VOLTMETER': 'voltmeter',
   'MULTIMETER': 'multimeter',
   'TRANSDUSER': 'transducer',
-  'AMMETER selector': 'selector-switch',
-  'VOLTMETER selector': 'selector-switch',
+  'AMMETER selector': 'ampere-selector',
+  'VOLTMETER selector': 'voltage-selector',
   'TEST BLOCK': 'test-block',
   'SURGE ARRESTER': 'surge-arrester',
   'VOLTAGE INDICATOR': 'lamp',
-  'ALARM ANUNCIATOR': 'lamp',
-  'ALARM WINDDOW': 'lamp',
+  'ALARM ANUNCIATOR': 'alarm-annunciator',
+  'ALARM WINDDOW': 'alarm-annunciator',
   'ACCESSORY': 'accessory',
 };
 
@@ -163,11 +163,15 @@ const SLOT_SYMBOL: Record<string, SymbolId> = {
 // transformer", "Motor, 3 phase" — is what the part actually is, so it wins
 // over the slot it was filed under.
 const FUNCTION_SYMBOL: [RegExp, SymbolId][] = [
+  [/vacuum.?contactor|contactor.*fuse|\bv\.?c\b.*fuse/i, 'vacuum-contactor-fuse'],
+  [/vacuum.?(circuit.?)?breaker|\bvcb\b/i, 'vcb'],
   [/withdraw|draw.?out|truck|racking/i, 'withdrawable-cb'],
-  [/vacuum|circuit.?breaker|leistungsschalter|\bmccb\b|\bacb\b|\bvcb\b|\bmcb\b/i, 'circuit-breaker'],
+  [/miniature.?circuit.?breaker|\bmcb\b/i, 'mcb'],
+  [/circuit.?breaker|leistungsschalter|\bmccb\b|\bacb\b/i, 'circuit-breaker'],
   [/switch.?disconnector|load.?break|sectionali[sz]er/i, 'switch-disconnector'],
   [/disconnector|isolator/i, 'disconnector'],
   [/fuse.?switch|switch.?fuse/i, 'switch-fuse'],
+  [/hrc.?fuse|high.?rupturing/i, 'hrc-fuse'],
   [/\bfuse\b|sicherung/i, 'fuse'],
   [/contactor|sch(ü|u)tz/i, 'contactor'],
   [/overload|thermal.?relay|bimetal/i, 'thermal-overload'],
@@ -176,14 +180,32 @@ const FUNCTION_SYMBOL: [RegExp, SymbolId][] = [
   [/current.?transformer|stromwandler|\bct\b/i, 'current-transformer'],
   [/voltage.?transformer|potential.?transformer|spannungswandler|\bpt\b|\bvt\b/i, 'voltage-transformer'],
   [/power.?transformer|transformer|transformator/i, 'transformer'],
+  [/\bkwh\b|kilo.?watt.?hour|energy.?meter/i, 'kwh-meter'],
+  [/\bkvarh\b|kilo.?var.?hour/i, 'kvarh-meter'],
   [/ammeter|amperemeter/i, 'ammeter'],
   [/voltmeter/i, 'voltmeter'],
-  [/multimeter|power.?meter|energy.?meter|\bkwh\b/i, 'multimeter'],
+  [/power.?factor|cos.?(φ|phi)/i, 'power-factor-meter'],
+  [/\bvar.?meter\b/i, 'var-meter'],
+  [/watt.?meter/i, 'watt-meter'],
+  [/frequency.?meter/i, 'frequency-meter'],
+  [/hour.?meter|running.?hour/i, 'hour-meter'],
+  [/multimeter|power.?meter/i, 'multimeter'],
   [/transducer/i, 'transducer'],
+  [/\bptc\b|thermistor/i, 'ptc'],
+  [/ampere.?selector/i, 'ampere-selector'],
+  [/voltage.?selector/i, 'voltage-selector'],
   [/selector/i, 'selector-switch'],
   [/protection.?relay|protective|\brelay\b/i, 'protection-relay'],
   [/surge.?arrester|arrester|\bspd\b|overvoltage/i, 'surge-arrester'],
-  [/capacitor|kondensator|power.?factor/i, 'capacitor'],
+  [/capacitor.*delta|delta.*capacitor/i, 'capacitor-delta'],
+  [/capacitor|kondensator/i, 'capacitor'],
+  [/surge.?limiter/i, 'surge-limiter'],
+  [/annunciator|alarm.?window/i, 'alarm-annunciator'],
+  [/local.?control.?station|\blcs\b/i, 'lcs'],
+  [/transfer.?switch|\bats\b/i, 'ats'],
+  [/magnet\b/i, 'magnet'],
+  [/key.?interlock/i, 'key-interlock'],
+  [/bus.?duct|bus.?bridge/i, 'bus-duct'],
   [/soft.?start/i, 'soft-starter'],
   [/frequency.?(converter|inverter)|\bvfd\b|\bvsd\b|inverter|drive/i, 'drive'],
   [/heater|heating/i, 'heater'],
@@ -301,9 +323,22 @@ const GEOM = {
   margin: 30,
   colWidth: 200,
   busY: 150,
-  cardRows: 7,
-  cardRowHeight: 15,
+  cardRowHeight: 16,
 };
+
+// The rows of the block under the drawing, as the office's own sheets carry
+// them: one line per property, one column per feeder.
+const TABLE_ROWS: { label: string; value: (line: DeviceTableRow) => string }[] = [
+  { label: 'BUS', value: l => String(l.busSection || '—') },
+  { label: 'Line', value: l => String(l.feederNo || '—') },
+  { label: 'Type', value: l => String(l.templateName || l.wiringType || '—') },
+  { label: 'Power', value: l => (l.ratingPower ? `${l.ratingPower} kW` : '—') },
+  { label: 'Nominal Current', value: l => (l.flc ? `${l.flc} A` : '—') },
+  { label: 'Position', value: l => [l.size, l.moduleNo && `M${l.moduleNo}`, l.sfdHfd].filter(Boolean).join(' · ') || '—' },
+  { label: 'Tag', value: l => String(l.tag || '—') },
+  { label: 'Description', value: l => String(l.description || '—') },
+  { label: 'Cable', value: l => String(l.cableSize || '—') },
+];
 
 /**
  * The switchgear drawn as single-line sheets: supply, busbar, outgoing
@@ -358,6 +393,12 @@ function drawDevice(item: ChainItem, x: number, y: number): string {
   return drawIecSymbol(item.id, x, y);
 }
 
+// Where the text beside a device starts: clear of a symbol exported from
+// EPLAN (they are drawn 36 wide) or of the library symbol's own box.
+function labelOffset(item: ChainItem): number {
+  return item.eplan?.packUrl ? 24 : symbolRight(item.id) + 6;
+}
+
 function drawSheet(o: {
   data: ProjectData;
   equipment: Equipment;
@@ -371,7 +412,7 @@ function drawSheet(o: {
   page: number;
   of: number;
 }): string {
-  const { margin, colWidth, cardRows, cardRowHeight } = GEOM;
+  const { margin, colWidth, cardRowHeight } = GEOM;
   const supplyWidth = o.supply ? colWidth : 90;
   const bodyLeft = margin + supplyWidth;
 
@@ -384,10 +425,14 @@ function drawSheet(o: {
 
   const chainTop = busY + 26;
   const loadY = chainTop + deepest * CELL + 20;
-  const cardY = loadY + CELL + 14;
-  const cardHeight = cardRows * cardRowHeight + 6;
-  const width = Math.max(900, bodyLeft + Math.max(1, o.lines.length) * colWidth + margin);
-  const height = cardY + cardHeight + 46;
+  const cubicleBottom = loadY + CELL + 10;
+  const tableTop = cubicleBottom + 26;
+  const tableHeight = TABLE_ROWS.length * cardRowHeight;
+  // The sheet is exactly as wide as the feeders on it: busbar, cubicles and
+  // the block underneath all end at the last column, never in mid-air.
+  const contentRight = bodyLeft + Math.max(1, o.lines.length) * colWidth;
+  const width = contentRight + margin;
+  const height = tableTop + tableHeight + 40;
 
   const out: string[] = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="Segoe UI, Arial, sans-serif">`);
@@ -402,9 +447,22 @@ function drawSheet(o: {
     o.equipment.type,
     o.equipment.description,
   ].filter(Boolean).join('  ·  '))}</text>`);
-  out.push(`<text x="${width - margin}" y="24" font-size="10" text-anchor="end" fill="#444">Single line diagram — IEC</text>`);
+  out.push(`<text x="${width - margin}" y="24" font-size="10" text-anchor="end" fill="#444">Single line diagram (SLD)</text>`);
   out.push(`<text x="${width - margin}" y="42" font-size="10" text-anchor="end" fill="#444">${
     esc(`${new Date().toLocaleDateString()}   sheet ${o.page}/${o.of}`)}</text>`);
+
+  // ── The busbar, labelled the way the office labels it ────────────────
+  const busLabel = [
+    `BUS ${o.lines[0]?.busSection || 'A'}`,
+    o.spec.serviceVoltage || o.spec.ratedInsulationVoltage,
+    o.spec.mainBusbarConfiguration,
+    o.spec.mainBusbarRatedCurrent && `${o.spec.mainBusbarRatedCurrent} A`,
+    o.spec.ratedShortTimeWithstandCurrent && `${o.spec.ratedShortTimeWithstandCurrent} kA / 1 Sec`,
+  ].filter(Boolean).join(', ');
+  // Written above the bar and clear of the incoming column, so the label never
+  // runs across the supply drop.
+  out.push(`<text x="${bodyLeft + 4}" y="${busY - 9}" font-size="9.5" font-weight="600" fill="#111">${esc(busLabel)}</text>`);
+  out.push(`<line x1="${margin}" y1="${busY}" x2="${contentRight}" y2="${busY}" stroke="#111" stroke-width="4.5"/>`);
 
   // ── Supply ────────────────────────────────────────────────────────────
   const supplyX = margin + supplyWidth / 2;
@@ -416,8 +474,9 @@ function drawSheet(o: {
     let y = 104;
     for (const item of supplyShown) {
       out.push(drawDevice(item, supplyX, y));
-      out.push(`<text x="${supplyX + 34}" y="${y + 15}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
-      out.push(`<text x="${supplyX + 34}" y="${y + 27}" font-size="8.5" fill="#444"><title>${esc(item.code)}</title>${esc(clip(item.code, 15))}</text>`);
+      const tx = supplyX + Math.max(40, labelOffset(item));
+      out.push(`<text x="${tx}" y="${y + 15}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
+      out.push(`<text x="${tx}" y="${y + 27}" font-size="8.5" fill="#1d4ed8"><title>${esc(item.code)}</title>${esc(clip(item.code, 15))}</text>`);
       y += CELL;
     }
     out.push(`<line x1="${supplyX}" y1="${y}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
@@ -427,22 +486,15 @@ function drawSheet(o: {
     out.push(`<text x="${supplyX}" y="84" font-size="9" text-anchor="middle" fill="#555">supply</text>`);
   }
 
-  // ── Busbar ────────────────────────────────────────────────────────────
-  out.push(`<line x1="${margin}" y1="${busY}" x2="${width - margin}" y2="${busY}" stroke="#111" stroke-width="5"/>`);
-  const busText = [
-    o.spec.mainBusbarConfiguration,
-    o.spec.mainBusbarRatedCurrent && `${o.spec.mainBusbarRatedCurrent} A`,
-    o.spec.ratedShortTimeWithstandCurrent && `Icw ${o.spec.ratedShortTimeWithstandCurrent} kA`,
-    o.spec.mainBusbarSize,
-  ].filter(Boolean).join('  ·  ');
-  if (busText) {
-    out.push(`<text x="${width - margin}" y="${busY - 10}" font-size="9.5" text-anchor="end" fill="#333">${esc(busText)}</text>`);
-  }
-
-  // ── Outgoing branches ─────────────────────────────────────────────────
+  // ── Outgoing feeders, each inside its cubicle ─────────────────────────
   o.lines.forEach((line, i) => {
-    const x = bodyLeft + i * colWidth + colWidth / 2;
-    const chain = chains[i];
+    const left = bodyLeft + i * colWidth;
+    const x = left + 46;                       // the branch sits left of centre,
+    const chain = chains[i];                   // so codes have room to its right
+
+    // The cubicle: the dashed outline the office draws around a cell.
+    out.push(`<rect x="${left + 4}" y="${busY + 8}" width="${colWidth - 8}" height="${cubicleBottom - busY - 8}" ` +
+      `fill="none" stroke="#111" stroke-width="0.8" stroke-dasharray="5 3"/>`);
 
     out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
     out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
@@ -450,42 +502,44 @@ function drawSheet(o: {
     let y = chainTop;
     for (const item of chain) {
       out.push(drawDevice(item, x, y));
-      // The label column clears the widest symbol in the library (a relay box
-      // or a meter), so nothing is ever written over a symbol.
-      out.push(`<text x="${x + 34}" y="${y + 14}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
-      out.push(`<text x="${x + 34}" y="${y + 25}" font-size="8.5" fill="#333"><title>${esc(item.code)}</title>${esc(clip(item.code, 17))}</text>`);
-      // Accessories belong to the device: listed under it, never a symbol.
+      // Tag in black, the part code in blue — the office writes the codes in
+      // colour beside the symbol, and it keeps the two apart at a glance. A
+      // boxed symbol (a relay, a meter) is wide, so the text starts clear of it.
+      const tx = x + Math.max(40, labelOffset(item));
+      out.push(`<text x="${tx}" y="${y + 14}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
+      out.push(`<text x="${tx}" y="${y + 25}" font-size="8.5" fill="#1d4ed8"><title>${esc(item.code)}</title>${esc(clip(item.code, 17))}</text>`);
       item.accessories.slice(0, 2).forEach((a, ai) => {
-        out.push(`<text x="${x + 34}" y="${y + 35 + ai * 9}" font-size="7.5" fill="#777"><title>${esc(a)}</title>+ ${esc(clip(a, 17))}</text>`);
+        out.push(`<text x="${tx}" y="${y + 35 + ai * 9}" font-size="7.5" fill="#6b7280"><title>${esc(a)}</title>+ ${esc(clip(a, 17))}</text>`);
       });
       if (item.accessories.length > 2) {
-        out.push(`<text x="${x + 34}" y="${y + 53}" font-size="7.5" fill="#777">+ ${item.accessories.length - 2} more</text>`);
+        out.push(`<text x="${tx}" y="${y + 53}" font-size="7.5" fill="#6b7280">+ ${item.accessories.length - 2} more</text>`);
       }
       y += CELL;
     }
     out.push(`<line x1="${x}" y1="${y}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
     out.push(drawIecSymbol(isMotorLoad(line) ? 'motor' : 'outgoing', x, loadY));
+  });
 
-    // ── Data block ──
-    const cx = bodyLeft + i * colWidth + 8;
-    const cw = colWidth - 16;
-    out.push(`<rect x="${cx}" y="${cardY}" width="${cw}" height="${cardHeight}" fill="#fff" stroke="#111" stroke-width="1"/>`);
-    const rows: [string, string][] = [
-      ['Feeder', String(line.feederNo || '—')],
-      ['Tag', String(line.tag || '—')],
-      ['Description', String(line.description || '—')],
-      ['Template', String(line.templateName || '—')],
-      ['Rating', [line.ratingPower && `${line.ratingPower} kW`, line.flc && `${line.flc} A`].filter(Boolean).join(' / ') || '—'],
-      ['Cable', String(line.cableSize || '—')],
-      ['Position', [line.busSection && `BUS ${line.busSection}`, line.size, line.moduleNo && `M${line.moduleNo}`].filter(Boolean).join(' · ') || '—'],
-    ];
-    rows.forEach(([label, value], r) => {
-      const ry = cardY + 3 + r * cardRowHeight;
-      if (r > 0) out.push(`<line x1="${cx}" y1="${ry}" x2="${cx + cw}" y2="${ry}" stroke="#e5e7eb" stroke-width="0.8"/>`);
-      out.push(`<text x="${cx + 6}" y="${ry + 11}" font-size="8" fill="#6b7280">${esc(label)}</text>`);
-      out.push(`<text x="${cx + cw - 6}" y="${ry + 11}" font-size="8.5" text-anchor="end" fill="#111">` +
-        `<title>${esc(value)}</title>${esc(clip(value, 22))}</text>`);
+  // ── The block under the drawing ───────────────────────────────────────
+  out.push(`<rect x="${margin}" y="${tableTop}" width="${contentRight - margin}" height="${tableHeight}" fill="none" stroke="#111" stroke-width="1"/>`);
+  TABLE_ROWS.forEach((row, r) => {
+    const ry = tableTop + r * cardRowHeight;
+    if (r > 0) out.push(`<line x1="${margin}" y1="${ry}" x2="${contentRight}" y2="${ry}" stroke="#c9ced6" stroke-width="0.7"/>`);
+    out.push(`<text x="${margin + 6}" y="${ry + 11}" font-size="8.5" font-weight="600" fill="#111">${esc(row.label)} :</text>`);
+    o.lines.forEach((line, i) => {
+      const cx = bodyLeft + i * colWidth + colWidth / 2;
+      const value = row.value(line);
+      out.push(`<text x="${cx}" y="${ry + 11}" font-size="8.5" text-anchor="middle" fill="#111">` +
+        `<title>${esc(value)}</title>${esc(clip(value, 26))}</text>`);
     });
+  });
+  // The column rules: the label column ends where the first feeder column
+  // begins, so every column below the drawing stands under its own cubicle.
+  out.push(`<line x1="${bodyLeft}" y1="${tableTop}" x2="${bodyLeft}" y2="${tableTop + tableHeight}" stroke="#111" stroke-width="1"/>`);
+  o.lines.forEach((_, i) => {
+    if (i === 0) return;
+    const cx = bodyLeft + i * colWidth;
+    out.push(`<line x1="${cx}" y1="${tableTop}" x2="${cx}" y2="${tableTop + tableHeight}" stroke="#c9ced6" stroke-width="0.7"/>`);
   });
 
   if (o.lines.length === 0) {
