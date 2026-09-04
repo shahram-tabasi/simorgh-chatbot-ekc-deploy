@@ -90,6 +90,26 @@ export async function syncProjectFromTpms(
   const switchgears = header.switchgears ?? [];
   const total = revisions.length * Math.max(1, switchgears.length) + 2;
 
+  // The panel specifications, one switchgear at a time. The header no longer
+  // carries them (that read is what made a big project hang), so they are
+  // filled in here — and a panel that cannot be read costs its own
+  // specification, not the whole import.
+  for (let i = 0; i < switchgears.length; i += SCOPE_BATCH) {
+    const batch = switchgears.slice(i, i + SCOPE_BATCH);
+    say(`Panel specifications — ${batch[0].scopeName} (${i + 1}/${switchgears.length})`, 0, total);
+    await Promise.all(batch.map(async sw => {
+      try {
+        const panel = await tpmsService.getProjectPanel(projectMainId, sw.scopeId);
+        sw.device = {
+          ...(sw.device ?? { name: sw.scopeName, type: sw.panelType, properties: {} }),
+          properties: { ...(sw.device?.properties ?? {}), ...(panel.properties ?? {}) },
+        };
+      } catch (err) {
+        problems.push(`Panel specification · ${sw.scopeName}: ${(err as Error).message}`);
+      }
+    }));
+  }
+
   // Every revision, oldest first, each one a complete project of its own —
   // and each one read switchgear by switchgear, in small batches, so that a
   // project with forty panels and a decade of revisions never hangs on one

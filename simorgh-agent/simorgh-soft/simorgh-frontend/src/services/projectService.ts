@@ -42,6 +42,28 @@ export const tpmsService = {
     return body;
   },
 
+  // The panel specification of one switchgear, on its own so that reading a
+  // project never depends on one request that grows with its size.
+  async getProjectPanel(projectMainId: number, scopeId: number): Promise<any> {
+    const r = await fetch(`${API_BASE_URL}/tpms/project/${projectMainId}/panel/${scopeId}`);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.success === false) {
+      throw new Error(body.error || `Could not read the panel specification of switchgear ${scopeId}`);
+    }
+    return body;
+  },
+
+  // How big a project is in TPMS, and how long each read takes — what the
+  // dialog's "Check this project" reports.
+  async getProjectStats(projectMainId: number): Promise<any> {
+    const r = await fetch(`${API_BASE_URL}/tpms/project/${projectMainId}/stats`);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.success === false) {
+      throw new Error(body.error || 'Could not read this project from TPMS');
+    }
+    return body;
+  },
+
   // One revision of a TPMS project: the feeder lines of every switchgear in
   // it, or — with a scopeId — of that one switchgear. Heavy projects are read
   // switchgear by switchgear so no single request has to carry the lot.

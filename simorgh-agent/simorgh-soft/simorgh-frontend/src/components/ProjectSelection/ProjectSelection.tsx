@@ -57,6 +57,9 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   // A read that came back with holes in it: shown before opening, so nobody
   // works on a project that is quietly missing a switchgear.
   const [pending, setPending]           = useState<TpmsSyncResult | null>(null);
+  // What TPMS says about the size of a project, for one that will not open.
+  const [stats, setStats]               = useState<any | null>(null);
+  const [statsBusy, setStatsBusy]       = useState(false);
 
   // ── Inline "new revision" form (same dialog, not a nested modal) ─────
   const [newRevOpen, setNewRevOpen]               = useState(false);
@@ -139,6 +142,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     setComboOpen(false);
     setSearch('');
     setTpmsHeader(null);
+    setStats(null);
+    setPending(null);
     setTpmsBusy(true);
     try {
       setTpmsHeader(await tpmsService.getProjectHeader(option.value));
@@ -146,6 +151,22 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       setError('Could not read this project from TPMS: ' + (err as Error).message);
     } finally {
       setTpmsBusy(false);
+    }
+  };
+
+  // What TPMS holds for this project and how long each read takes. Used when
+  // a project will not open: it says whether TPMS answers at all, and how big
+  // the thing being read actually is.
+  const handleCheck = async () => {
+    if (!selectedTpms) return;
+    setStatsBusy(true);
+    setStats(null);
+    try {
+      setStats(await tpmsService.getProjectStats(selectedTpms.value));
+    } catch (err) {
+      setStats({ error: (err as Error).message });
+    } finally {
+      setStatsBusy(false);
     }
   };
 
@@ -637,6 +658,44 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                       <p className="text-xs text-gray-500 mt-1" dir="rtl">
                         پروژه‌های سنگین را می‌توانید فقط با آخرین ریویژن باز کنید؛ بقیهٔ ریویژن‌ها دست‌نخورده می‌مانند.
                       </p>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="px-3 py-1.5 border border-purple-300 text-purple-800 rounded text-xs hover:bg-purple-100 disabled:opacity-50"
+                      onClick={handleCheck}
+                      disabled={statsBusy || opening}
+                    >
+                      {statsBusy ? 'Checking…' : 'Check this project'}
+                    </button>
+                    <span className="text-xs text-gray-500">
+                      How much TPMS holds for it, and how long each read takes.
+                    </span>
+                  </div>
+
+                  {stats && (
+                    <div className={`rounded border px-3 py-2 text-xs ${
+                      stats.error ? 'border-red-300 bg-red-50 text-red-800' : 'border-gray-200 bg-white text-gray-700'
+                    }`}>
+                      {stats.error ? (
+                        <>TPMS answered with an error: {stats.error}</>
+                      ) : (
+                        <>
+                          <div className="font-medium text-gray-800">
+                            {stats.switchgears} switchgear(s) · {stats.revisions.length} revision(s) ·
+                            {' '}{stats.drafts} line(s) · {stats.parts} part row(s)
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-gray-600">
+                            {stats.revisions.map((r: any) => (
+                              <span key={r.revision}>REV {r.revision}: {r.drafts}</span>
+                            ))}
+                          </div>
+                          <div className="mt-1 text-gray-500">
+                            reads: {Object.entries(stats.timings || {}).map(([k, v]) => `${k} ${v}ms`).join(' · ')}
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
 

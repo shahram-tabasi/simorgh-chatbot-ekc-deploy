@@ -512,6 +512,30 @@ export const SQL = {
     WHERE Project_ID = ? AND scopeName IS NOT NULL AND scopeName <> ''
     ORDER BY scopeName`,
 
+  // Every switchgear of a project with its type and cell count, in one read
+  // instead of one read per switchgear.
+  projectScopeDetails: `
+    SELECT vs.IDProjectScope AS scopeId, vs.SW_Type, vs.Cell_No, vs.TAG,
+           c.ENG_DES AS swTypeName
+    FROM view_scope vs
+    LEFT JOIN CODING_SECONDARY_GRP_TB c ON c.ID = vs.SW_Type
+    WHERE vs.IDProjectMain = ?`,
+
+  // How big a project is, before deciding to read it: drafts per revision and
+  // the parts on them.
+  statsRevisions: `
+    SELECT revision, COUNT(*) AS drafts
+    FROM View_draft
+    WHERE Project_ID = ?
+    GROUP BY revision
+    ORDER BY revision`,
+
+  statsParts: `
+    SELECT COUNT(*) AS parts
+    FROM View_draft d
+    JOIN View_draft_Equipment e ON e.draftId = d.ID
+    WHERE d.Project_ID = ?`,
+
   // The three pickers, straight from Eplanix's GetScopes / GetRevisions.
   projectList: `
     SELECT IDProjectMain AS value,
@@ -567,6 +591,7 @@ export function registerTpmsImportRoutes(app, getPool) {
       return res.status(400).json({ success: false, error: 'projectId is required' });
     }
     try {
+      const started = Date.now();
       const pool = await getPool();
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const many = async (sql, params) => (await pool.execute(sql, params))[0];
@@ -584,35 +609,33 @@ export function registerTpmsImportRoutes(app, getPool) {
         return res.status(404).json({ success: false, error: 'No such project in TPMS' });
       }
 
-      // Two reads per switchgear. Done one switchgear at a time a project
-      // with forty of them spends most of a minute in round trips, so they
-      // go in small batches — enough to be quick, few enough to leave the
-      // pool (10 connections) room to breathe.
-      const scopes = [];
-      const BATCH = 4;
-      for (let i = 0; i < scopeRows.length; i += BATCH) {
-        const batch = await Promise.all(scopeRows.slice(i, i + BATCH).map(async row => {
-          const id = Number(row.scopeId);
-          const [scopeRow, panelRow] = await Promise.all([
-            one(SQL.scope, [projectId, id]),
-            one(SQL.panel, [projectId, id]),
-          ]);
-          return { scopeId: id, scopeName: row.scopeName, scopeRow, panelRow };
-        }));
-        scopes.push(...batch);
-      }
+      // The header used to read technical_panel_identity for every switchgear
+      // — two round trips each, all inside this one request. On a project
+      // with dozens of panels that is the request that never comes back. The
+      // switchgears now come from a single read, and the panel specification
+      // is fetched per switchgear on its own route (see below), so no single
+      // request grows with the size of the project.
+      const [detailRows] = await pool.query(SQL.projectScopeDetails, [projectId]);
+      const details = new Map(detailRows.map(r => [Number(r.scopeId), r]));
+      const named = new Map(scopeRows.map(r => [Number(r.scopeId), r.scopeName]));
+      const ids = new Set([...details.keys(), ...named.keys()]);
 
-      const ids = new Set();
-      for (const entry of scopes) {
-        for (const id of collectPropertyIds(entry.panelRow, projectIdentityRow)) ids.add(id);
-      }
-      for (const id of collectPropertyIds(null, projectIdentityRow)) ids.add(id);
+      const scopes = [...ids].map(id => {
+        const detail = details.get(id) || {};
+        return {
+          scopeId: id,
+          scopeName: str(named.get(id)) || str(detail.TAG) || `Switchgear ${id}`,
+          scopeRow: { ...detail, IDProjectScope: id },
+          panelRow: null,          // read per switchgear, on its own route
+        };
+      }).sort((a, b) => a.scopeName.localeCompare(b.scopeName));
+
       let propertyTitles = {};
-      if (ids.size > 0) {
-        const list = [...ids];
+      const titleIds = collectPropertyIds(null, projectIdentityRow);
+      if (titleIds.length > 0) {
         const rows = await many(
-          `SELECT ID, Title FROM TECHNICAL_PROPERTIES WHERE ID IN (${list.map(() => '?').join(',')})`,
-          list,
+          `SELECT ID, Title FROM TECHNICAL_PROPERTIES WHERE ID IN (${titleIds.map(() => '?').join(',')})`,
+          titleIds,
         );
         propertyTitles = Object.fromEntries(rows.map(r => [Number(r.ID), r.Title]));
       }
@@ -622,11 +645,95 @@ export function registerTpmsImportRoutes(app, getPool) {
         revisions: revisionRows.map(r => r.value),
       });
       console.log(`✅ TPMS project ${projectId}: ${payload.switchgears.length} switchgear(s), ` +
-        `revisions ${payload.revisions.join(', ') || '—'}`);
+        `revisions ${payload.revisions.join(', ') || '—'} in ${Date.now() - started} ms`);
       res.json({ success: true, ...payload });
     } catch (err) {
       console.error('❌ Error in /api/tpms/project:', err.message);
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // The panel specification of one switchgear — technical_panel_identity plus
+  // the TECHNICAL_PROPERTIES titles behind its coded fields. Its own route so
+  // that reading a project never grows into one huge request.
+  app.get('/api/tpms/project/:projectId/panel/:scopeId', async (req, res) => {
+    const projectId = Number(req.params.projectId);
+    const scopeId = Number(req.params.scopeId);
+    if (!Number.isFinite(projectId) || !Number.isFinite(scopeId)) {
+      return res.status(400).json({ success: false, error: 'projectId and scopeId are required' });
+    }
+    try {
+      const pool = await getPool();
+      const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
+      const [panelRow, projectIdentityRow] = await Promise.all([
+        one(SQL.panel, [projectId, scopeId]),
+        one(SQL.projectIdentity, [projectId]),
+      ]);
+
+      let propertyTitles = {};
+      const ids = collectPropertyIds(panelRow, projectIdentityRow);
+      if (ids.length > 0) {
+        const [rows] = await pool.query(
+          `SELECT ID, Title FROM TECHNICAL_PROPERTIES WHERE ID IN (${ids.map(() => '?').join(',')})`,
+          ids,
+        );
+        propertyTitles = Object.fromEntries(rows.map(r => [Number(r.ID), r.Title]));
+      }
+
+      const resolve = makeTitleResolver(propertyTitles);
+      const properties = mapPanelToDeviceProperties(panelRow, projectIdentityRow, resolve);
+      delete properties.__designTemperature;
+      res.json({ success: true, scopeId, found: !!panelRow, properties });
+    } catch (err) {
+      console.error('❌ Error in /api/tpms/project/panel:', err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // How big a project is, and whether TPMS answers at all — the reading behind
+  // the dialog's "Check this project" button, so a project that will not open
+  // can be described instead of just failing.
+  app.get('/api/tpms/project/:projectId/stats', async (req, res) => {
+    const projectId = Number(req.params.projectId);
+    if (!Number.isFinite(projectId)) {
+      return res.status(400).json({ success: false, error: 'projectId is required' });
+    }
+    const timings = {};
+    const time = async (name, fn) => {
+      const t = Date.now();
+      try { return await fn(); } finally { timings[name] = Date.now() - t; }
+    };
+    try {
+      const pool = await getPool();
+      const projectRow = await time('project', async () =>
+        (await pool.execute(SQL.project, [projectId]))[0][0] || null);
+      if (!projectRow) return res.status(404).json({ success: false, error: 'No such project in TPMS' });
+
+      const scopes = await time('switchgears', async () =>
+        (await pool.query(SQL.projectScopeDetails, [projectId]))[0]);
+      const perRevision = await time('revisions', async () =>
+        (await pool.query(SQL.statsRevisions, [projectId]))[0]);
+      const parts = await time('parts', async () =>
+        (await pool.query(SQL.statsParts, [projectId]))[0][0]?.parts ?? 0);
+
+      const drafts = perRevision.reduce((n, r) => n + Number(r.drafts || 0), 0);
+      console.log(`ℹ️  TPMS project ${projectId} stats: ${scopes.length} switchgear(s), ` +
+        `${perRevision.length} revision(s), ${drafts} draft(s), ${parts} part row(s) ` +
+        `(${JSON.stringify(timings)} ms)`);
+      res.json({
+        success: true,
+        projectMainId: projectId,
+        oeNumber: str(projectRow.OENUM),
+        projectName: str(projectRow.Project_Name),
+        switchgears: scopes.length,
+        revisions: perRevision.map(r => ({ revision: Number(r.revision), drafts: Number(r.drafts) })),
+        drafts,
+        parts: Number(parts),
+        timings,
+      });
+    } catch (err) {
+      console.error('❌ Error in /api/tpms/project/stats:', err.message);
+      res.status(500).json({ success: false, error: err.message, timings });
     }
   });
 
