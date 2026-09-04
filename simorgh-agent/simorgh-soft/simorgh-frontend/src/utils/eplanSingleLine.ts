@@ -19,6 +19,7 @@ import {
   templateParts, formatPartEntry, stripLocaleTags, getEplanixValue,
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
 } from './tierEquipmentMatrix';
+import { CELL, SymbolId, drawIecSymbol, buildSymbolCatalogueSvg } from './iecSymbols';
 
 export const EPLAN_HEADERS = [
   'Page', 'Higher-level function', 'Location', 'DT', 'Function text',
@@ -108,18 +109,19 @@ export function buildEplanRows(
 }
 
 
+
 // ── The drawing ──────────────────────────────────────────────────────────────
 //
-// Laid out the way SIMARIS draws a distribution board: the supply at the top
-// left, a busbar across the sheet with its ratings beside it, one branch per
-// outgoing feeder hanging off it with its devices in order, and under each
-// branch a data block — feeder, tag, description, rating, current, cable —
-// so the sheet can be read without the tables. Sheets are paginated, a fixed
-// number of feeders each, like SIMARIS pages a board over several drawings.
-
-type SymbolKind = 'breaker' | 'disconnector' | 'switch-fuse' | 'contactor' | 'overload'
-                | 'ct' | 'pt' | 'meter' | 'relay' | 'arrester' | 'fuse'
-                | 'transformer' | 'motor' | 'capacitor' | 'drive' | 'box';
+// Laid out the way a distribution board is drawn: the supply at the top left,
+// a busbar across the sheet, one branch per outgoing feeder with its devices
+// down it, and under each branch a data block. The symbols themselves are the
+// IEC library in iecSymbols.ts.
+//
+// One rule decides what becomes a symbol: **a slot is one device**. The first
+// part in a slot is the device — the breaker, the contactor, the CT — and the
+// rest of that slot is its accessories: an auxiliary switch, a shunt trip, a
+// terminal cover. Those are written beside the device, never drawn as a second
+// switch on the line, which is how a single line is read.
 
 /** What EPLAN says a part is: the symbol it places, and for what function. */
 export interface EplanSymbolInfo {
@@ -132,32 +134,73 @@ export interface EplanSymbolInfo {
 }
 export type EplanSymbolMap = Record<string, EplanSymbolInfo>;
 
-// EPLAN's function definition says what the part *is* — "Circuit breaker,
-// 3 pole", "Current transformer", "Motor, 3 phase". That text decides the
-// symbol, so the drawing follows EPLAN's own classification of the part
-// rather than the slot the part happens to sit in.
-const FUNCTION_SYMBOL: [RegExp, SymbolKind][] = [
-  [/vacuum|circuit.?breaker|leistungsschalter|\bmccb\b|\bacb\b|\bvcb\b|\bmcb\b/i, 'breaker'],
-  [/switch.?disconnector|disconnector|isolator|load.?break|sectionali[sz]er/i, 'disconnector'],
+// The slot a part sits in says what the device is, unless EPLAN says better.
+const SLOT_SYMBOL: Record<string, SymbolId> = {
+  'CB ORDER': 'circuit-breaker',
+  'VCB OR VC/FUSE': 'withdrawable-cb',
+  'CONTACTOR. ORDER': 'contactor',
+  'OVER LOAD RELAY': 'thermal-overload',
+  'EARTH FAULT': 'earth-fault-relay',
+  'COREBALANCE CT': 'core-balance-ct',
+  'PROTECTION RELAY': 'protection-relay',
+  'CT RATING': 'current-transformer',
+  'PT RATING': 'voltage-transformer',
+  'AMMETER': 'ammeter',
+  'VOLTMETER': 'voltmeter',
+  'MULTIMETER': 'multimeter',
+  'TRANSDUSER': 'transducer',
+  'AMMETER selector': 'selector-switch',
+  'VOLTMETER selector': 'selector-switch',
+  'TEST BLOCK': 'test-block',
+  'SURGE ARRESTER': 'surge-arrester',
+  'VOLTAGE INDICATOR': 'lamp',
+  'ALARM ANUNCIATOR': 'lamp',
+  'ALARM WINDDOW': 'lamp',
+  'ACCESSORY': 'accessory',
+};
+
+// EPLAN's function definition — "Circuit breaker, 3 pole", "Current
+// transformer", "Motor, 3 phase" — is what the part actually is, so it wins
+// over the slot it was filed under.
+const FUNCTION_SYMBOL: [RegExp, SymbolId][] = [
+  [/withdraw|draw.?out|truck|racking/i, 'withdrawable-cb'],
+  [/vacuum|circuit.?breaker|leistungsschalter|\bmccb\b|\bacb\b|\bvcb\b|\bmcb\b/i, 'circuit-breaker'],
+  [/switch.?disconnector|load.?break|sectionali[sz]er/i, 'switch-disconnector'],
+  [/disconnector|isolator/i, 'disconnector'],
   [/fuse.?switch|switch.?fuse/i, 'switch-fuse'],
   [/\bfuse\b|sicherung/i, 'fuse'],
   [/contactor|sch(ü|u)tz/i, 'contactor'],
-  [/overload|thermal.?relay|bimetal/i, 'overload'],
-  [/current.?transformer|stromwandler|\bct\b/i, 'ct'],
-  [/voltage.?transformer|potential.?transformer|spannungswandler|\bpt\b|\bvt\b/i, 'pt'],
-  [/transformer|transformator/i, 'transformer'],
-  [/ammeter|voltmeter|multimeter|power.?meter|measuring|\bmeter\b/i, 'meter'],
-  [/protection.?relay|protective|\brelay\b/i, 'relay'],
-  [/surge.?arrester|arrester|\bspd\b|overvoltage/i, 'arrester'],
+  [/overload|thermal.?relay|bimetal/i, 'thermal-overload'],
+  [/earth.?fault|residual.?current|\brcd\b/i, 'earth-fault-relay'],
+  [/core.?balance|summation.?transformer/i, 'core-balance-ct'],
+  [/current.?transformer|stromwandler|\bct\b/i, 'current-transformer'],
+  [/voltage.?transformer|potential.?transformer|spannungswandler|\bpt\b|\bvt\b/i, 'voltage-transformer'],
+  [/power.?transformer|transformer|transformator/i, 'transformer'],
+  [/ammeter|amperemeter/i, 'ammeter'],
+  [/voltmeter/i, 'voltmeter'],
+  [/multimeter|power.?meter|energy.?meter|\bkwh\b/i, 'multimeter'],
+  [/transducer/i, 'transducer'],
+  [/selector/i, 'selector-switch'],
+  [/protection.?relay|protective|\brelay\b/i, 'protection-relay'],
+  [/surge.?arrester|arrester|\bspd\b|overvoltage/i, 'surge-arrester'],
   [/capacitor|kondensator|power.?factor/i, 'capacitor'],
-  [/soft.?start|frequency.?(converter|inverter)|\bvfd\b|\bvsd\b|drive/i, 'drive'],
+  [/soft.?start/i, 'soft-starter'],
+  [/frequency.?(converter|inverter)|\bvfd\b|\bvsd\b|inverter|drive/i, 'drive'],
+  [/heater|heating/i, 'heater'],
+  [/lamp|indicator|signal|annunciator/i, 'lamp'],
+  [/socket|outlet/i, 'socket'],
+  [/terminal|test.?block|test.?disconnect/i, 'test-block'],
+  [/generator/i, 'generator'],
   [/\bmotor\b/i, 'motor'],
 ];
 
-export function kindFromFunction(functionDefinition?: string): SymbolKind | null {
-  const text = String(functionDefinition ?? '');
-  if (!text) return null;
-  for (const [pattern, kind] of FUNCTION_SYMBOL) if (pattern.test(text)) return kind;
+// Parts that are not a device of their own: they belong to the device above.
+const ACCESSORY = /auxiliary|aux\.|shunt.?trip|under.?voltage|trip.?coil|closing.?coil|handle|cover|terminal.?cover|accessor|spare.?part|connection.?cable|mounting|adapter|link.?kit/i;
+
+export function kindFromFunction(functionDefinition?: string): SymbolId | null {
+  const value = String(functionDefinition ?? '');
+  if (!value) return null;
+  for (const [pattern, id] of FUNCTION_SYMBOL) if (pattern.test(value)) return id;
   return null;
 }
 
@@ -179,23 +222,8 @@ export function lookupSymbol(part: any, symbols?: EplanSymbolMap): EplanSymbolIn
   return undefined;
 }
 
-// Which symbol stands for a slot. Anything not named here is drawn as a dashed
-// box carrying its code, which is honest: the part is on the line, and the
-// drawing does not pretend to know its schematic shape.
-const SLOT_SYMBOL: Record<string, SymbolKind> = {
-  'CB ORDER': 'breaker', 'VCB OR VC/FUSE': 'breaker',
-  'CONTACTOR. ORDER': 'contactor',
-  'OVER LOAD RELAY': 'overload',
-  'CT RATING': 'ct', 'COREBALANCE CT': 'ct', 'PT RATING': 'pt',
-  'AMMETER': 'meter', 'VOLTMETER': 'meter', 'MULTIMETER': 'meter', 'TRANSDUSER': 'meter',
-  'PROTECTION RELAY': 'relay', 'EARTH FAULT': 'relay',
-  'SURGE ARRESTER': 'arrester',
-  'TEST BLOCK': 'box', 'ACCESSORY': 'box', 'VOLTAGE INDICATOR': 'box',
-};
-
 const esc = (s: string) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** Feeders that bring power in rather than take it out. */
@@ -207,13 +235,14 @@ const isMotorLoad = (line: DeviceTableRow) =>
   /^m/i.test(String(line.wiringType || '')) ||
   /motor|pump|fan|blower|compressor|mill/i.test(String(line.description || ''));
 
-// One device on a branch: its symbol, its tag and its code.
+/** One device on a branch: its symbol, its tag, its code and its accessories. */
 interface ChainItem {
-  kind: SymbolKind;
+  id: SymbolId;
   tag: string;
   code: string;
   slot: string;
-  /** What EPLAN says this part is, when its parts database was reachable. */
+  /** The rest of the parts in this slot — written, not drawn. */
+  accessories: string[];
   eplan?: EplanSymbolInfo;
 }
 
@@ -230,136 +259,35 @@ function chainFor(
     ...order.filter(p => parts[p]?.length),
     ...Object.keys(parts).filter(p => !order.includes(p)),
   ];
+
   const counters: Record<string, number> = {};
   const out: ChainItem[] = [];
+
   for (const slot of slots) {
-    for (const part of parts[slot]) {
-      const label = stripLocaleTags(part?.label) || SLOT_LETTER[slot] || 'A';
-      counters[label] = (counters[label] ?? 0) + 1;
-      // EPLAN's own classification of the part wins; the slot it sits in is
-      // the fallback for a part EPLAN does not know.
-      const eplan = lookupSymbol(part, symbols);
-      const kind = kindFromFunction(eplan?.functionDefinition) ?? SLOT_SYMBOL[slot] ?? 'box';
-      out.push({
-        kind,
-        tag: `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`,
-        code: formatPartEntry(part),
-        slot,
-        eplan,
-      });
-    }
+    const inSlot = parts[slot];
+    // The device of this slot is its first part; anything after it is an
+    // accessory of that device, not a device of its own.
+    const primary = inSlot[0];
+    const eplan = lookupSymbol(primary, symbols);
+    const fromFunction = kindFromFunction(eplan?.functionDefinition);
+    const isAccessory = !fromFunction &&
+      ACCESSORY.test(`${eplan?.functionDefinition ?? ''} ${stripLocaleTags(primary?.fullData?.Designation1)}`);
+    const id: SymbolId = fromFunction ?? (isAccessory ? 'accessory' : (SLOT_SYMBOL[slot] ?? 'accessory'));
+
+    const label = stripLocaleTags(primary?.label) || SLOT_LETTER[slot] || 'A';
+    counters[label] = (counters[label] ?? 0) + 1;
+
+    out.push({
+      id,
+      tag: `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`,
+      code: formatPartEntry(primary),
+      slot,
+      accessories: inSlot.slice(1).map(p => formatPartEntry(p)),
+      eplan,
+    });
   }
+
   return out;
-}
-
-// Symbols are drawn on the branch line, centred on x, occupying 34 px of it.
-function drawSymbol(kind: SymbolKind, x: number, y: number): string {
-  const g: string[] = [];
-  const line = (x1: number, y1: number, x2: number, y2: number, w = 1.3) =>
-    g.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#111" stroke-width="${w}"/>`);
-  switch (kind) {
-    case 'breaker':
-      // IEC circuit breaker: a switch whose fixed contact carries the cross.
-      line(x, y, x, y + 8);
-      g.push(`<circle cx="${x}" cy="${y + 8}" r="1.8" fill="#111"/>`);
-      line(x, y + 8, x + 11, y + 26, 1.5);          // moving contact
-      line(x - 5, y + 21, x + 5, y + 31, 1.5);      // ×
-      line(x + 5, y + 21, x - 5, y + 31, 1.5);
-      line(x, y + 26, x, y + 34);
-      break;
-    case 'switch-fuse':
-      line(x, y, x, y + 6);
-      line(x, y + 6, x + 11, y + 22, 1.5);
-      g.push(`<rect x="${x - 5}" y="${y + 22}" width="10" height="12" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
-      break;
-    case 'contactor':
-      // Switch stroke with the contactor's arc under the moving contact.
-      line(x, y, x, y + 6);
-      line(x, y + 6, x + 12, y + 22, 1.5);
-      g.push(`<path d="M ${x - 6} ${y + 22} a 6 6 0 0 0 12 0" fill="none" stroke="#111" stroke-width="1.3"/>`);
-      line(x, y + 26, x, y + 34);
-      break;
-    case 'overload':
-      g.push(`<rect x="${x - 8}" y="${y + 6}" width="16" height="22" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
-      g.push(`<path d="M ${x - 4} ${y + 11} q 5 6 0 12" fill="none" stroke="#111" stroke-width="1.3"/>`);
-      line(x, y, x, y + 6); line(x, y + 28, x, y + 34);
-      break;
-    case 'ct':
-      line(x, y, x, y + 34);
-      g.push(`<path d="M ${x + 2} ${y + 10} a 7 7 0 1 1 0 14" fill="none" stroke="#111" stroke-width="1.3"/>`);
-      break;
-    case 'pt':
-      line(x, y, x, y + 34);
-      g.push(`<circle cx="${x + 9}" cy="${y + 12}" r="6" fill="#fff" stroke="#111" stroke-width="1.2"/>`);
-      g.push(`<circle cx="${x + 9}" cy="${y + 22}" r="6" fill="#fff" stroke="#111" stroke-width="1.2"/>`);
-      break;
-    case 'meter':
-      line(x, y, x, y + 34);
-      g.push(`<circle cx="${x + 12}" cy="${y + 17}" r="8" fill="#fff" stroke="#111" stroke-width="1.2"/>`);
-      break;
-    case 'relay':
-      line(x, y, x, y + 34);
-      g.push(`<rect x="${x + 4}" y="${y + 7}" width="18" height="20" fill="#fff" stroke="#111" stroke-width="1.2"/>`);
-      break;
-    case 'arrester':
-      line(x, y, x, y + 6);
-      g.push(`<rect x="${x - 7}" y="${y + 6}" width="14" height="20" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
-      line(x - 4, y + 11, x + 4, y + 21);
-      line(x, y + 26, x, y + 34);
-      break;
-    case 'fuse':
-      line(x, y, x, y + 8);
-      g.push(`<rect x="${x - 6}" y="${y + 8}" width="12" height="18" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
-      line(x, y + 26, x, y + 34);
-      break;
-    case 'disconnector':
-      // A switch with no cross: the contact simply opens.
-      line(x, y, x, y + 8);
-      g.push(`<circle cx="${x}" cy="${y + 8}" r="1.8" fill="#111"/>`);
-      line(x, y + 8, x + 12, y + 26, 1.5);
-      g.push(`<circle cx="${x}" cy="${y + 26}" r="1.8" fill="#111"/>`);
-      line(x, y + 26, x, y + 34);
-      break;
-    case 'transformer':
-      line(x, y, x, y + 6);
-      g.push(`<circle cx="${x}" cy="${y + 13}" r="7.5" fill="none" stroke="#111" stroke-width="1.3"/>`);
-      g.push(`<circle cx="${x}" cy="${y + 22}" r="7.5" fill="none" stroke="#111" stroke-width="1.3"/>`);
-      line(x, y + 30, x, y + 34);
-      break;
-    case 'motor':
-      line(x, y, x, y + 8);
-      g.push(`<circle cx="${x}" cy="${y + 20}" r="11" fill="#fff" stroke="#111" stroke-width="1.4"/>`);
-      g.push(`<text x="${x}" y="${y + 24}" font-size="10" text-anchor="middle" fill="#111">M</text>`);
-      break;
-    case 'capacitor':
-      line(x, y, x, y + 14);
-      line(x - 8, y + 14, x + 8, y + 14, 1.6);
-      line(x - 8, y + 19, x + 8, y + 19, 1.6);
-      line(x, y + 19, x, y + 34);
-      break;
-    case 'drive':
-      line(x, y, x, y + 6);
-      g.push(`<rect x="${x - 11}" y="${y + 6}" width="22" height="22" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
-      line(x - 6, y + 22, x + 6, y + 12, 1.2);
-      line(x, y + 28, x, y + 34);
-      break;
-    default:
-      line(x, y, x, y + 34);
-      g.push(`<rect x="${x + 4}" y="${y + 9}" width="16" height="16" fill="#fff" stroke="#111" stroke-width="1" stroke-dasharray="3 2"/>`);
-  }
-  return g.join('');
-}
-
-// A device is drawn with the symbol EPLAN exported, when the symbol pack has
-// one for it, and with the app's own IEC symbol otherwise.
-function drawDevice(item: ChainItem, x: number, y: number): string {
-  const url = item.eplan?.packUrl;
-  if (url) {
-    return `<image href="${esc(url)}" x="${x - 17}" y="${y}" width="34" height="34" ` +
-      `preserveAspectRatio="xMidYMid meet"><title>${esc(item.eplan?.symbol || '')}</title></image>` +
-      `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + 34}" stroke="#111" stroke-width="0.6" opacity="0.35"/>`;
-  }
-  return drawSymbol(item.kind, x, y);
 }
 
 export interface SingleLinePage {
@@ -371,18 +299,15 @@ export interface SingleLinePage {
 
 const GEOM = {
   margin: 30,
-  colWidth: 190,
-  headerHeight: 58,
+  colWidth: 200,
   busY: 150,
-  chainStep: 44,
   cardRows: 7,
   cardRowHeight: 15,
 };
 
 /**
- * The switchgear drawn as single-line sheets, SIMARIS-fashion: supply, busbar,
- * outgoing branches with their devices, and a data block under each branch.
- * `perPage` feeders to a sheet.
+ * The switchgear drawn as single-line sheets: supply, busbar, outgoing
+ * branches with their devices, and a data block under each branch.
  */
 export function buildSingleLinePages(
   data: ProjectData,
@@ -401,8 +326,6 @@ export function buildSingleLinePages(
   const all = equipment.devices ?? [];
   const incomers = all.filter(isIncomer);
   const outgoing = all.filter(l => !isIncomer(l));
-  // A board drawn with no outgoing feeder at all would be an empty sheet; in
-  // that case the incomers are drawn as the branches instead.
   const branches = outgoing.length > 0 ? outgoing : all;
   const supply = outgoing.length > 0 ? incomers[0] : undefined;
 
@@ -423,6 +346,18 @@ export function buildSingleLinePages(
   }));
 }
 
+// A device is drawn with the symbol exported from EPLAN when the pack has one,
+// and with the library's IEC symbol otherwise.
+function drawDevice(item: ChainItem, x: number, y: number): string {
+  const url = item.eplan?.packUrl;
+  if (url) {
+    return `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + CELL}" stroke="#111" stroke-width="0.8"/>` +
+      `<image href="${esc(url)}" x="${x - 18}" y="${y + 2}" width="36" height="36" ` +
+      `preserveAspectRatio="xMidYMid meet"><title>${esc(item.eplan?.symbol || '')}</title></image>`;
+  }
+  return drawIecSymbol(item.id, x, y);
+}
+
 function drawSheet(o: {
   data: ProjectData;
   equipment: Equipment;
@@ -436,7 +371,7 @@ function drawSheet(o: {
   page: number;
   of: number;
 }): string {
-  const { margin, colWidth, chainStep, cardRows, cardRowHeight } = GEOM;
+  const { margin, colWidth, cardRows, cardRowHeight } = GEOM;
   const supplyWidth = o.supply ? colWidth : 90;
   const bodyLeft = margin + supplyWidth;
 
@@ -445,13 +380,11 @@ function drawSheet(o: {
   const supplyChain = o.supply ? chainFor(o.supply, o.templates, o.order, 0, o.symbols) : [];
   const supplyShown = supplyChain.slice(0, 3);
   const deepest = Math.max(1, ...chains.map(c => c.length));
-  // The busbar sits below whatever the incomer needs, never above its own
-  // minimum — so the supply never runs into it.
-  const busY = Math.max(GEOM.busY, 104 + supplyShown.length * 34 + 26);
+  const busY = Math.max(GEOM.busY, 104 + supplyShown.length * CELL + 26);
 
   const chainTop = busY + 26;
-  const loadY = chainTop + deepest * chainStep + 26;
-  const cardY = loadY + 44;
+  const loadY = chainTop + deepest * CELL + 20;
+  const cardY = loadY + CELL + 14;
   const cardHeight = cardRows * cardRowHeight + 6;
   const width = Math.max(900, bodyLeft + Math.max(1, o.lines.length) * colWidth + margin);
   const height = cardY + cardHeight + 46;
@@ -469,30 +402,29 @@ function drawSheet(o: {
     o.equipment.type,
     o.equipment.description,
   ].filter(Boolean).join('  ·  '))}</text>`);
-  out.push(`<text x="${width - margin}" y="24" font-size="10" text-anchor="end" fill="#444">Single line diagram</text>`);
+  out.push(`<text x="${width - margin}" y="24" font-size="10" text-anchor="end" fill="#444">Single line diagram — IEC</text>`);
   out.push(`<text x="${width - margin}" y="42" font-size="10" text-anchor="end" fill="#444">${
     esc(`${new Date().toLocaleDateString()}   sheet ${o.page}/${o.of}`)}</text>`);
 
   // ── Supply ────────────────────────────────────────────────────────────
   const supplyX = margin + supplyWidth / 2;
   if (o.supply) {
-    out.push(`<text x="${supplyX}" y="82" font-size="10" font-weight="700" text-anchor="middle" fill="#111">${
+    out.push(`<text x="${supplyX}" y="80" font-size="10" font-weight="700" text-anchor="middle" fill="#111">${
       esc(clip(String(o.supply.feederNo || 'INCOMING'), 22))}</text>`);
-    out.push(`<text x="${supplyX}" y="96" font-size="9" text-anchor="middle" fill="#555">${
+    out.push(`<text x="${supplyX}" y="94" font-size="9" text-anchor="middle" fill="#555">${
       esc(clip(String(o.supply.description || ''), 26))}</text>`);
-    // The incomer's own devices, drawn compactly above the busbar.
     let y = 104;
     for (const item of supplyShown) {
       out.push(drawDevice(item, supplyX, y));
-      out.push(`<text x="${supplyX + 26}" y="${y + 20}" font-size="8.5" fill="#111">${esc(clip(item.code, 18))}</text>`);
-      y += 34;
+      out.push(`<text x="${supplyX + 34}" y="${y + 15}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
+      out.push(`<text x="${supplyX + 34}" y="${y + 27}" font-size="8.5" fill="#444"><title>${esc(item.code)}</title>${esc(clip(item.code, 15))}</text>`);
+      y += CELL;
     }
     out.push(`<line x1="${supplyX}" y1="${y}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
   } else {
-    // No incomer on this board: the busbar is simply fed from elsewhere.
-    out.push(`<path d="M ${supplyX} 96 L ${supplyX} ${busY}" stroke="#111" stroke-width="1.4"/>`);
-    out.push(`<path d="M ${supplyX - 7} 96 L ${supplyX} 84 L ${supplyX + 7} 96 Z" fill="#111"/>`);
-    out.push(`<text x="${supplyX}" y="78" font-size="9" text-anchor="middle" fill="#555">supply</text>`);
+    out.push(drawIecSymbol('incoming', supplyX, 92));
+    out.push(`<line x1="${supplyX}" y1="132" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
+    out.push(`<text x="${supplyX}" y="84" font-size="9" text-anchor="middle" fill="#555">supply</text>`);
   }
 
   // ── Busbar ────────────────────────────────────────────────────────────
@@ -504,7 +436,6 @@ function drawSheet(o: {
     o.spec.mainBusbarSize,
   ].filter(Boolean).join('  ·  ');
   if (busText) {
-    // Right of the sheet, clear of the supply column.
     out.push(`<text x="${width - margin}" y="${busY - 10}" font-size="9.5" text-anchor="end" fill="#333">${esc(busText)}</text>`);
   }
 
@@ -519,26 +450,25 @@ function drawSheet(o: {
     let y = chainTop;
     for (const item of chain) {
       out.push(drawDevice(item, x, y));
-      out.push(`<text x="${x + 26}" y="${y + 14}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
-      out.push(`<text x="${x + 26}" y="${y + 26}" font-size="8.5" fill="#444"><title>${esc(item.code)}</title>${
-        esc(clip(item.code, 17))}</text>`);
-      y += chainStep;
+      // The label column clears the widest symbol in the library (a relay box
+      // or a meter), so nothing is ever written over a symbol.
+      out.push(`<text x="${x + 34}" y="${y + 14}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
+      out.push(`<text x="${x + 34}" y="${y + 25}" font-size="8.5" fill="#333"><title>${esc(item.code)}</title>${esc(clip(item.code, 17))}</text>`);
+      // Accessories belong to the device: listed under it, never a symbol.
+      item.accessories.slice(0, 2).forEach((a, ai) => {
+        out.push(`<text x="${x + 34}" y="${y + 35 + ai * 9}" font-size="7.5" fill="#777"><title>${esc(a)}</title>+ ${esc(clip(a, 17))}</text>`);
+      });
+      if (item.accessories.length > 2) {
+        out.push(`<text x="${x + 34}" y="${y + 53}" font-size="7.5" fill="#777">+ ${item.accessories.length - 2} more</text>`);
+      }
+      y += CELL;
     }
     out.push(`<line x1="${x}" y1="${y}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
+    out.push(drawIecSymbol(isMotorLoad(line) ? 'motor' : 'outgoing', x, loadY));
 
-    // The load at the foot: a motor when the line says so, an outgoing arrow
-    // otherwise.
-    if (isMotorLoad(line)) {
-      out.push(`<circle cx="${x}" cy="${loadY + 14}" r="13" fill="#fff" stroke="#111" stroke-width="1.4"/>`);
-      out.push(`<text x="${x}" y="${loadY + 18}" font-size="11" text-anchor="middle" fill="#111">M</text>`);
-    } else {
-      out.push(`<path d="M ${x - 7} ${loadY + 6} L ${x} ${loadY + 20} L ${x + 7} ${loadY + 6} Z" fill="#111"/>`);
-    }
-
-    // ── Data block, the same rows on every branch so the sheet reads as a
-    //    table under the drawing.
-    const cx = bodyLeft + i * colWidth + 6;
-    const cw = colWidth - 12;
+    // ── Data block ──
+    const cx = bodyLeft + i * colWidth + 8;
+    const cw = colWidth - 16;
     out.push(`<rect x="${cx}" y="${cardY}" width="${cw}" height="${cardHeight}" fill="#fff" stroke="#111" stroke-width="1"/>`);
     const rows: [string, string][] = [
       ['Feeder', String(line.feederNo || '—')],
@@ -551,12 +481,10 @@ function drawSheet(o: {
     ];
     rows.forEach(([label, value], r) => {
       const ry = cardY + 3 + r * cardRowHeight;
-      if (r > 0) {
-        out.push(`<line x1="${cx}" y1="${ry}" x2="${cx + cw}" y2="${ry}" stroke="#e5e7eb" stroke-width="0.8"/>`);
-      }
+      if (r > 0) out.push(`<line x1="${cx}" y1="${ry}" x2="${cx + cw}" y2="${ry}" stroke="#e5e7eb" stroke-width="0.8"/>`);
       out.push(`<text x="${cx + 6}" y="${ry + 11}" font-size="8" fill="#6b7280">${esc(label)}</text>`);
       out.push(`<text x="${cx + cw - 6}" y="${ry + 11}" font-size="8.5" text-anchor="end" fill="#111">` +
-        `<title>${esc(value)}</title>${esc(clip(value, 20))}</text>`);
+        `<title>${esc(value)}</title>${esc(clip(value, 22))}</text>`);
     });
   });
 
@@ -598,5 +526,22 @@ export function buildSingleLineHtml(
 </style></head><body>
 <button class="no-print" onclick="window.print()" style="margin-bottom:10px;padding:8px 14px;background:#1d4ed8;color:#fff;border:0;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
 ${pages.join('')}
+</body></html>`;
+}
+
+/** The symbol library on its own sheet, for printing or checking. */
+export function buildSymbolLibraryHtml(): string {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>IEC single-line symbols</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#111;padding:16px}
+  @page{size:A3 landscape;margin:10mm}
+  @media print{.no-print{display:none}body{padding:0}}
+</style></head><body>
+<button class="no-print" onclick="window.print()" style="margin-bottom:10px;padding:8px 14px;background:#1d4ed8;color:#fff;border:0;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
+<h1 style="font-size:16px;margin-bottom:4px">IEC single-line symbols — علائم تک‌خطی</h1>
+<p style="font-size:11px;color:#555;margin-bottom:10px">The symbols this app draws on a single line. A symbol exported from EPLAN into the symbol pack replaces the one here.</p>
+${buildSymbolCatalogueSvg()}
 </body></html>`;
 }

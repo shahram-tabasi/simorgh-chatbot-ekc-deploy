@@ -200,6 +200,39 @@ single line follows that instead of guessing from the slot the part sits in:
    symbol's name (`SG3.svg`), that graphic is drawn instead — the office's own
    symbol, in the app's sheet.
 
+### The symbol library
+
+`src/utils/iecSymbols.ts` is the library the drawing uses — 36 IEC single-line
+symbols, every one drawn to the same cell so they stack on a branch: entered
+at the top, left at the bottom, and whatever reaches sideways (a CT's
+secondary, a relay box) goes right, where the tag and the code are written.
+The whole set is on screen under **Eplanix → Symbols**, and prints from there.
+
+The shapes are the IEC ones:
+
+| Device | Symbol |
+|---|---|
+| Disconnector | an open blade between two contacts |
+| Switch disconnector | the blade with the load-break bar on the fixed contact |
+| Circuit breaker | the blade with the cross on the fixed contact |
+| Withdrawable CB | the same, inside the drawout brackets |
+| Contactor | the open contact with the small rectangle on it |
+| Thermal overload (bimetal) | a rectangle with the half-split square inside it |
+| Fuse | a rectangle across the line |
+| Current transformer | one circle sitting on the line, secondary to the side |
+| Voltage transformer | two interlocking circles, secondary to the side |
+| Transformer | two interlocking circles, in the line |
+| Meters | a circle carrying A, V, kW |
+| Motor / generator | a circle carrying M or G |
+
+### One slot, one device
+
+A slot is one device. The first part in a slot is the device — the breaker,
+the contactor, the CT — and everything after it in that slot is its
+accessories: an auxiliary switch, a shunt trip, a terminal cover. Those are
+written under the device (`+ Q:3VA9988-0AA12 ×2`), never drawn as a second
+switch on the line, which is what a single line means by a device.
+
 `GET /api/eplan-symbols/schema` reports which table and columns this EPLAN
 database keeps its symbols in; nothing is hard-coded, because the schema
 differs between EPLAN versions. If the parts database is out of reach, or

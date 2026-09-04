@@ -8,8 +8,9 @@ import { eplanSymbolService } from '../../services/projectService';
 import { templateParts } from '../../utils/tierEquipmentMatrix';
 import {
   EPLAN_HEADERS, EplanSymbolMap, buildEplanRows, buildSingleLinePages, buildSingleLineHtml,
-  partKeys,
+  buildSymbolLibraryHtml, partKeys,
 } from '../../utils/eplanSingleLine';
+import { IEC_SYMBOLS, SYMBOL_GROUPS, CELL } from '../../utils/iecSymbols';
 import {
   LAYOUT_HEADERS, buildPanelLayout, buildLayoutRows, buildLayoutSvg, buildLayoutHtml,
 } from '../../utils/panelLayout';
@@ -22,7 +23,7 @@ import {
 // items. Each one is previewed here before it is downloaded or printed, so
 // what leaves the app has been looked at first.
 
-type View = 'single-line' | 'layout' | 'mechanical';
+type View = 'single-line' | 'layout' | 'mechanical' | 'symbols';
 
 function openPrintable(html: string, what: string) {
   const w = window.open('', '_blank');
@@ -194,10 +195,11 @@ export const EplanixTab: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3 mb-5">
+      <div className="grid grid-cols-4 gap-3 mb-5">
         <Tab id="single-line" label="Single line — تک‌خطی" note="Busbar, feeders, devices, data blocks" />
         <Tab id="layout" label="Layout — جانمایی" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical — اقلام مکانیکال" note="Enclosure, busbars, compartments" />
+        <Tab id="symbols" label="Symbols — علائم" note="The IEC single-line library" />
       </div>
 
       {/* ── Single line ───────────────────────────────────────────────── */}
@@ -377,6 +379,52 @@ export const EplanixTab: React.FC = () => {
               Nothing to list yet — the switchgears need a panel specification in Device Library.
             </p>
           )}
+        </div>
+      )}
+
+      {/* ── The symbol library ────────────────────────────────────────── */}
+      {view === 'symbols' && (
+        <div className="border border-gray-200 rounded-lg">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-slate-700">IEC</span>
+              <div className="min-w-0">
+                <p className="font-medium text-sm text-gray-800">
+                  {Object.keys(IEC_SYMBOLS).length} single-line symbols
+                </p>
+                <p className="text-xs text-gray-500">
+                  What the drawing uses for each device. A symbol exported from EPLAN into the
+                  symbol pack replaces the one here, by name.
+                </p>
+              </div>
+            </div>
+            <Btn
+              onClick={() => openPrintable(buildSymbolLibraryHtml(), 'symbol library')}
+              icon="print"
+              className="bg-slate-700 text-white hover:bg-slate-800"
+            >
+              Print / PDF
+            </Btn>
+          </div>
+
+          <div className="p-4 space-y-5">
+            {SYMBOL_GROUPS.map(group => (
+              <div key={group}>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{group}</p>
+                <div className="grid grid-cols-6 gap-3">
+                  {Object.values(IEC_SYMBOLS).filter(sym => sym.group === group).map(sym => (
+                    <div key={sym.id} className="border border-gray-200 rounded p-2 bg-white">
+                      <svg width="100%" height={CELL + 16} viewBox={`0 0 90 ${CELL + 16}`}>
+                        <g dangerouslySetInnerHTML={{ __html: sym.draw(28, 8) }} />
+                      </svg>
+                      <p className="text-[11px] text-gray-800 leading-tight mt-1">{sym.title}</p>
+                      <p className="text-[11px] text-gray-500 leading-tight" dir="rtl">{sym.titleFa}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
