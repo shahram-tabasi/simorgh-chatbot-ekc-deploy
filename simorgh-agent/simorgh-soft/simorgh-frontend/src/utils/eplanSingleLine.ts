@@ -321,7 +321,6 @@ export interface SingleLinePage {
 
 const GEOM = {
   margin: 30,
-  colWidth: 200,
   busY: 150,
   cardRowHeight: 16,
 };
@@ -399,6 +398,234 @@ function labelOffset(item: ChainItem): number {
   return item.eplan?.packUrl ? 24 : symbolRight(item.id) + 6;
 }
 
+// How much room a device needs down the line: its own cell, and enough for the
+// accessory lines written beside it, so one device's text never runs into the
+// next device's tag.
+function stepFor(item: ChainItem): number {
+  const lines = Math.min(item.accessories.length, 3);
+  return Math.max(CELL, 26 + lines * 9);
+}
+
+// ── Series and parallel ─────────────────────────────────────────────────────
+//
+// A device is either in the power path — the line runs through it — or it is
+// an instrument working off a transformer beside the line. The office draws
+// the first down the branch and the second out to the side, joined by its own
+// connection: the CT feeds the ammeter and the protection relay, the
+// core-balance CT feeds the protection and earth-fault relays, the VT feeds
+// the voltmeter. So an instrument never sits in the power path, where it would
+// read as another device the current runs through.
+//
+// The rank is the order they hang off the line: the current instruments first,
+// then the relays (the protection relay between the CT above it and the
+// core-balance CT below, since both feed it), then the voltage instruments.
+const INSTRUMENT_RANK: Partial<Record<SymbolId, number>> = {
+  ammeter: 1, 'ampere-selector': 2, multimeter: 3, 'watt-meter': 4, 'var-meter': 5,
+  'power-factor-meter': 6, 'kwh-meter': 7, 'kvarh-meter': 8, transducer: 9,
+  'test-block': 10, 'protection-relay': 11, 'earth-fault-relay': 12,
+  voltmeter: 13, 'voltage-selector': 14, 'frequency-meter': 15, 'hour-meter': 16,
+  'alarm-annunciator': 17, lamp: 18, ptc: 19, lcs: 20,
+};
+const isInstrument = (id: SymbolId) => INSTRUMENT_RANK[id] != null;
+
+interface Branch {
+  /** The devices the current runs through, in order down the line. */
+  series: ChainItem[];
+  /** The instruments beside the line, in the order they hang off it. */
+  instruments: ChainItem[];
+  /** For each instrument, the series device that feeds it (an index into
+   *  `series`), or null when nothing on this line does — control wiring, drawn
+   *  as the legend draws it, with a dashed link. */
+  fedBy: (number | null)[];
+  /** A second transformer the instrument also works off: the protection relay
+   *  takes the phase CTs and the core-balance CT both, and the drawing has to
+   *  show both, or the earth-fault side of it is not there. */
+  alsoFed: (number | null)[];
+}
+
+function splitBranch(chain: ChainItem[]): Branch {
+  const series = chain.filter(i => !isInstrument(i.id));
+  const instruments = chain.filter(i => isInstrument(i.id))
+    .sort((a, b) => (INSTRUMENT_RANK[a.id] ?? 99) - (INSTRUMENT_RANK[b.id] ?? 99));
+
+  const at = (id: SymbolId) => series.findIndex(s => s.id === id);
+  const ct = at('current-transformer');
+  const cbct = at('core-balance-ct');
+  const vt = at('voltage-transformer');
+  const any = [ct, cbct, vt].find(n => n >= 0) ?? -1;
+
+  const fedBy = instruments.map(item => {
+    let source: number;
+    if (item.id === 'earth-fault-relay') source = cbct >= 0 ? cbct : ct;
+    else if (item.id === 'voltmeter' || item.id === 'voltage-selector' || item.id === 'frequency-meter')
+      source = vt >= 0 ? vt : ct;
+    else source = ct >= 0 ? ct : (cbct >= 0 ? cbct : vt);
+    if (source < 0) source = any;
+    return source >= 0 ? source : null;
+  });
+
+  // The protection relay works off the core-balance CT as well as the phase
+  // CTs, so it gets its second connection drawn.
+  const alsoFed = instruments.map((item, k) =>
+    item.id === 'protection-relay' && cbct >= 0 && fedBy[k] !== cbct ? cbct : null);
+
+  return { series, instruments, fedBy, alsoFed };
+}
+
+// ── Where everything on a branch sits ───────────────────────────────────────
+//
+// The instruments hang off the line in groups — one group per transformer that
+// feeds them — and a group starts level with its own transformer, so the
+// connection runs straight out of it into the instruments it feeds and no
+// group is left pointing at another's.
+interface InstrumentGroup {
+  /** The series device feeding this group, or null for control wiring. */
+  source: number | null;
+  /** Indices into `branch.instruments`, in the order they hang down. */
+  items: number[];
+  /** Where each of them sits. */
+  ys: number[];
+}
+
+interface BranchLayout {
+  /** Where each device in the power path sits. */
+  ys: number[];
+  /** Where the power path leaves the branch. */
+  seriesBottom: number;
+  groups: InstrumentGroup[];
+  /** The lowest point anything on the branch reaches. */
+  bottom: number;
+}
+
+function layoutBranch(branch: Branch, top: number): BranchLayout {
+  const ys: number[] = [];
+  let y = top;
+  for (const item of branch.series) { ys.push(y); y += stepFor(item); }
+  const seriesBottom = branch.series.length > 0 ? y : top;
+
+  // One group per feeding device, in the order those devices sit on the line;
+  // control wiring (nothing feeds it) comes last.
+  const order: (number | null)[] = [];
+  branch.fedBy.forEach(source => { if (!order.includes(source)) order.push(source); });
+  order.sort((a, b) => (a == null ? 1e6 : ys[a]) - (b == null ? 1e6 : ys[b]));
+
+  const groups: InstrumentGroup[] = [];
+  let cursor = top;
+  for (const source of order) {
+    const items = branch.instruments
+      .map((_, k) => k).filter(k => branch.fedBy[k] === source);
+    if (items.length === 0) continue;
+    const start = Math.max(cursor, source == null ? top : ys[source] - CELL / 2);
+    groups.push({ source, items, ys: items.map((_, k) => start + k * CELL) });
+    cursor = start + items.length * CELL;
+  }
+
+  return {
+    ys, seriesBottom, groups,
+    bottom: Math.max(seriesBottom, cursor),
+  };
+}
+
+/** How tall a branch is: the power path, or the instruments beside it. */
+const branchHeight = (b: Branch) => layoutBranch(b, 0).bottom;
+
+// How far right of the line the instruments stand: clear of the tags and codes
+// written beside the devices in the power path.
+const INSTR_DX = 120;
+
+const line = (x1: number, y1: number, x2: number, y2: number, w = 1.3, dash = '') =>
+  `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#111" stroke-width="${w}"${
+    dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
+
+// The tag in black and the part code in blue, with the accessories under them:
+// the office writes the codes in colour beside the symbol, and it keeps the
+// two apart at a glance.
+function deviceText(item: ChainItem, tx: number, y: number, codeChars = 17): string {
+  const out = [
+    `<text x="${tx}" y="${y}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`,
+    `<text x="${tx}" y="${y + 11}" font-size="8.5" fill="#1d4ed8"><title>${esc(item.code)}</title>${
+      esc(clip(item.code, codeChars))}</text>`,
+  ];
+  item.accessories.slice(0, 2).forEach((a, ai) => {
+    out.push(`<text x="${tx}" y="${y + 21 + ai * 9}" font-size="7.5" fill="#6b7280"><title>${
+      esc(a)}</title>+ ${esc(clip(a, codeChars))}</text>`);
+  });
+  if (item.accessories.length > 2) {
+    out.push(`<text x="${tx}" y="${y + 39}" font-size="7.5" fill="#6b7280">+ ${
+      item.accessories.length - 2} more</text>`);
+  }
+  return out.join('');
+}
+
+/**
+ * One branch: the power path down the line with its devices, and the
+ * instruments beside it, each joined to what feeds it.
+ *
+ * Returns the drawing and the y the power path leaves at, so the caller can
+ * run the line on to the load.
+ */
+function drawBranch(branch: Branch, x: number, top: number): { svg: string; bottom: number } {
+  const out: string[] = [];
+  const ix = x + INSTR_DX;
+  const { ys, seriesBottom, groups } = layoutBranch(branch, top);
+
+  // A device whose connection leaves at the middle of its cell has its own
+  // text written above it, so the connection never runs through the text.
+  const feeds = new Set<number>();
+  for (const g of groups) if (g.source != null) feeds.add(g.source);
+  branch.alsoFed.forEach(s => { if (s != null) feeds.add(s); });
+  // With no transformer on the line, control wiring leaves from the first
+  // device, so that one's text moves up too.
+  const controlFrom = groups.some(g => g.source == null) && branch.series.length > 0 ? 0 : null;
+  if (controlFrom != null) feeds.add(controlFrom);
+
+  // The power path: the line first, so the white boxes of the symbols sit on
+  // top of it.
+  if (branch.series.length > 0) out.push(line(x, top, x, seriesBottom));
+  branch.series.forEach((item, index) => {
+    out.push(drawDevice(item, x, ys[index]));
+    out.push(deviceText(item, x + Math.max(40, labelOffset(item)),
+      ys[index] + (feeds.has(index) ? 5 : 14), 15));
+  });
+
+  // The instruments beside the line, group by group: the transformer's
+  // connection out to the column, and the instruments strung on it.
+  for (const group of groups) {
+    const first = group.ys[0];
+    const last = group.ys[group.ys.length - 1] + CELL;
+    const ty = group.source == null
+      ? (controlFrom == null ? first + CELL / 2 : ys[controlFrom] + CELL / 2)
+      : ys[group.source] + CELL / 2;
+
+    out.push(line(ix, Math.min(first, ty), ix, Math.max(last, ty)));
+    out.push(line(x + 8, ty, ix, ty, group.source == null ? 1 : 1.1,
+      group.source == null ? '4 3' : ''));
+    if (group.source != null) out.push(`<circle cx="${ix}" cy="${ty}" r="2.4" fill="#111"/>`);
+
+    group.items.forEach((k, n) => {
+      const item = branch.instruments[k];
+      out.push(drawDevice(item, ix, group.ys[n]));
+      out.push(deviceText(item, ix + Math.max(34, labelOffset(item)), group.ys[n] + 17, 14));
+
+      // The second transformer feeding this instrument — the core-balance CT
+      // under the relay — comes in on its own elbow beside the column, so the
+      // two connections stay apart and each one is followed by eye.
+      const also = branch.alsoFed[k];
+      if (also != null) {
+        const ay = ys[also] + CELL / 2;
+        const my = group.ys[n] + CELL / 2;
+        const ex = ix - 12;
+        out.push(line(x + 8, ay, ex, ay, 1.1));
+        out.push(line(ex, ay, ex, my, 1.1));
+        out.push(line(ex, my, ix, my, 1.1));
+        out.push(`<circle cx="${ix}" cy="${my}" r="2.4" fill="#111"/>`);
+      }
+    });
+  }
+
+  return { svg: out.join('\n'), bottom: seriesBottom };
+}
+
 function drawSheet(o: {
   data: ProjectData;
   equipment: Equipment;
@@ -412,30 +639,54 @@ function drawSheet(o: {
   page: number;
   of: number;
 }): string {
-  const { margin, colWidth, cardRowHeight } = GEOM;
+  const { margin, cardRowHeight } = GEOM;
+
+  const branches = o.lines.map((line_, i) =>
+    splitBranch(chainFor(line_, o.templates, o.order, o.firstIndex + i + 1, o.symbols)));
+  const supplyAll = o.supply
+    ? splitBranch(chainFor(o.supply, o.templates, o.order, 0, o.symbols))
+    : null;
+  // The incoming column shows the head of its chain; the whole of it belongs
+  // to the incomer's own sheet, not to this one.
+  const supplyBranch: Branch | null = supplyAll && {
+    series: supplyAll.series.slice(0, 3),
+    instruments: supplyAll.instruments.slice(0, 3),
+    fedBy: supplyAll.fedBy.slice(0, 3).map(s => (s != null && s < 3 ? s : null)),
+    alsoFed: supplyAll.alsoFed.slice(0, 3).map(s => (s != null && s < 3 ? s : null)),
+  };
+
+  // A feeder with instruments beside it needs the room for them; one without
+  // stays narrow, so a board of plain feeders still fits the sheet.
+  const wide = [...branches, ...(supplyBranch ? [supplyBranch] : [])]
+    .some(b => b.instruments.length > 0);
+  const colWidth = wide ? 290 : 200;
+  const branchDx = 34;
+
   const supplyWidth = o.supply ? colWidth : 90;
   const bodyLeft = margin + supplyWidth;
+  const supplyX = margin + branchDx;
 
-  const chains = o.lines.map((line, i) =>
-    chainFor(line, o.templates, o.order, o.firstIndex + i + 1, o.symbols));
-  const supplyChain = o.supply ? chainFor(o.supply, o.templates, o.order, 0, o.symbols) : [];
-  const supplyShown = supplyChain.slice(0, 3);
-  const deepest = Math.max(1, ...chains.map(c => c.length));
-  const busY = Math.max(GEOM.busY, 104 + supplyShown.length * CELL + 26);
+  const supplyTop = 104;
+  const busY = Math.max(GEOM.busY,
+    supplyTop + (supplyBranch ? branchHeight(supplyBranch) : 0) + 26);
 
   const chainTop = busY + 26;
-  const loadY = chainTop + deepest * CELL + 20;
-  const cubicleBottom = loadY + CELL + 10;
-  const tableTop = cubicleBottom + 26;
+  const body = Math.max(CELL, ...branches.map(branchHeight));
+  const loadY = chainTop + body + 20;
+  const tableTop = loadY + CELL + 36;
   const tableHeight = TABLE_ROWS.length * cardRowHeight;
-  // The sheet is exactly as wide as the feeders on it: busbar, cubicles and
-  // the block underneath all end at the last column, never in mid-air.
+  // The sheet is exactly as wide as the feeders on it: busbar and the block
+  // underneath both end at the last column, never in mid-air.
   const contentRight = bodyLeft + Math.max(1, o.lines.length) * colWidth;
   const width = contentRight + margin;
   const height = tableTop + tableHeight + 40;
 
   const out: string[] = [];
-  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="Segoe UI, Arial, sans-serif">`);
+  // Sized by its viewBox and left to fit whatever it is put in, so a wide
+  // sheet is scaled down to the screen instead of running off the side of it.
+  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="100%" ` +
+    `preserveAspectRatio="xMidYMin meet" style="max-width:${width}px;height:auto;display:block" ` +
+    `font-family="Segoe UI, Arial, sans-serif">`);
   out.push(`<rect width="${width}" height="${height}" fill="#fff"/>`);
 
   // ── Title band ────────────────────────────────────────────────────────
@@ -464,60 +715,31 @@ function drawSheet(o: {
   out.push(`<text x="${bodyLeft + 4}" y="${busY - 9}" font-size="9.5" font-weight="600" fill="#111">${esc(busLabel)}</text>`);
   out.push(`<line x1="${margin}" y1="${busY}" x2="${contentRight}" y2="${busY}" stroke="#111" stroke-width="4.5"/>`);
 
-  // ── Supply ────────────────────────────────────────────────────────────
-  const supplyX = margin + supplyWidth / 2;
-  if (o.supply) {
-    out.push(`<text x="${supplyX}" y="80" font-size="10" font-weight="700" text-anchor="middle" fill="#111">${
+  // ── The incoming column ───────────────────────────────────────────────
+  if (o.supply && supplyBranch) {
+    out.push(`<text x="${supplyX}" y="80" font-size="10" font-weight="700" fill="#111">${
       esc(clip(String(o.supply.feederNo || 'INCOMING'), 22))}</text>`);
-    out.push(`<text x="${supplyX}" y="94" font-size="9" text-anchor="middle" fill="#555">${
-      esc(clip(String(o.supply.description || ''), 26))}</text>`);
-    let y = 104;
-    for (const item of supplyShown) {
-      out.push(drawDevice(item, supplyX, y));
-      const tx = supplyX + Math.max(40, labelOffset(item));
-      out.push(`<text x="${tx}" y="${y + 15}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
-      out.push(`<text x="${tx}" y="${y + 27}" font-size="8.5" fill="#1d4ed8"><title>${esc(item.code)}</title>${esc(clip(item.code, 15))}</text>`);
-      y += CELL;
-    }
-    out.push(`<line x1="${supplyX}" y1="${y}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
+    out.push(`<text x="${supplyX}" y="94" font-size="9" fill="#555">${
+      esc(clip(String(o.supply.description || ''), 30))}</text>`);
+    const drawn = drawBranch(supplyBranch, supplyX, supplyTop);
+    out.push(drawn.svg);
+    out.push(`<line x1="${supplyX}" y1="${drawn.bottom}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
   } else {
     out.push(drawIecSymbol('incoming', supplyX, 92));
     out.push(`<line x1="${supplyX}" y1="132" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
     out.push(`<text x="${supplyX}" y="84" font-size="9" text-anchor="middle" fill="#555">supply</text>`);
   }
 
-  // ── Outgoing feeders, each inside its cubicle ─────────────────────────
-  o.lines.forEach((line, i) => {
-    const left = bodyLeft + i * colWidth;
-    const x = left + 46;                       // the branch sits left of centre,
-    const chain = chains[i];                   // so codes have room to its right
-
-    // The cubicle: the dashed outline the office draws around a cell.
-    out.push(`<rect x="${left + 4}" y="${busY + 8}" width="${colWidth - 8}" height="${cubicleBottom - busY - 8}" ` +
-      `fill="none" stroke="#111" stroke-width="0.8" stroke-dasharray="5 3"/>`);
-
+  // ── Outgoing feeders ──────────────────────────────────────────────────
+  o.lines.forEach((line_, i) => {
+    const x = bodyLeft + i * colWidth + branchDx;
     out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
     out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
 
-    let y = chainTop;
-    for (const item of chain) {
-      out.push(drawDevice(item, x, y));
-      // Tag in black, the part code in blue — the office writes the codes in
-      // colour beside the symbol, and it keeps the two apart at a glance. A
-      // boxed symbol (a relay, a meter) is wide, so the text starts clear of it.
-      const tx = x + Math.max(40, labelOffset(item));
-      out.push(`<text x="${tx}" y="${y + 14}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
-      out.push(`<text x="${tx}" y="${y + 25}" font-size="8.5" fill="#1d4ed8"><title>${esc(item.code)}</title>${esc(clip(item.code, 17))}</text>`);
-      item.accessories.slice(0, 2).forEach((a, ai) => {
-        out.push(`<text x="${tx}" y="${y + 35 + ai * 9}" font-size="7.5" fill="#6b7280"><title>${esc(a)}</title>+ ${esc(clip(a, 17))}</text>`);
-      });
-      if (item.accessories.length > 2) {
-        out.push(`<text x="${tx}" y="${y + 53}" font-size="7.5" fill="#6b7280">+ ${item.accessories.length - 2} more</text>`);
-      }
-      y += CELL;
-    }
-    out.push(`<line x1="${x}" y1="${y}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
-    out.push(drawIecSymbol(isMotorLoad(line) ? 'motor' : 'outgoing', x, loadY));
+    const drawn = drawBranch(branches[i], x, chainTop);
+    out.push(drawn.svg);
+    out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
+    out.push(drawIecSymbol(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
   });
 
   // ── The block under the drawing ───────────────────────────────────────
@@ -526,15 +748,15 @@ function drawSheet(o: {
     const ry = tableTop + r * cardRowHeight;
     if (r > 0) out.push(`<line x1="${margin}" y1="${ry}" x2="${contentRight}" y2="${ry}" stroke="#c9ced6" stroke-width="0.7"/>`);
     out.push(`<text x="${margin + 6}" y="${ry + 11}" font-size="8.5" font-weight="600" fill="#111">${esc(row.label)} :</text>`);
-    o.lines.forEach((line, i) => {
+    o.lines.forEach((line_, i) => {
       const cx = bodyLeft + i * colWidth + colWidth / 2;
-      const value = row.value(line);
+      const value = row.value(line_);
       out.push(`<text x="${cx}" y="${ry + 11}" font-size="8.5" text-anchor="middle" fill="#111">` +
-        `<title>${esc(value)}</title>${esc(clip(value, 26))}</text>`);
+        `<title>${esc(value)}</title>${esc(clip(value, 30))}</text>`);
     });
   });
   // The column rules: the label column ends where the first feeder column
-  // begins, so every column below the drawing stands under its own cubicle.
+  // begins, so every column below the drawing stands under its own feeder.
   out.push(`<line x1="${bodyLeft}" y1="${tableTop}" x2="${bodyLeft}" y2="${tableTop + tableHeight}" stroke="#111" stroke-width="1"/>`);
   o.lines.forEach((_, i) => {
     if (i === 0) return;

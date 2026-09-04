@@ -240,16 +240,42 @@ The shapes, as the legend draws them:
 | Motor / generator | a circle carrying `M` or `G` |
 | Capacitor delta, magnet, heating element, LCS, ATS, bus duct, key interlock, capacitive divider | as the legend draws them |
 
+### Series and parallel
+
+A device is either **in the power path** — the line runs through it — or it is
+an **instrument** working off a transformer beside the line. The drawing keeps
+the two apart, because a single line that puts an ammeter in the power path
+reads as a board with an ammeter in series with the motor:
+
+* the power path runs down the branch: breaker, contactor, fuse, CT, core
+  balance CT, surge arrester…
+* the instruments hang beside it, in groups — one group per transformer that
+  feeds them, each group starting level with its own transformer:
+  * the **CT** feeds the ammeter, the selector, the meters and the
+    **protection relay**;
+  * the **core-balance CT** feeds the **earth-fault relay**, and its second
+    connection comes down its own elbow into the protection relay, which works
+    off both;
+  * the **VT** feeds the voltmeter, its selector and the frequency meter;
+  * an instrument no transformer on the line feeds is control wiring, drawn
+    with the dashed link the legend uses for it.
+
 ### The sheet
 
 A sheet is drawn the way the office draws one: the incoming column on the
 left, the busbar across with its rating written above it (`BUS A, 400 V,
-3P + N + PE, 4000 A, 50 kA / 1 Sec`, from the panel specification), one dashed
-cubicle per feeder with its device chain inside — tag in black, part code in
-blue, accessories listed under the device — and under the drawing the data
-block: one row per property (BUS, Line, Type, Power, Nominal Current,
-Position, Tag, Description, Cable) and one column per feeder, each column
-standing under its own cubicle.
+3P + N + PE, 4000 A, 50 kA / 1 Sec`, from the panel specification), one branch
+per feeder — tag in black, part code in blue, accessories under the device,
+and the text of a device that feeds an instrument written above its connection
+so nothing is written over anything — and under the drawing the data block:
+one row per property (BUS, Line, Type, Power, Nominal Current, Position, Tag,
+Description, Cable) and one column per feeder, each column standing under its
+own branch.
+
+Each device is given the room its own text needs, so a device carrying three
+accessories pushes the next one further down instead of running into it. The
+sheet is sized by its viewBox, so a wide one is scaled to fit the screen
+rather than running off the side of it.
 
 ### One slot, one device
 
