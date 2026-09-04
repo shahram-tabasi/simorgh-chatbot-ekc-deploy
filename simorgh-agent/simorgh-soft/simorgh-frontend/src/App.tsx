@@ -13,6 +13,7 @@ import { Chatbot } from './components/Chatbot/Chatbot';
 import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
 import { FeederDuplicateModal } from './components/DeviceSelection/FeederDuplicateModal';
 import { TpmsImportModal } from './components/TpmsImport/TpmsImportModal';
+import { EplanixTab } from './components/Eplanix/EplanixTab';
 import { findFeederDuplicates, DuplicateGroup } from './utils/feederDuplicates';
 import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
@@ -542,6 +543,11 @@ const MainApp: React.FC = () => {
       id: 3,
       title: `Output Types`,
       component: <OutputTypesTab />
+    },
+    {
+      id: 4,
+      title: `Eplanix`,
+      component: <EplanixTab />
     }
   ];
 

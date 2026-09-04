@@ -415,6 +415,12 @@ export function buildProjectPayload({
 // ─── SQL ─────────────────────────────────────────────────────────────────────
 // Every statement is a plain SELECT. Column names are exactly the ones the
 // Eplanix EF model maps to, so the two apps read the same fields.
+//
+// The EPLAN label table holds a row per entry, so an ECODE relabelled over the
+// years has several. Joining it directly multiplies every part row by that
+// count — on a big project that turns a normal read into a runaway one, and
+// duplicates the parts on every line. Both line queries therefore join the
+// newest label per ECODE (MAX(id)) instead of the table itself.
 export const SQL = {
   project: `
     SELECT IDProjectMain, OENUM, Project_Name, Project_Name_Fa, Order_Category,
@@ -457,7 +463,12 @@ export const SQL = {
            t.lable AS tlabel
     FROM View_draft d
     LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID
-    LEFT JOIN Technical_draft_lable_eplan_TB t ON t.ECODE = e.Ecode
+    LEFT JOIN (
+      SELECT l.ECODE, l.lable
+      FROM Technical_draft_lable_eplan_TB l
+      JOIN (SELECT ECODE, MAX(id) AS id FROM Technical_draft_lable_eplan_TB GROUP BY ECODE) m
+        ON m.ECODE = l.ECODE AND m.id = l.id
+    ) t ON t.ECODE = e.Ecode
     WHERE d.Project_ID = ? AND d.Tablo_ID = ? AND d.revision = ?
     ORDER BY d.ordering, d.ID, e.equipment, e.priority`,
 
@@ -478,7 +489,12 @@ export const SQL = {
            t.lable AS tlabel
     FROM View_draft d
     LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID
-    LEFT JOIN Technical_draft_lable_eplan_TB t ON t.ECODE = e.Ecode
+    LEFT JOIN (
+      SELECT l.ECODE, l.lable
+      FROM Technical_draft_lable_eplan_TB l
+      JOIN (SELECT ECODE, MAX(id) AS id FROM Technical_draft_lable_eplan_TB GROUP BY ECODE) m
+        ON m.ECODE = l.ECODE AND m.id = l.id
+    ) t ON t.ECODE = e.Ecode
     WHERE d.Project_ID = ? AND d.revision = ?
     ORDER BY d.Tablo_ID, d.ordering, d.ID, e.equipment, e.priority`,
 
@@ -568,14 +584,22 @@ export function registerTpmsImportRoutes(app, getPool) {
         return res.status(404).json({ success: false, error: 'No such project in TPMS' });
       }
 
+      // Two reads per switchgear. Done one switchgear at a time a project
+      // with forty of them spends most of a minute in round trips, so they
+      // go in small batches — enough to be quick, few enough to leave the
+      // pool (10 connections) room to breathe.
       const scopes = [];
-      for (const row of scopeRows) {
-        const scopeId = Number(row.scopeId);
-        const [scopeRow, panelRow] = await Promise.all([
-          one(SQL.scope, [projectId, scopeId]),
-          one(SQL.panel, [projectId, scopeId]),
-        ]);
-        scopes.push({ scopeId, scopeName: row.scopeName, scopeRow, panelRow });
+      const BATCH = 4;
+      for (let i = 0; i < scopeRows.length; i += BATCH) {
+        const batch = await Promise.all(scopeRows.slice(i, i + BATCH).map(async row => {
+          const id = Number(row.scopeId);
+          const [scopeRow, panelRow] = await Promise.all([
+            one(SQL.scope, [projectId, id]),
+            one(SQL.panel, [projectId, id]),
+          ]);
+          return { scopeId: id, scopeName: row.scopeName, scopeRow, panelRow };
+        }));
+        scopes.push(...batch);
       }
 
       const ids = new Set();
@@ -612,12 +636,26 @@ export function registerTpmsImportRoutes(app, getPool) {
   app.get('/api/tpms/project/:projectId/revision/:revision', async (req, res) => {
     const projectId = Number(req.params.projectId);
     const revision = Number(req.params.revision);
+    // One switchgear at a time when `scopeId` is given. A project with dozens
+    // of switchgears and a decade of revisions is far too much for a single
+    // read — it is the request that times out on the way through nginx — so
+    // the client walks it switchgear by switchgear and each read stays small.
+    const scopeId = req.query.scopeId != null ? Number(req.query.scopeId) : null;
     if (!Number.isFinite(projectId) || !Number.isFinite(revision)) {
       return res.status(400).json({ success: false, error: 'projectId and revision are required' });
     }
+    if (req.query.scopeId != null && !Number.isFinite(scopeId)) {
+      return res.status(400).json({ success: false, error: 'scopeId must be a number' });
+    }
     try {
       const pool = await getPool();
-      const [joinedRows] = await pool.execute(SQL.linesForRevision, [projectId, revision]);
+      const started = Date.now();
+      const [joinedRows] = scopeId != null
+        ? await pool.query(SQL.lines, [projectId, scopeId, revision])
+        : await pool.query(SQL.linesForRevision, [projectId, revision]);
+      if (scopeId != null) {
+        for (const row of joinedRows) if (row.tabloId == null) row.tabloId = scopeId;
+      }
       const switchgears = buildLinesByScope(joinedRows).map(entry => ({
         ...entry,
         counts: {
@@ -626,9 +664,11 @@ export function registerTpmsImportRoutes(app, getPool) {
             (sum, l) => sum + Object.values(l.parts).reduce((n, p) => n + p.length, 0), 0),
         },
       }));
-      console.log(`✅ TPMS project ${projectId} rev ${revision}: ` +
-        `${switchgears.length} switchgear(s), ${switchgears.reduce((n, s) => n + s.lines.length, 0)} lines`);
-      res.json({ success: true, revision, switchgears });
+      console.log(`✅ TPMS project ${projectId} rev ${revision}` +
+        `${scopeId != null ? ` scope ${scopeId}` : ''}: ${switchgears.length} switchgear(s), ` +
+        `${switchgears.reduce((n, s) => n + s.lines.length, 0)} lines, ` +
+        `${joinedRows.length} row(s) in ${Date.now() - started} ms`);
+      res.json({ success: true, revision, scopeId, switchgears });
     } catch (err) {
       console.error('❌ Error in /api/tpms/project/revision:', err.message);
       res.status(500).json({ success: false, error: err.message });

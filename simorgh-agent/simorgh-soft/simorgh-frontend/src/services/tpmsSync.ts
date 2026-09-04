@@ -29,7 +29,25 @@ export interface TpmsSyncResult {
   header: TpmsProjectHeader;
   summaries: TpmsSnapshotSummary[];
   created: boolean;
+  /** Switchgears that could not be read, so the import can say so instead of
+   *  quietly producing a project with holes in it. */
+  problems: string[];
 }
+
+export interface TpmsSyncOptions {
+  /** 'all' brings in every TPMS revision, 'newest' only the last one — the
+   *  quick way in for a project with a long history. */
+  revisions?: 'all' | 'newest';
+  /** A header already read (the dialog reads one to show what is coming).
+   *  Passing it back saves reading the whole project description twice —
+   *  which on a forty-panel project is not a cheap read. */
+  header?: TpmsProjectHeader;
+}
+
+// How many switchgears are read at once. Small enough that each request stays
+// well inside any proxy's read timeout, large enough that a forty-panel
+// project doesn't crawl.
+const SCOPE_BATCH = 3;
 
 export type TpmsSyncProgress = (message: string, done: number, total: number) => void;
 
@@ -57,29 +75,56 @@ export async function syncProjectFromTpms(
   projectMainId: number,
   existing: ProjectData | null,
   onProgress?: TpmsSyncProgress,
+  options: TpmsSyncOptions = {},
 ): Promise<TpmsSyncResult> {
   const say = (m: string, d: number, t: number) => { try { onProgress?.(m, d, t); } catch { /* UI only */ } };
+  const problems: string[] = [];
 
   say('Reading the project from TPMS…', 0, 1);
-  const header: TpmsProjectHeader = await tpmsService.getProjectHeader(projectMainId);
+  const header: TpmsProjectHeader =
+    options.header ?? await tpmsService.getProjectHeader(projectMainId);
 
   // A project with no drafts at all still imports — it just has no lines yet.
-  const revisions = (header.revisions ?? []).length > 0 ? [...header.revisions].sort((a, b) => a - b) : [0];
-  const total = revisions.length + 2;
+  const all = (header.revisions ?? []).length > 0 ? [...header.revisions].sort((a, b) => a - b) : [0];
+  const revisions = options.revisions === 'newest' ? all.slice(-1) : all;
+  const switchgears = header.switchgears ?? [];
+  const total = revisions.length * Math.max(1, switchgears.length) + 2;
 
-  // Every revision, oldest first, each one a complete project of its own.
+  // Every revision, oldest first, each one a complete project of its own —
+  // and each one read switchgear by switchgear, in small batches, so that a
+  // project with forty panels and a decade of revisions never hangs on one
+  // enormous request.
   const base: ProjectData = { ...defaultProjectData, ...(existing ?? {}) };
   const snapshots: { revision: number; data: ProjectData; summary: TpmsSnapshotSummary }[] = [];
   let step = 1;
+
   for (const revision of revisions) {
-    say(`Reading revision ${revision}…`, step, total);
-    let revisionData: TpmsRevisionData = { revision, switchgears: [] };
+    const entries: TpmsRevisionData['switchgears'] = [];
+
     if ((header.revisions ?? []).length > 0) {
-      revisionData = await tpmsService.getProjectRevision(projectMainId, revision);
+      for (let i = 0; i < switchgears.length; i += SCOPE_BATCH) {
+        const batch = switchgears.slice(i, i + SCOPE_BATCH);
+        say(`Revision ${revision} — ${batch[0].scopeName} (${i + 1}/${switchgears.length})`, step, total);
+        const results = await Promise.all(batch.map(async sw => {
+          try {
+            const data = await tpmsService.getProjectRevision(projectMainId, revision, sw.scopeId);
+            return (data.switchgears ?? []) as TpmsRevisionData['switchgears'];
+          } catch (err) {
+            // One unreadable switchgear must not cost the whole project: the
+            // rest still comes in, and the import says what is missing.
+            problems.push(`REV ${revision} · ${sw.scopeName}: ${(err as Error).message}`);
+            return [] as TpmsRevisionData['switchgears'];
+          }
+        }));
+        for (const list of results) entries.push(...list);
+        step += batch.length;
+      }
+    } else {
+      step += 1;
     }
-    const { data, summary } = buildTpmsRevisionSnapshot(base, header, revisionData);
+
+    const { data, summary } = buildTpmsRevisionSnapshot(base, header, { revision, switchgears: entries });
     snapshots.push({ revision, data, summary });
-    step += 1;
   }
 
   const newest = snapshots[snapshots.length - 1];
@@ -103,7 +148,9 @@ export async function syncProjectFromTpms(
   let known: Revision[] = [];
   try { known = await projectService.getRevisions(projectId); } catch { known = []; }
 
-  const wanted = new Set(revisions.map(String));
+  // Only the revisions actually read are rewritten; with "newest only" the
+  // ones already stored here are left exactly as they are.
+  const wanted = new Set((options.revisions === 'newest' ? all : revisions).map(String));
   const out: Revision[] = [];
 
   for (const snapshot of snapshots) {
@@ -159,6 +206,7 @@ export async function syncProjectFromTpms(
     header,
     summaries: snapshots.map(s => s.summary),
     created: !existing?._id,
+    problems,
   };
 }
 
@@ -170,8 +218,9 @@ export async function syncProjectFromTpms(
 export async function resyncIfTpmsMastered(
   project: ProjectData,
   onProgress?: TpmsSyncProgress,
+  options: TpmsSyncOptions = {},
 ): Promise<TpmsSyncResult | null> {
   const sync = project.tpmsSync;
   if (!sync || sync.master !== 'tpms' || !sync.projectMainId) return null;
-  return syncProjectFromTpms(sync.projectMainId, project, onProgress);
+  return syncProjectFromTpms(sync.projectMainId, project, onProgress, options);
 }

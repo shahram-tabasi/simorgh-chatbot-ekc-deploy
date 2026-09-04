@@ -13,9 +13,6 @@ import {
   buildTierMatrix,
 } from '../../utils/tierEquipmentMatrix';
 import { buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
-import { EPLAN_HEADERS, buildEplanRows, buildSingleLineHtml } from '../../utils/eplanSingleLine';
-import { LAYOUT_HEADERS, buildPanelLayout, buildLayoutRows, buildLayoutHtml } from '../../utils/panelLayout';
-import { MECHANICAL_HEADERS, buildMechanicalRows } from '../../utils/mechanicalItems';
 import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/revisionDiff';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
@@ -90,69 +87,13 @@ function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
 // ─── EPLAN single line ────────────────────────────────────────────────────────
 // The device list EPLAN imports (one sheet per switchgear, one row per device
 // on a feeder), and the schematic drawing of the same lines.
-function exportEplanExcel(data: ProjectData) {
-  const eqs = (data.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
-  if (eqs.length === 0) { alert('No switchgear with feeder lines in this project.'); return; }
-  const wb = XLSX.utils.book_new();
-  const taken = new Set<string>();
-  for (const eq of eqs) {
-    const ws = XLSX.utils.aoa_to_sheet([EPLAN_HEADERS, ...buildEplanRows(data, eq)]);
-    ws['!cols'] = [
-      { wch: 6 }, { wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 28 }, { wch: 22 },
-      { wch: 20 }, { wch: 16 }, { wch: 6 }, { wch: 12 }, { wch: 12 }, { wch: 16 },
-      { wch: 18 }, { wch: 28 },
-    ];
-    XLSX.utils.book_append_sheet(wb, ws, sheetName(eq.name, taken));
-  }
-  XLSX.writeFile(wb, `${data.projectName || 'project'}_EPLAN_single_line.xlsx`);
-}
 
-function openPrintable(html: string, what: string) {
-  const w = window.open('', '_blank');
-  if (!w) { alert(`Allow pop-ups to open the ${what}.`); return; }
-  w.document.write(html);
-  w.document.close();
-}
 
-function openSingleLine(data: ProjectData) {
-  const eqs = (data.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
-  if (eqs.length === 0) { alert('No switchgear with feeder lines in this project.'); return; }
-  openPrintable(buildSingleLineHtml(data, eqs), 'single-line diagram');
-}
 
 // ─── Layout (جانمایی) ─────────────────────────────────────────────────────────
-function exportLayoutExcel(data: ProjectData) {
-  const eqs = (data.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
-  if (eqs.length === 0) { alert('No switchgear with feeder lines in this project.'); return; }
-  const layouts = eqs.map(eq => buildPanelLayout(data, eq));
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([LAYOUT_HEADERS, ...buildLayoutRows(layouts)]);
-  ws['!cols'] = LAYOUT_HEADERS.map((h, i) => ({ wch: i === 9 ? 30 : Math.max(10, h.length + 2) }));
-  XLSX.utils.book_append_sheet(wb, ws, 'Layout');
-  XLSX.writeFile(wb, `${data.projectName || 'project'}_Layout.xlsx`);
-}
 
-function openLayout(data: ProjectData) {
-  const eqs = (data.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
-  if (eqs.length === 0) { alert('No switchgear with feeder lines in this project.'); return; }
-  openPrintable(buildLayoutHtml(data, eqs.map(eq => buildPanelLayout(data, eq))), 'layout');
-}
 
 // ─── Mechanical items (اقلام مکانیکال) ────────────────────────────────────────
-function exportMechanicalExcel(data: ProjectData) {
-  const eqs = data.equipments ?? [];
-  if (eqs.length === 0) { alert('No switchgear in this project.'); return; }
-  const rows = buildMechanicalRows(data, eqs);
-  if (rows.length === 0) {
-    alert('Nothing to list yet — the switchgears have no panel specification in Device Library.');
-    return;
-  }
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([MECHANICAL_HEADERS, ...rows]);
-  ws['!cols'] = [{ wch: 16 }, { wch: 14 }, { wch: 26 }, { wch: 34 }, { wch: 6 }, { wch: 10 }, { wch: 46 }];
-  XLSX.utils.book_append_sheet(wb, ws, 'Mechanical items');
-  XLSX.writeFile(wb, `${data.projectName || 'project'}_Mechanical_items.xlsx`);
-}
 
 // ─── Revision comparison ──────────────────────────────────────────────────────
 function exportDiffExcel(diff: RevisionDiff, meta: { projectName: string; base: string; target: string }) {
@@ -1134,82 +1075,18 @@ export const OutputTypesTab: React.FC = () => {
         );
       })()}
 
-      {/* ── EPLAN single line, layout and mechanical items ────────────────
-          Three engineering outputs off the same data: what EPLAN needs to
-          draw the single line, where each feeder sits in the panel, and the
-          sheet-metal and busbar side of it. */}
-      {(() => {
-        const withLines = (projectData.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
-        const lineCount = withLines.reduce((n, e) => n + (e.devices?.length ?? 0), 0);
-        const OutputCard: React.FC<{
-          badge: string; color: string; title: string; note: string;
-          buttons: { key: string; label: string; onClick: () => void; className: string }[];
-          disabled?: boolean;
-        }> = ({ badge, color, title, note, buttons, disabled }) => (
-          <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50">
-            <div className="flex items-center gap-3 min-w-0">
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: color }}>{badge}</span>
-              <div className="min-w-0">
-                <p className="font-medium text-sm text-gray-800">{title}</p>
-                <p className="text-xs text-gray-500 mt-0.5">{note}</p>
-              </div>
-            </div>
-            <div className="flex gap-2 flex-shrink-0">
-              {buttons.map(b => (
-                <button
-                  key={b.key}
-                  disabled={!!downloading || disabled}
-                  onClick={() => trigger(b.key, b.onClick)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap ${b.className}`}
-                >
-                  {downloading === b.key ? <span className="animate-spin">⏳</span> : <DownloadIcon className="w-4 h-4" />}
-                  {b.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-
-        return (
-          <>
-            <OutputCard
-              badge="EPLAN" color="#1d4ed8"
-              title="EPLAN single line — دیاگرام تک‌خطی"
-              note={withLines.length === 0
-                ? 'No switchgear with feeder lines yet.'
-                : `${withLines.length} switchgear${withLines.length === 1 ? '' : 's'} · ${lineCount} feeder${lineCount === 1 ? '' : 's'} — one EPLAN page per feeder: device tag, function text, part number, location.`}
-              disabled={withLines.length === 0}
-              buttons={[
-                { key: 'eplan', label: 'EPLAN device list', onClick: () => exportEplanExcel(projectData), className: 'bg-blue-700 text-white hover:bg-blue-800' },
-                { key: 'sld', label: 'Single-line drawing', onClick: () => openSingleLine(projectData), className: 'bg-slate-700 text-white hover:bg-slate-800' },
-              ]}
-            />
-
-            <OutputCard
-              badge="LAYOUT" color="#7c3aed"
-              title="Panel layout — جانمایی"
-              note={withLines.length === 0
-                ? 'No switchgear with feeder lines yet.'
-                : 'Front elevation from MODULE NO. and SIZE — each column stacked in position order, with the free space left in each.'}
-              disabled={withLines.length === 0}
-              buttons={[
-                { key: 'layout-xlsx', label: 'Layout Excel', onClick: () => exportLayoutExcel(projectData), className: 'bg-violet-600 text-white hover:bg-violet-700' },
-                { key: 'layout-draw', label: 'Elevation drawing', onClick: () => openLayout(projectData), className: 'bg-slate-700 text-white hover:bg-slate-800' },
-              ]}
-            />
-
-            <OutputCard
-              badge="MECH" color="#b45309"
-              title="Mechanical items — اقلام مکانیکال"
-              note="Enclosure, busbars, compartments, finish and hardware — counted from the panel specification and the feeders, every row saying what it was derived from."
-              disabled={(projectData.equipments ?? []).length === 0}
-              buttons={[
-                { key: 'mech', label: 'Mechanical Excel', onClick: () => exportMechanicalExcel(projectData), className: 'bg-amber-700 text-white hover:bg-amber-800' },
-              ]}
-            />
-          </>
-        );
-      })()}
+      {/* The single line, the layout and the mechanical items live in their
+          own tab now — Eplanix — where each one is previewed before it is
+          downloaded. */}
+      <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center gap-3 bg-blue-50/40">
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">EPLANIX</span>
+        <p className="text-sm text-gray-700">
+          Single line, panel layout and mechanical items have moved to the <strong>Eplanix</strong> tab.
+        </p>
+        <span className="text-sm text-gray-600 ml-auto" dir="rtl">
+          تک‌خطی، جانمایی و اقلام مکانیکال به تب «Eplanix» منتقل شد.
+        </span>
+      </div>
 
       {/* ── Section 04: LV Equipment & Template Matrix ─────────────────────
           Wide table — every row is one device-row from an LV equipment, and

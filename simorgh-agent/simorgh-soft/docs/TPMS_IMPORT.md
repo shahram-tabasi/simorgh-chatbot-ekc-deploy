@@ -118,16 +118,43 @@ Importing the same switchgear again refreshes it in place: the same equipment,
 its rows rebuilt, its templates replaced by name, its library entry updated.
 Everything else in the project is left alone.
 
+## Heavy projects
+
+A project with dozens of switchgears and a decade of revisions used not to
+open at all. Three things were in the way, and all three are fixed:
+
+- **The EPLAN label join.** `Technical_draft_lable_eplan_TB` holds one row per
+  entry, so an ECODE relabelled three times has three rows — and joining it
+  directly multiplied every part row by that count. Both line queries now join
+  the newest label per ECODE (`MAX(id)`), which also removes duplicated parts.
+- **One enormous request.** A revision used to be read for the whole project
+  at once. The client now walks it **switchgear by switchgear**
+  (`?scopeId=`), three at a time, so no single request is large and one
+  unreadable switchgear costs only itself — the import says which, and opens
+  the rest.
+- **The proxy timeout.** The host nginx gave `/simorgh-design-suite/` 120
+  seconds; the project read on a big project takes longer than that and came
+  back as a 504. It is 600s now, matching the container's own nginx.
+
+The dialog also offers **Newest only** instead of all revisions — the quick
+way into a project with a long history; the revisions already stored here are
+left untouched.
+
 ## Engineering outputs
 
-Three outputs in **Output Types** are built from what TPMS brings in:
+Three outputs live in their own **Eplanix** tab, built from what TPMS brings
+in:
 
 - **EPLAN single line — دیاگرام تک‌خطی.** One EPLAN page per feeder: an Excel
   in the column order EPLAN's device-list import reads (page, higher-level
   function, location, device tag, function text, part number, type number,
-  manufacturer, quantity), plus a schematic single-line drawing of the same
-  lines — a busbar with one branch per feeder and its devices in slot order —
-  for reading and checking.
+  manufacturer, quantity), plus the drawing itself, laid out the way SIMARIS
+  draws a board: the supply at the top left with its own devices, a busbar
+  across the sheet carrying its configuration, rating and Icw, one branch per
+  outgoing feeder with its devices in slot order and each device's tag and
+  code beside it, the load at the foot (a motor where the feeder says so), and
+  a data block under every branch — feeder, tag, description, template,
+  rating, cable, position. Sheets are paginated, 4 to 12 feeders each.
 - **Panel layout — جانمایی.** MODULE NO. is `column.position` and SIZE is the
   height in modules (LV) or cells (MV); read together they are the front
   elevation. The drawing stacks each column in position order and shows the

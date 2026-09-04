@@ -22,8 +22,11 @@ location /simorgh-design-suite/ {
     proxy_set_header Connection "";
 
     proxy_connect_timeout 30s;
-    proxy_send_timeout 120s;
-    proxy_read_timeout 120s;
+    # Reading a TPMS project (its switchgears and their panel specifications)
+    # is a long single request on a big project; 120s was cutting those off
+    # as a 504 and the project simply never opened.
+    proxy_send_timeout 600s;
+    proxy_read_timeout 600s;
 }
 
 # ====================================================================

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService, tpmsService, TpmsOption } from '../../services/projectService';
-import { syncProjectFromTpms, findLinkedProject } from '../../services/tpmsSync';
+import { syncProjectFromTpms, findLinkedProject, TpmsSyncResult } from '../../services/tpmsSync';
 import { TpmsProjectHeader } from '../../utils/tpmsProjectImport';
 import logoMark from '../../assets/logo-mark.png';
 
@@ -53,6 +53,10 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const [tpmsBusy, setTpmsBusy]         = useState(false);
   const [opening, setOpening]           = useState(false);
   const [progress, setProgress]         = useState<string>('');
+  const [revisionScope, setRevisionScope] = useState<'all' | 'newest'>('all');
+  // A read that came back with holes in it: shown before opening, so nobody
+  // works on a project that is quietly missing a switchgear.
+  const [pending, setPending]           = useState<TpmsSyncResult | null>(null);
 
   // ── Inline "new revision" form (same dialog, not a nested modal) ─────
   const [newRevOpen, setNewRevOpen]               = useState(false);
@@ -152,13 +156,16 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     if (!selectedTpms || !tpmsHeader) return;
     setOpening(true);
     setError(null);
+    setPending(null);
     try {
       const existing = findLinkedProject(projects, tpmsHeader);
       const result = await syncProjectFromTpms(
         selectedTpms.value,
         existing,
         message => setProgress(message),
+        { revisions: revisionScope, header: tpmsHeader },
       );
+      if (result.problems.length > 0) { setPending(result); return; }
       onProjectSelect(result.project, result.current || undefined);
     } catch (err) {
       setError('Could not open this project from TPMS: ' + (err as Error).message);
@@ -264,7 +271,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       setError(null);
       try {
         const result = await syncProjectFromTpms(
-          sync.projectMainId, selectedProject, message => setProgress(message));
+          sync.projectMainId, selectedProject, message => setProgress(message),
+          { revisions: revisionScope });
         // Keep the revision the user picked, if it survived the refresh.
         const picked = selectedRevision
           ? result.revisions.find(r => r.revisionNumber === selectedRevision.revisionNumber)
@@ -613,6 +621,25 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                     </div>
                   )}
 
+                  {tpmsHeader.revisions.length > 1 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Revisions to read</label>
+                      <select
+                        className="w-full border border-gray-400 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-purple-500"
+                        value={revisionScope}
+                        onChange={e => setRevisionScope(e.target.value as 'all' | 'newest')}
+                      >
+                        <option value="all">All {tpmsHeader.revisions.length} revisions — the full history</option>
+                        <option value="newest">
+                          Newest only (REV {tpmsHeader.revisions[tpmsHeader.revisions.length - 1]}) — quickest for a big project
+                        </option>
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1" dir="rtl">
+                        پروژه‌های سنگین را می‌توانید فقط با آخرین ریویژن باز کنید؛ بقیهٔ ریویژن‌ها دست‌نخورده می‌مانند.
+                      </p>
+                    </div>
+                  )}
+
                   <p className="text-xs text-gray-500">
                     Every switchgear lands in Device Selection with its lines and templates, the panel
                     specifications in Device Library, and each TPMS revision becomes a revision here.
@@ -632,6 +659,34 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                 Linked to TPMS project {selectedProject.tpmsSync.oeNumber || selectedProject.tpmsSync.projectMainId} — it is
                 read from TPMS again when it opens, and stays read-only until a revision is raised here.
               </span>
+            </div>
+          )}
+
+          {pending && (
+            <div className="mt-4 border border-amber-300 bg-amber-50 rounded p-3">
+              <p className="text-sm font-medium text-amber-900">
+                {pending.problems.length} part{pending.problems.length === 1 ? '' : 's'} of this project could not be read.
+              </p>
+              <p className="text-xs text-amber-800 mt-1" dir="rtl">
+                بخشی از پروژه خوانده نشد. می‌توانید همین‌طور باز کنید یا دوباره تلاش کنید.
+              </p>
+              <ul className="mt-2 max-h-28 overflow-y-auto text-xs text-amber-900 list-disc list-inside space-y-0.5">
+                {pending.problems.map((p, i) => <li key={i}>{p}</li>)}
+              </ul>
+              <div className="flex justify-end gap-2 mt-3">
+                <button
+                  className="px-3 py-1.5 border rounded text-xs hover:bg-amber-100"
+                  onClick={() => setPending(null)}
+                >
+                  Try again
+                </button>
+                <button
+                  className="px-3 py-1.5 bg-amber-600 text-white rounded text-xs hover:bg-amber-700"
+                  onClick={() => onProjectSelect(pending.project, pending.current || undefined)}
+                >
+                  Open anyway
+                </button>
+              </div>
             </div>
           )}
 
