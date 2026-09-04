@@ -167,6 +167,33 @@ in:
   cabinet width"); nothing is estimated from outside the project, and a row
   the project has no data for is left out rather than guessed.
 
+## EPLAN symbols on the single line
+
+Each template row was picked from EPLAN's parts database, and a part there
+carries *function templates* — each naming the symbol EPLAN places for it and
+what the part is ("Circuit breaker, 3 pole", "Current transformer"). The
+single line follows that instead of guessing from the slot the part sits in:
+
+1. `POST /api/eplan-symbols/lookup` asks the parts database for the symbol of
+   every part on the project's templates, matching on part number **and**
+   order number (TPMS usually carries the order number).
+2. The part's **function definition** decides the symbol drawn — breaker,
+   disconnector, contactor, overload, CT, PT, meter, relay, arrester,
+   transformer, capacitor, drive, motor.
+3. If a symbol exported from EPLAN sits in the symbol folder under that
+   symbol's name (`SG3.svg`), that graphic is drawn instead — the office's own
+   symbol, in the app's sheet.
+
+`GET /api/eplan-symbols/schema` reports which table and columns this EPLAN
+database keeps its symbols in; nothing is hard-coded, because the schema
+differs between EPLAN versions. If the parts database is out of reach, or
+holds no symbol for a part, the drawing falls back to the slot mapping and the
+Eplanix tab says so.
+
+The symbol folder is `simorgh-backend/eplan-symbols/`, mounted read-only into
+the container at `/app/eplan-symbols` (`EPLAN_SYMBOL_DIR`) — adding a symbol
+is a copy, not a rebuild.
+
 ## The API
 
 | Route | What it returns |

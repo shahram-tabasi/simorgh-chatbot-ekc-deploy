@@ -117,8 +117,67 @@ export function buildEplanRows(
 // so the sheet can be read without the tables. Sheets are paginated, a fixed
 // number of feeders each, like SIMARIS pages a board over several drawings.
 
-type SymbolKind = 'breaker' | 'switch-fuse' | 'contactor' | 'overload' | 'ct' | 'pt'
-                | 'meter' | 'relay' | 'arrester' | 'fuse' | 'box';
+type SymbolKind = 'breaker' | 'disconnector' | 'switch-fuse' | 'contactor' | 'overload'
+                | 'ct' | 'pt' | 'meter' | 'relay' | 'arrester' | 'fuse'
+                | 'transformer' | 'motor' | 'capacitor' | 'drive' | 'box';
+
+/** What EPLAN says a part is: the symbol it places, and for what function. */
+export interface EplanSymbolInfo {
+  symbol: string;
+  library?: string;
+  variant?: string;
+  functionDefinition?: string;
+  /** An SVG exported from EPLAN, when the symbol pack has one. */
+  packUrl?: string;
+}
+export type EplanSymbolMap = Record<string, EplanSymbolInfo>;
+
+// EPLAN's function definition says what the part *is* — "Circuit breaker,
+// 3 pole", "Current transformer", "Motor, 3 phase". That text decides the
+// symbol, so the drawing follows EPLAN's own classification of the part
+// rather than the slot the part happens to sit in.
+const FUNCTION_SYMBOL: [RegExp, SymbolKind][] = [
+  [/vacuum|circuit.?breaker|leistungsschalter|\bmccb\b|\bacb\b|\bvcb\b|\bmcb\b/i, 'breaker'],
+  [/switch.?disconnector|disconnector|isolator|load.?break|sectionali[sz]er/i, 'disconnector'],
+  [/fuse.?switch|switch.?fuse/i, 'switch-fuse'],
+  [/\bfuse\b|sicherung/i, 'fuse'],
+  [/contactor|sch(ü|u)tz/i, 'contactor'],
+  [/overload|thermal.?relay|bimetal/i, 'overload'],
+  [/current.?transformer|stromwandler|\bct\b/i, 'ct'],
+  [/voltage.?transformer|potential.?transformer|spannungswandler|\bpt\b|\bvt\b/i, 'pt'],
+  [/transformer|transformator/i, 'transformer'],
+  [/ammeter|voltmeter|multimeter|power.?meter|measuring|\bmeter\b/i, 'meter'],
+  [/protection.?relay|protective|\brelay\b/i, 'relay'],
+  [/surge.?arrester|arrester|\bspd\b|overvoltage/i, 'arrester'],
+  [/capacitor|kondensator|power.?factor/i, 'capacitor'],
+  [/soft.?start|frequency.?(converter|inverter)|\bvfd\b|\bvsd\b|drive/i, 'drive'],
+  [/\bmotor\b/i, 'motor'],
+];
+
+export function kindFromFunction(functionDefinition?: string): SymbolKind | null {
+  const text = String(functionDefinition ?? '');
+  if (!text) return null;
+  for (const [pattern, kind] of FUNCTION_SYMBOL) if (pattern.test(text)) return kind;
+  return null;
+}
+
+// The keys a part might be found under in EPLAN: its order number, its part
+// number, its type number — whichever the template row carries.
+export function partKeys(part: any): string[] {
+  return [
+    getEplanixValue(part?.fullData),
+    stripLocaleTags(part?.fullData?.OrderNumber),
+    stripLocaleTags(part?.fullData?.PartNumber),
+    stripLocaleTags(part?.fullData?.TypeNumber),
+    stripLocaleTags(part?.partNumber),
+  ].map(v => String(v ?? '').trim()).filter(Boolean);
+}
+
+export function lookupSymbol(part: any, symbols?: EplanSymbolMap): EplanSymbolInfo | undefined {
+  if (!symbols) return undefined;
+  for (const key of partKeys(part)) if (symbols[key]) return symbols[key];
+  return undefined;
+}
 
 // Which symbol stands for a slot. Anything not named here is drawn as a dashed
 // box carrying its code, which is honest: the part is on the line, and the
@@ -149,13 +208,21 @@ const isMotorLoad = (line: DeviceTableRow) =>
   /motor|pump|fan|blower|compressor|mill/i.test(String(line.description || ''));
 
 // One device on a branch: its symbol, its tag and its code.
-interface ChainItem { kind: SymbolKind; tag: string; code: string; slot: string }
+interface ChainItem {
+  kind: SymbolKind;
+  tag: string;
+  code: string;
+  slot: string;
+  /** What EPLAN says this part is, when its parts database was reachable. */
+  eplan?: EplanSymbolInfo;
+}
 
 function chainFor(
   line: DeviceTableRow,
   templates: Map<string, TemplateItem>,
   order: string[],
   page: number,
+  symbols?: EplanSymbolMap,
 ): ChainItem[] {
   const template = line.templateId ? templates.get(line.templateId) : undefined;
   const parts = template ? templateParts(template) : {};
@@ -169,11 +236,16 @@ function chainFor(
     for (const part of parts[slot]) {
       const label = stripLocaleTags(part?.label) || SLOT_LETTER[slot] || 'A';
       counters[label] = (counters[label] ?? 0) + 1;
+      // EPLAN's own classification of the part wins; the slot it sits in is
+      // the fallback for a part EPLAN does not know.
+      const eplan = lookupSymbol(part, symbols);
+      const kind = kindFromFunction(eplan?.functionDefinition) ?? SLOT_SYMBOL[slot] ?? 'box';
       out.push({
-        kind: SLOT_SYMBOL[slot] ?? 'box',
+        kind,
         tag: `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`,
         code: formatPartEntry(part),
         slot,
+        eplan,
       });
     }
   }
@@ -240,11 +312,54 @@ function drawSymbol(kind: SymbolKind, x: number, y: number): string {
       g.push(`<rect x="${x - 6}" y="${y + 8}" width="12" height="18" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
       line(x, y + 26, x, y + 34);
       break;
+    case 'disconnector':
+      // A switch with no cross: the contact simply opens.
+      line(x, y, x, y + 8);
+      g.push(`<circle cx="${x}" cy="${y + 8}" r="1.8" fill="#111"/>`);
+      line(x, y + 8, x + 12, y + 26, 1.5);
+      g.push(`<circle cx="${x}" cy="${y + 26}" r="1.8" fill="#111"/>`);
+      line(x, y + 26, x, y + 34);
+      break;
+    case 'transformer':
+      line(x, y, x, y + 6);
+      g.push(`<circle cx="${x}" cy="${y + 13}" r="7.5" fill="none" stroke="#111" stroke-width="1.3"/>`);
+      g.push(`<circle cx="${x}" cy="${y + 22}" r="7.5" fill="none" stroke="#111" stroke-width="1.3"/>`);
+      line(x, y + 30, x, y + 34);
+      break;
+    case 'motor':
+      line(x, y, x, y + 8);
+      g.push(`<circle cx="${x}" cy="${y + 20}" r="11" fill="#fff" stroke="#111" stroke-width="1.4"/>`);
+      g.push(`<text x="${x}" y="${y + 24}" font-size="10" text-anchor="middle" fill="#111">M</text>`);
+      break;
+    case 'capacitor':
+      line(x, y, x, y + 14);
+      line(x - 8, y + 14, x + 8, y + 14, 1.6);
+      line(x - 8, y + 19, x + 8, y + 19, 1.6);
+      line(x, y + 19, x, y + 34);
+      break;
+    case 'drive':
+      line(x, y, x, y + 6);
+      g.push(`<rect x="${x - 11}" y="${y + 6}" width="22" height="22" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
+      line(x - 6, y + 22, x + 6, y + 12, 1.2);
+      line(x, y + 28, x, y + 34);
+      break;
     default:
       line(x, y, x, y + 34);
       g.push(`<rect x="${x + 4}" y="${y + 9}" width="16" height="16" fill="#fff" stroke="#111" stroke-width="1" stroke-dasharray="3 2"/>`);
   }
   return g.join('');
+}
+
+// A device is drawn with the symbol EPLAN exported, when the symbol pack has
+// one for it, and with the app's own IEC symbol otherwise.
+function drawDevice(item: ChainItem, x: number, y: number): string {
+  const url = item.eplan?.packUrl;
+  if (url) {
+    return `<image href="${esc(url)}" x="${x - 17}" y="${y}" width="34" height="34" ` +
+      `preserveAspectRatio="xMidYMid meet"><title>${esc(item.eplan?.symbol || '')}</title></image>` +
+      `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + 34}" stroke="#111" stroke-width="0.6" opacity="0.35"/>`;
+  }
+  return drawSymbol(item.kind, x, y);
 }
 
 export interface SingleLinePage {
@@ -273,6 +388,7 @@ export function buildSingleLinePages(
   data: ProjectData,
   equipment: Equipment,
   perPage = 8,
+  symbols?: EplanSymbolMap,
 ): SingleLinePage[] {
   const templates = new Map(
     [...(data.templates?.[equipment.type] ?? [])].map(t => [t.id, t as TemplateItem]));
@@ -299,7 +415,7 @@ export function buildSingleLinePages(
     of: chunks.length,
     feeders: chunk.length,
     svg: drawSheet({
-      data, equipment, spec, templates, order,
+      data, equipment, spec, templates, order, symbols,
       supply, lines: chunk,
       firstIndex: index * perPage,
       page: index + 1, of: chunks.length,
@@ -313,6 +429,7 @@ function drawSheet(o: {
   spec: any;
   templates: Map<string, TemplateItem>;
   order: string[];
+  symbols?: EplanSymbolMap;
   supply?: DeviceTableRow;
   lines: DeviceTableRow[];
   firstIndex: number;
@@ -324,8 +441,8 @@ function drawSheet(o: {
   const bodyLeft = margin + supplyWidth;
 
   const chains = o.lines.map((line, i) =>
-    chainFor(line, o.templates, o.order, o.firstIndex + i + 1));
-  const supplyChain = o.supply ? chainFor(o.supply, o.templates, o.order, 0) : [];
+    chainFor(line, o.templates, o.order, o.firstIndex + i + 1, o.symbols));
+  const supplyChain = o.supply ? chainFor(o.supply, o.templates, o.order, 0, o.symbols) : [];
   const supplyShown = supplyChain.slice(0, 3);
   const deepest = Math.max(1, ...chains.map(c => c.length));
   // The busbar sits below whatever the incomer needs, never above its own
@@ -366,7 +483,7 @@ function drawSheet(o: {
     // The incomer's own devices, drawn compactly above the busbar.
     let y = 104;
     for (const item of supplyShown) {
-      out.push(drawSymbol(item.kind, supplyX, y));
+      out.push(drawDevice(item, supplyX, y));
       out.push(`<text x="${supplyX + 26}" y="${y + 20}" font-size="8.5" fill="#111">${esc(clip(item.code, 18))}</text>`);
       y += 34;
     }
@@ -401,7 +518,7 @@ function drawSheet(o: {
 
     let y = chainTop;
     for (const item of chain) {
-      out.push(drawSymbol(item.kind, x, y));
+      out.push(drawDevice(item, x, y));
       out.push(`<text x="${x + 26}" y="${y + 14}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
       out.push(`<text x="${x + 26}" y="${y + 26}" font-size="8.5" fill="#444"><title>${esc(item.code)}</title>${
         esc(clip(item.code, 17))}</text>`);
@@ -452,8 +569,10 @@ function drawSheet(o: {
 }
 
 /** One switchgear's sheets, joined for preview or print. */
-export function buildSingleLineSvg(data: ProjectData, equipment: Equipment, perPage = 8): string {
-  return buildSingleLinePages(data, equipment, perPage).map(p => p.svg).join('\n');
+export function buildSingleLineSvg(
+  data: ProjectData, equipment: Equipment, perPage = 8, symbols?: EplanSymbolMap,
+): string {
+  return buildSingleLinePages(data, equipment, perPage, symbols).map(p => p.svg).join('\n');
 }
 
 /** A print-ready document: every switchgear, every sheet, one page each. */
@@ -461,9 +580,10 @@ export function buildSingleLineHtml(
   data: ProjectData,
   equipments: Equipment[],
   perPage = 8,
+  symbols?: EplanSymbolMap,
 ): string {
   const pages = equipments.flatMap(eq =>
-    buildSingleLinePages(data, eq, perPage).map(page => `
+    buildSingleLinePages(data, eq, perPage, symbols).map(page => `
     <section style="page-break-after:always;padding:6px 0">
       <div style="overflow-x:auto">${page.svg}</div>
     </section>`));

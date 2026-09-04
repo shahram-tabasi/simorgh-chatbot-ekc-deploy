@@ -1,11 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import { DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { ProjectData, Equipment } from '../../types/project';
 import { sheetName } from '../../utils/bpmsExport';
+import { eplanSymbolService } from '../../services/projectService';
+import { templateParts } from '../../utils/tierEquipmentMatrix';
 import {
-  EPLAN_HEADERS, buildEplanRows, buildSingleLinePages, buildSingleLineHtml,
+  EPLAN_HEADERS, EplanSymbolMap, buildEplanRows, buildSingleLinePages, buildSingleLineHtml,
+  partKeys,
 } from '../../utils/eplanSingleLine';
 import {
   LAYOUT_HEADERS, buildPanelLayout, buildLayoutRows, buildLayoutSvg, buildLayoutHtml,
@@ -71,8 +74,56 @@ export const EplanixTab: React.FC = () => {
   const [selected, setSelected] = useState<string>('');   // equipment id, '' = all
   const [perPage, setPerPage] = useState(8);
   const [sheet, setSheet] = useState(0);
+  // What EPLAN says each part is — the symbol it places for it. Without this
+  // the drawing falls back to the slot the part sits in.
+  const [symbols, setSymbols] = useState<EplanSymbolMap>({});
+  const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
 
   const equipments = projectData.equipments ?? [];
+
+  // Every part on the project's templates, by the codes EPLAN might know it
+  // under. Looked up once per project, not once per sheet.
+  const partCodes = useMemo(() => {
+    const keys = new Set<string>();
+    for (const tier of ['LV', 'MV', 'HV'] as const) {
+      for (const template of projectData.templates?.[tier] ?? []) {
+        for (const parts of Object.values(templateParts(template))) {
+          for (const part of parts) for (const key of partKeys(part)) keys.add(key);
+        }
+      }
+    }
+    return [...keys].slice(0, 500);
+  }, [projectData.templates]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (partCodes.length === 0) { setSymbols({}); setSymbolNote('No parts on the templates yet.'); return; }
+      setSymbolNote('Reading the EPLAN symbols…');
+      const [found, pack] = await Promise.all([
+        eplanSymbolService.lookup(partCodes),
+        eplanSymbolService.pack(),
+      ]);
+      if (cancelled) return;
+      // A symbol the office exported from EPLAN is used as it is; the rest are
+      // drawn here, from what EPLAN says the part is.
+      const packLower = new Map(pack.map(name => [name.toLowerCase(), name]));
+      const map: EplanSymbolMap = {};
+      let fromPack = 0;
+      for (const [key, entry] of Object.entries(found)) {
+        const exported = packLower.get(String(entry.symbol || '').toLowerCase());
+        if (exported) fromPack += 1;
+        map[key] = { ...entry, packUrl: exported ? eplanSymbolService.svgUrl(exported) : undefined };
+      }
+      setSymbols(map);
+      const matched = new Set(Object.values(found).map(e => e.partNumber || e.symbol)).size;
+      setSymbolNote(
+        Object.keys(found).length === 0
+          ? 'EPLAN parts database has no symbol for these parts (or is out of reach) — symbols come from the template slots.'
+          : `EPLAN symbols: ${matched} part(s) matched${fromPack > 0 ? `, ${fromPack} drawn with symbols exported from EPLAN` : ''}.`);
+    })();
+    return () => { cancelled = true; };
+  }, [partCodes]);
   const withLines = equipments.filter(e => (e.devices ?? []).length > 0);
   const chosen = selected ? equipments.filter(e => e.id === selected) : equipments;
   const chosenWithLines = chosen.filter(e => (e.devices ?? []).length > 0);
@@ -80,8 +131,8 @@ export const EplanixTab: React.FC = () => {
   const preview = chosenWithLines[0];
 
   const pages = useMemo(
-    () => (preview ? buildSingleLinePages(projectData, preview, perPage) : []),
-    [projectData, preview, perPage]);
+    () => (preview ? buildSingleLinePages(projectData, preview, perPage, symbols) : []),
+    [projectData, preview, perPage, symbols]);
   const current = pages[Math.min(sheet, Math.max(0, pages.length - 1))];
 
   const layout = useMemo(
@@ -162,6 +213,7 @@ export const EplanixTab: React.FC = () => {
                 <p className="text-xs text-gray-500">
                   One sheet per {perPage} feeders · supply, busbar, device chain and a data block per feeder.
                 </p>
+                <p className="text-[11px] text-blue-700 mt-0.5">{symbolNote}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -173,7 +225,8 @@ export const EplanixTab: React.FC = () => {
                 {[4, 6, 8, 10, 12].map(n => <option key={n} value={n}>{n} feeders / sheet</option>)}
               </select>
               <Btn
-                onClick={() => openPrintable(buildSingleLineHtml(projectData, chosenWithLines, perPage), 'single-line diagram')}
+                onClick={() => openPrintable(
+                  buildSingleLineHtml(projectData, chosenWithLines, perPage, symbols), 'single-line diagram')}
                 icon="print"
                 className="bg-slate-700 text-white hover:bg-slate-800"
                 disabled={chosenWithLines.length === 0}

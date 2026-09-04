@@ -14,6 +14,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerDesktopRoutes } from './desktopDownload.js';
 import { registerTpmsImportRoutes } from './tpmsImport.js';
+import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 
 dotenv.config();
 
@@ -253,6 +254,10 @@ registerDesktopRoutes(app);
 
 // TPMS import — the same MySQL reads Eplanix does, mapped for this app.
 registerTpmsImportRoutes(app, connectToMySql);
+
+// EPLAN symbols — the single-line symbol each part carries in EPLAN's parts
+// database, plus the folder of symbols exported from EPLAN itself.
+registerEplanSymbolRoutes(app, connectToSqlServer, process.env.EPLAN_SYMBOL_DIR);
 
 app.get('/api/health', async (req, res) => {
   try {
