@@ -13,6 +13,10 @@ import {
   buildTierMatrix,
 } from '../../utils/tierEquipmentMatrix';
 import { buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
+import { EPLAN_HEADERS, buildEplanRows, buildSingleLineHtml } from '../../utils/eplanSingleLine';
+import { LAYOUT_HEADERS, buildPanelLayout, buildLayoutRows, buildLayoutHtml } from '../../utils/panelLayout';
+import { MECHANICAL_HEADERS, buildMechanicalRows } from '../../utils/mechanicalItems';
+import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/revisionDiff';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
 const DEVICE_PROP_LABELS: Record<string, string> = {
@@ -81,6 +85,82 @@ function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
   }
   const rev = revisionNumber ? `_REV${revisionNumber}` : '';
   XLSX.writeFile(wb, `${data.projectName || 'project'}_BPMS${rev}.xlsx`);
+}
+
+// ─── EPLAN single line ────────────────────────────────────────────────────────
+// The device list EPLAN imports (one sheet per switchgear, one row per device
+// on a feeder), and the schematic drawing of the same lines.
+function exportEplanExcel(data: ProjectData) {
+  const eqs = (data.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
+  if (eqs.length === 0) { alert('No switchgear with feeder lines in this project.'); return; }
+  const wb = XLSX.utils.book_new();
+  const taken = new Set<string>();
+  for (const eq of eqs) {
+    const ws = XLSX.utils.aoa_to_sheet([EPLAN_HEADERS, ...buildEplanRows(data, eq)]);
+    ws['!cols'] = [
+      { wch: 6 }, { wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 28 }, { wch: 22 },
+      { wch: 20 }, { wch: 16 }, { wch: 6 }, { wch: 12 }, { wch: 12 }, { wch: 16 },
+      { wch: 18 }, { wch: 28 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, sheetName(eq.name, taken));
+  }
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_EPLAN_single_line.xlsx`);
+}
+
+function openPrintable(html: string, what: string) {
+  const w = window.open('', '_blank');
+  if (!w) { alert(`Allow pop-ups to open the ${what}.`); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+function openSingleLine(data: ProjectData) {
+  const eqs = (data.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
+  if (eqs.length === 0) { alert('No switchgear with feeder lines in this project.'); return; }
+  openPrintable(buildSingleLineHtml(data, eqs), 'single-line diagram');
+}
+
+// ─── Layout (جانمایی) ─────────────────────────────────────────────────────────
+function exportLayoutExcel(data: ProjectData) {
+  const eqs = (data.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
+  if (eqs.length === 0) { alert('No switchgear with feeder lines in this project.'); return; }
+  const layouts = eqs.map(eq => buildPanelLayout(data, eq));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([LAYOUT_HEADERS, ...buildLayoutRows(layouts)]);
+  ws['!cols'] = LAYOUT_HEADERS.map((h, i) => ({ wch: i === 9 ? 30 : Math.max(10, h.length + 2) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Layout');
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_Layout.xlsx`);
+}
+
+function openLayout(data: ProjectData) {
+  const eqs = (data.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
+  if (eqs.length === 0) { alert('No switchgear with feeder lines in this project.'); return; }
+  openPrintable(buildLayoutHtml(data, eqs.map(eq => buildPanelLayout(data, eq))), 'layout');
+}
+
+// ─── Mechanical items (اقلام مکانیکال) ────────────────────────────────────────
+function exportMechanicalExcel(data: ProjectData) {
+  const eqs = data.equipments ?? [];
+  if (eqs.length === 0) { alert('No switchgear in this project.'); return; }
+  const rows = buildMechanicalRows(data, eqs);
+  if (rows.length === 0) {
+    alert('Nothing to list yet — the switchgears have no panel specification in Device Library.');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([MECHANICAL_HEADERS, ...rows]);
+  ws['!cols'] = [{ wch: 16 }, { wch: 14 }, { wch: 26 }, { wch: 34 }, { wch: 6 }, { wch: 10 }, { wch: 46 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Mechanical items');
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_Mechanical_items.xlsx`);
+}
+
+// ─── Revision comparison ──────────────────────────────────────────────────────
+function exportDiffExcel(diff: RevisionDiff, meta: { projectName: string; base: string; target: string }) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(buildDiffRows(diff, meta));
+  ws['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 10 }, { wch: 22 }, { wch: 30 }, { wch: 30 }];
+  XLSX.utils.book_append_sheet(wb, ws, `REV ${meta.base} to ${meta.target}`.slice(0, 31));
+  XLSX.writeFile(wb, `${meta.projectName || 'project'}_REV${meta.base}_vs_REV${meta.target}.xlsx`);
 }
 
 // ─── Per-section PDF (print-to-PDF window) ────────────────────────────────────
@@ -744,8 +824,9 @@ export const OutputTypesTab: React.FC = () => {
   const [compareBaseRevision, setCompareBaseRevision] = useState<string>('');
   const [compareTargetRevision, setCompareTargetRevision] = useState<string>('');
   const [revisions, setRevisions] = useState<Revision[]>([]);
-  const [compareDeviceType, setCompareDeviceType] = useState<'LV' | 'MV' | 'Total'>('Total');
   const [loadingRevisions, setLoadingRevisions] = useState(false);
+  const [diff, setDiff] = useState<RevisionDiff | null>(null);
+  const [diffError, setDiffError] = useState<string>('');
 
   // Load revisions on mount
   React.useEffect(() => {
@@ -789,35 +870,36 @@ export const OutputTypesTab: React.FC = () => {
   const eqs     = projectData.equipments ?? [];
   const rowTotal = eqs.reduce((s, eq) => s + (eq.devices?.length ?? 0), 0);
 
-  const handleCompareRevisions = async () => {
-    if (!compareBaseRevision || !compareTargetRevision) {
-      alert('Please select both base and target revisions.');
+  const revisionById = (id: string) => revisions.find(r => r._id === id);
+  const revisionLabel = (r?: Revision) =>
+    r ? `REV ${r.revisionNumber}${r.source === 'tpms' ? ' (TPMS)' : ''}` : '—';
+
+  // The comparison is computed here, from the snapshots the revisions carry:
+  // a revision holds the whole project as it stood, so two of them can be
+  // compared without asking the server for anything.
+  const runComparison = () => {
+    setDiffError('');
+    setDiff(null);
+    const base = revisionById(compareBaseRevision);
+    const target = revisionById(compareTargetRevision);
+    if (!base || !target) { setDiffError('Pick two revisions to compare.'); return; }
+    if (base._id === target._id) { setDiffError('Pick two different revisions.'); return; }
+    if (!base.projectSnapshot || !target.projectSnapshot) {
+      setDiffError('One of these revisions has no snapshot stored, so it cannot be compared.');
       return;
     }
-    
-    try {
-      // Download PDF comparison
-      const pdfBlob = await projectService.exportComparisonReport(compareBaseRevision, compareTargetRevision, 'pdf');
-      const pdfUrl = URL.createObjectURL(pdfBlob);
-      const pdfLink = document.createElement('a');
-      pdfLink.href = pdfUrl;
-      pdfLink.download = `revision_comparison_${compareBaseRevision}_${compareTargetRevision}.pdf`;
-      pdfLink.click();
-      
-      // Download Excel comparison
-      const excelBlob = await projectService.exportComparisonReport(compareBaseRevision, compareTargetRevision, 'excel');
-      const excelUrl = URL.createObjectURL(excelBlob);
-      const excelLink = document.createElement('a');
-      excelLink.href = excelUrl;
-      excelLink.download = `revision_comparison_${compareBaseRevision}_${compareTargetRevision}.xlsx`;
-      excelLink.click();
-      
-      setShowCompareModal(false);
-      alert('✅ Comparison reports downloaded successfully!');
-    } catch (error) {
-      console.error('Failed to export comparison:', error);
-      alert('❌ Failed to generate comparison reports. Please try again.');
-    }
+    setDiff(diffProjectSnapshots(base.projectSnapshot, target.projectSnapshot));
+  };
+
+  const downloadComparison = () => {
+    const base = revisionById(compareBaseRevision);
+    const target = revisionById(compareTargetRevision);
+    if (!diff || !base || !target) return;
+    exportDiffExcel(diff, {
+      projectName: projectData.projectName,
+      base: base.revisionNumber,
+      target: target.revisionNumber,
+    });
   };
 
   const Section: React.FC<{ id: string; title: string; badge: string; color: string; children: React.ReactNode }> = ({ id, title, badge, color, children }) => {
@@ -1052,6 +1134,83 @@ export const OutputTypesTab: React.FC = () => {
         );
       })()}
 
+      {/* ── EPLAN single line, layout and mechanical items ────────────────
+          Three engineering outputs off the same data: what EPLAN needs to
+          draw the single line, where each feeder sits in the panel, and the
+          sheet-metal and busbar side of it. */}
+      {(() => {
+        const withLines = (projectData.equipments ?? []).filter(e => (e.devices ?? []).length > 0);
+        const lineCount = withLines.reduce((n, e) => n + (e.devices?.length ?? 0), 0);
+        const OutputCard: React.FC<{
+          badge: string; color: string; title: string; note: string;
+          buttons: { key: string; label: string; onClick: () => void; className: string }[];
+          disabled?: boolean;
+        }> = ({ badge, color, title, note, buttons, disabled }) => (
+          <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: color }}>{badge}</span>
+              <div className="min-w-0">
+                <p className="font-medium text-sm text-gray-800">{title}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{note}</p>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              {buttons.map(b => (
+                <button
+                  key={b.key}
+                  disabled={!!downloading || disabled}
+                  onClick={() => trigger(b.key, b.onClick)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap ${b.className}`}
+                >
+                  {downloading === b.key ? <span className="animate-spin">⏳</span> : <DownloadIcon className="w-4 h-4" />}
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+
+        return (
+          <>
+            <OutputCard
+              badge="EPLAN" color="#1d4ed8"
+              title="EPLAN single line — دیاگرام تک‌خطی"
+              note={withLines.length === 0
+                ? 'No switchgear with feeder lines yet.'
+                : `${withLines.length} switchgear${withLines.length === 1 ? '' : 's'} · ${lineCount} feeder${lineCount === 1 ? '' : 's'} — one EPLAN page per feeder: device tag, function text, part number, location.`}
+              disabled={withLines.length === 0}
+              buttons={[
+                { key: 'eplan', label: 'EPLAN device list', onClick: () => exportEplanExcel(projectData), className: 'bg-blue-700 text-white hover:bg-blue-800' },
+                { key: 'sld', label: 'Single-line drawing', onClick: () => openSingleLine(projectData), className: 'bg-slate-700 text-white hover:bg-slate-800' },
+              ]}
+            />
+
+            <OutputCard
+              badge="LAYOUT" color="#7c3aed"
+              title="Panel layout — جانمایی"
+              note={withLines.length === 0
+                ? 'No switchgear with feeder lines yet.'
+                : 'Front elevation from MODULE NO. and SIZE — each column stacked in position order, with the free space left in each.'}
+              disabled={withLines.length === 0}
+              buttons={[
+                { key: 'layout-xlsx', label: 'Layout Excel', onClick: () => exportLayoutExcel(projectData), className: 'bg-violet-600 text-white hover:bg-violet-700' },
+                { key: 'layout-draw', label: 'Elevation drawing', onClick: () => openLayout(projectData), className: 'bg-slate-700 text-white hover:bg-slate-800' },
+              ]}
+            />
+
+            <OutputCard
+              badge="MECH" color="#b45309"
+              title="Mechanical items — اقلام مکانیکال"
+              note="Enclosure, busbars, compartments, finish and hardware — counted from the panel specification and the feeders, every row saying what it was derived from."
+              disabled={(projectData.equipments ?? []).length === 0}
+              buttons={[
+                { key: 'mech', label: 'Mechanical Excel', onClick: () => exportMechanicalExcel(projectData), className: 'bg-amber-700 text-white hover:bg-amber-800' },
+              ]}
+            />
+          </>
+        );
+      })()}
+
       {/* ── Section 04: LV Equipment & Template Matrix ─────────────────────
           Wide table — every row is one device-row from an LV equipment, and
           every template property becomes its own column. Empty cells mean
@@ -1083,94 +1242,210 @@ export const OutputTypesTab: React.FC = () => {
         HTML report includes a "Print / Save as PDF" button for browser-based PDF export.
       </div>
 
-      {/* Compare Revisions Modal */}
+      {/* Compare revisions — for a TPMS project these are TPMS's own
+          revisions, so this is where its changes are read. */}
       {showCompareModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl w-[700px] max-h-[80vh] flex flex-col">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-lg shadow-2xl w-[900px] max-w-full max-h-[88vh] flex flex-col">
             <div className="px-6 py-4 border-b">
-              <h3 className="font-semibold text-lg">Compare Revisions</h3>
-              <p className="text-xs text-gray-500 mt-1">Select two revisions to compare and generate PDF/Excel reports</p>
+              <h3 className="font-semibold text-lg">Compare revisions</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                What changed between two revisions of this project — master data, technical settings,
+                panel specifications, feeder lines and the parts on their templates.
+                {projectData.tpmsSync
+                  ? ' The revisions marked TPMS are the revisions TPMS holds, so this is also how TPMS changes are read.'
+                  : ''}
+              </p>
             </div>
-            
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-              {/* Device Type Selection */}
+
+            <div className="px-6 py-4 border-b bg-gray-50 grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
-                <select
-                  value={compareDeviceType}
-                  onChange={(e) => setCompareDeviceType(e.target.value as 'LV' | 'MV' | 'Total')}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
-                >
-                  <option value="Total">Total (All Devices)</option>
-                  <option value="LV">LV Devices</option>
-                  <option value="MV">MV Devices</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Base Revision (Reference)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Base revision</label>
                 <select
                   value={compareBaseRevision}
-                  onChange={(e) => setCompareBaseRevision(e.target.value)}
+                  onChange={e => { setCompareBaseRevision(e.target.value); setDiff(null); }}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
                   disabled={loadingRevisions}
                 >
-                  <option value="">Select base revision...</option>
+                  <option value="">Select…</option>
                   {revisions.map((rev, idx) => (
                     <option key={rev._id || idx} value={rev._id}>
-                      Revision {rev.revisionNumber}: {rev.revisionName}
+                      {revisionLabel(rev)} — {rev.revisionName}
                     </option>
                   ))}
                 </select>
               </div>
-              
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Target Revision (To Compare)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Compare with</label>
                 <select
                   value={compareTargetRevision}
-                  onChange={(e) => setCompareTargetRevision(e.target.value)}
+                  onChange={e => { setCompareTargetRevision(e.target.value); setDiff(null); }}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
                   disabled={loadingRevisions}
                 >
-                  <option value="">Select target revision...</option>
+                  <option value="">Select…</option>
                   {revisions.map((rev, idx) => (
                     <option key={rev._id || idx} value={rev._id}>
-                      Revision {rev.revisionNumber}: {rev.revisionName}
+                      {revisionLabel(rev)} — {rev.revisionName}
                     </option>
                   ))}
                 </select>
-              </div>
-              
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <p className="text-sm text-blue-800">
-                  <strong>Note:</strong> Comparison will generate both PDF and Excel reports showing:
-                </p>
-                <ul className="text-sm text-blue-700 mt-2 list-disc list-inside space-y-1">
-                  <li>Added equipment/templates</li>
-                  <li>Removed equipment/templates</li>
-                  <li>Modified properties with old/new values</li>
-                </ul>
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+              {diffError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mb-3">{diffError}</div>
+              )}
+
+              {!diff && !diffError && (
+                <p className="text-sm text-gray-500">Pick two revisions and press Compare.</p>
+              )}
+
+              {diff && (
+                <div className="space-y-4">
+                  <div className="flex gap-3 text-sm">
+                    <span className="px-2 py-1 rounded bg-green-100 text-green-800">{diff.totals.added} added</span>
+                    <span className="px-2 py-1 rounded bg-red-100 text-red-800">{diff.totals.removed} removed</span>
+                    <span className="px-2 py-1 rounded bg-amber-100 text-amber-800">{diff.totals.changed} changed</span>
+                  </div>
+
+                  {diff.isEmpty && (
+                    <p className="text-sm text-gray-600">These two revisions are identical.</p>
+                  )}
+
+                  {(diff.project.length > 0 || diff.techSettings.length > 0) && (
+                    <div className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm font-medium">Project &amp; technical settings</div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {[...diff.project, ...diff.techSettings].map((c, i) => (
+                            <tr key={i} className="border-t border-gray-100">
+                              <td className="px-3 py-1.5 text-gray-600 w-56">{c.field}</td>
+                              <td className="px-3 py-1.5 text-red-700 line-through">{c.from || '—'}</td>
+                              <td className="px-3 py-1.5 text-green-700">{c.to || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {diff.equipments.map(eq => (
+                    <div key={`${eq.type}-${eq.name}`} className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                          eq.type === 'LV' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{eq.type}</span>
+                        <span className="font-medium">{eq.name}</span>
+                        {eq.kind !== 'changed' && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                            eq.kind === 'added' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {eq.kind}
+                          </span>
+                        )}
+                        <span className="text-gray-500 ml-auto">
+                          {eq.counts.added} added · {eq.counts.removed} removed · {eq.counts.changed} changed
+                          {eq.panel.length > 0 ? ` · ${eq.panel.length} panel field(s)` : ''}
+                        </span>
+                      </div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {eq.panel.map((c, i) => (
+                            <tr key={`p${i}`} className="border-t border-gray-100 bg-amber-50/40">
+                              <td className="px-3 py-1.5 text-gray-500 w-28">panel</td>
+                              <td className="px-3 py-1.5 text-gray-700 w-48">{c.field}</td>
+                              <td className="px-3 py-1.5 text-red-700 line-through">{c.from || '—'}</td>
+                              <td className="px-3 py-1.5 text-green-700">{c.to || '—'}</td>
+                            </tr>
+                          ))}
+                          {eq.lines.map(line => (
+                            <React.Fragment key={line.key}>
+                              <tr className="border-t border-gray-200">
+                                <td className="px-3 py-1.5 w-28">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                                    line.kind === 'added' ? 'bg-green-100 text-green-700'
+                                    : line.kind === 'removed' ? 'bg-red-100 text-red-700'
+                                    : 'bg-amber-100 text-amber-700'}`}>{line.kind}</span>
+                                </td>
+                                <td className="px-3 py-1.5 font-medium text-gray-800" colSpan={3}>
+                                  {line.feederNo || line.key}
+                                  {line.description ? <span className="text-gray-500 font-normal"> — {line.description}</span> : null}
+                                </td>
+                              </tr>
+                              {line.kind === 'changed' && line.changes.map((c, i) => (
+                                <tr key={`${line.key}-${i}`} className="border-t border-gray-50">
+                                  <td className="px-3 py-1"></td>
+                                  <td className="px-3 py-1 text-gray-600 w-48">{c.field}</td>
+                                  <td className="px-3 py-1 text-red-700 line-through">{c.from || '—'}</td>
+                                  <td className="px-3 py-1 text-green-700">{c.to || '—'}</td>
+                                </tr>
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+
+                  {diff.templates.length > 0 && (
+                    <div className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm font-medium">Templates</div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {diff.templates.map(t => (
+                            <React.Fragment key={`${t.type}-${t.name}`}>
+                              <tr className="border-t border-gray-200">
+                                <td className="px-3 py-1.5 w-28">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                                    t.kind === 'added' ? 'bg-green-100 text-green-700'
+                                    : t.kind === 'removed' ? 'bg-red-100 text-red-700'
+                                    : 'bg-amber-100 text-amber-700'}`}>{t.kind}</span>
+                                </td>
+                                <td className="px-3 py-1.5 font-medium text-gray-800" colSpan={3}>
+                                  {t.name} <span className="text-gray-400">({t.type})</span>
+                                </td>
+                              </tr>
+                              {t.changes.map((c, i) => (
+                                <tr key={`${t.name}-${i}`} className="border-t border-gray-50">
+                                  <td className="px-3 py-1"></td>
+                                  <td className="px-3 py-1 text-gray-600 w-48">{c.field}</td>
+                                  <td className="px-3 py-1 text-red-700 line-through whitespace-pre-wrap">{c.from || '—'}</td>
+                                  <td className="px-3 py-1 text-green-700 whitespace-pre-wrap">{c.to || '—'}</td>
+                                </tr>
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between gap-2 px-6 py-4 border-t bg-gray-50">
               <button
                 className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
-                onClick={() => {
-                  setShowCompareModal(false);
-                  setCompareBaseRevision('');
-                  setCompareTargetRevision('');
-                }}
+                onClick={() => { setShowCompareModal(false); setDiff(null); setDiffError(''); }}
               >
-                Cancel
+                Close
               </button>
-              <button
-                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
-                disabled={!compareBaseRevision || !compareTargetRevision}
-                onClick={handleCompareRevisions}
-              >
-                Generate Reports (PDF + Excel)
-              </button>
+              <div className="flex gap-2">
+                <button
+                  className="px-4 py-2 border border-emerald-300 text-emerald-800 rounded text-sm hover:bg-emerald-50 disabled:opacity-40"
+                  disabled={!diff}
+                  onClick={downloadComparison}
+                >
+                  Excel (.xlsx)
+                </button>
+                <button
+                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                  disabled={!compareBaseRevision || !compareTargetRevision}
+                  onClick={runComparison}
+                >
+                  Compare
+                </button>
+              </div>
             </div>
           </div>
         </div>

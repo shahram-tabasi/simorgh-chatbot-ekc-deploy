@@ -8,17 +8,52 @@ There are two ways in:
 
 - **On the project screen.** The project combo box lists the suite's own
   projects and, underneath them, every project TPMS holds — the same list
-  Eplanix shows. Pick a TPMS project, pick its switchgear and revision, and
-  **Open from TPMS** reads it and opens it as a project. If a project for it
-  already exists (same PID, OE number or name), it is refreshed rather than
-  duplicated; otherwise a new one is created.
+  Eplanix shows. Pick one and **Open from TPMS** reads the *whole* project:
+  every switchgear, and every TPMS revision. Nothing else is asked. If a
+  project for it already exists here (linked, or same PID, OE number or name)
+  it is refreshed rather than duplicated.
 - **Inside an open project**, from **File → Import from TPMS…** or the
-  **🗄️ TPMS** button above the equipment tree in Device Selection — project →
-  switchgear → revision, read it, tick what to bring in, import.
+  **🗄️ TPMS** button above the equipment tree in Device Selection — one
+  switchgear at one revision, for pulling a single panel into a project that
+  the suite already owns.
 
 Nothing is ever written back to TPMS. If the server has no MySQL behind it,
 the TPMS section simply doesn't appear and the suite's own projects open as
 they always did.
+
+## Who owns the project
+
+A project opened from TPMS carries a link back to it (`tpmsSync`), and that
+link decides who owns the data:
+
+| `master` | What happens |
+|---|---|
+| `tpms` | TPMS owns it. Every time the project is opened it is read from TPMS again and written to MongoDB, and the app refuses edits — the mutation gate, Save and auto-save are all closed, and a bar across the top says so and offers **+ New Revision**. |
+| `suite` | Design Suite owns it. Syncing stops; the project is edited here like any other. |
+
+**Raising a revision in Design Suite is the hand-over.** The new revision is
+created with `source: 'suite'`, the project's `master` flips to `suite`, and
+the revisions TPMS wrote stay behind as history. There is no way back other
+than opening the TPMS project again as a new project.
+
+If TPMS cannot be reached when a linked project is opened, the copy stored
+here opens instead and the dialog says so — an unreachable database never
+stands between the user and their project.
+
+## Revisions
+
+TPMS revision *N* becomes **REV N** here, carrying that revision's whole
+project as its snapshot — every switchgear as it stood at that revision. So
+the revision list in Design Suite *is* the revision history in TPMS, and
+**Output Types → Compare revisions** is where TPMS's changes are read: pick
+two revisions and it lists what changed in the master data, the technical
+settings, the panel specifications, the feeder lines and the parts on their
+templates, with an Excel of the same.
+
+Revisions this side has that TPMS does not — one from a revision since
+removed there, or the empty REV 0 the backend creates for a project with none
+— are cleaned up on each sync. A revision raised in Design Suite is never
+touched.
 
 ## What is read
 
@@ -82,6 +117,37 @@ On MV, slot 19 is SURGE ARRESTER, as it is in Eplanix.
 Importing the same switchgear again refreshes it in place: the same equipment,
 its rows rebuilt, its templates replaced by name, its library entry updated.
 Everything else in the project is left alone.
+
+## Engineering outputs
+
+Three outputs in **Output Types** are built from what TPMS brings in:
+
+- **EPLAN single line — دیاگرام تک‌خطی.** One EPLAN page per feeder: an Excel
+  in the column order EPLAN's device-list import reads (page, higher-level
+  function, location, device tag, function text, part number, type number,
+  manufacturer, quantity), plus a schematic single-line drawing of the same
+  lines — a busbar with one branch per feeder and its devices in slot order —
+  for reading and checking.
+- **Panel layout — جانمایی.** MODULE NO. is `column.position` and SIZE is the
+  height in modules (LV) or cells (MV); read together they are the front
+  elevation. The drawing stacks each column in position order and shows the
+  free space left; the Excel lists every feeder with its column, position,
+  from/to and size.
+- **Mechanical items — اقلام مکانیکال.** The enclosure, busbars,
+  compartments, finish and hardware, counted from the panel specification and
+  the feeders. Every row carries a **Basis** column saying what it was derived
+  from ("one per cell — cell count stated by TPMS (12)", "12 cell(s) × 800 mm
+  cabinet width"); nothing is estimated from outside the project, and a row
+  the project has no data for is left out rather than guessed.
+
+## The API
+
+| Route | What it returns |
+|---|---|
+| `GET /api/tpms/projects` | the project list (value, code, name, text) |
+| `GET /api/tpms/project/:projectId` | the project, its technical settings, its switchgears and its revision numbers |
+| `GET /api/tpms/project/:projectId/revision/:revision` | every switchgear's feeder lines at that revision, in one read |
+| `GET /api/tpms/scopes/:projectId`, `…/revisions/:scopeId`, `…/import` | the per-switchgear import, unchanged |
 
 ## Note on the three pickers
 
