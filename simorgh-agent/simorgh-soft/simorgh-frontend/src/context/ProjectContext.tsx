@@ -40,12 +40,21 @@ interface ProjectContextType {
   revisionLockNotice: RevisionLockNotice | null;
   notifyRevisionLocked: () => void;
   dismissRevisionLockNotice: () => void;
+  // True while TPMS owns this project: it is re-read from TPMS every time it
+  // opens, so nothing here may be edited. Raising a revision takes it over.
+  isTpmsMastered: boolean;
 }
 
-// Details shown by the "this revision is locked" dialog.
+// Details shown by the "this revision is locked" dialog. `kind` says why:
+// a newer revision exists, or TPMS still owns the project.
 export interface RevisionLockNotice {
+  kind: 'newer-revision' | 'tpms';
   currentRevisionNumber: string;
   blockingRevisionNumbers: string[];
+  /** For the TPMS case: which TPMS project this one mirrors. */
+  tpmsProject?: string;
+  /** The revision number a new revision would get. */
+  nextRevisionNumber?: string;
 }
 
 // EMPTY DEFAULTS - no demo values
@@ -146,17 +155,36 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const [revisionLockNotice, setRevisionLockNotice] = useState<RevisionLockNotice | null>(null);
   const dismissRevisionLockNotice = () => setRevisionLockNotice(null);
 
+  // While TPMS is the master, the project is a mirror of TPMS: it is read
+  // again on every open, so an edit made here would be overwritten. The way
+  // out is to raise a revision, which hands ownership to this side.
+  const isTpmsMastered = projectData.tpmsSync?.master === 'tpms';
+
   const notifyRevisionLocked = () => {
-    setRevisionLockNotice({
-      currentRevisionNumber: currentRevision?.revisionNumber ?? '',
-      blockingRevisionNumbers,
-    });
+    setRevisionLockNotice(
+      isTpmsMastered
+        ? {
+            kind: 'tpms',
+            currentRevisionNumber: currentRevision?.revisionNumber ?? '',
+            blockingRevisionNumbers: [],
+            tpmsProject: projectData.tpmsSync?.oeNumber || projectData.tpmsSync?.projectName || '',
+            nextRevisionNumber: String(getNextRevisionNumber()),
+          }
+        : {
+            kind: 'newer-revision',
+            currentRevisionNumber: currentRevision?.revisionNumber ?? '',
+            blockingRevisionNumbers,
+          });
   };
 
-  // Every project mutation goes through this gate. Once a newer revision
-  // exists the selected one is frozen: the change is dropped and the user is
-  // told which revisions have to be deleted first.
+  // Every project mutation goes through this gate. The change is dropped and
+  // the user is told why: a newer revision exists and has to be deleted first,
+  // or TPMS still owns the project and a revision has to be raised.
   const guardEdit = (): boolean => {
+    if (isTpmsMastered) {
+      notifyRevisionLocked();
+      return false;
+    }
     if (isCurrentRevisionEditable) return true;
     notifyRevisionLocked();
     return false;
@@ -198,6 +226,12 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const saveProject = async (): Promise<void> => {
+    // A TPMS-mastered project is written by the sync, not from here.
+    if (isTpmsMastered) {
+      notifyRevisionLocked();
+      throw new Error(
+        'This project is read from TPMS. Raise a revision in Design Suite to edit it here.');
+    }
     // Revision 0 (or any older revision) becomes read-only once a newer
     // revision exists — the user must delete the newer revisions first.
     if (currentRevision && !isCurrentRevisionEditable) {
@@ -452,22 +486,47 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
 
   const createRevisionForProject = async (pid: string, revName: string, desc: string): Promise<Revision> => {
     const nextNum = getNextRevisionNumber();
-    
+
+    // Raising a revision on a TPMS-mirrored project is the hand-over: from
+    // here on this side owns the project, so it stops being re-read from TPMS
+    // and becomes editable. The revisions TPMS wrote stay where they are.
+    const takingOver = projectData.tpmsSync?.master === 'tpms';
+    const tpmsSync = takingOver
+      ? {
+          ...projectData.tpmsSync!,
+          master: 'suite' as const,
+          detachedAt: new Date().toISOString(),
+          detachedAtRevision: String(nextNum),
+        }
+      : projectData.tpmsSync;
+    const snapshot: ProjectData = { ...projectData, ...(tpmsSync ? { tpmsSync } : {}) };
+
     console.log('Creating revision:', {
       projectId: pid,
       revisionNumber: nextNum.toString(),
-      projectName: projectData.projectName
+      projectName: projectData.projectName,
+      takingOverFromTpms: takingOver,
     });
-    
+
     const newRevision = await projectService.createRevision({
       projectId: pid,
       revisionNumber: nextNum.toString(),
       revisionName: revName || `Revision ${nextNum}`,
       description: desc || '',
       createdBy: 'user',
-      projectSnapshot: projectData,
+      projectSnapshot: snapshot,
       isLocked: false,
+      source: 'suite',
     });
+
+    if (takingOver) {
+      setProjectData(snapshot);
+      try {
+        await projectService.updateProject(pid, { tpmsSync });
+      } catch (err) {
+        console.error('Revision created, but the project could not be marked as taken over:', err);
+      }
+    }
     
     console.log('Revision created successfully:', newRevision);
     
@@ -566,6 +625,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         deleteRevision,
         getNextRevisionNumber,
         isCurrentRevisionEditable,
+        isTpmsMastered,
         blockingRevisionNumbers,
         revisionLockNotice,
         notifyRevisionLocked,

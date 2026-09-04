@@ -154,6 +154,27 @@ export function buildLines(joinedRows) {
   return lines.sort((a, b) => (a.ordering ?? 0) - (b.ordering ?? 0));
 }
 
+// The same grouping, one step up: the whole project's rows for one revision,
+// split per switchgear (View_draft.Tablo_ID). Used by the project-wide import,
+// which reads every switchgear of a revision in a single query.
+export function buildLinesByScope(joinedRows) {
+  const byScope = new Map();
+  for (const row of joinedRows || []) {
+    const key = String(row.tabloId ?? '');
+    if (!byScope.has(key)) byScope.set(key, []);
+    byScope.get(key).push(row);
+  }
+  const out = [];
+  for (const [key, rows] of byScope) {
+    out.push({
+      scopeId: Number(key),
+      scopeName: str(rows[0]?.scopeName),
+      lines: buildLines(rows),
+    });
+  }
+  return out;
+}
+
 // TPMS stores many panel/project fields as an id into TECHNICAL_PROPERTIES,
 // with a free-text "remark" column used when the chosen title is "Remark" (or
 // when nothing was chosen). This resolves that pair the way Eplanix does.
@@ -339,6 +360,58 @@ export function buildImportPayload({
   };
 }
 
+// Assemble the header of a project-wide import: the project itself, its
+// technical settings, and every switchgear it holds — everything except the
+// feeder lines, which are read one revision at a time.
+export function buildProjectPayload({
+  projectRow, projectIdentityRow, propertyTitles, scopes, columnRows, revisions,
+}) {
+  const resolve = makeTitleResolver(propertyTitles || {});
+
+  const columnNames = {};
+  for (const row of columnRows || []) {
+    const level = Number(row.level);
+    if (Number.isFinite(level) && str(row.name)) columnNames[level] = str(row.name);
+  }
+
+  const switchgears = (scopes || []).map(entry => {
+    const scopeRow = entry.scopeRow || {};
+    const switchgearType = str(scopeRow.swTypeName);
+    const panelType = panelTypeFromSwitchgear(switchgearType);
+    const properties = mapPanelToDeviceProperties(entry.panelRow, projectIdentityRow, resolve);
+    delete properties.__designTemperature;
+    const scopeName = str(entry.scopeName) || str(scopeRow.scopeName) || 'Switchgear';
+    return {
+      scopeId: entry.scopeId,
+      scopeName,
+      switchgearType,
+      panelType,
+      cellCount: str(scopeRow.Cell_No),
+      tag: str(scopeRow.TAG),
+      device: { name: scopeName, type: panelType, properties },
+      slotProperties: panelType === 'MV' ? MV_SLOT_PROPERTIES : LV_SLOT_PROPERTIES,
+    };
+  });
+
+  return {
+    project: {
+      projectMainId: projectRow?.IDProjectMain ?? null,
+      oeNumber: str(projectRow?.OENUM),
+      projectName: str(projectRow?.Project_Name),
+      projectNameFa: str(projectRow?.Project_Name_Fa),
+      orderCategory: str(projectRow?.Order_Category),
+      oeDate: str(projectRow?.OEDATE),
+      projectExpert: str(projectRow?.Project_Expert_Label),
+      technicalSupervisor: str(projectRow?.Technical_Supervisor_Label),
+      technicalExpert: str(projectRow?.Technical_Expert_Label),
+    },
+    techSettings: mapProjectToTechSettings(projectIdentityRow, resolve),
+    columnNames,
+    revisions: (revisions || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b),
+    switchgears,
+  };
+}
+
 // ─── SQL ─────────────────────────────────────────────────────────────────────
 // Every statement is a plain SELECT. Column names are exactly the ones the
 // Eplanix EF model maps to, so the two apps read the same fields.
@@ -392,6 +465,37 @@ export const SQL = {
     SELECT level, name FROM View_draft_column
     WHERE Project_ID = ?`,
 
+  // Every switchgear of a project at one revision, in one read. Same columns
+  // as `lines`, plus the switchgear the row belongs to.
+  linesForRevision: `
+    SELECT d.Tablo_ID AS tabloId,
+           d.ID AS draftId, d.scopeName, d.bus_section, d.feeder_no, d.wiring_type,
+           d.rating_power, d.flc, d.tag, d.Designation, d.Module, d.Size, d.sfd_hfd,
+           d.cable_size, d.cb_rating, d.contactor_rating, d.overLoad_rating,
+           d.module_type, d.templateName, d.ordering,
+           e.equipment, e.label, e.SCODE, e.SEC_DES, e.ENG_DES, e.SHR_DES,
+           e.priority, e.QTY, e.Ecode,
+           t.lable AS tlabel
+    FROM View_draft d
+    LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID
+    LEFT JOIN Technical_draft_lable_eplan_TB t ON t.ECODE = e.Ecode
+    WHERE d.Project_ID = ? AND d.revision = ?
+    ORDER BY d.Tablo_ID, d.ordering, d.ID, e.equipment, e.priority`,
+
+  // Every revision the project has, across all its switchgears.
+  projectRevisions: `
+    SELECT DISTINCT revision AS value
+    FROM View_draft
+    WHERE Project_ID = ? AND revision IS NOT NULL
+    ORDER BY revision`,
+
+  // Its switchgears, as the drafts name them.
+  projectScopes: `
+    SELECT DISTINCT Tablo_ID AS scopeId, scopeName
+    FROM View_draft
+    WHERE Project_ID = ? AND scopeName IS NOT NULL AND scopeName <> ''
+    ORDER BY scopeName`,
+
   // The three pickers, straight from Eplanix's GetScopes / GetRevisions.
   projectList: `
     SELECT IDProjectMain AS value,
@@ -436,6 +540,100 @@ export function registerTpmsImportRoutes(app, getPool) {
   listRoute('/api/tpms/projects', SQL.projectList);
   listRoute('/api/tpms/scopes/:projectId', SQL.scopeList, req => Number(req.params.projectId));
   listRoute('/api/tpms/revisions/:scopeId', SQL.revisionList, req => Number(req.params.scopeId));
+
+  // ── The whole project ──────────────────────────────────────────────────
+  // Everything about a project except its feeder lines: used when a project is
+  // opened from TPMS, where every switchgear comes in at once rather than one
+  // at a time.
+  app.get('/api/tpms/project/:projectId', async (req, res) => {
+    const projectId = Number(req.params.projectId);
+    if (!Number.isFinite(projectId)) {
+      return res.status(400).json({ success: false, error: 'projectId is required' });
+    }
+    try {
+      const pool = await getPool();
+      const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
+      const many = async (sql, params) => (await pool.execute(sql, params))[0];
+
+      const [projectRow, projectIdentityRow, scopeRows, revisionRows, columnRows] =
+        await Promise.all([
+          one(SQL.project, [projectId]),
+          one(SQL.projectIdentity, [projectId]),
+          many(SQL.projectScopes, [projectId]),
+          many(SQL.projectRevisions, [projectId]),
+          many(SQL.columns, [projectId]),
+        ]);
+
+      if (!projectRow) {
+        return res.status(404).json({ success: false, error: 'No such project in TPMS' });
+      }
+
+      const scopes = [];
+      for (const row of scopeRows) {
+        const scopeId = Number(row.scopeId);
+        const [scopeRow, panelRow] = await Promise.all([
+          one(SQL.scope, [projectId, scopeId]),
+          one(SQL.panel, [projectId, scopeId]),
+        ]);
+        scopes.push({ scopeId, scopeName: row.scopeName, scopeRow, panelRow });
+      }
+
+      const ids = new Set();
+      for (const entry of scopes) {
+        for (const id of collectPropertyIds(entry.panelRow, projectIdentityRow)) ids.add(id);
+      }
+      for (const id of collectPropertyIds(null, projectIdentityRow)) ids.add(id);
+      let propertyTitles = {};
+      if (ids.size > 0) {
+        const list = [...ids];
+        const rows = await many(
+          `SELECT ID, Title FROM TECHNICAL_PROPERTIES WHERE ID IN (${list.map(() => '?').join(',')})`,
+          list,
+        );
+        propertyTitles = Object.fromEntries(rows.map(r => [Number(r.ID), r.Title]));
+      }
+
+      const payload = buildProjectPayload({
+        projectRow, projectIdentityRow, propertyTitles, scopes, columnRows,
+        revisions: revisionRows.map(r => r.value),
+      });
+      console.log(`✅ TPMS project ${projectId}: ${payload.switchgears.length} switchgear(s), ` +
+        `revisions ${payload.revisions.join(', ') || '—'}`);
+      res.json({ success: true, ...payload });
+    } catch (err) {
+      console.error('❌ Error in /api/tpms/project:', err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // One revision of a project, every switchgear in it — the feeder lines and
+  // the parts on them. A project's revisions are read one by one so each
+  // becomes a revision of its own on this side.
+  app.get('/api/tpms/project/:projectId/revision/:revision', async (req, res) => {
+    const projectId = Number(req.params.projectId);
+    const revision = Number(req.params.revision);
+    if (!Number.isFinite(projectId) || !Number.isFinite(revision)) {
+      return res.status(400).json({ success: false, error: 'projectId and revision are required' });
+    }
+    try {
+      const pool = await getPool();
+      const [joinedRows] = await pool.execute(SQL.linesForRevision, [projectId, revision]);
+      const switchgears = buildLinesByScope(joinedRows).map(entry => ({
+        ...entry,
+        counts: {
+          lines: entry.lines.length,
+          parts: entry.lines.reduce(
+            (sum, l) => sum + Object.values(l.parts).reduce((n, p) => n + p.length, 0), 0),
+        },
+      }));
+      console.log(`✅ TPMS project ${projectId} rev ${revision}: ` +
+        `${switchgears.length} switchgear(s), ${switchgears.reduce((n, s) => n + s.lines.length, 0)} lines`);
+      res.json({ success: true, revision, switchgears });
+    } catch (err) {
+      console.error('❌ Error in /api/tpms/project/revision:', err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
   app.get('/api/tpms/import', async (req, res) => {
     const projectId = Number(req.query.projectId);

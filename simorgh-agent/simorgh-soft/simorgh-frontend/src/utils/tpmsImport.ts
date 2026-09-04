@@ -146,12 +146,20 @@ function templateNameFor(line: TpmsLine, index: number): string {
   return line.templateName || line.wiringType || `TPMS Template ${index + 1}`;
 }
 
+// Ids are derived from the switchgear rather than the clock, so importing the
+// same switchgear twice lands on the same equipment, templates and rows —
+// and two switchgears imported in the same millisecond can never collide.
+const scopeKey = (scope: TpmsPayload['scope']) =>
+  scope.scopeId != null
+    ? String(scope.scopeId)
+    : (scope.scopeName || 'scope').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
 export function buildTpmsImport(
   projectData: ProjectData,
   payload: TpmsPayload,
   options: TpmsImportOptions,
 ): TpmsImportResult {
-  const stamp = Date.now();
+  const key = scopeKey(payload.scope);
   const tier = payload.scope.panelType;
   const patch: Partial<ProjectData> = {};
   const summary = { templates: 0, rows: 0, parts: 0, replacedEquipment: false, replacedTemplates: 0 };
@@ -190,12 +198,14 @@ export function buildTpmsImport(
 
   if (options.deviceLibrary && payload.device?.name) {
     const existing = (library[tier] ?? []).find(d => d.name === payload.device.name);
-    libraryItemId = existing?.id ?? `lib-tpms-${stamp}`;
+    libraryItemId = existing?.id ?? `lib-tpms-${key}`;
     const item: DeviceLibraryItem = {
       id: libraryItemId,
       name: payload.device.name,
       type: tier,
       properties: { ...(existing?.properties ?? {}), ...payload.device.properties },
+      source: 'tpms',
+      ...(payload.scope.scopeId != null ? { tpmsScopeId: payload.scope.scopeId } : {}),
     };
     patch.deviceLibrary = {
       ...library,
@@ -220,6 +230,16 @@ export function buildTpmsImport(
       if (property && name) displayNames[property] = name;
     }
 
+    // A template is "from TPMS" when it carries the marker, or (for imports
+    // made before the marker existed) when it sits under the TPMS path.
+    const belongsToScope = (t: TemplateItem) =>
+      t.source === 'tpms' || t.hierarchy?.path?.[0] === 'TPMS';
+    const isThisScope = (t: TemplateItem) =>
+      belongsToScope(t) && (
+        (payload.scope.scopeId != null && t.tpmsScopeId === payload.scope.scopeId) ||
+        t.hierarchy?.path?.[1] === payload.scope.scopeName
+      );
+
     const bySignature = new Map<string, TemplateItem>();
     const rows: DeviceTableRow[] = [];
     // Two lines can carry the same TPMS name with different parts; each part
@@ -243,30 +263,40 @@ export function buildTpmsImport(
         }
         if (Object.keys(displayNames).length > 0) properties.__displayNames = displayNames;
 
-        const baseName = templateNameFor(line, bySignature.size);
+        // Another switchgear of the same project can use the same draft name
+        // for a different part set; the second one carries its switchgear so
+        // the two stay apart in the template list.
+        let baseName = templateNameFor(line, bySignature.size);
+        const takenByAnother = tierTemplates.some(
+          t => t.name === baseName && belongsToScope(t) && !isThisScope(t),
+        );
+        if (takenByAnother) baseName = `${baseName} (${payload.scope.scopeName})`;
         const seen = namesUsed.get(baseName) ?? 0;
         namesUsed.set(baseName, seen + 1);
         const name = seen === 0 ? baseName : `${baseName} (${seen + 1})`;
 
         // Re-importing the same switchgear replaces the templates it made
-        // before, matched by name, instead of piling up duplicates.
+        // before, matched by name within that switchgear, instead of piling up
+        // duplicates — and never claims another switchgear's template.
         const previous = tierTemplates.find(
-          t => t.name === name && !claimed.has(t.id) && (t as any).hierarchy?.path?.[0] === 'TPMS',
+          t => t.name === name && !claimed.has(t.id) && isThisScope(t),
         );
         if (previous) claimed.add(previous.id);
         template = {
-          id: previous?.id ?? `${tier}-tpms-${stamp}-${bySignature.size}`,
+          id: previous?.id ?? `${tier}-tpms-${key}-${bySignature.size}`,
           name,
           type: tier,
           properties,
           hierarchy: { path: ['TPMS', payload.scope.scopeName], params: { notes: signature.slice(0, 200) } },
+          source: 'tpms',
+          ...(payload.scope.scopeId != null ? { tpmsScopeId: payload.scope.scopeId } : {}),
         } as TemplateItem;
         if (previous) summary.replacedTemplates += 1;
         bySignature.set(signature, template);
       }
 
       rows.push({
-        id: `row-tpms-${stamp}-${index}`,
+        id: `row-tpms-${key}-${index}`,
         rowNumber: index + 1,
         templateId: template.id,
         templateName: template.name,
@@ -299,7 +329,7 @@ export function buildTpmsImport(
     const existingEquipment = equipments.find(
       eq => eq.type === tier && eq.name === payload.scope.scopeName,
     );
-    const equipmentId = existingEquipment?.id ?? `eq-tpms-${stamp}`;
+    const equipmentId = existingEquipment?.id ?? `eq-tpms-${key}`;
     summary.replacedEquipment = !!existingEquipment;
 
     const equipment: Equipment = {

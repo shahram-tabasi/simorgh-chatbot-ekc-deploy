@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService, tpmsService, TpmsOption } from '../../services/projectService';
-import { defaultProjectData } from '../../context/ProjectContext';
-import { buildTpmsImport } from '../../utils/tpmsImport';
+import { syncProjectFromTpms, findLinkedProject } from '../../services/tpmsSync';
+import { TpmsProjectHeader } from '../../utils/tpmsProjectImport';
 import logoMark from '../../assets/logo-mark.png';
 
 interface ProjectSelectionProps {
@@ -19,10 +19,13 @@ const projectCode = (p: ProjectData) => (p.projectId || p.projectNumber || '').t
 // No second modal opens on top of this one at any point.
 //
 // The combo box lists two kinds of project: this suite's own (MongoDB) and the
-// ones TPMS holds — the very list Eplanix shows. Picking a TPMS project asks
-// for its switchgear and revision instead of a revision, and opening it reads
-// the switchgear out of MySQL and lands it in the project. TPMS is only ever
-// read; nothing is written back to it.
+// ones TPMS holds — the very list Eplanix shows. Picking a TPMS project reads
+// the whole project: every switchgear, and every TPMS revision as a revision
+// on this side. Nothing is asked and nothing is written back to TPMS.
+//
+// A project that came from TPMS stays TPMS's until a revision is raised here:
+// opening it reads TPMS again, so it is always what TPMS says. That is why a
+// linked project is re-read on Open Project too.
 export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   onProjectSelect,
   onNewProject,
@@ -46,12 +49,10 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const [tpmsProjects, setTpmsProjects] = useState<TpmsOption[]>([]);
   const [tpmsListError, setTpmsListError] = useState<string | null>(null);
   const [selectedTpms, setSelectedTpms] = useState<TpmsOption | null>(null);
-  const [scopes, setScopes]                     = useState<TpmsOption[]>([]);
-  const [selectedScope, setSelectedScope]       = useState<TpmsOption | null>(null);
-  const [tpmsRevisions, setTpmsRevisions]       = useState<TpmsOption[]>([]);
-  const [selectedTpmsRev, setSelectedTpmsRev]   = useState<TpmsOption | null>(null);
-  const [tpmsBusy, setTpmsBusy]                 = useState(false);
-  const [opening, setOpening]                   = useState(false);
+  const [tpmsHeader, setTpmsHeader]     = useState<TpmsProjectHeader | null>(null);
+  const [tpmsBusy, setTpmsBusy]         = useState(false);
+  const [opening, setOpening]           = useState(false);
+  const [progress, setProgress]         = useState<string>('');
 
   // ── Inline "new revision" form (same dialog, not a nested modal) ─────
   const [newRevOpen, setNewRevOpen]               = useState(false);
@@ -115,8 +116,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const handlePickProject = async (project: ProjectData | null) => {
     setSelectedProject(project);
     setSelectedTpms(null);
-    setScopes([]); setSelectedScope(null);
-    setTpmsRevisions([]); setSelectedTpmsRev(null);
+    setTpmsHeader(null);
     setComboOpen(false);
     setSearch('');
     setNewRevOpen(false);
@@ -125,7 +125,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     if (project?._id) await loadRevisions(project._id);
   };
 
-  // A TPMS project: its switchgears take the place of the revision list.
+  // A TPMS project: read what it holds so the dialog can say what is coming —
+  // switchgears and revisions — before anything is written here.
   const handlePickTpms = async (option: TpmsOption) => {
     setSelectedTpms(option);
     setSelectedProject(null);
@@ -133,122 +134,37 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     setNewRevOpen(false);
     setComboOpen(false);
     setSearch('');
-    setScopes([]); setSelectedScope(null);
-    setTpmsRevisions([]); setSelectedTpmsRev(null);
+    setTpmsHeader(null);
     setTpmsBusy(true);
     try {
-      const list = await tpmsService.getScopes(option.value);
-      setScopes(list);
-      if (list.length === 1) await handlePickScope(list[0]);
+      setTpmsHeader(await tpmsService.getProjectHeader(option.value));
     } catch (err) {
-      setError('Could not read the switchgears of this TPMS project: ' + (err as Error).message);
+      setError('Could not read this project from TPMS: ' + (err as Error).message);
     } finally {
       setTpmsBusy(false);
     }
   };
 
-  const handlePickScope = async (scope: TpmsOption) => {
-    setSelectedScope(scope);
-    setTpmsRevisions([]); setSelectedTpmsRev(null);
-    setTpmsBusy(true);
-    try {
-      const list = await tpmsService.getRevisions(scope.value);
-      setTpmsRevisions(list);
-      // Newest revision first, as Eplanix opens it.
-      const newest = [...list].sort((a, b) => Number(b.value) - Number(a.value))[0];
-      setSelectedTpmsRev(newest ?? null);
-    } catch (err) {
-      setError('Could not read the revisions of this switchgear: ' + (err as Error).message);
-    } finally {
-      setTpmsBusy(false);
-    }
-  };
-
-  // Open a TPMS switchgear as a project: read it, land it in the project that
-  // already stands for this TPMS project (matched on PID, OE number or name),
-  // or in a fresh one, then open that.
+  // Read the whole project — every switchgear, every revision — into this
+  // suite and open it. A project that already stands for it (linked, or same
+  // PID / OE number / name) is refreshed rather than duplicated.
   const handleOpenFromTpms = async () => {
-    if (!selectedTpms || !selectedScope || !selectedTpmsRev) return;
+    if (!selectedTpms || !tpmsHeader) return;
     setOpening(true);
     setError(null);
     try {
-      const payload = await tpmsService.getImport(
-        selectedTpms.value, selectedScope.value, Number(selectedTpmsRev.value));
-
-      const pid = payload.project?.projectMainId != null ? String(payload.project.projectMainId) : '';
-      const oe  = (payload.project?.oeNumber || '').trim();
-      const name = (payload.project?.projectName || '').trim().toLowerCase();
-      let existing = projects.find(p =>
-        (pid && (p.projectId || '').trim() === pid) ||
-        (oe && (p.projectNumber || '').trim() === oe) ||
-        (name && p.projectName.trim().toLowerCase() === name)) ?? null;
-
-      if (existing?._id) {
-        try { existing = await projectService.getProjectById(existing._id); }
-        catch (err) { console.warn('Using the listed copy of the project:', err); }
-      }
-
-      const seed: ProjectData = { ...defaultProjectData, ...(existing ?? {}) };
-      const { patch } = buildTpmsImport(seed, payload, {
-        projectData: true, techSettings: true, deviceLibrary: true, equipment: true,
-      });
-      const merged: ProjectData = { ...seed, ...patch };
-
-      let saved: ProjectData = merged;
-      if (existing?._id) {
-        const { _id, ...body } = merged as any;   // _id is immutable in the update
-        saved = await projectService.updateProject(existing._id, body);
-      } else {
-        const { _id, ...body } = merged as any;
-        saved = await projectService.createProject(body);
-      }
-      onProjectSelect(saved ?? merged);
+      const existing = findLinkedProject(projects, tpmsHeader);
+      const result = await syncProjectFromTpms(
+        selectedTpms.value,
+        existing,
+        message => setProgress(message),
+      );
+      onProjectSelect(result.project, result.current || undefined);
     } catch (err) {
-      setError('Could not open this switchgear from TPMS: ' + (err as Error).message);
+      setError('Could not open this project from TPMS: ' + (err as Error).message);
     } finally {
       setOpening(false);
-    }
-  };
-
-  const openNewRevisionForm = () => {
-    const nextNum = revisions.length > 0
-      ? Math.max(...revisions.map(r => parseInt(r.revisionNumber) || 0)) + 1
-      : 0;
-    setNewRevNumber(String(nextNum));
-    setNewRevName(`Revision ${nextNum}`);
-    setNewRevDescription('');
-    setNewRevOpen(true);
-  };
-
-  const handleCreateRevision = async () => {
-    if (!selectedProject?._id) return;
-    setCreatingRevision(true);
-    try {
-      // Snapshot the freshest copy of the project, but don't fail the whole
-      // operation if that read is unavailable — the project document we
-      // already listed is a complete one and works as the snapshot.
-      let latestProject = selectedProject;
-      try {
-        latestProject = await projectService.getProjectById(selectedProject._id);
-      } catch (fetchErr) {
-        console.warn('Falling back to the listed project for the snapshot:', fetchErr);
-      }
-      const created = await projectService.createRevision({
-        projectId: selectedProject._id,
-        revisionNumber: newRevNumber,
-        revisionName: newRevName || `Revision ${newRevNumber}`,
-        description: newRevDescription || '',
-        createdBy: 'user',
-        projectSnapshot: latestProject,
-        isLocked: false,
-      });
-      await loadRevisions(selectedProject._id);
-      setSelectedRevision(created);
-      setNewRevOpen(false);
-    } catch (err) {
-      setError('Failed to create revision: ' + (err as Error).message);
-    } finally {
-      setCreatingRevision(false);
+      setProgress('');
     }
   };
 
@@ -277,8 +193,94 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   const canCreate  = trimmed.length > 0 && !exactMatch;
   const nothingFound = filteredProjects.length === 0 && filteredTpms.length === 0;
 
-  const handleOpen = () => {
+  const openNewRevisionForm = () => {
+    const nextNum = revisions.length > 0
+      ? Math.max(...revisions.map(r => parseInt(r.revisionNumber) || 0)) + 1
+      : 0;
+    setNewRevNumber(String(nextNum));
+    setNewRevName(`Revision ${nextNum}`);
+    setNewRevDescription('');
+    setNewRevOpen(true);
+  };
+
+  const handleCreateRevision = async () => {
+    if (!selectedProject?._id) return;
+    setCreatingRevision(true);
+    try {
+      // Snapshot the freshest copy of the project, but don't fail the whole
+      // operation if that read is unavailable — the project document we
+      // already listed is a complete one and works as the snapshot.
+      let latestProject = selectedProject;
+      try {
+        latestProject = await projectService.getProjectById(selectedProject._id);
+      } catch (fetchErr) {
+        console.warn('Falling back to the listed project for the snapshot:', fetchErr);
+      }
+      // Raising a revision here on a TPMS-linked project is the hand-over:
+      // Design Suite becomes its master and it stops being read from TPMS.
+      const tpmsSync = latestProject.tpmsSync?.master === 'tpms'
+        ? {
+            ...latestProject.tpmsSync,
+            master: 'suite' as const,
+            detachedAt: new Date().toISOString(),
+            detachedAtRevision: newRevNumber,
+          }
+        : latestProject.tpmsSync;
+      const snapshot = { ...latestProject, ...(tpmsSync ? { tpmsSync } : {}) };
+
+      const created = await projectService.createRevision({
+        projectId: selectedProject._id,
+        revisionNumber: newRevNumber,
+        revisionName: newRevName || `Revision ${newRevNumber}`,
+        description: newRevDescription || '',
+        createdBy: 'user',
+        projectSnapshot: snapshot,
+        isLocked: false,
+        source: 'suite',
+      });
+      if (tpmsSync && tpmsSync !== latestProject.tpmsSync) {
+        try { await projectService.updateProject(selectedProject._id, { tpmsSync }); }
+        catch (err) { console.error('Could not mark the project as taken over:', err); }
+        setSelectedProject(snapshot);
+        setProjects(prev => prev.map(p => (p._id === snapshot._id ? snapshot : p)));
+      }
+      await loadRevisions(selectedProject._id);
+      setSelectedRevision(created);
+      setNewRevOpen(false);
+    } catch (err) {
+      setError('Failed to create revision: ' + (err as Error).message);
+    } finally {
+      setCreatingRevision(false);
+    }
+  };
+
+  const handleOpen = async () => {
     if (!selectedProject) return;
+    // A project TPMS still owns is read again on the way in, so what opens is
+    // what TPMS has now. Raising a revision here ends that.
+    const sync = selectedProject.tpmsSync;
+    if (sync?.master === 'tpms' && sync.projectMainId) {
+      setOpening(true);
+      setError(null);
+      try {
+        const result = await syncProjectFromTpms(
+          sync.projectMainId, selectedProject, message => setProgress(message));
+        // Keep the revision the user picked, if it survived the refresh.
+        const picked = selectedRevision
+          ? result.revisions.find(r => r.revisionNumber === selectedRevision.revisionNumber)
+          : null;
+        onProjectSelect(result.project, picked || result.current || undefined);
+        return;
+      } catch (err) {
+        // TPMS being unreachable must not stand between the user and their
+        // project: say so, and open the copy that is already here.
+        console.warn('TPMS refresh failed; opening the stored project:', err);
+        setError('TPMS could not be reached — opening the last version stored here.');
+      } finally {
+        setOpening(false);
+        setProgress('');
+      }
+    }
     onProjectSelect(selectedProject, selectedRevision || undefined);
   };
 
@@ -568,60 +570,74 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
             </div>
           )}
 
-          {/* ── A TPMS project: pick the switchgear and its revision ── */}
+          {/* ── A TPMS project: what is about to be read ── */}
           {selectedTpms && (
             <div className="mt-5 border border-purple-200 bg-purple-50/50 rounded p-3 space-y-3">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold">TPMS</span>
                 <span className="text-sm text-gray-700">
-                  Read straight from TPMS — the same data Eplanix shows. Nothing is written back.
+                  The whole project is read from TPMS — the same data Eplanix shows. Nothing is written back.
                 </span>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Switchgear</label>
-                <select
-                  className="w-full border border-gray-400 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-purple-500"
-                  value={selectedScope?.value ?? ''}
-                  disabled={tpmsBusy || scopes.length === 0}
-                  onChange={e => {
-                    const found = scopes.find(x => String(x.value) === e.target.value);
-                    if (found) handlePickScope(found);
-                  }}
-                >
-                  <option value="">
-                    {tpmsBusy && scopes.length === 0
-                      ? 'Reading switchgears…'
-                      : scopes.length === 0 ? 'No switchgear on this project' : '-- Select Switchgear --'}
-                  </option>
-                  {scopes.map(o => <option key={o.value} value={o.value}>{o.text}</option>)}
-                </select>
-              </div>
+              {tpmsBusy && !tpmsHeader && (
+                <div className="text-sm text-gray-500">Reading the project…</div>
+              )}
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Revision</label>
-                <select
-                  className="w-full border border-gray-400 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-purple-500"
-                  value={selectedTpmsRev?.value ?? ''}
-                  disabled={tpmsBusy || tpmsRevisions.length === 0}
-                  onChange={e => setSelectedTpmsRev(
-                    tpmsRevisions.find(x => String(x.value) === e.target.value) ?? null)}
-                >
-                  <option value="">
-                    {!selectedScope ? 'Pick a switchgear first'
-                      : tpmsBusy ? 'Reading revisions…'
-                      : tpmsRevisions.length === 0 ? 'No revision on this switchgear' : '-- Select Revision --'}
-                  </option>
-                  {tpmsRevisions.map(o => (
-                    <option key={o.value} value={o.value}>REV {o.text}</option>
-                  ))}
-                </select>
-              </div>
+              {tpmsHeader && (
+                <>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                    <div><span className="text-gray-500">OE number:</span> <span className="text-gray-800">{tpmsHeader.project.oeNumber || '—'}</span></div>
+                    <div><span className="text-gray-500">Project:</span> <span className="text-gray-800">{tpmsHeader.project.projectName || '—'}</span></div>
+                    <div><span className="text-gray-500">Switchgears:</span> <span className="text-gray-800">{tpmsHeader.switchgears.length}</span></div>
+                    <div>
+                      <span className="text-gray-500">Revisions:</span>{' '}
+                      <span className="text-gray-800">
+                        {tpmsHeader.revisions.length > 0 ? tpmsHeader.revisions.map(r => `REV ${r}`).join(', ') : '—'}
+                      </span>
+                    </div>
+                  </div>
 
-              <p className="text-xs text-gray-500">
-                Opening it brings in the project data, technical settings, the panel specification
-                as a Device Library entry, every feeder line and the parts on it.
-              </p>
+                  {tpmsHeader.switchgears.length > 0 && (
+                    <div className="border border-purple-100 rounded bg-white max-h-32 overflow-y-auto divide-y divide-gray-50">
+                      {tpmsHeader.switchgears.map(sw => (
+                        <div key={sw.scopeId} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                            sw.panelType === 'LV' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                          }`}>{sw.panelType}</span>
+                          <span className="text-gray-800">{sw.scopeName}</span>
+                          <span className="text-gray-400 truncate">{sw.switchgearType}</span>
+                          {sw.cellCount && <span className="text-gray-400 ml-auto">{sw.cellCount} cells</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="text-xs text-gray-500">
+                    Every switchgear lands in Device Selection with its lines and templates, the panel
+                    specifications in Device Library, and each TPMS revision becomes a revision here.
+                    Until a revision is raised in Design Suite the project stays read-only and is refreshed
+                    from TPMS every time it is opened.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* A project of this suite that TPMS still owns */}
+          {selectedProject?.tpmsSync?.master === 'tpms' && (
+            <div className="mt-4 flex items-start gap-2 text-xs text-purple-800 bg-purple-50 border border-purple-200 rounded px-3 py-2">
+              <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold">TPMS</span>
+              <span>
+                Linked to TPMS project {selectedProject.tpmsSync.oeNumber || selectedProject.tpmsSync.projectMainId} — it is
+                read from TPMS again when it opens, and stays read-only until a revision is raised here.
+              </span>
+            </div>
+          )}
+
+          {progress && (
+            <div className="mt-4 text-sm text-gray-600 flex items-center gap-2">
+              <span className="animate-spin">⏳</span>{progress}
             </div>
           )}
         </div>
@@ -637,7 +653,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
             <button
               className="px-5 py-2 bg-purple-600 text-white rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={handleOpenFromTpms}
-              disabled={!selectedScope || !selectedTpmsRev || opening}
+              disabled={!tpmsHeader || tpmsBusy || opening}
             >
               {opening ? 'Reading from TPMS…' : 'Open from TPMS'}
             </button>
@@ -645,9 +661,9 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
             <button
               className="px-5 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={handleOpen}
-              disabled={!selectedProject}
+              disabled={!selectedProject || opening}
             >
-              Open Project
+              {opening ? 'Refreshing from TPMS…' : 'Open Project'}
             </button>
           )}
         </div>

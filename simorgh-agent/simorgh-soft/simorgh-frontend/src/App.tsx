@@ -311,14 +311,16 @@ const MainApp: React.FC = () => {
     deleteRevision,
     getNextRevisionNumber,
     isCurrentRevisionEditable,
+    isTpmsMastered,
     blockingRevisionNumbers,
     revisionLockNotice,
     notifyRevisionLocked,
     dismissRevisionLockNotice
   } = useProject();
 
-  // Auto-save — disabled while a locked (non-latest) revision is selected.
-  useAutoSave(projectData, saveProject, isCurrentRevisionEditable);
+  // Auto-save — off while a locked (non-latest) revision is selected, and off
+  // while TPMS owns the project (it is written by the sync, not from here).
+  useAutoSave(projectData, saveProject, isCurrentRevisionEditable && !isTpmsMastered);
 
   const desktopInstaller = useDesktopInstaller();
 
@@ -720,9 +722,33 @@ const MainApp: React.FC = () => {
         </div>
       </div>
 
+      {/* Read-only banner — TPMS owns this project until a revision is raised
+          here. */}
+      {isTpmsMastered && (
+        <div className="bg-purple-50 border-b border-purple-300 px-4 py-2">
+          <div className="container mx-auto flex items-center gap-2 text-sm text-purple-900">
+            <span>🗄️</span>
+            <span>
+              Read-only — this project is read from <strong>TPMS</strong>
+              {projectData.tpmsSync?.oeNumber ? ` (${projectData.tpmsSync.oeNumber})` : ''} every time it
+              opens. Raise a revision to take it over and edit it here.
+            </span>
+            <button
+              className="ml-auto px-3 py-1 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50"
+              onClick={() => { setNewRevisionName(`Revision ${getNextRevisionNumber()}`); setShowCreateRevisionModal(true); }}
+            >
+              + New Revision
+            </button>
+            <span dir="rtl" className="text-purple-800">
+              برای ویرایش، یک ریویژن جدید بسازید.
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Read-only banner — a non-latest revision cannot be edited until the
           newer revisions are deleted. */}
-      {!isCurrentRevisionEditable && currentRevision && (
+      {!isTpmsMastered && !isCurrentRevisionEditable && currentRevision && (
         <div className="bg-amber-50 border-b border-amber-300 px-4 py-2">
           <div className="container mx-auto flex items-center gap-2 text-sm text-amber-900">
             <span>🔒</span>
@@ -769,7 +795,12 @@ const MainApp: React.FC = () => {
                 🪟 Windows app{desktopInstaller.version ? ` ${desktopInstaller.version}` : ''}
               </a>
             )}
-            <span>Version 1.0.0 | Auto-save: Enabled</span>
+            <span>
+              Version 1.0.0 | Auto-save:{' '}
+              {isTpmsMastered
+                ? 'off (read from TPMS)'
+                : isCurrentRevisionEditable ? 'Enabled' : 'off (revision locked)'}
+            </span>
           </span>
         </div>
       </div>

@@ -31,6 +31,27 @@ export const tpmsService = {
     return (await r.json()).items ?? [];
   },
 
+  // Everything about a TPMS project except its feeder lines: the project
+  // itself, its technical settings and every switchgear it holds.
+  async getProjectHeader(projectMainId: number): Promise<any> {
+    const r = await fetch(`${API_BASE_URL}/tpms/project/${projectMainId}`);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.success === false) {
+      throw new Error(body.error || 'Could not read this project from TPMS');
+    }
+    return body;
+  },
+
+  // One revision of a TPMS project: the feeder lines of every switchgear in it.
+  async getProjectRevision(projectMainId: number, revision: number): Promise<any> {
+    const r = await fetch(`${API_BASE_URL}/tpms/project/${projectMainId}/revision/${revision}`);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.success === false) {
+      throw new Error(body.error || `Could not read revision ${revision} from TPMS`);
+    }
+    return body;
+  },
+
   // The whole switchgear: project, technical settings, panel specification,
   // every feeder line and the parts on it.
   async getImport(projectId: number, scopeId: number, revisionId: number): Promise<any> {
