@@ -1,0 +1,29 @@
+filebeat.autodiscover:
+  providers:
+    - type: docker
+      hints.enabled: true
+      templates:
+        - condition:
+            contains:
+              docker.container.image: "simorgh"
+          config:
+            - type: container
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+              json.keys_under_root: false
+              json.add_error_key: true
+              json.message_key: message
+
+processors:
+  - add_docker_metadata: ~
+  - add_host_metadata: ~
+  - drop_event:
+      when:
+        regexp:
+          message: "GET /health"
+
+output.logstash:
+  hosts: ["logstash:5044"]
+
+logging.level: info
+logging.to_files: false

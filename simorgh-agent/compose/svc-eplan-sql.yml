@@ -1,0 +1,35 @@
+# =============================================================================
+# EPLAN-SQL-SERVICE - Sole gateway to the Eplan_n2 MSSQL DB at .39
+# Port 8044. REST + MCP. Per the no-direct-external-access policy, NO
+# other service may use pymssql/pyodbc to talk to .39 directly.
+# =============================================================================
+services:
+  eplan-sql-service:
+    image: simorgh-eplan-sql-service:local
+    build: ../eplan-sql-service
+    container_name: eplan-sql-service
+    expose:
+      - "8044"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - EPLAN_SQL_HOST=${EPLAN_SQL_HOST:-${SQL_SERVER_HOST:-192.168.1.39}}
+      - EPLAN_SQL_PORT=${EPLAN_SQL_PORT:-${SQL_SERVER_PORT:-1433}}
+      - EPLAN_SQL_USER=${EPLAN_SQL_USER:-${SQL_SERVER_USER:-}}
+      - EPLAN_SQL_PASSWORD=${EPLAN_SQL_PASSWORD:-${SQL_SERVER_PASSWORD:-}}
+      - EPLAN_SQL_DATABASE=${EPLAN_SQL_DATABASE:-${SQL_SERVER_DATABASE:-Eplan_n2}}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8044/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

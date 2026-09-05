@@ -1,0 +1,74 @@
+# =============================================================================
+# STT-SERVICE - Speech-to-Text using Faster-Whisper (CPU)
+# Port 8001.
+#
+# Persian transcription quality is governed by which Whisper model is
+# loaded. Two paths:
+#
+# (a) Default — pull a public HF Whisper model (size set by
+#     WHISPER_MODEL_SIZE env, e.g. "base", "small", "medium"). On
+#     Persian, the small models WER badly (50–70% for "base") and the
+#     larger ones require multi-GB downloads through Xray which usually
+#     stall — see today's runbook commentary.
+#
+# (b) Recommended on .68 — load a LOCAL CT2-converted Persian-tuned
+#     model from the `simorgh_whisper_cache` docker volume (populated
+#     by the .github/workflows/whisper-model-fetch.yml workflow that we
+#     ran earlier today; ~3.5 GB on disk, vhdm/whisper-large-fa-v1 in
+#     int8). faster-whisper accepts a local-path model id, so we just
+#     set WHISPER_MODEL_SIZE to the in-volume path. Persian WER drops
+#     from ~50-70% to ~14%.
+# =============================================================================
+services:
+  stt-service:
+    image: simorgh-stt-service:local
+    build: ../stt-service
+    container_name: stt-service
+    expose:
+      - "8001"
+    volumes:
+      - stt_models:/app/models
+      # Read-only mount of the Persian-tuned CT2 model populated by the
+      # whisper-model-fetch workflow. Mounted r/o so an accidental
+      # `model.save()` can't corrupt the artifact.
+      - whisper_cache:/models:ro
+    networks:
+      - app_net
+    healthcheck:
+      # faster-whisper downloads the model on first boot (~150 MB through
+      # Xray VPN) before /health responds. Wide start_period accommodates
+      # the slow first run; subsequent boots load the cached model fast.
+      test: ["CMD-SHELL", "wget -qO /dev/null --timeout=20 http://127.0.0.1:8001/health || exit 1"]
+      interval: 45s
+      timeout: 25s
+      retries: 3
+      start_period: 600s
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Default is the LOCAL Persian-tuned CT2 model. To fall back to a
+      # generic HF size (e.g. for English-only deployments), set
+      # WHISPER_MODEL_SIZE=base / small / medium in .env. faster-whisper
+      # auto-detects path-vs-id from the string shape.
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-/models/whisper-large-fa}
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
+      # Pin language for the auto-detect-on-short-clips failure mode
+      # documented in 164b7e1; explicit ?language=XX request still wins.
+      - STT_DEFAULT_LANGUAGE=${STT_DEFAULT_LANGUAGE:-fa}
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  stt_models:
+    name: simorgh_stt_models
+    driver: local
+  whisper_cache:
+    # Created out-of-band via `docker volume create simorgh_whisper_cache`
+    # and pre-populated by the whisper-model-fetch GH workflow. See the
+    # extract step in docs/opt-in-services-runbook.md.
+    name: simorgh_whisper_cache
+    external: true

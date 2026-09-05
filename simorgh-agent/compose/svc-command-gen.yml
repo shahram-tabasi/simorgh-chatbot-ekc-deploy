@@ -1,0 +1,27 @@
+# =============================================================================
+# COMMAND-GEN - Safe shell command generator
+# Port 8024. AI/COT calls /mcp.
+# =============================================================================
+services:
+  command-gen:
+    build: ../command-gen-service
+    image: simorgh-command-gen:local
+    container_name: command-gen
+    expose:
+      - "8024"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8024/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

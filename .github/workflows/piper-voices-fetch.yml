@@ -1,0 +1,111 @@
+name: Download Piper voices (TTS)
+
+# Downloads Piper .onnx voice models from rhasspy/piper-voices (the
+# canonical mirror — karim23657/Persian-Piper-Model-gyro returns 401
+# either because it's been gated or removed). Ships as a small
+# tarball that drops into simorgh-agent/tts/voices/ on .68 (bind-
+# mounted r/o by openedai-speech).
+#
+# Uses huggingface-cli, not curl, so HF's bot detection / user-agent
+# checks don't surprise us.
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_english:
+        description: "Also fetch en_US-amy-medium (English fallback voice)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface-cli
+        run: pip install --quiet "huggingface_hub[cli]==0.24.6"
+
+      - name: Fetch Persian voice (fa_IR-amir-medium)
+        env:
+          HF_HUB_DISABLE_XET: "1"
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+        run: |
+          set -eu
+          mkdir -p voices
+          # rhasspy/piper-voices layout: <lang>/<locale>/<voice>/<quality>/<files>
+          huggingface-cli download rhasspy/piper-voices \
+              fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx \
+              fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx.json \
+              --local-dir hf-staging \
+              --local-dir-use-symlinks False
+          # Flatten the nested path into voices/ root — the openedai-
+          # speech PRELOAD_MODEL env points at voices/fa_IR-amir-medium.onnx.
+          mv hf-staging/fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx      voices/
+          mv hf-staging/fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx.json voices/
+
+      - name: Fetch English voice (optional)
+        if: inputs.include_english
+        env:
+          HF_HUB_DISABLE_XET: "1"
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+        run: |
+          set -eu
+          huggingface-cli download rhasspy/piper-voices \
+              en/en_US/amy/medium/en_US-amy-medium.onnx \
+              en/en_US/amy/medium/en_US-amy-medium.onnx.json \
+              --local-dir hf-staging \
+              --local-dir-use-symlinks False
+          mv hf-staging/en/en_US/amy/medium/en_US-amy-medium.onnx      voices/
+          mv hf-staging/en/en_US/amy/medium/en_US-amy-medium.onnx.json voices/
+
+      - name: Summarise
+        run: |
+          set -eu
+          ls -lh voices/
+          du -sh voices/
+
+      - name: Pack tarball
+        run: |
+          set -eu
+          tar -C voices -czf piper-voices.tar.gz .
+          ls -lh piper-voices.tar.gz
+          sha256sum piper-voices.tar.gz | tee piper-voices.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: piper-voices
+          path: |
+            piper-voices.tar.gz
+            piper-voices.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      - name: Install instructions
+        run: |
+          cat <<'EOF'
+          ============================================================
+          Artifact: piper-voices
+          ============================================================
+          gh run download $RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy -n piper-voices
+          sha256sum -c piper-voices.tar.gz.sha256
+          scp piper-voices.tar.gz ubuntu@192.168.1.68:/tmp/
+
+          # On .68: extract into the bind-mount source (tts/voices/).
+          ssh ubuntu@192.168.1.68 '
+            cd ~/simorgh-chatbot-ekc-deploy/simorgh-agent/tts/voices &&
+            tar xzf /tmp/piper-voices.tar.gz &&
+            ls -lh
+          '
+          # openedai-speech bind-mounts ../tts/voices read-only,
+          # so the container picks up these files on next start.
+          ============================================================
+          EOF

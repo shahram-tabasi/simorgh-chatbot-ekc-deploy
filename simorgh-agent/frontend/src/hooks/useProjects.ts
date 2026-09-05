@@ -156,21 +156,46 @@ export function useProjects(userId?: string) {
         const backendProjectChats = projectChatsResponse.data.chats || [];
         console.log(`✅ Loaded ${backendProjectChats.length} project chats from backend`);
 
-        // Group chats by project
+        // Group chats by project. CRITICAL: key on the per-workspace
+        // UUID, NOT on project_number. The backend mirror at
+        // chat-service/routes/project_chat_session.py:82-84 sets
+        //   project_number = tpms_oenum || gitlab_repo_path || project_id
+        // so two distinct workspaces cloned from the same gitlab repo
+        // get the SAME project_number value. Keying on it collapses
+        // them into one folder with commingled chats — the bug the
+        // operator hit when creating two projects from the same repo.
+        // The real workspace UUID lives at chat.project_id (the field
+        // the backend actually writes). project_id_main is checked
+        // first as a defensive fallback in case some older
+        // mirror-write used that field name.
         const projectsMap = new Map<string, any>();
 
         for (const chat of backendProjectChats) {
-          const projectId = chat.project_number || chat.project_id_main;
-          const projectName = chat.project_name || `Project ${projectId}`;
+          const projectId = chat.project_id || chat.project_id_main || chat.project_number;
+          const projectName = chat.project_name || `Project ${chat.project_number || projectId}`;
 
           if (!projectsMap.has(projectId)) {
             projectsMap.set(projectId, {
               id: projectId,
               name: projectName,
+              // Keep project_number around as a display-only field (it's
+              // the human-readable OE) so the sidebar can show e.g.
+              // "test-ap05" while internally tracking by UUID.
+              oeNumber: chat.project_number ?? null,
               chats: [],
               createdAt: new Date(chat.created_at),
-              isExpanded: false
+              isExpanded: false,
+              repoPath: chat.repo_path ?? null,
+              baseBranch: chat.base_branch ?? null,
+              workingBranch: chat.working_branch ?? null
             });
+          } else {
+            // Fill in git context from whichever chat in the project
+            // carries it — older sessions may pre-date the mirror change.
+            const existing = projectsMap.get(projectId);
+            if (!existing.repoPath && chat.repo_path) existing.repoPath = chat.repo_path;
+            if (!existing.baseBranch && chat.base_branch) existing.baseBranch = chat.base_branch;
+            if (!existing.workingBranch && chat.working_branch) existing.workingBranch = chat.working_branch;
           }
 
           const project = projectsMap.get(projectId);
@@ -180,7 +205,8 @@ export function useProjects(userId?: string) {
             messages: [],
             createdAt: new Date(chat.created_at),
             updatedAt: new Date(chat.created_at),
-            projectId: projectId
+            projectId: projectId,
+            archived: chat.archived === true
           });
 
           // Update project createdAt to earliest chat
@@ -227,6 +253,46 @@ export function useProjects(userId?: string) {
     };
 
     fetchProjects();
+  }, [userId]);
+
+  // ---------------------------------------------------------------------
+  // Sidebar status dots — poll the batch runtime endpoint and merge the
+  // result into the existing project list. Independent of either project
+  // source (legacy /project-chats or agent /v2/agent/projects) because
+  // the backend keys the response by both UUID and oenum.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+
+    const refreshRuntime = async () => {
+      try {
+        const token = localStorage.getItem('simorgh_token');
+        if (!token) return;
+        const res = await axios.get(
+          `${API_BASE}/v2/agent/projects/runtime/batch`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const map = res.data || {};
+        if (cancelled || !map || Object.keys(map).length === 0) return;
+        setProjects(prev =>
+          prev.map(p => {
+            const next = map[p.id] || (p as any).oeNumber && map[(p as any).oeNumber];
+            return next ? { ...p, runtimeStatus: next } : p;
+          })
+        );
+      } catch (err) {
+        // Status is best-effort. Don't surface 401/5xx — the sidebar
+        // just falls back to the "idle" dot.
+      }
+    };
+
+    refreshRuntime();
+    const id = window.setInterval(refreshRuntime, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, [userId]);
 
   // Save projects to localStorage (per user)
@@ -414,18 +480,49 @@ export function useProjects(userId?: string) {
         return;
       }
 
-      // Create project page/chat in backend
-      const response = await axios.post(`${API_BASE}/chats`, {
-        chat_name: pageName,
-        user_id: userId,
-        chat_type: 'project',
-        project_number: projectId,  // projectId is OENUM
-        page_name: pageName
-      }, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      // For wizard projects (any chat id starts with `session_`) we use
+      // the new endpoint; need the project's UUID for it. The first
+      // session chat's metadata holds it — resolve once.
+      const existingProject = projects.find(p => p.id === projectId);
+      const anySessionChat = existingProject?.chats.find(c => c.id.startsWith('session_'));
+
+      let response;
+      if (anySessionChat) {
+        const sessMeta = await axios.get(
+          `${API_BASE}/v2/chatbot/project/sessions/${anySessionChat.id}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        const projectUuid = sessMeta.data.project_id;
+        const created = await axios.post(
+          `${API_BASE}/v2/chatbot/project/sessions`,
+          { project_id: projectUuid, title: pageName, stage: 'general' },
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        // Shape the response to match what the legacy path returned so
+        // the downstream code keeps working unchanged.
+        response = {
+          data: {
+            chat: {
+              chat_id: created.data.session_token,
+              project_name: existingProject?.name || projectId,
+            },
+          },
+        };
+      } else {
+        // Legacy OENUM-based project (no session_ chat yet) — keep using
+        // the old endpoint. Falls back to current behaviour for old data.
+        response = await axios.post(`${API_BASE}/chats`, {
+          chat_name: pageName,
+          user_id: userId,
+          chat_type: 'project',
+          project_number: projectId,
+          page_name: pageName,
+        }, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+      }
 
       const backendChatId = response.data.chat.chat_id;
       const projectName = response.data.chat.project_name || `Project ${projectId}`;
@@ -590,14 +687,22 @@ export function useProjects(userId?: string) {
 
       console.log('📥 Loading chat history for:', chatId);
 
-      const response = await axios.get(`${API_BASE}/chats/${chatId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      // Project chat sessions use the new deep-link token format
+      // (session_<urlsafe>). They live in project_messages, not the
+      // legacy chats table. Route the GET accordingly.
+      const isProjectSession = chatId.startsWith('session_');
+      const response = isProjectSession
+        ? await axios.get(
+            `${API_BASE}/v2/chatbot/project/sessions/${chatId}/messages`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          )
+        : await axios.get(`${API_BASE}/chats/${chatId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
 
       const messages = response.data.messages || [];
       const chatMetadata = response.data.chat || {};
+      const ctx = response.data.context || null;
 
       console.log(`✅ Loaded ${messages.length} messages for chat ${chatId}`);
 
@@ -610,6 +715,12 @@ export function useProjects(userId?: string) {
         metadata: m.metadata || {}
       }));
 
+      // Guard: a 200-OK-with-empty-messages from the backend used to
+      // nuke the in-memory thread on every project switch (the blanking
+      // bug). Only replace local messages if the server actually
+      // returned some, or there were none locally.
+      const mapped = mapMessages(messages);
+
       if (projectId !== null) {
         // Project chat
         setProjects(prev =>
@@ -617,13 +728,22 @@ export function useProjects(userId?: string) {
             p.id === projectId
               ? {
                   ...p,
+                  repoPath: ctx?.repo_path ?? p.repoPath ?? null,
+                  baseBranch: ctx?.base_branch ?? p.baseBranch ?? null,
+                  workingBranch: ctx?.working_branch ?? p.workingBranch ?? null,
+                  filesChangedCount: typeof ctx?.files_changed_count === 'number'
+                    ? ctx.files_changed_count
+                    : p.filesChangedCount,
                   chats: p.chats.map(c =>
                     c.id === chatId
                       ? {
                           ...c,
                           title: chatMetadata.chat_name || c.title,
-                          messages: mapMessages(messages),
-                          updatedAt: new Date()
+                          messages: (mapped.length > 0 || c.messages.length === 0)
+                            ? mapped
+                            : c.messages,
+                          updatedAt: new Date(),
+                          archived: ctx?.archived ?? c.archived
                         }
                       : c
                   )
@@ -640,7 +760,9 @@ export function useProjects(userId?: string) {
               ? {
                   ...c,
                   title: chatMetadata.chat_name || c.title,
-                  messages: mapMessages(messages),
+                  messages: (mapped.length > 0 || c.messages.length === 0)
+                    ? mapped
+                    : c.messages,
                   updatedAt: new Date()
                 }
               : c
@@ -823,70 +945,173 @@ export function useProjects(userId?: string) {
       return;
     }
 
-    try {
-      const token = localStorage.getItem('simorgh_token');
-      if (!token) {
-        console.error('❌ No auth token found');
-        showError('Authentication Required', 'Please log in again.');
-        return;
-      }
+    const token = localStorage.getItem('simorgh_token');
+    if (!token) {
+      console.error('❌ No auth token found');
+      showError('Authentication Required', 'Please log in again.');
+      return;
+    }
+    const authHeaders = { headers: { Authorization: `Bearer ${token}` } };
 
-      // Delete all project chats from backend
-      console.log('🗑️ Deleting all chats for project:', projectId);
-      const response = await axios.delete(`${API_BASE}/projects/${projectId}/chats`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
+    // Previous version had three failure modes the operator hit:
+    //   1) Only the first session_<...> chat was cascade-deleted;
+    //      projects with multiple sessions left orphan messages.
+    //   2) Any error (including 404 "already gone") aborted before
+    //      local cleanup, leaving the project stuck in the sidebar.
+    //   3) Projects with BOTH a wizard session AND legacy OENUM
+    //      chats only got one path attempted, not both.
+    // Fix: best-effort sweep of every backend deletion path; treat
+    // 404 as success ("already gone"); only block local cleanup if
+    // EVERY path failed for a real reason.
+    const errors: string[] = [];
+    let anyBackendCleanup = false;
+    let aggregateChats = 0;
+    let aggregateNeo4j = 0;
+    let projectDbDeleted = false;
+
+    // (a) Cascade each session token. Each one drops its own project
+    //     + sessions + messages + tasks + documents + git_commits +
+    //     containers + volumes server-side; doing all of them
+    //     guarantees nothing is left behind even if a project has
+    //     multiple wizard sessions.
+    const sessionChats = project.chats.filter(c => c.id.startsWith('session_'));
+    for (const sc of sessionChats) {
+      try {
+        const r = await axios.delete(
+          `${API_BASE}/v2/chatbot/project/sessions/${sc.id}`,
+          authHeaders,
+        );
+        anyBackendCleanup = true;
+        aggregateChats   += r.data?.deleted_chat_count  ?? 0;
+        aggregateNeo4j   += r.data?.deleted_neo4j_nodes ?? 0;
+        projectDbDeleted ||= !!r.data?.project_db_deleted;
+        console.log('🗑️ session cascade ok:', sc.id, r.data);
+      } catch (e: any) {
+        const status = e?.response?.status;
+        if (status === 404) {
+          // Already gone — treat as success for local cleanup.
+          anyBackendCleanup = true;
+          console.log('🗑️ session already gone (404):', sc.id);
+        } else {
+          errors.push(`session ${sc.id.slice(0, 12)}…: ${e?.message || e}`);
+          console.error('❌ session delete failed:', sc.id, e);
         }
-      });
+      }
+    }
 
-      console.log(`✅ Backend deletion result:`, response.data);
+    // (b) Legacy per-project sweep — covers OENUM-only projects AND
+    //     stragglers in projects that ALSO had wizard sessions.
+    try {
+      const r = await axios.delete(
+        `${API_BASE}/projects/${projectId}/chats`,
+        authHeaders,
+      );
+      anyBackendCleanup = true;
+      aggregateChats += r.data?.deleted_chat_count ?? 0;
+      console.log('🗑️ legacy sweep ok:', projectId, r.data);
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 404) {
+        // No legacy chats — expected for modern-only projects.
+        console.log('🗑️ no legacy chats for project (404, OK):', projectId);
+      } else {
+        // Don't treat this as a hard failure when sessions already
+        // succeeded — many wizard projects have no legacy chats and
+        // the endpoint can 500 on empty.
+        console.warn('legacy sweep error (non-fatal):', e?.message);
+      }
+    }
 
-      // Remove from local state
-      const updatedProjects = projects.filter(p => p.id !== projectId);
-      setProjects(updatedProjects);
+    // Diagnostic. Operator reported projects re-appearing on hard-reload
+    // after a delete (2026-05-24). The only way that happens is if the
+    // backend's GET /users/{id}/project-chats keeps returning chat
+    // metadata for these projects — so let's verify by re-fetching
+    // immediately after the delete and surfacing the result. This both
+    // confirms backend cleanup AND triggers a fresh in-memory state
+    // that matches what the next mount will see.
+    console.log('🗑️ deleteProject summary', {
+      projectId,
+      project_name: project.name,
+      project_chats_count: project.chats.length,
+      session_chats_count: project.chats.filter(c => c.id.startsWith('session_')).length,
+      anyBackendCleanup,
+      errors,
+      aggregateChats,
+      projectDbDeleted,
+    });
 
-      // Update localStorage to persist deletion
-      localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(updatedProjects));
+    // Local cleanup: as long as SOMETHING succeeded server-side OR
+    // we've collected zero real errors, the project is effectively
+    // gone and the sidebar should reflect that. Otherwise surface
+    // the error and KEEP the project so the user can retry.
+    if (anyBackendCleanup || errors.length === 0) {
+      const remaining = projects.filter(p => p.id !== projectId);
+      setProjects(remaining);
+      localStorage.setItem(`simorgh_projects_${userId}`, JSON.stringify(remaining));
 
-      // Clear active project if it was deleted
+      // Belt-and-suspenders: poll the backend list once more after a
+      // brief delay to catch the case where the backend deletion
+      // "succeeded" but the Redis chat-metadata key wasn't fully
+      // cleared. If the project is STILL in /users/{id}/project-chats,
+      // log it loudly so the operator knows the backend has stale
+      // state — and we DON'T re-add it locally (the user wanted it
+      // gone), but flag it so they can paste the log back.
+      setTimeout(async () => {
+        try {
+          const verify = await axios.get(
+            `${API_BASE}/users/${userId}/project-chats`, authHeaders,
+          );
+          const stillThere = (verify.data?.chats || []).some(
+            (c: any) => (c.project_id === projectId)
+                       || (c.project_id_main === projectId)
+                       || (c.project_number === projectId),
+          );
+          if (stillThere) {
+            console.error(
+              '⚠️ deleteProject: backend STILL returns this project ' +
+              'after delete. Redis chat-metadata not cleaned. project_id=' +
+              projectId,
+            );
+          } else {
+            console.log('✅ deleteProject: backend confirms project gone:', projectId);
+          }
+        } catch (e) {
+          console.warn('deleteProject verify fetch failed:', e);
+        }
+      }, 500);
+
+      // Clear active project if it was the one deleted, then strip
+      // any deep-link ?project=X&session=Y from the URL so a refresh
+      // doesn't try to re-open the just-deleted session.
       if (activeProjectId === projectId) {
         setActiveChatId(null);
         setActiveProjectId(null);
       }
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('project') === projectId) {
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      } catch {}
+      try { sessionStorage.removeItem('simorgh_pending_session'); } catch {}
 
-      const deletedChatCount = response.data.deleted_chat_count || 0;
-      const deletedNeo4jNodes = response.data.deleted_neo4j_nodes || 0;
-      const neo4jDeleted = response.data.neo4j_deleted || false;
-      const projectDbDeleted = response.data.project_db_deleted || false;
-      const projectDbDetails = response.data.project_db_details || {};
-
-      console.log(`✅ Project deleted: ${projectId} (${deletedChatCount} chats, ${deletedNeo4jNodes} Neo4j nodes, DB: ${projectDbDeleted})`);
-
-      // Show detailed deletion summary
-      let summaryMessage = `Project "${project.name}" has been completely deleted!\n\n`;
-      summaryMessage += `📊 Deletion Summary:\n`;
-      summaryMessage += `• Redis: ${deletedChatCount} chat(s) removed\n`;
-      summaryMessage += `• Neo4j: ${deletedNeo4jNodes} node(s) removed\n`;
-
-      if (projectDbDeleted) {
-        summaryMessage += `• PostgreSQL: Database deleted\n`;
-        summaryMessage += `• Qdrant: Collection deleted\n`;
-      } else if (projectDbDetails.message) {
-        summaryMessage += `• Project DB: ${projectDbDetails.message}\n`;
+      let summary = `Project "${project.name}" deleted.\n\n`;
+      summary += `📊 Cleanup:\n`;
+      summary += `• ${aggregateChats} chat(s) removed\n`;
+      summary += `• ${aggregateNeo4j} graph node(s) removed\n`;
+      summary += `• PostgreSQL: ${projectDbDeleted ? 'database deleted' : 'no per-project DB'}\n`;
+      if (errors.length > 0) {
+        summary += `\n⚠️ Partial cleanup — some backend paths failed:\n${errors.join('\n')}`;
+        showInfo('Project Deleted (Partial)', summary);
+      } else {
+        showInfo('Project Deleted', summary);
       }
-
-      if (!neo4jDeleted) {
-        summaryMessage += `\n⚠️ Note: Project was not found in Neo4j database.`;
-      }
-
-      showInfo('Project Deleted', summaryMessage);
-
-    } catch (error: any) {
-      console.error('❌ Failed to delete project from backend:', error);
-
-      // Show error to user
-      const errorMessage = error.response?.data?.detail || 'Failed to delete project from backend';
-      showError('Delete Failed', `${errorMessage}\n\nThe project was not deleted.`);
+    } else {
+      showError(
+        'Delete Failed',
+        `Could not remove the project from the backend:\n\n${errors.join('\n')}\n\n` +
+        `The project is still in the sidebar — try again or contact support.`,
+      );
     }
   };
 
@@ -896,6 +1121,68 @@ export function useProjects(userId?: string) {
           .find(p => p.id === activeProjectId)
           ?.chats.find(c => c.id === activeChatId)
       : generalChats.find(c => c.id === activeChatId);
+
+  // Prepend a synthetic chat row for a project chat session that was
+  // just created via the wizard or arrived through the deep-link
+  // resolver, so the user sees it in the sidebar before the next
+  // background project-list refresh catches up.
+  const ensureSessionChat = (projectId: string, sessionToken: string,
+                             title: string) => {
+    setProjects(prev =>
+      prev.map(p => {
+        if (p.id !== projectId) return p;
+        if (p.chats.some(c => c.id === sessionToken)) return p;
+        const synthetic = {
+          id: sessionToken,
+          title: title || 'New session',
+          messages: [],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as any;
+        return { ...p, chats: [synthetic, ...p.chats] };
+      })
+    );
+  };
+
+  const archiveChat = async (chatId: string, projectId: string | null, archive: boolean) => {
+    if (!chatId.startsWith('session_')) {
+      // Only wizard sessions support archive (the legacy endpoint isn't wired).
+      showError('Not supported', 'Archive is only available for project sessions.');
+      return;
+    }
+    try {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) return;
+      const path = archive ? 'archive' : 'unarchive';
+      await axios.post(
+        `${API_BASE}/v2/chatbot/project/sessions/${chatId}/${path}`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      // Update local state — flip the chat's archived flag.
+      if (projectId !== null) {
+        setProjects(prev =>
+          prev.map(p =>
+            p.id === projectId
+              ? {
+                  ...p,
+                  chats: p.chats.map(c =>
+                    c.id === chatId ? { ...c, archived: archive } : c
+                  )
+                }
+              : p
+          )
+        );
+      } else {
+        setGeneralChats(prev =>
+          prev.map(c => c.id === chatId ? { ...c, archived: archive } : c)
+        );
+      }
+    } catch (e: any) {
+      console.error('archive failed', e);
+      showError('Archive failed', e?.response?.data?.detail || 'Could not update session.');
+    }
+  };
 
   return {
     projects,
@@ -914,8 +1201,10 @@ export function useProjects(userId?: string) {
     renameChat,
     deleteChat,
     deleteProject,
+    archiveChat,
     toggleProject,
     toggleGeneralChats,
-    selectChat
+    selectChat,
+    ensureSessionChat,
   };
 }

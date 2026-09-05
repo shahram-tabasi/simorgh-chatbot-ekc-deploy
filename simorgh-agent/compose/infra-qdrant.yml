@@ -1,0 +1,64 @@
+# =============================================================================
+# QDRANT - Vector Database (semantic search, document RAG)
+# Used by: documents-rag, context-search, embeddings indexing.
+#
+# Tuned for ~200 users with active RAG. Override QDRANT_* in .env.
+# Web UI dashboard:  http://<host>:${QDRANT_HTTP_PORT:-6333}/dashboard
+# =============================================================================
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.1
+    container_name: qdrant
+    # Qdrant/RocksDB opens many file handles per collection + segment. The
+    # Docker default nofile soft limit (often 1024) gets exhausted by only
+    # a handful of collections, after which CREATE COLLECTION fails with
+    # "RocksDB open error: Too many open files (os error 24)" → HTTP 500.
+    # That silently broke document indexing: uploads parsed + embedded but
+    # the per-project collection could never be created, so nothing was
+    # stored and the chatbot found no content. Qdrant docs recommend a high
+    # limit; 65536 comfortably covers many collections + segments.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=${QDRANT_MAX_REQUEST_MB:-64}
+      - QDRANT__SERVICE__MAX_WORKERS=${QDRANT_MAX_WORKERS:-0}   # 0 = auto (1 per CPU)
+      - QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=${QDRANT_MAX_SEARCH_THREADS:-0}
+      - QDRANT__LOG_LEVEL=${QDRANT_LOG_LEVEL:-INFO}
+    deploy:
+      resources:
+        limits:
+          memory: ${QDRANT_MEM_LIMIT:-3g}
+        reservations:
+          memory: ${QDRANT_MEM_RESERVATION:-1g}
+    ports:
+      # REST + dashboard
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+    expose:
+      - "6334"          # gRPC, internal only
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - app_net
+    healthcheck:
+      # qdrant slim image has no wget/curl/bash — just a busybox sh.
+      # Smoke-test the pid file via the busybox `ls`; if the process
+      # crashes the container will die and docker takes care of it.
+      test: ["CMD-SHELL", "ls /qdrant/qdrant >/dev/null && ls /qdrant/storage >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  qdrant_storage:
+    name: simorgh_qdrant_storage
+    driver: local

@@ -1,0 +1,46 @@
+# openedai-speech voice mapping
+# =============================================================================
+# Maps OpenAI-style voice names to local Piper .onnx files. Clients send
+# {"voice": "alloy"} (or any of the names below) → server uses the matched
+# Piper voice.
+#
+# To add a voice: drop the .onnx + .onnx.json into ../voices/ and add an
+# entry here. To change defaults for existing clients: just edit the path.
+
+tts-1:
+  # Default Persian voice — primary for chat-service / project-agent TTS.
+  alloy:
+    model: voices/fa_IR-amir-medium.onnx
+    speaker:
+  # Aliases pointing at the same Persian voice so clients can use any of
+  # the standard OpenAI voice names without code changes.
+  echo:
+    model: voices/fa_IR-amir-medium.onnx
+    speaker:
+  fable:
+    model: voices/fa_IR-amir-medium.onnx
+    speaker:
+  onyx:
+    model: voices/fa_IR-amir-medium.onnx
+    speaker:
+  nova:
+    model: voices/fa_IR-amir-medium.onnx
+    speaker:
+  shimmer:
+    model: voices/fa_IR-amir-medium.onnx
+    speaker:
+  # Explicit Persian name for clarity in logs.
+  fa_amir:
+    model: voices/fa_IR-amir-medium.onnx
+    speaker:
+  # English fallback — uncomment after downloading en_US-amy-medium.
+  # en_amy:
+  #   model: voices/en_US-amy-medium.onnx
+  #   speaker:
+
+tts-1-hd:
+  # Higher-quality tier — point at the same Piper for now; later you can
+  # add Coqui XTTSv2 here for slower-but-more-natural output.
+  alloy:
+    model: voices/fa_IR-amir-medium.onnx
+    speaker:

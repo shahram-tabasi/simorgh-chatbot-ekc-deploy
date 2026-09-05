@@ -1,0 +1,45 @@
+# =============================================================================
+# TTS-SERVICE - Text-to-Speech using edge-tts (CPU)
+# Port 8002.
+# =============================================================================
+services:
+  tts-service:
+    image: simorgh-tts-service:local
+    build: ../tts-service
+    container_name: tts-service
+    expose:
+      - "8002"
+    volumes:
+      - tts_cache:/app/cache
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TTS_VOICE=${TTS_VOICE:-en-US-AriaNeural}
+      - TTS_LANGUAGE=${TTS_LANGUAGE:-en}
+      - TTS_MAX_CACHE_MB=${TTS_MAX_CACHE_MB:-500}
+      # edge-tts opens a WSS to speech.platform.bing.com — needs outbound
+      # internet. .68 has none directly; the host xray proxy at
+      # 172.17.0.1:10809 is the only way out. aiohttp's WS client does NOT
+      # honour HTTP_PROXY env vars on its own, so we pass the proxy URL
+      # explicitly into edge_tts.Communicate(proxy=...) inside app.py and
+      # read it from TTS_PROXY here. Override per-host if your xray binds
+      # somewhere else.
+      - TTS_PROXY=${TTS_PROXY:-http://172.17.0.1:10809}
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  tts_cache:
+    name: simorgh_tts_cache
+    driver: local

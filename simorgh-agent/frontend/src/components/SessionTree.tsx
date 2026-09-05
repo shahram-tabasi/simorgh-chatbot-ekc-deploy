@@ -22,6 +22,7 @@ import {
   Edit2,
 } from 'lucide-react';
 import { ChatSession, SessionStage, Project, Chat } from '../types';
+import { ProjectStatusIcon } from './ProjectStatusIcon';
 import { StageBadge } from './SessionStageSelector';
 import { Tooltip } from './Tooltip';
 import ContextMenu from './ContextMenu';
@@ -111,20 +112,39 @@ export function SessionTree({
   const generalSessions = sessions.filter((s) => s.chatType === 'general');
   const projectSessions = sessions.filter((s) => s.chatType === 'project');
 
-  // Group project sessions by project number
+  // Group project sessions by PROJECT ID (the per-project UUID), not
+  // by project number. Multiple projects can share the same source
+  // OE / TPMS number (a project number identifies the SOURCE, not the
+  // workspace instance), and keying off projectNumber was collapsing
+  // distinct workspaces into one folder with commingled chats. Each
+  // project gets its own folder with its own chats now.
   const projectSessionGroups = projectSessions.reduce((acc, session) => {
-    const key = session.projectNumber || session.projectId || 'unknown';
+    const key = session.projectId || session.projectNumber || 'unknown';
     if (!acc[key]) {
+      // Look up the host project so the row can render runtime status
+      // (busy / paused / pushed / conflict / error / idle) on the
+      // LEFT of the project name. Falls back gracefully when the
+      // project isn't in the projects list.
+      const hostProject = projects.find(p => p.id === session.projectId);
       acc[key] = {
         projectNumber: session.projectNumber,
         projectName: session.projectName,
+        projectId: session.projectId,
+        runtimeStatus: hostProject?.runtimeStatus,
         sessions: [],
         expanded: true,
       };
     }
     acc[key].sessions.push(session);
     return acc;
-  }, {} as Record<string, { projectNumber?: string; projectName?: string; sessions: ChatSession[]; expanded: boolean }>);
+  }, {} as Record<string, {
+    projectNumber?: string;
+    projectName?: string;
+    projectId?: string;
+    runtimeStatus?: import('../types').RuntimeStatus;
+    sessions: ChatSession[];
+    expanded: boolean;
+  }>);
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => ({
@@ -329,6 +349,7 @@ export function SessionTree({
                             projectKey={projectKey}
                             projectName={group.projectName}
                             projectNumber={group.projectNumber}
+                            runtimeStatus={group.runtimeStatus}
                             sessions={group.sessions}
                             activeSessionId={activeSessionId}
                             onSelectSession={onSelectSession}
@@ -495,6 +516,7 @@ function ProjectSessionGroup({
   projectKey,
   projectName,
   projectNumber,
+  runtimeStatus,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -503,6 +525,7 @@ function ProjectSessionGroup({
   projectKey: string;
   projectName?: string;
   projectNumber?: string;
+  runtimeStatus?: import('../types').RuntimeStatus;
   sessions: ChatSession[];
   activeSessionId?: string | null;
   onSelectSession?: (sessionId: string) => void;
@@ -522,6 +545,12 @@ function ProjectSessionGroup({
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 transition text-sm"
       >
+        {/* Status dot — leftmost position so it's the first thing
+            you see per project. busy/conflict/pushed/etc. variants
+            from ProjectStatusIcon. Was previously only on the
+            legacy tree; modern session tree had no status surface
+            at all. */}
+        <ProjectStatusIcon status={runtimeStatus} />
         {expanded ? (
           <ChevronDown className="w-4 h-4 text-gray-500" />
         ) : (
@@ -596,6 +625,7 @@ function LegacyProjectItem({
               <ChevronRight className="w-5 h-5 text-gray-400" />
             )}
             <Folder className="w-5 h-5 text-indigo-400" />
+            <ProjectStatusIcon status={project.runtimeStatus} />
             <span className="font-bold text-white">
               {(project as any).oeNumber || project.id}
             </span>

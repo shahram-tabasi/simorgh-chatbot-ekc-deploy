@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simorgh — Admin Console</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── Login ─────────────────────────────────────────────────── -->
+  <div id="login-screen" class="hidden login-shell">
+    <div class="login-box">
+      <div class="login-head">
+        <div class="brand-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+        </div>
+        <h1>Simorgh Admin</h1>
+        <p>Authorized access only</p>
+      </div>
+      <form id="login-form" class="login-form">
+        <div>
+          <label class="form-label">Email address</label>
+          <input type="email" id="login-email" required placeholder="admin@example.com" class="form-input" autocomplete="email" />
+        </div>
+        <div>
+          <label class="form-label">Password</label>
+          <input type="password" id="login-password" required placeholder="••••••••" class="form-input" autocomplete="current-password" />
+        </div>
+        <button type="submit" class="btn-login">Sign in</button>
+        <div id="login-error" class="login-error hidden"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── App Shell ─────────────────────────────────────────────── -->
+  <div id="app-shell" class="hidden app-shell">
+
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-logo brand-logo-sm">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="12" height="12">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-name">Simorgh</div>
+          <div class="brand-sub">Admin Console</div>
+        </div>
+      </div>
+
+      <nav id="sidebar-nav" class="sidebar-nav"></nav>
+
+      <div class="sidebar-foot">
+        <div id="user-chip" class="user-chip">
+          <div class="avatar avatar-sm" id="user-initial">?</div>
+          <div class="user-meta">
+            <div class="user-name" id="user-name">—</div>
+            <div class="user-mail" id="user-email">—</div>
+          </div>
+          <button id="logout-btn" title="Sign out" class="logout-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="12" height="12">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h1 id="page-title"></h1>
+          <span class="topbar-sep">·</span>
+          <p id="page-subtitle"></p>
+        </div>
+        <div class="topbar-right">
+          <div id="health-pill" class="hidden"></div>
+          <button id="refresh-btn" class="topbar-btn" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="12" height="12">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="page-content" class="page-content"></div>
+    </main>
+  </div>
+
+  <div id="modal-host" class="modal-host hidden">
+    <div class="modal-backdrop" data-modal-backdrop></div>
+    <div id="modal-card" class="modal-card"></div>
+  </div>
+
+  <div id="toast-host" class="toast-host"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

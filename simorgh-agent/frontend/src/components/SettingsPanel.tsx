@@ -24,6 +24,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { showWarning } from '../utils/alerts';
 import { useAuth, isModernUser, isLegacyUser } from '../context/AuthContext';
 import { useTheme, ThemeType } from '../context/ThemeContext';
+import AvatarPicker, { loadStoredAvatar, presetAvatarUrl } from './AvatarPicker';
 
 const languages = [
   { code: 'en', name: 'English', flag: '🇺🇸' },
@@ -43,14 +44,25 @@ const themes: Array<{ id: ThemeType; name: string; icon: any; gradient: string }
 interface SettingsPanelProps {
   externalOpen?: boolean;
   onExternalClose?: () => void;
+  /** When true (the active chat is a general/HR session) the Online
+   * AI tile in the AI-Mode picker is disabled — general chat is
+   * hard-pinned to local Simorgh AI by hr_chat.py force_backend='text',
+   * so allowing Online to be picked would be misleading. */
+  isGeneralChatActive?: boolean;
 }
 
-export default function SettingsPanel({ externalOpen = false, onExternalClose }: SettingsPanelProps = {}) {
+export default function SettingsPanel({
+  externalOpen = false,
+  onExternalClose,
+  isGeneralChatActive = false,
+}: SettingsPanelProps = {}) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [langOpen, setLangOpen] = React.useState(false);
   const [aiMode, setAiMode] = React.useState<'online' | 'offline'>('online');
+  const [avatarPickerOpen, setAvatarPickerOpen] = React.useState(false);
+  const [avatarRev, setAvatarRev] = React.useState(0);  // re-render after pick
 
-  const { language, setLanguage } = useLanguage();
+  const { language, setLanguage, t } = useLanguage();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const { theme, setTheme, notificationsEnabled, setNotificationsEnabled } = useTheme();
@@ -69,26 +81,44 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
     : 'Guest'
     : 'Guest';
 
+  // Stable identity for the avatar's per-user localStorage key. Modern
+  // users get their UUID; legacy/TPMS users get EMPUSERNAME (their
+  // JWT sub claim). Avoid using displayName — it can change between
+  // sessions and would orphan saved avatars.
+  const avatarUserId = user
+    ? isModernUser(user)
+      ? (user.id as string)
+      : isLegacyUser(user)
+        ? user.EMPUSERNAME
+        : null
+    : null;
+  const avatarInitial = (displayName?.trim() || 'U').charAt(0).toUpperCase();
+
+  // Re-render the avatar img when AvatarPicker (or any other mount)
+  // broadcasts a new selection — bumps the React key so cached <img>
+  // src values invalidate even when the URL hasn't changed.
+  React.useEffect(() => {
+    const onChange = () => setAvatarRev((n) => n + 1);
+    window.addEventListener('simorgh-avatar-changed', onChange);
+    return () => window.removeEventListener('simorgh-avatar-changed', onChange);
+  }, []);
+
   // Sync with external control (both open and close)
   React.useEffect(() => {
     setIsOpen(externalOpen);
   }, [externalOpen]);
 
-  // Load AI mode from localStorage on mount (modern users forced to online)
+  // Load AI mode from localStorage on mount. Used to force online for
+  // modern users; that pre-dated the HR direct-RAG path. Now both
+  // tiers can pick either mode for project chats. General chats
+  // always use Local regardless of this setting (hr_chat.py forces
+  // offline_text backend) — the panel's helper text explains this.
   React.useEffect(() => {
-    if (isModern) {
-      setAiMode('online');
-      return;
-    }
     const savedMode = localStorage.getItem('llm_mode') as 'online' | 'offline' | null;
-    if (savedMode) {
-      setAiMode(savedMode);
-    }
-  }, [isModern]);
+    setAiMode(savedMode ?? 'offline');  // Default to offline now.
+  }, []);
 
-  // Handle AI mode change - modern users are locked to online
   const handleAiModeChange = (mode: 'online' | 'offline') => {
-    if (mode === 'offline' && isModern) return;
     setAiMode(mode);
     localStorage.setItem('llm_mode', mode);
     window.dispatchEvent(new CustomEvent('llm-mode-changed', { detail: mode }));
@@ -139,7 +169,7 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                 <div className="flex items-center justify-between">
                   <h2 className="text-2xl font-bold text-white flex items-center gap-3">
                     <Palette className="w-8 h-8 text-purple-400" />
-                    Settings
+                    {t('settings')}
                   </h2>
                   <button
                     onClick={handleClose}
@@ -149,16 +179,36 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                   </button>
                 </div>
 
-                {/* یوزر */}
+                {/* User card. Avatar is fully offline — either one of
+                    eight built-in initial SVGs (rendered inline) or a
+                    user-uploaded photo persisted to localStorage. The
+                    old ui-avatars.com img was the only external HTTP
+                    dependency in this panel; gone now per operator
+                    request ("همه افلاین باشد"). Clicking the avatar
+                    opens the picker. */}
                 <div className="bg-white/5 rounded-2xl p-5 border border-white/10">
                   <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-full overflow-hidden border-4 border-white/20 shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => setAvatarPickerOpen(true)}
+                      className="relative w-14 h-14 rounded-full overflow-hidden border-4 border-white/20 shadow-xl hover:border-emerald-400/60 transition group"
+                      title={t('changeAvatar')}
+                    >
                       <img
-                        src={`https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=6366f1&color=fff&bold=true`}
-                        alt="User"
+                        src={
+                          loadStoredAvatar(avatarUserId, avatarInitial) ||
+                          presetAvatarUrl('indigo', avatarInitial)
+                        }
+                        alt={displayName}
                         className="w-full h-full object-cover"
+                        // avatarRev forces React to re-fetch the image
+                        // after a pick (same src would otherwise cache).
+                        key={`avatar-${avatarRev}`}
                       />
-                    </div>
+                      <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-[10px] text-white font-semibold">
+                        {t('changeAvatar')}
+                      </span>
+                    </button>
                     <div>
                       <p className="text-white font-bold text-lg">{displayName}</p>
                       <p className="text-gray-400 text-sm">{userStatus}</p>
@@ -174,7 +224,7 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
 
                 {/* زبان */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Language</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">{t('language')}</h3>
                   <div className="relative">
                     <button
                       onClick={() => setLangOpen(!langOpen)}
@@ -217,53 +267,86 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                   </div>
                 </div>
 
-                {/* AI Mode */}
+                {/* AI Mode — applies to PROJECT chats only. General
+                    chats always use Simorgh AI (the HR direct-RAG path
+                    hard-pins offline). The Online tile sets the
+                    project-chat per-request mode to "online"; the
+                    backend routes to the configured cloud API. Local
+                    is the default (and the only useful setting for
+                    general chat). */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">AI Mode</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">{t('aiMode')}</h3>
+                  <p className="text-[11px] text-gray-500 mb-4 leading-relaxed">
+                    General chat always uses <span className="text-violet-300">Simorgh AI</span>.
+                    This setting controls <span className="text-sky-300">project chat</span> only.
+                  </p>
                   <div className="space-y-3">
+                    {/* In general chat the effective mode is ALWAYS
+                        offline (hr_chat.py force-pins it), so override
+                        the visual selection regardless of saved
+                        preference. Saved preference (aiMode) is
+                        preserved in localStorage for when the user
+                        switches back to a project chat. */}
+                    {(() => {
+                      const effectiveMode = isGeneralChatActive ? 'offline' : aiMode;
+                      return (
+                        <>
                     <button
                       onClick={() => handleAiModeChange('online')}
+                      disabled={isGeneralChatActive}
+                      title={isGeneralChatActive
+                        ? "Online AI is project-chat only — general chat always uses Simorgh AI"
+                        : undefined}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        aiMode === 'online'
-                          ? 'border-blue-500 bg-blue-500/10'
-                          : 'border-white/10 hover:border-white/30'
+                        isGeneralChatActive
+                          ? 'border-white/5 opacity-40 cursor-not-allowed'
+                          : effectiveMode === 'online'
+                            ? 'border-blue-500 bg-blue-500/10'
+                            : 'border-white/10 hover:border-white/30'
                       }`}
                     >
-                      <Wifi className="w-6 h-6 text-blue-400" />
+                      {isGeneralChatActive
+                        ? <Lock className="w-6 h-6 text-gray-500" />
+                        : <Wifi className="w-6 h-6 text-blue-400" />}
                       <div className="text-left">
-                        <div className="text-white font-medium">Online AI</div>
-                        <div className="text-xs text-gray-400">Cloud • GPT-4 • Grok</div>
+                        <div className="text-white font-medium">{t('onlineAI')}</div>
+                        <div className="text-xs text-gray-400">
+                          {isGeneralChatActive
+                            ? 'Disabled in general chat (project chat only)'
+                            : 'Configured cloud API · project chat only'}
+                        </div>
                       </div>
                     </button>
                     <button
                       onClick={() => handleAiModeChange('offline')}
-                      disabled={isModern}
                       className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
-                        isModern
-                          ? 'border-white/5 opacity-50 cursor-not-allowed'
-                          : aiMode === 'offline'
-                            ? 'border-purple-500 bg-purple-500/10'
-                            : 'border-white/10 hover:border-white/30'
+                        effectiveMode === 'offline'
+                          ? 'border-violet-500 bg-violet-500/10'
+                          : 'border-white/10 hover:border-white/30'
                       }`}
                     >
-                      {isModern ? (
-                        <Lock className="w-6 h-6 text-gray-500" />
-                      ) : (
-                        <WifiOff className="w-6 h-6 text-purple-400" />
-                      )}
+                      <WifiOff className="w-6 h-6 text-violet-400" />
                       <div className="text-left">
-                        <div className="text-white font-medium">Local AI</div>
-                        <div className="text-xs text-gray-400">
-                          {isModern ? 'Available for local network users' : 'On-premise • 192.168.1.61/62 • Private'}
+                        <div className="text-white font-medium">
+                          Simorgh AI
+                          <span className="text-[10px] text-violet-300/80 font-normal ml-1">
+                            {isGeneralChatActive ? '(active)' : '(default)'}
+                          </span>
                         </div>
+                        {/* "LLM + VLM" subtitle removed per operator
+                            request — kept the tile parent intact so
+                            spacing matches the Online AI tile. */}
                       </div>
                     </button>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
                 {/* Notifications - NOW ENABLED */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Notifications</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">{t('notifications')}</h3>
                   <button
                     onClick={handleNotificationToggle}
                     className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all ${
@@ -293,7 +376,7 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
 
                 {/* Themes - NOW WORKING */}
                 <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Themes</h3>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">{t('theme')}</h3>
                   <div className="grid grid-cols-2 gap-3">
                     {themes.map((themeOption) => (
                       <button
@@ -332,13 +415,23 @@ export default function SettingsPanel({ externalOpen = false, onExternalClose }:
                   className="w-full py-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 font-medium hover:bg-red-500/20 transition"
                 >
                   <LogOut className="w-5 h-5 inline mr-2" />
-                  Logout
+                  {t('logout')}
                 </button>
               </div>
             </motion.div>
           </>
         )}
       </AnimatePresence>
+
+      {/* Offline avatar picker — mounts above the panel so the user
+          can change their photo without dismissing settings. */}
+      <AvatarPicker
+        isOpen={avatarPickerOpen}
+        onClose={() => setAvatarPickerOpen(false)}
+        userId={avatarUserId}
+        userInitial={avatarInitial}
+        onSaved={() => setAvatarRev((n) => n + 1)}
+      />
     </>
   );
 }

@@ -1,0 +1,223 @@
+name: Download Docling models
+
+# Downloads the Docling document-AI model bundle (~1.5 GB:
+# layout-heron + tableformer + code-equation + EasyOCR) on a
+# GitHub-hosted runner, where HuggingFace bandwidth is fast and
+# unmetered. Uploads as one or more tarball artifacts so they can be
+# fetched onto .68 (which sits behind an Xray VPN with a daily
+# bandwidth cap and tends to stall on big HF downloads).
+#
+# Mirrors the split/upload pattern from hf-model-fetch.yml, but the
+# source is `docling-tools models download` instead of a single HF
+# repo — because the bundle is multiple repos pulled by one CLI.
+#
+# AFTER DOWNLOAD on .68:
+#   gh run download <RUN_ID> -R shahram-tabasi/simorgh-chatbot-ekc-deploy \
+#       -n docling-models[-part-N-of-M]
+#   ./REASSEMBLE.sh                                  # if split
+#   sha256sum -c docling-models.tar.gz.sha256        # verify
+#   # then load into the docker volume (one-liner below).
+
+on:
+  workflow_dispatch:
+    inputs:
+      docling_image_tag:
+        description: "docling-serve-cpu image tag to drive the download"
+        type: string
+        default: "latest"
+      parts:
+        description: "Split tarball into N artifacts (1 = no split, 2 = default for the daily-cap proxy)"
+        type: choice
+        default: "1"
+        options: ["1", "2", "3", "4"]
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download Docling models via docling-tools
+        env:
+          IMG: quay.io/docling-project/docling-serve-cpu:${{ inputs.docling_image_tag }}
+        run: |
+          set -eu
+          mkdir -p models
+          # Run as root (--user 0) because the docling-serve image's
+          # default UBI user can't write to mounted host dirs that the
+          # runner created. Same fix we apply in docling/Dockerfile.
+          docker run --rm \
+            -v "$PWD/models:/out" \
+            --user 0 \
+            "$IMG" \
+            bash -c 'docling-tools models download --output-dir /out'
+          echo "----- downloaded tree -----"
+          find models -maxdepth 3 -printf '%y %p\n' | head -60
+          du -sh models
+
+      - name: Pack tarball
+        id: pack
+        run: |
+          set -eu
+          # Archive the bare contents of models/ (no leading dir) so that
+          # extracting straight into the volume at /opt/docling-models
+          # lands the artifacts at the path docling-serve expects.
+          OUT="docling-models.tar.gz"
+          tar -C models -czf "$OUT" .
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          echo "size=$(stat -c%s "$OUT")" >> "$GITHUB_OUTPUT"
+
+      - name: Split tarball into N parts
+        id: split
+        env:
+          OUT: ${{ steps.pack.outputs.out }}
+          PARTS: ${{ inputs.parts }}
+        run: |
+          set -eu
+          mkdir -p parts
+          if [ "$PARTS" -le 1 ]; then
+            cp "$OUT" parts/
+            cp "$OUT.sha256" parts/
+            echo "split=false" >> "$GITHUB_OUTPUT"
+            echo "Single-piece mode: parts/ contains the whole tarball."
+            ls -lh parts/
+            exit 0
+          fi
+          # Byte-exact split. Suffix length 2 keeps file names sortable
+          # through PARTS=99.
+          split -n "$PARTS" -d --suffix-length=2 "$OUT" "parts/${OUT}.part."
+          cp "$OUT.sha256" "parts/"
+          cat > "parts/REASSEMBLE.sh" <<BASH
+          #!/usr/bin/env bash
+          set -e
+          base="${OUT}"
+          parts=( \$(ls "\${base}".part.* | sort) )
+          echo "Reassembling \${#parts[@]} parts → \${base} …"
+          cat "\${parts[@]}" > "\${base}"
+          echo "Verifying SHA256 …"
+          sha256sum -c "\${base}.sha256"
+          echo "✅ \${base} ready."
+          BASH
+          chmod +x parts/REASSEMBLE.sh
+          ls -lh parts/
+          echo "split=true" >> "$GITHUB_OUTPUT"
+
+      # ── Single-piece upload ────────────────────────────────────────────
+      - name: Upload artifact (single piece)
+        if: steps.split.outputs.split == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docling-models
+          path: |
+            parts/docling-models.tar.gz
+            parts/docling-models.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      # ── Split upload — one artifact per part, downloadable independently
+      - name: Upload part 1 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docling-models-part-1of${{ inputs.parts }}
+          path: |
+            parts/docling-models.tar.gz.part.00
+            parts/docling-models.tar.gz.sha256
+            parts/REASSEMBLE.sh
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 2 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docling-models-part-2of${{ inputs.parts }}
+          path: parts/docling-models.tar.gz.part.01
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 3 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docling-models-part-3of${{ inputs.parts }}
+          path: parts/docling-models.tar.gz.part.02
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 4 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '4'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docling-models-part-4of${{ inputs.parts }}
+          path: parts/docling-models.tar.gz.part.03
+          retention-days: 14
+          compression-level: 0
+
+      - name: Install instructions
+        env:
+          PARTS: ${{ inputs.parts }}
+          SPLIT: ${{ steps.split.outputs.split }}
+        run: |
+          if [ "$SPLIT" != "true" ]; then
+            cat <<'EOF'
+          ============================================================
+          Artifact: docling-models   (single piece)
+          ============================================================
+          # 1. On any machine with `gh` CLI + internet:
+          gh run download $RUN_ID \
+              -R shahram-tabasi/simorgh-chatbot-ekc-deploy \
+              -n docling-models
+          sha256sum -c docling-models.tar.gz.sha256
+
+          # 2. Transfer to .68:
+          scp docling-models.tar.gz ubuntu@192.168.1.68:/tmp/
+
+          # 3. On .68 — create the volume and extract into it:
+          docker volume create simorgh_docling_models
+          docker run --rm \
+              -v simorgh_docling_models:/dst \
+              -v /tmp:/src:ro \
+              alpine sh -c 'tar xzf /src/docling-models.tar.gz -C /dst \
+                  && chown -R 1001:0 /dst && chmod -R g+rwX /dst && du -sh /dst'
+
+          # 4. Activate svc-docling.yml + USE_DOCLING=1 per the runbook,
+          #    then docker compose up -d docling-serve doc-processor.
+          ============================================================
+          EOF
+            exit 0
+          fi
+
+          cat <<EOF
+          ============================================================
+          Artifact: docling-models   (split into ${PARTS} parts)
+          ============================================================
+          # 1. On a workstation with internet — download each part you
+          #    haven't already grabbed. Each `gh` call pulls one part only:
+          for i in \$(seq 1 ${PARTS}); do
+            gh run download \$RUN_ID \\
+                -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
+                -n docling-models-part-\${i}of${PARTS}
+          done
+
+          # 2. Reassemble (REASSEMBLE.sh ships inside part 1of${PARTS}):
+          chmod +x REASSEMBLE.sh
+          ./REASSEMBLE.sh
+          # → produces docling-models.tar.gz, verified by sha256
+
+          # 3. Transfer + install on .68:
+          scp docling-models.tar.gz ubuntu@192.168.1.68:/tmp/
+          ssh ubuntu@192.168.1.68 'docker volume create simorgh_docling_models && \\
+              docker run --rm \\
+                -v simorgh_docling_models:/dst -v /tmp:/src:ro alpine \\
+                sh -c "tar xzf /src/docling-models.tar.gz -C /dst && \\
+                       chown -R 1001:0 /dst && chmod -R g+rwX /dst && du -sh /dst"'
+
+          # 4. Activate svc-docling.yml + USE_DOCLING=1 per the runbook,
+          #    then docker compose up -d docling-serve doc-processor.
+          ============================================================
+          EOF

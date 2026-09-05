@@ -1,12 +1,13 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
-import { ProjectData, TemplateItem, DeviceItem, Equipment } from '../types/project';
+import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, Revision } from '../types/project';
 import { projectService } from '../services/projectService';
+import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 
 interface ProjectContextType {
   projectData: ProjectData;
   updateProjectData: (data: Partial<ProjectData>) => void;
   saveProject: () => Promise<void>;
-  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string) => void;
+  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   deleteTemplate: (templateId: string) => void;
   addDevice: (device: Partial<DeviceItem>) => void;
@@ -18,54 +19,93 @@ interface ProjectContextType {
   copyEquipment: (equipmentId: string) => void;
   selectedEquipment: Equipment | null;
   setSelectedEquipment: (equipment: Equipment | null) => void;
+  // Revision management
+  currentRevision: Revision | null;
+  revisions: Revision[];
+  loadRevisions: (projectId: string) => Promise<void>;
+  createRevision: (revisionName: string, description: string) => Promise<Revision>;
+  switchRevision: (revisionId: string) => Promise<void>;
+  deleteRevision: (revisionId: string, password: string) => Promise<void>;
+  getNextRevisionNumber: () => number;
+  // True when the currently selected revision may be saved/edited — i.e.
+  // there is no revision selected yet (new project), or the selected
+  // revision is the latest one. A non-latest revision (including
+  // Revision 0 once higher revisions exist) is view-only.
+  isCurrentRevisionEditable: boolean;
+  // The revisions that block editing the current one (all newer ones), plus
+  // the helpers a screen needs to react to a blocked edit attempt:
+  // `notifyRevisionLocked()` raises the warning dialog, `revisionLockNotice`
+  // drives it, `dismissRevisionLockNotice()` closes it.
+  blockingRevisionNumbers: string[];
+  revisionLockNotice: RevisionLockNotice | null;
+  notifyRevisionLocked: () => void;
+  dismissRevisionLockNotice: () => void;
+  // True while TPMS owns this project: it is re-read from TPMS every time it
+  // opens, so nothing here may be edited. Raising a revision takes it over.
+  isTpmsMastered: boolean;
 }
 
-const defaultProjectData: ProjectData = {
-  projectName: 'New Project',
+// Details shown by the "this revision is locked" dialog. `kind` says why:
+// a newer revision exists, or TPMS still owns the project.
+export interface RevisionLockNotice {
+  kind: 'newer-revision' | 'tpms';
+  currentRevisionNumber: string;
+  blockingRevisionNumbers: string[];
+  /** For the TPMS case: which TPMS project this one mirrors. */
+  tpmsProject?: string;
+  /** The revision number a new revision would get. */
+  nextRevisionNumber?: string;
+}
+
+// EMPTY DEFAULTS - no demo values
+// Exported so a project can be seeded from outside the provider — the project
+// selection dialog builds one this way when it opens a switchgear from TPMS.
+export const defaultProjectData: ProjectData = {
+  projectName: '',
   projectId: '',
   projectNumber: '',
   noticeToProceedDate: '',
   deliveryDate: '',
-  projectDescription: 'Project Description',
-  planner: 'SIMORGH',
-  designOffice: 'ELECTRO KAVIR',
+  projectDescription: '',
+  planner: '',
+  designOffice: '',
   createdOn: new Date().toLocaleDateString(),
   changedOn: new Date().toLocaleDateString(),
   location: '',
   client: '',
-  standard: 'IEC',
-  country: 'Iran',
-  language: 'English',
+  standard: '',
+  country: '',
+  language: '',
   comment: '',
   technicalSettings: {
     mediumVoltage: {
-      nominalVoltage: '20',
-      maxShortCircuitPower: '250',
-      minShortCircuitPower: '100',
-      maxCrossSection: '500',
-      minCrossSection: '25'
+      nominalVoltage: '',
+      maxShortCircuitPower: '',
+      minShortCircuitPower: '',
+      maxCrossSection: '',
+      minCrossSection: ''
     },
     lowVoltage: {
-      nominalVoltage: '400',
-      frequency: '50',
-      permissibleTouchVoltage: '50',
-      ambientTemperature: '45',
-      numberOfPoles: '3-contact preferably, 4-contact if required',
-      earthFaultDetection: 'if required',
-      referencePoint: 'Transformer-secondary terminals',
-      relativeOperatingVoltage: '100',
-      maxPermissibleVoltage: '14',
-      maxCrossSection: '300',
-      minCrossSection: '1.5',
+      nominalVoltage: '',
+      frequency: '',
+      permissibleTouchVoltage: '',
+      ambientTemperature: '',
+      numberOfPoles: '',
+      earthFaultDetection: '',
+      referencePoint: '',
+      relativeOperatingVoltage: '',
+      maxPermissibleVoltage: '',
+      maxCrossSection: '',
+      minCrossSection: '',
       enableReducedCrossSection: false
     }
   },
   techSettings: {
-    general: { altitudeAboveSeaLevel: '1000', designTemperature: '45' },
-    wireSize: { controlCircuit: '1.5', ctSecondary: '2.5', ptSecondary: '2.5', plcPowerSupply: '1.5' },
-    wireColor: { acPhase: 'Brown', dcPlus: 'Red', acNeutral: 'Blue', dcMinus: 'Black', plcInput: 'Green', plcOutput: 'Yellow', threePhase: 'Brown/Black/Grey' },
+    general: { altitudeAboveSeaLevel: '', designTemperature: '' },
+    wireSize: { controlCircuit: '', ctSecondary: '', ptSecondary: '', plcPowerSupply: '' },
+    wireColor: { acPhase: '', dcPlus: '', acNeutral: '', dcMinus: '', plcInput: '', plcOutput: '', threePhase: '' },
     wireManufacturer: { lv: '', mv: '' },
-    others: { thicknessOfPainting: '80', colorType: 'RAL', backgroundColor: '7035', writingColor: '9005' }
+    others: { thicknessOfPainting: '', colorType: '', backgroundColor: '', writingColor: '' }
   },
   templates: { LV: [], MV: [], HV: [] },
   deviceLibrary: { LV: [], MV: [], HV: [] },
@@ -79,19 +119,105 @@ const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 interface ProjectProviderProps {
   children: ReactNode;
   initialProject?: ProjectData | null;
+  initialRevision?: Revision | null;
 }
 
-export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, initialProject }) => {
-  // Merge supplied initial project with defaults so new/optional fields always exist
+export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, initialProject, initialRevision }) => {
   const [projectData, setProjectData] = useState<ProjectData>(
     initialProject
       ? { ...defaultProjectData, ...initialProject }
       : defaultProjectData
   );
   const [projectId, setProjectId] = useState<string | null>(initialProject?._id || null);
-  const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null); // ⭐ جدید
+  const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null);
+  
+  // Revision state - centralized source of truth
+  const [currentRevision, setCurrentRevision] = useState<Revision | null>(initialRevision || null);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [isLoadingRevisions, setIsLoadingRevisions] = useState(false);
+
+  // revisions is kept sorted latest-first by the backend/loadRevisions, so
+  // revisions[0] is always the latest revision when any exist.
+  const isCurrentRevisionEditable =
+    !currentRevision || revisions.length === 0 || revisions[0]._id === currentRevision._id;
+
+  // Every revision newer than the selected one — these are exactly the
+  // revisions the user has to delete before this one becomes editable again.
+  const blockingRevisionNumbers = React.useMemo(() => {
+    if (!currentRevision || isCurrentRevisionEditable) return [];
+    const currentNum = parseInt(currentRevision.revisionNumber) || 0;
+    return revisions
+      .filter(r => (parseInt(r.revisionNumber) || 0) > currentNum)
+      .map(r => r.revisionNumber)
+      .sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+  }, [revisions, currentRevision, isCurrentRevisionEditable]);
+
+  const [revisionLockNotice, setRevisionLockNotice] = useState<RevisionLockNotice | null>(null);
+  const dismissRevisionLockNotice = () => setRevisionLockNotice(null);
+
+  // While TPMS is the master, the project is a mirror of TPMS: it is read
+  // again on every open, so an edit made here would be overwritten. The way
+  // out is to raise a revision, which hands ownership to this side.
+  const isTpmsMastered = projectData.tpmsSync?.master === 'tpms';
+
+  const notifyRevisionLocked = () => {
+    setRevisionLockNotice(
+      isTpmsMastered
+        ? {
+            kind: 'tpms',
+            currentRevisionNumber: currentRevision?.revisionNumber ?? '',
+            blockingRevisionNumbers: [],
+            tpmsProject: projectData.tpmsSync?.oeNumber || projectData.tpmsSync?.projectName || '',
+            nextRevisionNumber: String(getNextRevisionNumber()),
+          }
+        : {
+            kind: 'newer-revision',
+            currentRevisionNumber: currentRevision?.revisionNumber ?? '',
+            blockingRevisionNumbers,
+          });
+  };
+
+  // Every project mutation goes through this gate. The change is dropped and
+  // the user is told why: a newer revision exists and has to be deleted first,
+  // or TPMS still owns the project and a revision has to be raised.
+  const guardEdit = (): boolean => {
+    if (isTpmsMastered) {
+      notifyRevisionLocked();
+      return false;
+    }
+    if (isCurrentRevisionEditable) return true;
+    notifyRevisionLocked();
+    return false;
+  };
+
+  // Deep-link hydrate: the chatbot creates a project on simorgh-soft's
+  // backend, then redirects the user to /simorgh-design-suite/?projectId=<_id>.
+  // If we see that query param on mount AND we don't already have a project
+  // loaded, fetch it and hydrate the context. One-shot — won't fight a
+  // later in-app project switch.
+  React.useEffect(() => {
+    if (initialProject) return;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const pid = q.get("projectId");
+      if (!pid) return;
+      (async () => {
+        try {
+          const p = await projectService.getProjectById(pid);
+          if (p) {
+            setProjectData({ ...defaultProjectData, ...p });
+            setProjectId(pid);
+          }
+        } catch (e) {
+          console.warn("deep-link hydrate failed:", e);
+        }
+      })();
+    } catch { /* ignore: no window (SSR / test) */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const updateProjectData = (data: Partial<ProjectData>) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       ...data,
@@ -100,9 +226,25 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const saveProject = async (): Promise<void> => {
+    // A TPMS-mastered project is written by the sync, not from here.
+    if (isTpmsMastered) {
+      notifyRevisionLocked();
+      throw new Error(
+        'This project is read from TPMS. Raise a revision in Design Suite to edit it here.');
+    }
+    // Revision 0 (or any older revision) becomes read-only once a newer
+    // revision exists — the user must delete the newer revisions first.
+    if (currentRevision && !isCurrentRevisionEditable) {
+      notifyRevisionLocked();
+      throw new Error(
+        `Revision ${currentRevision.revisionNumber} is locked because newer revision(s) ` +
+        `${blockingRevisionNumbers.map(n => `REV ${n}`).join(', ')} exist. ` +
+        `Delete the newer revisions to edit it again.`
+      );
+    }
     try {
       console.log('Saving project...', projectData);
-      
+
       const { _id, ...projectDataWithoutId } = projectData;
       const projectToSave = {
         ...projectDataWithoutId,
@@ -110,7 +252,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       };
 
       let savedProject;
-      
+
       if (projectId) {
         console.log('Updating existing project with ID:', projectId);
         savedProject = await projectService.updateProject(projectId, projectToSave);
@@ -121,6 +263,26 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       }
 
       setProjectData(savedProject);
+
+      // Revisions are otherwise frozen at creation time. Keep the active
+      // revision's stored snapshot in sync with further edits so that
+      // switching away and back to it preserves the latest changes.
+      if (currentRevision) {
+        const updatedRevision = await projectService.updateRevision(currentRevision._id!, {
+          projectSnapshot: savedProject
+        });
+        // Only take the response when it really is a revision. A malformed
+        // reply used to replace the active revision with something that had no
+        // _id, which reads as "not the latest revision" — and the whole
+        // project silently went read-only.
+        if (updatedRevision && (updatedRevision as any)._id) {
+          setCurrentRevision(updatedRevision);
+          setRevisions(prev => prev.map(r => (r._id === updatedRevision._id ? updatedRevision : r)));
+        } else {
+          console.warn('updateRevision returned no revision; keeping the current one.');
+        }
+      }
+
       console.log('Project saved successfully:', savedProject);
     } catch (error) {
       console.error('Error saving project:', error);
@@ -128,24 +290,42 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     }
   };
 
-  const addTemplate = (type: 'LV' | 'MV' | 'HV', name: string) => {
-    const newTemplate: TemplateItem = {
-      id: `${type}-${Date.now()}`,
-      name,
-      type,
-      properties: {}
-    };
-    setProjectData(prev => ({
-      ...prev,
-      templates: {
-        ...prev.templates,
-        [type]: [...prev.templates[type], newTemplate]
-      },
-      changedOn: new Date().toISOString()
-    }));
+  const addTemplate = (
+    type: 'LV' | 'MV' | 'HV',
+    name: string,
+    hierarchy?: TemplateHierarchy,
+    copyFromId?: string,
+  ) => {
+    if (!guardEdit()) return;
+    setProjectData(prev => {
+      // Optional clone of an existing template's properties (deep enough for
+      // our value tree). Used by the hierarchical wizard's "use as a starting
+      // point" flow.
+      let baseProps: Record<string, any> = {};
+      if (copyFromId) {
+        const source = prev.templates[type].find(t => t.id === copyFromId);
+        if (source) baseProps = JSON.parse(JSON.stringify(source.properties || {}));
+      }
+      const newTemplate: TemplateItem = {
+        id: `${type}-${Date.now()}`,
+        name,
+        type,
+        properties: baseProps,
+        ...(hierarchy ? { hierarchy } : {}),
+      };
+      return {
+        ...prev,
+        templates: {
+          ...prev.templates,
+          [type]: [...prev.templates[type], newTemplate],
+        },
+        changedOn: new Date().toISOString(),
+      };
+    });
   };
 
   const updateTemplate = (templateId: string, properties: Record<string, string>) => {
+    if (!guardEdit()) return;
     setProjectData(prev => {
       const updatedTemplates = { ...prev.templates };
       for (const type of ['LV', 'MV', 'HV'] as const) {
@@ -161,23 +341,20 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     });
   };
 
+  // Deleting a template also clears the device rows that were built on it —
+  // a row pointing at a template that no longer exists would keep a name in
+  // the grid while all of its property columns come out blank.
   const deleteTemplate = (templateId: string) => {
-    setProjectData(prev => {
-      const updatedTemplates = { ...prev.templates };
-      for (const type of ['LV', 'MV', 'HV'] as const) {
-        updatedTemplates[type] = updatedTemplates[type].filter(
-          template => template.id !== templateId
-        );
-      }
-      return {
-        ...prev,
-        templates: updatedTemplates,
-        changedOn: new Date().toISOString()
-      };
-    });
+    if (!guardEdit()) return;
+    setProjectData(prev => ({
+      ...prev,
+      ...removeTemplateEverywhere(prev, templateId),
+      changedOn: new Date().toISOString()
+    }));
   };
 
   const addDevice = (device: Partial<DeviceItem>) => {
+    if (!guardEdit()) return;
     const newDevice: DeviceItem = {
       id: `device-${Date.now()}`,
       rowNumber: projectData.devices.length + 1,
@@ -200,6 +377,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const updateDevice = (deviceId: string, data: Partial<DeviceItem>) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       devices: prev.devices.map(device =>
@@ -210,6 +388,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const deleteDevice = (deviceId: string) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       devices: prev.devices.filter(device => device.id !== deviceId),
@@ -219,6 +398,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
 
   // ⭐ جدید - Equipment Methods
   const addEquipment = (equipment: Equipment) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       equipments: [...prev.equipments, equipment],
@@ -227,6 +407,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const updateEquipment = (equipmentId: string, data: Partial<Equipment>) => {
+    if (!guardEdit()) return;
     setProjectData(prev => ({
       ...prev,
       equipments: prev.equipments.map(eq =>
@@ -237,7 +418,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const deleteEquipment = (equipmentId: string) => {
-    // حذف دستگاه‌های مربوط به این Equipment
+    if (!guardEdit()) return;
+    // Removes the equipment from the project arrangement together with its
+    // device rows. The Device Library entry it was created from is NOT
+    // touched — the user may want to lay the same device out again.
     setProjectData(prev => ({
       ...prev,
       equipments: prev.equipments.filter(eq => eq.id !== equipmentId),
@@ -251,6 +435,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const copyEquipment = (equipmentId: string) => {
+    if (!guardEdit()) return;
     const equipment = projectData.equipments.find(eq => eq.id === equipmentId);
     if (equipment) {
       const copiedEquipment: Equipment = {
@@ -261,6 +446,157 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       addEquipment(copiedEquipment);
     }
   };
+
+  // ============================================
+  // Revision Management - Centralized Source of Truth
+  // ============================================
+
+  const loadRevisions = async (pid: string) => {
+    if (!pid) return;
+    try {
+      setIsLoadingRevisions(true);
+      console.log('Loading revisions for project:', pid);
+      const revisionsData = await projectService.getRevisions(pid);
+      console.log('Loaded revisions:', revisionsData.length);
+      setRevisions(revisionsData);
+      
+      // Auto-create Revision 0 if no revisions exist
+      if (revisionsData.length === 0 && pid) {
+        console.log('No revisions found, creating Revision 0...');
+        const rev0 = await createRevisionForProject(pid, 'Initial', 'Base revision created automatically');
+        setCurrentRevision(rev0);
+      } else if (revisionsData.length > 0 && !currentRevision) {
+        // Set current revision to latest (first after sort by revisionNumber desc)
+        console.log('Setting current revision to latest:', revisionsData[0].revisionNumber);
+        setCurrentRevision(revisionsData[0]);
+      }
+    } catch (err) {
+      console.error('Failed to load revisions:', err);
+      setRevisions([]);
+    } finally {
+      setIsLoadingRevisions(false);
+    }
+  };
+
+  const getNextRevisionNumber = (): number => {
+    if (revisions.length === 0) return 0;
+    const maxRev = Math.max(...revisions.map(r => parseInt(r.revisionNumber) || 0));
+    return maxRev + 1;
+  };
+
+  const createRevisionForProject = async (pid: string, revName: string, desc: string): Promise<Revision> => {
+    const nextNum = getNextRevisionNumber();
+
+    // Raising a revision on a TPMS-mirrored project is the hand-over: from
+    // here on this side owns the project, so it stops being re-read from TPMS
+    // and becomes editable. The revisions TPMS wrote stay where they are.
+    const takingOver = projectData.tpmsSync?.master === 'tpms';
+    const tpmsSync = takingOver
+      ? {
+          ...projectData.tpmsSync!,
+          master: 'suite' as const,
+          detachedAt: new Date().toISOString(),
+          detachedAtRevision: String(nextNum),
+        }
+      : projectData.tpmsSync;
+    const snapshot: ProjectData = { ...projectData, ...(tpmsSync ? { tpmsSync } : {}) };
+
+    console.log('Creating revision:', {
+      projectId: pid,
+      revisionNumber: nextNum.toString(),
+      projectName: projectData.projectName,
+      takingOverFromTpms: takingOver,
+    });
+
+    const newRevision = await projectService.createRevision({
+      projectId: pid,
+      revisionNumber: nextNum.toString(),
+      revisionName: revName || `Revision ${nextNum}`,
+      description: desc || '',
+      createdBy: 'user',
+      projectSnapshot: snapshot,
+      isLocked: false,
+      source: 'suite',
+    });
+
+    if (takingOver) {
+      setProjectData(snapshot);
+      try {
+        await projectService.updateProject(pid, { tpmsSync });
+      } catch (err) {
+        console.error('Revision created, but the project could not be marked as taken over:', err);
+      }
+    }
+    
+    console.log('Revision created successfully:', newRevision);
+    
+    // Reload revisions and set new one as current
+    await loadRevisions(pid);
+    // currentRevision will be set by loadRevisions -> it's already the first in list
+    // But we explicitly set it here to ensure it's the newly created one
+    setCurrentRevision(newRevision);
+    return newRevision;
+  };
+
+  const createRevision = async (revName: string, desc: string): Promise<Revision> => {
+    if (!projectId) {
+      console.error('No projectId available for creating revision');
+      throw new Error('Project must be saved before creating a revision');
+    }
+    console.log('createRevision called with:', { projectId, revName, desc });
+    return createRevisionForProject(projectId, revName, desc);
+  };
+
+  const switchRevision = async (revisionId: string) => {
+    console.log('Switching to revision:', revisionId);
+    const revision = revisions.find(r => r._id === revisionId);
+    if (!revision) {
+      console.error('Revision not found:', revisionId);
+      throw new Error('Revision not found');
+    }
+    
+    // Load the project snapshot from the selected revision
+    if (revision.projectSnapshot) {
+      console.log('Loading project snapshot from revision:', revision.revisionNumber);
+      setProjectData({ ...defaultProjectData, ...revision.projectSnapshot });
+      setCurrentRevision(revision);
+      // Update project ID to ensure consistency
+      setProjectId(revision.projectId);
+      console.log('Successfully switched to revision:', revision.revisionNumber);
+    } else {
+      console.error('Revision has no projectSnapshot:', revision);
+      throw new Error('Revision has no project snapshot');
+    }
+  };
+
+  const deleteRevision = async (revisionId: string, password: string): Promise<void> => {
+    if (!projectId) {
+      throw new Error('No project loaded');
+    }
+    await projectService.deleteRevision(revisionId, password);
+
+    const updatedRevisions = await projectService.getRevisions(projectId);
+    setRevisions(updatedRevisions);
+
+    // If the deleted revision was the active one, fall back to the new
+    // latest revision and load its snapshot.
+    if (currentRevision && currentRevision._id === revisionId) {
+      const newCurrent = updatedRevisions.length > 0 ? updatedRevisions[0] : null;
+      setCurrentRevision(newCurrent);
+      if (newCurrent && newCurrent.projectSnapshot) {
+        setProjectData({ ...defaultProjectData, ...newCurrent.projectSnapshot });
+        setProjectId(newCurrent.projectId);
+      }
+    }
+  };
+
+  // Load revisions when project ID changes
+  React.useEffect(() => {
+    if (projectId && !initialRevision) {
+      loadRevisions(projectId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   return (
     <ProjectContext.Provider
@@ -274,13 +610,26 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         addDevice,
         updateDevice,
         deleteDevice,
-        // ⭐ جدید
         addEquipment,
         updateEquipment,
         deleteEquipment,
         copyEquipment,
         selectedEquipment,
-        setSelectedEquipment
+        setSelectedEquipment,
+        // Revision management
+        currentRevision,
+        revisions,
+        loadRevisions,
+        createRevision,
+        switchRevision,
+        deleteRevision,
+        getNextRevisionNumber,
+        isCurrentRevisionEditable,
+        isTpmsMastered,
+        blockingRevisionNumbers,
+        revisionLockNotice,
+        notifyRevisionLocked,
+        dismissRevisionLockNotice
       }}
     >
       {children}

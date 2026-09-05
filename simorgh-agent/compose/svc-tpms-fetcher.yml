@@ -1,0 +1,34 @@
+# =============================================================================
+# TPMS-FETCHER - Fetch TPMS project data from external MySQL (192.168.1.148)
+# Port 8021. AI/COT calls /mcp.
+# =============================================================================
+services:
+  tpms-fetcher:
+    build: ../tpms-fetcher-service
+    image: simorgh-tpms-fetcher:local
+    container_name: tpms-fetcher
+    expose:
+      - "8021"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      # 2026-05: TPMS data is no longer copied to a per-project workspace.
+      # The CoT engine reads it on demand via tpms-context-agent (MCP).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8021/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

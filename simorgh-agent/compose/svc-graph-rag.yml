@@ -1,0 +1,54 @@
+# =============================================================================
+# GRAPH-RAG-SERVICE - Neo4j-based graph RAG (entity linking + traversal)
+# Port 8037. REST. Extracted from backend in Phase 9.
+# Routes mounted at /api/v2/graph-rag/*. Requires Neo4j (infra-neo4j.yml).
+# =============================================================================
+services:
+  graph-rag-service:
+    image: simorgh-graph-rag-service:local
+    build: ../graph-rag-service
+    container_name: graph-rag-service
+    expose:
+      - "8037"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - NEO4J_URI=${NEO4J_URI:-bolt://neo4j:7687}
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-simorgh_secure_2024}
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - LLM_GATEWAY_URL=http://llm-gateway:8030
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
+      - HF_HOME=/root/.cache/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+      - sentence_transformers_cache:/root/.cache/torch/sentence_transformers
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8037/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  huggingface_cache:
+    name: simorgh_huggingface_cache
+    driver: local
+  sentence_transformers_cache:
+    name: simorgh_sentence_transformers_cache
+    driver: local

@@ -1,17 +1,34 @@
 """
-Simorgh Industrial Electrical Assistant - Backend API
-======================================================
-FastAPI backend with Redis, Qdrant, hybrid LLM, MCP microservices, and git-based project management.
+Simorgh Industrial Electrical Assistant - Backend (slimmed)
+============================================================
+After phase C of the monolith decomposition, this backend is the
+**legacy fallback** for paths that haven't been routed to extracted
+microservices yet. The following routers have been REMOVED from this
+backend and now live in their own containers:
 
-Architecture:
-- Redis: Multi-DB caching (sessions, chat, LLM, auth)
-- Qdrant: Vector search and document grounding
-- PostgreSQL: Auth, user tiers, project metadata
-- MCP: Dynamic tool discovery across microservices
-- Git: Project version control (via shell-service)
-- LLM: Hybrid OpenAI/Local support
+  - auth_v2       → simorgh-agent/auth-service (port 8032)
+  - documents_rag → simorgh-agent/documents-rag-service (8033)
+  - chatbot_v2    → simorgh-agent/chat-service (8034)
+  - project_session   → simorgh-agent/chat-service (8034)
+  - project_agent_routes → simorgh-agent/project-agent-service (8035)
+  - admin         → simorgh-agent/admin-service (8039)
+  - quota         → simorgh-agent/tier-quota-service (8040)
+  - payments      → simorgh-agent/payments-service (8038)
 
-Author: Simorgh Industrial Assistant
+Container nginx (`nginx_configs/includes/locations.inc`) routes the
+matching `/api/*` paths to those services directly. Backend still serves:
+
+  - /auth/*                     legacy auth (auth.py — kept)
+  - /api/v2/tpms/*              TPMS webhooks (tpms_webhook.py — kept)
+  - /api/documents/intelligence (document_intelligence.py — kept)
+  - inline routes in this file  (many — see @app.* below)
+  - the catch-all /api/* fallback for anything else nginx forwards here
+
+KNOWN remaining cleanup (not done in phase C — needs runtime testing):
+  - Many `services/*.py` modules are now duplicated in extracted services
+    and dead in backend. Prune after validating runtime.
+  - Many inline `@app.get/post` handlers in this file likely overlap with
+    extracted routers. Audit + delete in a future pass.
 """
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Query, BackgroundTasks, Request, Body
@@ -53,18 +70,14 @@ from services.unified_memory_service import (
 )
 from models.ontology import *
 
-# Import authentication routes and utilities
+# Routes still owned by backend (legacy + non-extracted)
 from routes.auth import router as auth_router
-from routes.auth_v2 import router as auth_v2_router
-from routes.documents_rag import router as documents_rag_router
-from routes.project_session import include_project_session_routes
-from routes.project_agent_routes import include_project_agent_routes
 from routes.tpms_webhook import router as tpms_webhook_router
-from routes.quota import router as quota_router
-from routes.admin import router as admin_router
-from routes.payments import router as payments_router
 from routes.document_intelligence import router as document_intelligence_router
 from services.auth_utils import get_current_user
+# NOTE: auth_v2, documents_rag, chatbot_v2, project_session,
+# project_agent_routes, quota, admin, payments — extracted in phase C.
+# Their HTTP paths now resolve to their own containers via nginx.
 
 # Import security middleware
 from middleware.security import (
@@ -74,10 +87,11 @@ from middleware.security import (
 )
 
 # Import chatbot_core for enhanced session management
+# include_chatbot_routes is intentionally NOT imported — it would try to
+# pull in routes.chatbot_v2 which was extracted to chat-service in phase C.
 from chatbot_core.startup import (
     initialize_chatbot_on_startup,
     shutdown_chatbot,
-    include_chatbot_routes,
 )
 from chatbot_core.integration import get_chatbot_core, ChatbotCore
 
@@ -107,23 +121,20 @@ app = FastAPI(
     description="Neo4j-based electrical engineering chatbot with hybrid LLM support"
 )
 
-# Include routers
-app.include_router(auth_router)
-app.include_router(auth_v2_router)  # Modern auth endpoints (v2)
-app.include_router(documents_rag_router)
-app.include_router(tpms_webhook_router)  # TPMS real-time sync webhooks
-app.include_router(quota_router)  # User quota/tier endpoints
-app.include_router(admin_router)  # Admin panel endpoints
-app.include_router(payments_router)  # Crypto payment endpoints
+# Include routers — only those still owned by backend after phase C.
+app.include_router(auth_router)             # legacy /auth/*
+app.include_router(tpms_webhook_router)     # /api/v2/tpms/*
+app.include_router(document_intelligence_router)  # /api/documents/intelligence/*
 
-# Include enhanced chatbot v2 routes
-include_chatbot_routes(app)
-
-# Include project session routes (per-project database isolation)
-include_project_session_routes(app)
-
-# Include project agent routes (COT, tasks, shell, email gateway)
-include_project_agent_routes(app)
+# Removed in phase C (routed to dedicated containers via nginx):
+#   - auth_v2_router          → auth-service:8032
+#   - documents_rag_router    → documents-rag-service:8033
+#   - chatbot v2 routes       → chat-service:8034
+#   - project_session routes  → chat-service:8034
+#   - project_agent routes    → project-agent-service:8035
+#   - admin_router            → admin-service:8039
+#   - quota_router            → tier-quota-service:8040
+#   - payments_router         → payments-service:8038
 
 # CORS
 app.add_middleware(
@@ -300,10 +311,16 @@ async def startup_event():
         logger.info("✅ Unified Memory service initialized")
     except Exception as e:
         logger.warning(f"⚠️ Unified Memory service initialization failed (non-fatal): {e}")
-        unified_memory_service = get_unified_memory_service(
-            redis_service=redis_service,
-            llm_service=llm_service
-        )
+        try:
+            unified_memory_service = get_unified_memory_service(
+                redis_service=redis_service,
+                llm_service=llm_service
+            )
+        except Exception as fallback_err:
+            logger.warning(
+                f"⚠️ Unified Memory fallback construction also failed (non-fatal): {fallback_err}"
+            )
+            unified_memory_service = None
         qdrant = None
 
     # Initialize Unified LLM Context Service
@@ -1330,26 +1347,47 @@ async def delete_chat(
     redis: RedisService = Depends(get_redis)
 ):
     """
-    Delete a chat session (requires authentication)
+    Delete a chat session (requires authentication).
 
-    Validates that the requesting user owns this chat
+    Validates that the requesting user owns this chat. Tolerates the
+    case where metadata is missing — general chats whose messages
+    were persisted only via the HR direct-RAG path
+    (general_chat_hr.py:_persist_pair) write `chat:history:{chat_id}`
+    but never create `chat:{chat_id}:metadata`, so the old "404 if no
+    metadata" path left those chats undeletable. The hardened
+    delete_chat sweep handles them correctly (it scans for all keys
+    matching the chat_id), and ownership is verified via the
+    user-index sets instead in that branch.
     """
-    # Get metadata
     metadata = redis.get(f"chat:{chat_id}:metadata", db="chat")
 
-    if not metadata:
-        raise HTTPException(status_code=404, detail="Chat not found")
+    if metadata:
+        # Normal path: metadata-based ownership check.
+        if metadata.get("user_id") != current_user:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You don't have permission to delete this chat"
+            )
+        user_id_for_delete = metadata.get("user_id")
+    else:
+        # Metadata-less path: verify ownership by checking that
+        # `chat_id` is actually in one of current_user's chat-index
+        # sets. This catches orphan history-only chats created by
+        # the HR direct-RAG persistence path without exposing the
+        # delete to arbitrary other users.
+        user_chat_ids = set(redis.get_user_general_chats(current_user))
+        if chat_id not in user_chat_ids:
+            # Belt-and-braces: also check the project indices in
+            # case this is a project chat with no metadata.
+            user_all = set(redis.get_user_all_chats(current_user))
+            if chat_id not in user_all:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Chat not found"
+                )
+        user_id_for_delete = current_user
 
-    # Security: Verify the chat belongs to the requesting user
-    if metadata.get("user_id") != current_user:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied: You don't have permission to delete this chat"
-        )
-
-    # Delete the chat
-    user_id = metadata.get("user_id")
-    success = redis.delete_chat(chat_id, user_id)
+    success = redis.delete_chat(chat_id, user_id_for_delete)
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete chat")
@@ -1755,12 +1793,17 @@ Rules:
 
 Title:"""
 
+        # Use whatever the stack's default LLM mode is. Hardcoding "online"
+        # broke title generation entirely whenever OpenAI was unavailable
+        # (expired/missing key, no internet, etc.) and produced a
+        # cascading "Failed to generate chat title" error on every new
+        # chat. The local LLM is plenty for a 5-word title.
         result = llm.generate(
             messages=[
                 {"role": "system", "content": "You are an expert at creating concise, descriptive titles."},
                 {"role": "user", "content": title_prompt}
             ],
-            mode="online",  # Force online for quality
+            mode=os.getenv("DEFAULT_LLM_MODE", "offline"),
             temperature=0.3,
             max_tokens=20,
             use_cache=False
@@ -1927,6 +1970,85 @@ def process_spec_extraction(
 # =============================================================================
 # CHAT/RAG ENDPOINT
 # =============================================================================
+
+async def _answer_image_with_vlm(
+    image_bytes: bytes,
+    filename: str,
+    content_type: str,
+    user_text: str,
+    llm_mode: str = None,
+) -> Optional[str]:
+    """Answer a chat turn that carries a raster image by routing it to the
+    local VLM on 192.168.1.62 via llm-gateway.
+
+    Uploaded images (SLDs, photos, screenshots) have no text layer, so the
+    doc-processor path extracts nothing and the bytes are lost. The gateway
+    auto-selects the VLM backend whenever a message contains image_url
+    content, so we just build an OpenAI-shape data-URL message and POST it
+    in offline mode. Returns the answer text, or None to fall through to
+    the existing doc-processor path.
+    """
+    import base64 as _b64
+    import httpx as _httpx
+
+    gateway_url = os.getenv("LLM_GATEWAY_URL", "http://llm-gateway:8030").strip().rstrip("/")
+    if not gateway_url:
+        return None
+
+    ext = (filename or "img.png").rsplit(".", 1)[-1].lower()
+    mime = content_type if (content_type or "").startswith("image/") else {
+        "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+        "bmp": "image/bmp", "tiff": "image/tiff", "gif": "image/gif",
+        "webp": "image/webp",
+    }.get(ext, "image/png")
+
+    b64 = _b64.b64encode(image_bytes).decode("ascii")
+    question = (user_text or "").strip() or (
+        "Describe this engineering drawing in detail. If it is a single "
+        "line diagram or panel schematic, list the feeder/section, ratings, "
+        "device tags (CB, contactor, CT, PT, relays) and any table values "
+        "you can read."
+    )
+    system_prompt = (
+        "You are Simorgh, an electrical-engineering assistant. The user has "
+        "attached an image (often a single line diagram, panel schematic, or "
+        "datasheet). Read it carefully and answer in the user's language. "
+        "Quote exact device tags, ratings and table values you can see; say "
+        "plainly when a field on the drawing is blank rather than inventing a "
+        "value."
+    )
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            ]},
+        ],
+        # offline → local backends; no force_backend so the gateway's
+        # image sniff routes this to the VLM (.62).
+        "mode": "offline",
+        "temperature": 0.2,
+        "max_tokens": int(os.getenv("VLM_VISION_MAX_TOKENS", "1500")),
+    }
+    timeout = float(os.getenv("LLM_GATEWAY_TIMEOUT_SEC", "180"))
+    try:
+        async with _httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(f"{gateway_url}/generate", json=payload)
+            r.raise_for_status()
+            body = r.json()
+    except Exception as e:
+        logger.error(f"VLM image call failed: {e}")
+        return None
+
+    answer = (body.get("response") or "").strip()
+    if not answer:
+        logger.warning("VLM image: empty answer (backend=%s)", body.get("backend"))
+        return None
+    logger.info("VLM image: answered via %s (%d chars)", body.get("backend"), len(answer))
+    return answer
+
 
 @app.post("/api/chat/send")
 async def send_chat_message(
@@ -2310,13 +2432,84 @@ async def send_chat_message(
         if _file:
             logger.info(f"📎 Processing uploaded file: {_file.filename}")
 
+            # Read the bytes once (the UploadFile stream can only be
+            # consumed once; reused for the temp-file write below).
+            _img_bytes = await _file.read()
+
+            # IMAGE SHORT-CIRCUIT: raster images (SLDs, photos, screenshots)
+            # have no text layer, so the doc-processor path below extracts
+            # nothing. Route the image straight to the local VLM on .62 via
+            # llm-gateway and return its answer.
+            _img_ct = (getattr(_file, "content_type", "") or "").lower()
+            _is_image = _img_ct.startswith("image/") or (_file.filename or "").lower().endswith(
+                (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".gif", ".webp")
+            )
+            if _is_image and _img_bytes:
+                _vlm_answer = await _answer_image_with_vlm(
+                    image_bytes=_img_bytes,
+                    filename=_file.filename or "image",
+                    content_type=_img_ct,
+                    user_text=_content,
+                    llm_mode=_llm_mode,
+                )
+                if _vlm_answer:
+                    _created = datetime.utcnow().isoformat()
+                    _disp = _content or f"📎 {_file.filename}"
+                    _umsg = {
+                        "message_id": str(uuid.uuid4()), "chat_id": _chat_id,
+                        "project_id": project_number, "page_id": _chat_id,
+                        "role": "user", "sender": "user",
+                        "content": _disp, "text": _disp,
+                        "timestamp": _created, "created_at": _created,
+                        "user_id": _user_id, "has_attachment": True,
+                        "attachment_filename": _file.filename,
+                    }
+                    _amsg = {
+                        "message_id": str(uuid.uuid4()), "chat_id": _chat_id,
+                        "project_id": project_number, "page_id": _chat_id,
+                        "role": "assistant", "sender": "assistant",
+                        "content": _vlm_answer, "text": _vlm_answer,
+                        "timestamp": _created, "created_at": _created,
+                        "llm_mode": "offline_vlm", "context_used": True,
+                        "cached": False,
+                    }
+                    try:
+                        redis.cache_chat_message(_chat_id, _umsg)
+                        redis.cache_chat_message(_chat_id, _amsg)
+                    except Exception as e:
+                        logger.warning(f"VLM image: redis cache failed: {e}")
+                    try:
+                        await memory.persistence.store_message(
+                            message_id=_umsg["message_id"], chat_id=_chat_id,
+                            user_id=_user_id, role="user", content=_disp,
+                            project_number=project_number,
+                            metadata={"has_attachment": True,
+                                      "attachment_filename": _file.filename})
+                        await memory.persistence.store_message(
+                            message_id=_amsg["message_id"], chat_id=_chat_id,
+                            user_id=_user_id, role="assistant", content=_vlm_answer,
+                            project_number=project_number,
+                            metadata={"llm_mode": "offline_vlm", "vision": True})
+                    except Exception as e:
+                        logger.warning(f"VLM image: postgres store failed: {e}")
+                    return {
+                        "chat_id": _chat_id,
+                        "response": _vlm_answer,
+                        "llm_mode": "offline_vlm",
+                        "context_used": True,
+                        "cached_response": False,
+                        "tokens": None,
+                    }
+                # VLM unavailable/empty — fall through to doc-processor.
+                logger.info("VLM image: no answer; falling back to doc-processor")
+
             # Save file temporarily
             import tempfile
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / f"{uuid.uuid4()}_{_file.filename}"
 
             with open(temp_file, 'wb') as f:
-                f.write(await _file.read())
+                f.write(_img_bytes)
 
             try:
                 # Import doc processor client
@@ -3130,6 +3323,93 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
                 system_prompt += stream_context_result.context_text
                 system_prompt += """\n\n🎯 CRITICAL: Use the above project data to answer. Be specific and cite actual values."""
 
+            # Project chat sessions (chat_id starts with `session_`) — pull the
+            # exploration summary that project-explorer wrote to redis db 5
+            # so the LLM sees the user's repo files even though /api/chat/stream
+            # doesn't have CoT tool-use. Best-effort: silent on lookup failure.
+            _enrichment_applied = False
+            if message.chat_id and message.chat_id.startswith("session_"):
+                try:
+                    from database.postgres_connection import get_db
+                    import redis as _redis_lib_local
+                    pg = get_db()
+                    sess_row = await pg.execute_one_async(
+                        "SELECT s.project_id, p.name AS project_name, "
+                        "       p.gitlab_repo_path, p.simorgh_branch "
+                        "FROM project_chat_sessions s "
+                        "JOIN projects p ON p.id = s.project_id "
+                        "WHERE s.session_token = $1",
+                        message.chat_id,
+                    )
+                    if sess_row:
+                        project_id_str = str(sess_row["project_id"])
+                        r5 = _redis_lib_local.Redis(
+                            host=os.getenv("REDIS_HOST", "redis"),
+                            port=int(os.getenv("REDIS_PORT", "6379")),
+                            db=5, decode_responses=True, socket_timeout=2,
+                        )
+                        exploration_raw = r5.get(f"project:{project_id_str}:exploration")
+                        if exploration_raw:
+                            exploration = json.loads(exploration_raw)
+                            system_prompt += f"\n\n{'=' * 50}\n# PROJECT REPOSITORY CONTEXT\n{'=' * 50}\n"
+                            project_name = sess_row.get("project_name") or "this project"
+                            repo_path = sess_row.get("gitlab_repo_path") or ""
+                            branch = sess_row.get("simorgh_branch") or "(simorgh working branch)"
+                            system_prompt += (
+                                f"\nProject: **{project_name}**\n"
+                                f"GitLab repo: `{repo_path}` "
+                                f"(cloned at /work/gitlab on branch `{branch}` "
+                                f"inside the project's runtime-broker container)\n"
+                            )
+                            if exploration.get("remote_summary"):
+                                system_prompt += (
+                                    "\n## Repository overview\n"
+                                    + exploration["remote_summary"][:5000]
+                                )
+                            if exploration.get("container_summary"):
+                                system_prompt += (
+                                    "\n\n## File index (deep walk)\n"
+                                    + exploration["container_summary"][:4000]
+                                )
+                            file_index = exploration.get("file_index") or []
+                            if file_index:
+                                system_prompt += (
+                                    "\n\n## Full file list (sample)\n"
+                                    + "\n".join("- " + f for f in file_index[:60])
+                                )
+                            system_prompt += (
+                                "\n\n🎯 CRITICAL: When the user asks about "
+                                "repo files, project structure, or specific "
+                                "code/text from the repo, answer from the above "
+                                "context. The whole repo is cloned at "
+                                "/work/gitlab inside the session container — "
+                                "treat it as authoritative for project-specific "
+                                "questions."
+                            )
+                            _enrichment_applied = True
+                            logger.info(
+                                "project-session prompt enrichment applied "
+                                f"chat={message.chat_id} project={project_id_str} "
+                                f"repo={repo_path} system_prompt_len={len(system_prompt)}"
+                            )
+                        else:
+                            logger.info(
+                                "project-session enrichment: no exploration "
+                                f"state for project_id={project_id_str} "
+                                "(redis db 5 miss)"
+                            )
+                    else:
+                        logger.info(
+                            f"project-session enrichment: chat_id "
+                            f"{message.chat_id} not found in project_chat_sessions"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "project-session prompt enrichment failed for "
+                        f"chat_id={message.chat_id}: {e}",
+                        exc_info=True,
+                    )
+
             # Build LLM messages
             llm_messages = [{"role": "system", "content": system_prompt}]
 
@@ -3177,6 +3457,77 @@ Provide accurate, technical responses based on IEC and IEEE standards."""
             think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
             think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
             think_block_pattern = re.compile(r'<think(?:ing)?>.*?</think(?:ing)?>', re.IGNORECASE | re.DOTALL)
+
+            # =====================================================================
+            # PHASE 3.5: CoT analysis + MCP tool execution for project chats.
+            #
+            # Before letting the LLM answer raw, ask the project_agent to plan
+            # the response and execute any tool calls (gitlab-mcp, context-
+            # search, tpms-context-agent, etc.). The tool outputs are injected
+            # as system evidence in `llm_messages` so the final response is
+            # grounded in real project data, not just the user's prompt +
+            # memory. For general chats this is skipped.
+            #
+            # Skip when chat_id is a wizard session_<token>: the legacy CoT
+            # path treats project_number as an OENUM / UUID, but our wizard
+            # uses gitlab_repo_path. We already injected the project's
+            # exploration summary into the system prompt above (the
+            # _enrichment_applied flag), which gives the LLM the same data
+            # the CoT block would have surfaced.
+            # =====================================================================
+            if chat_type == "project" and not _enrichment_applied:
+                try:
+                    from services.project_agent import get_project_agent
+                    from models.project_models import COTRequest, MessageChannel
+
+                    pagent = get_project_agent()
+                    cot_req = COTRequest(
+                        project_id=project_id_for_memory or project_number,
+                        user_input=message.content,
+                        channel=MessageChannel.CHAT,
+                        chat_id=message.chat_id,
+                        auto_execute=False,
+                    )
+                    project_ctx = {
+                        "name": chat_metadata.get("project_name", project_number),
+                        "status": "active",
+                        "description": chat_metadata.get("description", ""),
+                        "oenum": project_number,
+                    }
+                    cot = await pagent.cot_engine.analyze(cot_req, project_ctx)
+
+                    # Emit per-step events to the UI so the operator sees the plan
+                    for st in cot.steps:
+                        yield f"data: {json.dumps({'agent_step': {'task_id': f'cot-{st.step_number}', 'status': 'active', 'title': st.title, 'detail': st.description[:120], 'tool': st.tool_needed}})}\n\n"
+
+                    # Best-effort: execute each step whose tool is reachable via MCP.
+                    tool_evidence: list[str] = []
+                    mcp = getattr(pagent, "mcp_manager", None)
+                    if mcp and mcp.is_connected:
+                        for st in cot.steps:
+                            if not st.tool_needed:
+                                continue
+                            try:
+                                result = await mcp.call_tool(st.tool_needed, st.tool_input or {})
+                                snippet = (str(result)[:1500] + "…") if result and len(str(result)) > 1500 else str(result)
+                                tool_evidence.append(f"### {st.tool_needed}\n{snippet}")
+                                yield f"data: {json.dumps({'agent_step': {'task_id': f'cot-{st.step_number}', 'status': 'completed', 'title': st.title, 'tool': st.tool_needed}})}\n\n"
+                            except Exception as te:
+                                logger.warning(f"CoT step {st.step_number} ({st.tool_needed}) failed: {te}")
+                                yield f"data: {json.dumps({'agent_step': {'task_id': f'cot-{st.step_number}', 'status': 'failed', 'title': st.title, 'tool': st.tool_needed, 'detail': str(te)[:120]}})}\n\n"
+
+                    # Inject tool outputs as system evidence right before the
+                    # current user message. The LLM now answers WITH the
+                    # tool evidence in front of it.
+                    if tool_evidence:
+                        llm_messages.insert(-1, {
+                            "role": "system",
+                            "content": "Evidence gathered by agent tools:\n\n" + "\n\n".join(tool_evidence),
+                        })
+                except Exception as cot_err:
+                    # Never block the chat on a CoT failure — log + degrade
+                    # to the plain LLM path with whatever context we built.
+                    logger.warning(f"CoT analysis failed (degrading to plain LLM): {cot_err}", exc_info=True)
 
             async for chunk in llm.async_generate_stream(
                 messages=llm_messages,

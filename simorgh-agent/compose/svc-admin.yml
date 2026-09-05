@@ -1,0 +1,71 @@
+# =============================================================================
+# ADMIN-SERVICE — control panel + admin REST surface
+# Port 8039. REST + static SPA at /api/v2/admin/ui/.
+#
+# Capabilities:
+#   * /api/v2/admin/users, /tiers, /stats           (existing)
+#   * /api/v2/admin/settings/...                    runtime-editable env values
+#   * /api/v2/admin/features/...                    feature flags + per-user overrides
+#   * /api/v2/admin/audit                           audit log
+#   * /api/v2/admin/system/...                      service health + container restart
+#   * /api/v2/admin/internal/settings/scope/<svc>   pulled by other services'
+#                                                   live-settings clients
+#   * /api/v2/admin/ui/                             single-page admin UI
+#
+# Notes:
+#   * MASTER_ENCRYPTION_KEY is required for at-rest secret encryption.
+#     Generate once with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+#   * SETTINGS_INTERNAL_TOKEN gates the /internal/settings/scope/* endpoint.
+#     Mirror the same value to LIVE_SETTINGS clients (e.g. llm-gateway).
+#   * Docker socket mount enables the "Restart" buttons in the System tab.
+#     Comment it out if your deploy doesn't permit privileged sockets — the
+#     UI will then show those controls greyed-out.
+# =============================================================================
+services:
+  admin-service:
+    image: simorgh-admin-service:local
+    build: ../admin-service
+    container_name: admin-service
+    expose:
+      - "8039"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - REDIS_URL=redis://redis:6379/0
+      - POSTGRES_AUTH_HOST=${POSTGRES_AUTH_HOST:-postgres_auth}
+      - POSTGRES_AUTH_PORT=${POSTGRES_AUTH_PORT:-5432}
+      - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+      - POSTGRES_AUTH_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_AUTH_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - ADMIN_SETUP_SECRET=${ADMIN_SETUP_SECRET:-}
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      # NEW: control-panel-specific
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - SETTINGS_INTERNAL_TOKEN=${SETTINGS_INTERNAL_TOKEN:-}
+    volumes:
+      # Optional — enables the "Restart container" button in System tab.
+      # Drop this line in deployments that don't allow privileged sockets.
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    depends_on:
+      postgres_auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8039/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

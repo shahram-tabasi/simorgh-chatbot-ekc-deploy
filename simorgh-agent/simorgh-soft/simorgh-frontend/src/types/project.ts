@@ -45,6 +45,9 @@ export interface DeviceLibraryItem {
   name: string;
   type: 'LV' | 'MV' | 'HV';
   properties: DeviceLibraryProperties;
+  /** 'tpms' when this entry was read from TPMS rather than typed here. */
+  source?: 'tpms';
+  tpmsScopeId?: number;
 }
 
 // ==============================
@@ -146,6 +149,57 @@ export interface ProjectData {
   devices: DeviceItem[];
   equipments: Equipment[];
   outputTypes?: OutputType[];
+  /** Set on a project that came from TPMS — see TpmsSyncState. */
+  tpmsSync?: TpmsSyncState;
+}
+
+// ── TPMS-linked projects ─────────────────────────────────────────────────────
+// A project opened from TPMS keeps a link back to it. While `master` is
+// 'tpms', TPMS owns the data: every time the project is opened it is read from
+// TPMS again, and the app refuses edits. Raising a revision inside Design Suite
+// hands ownership over ('suite'): syncing stops and the new revision is the
+// one being worked on.
+export interface TpmsSyncState {
+  projectMainId: number;
+  oeNumber: string;
+  projectName: string;
+  master: 'tpms' | 'suite';
+  lastSyncedAt: string;
+  /** The TPMS revisions that became revisions on this side. */
+  revisions: number[];
+  /** Switchgear (scope) ids and names last read from TPMS. */
+  switchgears: { scopeId: number; scopeName: string; panelType: 'LV' | 'MV' | 'HV' }[];
+  /** When and at which revision the suite took over. */
+  detachedAt?: string;
+  detachedAtRevision?: string;
+}
+
+// ── Hierarchical template path ───────────────────────────────────────────────
+// Templates are organised in a category tree the user explored when
+// authoring them. This metadata lets the chatbot (and a forthcoming browser
+// UI) propose similar templates that already exist at the same path.
+//
+// LV path example:
+//   ['S8', 'OFW', 'FCB1', 'OUTGOING']  ← top → leaf
+//   ['8PT', 'CCS']
+//   ['S8', 'OFW', 'SFD']
+//
+// MV path is simpler:
+//   ['INCOMING'] | ['COUPLING'] | ['METERING'] | ['RISER'] | ['MET&RISER'] | ['OUTGOING']
+//
+// `leafKind` describes what equipment family this template is for, so the
+// suggestion engine can short-list templates with matching power/current.
+
+export type TemplateLeafKind = 'motor' | 'transformer' | 'lighting' | 'other';
+
+export interface TemplateHierarchy {
+  path: string[];                  // top → leaf nodes
+  leafKind?: TemplateLeafKind;
+  params?: {
+    kw?: string;                   // rated power (kW or kVA)
+    currentA?: string;             // rated full-load current
+    notes?: string;
+  };
 }
 
 export interface TemplateItem {
@@ -153,6 +207,11 @@ export interface TemplateItem {
   name: string;
   type: 'LV' | 'MV' | 'HV';
   properties: Record<string, string>;
+  /** Optional hierarchical classification used by recommendations / AI tools. */
+  hierarchy?: TemplateHierarchy;
+  /** 'tpms' when this template was built from a TPMS draft. */
+  source?: 'tpms';
+  tpmsScopeId?: number;
 }
 
 export interface DeviceItem {
@@ -201,6 +260,19 @@ export interface DeviceTableRow {
   flc: string;
   equipmentId: string;
   selectedParts?: SelectedPartEntry[];
+
+  // ── MV / LV specific extra columns (Device Selection) ──
+  tag?: string;          // MV + LV
+  description?: string;  // MV + LV
+  cableSize?: string;    // MV + LV
+  // LV-only
+  sfdHfd?: string;
+  moduleNo?: string;
+  size?: string;
+
+  // ── Visual customizations ──
+  rowColor?: string;                 // background color for the whole row (tailwind hex like '#fde68a')
+  cellColors?: Record<string, string>; // per-column background color overrides; key = column field name
 }
 
 export interface Equipment {
@@ -220,4 +292,41 @@ export interface OutputType {
   format: 'PDF' | 'Excel' | 'Word' | 'DWG';
   template: string;
   enabled: boolean;
+}
+
+// ==============================
+// Revision Management
+// ==============================
+
+export interface Revision {
+  _id?: string;
+  projectId: string;
+  revisionNumber: string;
+  revisionName: string;
+  description: string;
+  createdOn: string;
+  changedOn: string;
+  createdBy: string;
+  projectSnapshot: ProjectData;
+  isLocked: boolean;
+  parentRevisionId?: string;
+  /** 'tpms' for a revision that mirrors a TPMS revision, 'suite' for one
+   *  raised here. Absent on revisions created before this existed. */
+  source?: 'tpms' | 'suite';
+  /** The TPMS revision number this revision mirrors. */
+  tpmsRevision?: number;
+}
+
+export interface RevisionComparison {
+  baseRevision: Revision;
+  targetRevision: Revision;
+  differences: {
+    added: string[];
+    removed: string[];
+    modified: Array<{
+      field: string;
+      oldValue: any;
+      newValue: any;
+    }>;
+  };
 }

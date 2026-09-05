@@ -1,0 +1,111 @@
+# =============================================================================
+# LLM-GATEWAY - Hybrid OpenAI + local-LLM/VLM router
+# Port 8030. REST.
+#
+# Routes between three OpenAI-compatible backends:
+#   online       → api.openai.com           (OPENAI_API_KEY)
+#   offline-text → 192.168.1.61/v1          (qwen3-30b-a3b via vllm-openai)
+#   offline-vlm  → 192.168.1.62/v1          (qwen2-vl-7b   via vllm-openai)
+#
+# offline-text vs offline-vlm is auto-selected per request: any message
+# with a content part of type "image_url" → VLM, else LLM.
+#
+# See `llms/README.md` for the GPU-side stack (vllm/vllm-openai).
+# =============================================================================
+services:
+  llm-gateway:
+    image: simorgh-llm-gateway:local
+    build: ../llm-gateway
+    container_name: llm-gateway
+    expose:
+      - "8030"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # The docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (Xray)
+      # so containers can reach the public internet for things like
+      # api.openai.com. Local LAN destinations (192.168.1.61 / .62 for
+      # the LLM + VLM boxes) MUST bypass it — Xray 503s on RFC1918 dst.
+      # httpx (gateway's HTTP client) and busybox-wget do NOT honor CIDR
+      # in NO_PROXY, so set explicit values: blank HTTP_PROXY entirely
+      # (we don't actually need the proxy for anything the gateway does
+      # — OPENAI_API_KEY is unset by default and api.openai.com calls
+      # go through the agent stack's online routing) and wildcard
+      # NO_PROXY so nothing accidentally tunnels.
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
+
+      # Online mode: OpenAI
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
+
+      # Offline mode: text-only LLM on 192.168.1.61
+      # Qwen3-30B-A3B-Instruct-2507 (4-bit AWQ MoE) served via
+      # vllm/vllm-openai with --tool-call-parser hermes on 1× A30.
+      # Match LOCAL_LLM_MODEL_TEXT to --served-model-name on .61.
+      - LOCAL_LLM_URL_TEXT=${LOCAL_LLM_URL_TEXT:-http://192.168.1.61/v1}
+      - LOCAL_LLM_MODEL_TEXT=${LOCAL_LLM_MODEL_TEXT:-qwen3-30b-a3b}
+      # Harmony response sanitiser. gpt-oss emitted Harmony channel
+      # tokens (<|channel|>commentary …) that had to be stripped; Qwen3
+      # does NOT, so the sanitiser is OFF by default. Set to 1 ONLY if
+      # you roll back to gpt-oss-20b.
+      - OFFLINE_TEXT_HARMONY=${OFFLINE_TEXT_HARMONY:-0}
+
+      # Offline mode: VLM on 192.168.1.62 (A30 24GB)
+      - LOCAL_LLM_URL_VLM=${LOCAL_LLM_URL_VLM:-http://192.168.1.62/v1}
+      - LOCAL_LLM_MODEL_VLM=${LOCAL_LLM_MODEL_VLM:-qwen2.5-vl-7b}
+
+      # Optional: if vllm was started with --api-key, mirror it here
+      # (same value on both GPU boxes assumed).
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+
+      # online | offline | auto
+      - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
+
+      # Hard-cap upstream timeout (gen can run minutes for 20B).
+      - LLM_GATEWAY_TIMEOUT_SEC=${LLM_GATEWAY_TIMEOUT_SEC:-1800}
+
+      # ---- LiteLLM shim (Pattern C, opt-in) ---------------------------
+      # When USE_LITELLM=1, the gateway routes every backend
+      # (online/offline_text/offline_vlm) through LiteLLM instead of
+      # going direct to OpenAI / 192.168.1.61 / 192.168.1.62. Model
+      # selection + vision sniffing + auto-fallback all stay in the
+      # gateway; only the transport changes. LiteLLM's model_list
+      # (litellm/config.yaml) must list gpt-4o / gpt-oss-20b /
+      # qwen2.5-vl-7b under those exact names. Activate with:
+      #   1. Uncomment compose/svc-litellm.yml in master include.
+      #   2. Set USE_LITELLM=1 in .env (or shell).
+      #   3. docker compose up -d litellm llm-gateway
+      # Roll back: USE_LITELLM=0; docker compose up -d llm-gateway
+      - USE_LITELLM=${USE_LITELLM:-0}
+      - LITELLM_URL=${LITELLM_URL:-http://litellm:4000}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
+
+      # Live settings — admin-service hot-reloads these every 30 s, falling
+      # back to the env values above when unreachable. SETTINGS_INTERNAL_TOKEN
+      # must match the one configured on admin-service.
+      - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin-service:8039}
+      - LIVE_SETTINGS_SCOPE=llm-gateway
+      - SETTINGS_INTERNAL_TOKEN=${SETTINGS_INTERNAL_TOKEN:-}
+      - LIVE_SETTINGS_REFRESH_SEC=${LIVE_SETTINGS_REFRESH_SEC:-30}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8030/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

@@ -39,6 +39,19 @@ DEFAULT_LANGUAGE = os.getenv("TTS_LANGUAGE", "en")
 CACHE_DIR = Path(os.getenv("TTS_CACHE_DIR", "/app/cache"))
 MAX_CACHE_SIZE_MB = int(os.getenv("TTS_MAX_CACHE_MB", "500"))
 MAX_TEXT_LENGTH = int(os.getenv("TTS_MAX_TEXT_LENGTH", "5000"))
+# edge-tts opens a WSS to speech.platform.bing.com. aiohttp's WS client
+# does NOT honour HTTP_PROXY env vars, so on hosts without direct outbound
+# (e.g. .68 → xray on 172.17.0.1:10809) the connection dies with a DNS
+# resolution error. Pass the proxy URL explicitly via Communicate(proxy=).
+# Prefer an explicit TTS_PROXY override, fall back to HTTPS_PROXY/HTTP_PROXY.
+TTS_PROXY = (
+    os.getenv("TTS_PROXY")
+    or os.getenv("HTTPS_PROXY")
+    or os.getenv("https_proxy")
+    or os.getenv("HTTP_PROXY")
+    or os.getenv("http_proxy")
+    or None
+)
 
 # Ensure cache directory exists
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,19 +72,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Available voices (subset of edge-tts voices)
+# Available voices (subset of edge-tts voices).
+#
+# Two key forms accepted: the historical "-1" / "-2" suffixed names
+# (legacy clients still in production), AND the suffix-less form that
+# the current frontend sends from MessageList.tsx (`fa-female` /
+# `en-male` based on a Persian/Arabic regex on the rendered text).
+# Keeping both avoids silent fallback to DEFAULT_VOICE — which is
+# English-only and produces NO audio for Persian text, since
+# Microsoft Edge TTS can't synthesize Persian Unicode through an
+# English voice. See _resolve_voice() warning below.
 VOICE_MAP = {
     # English
+    "en-female":   "en-US-AriaNeural",
+    "en-male":     "en-US-GuyNeural",
     "en-female-1": "en-US-AriaNeural",
     "en-female-2": "en-US-JennyNeural",
-    "en-male-1": "en-US-GuyNeural",
-    "en-male-2": "en-US-ChristopherNeural",
+    "en-male-1":   "en-US-GuyNeural",
+    "en-male-2":   "en-US-ChristopherNeural",
     # Persian / Farsi
+    "fa-female":   "fa-IR-DilaraNeural",
+    "fa-male":     "fa-IR-FaridNeural",
     "fa-female-1": "fa-IR-DilaraNeural",
-    "fa-male-1": "fa-IR-FaridNeural",
+    "fa-male-1":   "fa-IR-FaridNeural",
     # Arabic
+    "ar-female":   "ar-SA-ZariyahNeural",
+    "ar-male":     "ar-SA-HamedNeural",
     "ar-female-1": "ar-SA-ZariyahNeural",
-    "ar-male-1": "ar-SA-HamedNeural",
+    "ar-male-1":   "ar-SA-HamedNeural",
 }
 
 
@@ -111,15 +139,27 @@ def _get_cache_path(cache_key: str) -> Path:
 
 
 def _resolve_voice(voice_id: Optional[str]) -> str:
-    """Resolve voice ID to edge-tts voice name"""
+    """Resolve voice ID to edge-tts voice name.
+
+    Falling back to DEFAULT_VOICE silently used to mask a real bug:
+    the frontend sends `fa-female` for Persian text, but if that key
+    wasn't in VOICE_MAP the fallback picked the English default
+    voice — and Microsoft's TTS returns NO AUDIO when asked to read
+    Persian script with an English voice, producing a 500 with the
+    unhelpful "no audio received" log. Now we warn loudly so the
+    next mismatch is obvious.
+    """
     if not voice_id:
         return DEFAULT_VOICE
-    # Check if it's a friendly name
     if voice_id in VOICE_MAP:
         return VOICE_MAP[voice_id]
-    # Check if it's already a full edge-tts voice name
+    # Accept a full edge-tts voice name passed through directly.
     if "Neural" in voice_id:
         return voice_id
+    logger.warning(
+        f"Unknown voice_id={voice_id!r}; falling back to DEFAULT_VOICE={DEFAULT_VOICE}. "
+        f"If the request text is non-English this will produce 0 bytes of audio."
+    )
     return DEFAULT_VOICE
 
 
@@ -153,6 +193,7 @@ async def health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "default_voice": DEFAULT_VOICE,
         "cache_dir": str(CACHE_DIR),
+        "proxy_configured": bool(TTS_PROXY),
     }
 
 
@@ -192,55 +233,97 @@ async def synthesize(request: SynthesizeRequest):
             }
         )
 
-    # Generate speech
-    try:
-        logger.info(f"Synthesizing: {len(request.text)} chars, voice={voice}, rate={rate}")
+    # Microsoft's edge TTS endpoint is sporadically flaky through
+    # high-latency proxies — `NoAudioReceived` (and empty-body returns)
+    # fire for some requests with no obvious content pattern; same
+    # text+voice usually succeeds on a second try. One retry with a
+    # short backoff catches almost all transient cases. If the second
+    # attempt also fails, the request body is logged in full so an
+    # operator can reproduce and decide if frontend text-cleanup needs
+    # tightening for some character class.
+    logger.info(f"Synthesizing: {len(request.text)} chars, voice={voice}, rate={rate}")
 
-        communicate = edge_tts.Communicate(
-            text=request.text,
-            voice=voice,
-            rate=rate,
-            volume=volume,
-        )
-
-        # Collect audio data
-        audio_data = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data.write(chunk["data"])
-
-        audio_data.seek(0)
-        audio_bytes = audio_data.read()
-
-        if not audio_bytes:
-            raise HTTPException(status_code=500, detail="TTS engine returned empty audio")
-
-        # Cache the result
+    audio_bytes: bytes = b""
+    for attempt in (1, 2):
         try:
-            cache_path.write_bytes(audio_bytes)
-            _cleanup_cache()
+            communicate = edge_tts.Communicate(
+                text=request.text,
+                voice=voice,
+                rate=rate,
+                volume=volume,
+                proxy=TTS_PROXY,
+            )
+            buf = io.BytesIO()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    buf.write(chunk["data"])
+            audio_bytes = buf.getvalue()
+            if audio_bytes:
+                if attempt > 1:
+                    logger.info(f"Synthesis succeeded on retry {attempt}")
+                break
+            # Empty body without exception — treat as the transient
+            # "no audio" case and retry.
+            logger.warning(f"Empty audio on attempt {attempt}; retrying")
+        except edge_tts.exceptions.NoAudioReceived:
+            logger.warning(f"NoAudioReceived on attempt {attempt}; retrying")
         except Exception as e:
-            logger.warning(f"Failed to cache audio: {e}")
+            # Non-transient errors (network, library bugs, etc.) skip
+            # retry — re-raising immediately so the client sees the
+            # real cause instead of a generic "no audio" after 500ms.
+            logger.error(f"TTS synthesis error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
+        if attempt == 1:
+            await asyncio.sleep(0.25)
 
-        logger.info(f"Synthesized: {len(audio_bytes)} bytes, voice={voice}")
-
-        return StreamingResponse(
-            io.BytesIO(audio_bytes),
-            media_type="audio/mpeg",
-            headers={
-                "Content-Disposition": "inline",
-                "X-TTS-Cached": "false",
-                "X-TTS-Voice": voice,
-                "Content-Length": str(len(audio_bytes)),
-            }
+    if not audio_bytes:
+        logger.error(
+            "No audio received from edge-tts after 2 attempts. "
+            f"voice={voice} rate={rate} text_len={len(request.text)} "
+            f"text_preview={request.text[:300]!r}"
+        )
+        # 503 (Service Unavailable) — not 500 — because the failure is
+        # almost always upstream connectivity to Microsoft, not a bug in
+        # this service. The structured body lets the frontend distinguish
+        # "TTS-needs-internet" from a generic crash and show a localised
+        # message instead of a silent click on the speak button.
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error_code": "tts_upstream_unavailable",
+                "detail": "TTS upstream returned no audio after retries",
+                "user_message_fa": (
+                    "خدمات تبدیل متن به گفتار در حال حاضر در دسترس نیست. "
+                    "اتصال اینترنت سرور را بررسی کنید."
+                ),
+                "user_message_en": (
+                    "Text-to-speech is currently unavailable — the server "
+                    "could not reach the upstream speech provider. Please "
+                    "check the server's outbound internet connection."
+                ),
+                "voice": voice,
+            },
         )
 
-    except edge_tts.exceptions.NoAudioReceived:
-        logger.error("No audio received from edge-tts")
-        raise HTTPException(status_code=500, detail="TTS synthesis failed: no audio received")
+    # Cache the result
+    try:
+        cache_path.write_bytes(audio_bytes)
+        _cleanup_cache()
     except Exception as e:
-        logger.error(f"TTS synthesis error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
+        logger.warning(f"Failed to cache audio: {e}")
+
+    logger.info(f"Synthesized: {len(audio_bytes)} bytes, voice={voice}")
+
+    return StreamingResponse(
+        io.BytesIO(audio_bytes),
+        media_type="audio/mpeg",
+        headers={
+            "Content-Disposition": "inline",
+            "X-TTS-Cached": "false",
+            "X-TTS-Voice": voice,
+            "Content-Length": str(len(audio_bytes)),
+        }
+    )
 
 
 @app.get("/voices")

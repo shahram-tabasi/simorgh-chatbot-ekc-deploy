@@ -3,9 +3,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Message, UploadedFile, AgentPlan, AgentTaskGroup, AgentSubtask } from '../types';
 import axios from 'axios';
+import { sendMessageHrStream } from '../services/chatbotV2Api';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const API_V2_CHAT = `${API_BASE}/v2/chat`;
+
+// UUID-shaped user_id means a modern (postgres_auth) user; only modern
+// users are eligible for the HR/Strategy direct-RAG fast path. Legacy
+// TPMS users (EMPUSERNAME strings) keep the old flow.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isModernUser = (id?: string) => !!id && UUID_RE.test(id);
 
 export interface ChatOptions {
   llmMode?: 'online' | 'offline' | null; // null = use default
@@ -46,10 +54,14 @@ export function useChat(
         setLlmMode(savedMode);
         console.log('Loaded LLM mode from storage:', savedMode);
       } else {
-        // اگر هیچی نبود یا مقدار اشتباه بود → پیش‌فرض رو بذار online
-        setLlmMode('online');
-        localStorage.setItem('llm_mode', 'online');
-        console.log('Set default LLM mode: online');
+        // Default offline — general chat always uses the local gpt-oss
+        // path (hr_chat.py force_backend='text'); project chats now
+        // honour this setting too. Previously defaulted to online,
+        // which made the toggle have no effect since modern users were
+        // also force-locked back to online elsewhere.
+        setLlmMode('offline');
+        localStorage.setItem('llm_mode', 'offline');
+        console.log('Set default LLM mode: offline');
       }
     };
 
@@ -119,7 +131,8 @@ export function useChat(
   // Streaming message sender using Server-Sent Events
   const sendMessageStreaming = useCallback(async (
     content: string,
-    options?: ChatOptions
+    options?: ChatOptions,
+    files?: UploadedFile[]
   ) => {
     if (!chatId || !userId) {
       console.error('❌ Cannot send message: chatId or userId missing');
@@ -233,6 +246,448 @@ export function useChat(
 
       updateAgentPlan(plan);
     };
+
+    // Wizard project sessions (chat_id starts with `session_`) route through
+    // project-agent-service /api/v2/agent/projects/{pid}/message/stream so
+    // the CoT engine + MCP tools (gitlab-mcp, runtime-broker, etc.) actually
+    // run. Legacy /api/chat/stream stays only for general chats.
+    if (chatId.startsWith('session_')) {
+      try {
+        // Resolve project_id from the session token (one-time per session).
+        const sessResp = await axios.get(
+          `${API_BASE}/v2/chatbot/project/sessions/${chatId}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        const projectId = sessResp.data.project_id;
+        if (!projectId) throw new Error('session has no project_id');
+
+        // Upload EVERY attached file to project-agent /documents (each is
+        // parsed, embedded and indexed under the project's tenant in the
+        // shared vector store). Previously only files[0] was uploaded, so
+        // a two-file comparison silently dropped the second file. We upload
+        // all of them; the agent's grounding retrieves across all project
+        // documents by project scope. The first uploaded id is still passed
+        // on the stream body for the single-image vision pipeline.
+        let _documentId: string | undefined;
+        let _documentFilename: string | undefined;
+        const _attached = (files || []).filter((f) => f.file);
+        for (const f of _attached) {
+          try {
+            const fd = new FormData();
+            fd.append('file', f.file as File);
+            const upResp = await axios.post(
+              `${API_BASE}/v2/agent/projects/${projectId}/documents`,
+              fd,
+              {
+                headers: {
+                  'Content-Type': 'multipart/form-data',
+                  'Authorization': `Bearer ${token}`,
+                },
+                signal: abortControllerRef.current?.signal,
+              },
+            );
+            const id =
+              upResp.data?.document_id || upResp.data?.id || upResp.data?.document?.id;
+            if (_documentId === undefined) {
+              _documentId = id;
+              _documentFilename = f.name;
+            }
+            console.log('📎 Uploaded attachment to project-agent:', f.name, id,
+                        upResp.data?.status, upResp.data?.chunks_indexed);
+            if (upResp.data?.status === 'index_failed') {
+              console.warn('⚠️ Attachment indexed 0 chunks (not searchable):', f.name);
+            }
+          } catch (upErr) {
+            console.error('Attachment upload failed:', f.name, upErr);
+          }
+        }
+
+        const url = `${API_BASE}/v2/agent/projects/${projectId}/message/stream`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'text/event-stream',
+          },
+          body: JSON.stringify({
+            content,
+            channel: 'chat',
+            chat_id: chatId,
+            // Honour the user's mode choice from SettingsPanel.
+            // Default offline (local Simorgh AI on .61/.62); 'online'
+            // uses the configured OpenAI/Anthropic API. The backend
+            // accepts this on ProjectMessageCreate and falls back to
+            // local if the requested online provider isn't configured.
+            llm_mode: llmMode || 'offline',
+            // Attachment reference (set when a file was uploaded above).
+            // The agent fetches the stashed image bytes by document_id
+            // and runs vision perception before planning.
+            document_id: _documentId,
+            document_filename: _documentFilename,
+          }),
+          signal: abortControllerRef.current?.signal,
+        });
+        // 425 Too Early: project-init is still indexing this project
+        // (Phase 3 of auto-exploration). Render a friendly inline
+        // message that surfaces the current step so the user knows
+        // what's happening, instead of a generic "HTTP 425" error
+        // toast. The user can retry once init reports done.
+        if (response.status === 425) {
+          let progressText = 'Indexing project files…';
+          try {
+            const errBody = await response.json();
+            const p = errBody?.detail?.progress;
+            if (p?.current_step) {
+              const completed = p.completed_count ?? p.completed_steps?.length ?? 0;
+              const total = p.total_expected ?? 0;
+              progressText = total
+                ? `Indexing project — currently: ${p.current_step} (${completed}/${total})`
+                : `Indexing project — currently: ${p.current_step}`;
+            }
+          } catch {
+            // body wasn't JSON; keep the default progressText
+          }
+          setIsTyping(false);
+          setMessages(prev => [...prev, {
+            id: `system-${Date.now()}`,
+            content:
+              `🔄 ${progressText}\n\n` +
+              'Your project is still being set up. ' +
+              'This usually takes under a minute for small repos; ' +
+              'large ones with many documents can take a few minutes ' +
+              'while we extract and index the content. Please try ' +
+              'your question again shortly.',
+            role: 'assistant',
+            timestamp: new Date(),
+            metadata: { initBlocked: true } as any,
+          }]);
+          return;
+        }
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} from project-agent`);
+        }
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('No response body from project-agent');
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let curEvent = 'message';
+        let curData = '';
+        let accumulated = '';
+
+        const flushEvent = () => {
+          if (!curData) { curEvent = 'message'; return; }
+          let payload: any = curData;
+          try { payload = JSON.parse(curData); } catch {}
+          if (curEvent === 'complete') {
+            accumulated = payload.response || '';
+            const tasks: AgentTaskGroup[] = (payload.tasks || []).map((t: any) => ({
+              id: String(t.id || t.task_id || `task-${Math.random()}`),
+              title: t.title || t.task_type || 'task',
+              status: 'completed',
+              subtasks: [],
+            }));
+            if (!messageAdded) {
+              messageAdded = true;
+              setIsTyping(false);
+              setMessages(prev => [...prev, {
+                id: aiMessageId,
+                content: accumulated,
+                role: 'assistant',
+                timestamp: new Date(),
+                metadata: {
+                  streaming: false,
+                  agentPlan: tasks.length ? { tasks } : currentAgentPlan || undefined,
+                  cot_chain: payload.chain_id,
+                  cot_reasoning: payload.reasoning,
+                },
+              }]);
+            } else {
+              setMessages(prev => prev.map(m =>
+                m.id === aiMessageId
+                  ? { ...m, content: accumulated, metadata: {
+                      ...m.metadata, streaming: false,
+                      agentPlan: tasks.length ? { tasks } : m.metadata?.agentPlan,
+                      cot_chain: payload.chain_id, cot_reasoning: payload.reasoning,
+                    } }
+                  : m
+              ));
+            }
+          } else if (curEvent === 'error') {
+            setIsTyping(false);
+            const errMsg: Message = {
+              id: aiMessageId,
+              content: `Error: ${payload.error || curData}`,
+              role: 'assistant',
+              timestamp: new Date(),
+              metadata: { error: true },
+            };
+            if (!messageAdded) {
+              messageAdded = true;
+              setMessages(prev => [...prev, errMsg]);
+            } else {
+              setMessages(prev => prev.map(m => m.id === aiMessageId ? errMsg : m));
+            }
+          } else if (curEvent === 'ping') {
+            // keepalive — ignore
+          } else if (curEvent === 'cot_plan_chosen') {
+            // Phase 5: master router announced which CoT plan it
+            // picked. Stamp it on the streaming assistant message so
+            // MessageList can paint a chip ("plan: single_repo")
+            // above the bubble.
+            if (!messageAdded) {
+              messageAdded = true;
+              setIsTyping(false);
+              setMessages(prev => [...prev, {
+                id: aiMessageId,
+                content: '',
+                role: 'assistant',
+                timestamp: new Date(),
+                metadata: {
+                  streaming: true,
+                  cotPlan: payload?.plan,
+                  cotPlanSignals: payload?.signals,
+                },
+              }]);
+            } else {
+              setMessages(prev => prev.map(m => m.id === aiMessageId
+                ? { ...m, metadata: {
+                    ...(m.metadata || {}),
+                    cotPlan: payload?.plan,
+                    cotPlanSignals: payload?.signals,
+                  } }
+                : m));
+            }
+          } else {
+            // CHAT-DRIVEN PANEL OPEN. The agent's open_soft_proposals
+            // soft-bridge tool emits a `soft_open_drawer` progress
+            // event; re-broadcast it on window so the inline Design
+            // Suite component can listen and auto-open the drawer
+            // without restructuring the SSE plumbing. AG-UI /
+            // Claude-Artifacts pattern: named tool call → typed event
+            // → component opens panel.
+            if (curEvent === 'soft_open_drawer') {
+              try {
+                window.dispatchEvent(new CustomEvent(
+                  'simorgh:soft-open-drawer',
+                  { detail: { projectId, ...(payload || {}) } },
+                ));
+              } catch {}
+            }
+            // progress / step / anything-else → surface as an agent step
+            const step = (payload && typeof payload === 'object' && payload.title)
+              ? payload
+              : { title: curEvent, status: 'active', detail: typeof payload === 'string' ? payload : '' };
+            handleAgentStep({ agent_step: {
+              task_id: step.task_id || `cot-${curEvent}`,
+              status: step.status || 'active',
+              title: step.title || curEvent,
+              detail: step.detail,
+              tool: step.tool || step.tool_needed,
+            }});
+            if (!currentAgentPlan) {
+              // bootstrap a plan so subsequent steps have a place to live
+              currentAgentPlan = { tasks: [{
+                id: step.task_id || `cot-${curEvent}`,
+                title: step.title || curEvent,
+                status: 'active',
+                subtasks: [],
+              }] };
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId, content: '', role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { streaming: true, agentPlan: currentAgentPlan },
+                }]);
+              }
+            }
+          }
+          curEvent = 'message';
+          curData = '';
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let nl;
+          while ((nl = buffer.indexOf('\n')) !== -1) {
+            const rawLine = buffer.slice(0, nl).replace(/\r$/, '');
+            buffer = buffer.slice(nl + 1);
+            if (rawLine === '') { flushEvent(); continue; }
+            if (rawLine.startsWith(':')) continue;          // SSE comment
+            if (rawLine.startsWith('event: ')) curEvent = rawLine.slice(7).trim();
+            else if (rawLine.startsWith('data: ')) curData = rawLine.slice(6);
+          }
+        }
+        flushEvent();
+        return;
+      } catch (e: any) {
+        console.error('project-agent stream failed:', e);
+        setIsTyping(false);
+        const errMsg: Message = {
+          id: aiMessageId,
+          content: `Failed to reach project agent: ${e.message || e}`,
+          role: 'assistant',
+          timestamp: new Date(),
+          metadata: { error: true },
+        };
+        setMessages(prev => [...prev, errMsg]);
+        return;
+      }
+    }
+
+    // General chat for modern (UUID) users: route to the HR/Strategy
+    // direct-RAG path. No planner, no MCP, no OpenAI — straight to
+    // gpt-oss-20b on .61 via llm-gateway. The legacy /api/chat/stream
+    // fallback below still applies to legacy TPMS users.
+    if (isModernUser(userId) && !projectNumber) {
+      try {
+        await sendMessageHrStream(
+          userId!,
+          content,
+          {
+            onMeta: (meta) => {
+              // Citations arrive BEFORE the first token. Stamp them on
+              // a (still-empty) assistant message so the bubble renders
+              // source badges while gpt-oss is generating.
+              //
+              // Also stamps cache_entry_id (issue #1, May 2026): the
+              // backend sends this in the meta frame on cache HIT AND
+              // on the trailing meta frame after a cache MISS that
+              // successfully wrote a new entry. Threading it into the
+              // assistant message's metadata is what makes 👍/👎
+              // on a cache-served answer call /cache-reaction with
+              // the right id — without this, the dislike click does
+              // nothing (operator's "again the cache retrieved"
+              // report immediately above this commit).
+              const cacheMeta = {
+                ...(meta.cache_hit ? { cache_hit: true as const } : {}),
+                ...(meta.cache_entry_id ? { cache_entry_id: meta.cache_entry_id } : {}),
+                ...(meta.cache_cosine !== undefined ? { cache_cosine: meta.cache_cosine } : {}),
+              };
+              // Build a partial-merge payload: only include
+              // keys that the meta frame actually carries. The
+              // trailing meta frame from the cache-MISS path
+              // (chat-service general_chat_hr.py) sends ONLY
+              // `cache_entry_id` after the stream completes —
+              // unconditionally including `citations: meta.hits`
+              // here would overwrite the previously-set citations
+              // with undefined and the bubble would lose its
+              // source badges.
+              const metaPatch: Record<string, any> = { ...cacheMeta };
+              if (Array.isArray(meta.hits)) metaPatch.citations = meta.hits as any;
+              if (typeof meta.top_score === 'number') metaPatch.top_score = meta.top_score;
+
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: '',
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: {
+                    streaming: true,
+                    ...metaPatch,
+                  },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, metadata: { ...(m.metadata || {}), ...metaPatch }}
+                  : m));
+              }
+            },
+            onChunk: (delta) => {
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: delta,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { streaming: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: (m.content || '') + delta }
+                  : m));
+              }
+            },
+            onRefusal: (text) => {
+              // Out-of-corpus query — refusal IS the assistant message;
+              // suppress citation badges (no sources backed this) and
+              // do NOT mark as error (otherwise the bubble turns red).
+              if (!messageAdded) {
+                messageAdded = true;
+                setIsTyping(false);
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: text,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { refusal: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: text, metadata: { ...(m.metadata||{}), refusal: true, citations: undefined } }
+                  : m));
+              }
+            },
+            onDone: () => {
+              setMessages(prev => prev.map(m => m.id === aiMessageId
+                ? { ...m, metadata: { ...(m.metadata||{}), streaming: false } }
+                : m));
+              // Quota sync (May 2026 — operator's "quota still not
+              // work" report). The backend now yields the `done`
+              // frame AFTER cache.write + persist + increment_usage
+              // all finish, so by the time we see this event the
+              // server-side count is up to date. Dispatch a global
+              // event for useQuota to listen on; that hook fetches
+              // /api/v2/quota/me and re-renders the ring with the
+              // authoritative count. Cross-hook coupling via
+              // CustomEvent is cleaner than threading a callback
+              // through sendMessage → useChat → useQuota.
+              window.dispatchEvent(new CustomEvent('simorgh-message-streamed'));
+            },
+            onError: (err) => {
+              console.error('hr_chat stream failed:', err);
+              setIsTyping(false);
+              if (!messageAdded) {
+                setMessages(prev => [...prev, {
+                  id: aiMessageId,
+                  content: `Error: ${err.message}`,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  metadata: { error: true },
+                }]);
+              } else {
+                setMessages(prev => prev.map(m => m.id === aiMessageId
+                  ? { ...m, content: `Error: ${err.message}`,
+                      metadata: { ...(m.metadata||{}), error: true, streaming: false } }
+                  : m));
+              }
+            },
+          },
+          undefined,
+          // Wire the abort controller signal so the Stop button in
+          // ChatInput actually halts the SSE stream from gpt-oss.
+          abortControllerRef.current?.signal,
+          // chatId so the backend can persist the conversation pair.
+          // Without this, general-chat history vanished on chat-switch
+          // because the HR direct-RAG path never wrote to the chat
+          // history store. Operator reported the symptom 2026-05-24.
+          chatId,
+        );
+      } finally {
+        setIsTyping(false);
+      }
+      return;
+    }
 
     try {
       const response = await fetch(`${API_BASE}/chat/stream`, {
@@ -515,7 +970,10 @@ export function useChat(
           context_used: data.sources?.length > 0 || data.context_used,
           cached_response: data.cached_response,
           tokens: data.tokens_used || data.tokens,
-          sources: data.sources  // v2 provides sources
+          sources: data.sources,  // v2 provides sources
+          // Surfaces priority-2's fit_history telemetry so the chat
+          // input's TokenUsageRing can paint live context-window usage.
+          token_budget: data.token_budget,
         }
       };
 
@@ -588,11 +1046,20 @@ export function useChat(
 
     setMessages(prev => [...prev, userMessage]);
 
-    // Use streaming unless disabled or files are attached
-    const useStreaming = options?.useStreaming !== false && (!files || files.length === 0);
+    // Routing:
+    //  - Project sessions (`session_…`) ALWAYS use the modern streaming
+    //    CoT path, including when files are attached. Images are uploaded
+    //    to project-agent /documents (which stashes the bytes) and the
+    //    document_id rides along on the stream body; the agent runs the
+    //    describe-then-reason vision pipeline. No legacy endpoint.
+    //  - General chats with files fall back to the batch path.
+    const isProjectSession = chatId.startsWith('session_');
+    const hasFiles = !!(files && files.length > 0);
+    const useStreaming =
+      options?.useStreaming !== false && (!hasFiles || isProjectSession);
 
     if (useStreaming) {
-      await sendMessageStreaming(content, options);
+      await sendMessageStreaming(content, options, files);
     } else {
       await sendMessageBatch(content, files, options);
     }
@@ -744,7 +1211,8 @@ export function useChat(
             context_used: data.sources?.length > 0 || data.context_used,
             cached_response: data.cached_response,
             tokens: data.tokens_used || data.tokens,
-            sources: data.sources
+            sources: data.sources,
+            token_budget: data.token_budget,
           },
           currentVersionIndex: currentVersion.length
         };
@@ -782,6 +1250,12 @@ export function useChat(
   };
 
   const updateMessageReaction = (messageId: string, reaction: 'like' | 'dislike' | 'none') => {
+    // Find the message first so we can read its cache_entry_id
+    // BEFORE the optimistic state update (which doesn't affect
+    // metadata but keeps the lookup obvious).
+    const target = messages.find(m => m.id === messageId);
+    const cacheEntryId = (target?.metadata as any)?.cache_entry_id as string | undefined;
+
     setMessages(prev => prev.map(msg => {
       if (msg.id === messageId) {
         return {
@@ -792,6 +1266,31 @@ export function useChat(
       }
       return msg;
     }));
+
+    // Cross-user cache reactions (issue #1, May 2026). When the
+    // reacted-to assistant message came from / was added to the
+    // semantic cache, push the user's verdict back so:
+    //   • like   → bumps that entry's like_score (wins ties on
+    //              future cosine matches across all users)
+    //   • dislike → hard-deletes the entry from the cache (no
+    //              future user sees that bad answer again)
+    // Fire-and-forget — UI feedback already happened locally.
+    if (cacheEntryId && (reaction === 'like' || reaction === 'dislike')) {
+      const token = localStorage.getItem('simorgh_token');
+      if (!token) return;
+      fetch('/api/v2/general-chat/hr/cache-reaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          cache_entry_id: cacheEntryId,
+          reaction,
+          user_id: userId,
+        }),
+      }).catch(() => { /* best-effort; local state already updated */ });
+    }
   };
 
   const switchVersion = (messageId: string, versionIndex: number) => {

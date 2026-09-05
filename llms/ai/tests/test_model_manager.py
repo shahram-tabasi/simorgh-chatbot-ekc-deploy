@@ -4,7 +4,78 @@ Unit tests for ModelManager
 
 import pytest
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from services.model_manager import ModelManager, ModelPrecision
+from services.model_manager import ModelManager, ModelPrecision, _build_guided_decoding
+
+
+class TestBuildGuidedDecoding:
+    """Translation layer from request kwargs → vLLM GuidedDecodingParams.
+
+    vLLM may not be installed in the test environment; in that case the
+    helper must degrade to None instead of raising.
+    """
+
+    def test_no_constraint_returns_none(self):
+        assert _build_guided_decoding({}) is None
+        assert _build_guided_decoding({"temperature": 0.3}) is None
+
+    def test_response_format_json_object_is_normalized(self, monkeypatch):
+        captured = {}
+
+        class FakeGDP:
+            def __init__(self, **kw):
+                captured.update(kw)
+
+        import services.model_manager as mm
+        # Inject FakeGDP into the import path the helper uses.
+        import sys, types
+        fake_sp = types.ModuleType("vllm.sampling_params")
+        fake_sp.GuidedDecodingParams = FakeGDP
+        fake_vllm = sys.modules.setdefault("vllm", types.ModuleType("vllm"))
+        monkeypatch.setitem(sys.modules, "vllm.sampling_params", fake_sp)
+
+        out = _build_guided_decoding({
+            "response_format": {"type": "json_object"},
+        })
+        assert isinstance(out, FakeGDP)
+        assert captured == {"json": {"type": "object"}}
+
+    def test_guided_json_precedence_over_regex(self, monkeypatch):
+        captured = {}
+
+        class FakeGDP:
+            def __init__(self, **kw):
+                captured.update(kw)
+
+        import sys, types
+        fake_sp = types.ModuleType("vllm.sampling_params")
+        fake_sp.GuidedDecodingParams = FakeGDP
+        monkeypatch.setitem(sys.modules, "vllm.sampling_params", fake_sp)
+
+        schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+        out = _build_guided_decoding({
+            "guided_json": schema,
+            "guided_regex": "ignored",
+        })
+        assert isinstance(out, FakeGDP)
+        assert captured == {"json": schema}
+
+    def test_vllm_missing_degrades_to_none(self, monkeypatch):
+        # Force both import sites to raise ImportError.
+        import sys, builtins
+        real_import = builtins.__import__
+
+        def _raise(name, *a, **kw):
+            if name in ("vllm.sampling_params", "vllm"):
+                raise ImportError(f"no {name} in test env")
+            return real_import(name, *a, **kw)
+
+        monkeypatch.setattr(builtins, "__import__", _raise)
+        # Drop any cached module so the import statement actually runs.
+        sys.modules.pop("vllm.sampling_params", None)
+        sys.modules.pop("vllm", None)
+
+        out = _build_guided_decoding({"guided_json": {"type": "object"}})
+        assert out is None
 
 
 class TestModelManager:

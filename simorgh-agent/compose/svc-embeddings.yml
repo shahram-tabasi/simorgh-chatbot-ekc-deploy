@@ -1,0 +1,46 @@
+# =============================================================================
+# EMBEDDINGS-SERVICE - Sentence-Transformers based embeddings
+# Port 8031. REST. Extracted from backend/services/qdrant_service.py in Phase 3.
+# Used by Qdrant indexing when LLM-based embeddings (llm-gateway) are off.
+# =============================================================================
+services:
+  embeddings-service:
+    image: simorgh-embeddings-service:local
+    build: ../embeddings-service
+    container_name: embeddings-service
+    expose:
+      - "8031"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cpu}
+      - EMBEDDING_NORMALIZE=${EMBEDDING_NORMALIZE:-true}
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
+      - HF_HOME=/root/.cache/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+      - sentence_transformers_cache:/root/.cache/torch/sentence_transformers
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8031/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  huggingface_cache:
+    name: simorgh_huggingface_cache
+    driver: local
+  sentence_transformers_cache:
+    name: simorgh_sentence_transformers_cache
+    driver: local

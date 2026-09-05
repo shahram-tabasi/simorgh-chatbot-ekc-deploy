@@ -1,0 +1,74 @@
+# =============================================================================
+# svc-build-deps.override.yml.example
+# =============================================================================
+# Copy/move this file to `docker-compose.override.yml` (or
+# `compose/svc-build-deps.override.yml` and include it from the master
+# compose) to wire the offline build-deps bundle into every service's
+# build context.
+#
+# What it does: for each service that takes pip/npm/apt deps from
+# upstream, adds a NAMED build context called `deps` pointing at
+# /srv/build-deps/ (or wherever install-build-deps.sh extracted to).
+#
+# Dockerfiles can then write:
+#
+#   COPY --from=deps /wheels       /tmp/wheels
+#   COPY --from=deps /requirements /tmp/requirements
+#   RUN pip install --no-index --find-links=/tmp/wheels \
+#         -r /tmp/requirements/project-agent-service.txt
+#
+# …and the docker build NEVER reaches out to pypi.org / npm / apt
+# mirrors. The bundle on /srv/build-deps/ is the sole source of truth.
+#
+# To produce the bundle: trigger
+#   .github/workflows/build-deps-bundle.yml
+# on GitHub, download the zip artifact, then run
+#   ./simorgh-agent/scripts/install-build-deps.sh /tmp/<zip>
+# on the deploy host to populate /srv/build-deps/.
+# =============================================================================
+
+services:
+  project-agent-service:
+    build:
+      additional_contexts:
+        deps: /srv/build-deps
+
+  context-search:
+    build:
+      additional_contexts:
+        deps: /srv/build-deps
+
+  llm-gateway:
+    build:
+      additional_contexts:
+        deps: /srv/build-deps
+
+  doc-processor:
+    build:
+      additional_contexts:
+        deps: /srv/build-deps
+
+  embeddings-service:
+    build:
+      additional_contexts:
+        deps: /srv/build-deps
+
+  chat-service:
+    build:
+      additional_contexts:
+        deps: /srv/build-deps
+
+  backend:
+    build:
+      additional_contexts:
+        deps: /srv/build-deps
+
+  frontend:
+    build:
+      additional_contexts:
+        deps: /srv/build-deps
+
+# Add more services here as you convert their Dockerfiles to consume
+# from the deps context. Each service that doesn't have the override
+# falls back to the upstream pip/apt/npm paths (so partial migration
+# is safe).

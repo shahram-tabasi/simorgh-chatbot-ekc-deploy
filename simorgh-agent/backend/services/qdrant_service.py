@@ -1173,6 +1173,24 @@ class QdrantService:
                 score_threshold=score_threshold
             )
 
+            # Fallback: if the threshold filtered everything out but the
+            # collection HAS content for this project, return the top-K
+            # anyway. Small/sparse projects (e.g. one PDF, summary doesn't
+            # contain the exact query terms) would otherwise produce
+            # empty RAG context and the LLM would ignore the document.
+            if not results:
+                logger.info(
+                    f"🔁 No section hits at score >= {score_threshold}; "
+                    f"falling back to top-{limit} without threshold."
+                )
+                results = self.client.search(
+                    collection_name=collection_name,
+                    query_vector=query_embedding,
+                    limit=limit,
+                    query_filter=search_filter,
+                    score_threshold=None,
+                )
+
             # Format results with FULL CONTENT (not summary)
             formatted_results = []
             for result in results:

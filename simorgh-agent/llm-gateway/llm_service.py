@@ -1,0 +1,1552 @@
+"""
+Unified LLM Service
+===================
+Supports both online (OpenAI) and offline (Local LLM) modes with intelligent fallback.
+
+Features:
+- Online mode: OpenAI API (gpt-4o, etc.)
+- Offline mode: Local LLM servers (192.168.1.61, 192.168.1.62)
+- Automatic fallback on failure
+- Response caching via Redis
+- Token usage tracking
+- Streaming support
+
+Author: Simorgh Industrial Assistant
+"""
+
+import os
+import logging
+import hashlib
+import json
+import asyncio
+import requests
+from requests.exceptions import Timeout, RequestException
+from typing import List, Dict, Any, Optional, Iterator, Union, AsyncIterator
+from enum import Enum
+import openai
+import httpx
+from contextlib import asynccontextmanager
+
+# Import async LLM client for non-blocking offline calls
+from llm_async_client import get_async_llm_client, AsyncLLMClient
+
+# Import output parser for extracting clean responses
+try:
+    from output_parser import OutputParser, parse_llm_output, parse_streaming_chunk
+    OUTPUT_PARSER_AVAILABLE = True
+except ImportError:
+    OUTPUT_PARSER_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CUSTOM EXCEPTIONS
+# =============================================================================
+
+class LLMError(Exception):
+    """Base exception for LLM-related errors"""
+    pass
+
+
+class LLMOfflineError(LLMError):
+    """Raised when local LLM servers are unavailable"""
+    pass
+
+
+class LLMOnlineError(LLMError):
+    """Raised when OpenAI API is unavailable"""
+    pass
+
+
+class LLMTimeoutError(LLMError):
+    """Raised when LLM request times out"""
+    pass
+
+
+# =============================================================================
+# ENUMS
+# =============================================================================
+
+class LLMMode(str, Enum):
+    """LLM operation modes"""
+    ONLINE = "online"
+    OFFLINE = "offline"
+    AUTO = "auto"  # Try online first, fallback to offline
+
+
+class LLMService:
+    """
+    Unified LLM Service
+
+    Supports:
+    - OpenAI API (gpt-4o, gpt-4-turbo, gpt-3.5-turbo)
+    - Local LLM servers with fallback
+    - Response caching
+    - Token tracking
+    - Streaming responses
+    """
+
+    def __init__(
+        self,
+        openai_api_key: str = None,
+        openai_model: str = None,
+        local_llm_url_1: str = None,
+        local_llm_url_2: str = None,
+        default_mode: str = None,
+        redis_service=None
+    ):
+        """Initialize LLM service with configuration"""
+
+        # OpenAI configuration
+        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        self.openai_model = openai_model or os.getenv("OPENAI_MODEL", "gpt-4o")
+
+        if self.openai_api_key:
+            openai.api_key = self.openai_api_key
+            logger.info(f"✅ OpenAI configured: {self.openai_model}")
+        else:
+            logger.warning("⚠️ OpenAI API key not configured")
+
+        # Local LLM configuration - via nginx load balancer
+        # Backend sends offline traffic to /api/llm which nginx load balances to .61/.62
+        self.local_llm_url = local_llm_url_1 or os.getenv(
+            "LOCAL_LLM_URL", "http://localhost/api/llm"
+        )
+
+        logger.info(f"✅ Local LLM endpoint (load-balanced): {self.local_llm_url}")
+
+        # Default mode
+        self.default_mode = LLMMode(
+            default_mode or os.getenv("DEFAULT_LLM_MODE", "online")
+        )
+
+        # Redis for caching (optional)
+        self.redis_service = redis_service
+
+        # Statistics
+        self.stats = {
+            "total_requests": 0,
+            "online_requests": 0,
+            "offline_requests": 0,
+            "cache_hits": 0,
+            "failures": 0
+        }
+
+    def health_check(self) -> Dict[str, Any]:
+        """Check health of all LLM endpoints"""
+        health = {
+            "openai": self._check_openai_health(),
+            "local_llm": self._check_local_llm_health(self.local_llm_url),
+            "stats": self.stats
+        }
+
+        overall_status = "healthy" if any(
+            h["status"] == "healthy" for h in [
+                health["openai"],
+                health["local_llm"]
+            ]
+        ) else "unhealthy"
+
+        health["status"] = overall_status
+        return health
+
+    def _format_messages_for_local_llm(
+        self,
+        messages: List[Dict[str, str]]
+    ) -> tuple[str, str]:
+        """
+        Format OpenAI-style messages for local LLM API.
+
+        Local LLM only accepts system_prompt and user_prompt, so we need to
+        include the conversation history in the user prompt.
+
+        Args:
+            messages: List of messages with 'role' and 'content'
+
+        Returns:
+            Tuple of (system_prompt, user_prompt_with_history)
+        """
+        system_prompt = "You are Simorgh, an expert industrial electrical engineering assistant."
+        conversation_history = []
+        current_message = ""
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_prompt = content
+            elif role == "user":
+                # Keep track of conversation for history
+                conversation_history.append(f"User: {content}")
+                current_message = content  # Keep last user message
+            elif role == "assistant":
+                conversation_history.append(f"Assistant: {content}")
+
+        # If we have conversation history (more than just the current message)
+        if len(conversation_history) > 1:
+            # Format history (excluding the last user message which becomes the current question)
+            history_text = "\n\n".join(conversation_history[:-1])
+            user_prompt = f"""## Previous Conversation:
+{history_text}
+
+## Current Question:
+{current_message}
+
+Please answer the current question, keeping in mind the context from our previous conversation."""
+        else:
+            # No history, just use the current message
+            user_prompt = current_message
+
+        return system_prompt, user_prompt
+
+    def _check_openai_health(self) -> Dict[str, Any]:
+        """Check OpenAI API availability"""
+        if not self.openai_api_key:
+            return {"status": "disabled", "message": "No API key"}
+
+        try:
+            # Try a minimal API call
+            response = openai.models.list()
+            return {
+                "status": "healthy",
+                "model": self.openai_model,
+                "available": True
+            }
+        except Exception as e:
+            logger.error(f"OpenAI health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+
+    def _check_local_llm_health(self, url: str) -> Dict[str, Any]:
+        """Check local LLM server health"""
+        try:
+            response = requests.get(f"{url}/health", timeout=5)
+            if response.status_code == 200:
+                return {
+                    "status": "healthy",
+                    "url": url,
+                    "available": True
+                }
+            else:
+                return {
+                    "status": "unhealthy",
+                    "url": url,
+                    "error": f"Status code: {response.status_code}"
+                }
+        except Exception as e:
+            return {
+                "status": "unhealthy",
+                "url": url,
+                "error": str(e)
+            }
+
+    # =========================================================================
+    # MAIN GENERATION METHODS
+    # =========================================================================
+
+    def generate(
+        self,
+        messages: List[Dict[str, str]],
+        mode: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        use_cache: bool = True,
+        cache_ttl: int = 3600,
+        inject_knowledge: bool = False,
+        cancellation_token: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate LLM response (synchronous)
+
+        Note: cancellation_token parameter exists for future async support
+        Currently, the method must complete once the HTTP request starts
+
+        Args:
+            messages: Chat messages in OpenAI format
+            mode: "online", "offline", or "auto" (uses default if None)
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate
+            use_cache: Whether to use Redis cache
+            cache_ttl: Cache lifetime in seconds
+            inject_knowledge: If True, inject electrical knowledge base into system prompt
+            cancellation_token: Optional (not currently used - for future async support)
+
+        Returns:
+            {
+                "response": str,
+                "mode": str,
+                "model": str,
+                "tokens": {
+                    "prompt": int,
+                    "completion": int,
+                    "total": int
+                },
+                "cached": bool
+            }
+        """
+        self.stats["total_requests"] += 1
+
+        # Inject electrical knowledge base if requested
+        if inject_knowledge:
+            try:
+                from knowledge.electrical_anthology import get_knowledge_context
+                knowledge = get_knowledge_context()
+
+                # Find system message and append knowledge
+                system_message_found = False
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        # Append knowledge to existing system message
+                        msg["content"] += f"\n\n## Reference Knowledge Base\n{knowledge}"
+                        system_message_found = True
+                        logger.info("✅ Injected electrical knowledge into existing system message")
+                        break
+
+                if not system_message_found:
+                    # No system message exists, add one with knowledge
+                    messages.insert(0, {
+                        "role": "system",
+                        "content": f"You are Simorgh, an expert electrical engineering assistant.\n\n## Reference Knowledge Base\n{knowledge}"
+                    })
+                    logger.info("✅ Injected electrical knowledge in new system message")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to inject knowledge base: {e}")
+                # Continue without knowledge injection
+
+        # Determine mode
+        effective_mode = LLMMode(mode) if mode else self.default_mode
+        logger.info(f"🎯 LLM Generate - Input mode: {mode}, Effective mode: {effective_mode.value}, Default mode: {self.default_mode.value}")
+
+        # Check cache
+        if use_cache and self.redis_service:
+            cache_key = self._generate_cache_key(
+                messages, effective_mode, temperature, max_tokens
+            )
+            cached = self.redis_service.get_cached_llm_response(cache_key)
+
+            if cached:
+                self.stats["cache_hits"] += 1
+                cached["cached"] = True
+                logger.debug("Using cached LLM response")
+                return cached
+
+        # Generate response based on mode
+        try:
+            if effective_mode == LLMMode.ONLINE:
+                logger.info(f"🌐 Calling ONLINE LLM (OpenAI {self.openai_model})")
+                result = self._generate_online(messages, temperature, max_tokens, cancellation_token)
+                self.stats["online_requests"] += 1
+
+            elif effective_mode == LLMMode.OFFLINE:
+                logger.info(f"💻 Calling OFFLINE LLM (Local server: {self.local_llm_url})")
+                result = self._generate_offline(messages, temperature, max_tokens, cancellation_token)
+                self.stats["offline_requests"] += 1
+
+            elif effective_mode == LLMMode.AUTO:
+                # Try online first, fallback to offline
+                try:
+                    result = self._generate_online(messages, temperature, max_tokens, cancellation_token)
+                    self.stats["online_requests"] += 1
+                except Exception as e:
+                    logger.warning(f"Online LLM failed, falling back to offline: {e}")
+                    result = self._generate_offline(messages, temperature, max_tokens, cancellation_token)
+                    self.stats["offline_requests"] += 1
+
+            else:
+                raise ValueError(f"Invalid LLM mode: {effective_mode}")
+
+            result["cached"] = False
+
+            # Cache the response
+            if use_cache and self.redis_service:
+                self.redis_service.cache_llm_response(
+                    cache_key,
+                    result["response"],
+                    metadata={
+                        "mode": result["mode"],
+                        "model": result["model"],
+                        "tokens": result.get("tokens")
+                    },
+                    ttl=cache_ttl
+                )
+
+            return result
+
+        except Exception as e:
+            self.stats["failures"] += 1
+            logger.error(f"LLM generation failed: {e}")
+            raise
+
+    def _generate_online(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: Optional[int],
+        cancellation_token: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate response using OpenAI API
+
+        Note: cancellation_token is accepted for future streaming support
+        Currently, once the API call starts, it runs to completion
+        """
+        logger.info(f"🌐 _generate_online called - Model: {self.openai_model}")
+
+        if not self.openai_api_key:
+            raise ValueError("OpenAI API key not configured")
+
+        try:
+            response = openai.chat.completions.create(
+                model=self.openai_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=60
+            )
+
+            finish_reason = response.choices[0].finish_reason
+            logger.info(f"✅ OpenAI response received - Tokens: {response.usage.total_tokens}, Finish reason: {finish_reason}")
+
+            response_text = response.choices[0].message.content
+
+            # Handle truncation (finish_reason = "length" means hit token limit)
+            if finish_reason == "length" and max_tokens is None:
+                logger.warning(f"⚠️ Response truncated due to token limit, attempting continuation...")
+                response_text = self._continue_truncated_response(
+                    messages, response_text, temperature, "online"
+                )
+
+            return {
+                "response": response_text,
+                "mode": "online",
+                "model": self.openai_model,
+                "tokens": {
+                    "prompt": response.usage.prompt_tokens,
+                    "completion": response.usage.completion_tokens,
+                    "total": response.usage.total_tokens
+                },
+                "finish_reason": finish_reason
+            }
+
+        except openai.APITimeoutError as e:
+            logger.error(f"OpenAI API timeout: {e}")
+            raise LLMTimeoutError(f"OpenAI API request timed out: {str(e)}")
+        except Exception as e:
+            logger.error(f"OpenAI API error: {e}")
+            raise LLMOnlineError(f"OpenAI API unavailable: {str(e)}")
+
+    def _generate_offline(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: Optional[int],
+        cancellation_token: Optional[Any] = None,
+        _disable_continuation: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Generate response using local LLM via nginx load balancer
+
+        Note: cancellation_token is accepted for future streaming support
+        Currently, once the API call starts, it runs to completion
+
+        Args:
+            _disable_continuation: Internal flag to prevent recursive continuation
+        """
+        logger.info(f"📡 _generate_offline called - URL: {self.local_llm_url}")
+
+        # Call load-balanced endpoint (nginx handles failover between .61/.62)
+        try:
+            result = self._call_local_llm(
+                self.local_llm_url,
+                messages,
+                temperature,
+                max_tokens
+            )
+
+            finish_reason = result.get("finish_reason", "stop")
+            logger.info(f"✅ Local LLM response received - Finish reason: {finish_reason}")
+
+            response_text = result["response"]
+
+            # Handle truncation (finish_reason = "length" means stream didn't complete)
+            # Only if continuation is not disabled (prevents infinite recursion)
+            if finish_reason == "length" and max_tokens is None and not _disable_continuation:
+                logger.warning(f"⚠️ Response truncated (stream incomplete), attempting continuation...")
+                response_text = self._continue_truncated_response(
+                    messages, response_text, temperature, "offline"
+                )
+
+                # Update result with continued response
+                result["response"] = response_text
+                result["finish_reason"] = "stop"  # Mark as completed after continuation
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Local LLM endpoint failed: {e}")
+            raise LLMOfflineError(f"Local LLM unavailable (load-balanced endpoint: {self.local_llm_url})")
+
+    def _call_local_llm(
+        self,
+        url: str,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: Optional[int]
+    ) -> Dict[str, Any]:
+        """Call a local LLM server endpoint (non-streaming - consumes stream internally)"""
+
+        # Format messages for local LLM API (includes conversation history)
+        system_prompt, user_prompt = self._format_messages_for_local_llm(messages)
+
+        payload = {
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "thinking_level": "medium",
+            "stream": True  # Must be True for /generate-stream endpoint
+        }
+
+        full_url = f"{url.rstrip('/')}/generate-stream"
+        logger.info(f"🔧 _call_local_llm - Full URL: {full_url}")
+        logger.info(f"🔧 Payload: system_prompt length={len(system_prompt)}, user_prompt length={len(user_prompt)}, history_included={'Previous Conversation' in user_prompt}")
+
+        try:
+            response = requests.post(
+                full_url,
+                json=payload,
+                timeout=180,
+                headers={"Content-Type": "application/json"},
+                stream=True  # Enable streaming
+            )
+
+            response.raise_for_status()
+
+            # Consume the entire stream and aggregate chunks (SSE format)
+            full_response = ""
+            line_count = 0
+            chunk_count = 0
+            is_completed = False  # Track if stream completed normally
+
+            for line in response.iter_lines():
+                if line:
+                    line_count += 1
+                    try:
+                        decoded_line = line.decode('utf-8')
+
+                        # Handle SSE format: strip "data: " prefix
+                        if decoded_line.startswith('data: '):
+                            decoded_line = decoded_line[6:]  # Remove "data: " prefix
+
+                        logger.debug(f"📥 Stream line {line_count}: {decoded_line[:100]}...")
+
+                        data = json.loads(decoded_line)
+                        logger.debug(f"📦 Parsed JSON keys: {list(data.keys())}")
+
+                        # Handle different response formats
+                        if "chunk" in data:
+                            # Incremental chunk format
+                            chunk_count += 1
+                            full_response += data["chunk"]
+                        elif "output" in data:
+                            # Complete output format (status: completed)
+                            full_response = data["output"]
+                            is_completed = True
+                            logger.info(f"✅ Received complete output (length: {len(full_response)})")
+                        elif "text" in data:
+                            # Alternative chunk format
+                            chunk_count += 1
+                            full_response += data["text"]
+                        else:
+                            # Check for completion status
+                            if data.get('status') == 'completed':
+                                is_completed = True
+                                logger.info(f"✅ Stream completed successfully")
+                            logger.debug(f"ℹ️ Status update: {data.get('status', 'unknown')}")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"⚠️ JSON decode error on line {line_count}: {e}, Raw: {line[:100]}")
+                        continue
+
+            logger.info(f"✅ Local LLM response received - Lines: {line_count}, Chunks: {chunk_count}, Response length: {len(full_response)}, Completed: {is_completed}")
+
+            # Extract only the final answer (strip reasoning/analysis)
+            clean_response = self._extract_final_answer(full_response)
+            logger.info(f"🎯 Extracted final answer - Original: {len(full_response)} chars, Clean: {len(clean_response)} chars")
+
+            # Determine finish reason based on completion status
+            finish_reason = "stop" if is_completed else "length"
+
+            return {
+                "response": clean_response,
+                "mode": "offline",
+                "model": "local-llm",
+                "finish_reason": finish_reason,
+                "tokens": {
+                    "prompt": 0,
+                    "completion": 0,
+                    "total": 0
+                },
+                "server": url
+            }
+
+        except Timeout:
+            raise LLMTimeoutError(f"Local LLM server timed out: {url}")
+        except RequestException as e:
+            raise Exception(f"Local LLM request failed: {url} - {str(e)}")
+
+    def _extract_final_answer(self, raw_response: str) -> str:
+        """
+        Extract only the final user-facing answer from local LLM response.
+
+        Uses the OutputParser to handle various LLM output formats including:
+        - Thinking tags (<think>...</think>, <thinking>...</thinking>)
+        - Reasoning tags (<reasoning>...</reasoning>)
+        - Analysis markers (assistantanalysis, assistantfinal)
+        - ReAct format (Thought/Action/Observation/Final Answer)
+        - Chain of thought markers
+
+        Returns clean, user-facing content only.
+        """
+        if not raw_response:
+            return raw_response
+
+        # Use the advanced OutputParser if available
+        if OUTPUT_PARSER_AVAILABLE:
+            try:
+                clean_response = parse_llm_output(raw_response)
+                if clean_response:
+                    logger.debug(f"📝 OutputParser extracted clean response ({len(raw_response)} -> {len(clean_response)} chars)")
+                    return clean_response
+            except Exception as e:
+                logger.warning(f"OutputParser failed, using fallback: {e}")
+
+        # Fallback extraction logic
+        import re
+
+        # Strategy 1: Remove thinking/reasoning tags
+        thinking_patterns = [
+            r'<think>.*?</think>',
+            r'<thinking>.*?</thinking>',
+            r'<reasoning>.*?</reasoning>',
+            r'<analysis>.*?</analysis>',
+            r'<internal>.*?</internal>',
+            r'<scratchpad>.*?</scratchpad>',
+        ]
+        result = raw_response
+        for pattern in thinking_patterns:
+            result = re.sub(pattern, '', result, flags=re.DOTALL | re.IGNORECASE)
+
+        # Strategy 2: Look for explicit final answer markers
+        final_patterns = [
+            r'<final_answer>(.*?)</final_answer>',
+            r'<answer>(.*?)</answer>',
+            r'Final Answer:\s*(.*?)(?:\n\n|$)',
+        ]
+        for pattern in final_patterns:
+            match = re.search(pattern, result, re.DOTALL | re.IGNORECASE)
+            if match:
+                final_answer = match.group(1).strip()
+                if final_answer:
+                    logger.debug(f"📝 Extracted final answer from marker")
+                    return final_answer
+
+        # Strategy 3: Look for assistantfinal marker (most specific)
+        if "assistantfinal" in result:
+            parts = result.split("assistantfinal", 1)
+            if len(parts) > 1:
+                final_answer = parts[1].strip()
+                logger.debug(f"📝 Extracted final answer after 'assistantfinal' marker")
+                return final_answer
+
+        # Strategy 4: Detect chain-of-thought reasoning output (no tags)
+        # Pattern: "The user: '...' They want... Provide..."
+        cot_patterns = [
+            # Model reasoning about user's question
+            r'^The user:?\s*["\'].*?["\']\.?\s*They\s+want',
+            r'^The user\s+(?:asks?|wants?|is asking)',
+            r'^User\'?s?\s+(?:question|request|query)',
+            # Internal planning
+            r'^(?:I\s+)?(?:need|should|will|must)\s+(?:to\s+)?(?:provide|give|explain|respond)',
+            r'^(?:Let me|I\'ll|We should|We need to)\s+(?:think|analyze|consider|provide)',
+            r'^Thinking:',
+            r'^Analysis:',
+            r'^Planning:',
+        ]
+
+        for pattern in cot_patterns:
+            if re.search(pattern, result, re.IGNORECASE | re.MULTILINE):
+                logger.warning(f"⚠️ Detected chain-of-thought reasoning in output, attempting to extract answer")
+
+                # Try to find actual answer after reasoning
+                # Look for patterns that indicate the actual response starts
+                answer_markers = [
+                    r'\n\n(?:Here is|Here\'s|The answer is|Answer:)\s*(.*)',
+                    r'\n\n(?:Based on|According to|From the)\s+(?:the\s+)?(?:document|specification|context)',
+                    r'\n\n##\s+',  # Markdown header usually indicates actual content
+                    r'\n\n\*\*',  # Bold text usually indicates actual content
+                    r'\n\n\d+\.\s+',  # Numbered list
+                    r'\n\n-\s+',  # Bullet list
+                ]
+
+                for marker in answer_markers:
+                    match = re.search(marker, result, re.DOTALL | re.IGNORECASE)
+                    if match:
+                        # Extract from this point forward
+                        start_pos = match.start()
+                        extracted = result[start_pos:].strip()
+                        if len(extracted) > 100:  # Reasonable answer length
+                            logger.info(f"📝 Extracted actual answer from reasoning ({len(result)} -> {len(extracted)} chars)")
+                            result = extracted
+                            break
+
+                # If still looks like reasoning, try harder - look for structured content
+                if re.search(cot_patterns[0], result, re.IGNORECASE):
+                    # Last resort: find first table, list, or substantial paragraph
+                    content_match = re.search(r'(\|[^\n]+\|.*?\n(?:\|[^\n]+\|\n)+)', result, re.DOTALL)
+                    if content_match:
+                        result = content_match.group(1).strip()
+                        logger.info(f"📝 Extracted table from reasoning output")
+
+                break
+
+        # Strategy 5: Clean up remaining artifacts
+        # Remove orphaned tags
+        result = re.sub(r'</?(?:think|thinking|reasoning|analysis|internal)>', '', result, flags=re.IGNORECASE)
+
+        # Remove common prefixes
+        prefixes = ['assistant', 'Assistant:', 'AI:', 'assistantanalysis']
+        for prefix in prefixes:
+            if result.lower().startswith(prefix.lower()):
+                result = result[len(prefix):].lstrip(':').strip()
+
+        # Clean up multiple newlines
+        result = re.sub(r'\n{3,}', '\n\n', result).strip()
+
+        logger.debug(f"📝 Cleaned response: {len(raw_response)} -> {len(result)} chars")
+        return result
+
+    def _continue_truncated_response(
+        self,
+        original_messages: List[Dict[str, str]],
+        partial_response: str,
+        temperature: float,
+        mode: str,
+        max_continuations: int = 3
+    ) -> str:
+        """
+        Continue a truncated response by asking LLM to continue from where it left off
+
+        Args:
+            original_messages: Original conversation messages
+            partial_response: Truncated response received
+            temperature: Sampling temperature
+            mode: "online" or "offline"
+            max_continuations: Maximum number of continuation attempts
+
+        Returns:
+            Complete response (concatenated)
+        """
+        full_response = partial_response
+        continuation_count = 0
+
+        while continuation_count < max_continuations:
+            continuation_count += 1
+
+            # Create continuation prompt
+            continuation_messages = original_messages.copy()
+            continuation_messages.append({
+                "role": "assistant",
+                "content": full_response
+            })
+            continuation_messages.append({
+                "role": "user",
+                "content": "Please continue from where you left off. Complete your previous response."
+            })
+
+            logger.info(f"🔄 Continuation attempt {continuation_count}/{max_continuations}")
+
+            try:
+                if mode == "online":
+                    continuation_result = self._generate_online(
+                        continuation_messages, temperature, max_tokens=None
+                    )
+                else:
+                    # Disable further continuation to prevent infinite recursion
+                    continuation_result = self._generate_offline(
+                        continuation_messages, temperature, max_tokens=None,
+                        _disable_continuation=True
+                    )
+
+                continuation_text = continuation_result["response"]
+                finish_reason = continuation_result.get("finish_reason", "stop")
+
+                # Append continuation
+                full_response += continuation_text
+
+                # If finished naturally, break
+                if finish_reason == "stop":
+                    logger.info(f"✅ Response completed after {continuation_count} continuation(s)")
+                    break
+
+                # If still truncated, continue loop
+                logger.warning(f"⚠️ Continuation {continuation_count} also truncated, trying again...")
+
+            except Exception as e:
+                logger.error(f"❌ Continuation failed: {e}")
+                # Return what we have so far
+                break
+
+        if continuation_count >= max_continuations:
+            logger.warning(f"⚠️ Reached max continuations ({max_continuations}), returning partial response")
+
+        return full_response
+
+    # =========================================================================
+    # STREAMING SUPPORT
+    # =========================================================================
+
+    def generate_stream(
+        self,
+        messages: List[Dict[str, str]],
+        mode: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None
+    ) -> Iterator[str]:
+        """
+        Generate streaming LLM response
+
+        Args:
+            messages: Chat messages
+            mode: LLM mode
+            temperature: Sampling temperature
+            max_tokens: Max tokens
+
+        Yields:
+            Response chunks as they arrive
+        """
+        effective_mode = LLMMode(mode) if mode else self.default_mode
+
+        if effective_mode == LLMMode.ONLINE:
+            yield from self._stream_online(messages, temperature, max_tokens)
+        else:
+            yield from self._stream_offline(messages, temperature, max_tokens)
+
+    def _stream_online(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: Optional[int]
+    ) -> Iterator[str]:
+        """Stream from OpenAI API"""
+        if not self.openai_api_key:
+            raise ValueError("OpenAI API key not configured")
+
+        try:
+            stream = openai.chat.completions.create(
+                model=self.openai_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True
+            )
+
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
+        except Exception as e:
+            logger.error(f"OpenAI streaming error: {e}")
+            raise
+
+    def _stream_offline(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: Optional[int]
+    ) -> Iterator[str]:
+        """Stream from local LLM via nginx load balancer with thinking section filtering"""
+
+        # Format messages for local LLM API (includes conversation history)
+        system_prompt, user_prompt = self._format_messages_for_local_llm(messages)
+
+        # Call load-balanced endpoint (nginx handles failover between .61/.62)
+        try:
+            url = f"{self.local_llm_url.rstrip('/')}/generate-stream"
+
+            payload = {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "thinking_level": "medium",
+                "stream": True
+            }
+
+            logger.info(f"🔧 _stream_offline - history_included={'Previous Conversation' in user_prompt}, user_prompt_length={len(user_prompt)}")
+
+            response = requests.post(
+                url,
+                json=payload,
+                stream=True,
+                timeout=180
+            )
+            response.raise_for_status()
+
+            # State for tracking thinking sections during streaming
+            accumulated_text = ""
+            in_thinking = False
+            thinking_depth = 0  # Track nested thinking tags
+            chunks_yielded = False  # Track if any chunks have been yielded
+
+            # Patterns for detecting thinking sections
+            import re
+            think_open_pattern = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
+            think_close_pattern = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
+
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        decoded_line = line.decode('utf-8')
+
+                        # Handle SSE format: strip "data: " prefix
+                        if decoded_line.startswith('data: '):
+                            decoded_line = decoded_line[6:]
+
+                        data = json.loads(decoded_line)
+                        chunk = ""
+
+                        # Handle different response formats
+                        if "chunk" in data:
+                            chunk = data["chunk"]
+                        elif "output" in data:
+                            # Complete output format - only yield if no chunks were sent
+                            # This prevents duplication when both chunks AND output are sent
+                            if not chunks_yielded:
+                                raw_output = data["output"]
+                                clean_output = self._extract_final_answer(raw_output)
+                                yield clean_output
+                            continue
+                        elif "text" in data:
+                            chunk = data["text"]
+                        else:
+                            # Skip status updates without content
+                            continue
+
+                        if not chunk:
+                            continue
+
+                        # Track accumulated text for context
+                        accumulated_text += chunk
+
+                        # Check for thinking tag transitions
+                        open_matches = think_open_pattern.findall(chunk)
+                        close_matches = think_close_pattern.findall(chunk)
+
+                        thinking_depth += len(open_matches)
+                        thinking_depth -= len(close_matches)
+                        thinking_depth = max(0, thinking_depth)  # Prevent negative
+
+                        # If we're inside thinking section, don't yield
+                        if thinking_depth > 0:
+                            in_thinking = True
+                            continue
+
+                        # If we just exited thinking section
+                        if in_thinking and thinking_depth == 0:
+                            in_thinking = False
+                            # Clean any remaining thinking tags from chunk
+                            clean_chunk = think_open_pattern.sub('', chunk)
+                            clean_chunk = think_close_pattern.sub('', clean_chunk)
+                            if clean_chunk.strip():
+                                chunks_yielded = True
+                                yield clean_chunk
+                            continue
+
+                        # Normal chunk - yield after cleaning any stray tags
+                        clean_chunk = think_open_pattern.sub('', chunk)
+                        clean_chunk = think_close_pattern.sub('', clean_chunk)
+                        if clean_chunk:
+                            chunks_yielded = True
+                            yield clean_chunk
+
+                    except json.JSONDecodeError:
+                        continue
+
+        except Exception as e:
+            logger.error(f"Local LLM streaming failed: {e}")
+            raise
+
+    # =========================================================================
+    # ASYNC METHODS (Non-blocking for concurrent users)
+    # =========================================================================
+
+    async def async_generate(
+        self,
+        messages: List[Dict[str, str]],
+        mode: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        user_id: str = "anonymous",
+        use_cache: bool = True,
+        cache_ttl: int = 3600,
+    ) -> Dict[str, Any]:
+        """
+        Generate LLM response asynchronously (non-blocking).
+
+        This method allows multiple users to make concurrent requests
+        without blocking each other.
+
+        Args:
+            messages: Chat messages in OpenAI format
+            mode: "online", "offline", or "auto"
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens
+            user_id: User identifier for rate limiting
+            use_cache: Whether to use Redis cache
+            cache_ttl: Cache lifetime in seconds
+
+        Returns:
+            Response dict
+        """
+        self.stats["total_requests"] += 1
+        effective_mode = LLMMode(mode) if mode else self.default_mode
+
+        # Check cache first
+        if use_cache and self.redis_service:
+            cache_key = self._generate_cache_key(
+                messages, effective_mode, temperature, max_tokens
+            )
+            cached = self.redis_service.get_cached_llm_response(cache_key)
+            if cached:
+                self.stats["cache_hits"] += 1
+                cached["cached"] = True
+                return cached
+
+        try:
+            if effective_mode == LLMMode.ONLINE:
+                # Online uses sync OpenAI client (already fast enough)
+                result = await asyncio.to_thread(
+                    self._generate_online, messages, temperature, max_tokens, None
+                )
+                self.stats["online_requests"] += 1
+
+            elif effective_mode == LLMMode.OFFLINE:
+                # Use async client for offline (non-blocking!)
+                result = await self._async_generate_offline(
+                    messages, temperature, user_id
+                )
+                self.stats["offline_requests"] += 1
+
+            elif effective_mode == LLMMode.AUTO:
+                try:
+                    result = await asyncio.to_thread(
+                        self._generate_online, messages, temperature, max_tokens, None
+                    )
+                    self.stats["online_requests"] += 1
+                except Exception as e:
+                    logger.warning(f"Online failed, using async offline: {e}")
+                    result = await self._async_generate_offline(
+                        messages, temperature, user_id
+                    )
+                    self.stats["offline_requests"] += 1
+
+            result["cached"] = False
+
+            # Cache response
+            if use_cache and self.redis_service:
+                self.redis_service.cache_llm_response(
+                    cache_key,
+                    result["response"],
+                    metadata={
+                        "mode": result["mode"],
+                        "model": result["model"],
+                        "tokens": result.get("tokens")
+                    },
+                    ttl=cache_ttl
+                )
+
+            return result
+
+        except Exception as e:
+            self.stats["failures"] += 1
+            logger.error(f"Async LLM generation failed: {e}")
+            raise
+
+    async def _async_generate_offline(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        user_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Generate response using async LLM client (non-blocking).
+        """
+        # Format messages for local LLM
+        system_prompt, user_prompt = self._format_messages_for_local_llm(messages)
+
+        # Get async client
+        async_client = get_async_llm_client()
+
+        # Make async request
+        result = await async_client.generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            user_id=user_id,
+            thinking_level="medium",
+        )
+
+        # Handle rate limit error
+        if result.get("error") == "rate_limit_exceeded":
+            return result
+
+        # Extract final answer
+        clean_response = self._extract_final_answer(result.get("response", ""))
+
+        return {
+            "response": clean_response,
+            "mode": "offline",
+            "model": "local-llm",
+            "finish_reason": result.get("finish_reason", "stop"),
+            "tokens": {"prompt": 0, "completion": 0, "total": 0},
+            "server": result.get("server"),
+        }
+
+    async def async_generate_stream(
+        self,
+        messages: List[Dict[str, str]],
+        mode: Optional[str] = None,
+        temperature: float = 0.7,
+        user_id: str = "anonymous",
+    ) -> AsyncIterator[str]:
+        """
+        Generate streaming LLM response asynchronously.
+
+        Args:
+            messages: Chat messages
+            mode: LLM mode
+            temperature: Sampling temperature
+            user_id: User identifier for rate limiting
+
+        Yields:
+            Response chunks as they arrive
+        """
+        effective_mode = LLMMode(mode) if mode else self.default_mode
+
+        if effective_mode == LLMMode.ONLINE:
+            # Use sync generator wrapped in async
+            for chunk in self._stream_online(messages, temperature, None):
+                yield chunk
+                await asyncio.sleep(0)  # Yield control
+        else:
+            # Use async streaming
+            async for chunk in self._async_stream_offline(messages, user_id):
+                yield chunk
+
+    async def _async_stream_offline(
+        self,
+        messages: List[Dict[str, str]],
+        user_id: str,
+    ) -> AsyncIterator[str]:
+        """
+        Async streaming from local LLM.
+        """
+        system_prompt, user_prompt = self._format_messages_for_local_llm(messages)
+
+        async_client = get_async_llm_client()
+
+        # Track if in thinking section
+        in_thinking = False
+        import re
+        think_open = re.compile(r'<think(?:ing)?>', re.IGNORECASE)
+        think_close = re.compile(r'</think(?:ing)?>', re.IGNORECASE)
+
+        async for chunk in async_client.generate_stream(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            user_id=user_id,
+            thinking_level="medium",
+        ):
+            # Filter thinking sections
+            if think_open.search(chunk):
+                in_thinking = True
+                continue
+            if think_close.search(chunk):
+                in_thinking = False
+                continue
+            if in_thinking:
+                continue
+
+            # Clean and yield
+            clean_chunk = think_open.sub('', chunk)
+            clean_chunk = think_close.sub('', clean_chunk)
+            if clean_chunk:
+                yield clean_chunk
+
+    # =========================================================================
+    # SPECIALIZED METHODS
+    # =========================================================================
+
+    def extract_entities(
+        self,
+        text: str,
+        entity_types: List[str],
+        mode: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract entities from text using LLM
+
+        Args:
+            text: Input text
+            entity_types: List of entity types to extract
+            mode: LLM mode
+
+        Returns:
+            List of extracted entities
+        """
+        prompt = f"""Extract the following types of entities from the text below:
+
+Entity Types: {', '.join(entity_types)}
+
+Text:
+{text}
+
+Return a JSON array of entities in this format:
+[
+  {{"type": "EntityType", "value": "...", "properties": {{}}}},
+  ...
+]
+"""
+
+        messages = [
+            {"role": "system", "content": "You are an expert entity extraction system."},
+            {"role": "user", "content": prompt}
+        ]
+
+        result = self.generate(messages, mode=mode, temperature=0.3)
+
+        # Parse JSON response
+        try:
+            entities = json.loads(result["response"])
+            return entities
+        except json.JSONDecodeError:
+            logger.error("Failed to parse entity extraction response")
+            return []
+
+    def extract_relationships(
+        self,
+        entities: List[Dict[str, Any]],
+        context: str,
+        mode: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract relationships between entities
+
+        Args:
+            entities: List of entities
+            context: Context text
+            mode: LLM mode
+
+        Returns:
+            List of relationships
+        """
+        entities_str = json.dumps(entities, indent=2)
+
+        prompt = f"""Given these entities and context, extract relationships between them.
+
+Entities:
+{entities_str}
+
+Context:
+{context}
+
+Return a JSON array of relationships:
+[
+  {{"from": "entity_id", "to": "entity_id", "type": "RELATIONSHIP_TYPE", "properties": {{}}}},
+  ...
+]
+"""
+
+        messages = [
+            {"role": "system", "content": "You are an expert relationship extraction system."},
+            {"role": "user", "content": prompt}
+        ]
+
+        result = self.generate(messages, mode=mode, temperature=0.3)
+
+        try:
+            relationships = json.loads(result["response"])
+            return relationships
+        except json.JSONDecodeError:
+            logger.error("Failed to parse relationship extraction response")
+            return []
+
+    # =========================================================================
+    # EMBEDDING GENERATION
+    # =========================================================================
+
+    def generate_embedding(
+        self,
+        text: str,
+        mode: Optional[str] = None,
+        model: Optional[str] = None
+    ) -> List[float]:
+        """
+        Generate embedding vector for text using LLM
+
+        This provides better semantic understanding than generic embedding models,
+        especially for domain-specific technical content.
+
+        Args:
+            text: Input text to embed
+            mode: "online", "offline", or None (uses default)
+            model: Optional specific embedding model (online mode only)
+
+        Returns:
+            Embedding vector as list of floats
+
+        Raises:
+            LLMError: If embedding generation fails
+        """
+        # Determine mode
+        effective_mode = LLMMode(mode) if mode else self.default_mode
+
+        try:
+            if effective_mode == LLMMode.ONLINE or effective_mode == LLMMode.AUTO:
+                # Use OpenAI embeddings API
+                return self._generate_embedding_online(text, model)
+
+            elif effective_mode == LLMMode.OFFLINE:
+                # Use local LLM embeddings endpoint
+                return self._generate_embedding_offline(text)
+
+            else:
+                raise ValueError(f"Invalid LLM mode for embeddings: {effective_mode}")
+
+        except Exception as e:
+            # If AUTO mode and online fails, try offline
+            if effective_mode == LLMMode.AUTO:
+                try:
+                    logger.warning(f"Online embedding failed, falling back to offline: {e}")
+                    return self._generate_embedding_offline(text)
+                except Exception as offline_error:
+                    logger.error(f"Both online and offline embedding failed: {offline_error}")
+                    raise LLMError(f"Embedding generation failed: {offline_error}")
+            raise LLMError(f"Embedding generation failed: {e}")
+
+    def _generate_embedding_online(
+        self,
+        text: str,
+        model: Optional[str] = None
+    ) -> List[float]:
+        """
+        Generate embedding using OpenAI API
+
+        Args:
+            text: Input text
+            model: Optional specific model (default: text-embedding-3-large)
+
+        Returns:
+            Embedding vector
+        """
+        if not self.openai_api_key:
+            raise LLMOnlineError("OpenAI API key not configured")
+
+        # Use text-embedding-3-large for best quality (3072 dimensions)
+        # Alternative: text-embedding-3-small (1536 dimensions, faster)
+        embedding_model = model or "text-embedding-3-large"
+
+        try:
+            response = openai.embeddings.create(
+                model=embedding_model,
+                input=text
+            )
+
+            embedding = response.data[0].embedding
+            logger.debug(f"✅ Generated online embedding ({len(embedding)} dimensions)")
+            return embedding
+
+        except Exception as e:
+            logger.error(f"❌ OpenAI embedding failed: {e}")
+            raise LLMOnlineError(f"OpenAI embedding failed: {e}")
+
+    def _generate_embedding_offline(
+        self,
+        text: str,
+        timeout: int = 30
+    ) -> List[float]:
+        """
+        Generate embedding using local LLM server
+
+        Calls the local LLM's embedding endpoint to generate embeddings.
+        This uses the same model understanding as generation, providing
+        better domain-specific semantic matching.
+
+        Args:
+            text: Input text
+            timeout: Request timeout in seconds
+
+        Returns:
+            Embedding vector
+        """
+        try:
+            # Call local LLM embedding endpoint
+            # The endpoint should accept: {"input": "text"}
+            # And return: {"embedding": [float, ...]}
+
+            response = requests.post(
+                f"{self.local_llm_url}/embeddings",
+                json={"input": text},
+                timeout=timeout,
+                headers={"Content-Type": "application/json"}
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+
+                # Handle different response formats
+                if "embedding" in data:
+                    embedding = data["embedding"]
+                elif "data" in data and len(data["data"]) > 0:
+                    # OpenAI-compatible format
+                    embedding = data["data"][0]["embedding"]
+                else:
+                    raise LLMOfflineError(f"Unexpected response format: {data}")
+
+                logger.debug(f"✅ Generated offline embedding ({len(embedding)} dimensions)")
+                return embedding
+
+            else:
+                error_msg = f"Local LLM embedding failed: HTTP {response.status_code}"
+                logger.error(f"❌ {error_msg}")
+
+                # If embedding endpoint doesn't exist, try fallback with generation
+                logger.warning("⚠️ Trying fallback: using LLM generation for embedding")
+                return self._generate_embedding_offline_fallback(text, timeout)
+
+        except requests.exceptions.Timeout:
+            raise LLMTimeoutError(f"Local LLM embedding timeout after {timeout}s")
+
+        except RequestException as e:
+            logger.warning(f"Local LLM embedding request failed: {e}")
+            # Try fallback method
+            return self._generate_embedding_offline_fallback(text, timeout)
+
+    def _generate_embedding_offline_fallback(
+        self,
+        text: str,
+        timeout: int = 30
+    ) -> List[float]:
+        """
+        Fallback method: Generate embedding by asking LLM to create a semantic representation
+
+        This is a creative fallback that asks the LLM to generate a normalized embedding
+        from the text by extracting semantic features.
+
+        Args:
+            text: Input text
+            timeout: Request timeout in seconds
+
+        Returns:
+            Embedding vector
+        """
+        # Ask LLM to generate a semantic embedding
+        # This uses the LLM's understanding to create a meaningful vector
+        embedding_prompt = f"""Extract semantic features from this text and return ONLY a JSON array of exactly 768 floating point numbers between -1.0 and 1.0 representing the semantic embedding.
+
+Text: {text[:500]}
+
+Return only the JSON array, nothing else."""
+
+        try:
+            messages = [
+                {"role": "system", "content": "You are a semantic embedding generator. Return ONLY a JSON array of 768 floats."},
+                {"role": "user", "content": embedding_prompt}
+            ]
+
+            result = self._generate_offline(messages, temperature=0.1, max_tokens=4096)
+
+            # Parse the embedding from response
+            response_text = result["response"].strip()
+
+            # Try to extract JSON array from response
+            import re
+            json_match = re.search(r'\[([\d\s,.\-eE]+)\]', response_text)
+            if json_match:
+                embedding = json.loads(json_match.group(0))
+
+                # Ensure it's the right dimension
+                if len(embedding) >= 768:
+                    embedding = embedding[:768]  # Truncate if too long
+                else:
+                    # Pad with zeros if too short
+                    embedding.extend([0.0] * (768 - len(embedding)))
+
+                logger.debug(f"✅ Generated fallback embedding ({len(embedding)} dimensions)")
+                return embedding
+            else:
+                raise LLMOfflineError("Failed to parse embedding from LLM response")
+
+        except Exception as e:
+            logger.error(f"❌ Fallback embedding generation failed: {e}")
+            raise LLMOfflineError(f"Fallback embedding failed: {e}")
+
+    # =========================================================================
+    # UTILITIES
+    # =========================================================================
+
+    def _generate_cache_key(
+        self,
+        messages: List[Dict[str, str]],
+        mode: LLMMode,
+        temperature: float,
+        max_tokens: Optional[int]
+    ) -> str:
+        """Generate cache key for request"""
+        key_data = {
+            "messages": messages,
+            "mode": mode.value,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "model": self.openai_model if mode == LLMMode.ONLINE else "local"
+        }
+
+        key_str = json.dumps(key_data, sort_keys=True)
+        return hashlib.sha256(key_str.encode()).hexdigest()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get service statistics"""
+        return {
+            **self.stats,
+            "cache_hit_rate": (
+                self.stats["cache_hits"] / self.stats["total_requests"]
+                if self.stats["total_requests"] > 0 else 0
+            )
+        }
+
+    def reset_stats(self):
+        """Reset statistics counters"""
+        self.stats = {
+            "total_requests": 0,
+            "online_requests": 0,
+            "offline_requests": 0,
+            "cache_hits": 0,
+            "failures": 0
+        }
+
+
+# =============================================================================
+# SINGLETON INSTANCE
+# =============================================================================
+
+_llm_instance: Optional[LLMService] = None
+
+
+def get_llm_service(redis_service=None) -> LLMService:
+    """Get or create LLM service singleton"""
+    global _llm_instance
+
+    if _llm_instance is None:
+        _llm_instance = LLMService(redis_service=redis_service)
+
+    return _llm_instance

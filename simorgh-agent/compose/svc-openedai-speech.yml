@@ -1,0 +1,81 @@
+# =============================================================================
+# OPENEDAI-SPEECH - OpenAI /v1/audio/speech compatible TTS (Piper + XTTS backends)
+# Internal port 8000. Drop-in for tts-service.
+#
+# Uses Piper (fast, Persian-tuned, offline) by default; can also serve Coqui
+# XTTSv2 for higher-quality voices when configured. Voices are mounted from
+# ../tts/voices/ (read-only) and must be pre-downloaded — see tts/voices/README.md.
+#
+# Activation:
+#   1. Download voices into ../tts/voices/ (see that README).
+#   2. Uncomment the master include AND comment out svc-tts.yml.
+#   3. Repoint TTS_URL in chat-service / project-agent-service:
+#        old: http://tts-service:8002
+#        new: http://openedai-speech:8000
+#   4. Clients calling POST /v1/audio/speech with {"voice": "alloy", ...}
+#      work unchanged — voice_to_speaker.yaml maps that to Persian Piper.
+# =============================================================================
+services:
+  openedai-speech:
+    image: ghcr.io/matatonic/openedai-speech-min:latest
+    container_name: openedai-speech
+    expose:
+      - "8002"             # legacy TTS port — see alias below
+    volumes:
+      - ../tts/voices:/app/voices:ro
+      - ../tts/config/voice_to_speaker.yaml:/app/config/voice_to_speaker.yaml:ro
+    # Override the image's CMD (`bash startup.min.sh`). The .min
+    # startup script ignores $PORT and runs two `download_voices_*.sh`
+    # helpers that try to write en_US / en_GB Piper voices into
+    # /app/voices — which is bind-mounted read-only here, so they
+    # fail noisily on every boot. We skip the whole thing and invoke
+    # the underlying server directly with the only flags that matter:
+    # --port to make the legacy `tts-service:8002` alias reach the
+    # right listener, and --preload to warm the Persian voice we DO
+    # ship via the workflow. Equivalent to the canonical startup.sh
+    # tail (`python speech.py ${PRELOAD_MODEL:+--preload …} $EXTRA_ARGS $@`)
+    # minus the parts that don't apply offline.
+    entrypoint: ["bash", "-c"]
+    command:
+      # No --preload here: that flag is XTTS-only (warms a single
+      # XTTS voice into VRAM), and ghcr.io/.../openedai-speech-MIN
+      # strips XTTS support entirely — speech.py only imports
+      # ModelManager when --preload is set, then NameErrors on it
+      # immediately. Piper voices are loaded lazily per-request via
+      # voice_to_speaker.yaml mappings; no warm-up needed.
+      - "cd /app && exec python speech.py --host 0.0.0.0 --port 8002"
+    environment:
+      - PRELOAD_MODEL=voices/fa_IR-amir-medium.onnx
+      - TTS_HOME=/app/voices
+      - HF_HUB_OFFLINE=1
+      # PORT is left here for documentation — startup.min.sh ignores
+      # it, but if a future image variant honors it the override
+      # above already covers us via the explicit --port arg.
+      - PORT=8002
+    networks:
+      app_net:
+        # Drop-in for tts-service: clients keep hitting
+        # http://tts-service:8002 and Docker DNS resolves here.
+        # Stop AND REMOVE the old tts-service first — leaving the
+        # stopped container in place keeps a second IP attached to
+        # the alias, which makes DNS round-robin 50% of requests to
+        # nowhere. Same lesson the whisper rollout taught.
+        aliases:
+          - tts-service
+    healthcheck:
+      # ghcr.io/matatonic/openedai-speech-min is a minimal Python
+      # image with neither curl nor wget — the obvious shell-based
+      # healthcheck exits 127 (command not found) on every interval
+      # and the container never leaves `(health: starting)`. Probe
+      # via python3 + urllib, same pattern as svc-whisper.yml.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/v1/models', timeout=3).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

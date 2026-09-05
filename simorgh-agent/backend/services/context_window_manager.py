@@ -91,17 +91,26 @@ class ContextWindowManager:
         self.max_tokens = max_tokens or self.MODEL_LIMITS.get(model, 8192)
         self.budget_allocation = budget_allocation or self.DEFAULT_BUDGET
 
-        # Initialize tokenizer
+        # Initialize tokenizer. tiktoken downloads BPE files from
+        # openaipublic.blob.core.windows.net on first use; in an air-gapped
+        # deploy that egress can fail. Fall back to None and let count_tokens()
+        # use the chars/4 estimate.
+        self.tokenizer = None
         try:
-            # Try to get model-specific tokenizer
             if "gpt" in model.lower():
                 self.tokenizer = tiktoken.encoding_for_model(model)
             else:
-                # Use cl100k_base for Claude and other models
                 self.tokenizer = tiktoken.get_encoding("cl100k_base")
         except Exception as e:
-            logger.warning(f"Failed to load tokenizer for {model}, using cl100k_base: {e}")
-            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            logger.warning(f"Failed to load model tokenizer for {model}: {e}")
+            try:
+                self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            except Exception as e2:
+                logger.warning(
+                    f"Failed to load cl100k_base tokenizer ({e2}); "
+                    "falling back to char/4 token estimate."
+                )
+                self.tokenizer = None
 
         logger.info(f"ContextWindowManager initialized: model={model}, max_tokens={self.max_tokens}")
 
@@ -109,6 +118,8 @@ class ContextWindowManager:
         """Count tokens in a text string"""
         if not text:
             return 0
+        if self.tokenizer is None:
+            return len(text) // 4
         try:
             return len(self.tokenizer.encode(text))
         except Exception as e:

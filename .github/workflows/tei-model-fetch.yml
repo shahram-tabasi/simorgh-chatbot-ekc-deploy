@@ -1,0 +1,189 @@
+name: Download TEI embeddings model
+
+# Downloads a HuggingFace embeddings model into the cache layout TEI
+# expects under /data, packages it as a tarball artifact. Sidesteps
+# the Xray HF stalls that brick `docker build` on .68.
+#
+# Uses the runner's native Python — the upstream TEI image is Rust
+# and doesn't have huggingface_hub importable from its python3 (which
+# is what the first version of this workflow tripped on).
+
+on:
+  workflow_dispatch:
+    inputs:
+      embedding_model:
+        description: "HF repo id (must match Qdrant collection dim — default is the legacy 384-dim model)"
+        type: string
+        default: "sentence-transformers/all-MiniLM-L6-v2"
+      parts:
+        description: "Split tarball into N artifacts (default 1; the 384-dim model is ~80 MB)"
+        type: choice
+        default: "1"
+        options: ["1", "2", "3", "4"]
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install --quiet "huggingface_hub==0.24.6"
+
+      - name: Download model in TEI cache layout
+        env:
+          MODEL: ${{ inputs.embedding_model }}
+          # Disable hf_transfer / xet — TEI loads via plain snapshot
+          # files, not blobs.
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+          HF_HUB_DISABLE_XET: "1"
+          # Set HF_TOKEN repo secret to fetch gated/private embedding
+          # models. Ignored for public repos.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -eu
+          mkdir -p data
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          path = snapshot_download(
+              repo_id=os.environ["MODEL"],
+              cache_dir="data",
+              local_dir_use_symlinks=False,
+          )
+          print(f"Downloaded to: {path}")
+          PY
+          echo "----- downloaded tree -----"
+          find data -maxdepth 4 -printf '%y %p\n'
+          du -sh data
+
+      - name: Compute model dirname (for install instructions)
+        id: dirname
+        env:
+          MODEL: ${{ inputs.embedding_model }}
+        run: |
+          # HF rewrites "owner/repo" to "models--owner--repo" in its cache.
+          DIRNAME="models--$(echo "$MODEL" | sed 's|/|--|')"
+          echo "dirname=$DIRNAME" >> "$GITHUB_OUTPUT"
+          ls data | grep -F "$DIRNAME" || (echo "::error::expected $DIRNAME in data/" && exit 1)
+
+      - name: Pack tarball
+        id: pack
+        run: |
+          set -eu
+          OUT="tei-model.tar.gz"
+          tar -C data -czf "$OUT" .
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Split tarball into N parts
+        id: split
+        env:
+          OUT: ${{ steps.pack.outputs.out }}
+          PARTS: ${{ inputs.parts }}
+        run: |
+          set -eu
+          mkdir -p parts
+          if [ "$PARTS" -le 1 ]; then
+            cp "$OUT" "$OUT.sha256" parts/
+            echo "split=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          split -n "$PARTS" -d --suffix-length=2 "$OUT" "parts/${OUT}.part."
+          cp "$OUT.sha256" parts/
+          cat > "parts/REASSEMBLE.sh" <<BASH
+          #!/usr/bin/env bash
+          set -e
+          base="${OUT}"
+          parts=( \$(ls "\${base}".part.* | sort) )
+          cat "\${parts[@]}" > "\${base}"
+          sha256sum -c "\${base}.sha256"
+          echo "✅ \${base} ready."
+          BASH
+          chmod +x parts/REASSEMBLE.sh
+          echo "split=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact (single piece)
+        if: steps.split.outputs.split == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tei-model
+          path: |
+            parts/tei-model.tar.gz
+            parts/tei-model.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 1 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tei-model-part-1of${{ inputs.parts }}
+          path: |
+            parts/tei-model.tar.gz.part.00
+            parts/tei-model.tar.gz.sha256
+            parts/REASSEMBLE.sh
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 2 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tei-model-part-2of${{ inputs.parts }}
+          path: parts/tei-model.tar.gz.part.01
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 3 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tei-model-part-3of${{ inputs.parts }}
+          path: parts/tei-model.tar.gz.part.02
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 4 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '4'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tei-model-part-4of${{ inputs.parts }}
+          path: parts/tei-model.tar.gz.part.03
+          retention-days: 14
+          compression-level: 0
+
+      - name: Install instructions
+        env:
+          MODEL: ${{ inputs.embedding_model }}
+          DIRNAME: ${{ steps.dirname.outputs.dirname }}
+        run: |
+          cat <<EOF
+          ============================================================
+          Artifact: tei-model   (model=${MODEL})
+          ============================================================
+          gh run download \$RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy -n tei-model
+          sha256sum -c tei-model.tar.gz.sha256
+          scp tei-model.tar.gz ubuntu@192.168.1.68:/tmp/
+
+          docker volume create simorgh_tei_models
+          docker run --rm -v simorgh_tei_models:/dst -v /tmp:/src:ro alpine \\
+              sh -c 'tar xzf /src/tei-model.tar.gz -C /dst && ls /dst && du -sh /dst'
+          # expect: /dst contains directory ${DIRNAME}/
+
+          docker pull ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+          docker tag ghcr.io/huggingface/text-embeddings-inference:cpu-latest simorgh-tei:offline
+
+          # The compose --model-id flag points at /data/${DIRNAME}.
+          # If you chose a non-default embedding_model, update
+          # compose/svc-tei.yml's command list accordingly.
+          ============================================================
+          EOF

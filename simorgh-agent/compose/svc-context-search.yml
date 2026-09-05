@@ -1,0 +1,80 @@
+# =============================================================================
+# CONTEXT-SEARCH - Hybrid (BM25 + kNN) search across logs, project docs,
+# GitLab blobs, TPMS rows, and prior CoT transcripts. Provides the
+# "high-quality context" block used by the LLM prompt assembler.
+# =============================================================================
+services:
+  context-search:
+    build:
+      context: ..
+      dockerfile: context-search-service/Dockerfile
+    image: simorgh-context-search:local
+    container_name: context-search
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8049",
+              "--workers", "${CONTEXT_SEARCH_WORKERS:-4}"]
+    ports:
+      - "${CONTEXT_SEARCH_HTTP_PORT:-8049}:8049"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - ELASTIC_USER=${ELASTIC_USER:-elastic}
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - EMBEDDINGS_URL=${EMBEDDINGS_URL:-http://embeddings:8037}
+      - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      # Apache AGE — empty AGE_DSN keeps graph_search dormant; populate
+      # it (e.g. postgresql://simorgh_graph:.../simorgh_graph) once the
+      # infra-postgres-age.yml service is up.
+      - AGE_DSN=${AGE_DSN:-}
+      - AGE_GRAPH_NAME=${AGE_GRAPH_NAME:-simorgh}
+      - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
+      - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+      # Phase 7: cross-encoder rerank on /search/content. Reads the
+      # bge-reranker-v2-m3 model from the shared simorgh_huggingface_cache
+      # volume mounted below — the model is loaded lazily on the first
+      # /search/content call, so a missing model only fails THAT path,
+      # never the service startup.
+      - CONTENT_SEARCH_RERANK=${CONTENT_SEARCH_RERANK:-1}
+      - CONTENT_SEARCH_RERANKER_MODEL=${CONTENT_SEARCH_RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      - CONTENT_SEARCH_RERANK_PREFETCH=${CONTENT_SEARCH_RERANK_PREFETCH:-30}
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
+    volumes:
+      # Shared HuggingFace cache — same simorgh_huggingface_cache volume
+      # the project-agent-service uses. bge-reranker-v2-m3 (~600 MB)
+      # already lives there once you've pre-downloaded it via the
+      # bge-m3 / hf-model-fetch workflows.
+      - huggingface_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        limits:
+          memory: ${CONTEXT_SEARCH_MEM_LIMIT:-2g}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8049/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  # Same simorgh_huggingface_cache that svc-project-agent.yml declares
+  # — docker compose merges identically-named volumes across included
+  # files, so both services share the SAME on-disk cache without a
+  # second copy. The `driver: local` field must match the other
+  # declaration; mixing `external: true` here would cause
+  # "conflicting parameters" on `docker compose up`.
+  huggingface_cache:
+    name: simorgh_huggingface_cache
+    driver: local

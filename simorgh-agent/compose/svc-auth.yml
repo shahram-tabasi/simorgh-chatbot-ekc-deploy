@@ -1,0 +1,69 @@
+# =============================================================================
+# AUTH-SERVICE - Authentication (email/password, Google OAuth, JWT, TPMS legacy)
+# Port 8032. REST. Extracted from backend in Phase 4.
+# Routes mounted at /api/v2/auth/*.
+# =============================================================================
+services:
+  auth-service:
+    image: simorgh-auth-service:local
+    build: ../auth-service
+    container_name: auth-service
+    expose:
+      - "8032"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # JWT
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      # PostgreSQL Auth
+      - POSTGRES_AUTH_HOST=${POSTGRES_AUTH_HOST:-postgres_auth}
+      - POSTGRES_AUTH_PORT=${POSTGRES_AUTH_PORT:-5432}
+      - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+      - POSTGRES_AUTH_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_AUTH_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      # Google OAuth
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-https://simorghai.electrokavir.com/chatbot/auth/google/callback}
+      # Email
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-smtp}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@simorgh.ai}
+      - FROM_NAME=${FROM_NAME:-Simorgh AI}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - AUTO_VERIFY_EMAIL=${AUTO_VERIFY_EMAIL:-false}
+      - FRONTEND_URL=${FRONTEND_URL:-https://simorghai.electrokavir.com/chatbot}
+      - SECURE_COOKIES=${SECURE_COOKIES:-true}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN}
+      # MySQL TPMS (legacy fallback)
+      - MYSQL_HOST=${MYSQL_HOST:-192.168.1.148}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      # CORS
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      # Redis profile cache (legacy login enrichment)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - USER_PROFILE_TTL_SEC=${USER_PROFILE_TTL_SEC:-86400}
+    depends_on:
+      postgres_auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8032/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

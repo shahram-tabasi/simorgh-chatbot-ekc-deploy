@@ -1,0 +1,83 @@
+# =============================================================================
+# FASTER-WHISPER SERVER - offline Persian STT (OpenAI /v1/audio compatible)
+# Internal port 8000. Drop-in for stt-service.
+#
+# Activation:
+#   1. Pre-populate the `simorgh_whisper_cache` volume via the
+#      `whisper-model-fetch` GH workflow. The workflow does the
+#      HF→CTranslate2 int8 conversion on a runner and ships pure CT2
+#      binaries — the in-image build path stalls on .68's Xray link
+#      AND requires runtime conversion (slow start-up).
+#   2. Tag the upstream image as simorgh-whisper:offline:
+#        docker tag fedirz/faster-whisper-server:latest-cpu simorgh-whisper:offline
+#   3. Uncomment the master include for this file AND comment out svc-stt.yml.
+#   4. Stop the old stt-service first (alias collision), then start
+#      whisper-server.
+# =============================================================================
+services:
+  whisper-server:
+    image: simorgh-whisper:offline
+    build:
+      context: ../whisper
+      dockerfile: Dockerfile
+      args:
+        WHISPER_MODEL: MohammadGholizadeh/whisper-large-v3-persian-common-voice-17
+    container_name: whisper-server
+    expose:
+      - "8001"             # legacy STT port — see alias below
+    environment:
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - WHISPER_DEFAULT_LANGUAGE=fa
+      - WHISPER_COMPUTE_TYPE=int8
+      # WHISPER_MODEL is a LOCAL PATH (not an HF repo id) — points at
+      # the CT2-converted model that the workflow extracts into the
+      # volume. Keep this in sync with `output_dirname` input on the
+      # workflow (default: whisper-large-fa, since the previously
+      # documented MohammadGholizadeh repo went 401 May 2026).
+      - WHISPER_MODEL=/models/whisper-large-fa
+      - UVICORN_PORT=8001     # listen on legacy port so the alias works
+    volumes:
+      # Persistent home for the CT2-converted Whisper model. The
+      # workflow extracts whisper-model.tar.gz into this volume, which
+      # produces /models/<output_dirname>/ containing model.bin and
+      # the tokenizer/preprocessor configs faster-whisper needs.
+      - whisper_cache:/models
+    networks:
+      app_net:
+        # Drop-in for stt-service: clients keep hitting
+        # http://stt-service:8001 and Docker DNS resolves here.
+        # Stop the old stt-service first.
+        aliases:
+          - stt-service
+    healthcheck:
+      # The fedirz/faster-whisper-server image ships neither curl nor
+      # wget, so the obvious `curl -sf .../health` form makes the
+      # healthcheck exit 127 forever. The container still serves
+      # traffic — only the health verdict is wrong. Probe via the
+      # one HTTP-capable tool the image DOES have: python3 + urllib.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s      # CT2 load from local path is fast (~5–15s)
+    restart: unless-stopped
+    # GPU passthrough — uncomment if .68 has an NVIDIA GPU and CUDA runtime.
+    # Switch the build base image to fedirz/faster-whisper-server:latest-cuda.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  whisper_cache:
+    name: simorgh_whisper_cache
+    external: true

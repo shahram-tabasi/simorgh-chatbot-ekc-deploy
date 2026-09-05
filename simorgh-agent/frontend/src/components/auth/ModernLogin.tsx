@@ -50,7 +50,11 @@ export default function ModernLogin() {
   };
 
   return (
-    <div className="min-h-screen flex">
+    // min-h-screen + flex-col on mobile keeps the form scrollable when
+    // the on-screen keyboard shrinks the viewport (previous layout
+    // pinned the form with items-center, so users had to manually
+    // resize the page just to reach the submit button).
+    <div className="min-h-screen flex flex-col lg:flex-row">
       {/* Left Side - Branding */}
       <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-700 relative overflow-hidden">
         {/* Animated background elements */}
@@ -125,13 +129,15 @@ export default function ModernLogin() {
         </div>
       </div>
 
-      {/* Right Side - Login Form */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center p-6 sm:p-12 bg-white dark:bg-gray-900">
+      {/* Right Side - Login Form. On mobile we start the form at the
+          top and let the page scroll naturally; only on lg+ do we
+          vertically center inside the right column. */}
+      <div className="w-full lg:w-1/2 flex flex-col items-stretch justify-start lg:items-center lg:justify-center px-6 py-8 sm:p-12 bg-white dark:bg-gray-900 overflow-y-auto">
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5 }}
-          className="w-full max-w-md"
+          className="w-full max-w-md mx-auto"
         >
           {/* Mobile Logo */}
           <div className="lg:hidden text-center mb-8">

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Edit2, Trash2, Plus } from 'lucide-react';
+import { Edit2, Trash2, Plus, Archive, ArchiveRestore } from 'lucide-react';
 
 interface ContextMenuProps {
   x: number;
@@ -9,6 +9,8 @@ interface ContextMenuProps {
   onRename?: () => void;
   onDelete: () => void;
   onCreateNew?: () => void;
+  onArchive?: () => void;
+  isArchived?: boolean;
   target: 'project' | 'page';
 }
 
@@ -19,6 +21,8 @@ export default function ContextMenu({
   onRename,
   onDelete,
   onCreateNew,
+  onArchive,
+  isArchived = false,
   target
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -85,6 +89,28 @@ export default function ContextMenu({
         >
           <Edit2 className="w-4 h-4 text-blue-400 group-hover:text-blue-300" />
           <span>Rename {target === 'project' ? 'Project' : 'Page'}</span>
+        </button>
+      )}
+
+      {onArchive && target === 'page' && (
+        <button
+          onClick={() => {
+            onArchive();
+            onClose();
+          }}
+          className="w-full px-4 py-2 text-left text-gray-200 hover:bg-white/10 flex items-center gap-3 transition group"
+        >
+          {isArchived ? (
+            <>
+              <ArchiveRestore className="w-4 h-4 text-emerald-400 group-hover:text-emerald-300" />
+              <span>Unarchive Session</span>
+            </>
+          ) : (
+            <>
+              <Archive className="w-4 h-4 text-amber-400 group-hover:text-amber-300" />
+              <span>Archive Session</span>
+            </>
+          )}
         </button>
       )}
 

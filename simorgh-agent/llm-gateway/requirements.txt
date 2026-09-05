@@ -1,0 +1,10 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic>=2.7.0,<3.0.0
+httpx>=0.25.0
+# Official Harmony response-format parser for gpt-oss outputs. Optional:
+# llm-gateway falls back to a regex parser in harmony.py if this fails
+# to import (air-gapped hosts may have no pip access). The library is
+# pure-Python and small (~50 kB).
+openai-harmony==0.0.4
+

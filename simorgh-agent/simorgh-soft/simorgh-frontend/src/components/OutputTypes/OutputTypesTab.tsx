@@ -1,11 +1,19 @@
 import React, { useState } from 'react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
   FileSpreadsheetIcon, FileTextIcon, FileCode2Icon,
   DownloadIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon
 } from 'lucide-react';
-import { ProjectData } from '../../types/project';
+import { ProjectData, Revision } from '../../types/project';
+import { projectService } from '../../services/projectService';
+import {
+  LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
+  LV_DEVICE_COLS, MV_DEVICE_COLS,
+  buildTierMatrix,
+} from '../../utils/tierEquipmentMatrix';
+import { buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
+import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/revisionDiff';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
 const DEVICE_PROP_LABELS: Record<string, string> = {
@@ -45,6 +53,112 @@ const DEVICE_PROP_LABELS: Record<string, string> = {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const v = (val: any) => (val == null || val === '' ? '—' : String(val));
 const boolStr = (val: any) => (val ? '✓' : '—');
+
+// ─── Per-section Excel export ─────────────────────────────────────────────────
+function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {
+  const { headers, rows } = buildTierMatrix(data, tier);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  XLSX.utils.book_append_sheet(wb, ws, `${tier} Equipment`);
+  XLSX.writeFile(wb, `${data.projectName}_${tier}_Equipment.xlsx`);
+}
+
+// ─── BPMS export (LV only) ────────────────────────────────────────────────────
+// One sheet per LV switchgear, laid out like the hand-made BPMS workbook: the
+// line columns from Device Selection, then one row per part on that line's
+// template from Create Template.
+function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
+  const sheets = buildBpmsSheets(data, { revisionNumber });
+  if (sheets.length === 0) {
+    alert('No LV equipment in this project — the BPMS report covers LV switchgears only.');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  const taken = new Set<string>();
+  for (const sheet of sheets) {
+    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
+    styleBpmsSheet(ws, sheet);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName(sheet.name, taken));
+  }
+  const rev = revisionNumber ? `_REV${revisionNumber}` : '';
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_BPMS${rev}.xlsx`);
+}
+
+// ─── EPLAN single line ────────────────────────────────────────────────────────
+// The device list EPLAN imports (one sheet per switchgear, one row per device
+// on a feeder), and the schematic drawing of the same lines.
+
+
+
+// ─── Layout (جانمایی) ─────────────────────────────────────────────────────────
+
+
+// ─── Mechanical items (اقلام مکانیکال) ────────────────────────────────────────
+
+// ─── Revision comparison ──────────────────────────────────────────────────────
+function exportDiffExcel(diff: RevisionDiff, meta: { projectName: string; base: string; target: string }) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(buildDiffRows(diff, meta));
+  ws['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 10 }, { wch: 22 }, { wch: 30 }, { wch: 30 }];
+  XLSX.utils.book_append_sheet(wb, ws, `REV ${meta.base} to ${meta.target}`.slice(0, 31));
+  XLSX.writeFile(wb, `${meta.projectName || 'project'}_REV${meta.base}_vs_REV${meta.target}.xlsx`);
+}
+
+// ─── Per-section PDF (print-to-PDF window) ────────────────────────────────────
+function exportTierPDF(data: ProjectData, tier: 'LV' | 'MV') {
+  const { headers, rows } = buildTierMatrix(data, tier);
+  const accent = tier === 'LV' ? '#065f46' : '#92400e';
+  const accentSoft = tier === 'LV' ? '#d1fae5' : '#fef3c7';
+
+  const thHtml = headers
+    .map(h => `<th style="background:${accent};color:#fff;padding:5px 7px;font-size:10px;text-align:left;border:1px solid #fff;white-space:nowrap">${h}</th>`)
+    .join('');
+  const rowsHtml = rows.map((r, i) => `<tr style="background:${i % 2 ? '#fafafa' : '#fff'}">${
+    r.map((cell, ci) => {
+      const safe = String(cell ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      const isFirst = ci === 0;
+      return `<td style="padding:4px 6px;border:1px solid #e5e7eb;font-size:9.5px;vertical-align:top;white-space:pre-wrap;${isFirst ? 'font-weight:600' : ''}">${safe}</td>`;
+    }).join('')
+  }</tr>`).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>${data.projectName} — ${tier} Equipment</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#111;padding:12px}
+    @page{size:A2 landscape;margin:10mm}
+    @media print{.no-print{display:none}body{padding:0}}
+    table{page-break-inside:auto;border-collapse:collapse;width:100%}
+    tr{page-break-inside:avoid}
+  </style></head><body>
+  <div style="background:${accent};color:#fff;padding:14px 18px;border-radius:6px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <div style="font-size:9px;letter-spacing:.8px;opacity:.8">SIMORGH DESIGN — ${tier} EQUIPMENT REPORT</div>
+      <div style="font-size:17px;font-weight:800;margin-top:2px">${data.projectName}</div>
+    </div>
+    <div style="text-align:right;font-size:10px;opacity:.85">
+      <div>${new Date().toLocaleString()}</div>
+      <div>${rows.length} rows × ${headers.length} cols</div>
+    </div>
+  </div>
+  <div class="no-print" style="margin-bottom:10px;text-align:right">
+    <button onclick="window.print()" style="background:${accent};color:#fff;border:none;padding:6px 16px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600">🖨 Print / Save as PDF</button>
+  </div>
+  <div style="overflow-x:auto"><table>
+    <thead><tr>${thHtml}</tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table></div>
+  <div style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:6px;font-size:9px;color:#9ca3af">
+    Generated by Simorgh Design Software — ${tier} section export
+  </div>
+  <script>window.onload=()=>{window.focus();window.print();}<\/script>
+  </body></html>`;
+
+  const win = window.open('', '_blank', 'width=1400,height=900');
+  if (win) { win.document.write(html); win.document.close(); }
+  // also silence the unused-variable warning if accentSoft is not used elsewhere
+  void accentSoft;
+}
 
 function buildProjectRows(p: ProjectData) {
   return [
@@ -161,6 +275,51 @@ function exportExcel(data: ProjectData) {
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(eqRows), 'Equipment & Selections');
 
+  // ── Sheet 5: Template Components Breakdown (only used templates) ──────────
+  const usedTemplateIds = new Set<string>();
+  (data.equipments ?? []).forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedTemplateIds.add(d.templateId); }));
+  const usedTemplates = [
+    ...(data.templates?.LV ?? []),
+    ...(data.templates?.MV ?? []),
+    ...(data.templates?.HV ?? []),
+  ].filter(t => usedTemplateIds.has(t.id));
+
+  const tmplHeaders = ['Template', 'Type', 'Property', 'Part Number', 'Manufacturer', 'Rating', 'Label', 'Qty', 'Priority', 'Locked'];
+  const tmplRows: any[][] = [tmplHeaders];
+  for (const tmpl of usedTemplates) {
+    const props = (tmpl.properties ?? {}) as Record<string, any>;
+    const displayNames: Record<string, string> = props.__displayNames || {};
+    const lockedRows: string[]                  = props.__locked || [];
+    const entries = Object.entries(props).filter(
+      ([k, val]) => k !== '__displayNames' && k !== '__locked'
+        && val && Array.isArray((val as any).parts) && (val as any).parts.length > 0
+    );
+    if (entries.length === 0) {
+      tmplRows.push([tmpl.name, tmpl.type, '—', '—', '—', '—', '—', '—', '—', '—']);
+      continue;
+    }
+    for (const [propName, propVal] of entries) {
+      const label = displayNames[propName] || propName;
+      const locked = lockedRows.includes(propName) ? 'yes' : '';
+      const parts = (propVal as any).parts as any[];
+      parts.forEach((part, pi) => {
+        tmplRows.push([
+          pi === 0 ? tmpl.name : '',
+          pi === 0 ? tmpl.type : '',
+          pi === 0 ? label : '',
+          v(part.partNumber),
+          v(part.fullData?.Manufacturer),
+          v(part.fullData?.Designation3),
+          v(part.label),
+          part.quantity ?? 1,
+          part.priority ?? 1,
+          pi === 0 ? locked : '',
+        ]);
+      });
+    }
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tmplRows), 'Template Components');
+
   XLSX.writeFile(wb, `${data.projectName}_Report.xlsx`);
 }
 
@@ -268,6 +427,57 @@ function exportPDF(data: ProjectData) {
   ${techRows.length>0 ? secHd('02','Technical Settings','#277548')+techTable : ''}
   ${secHd('03','Device Library','#277548')}${devTable}
   ${secHd('04','Equipment & Device Selections','#b45309')}${eqTable}
+  ${(() => {
+    const usedIds = new Set<string>();
+    eqs.forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedIds.add(d.templateId); }));
+    const used = [
+      ...(data.templates?.LV ?? []),
+      ...(data.templates?.MV ?? []),
+      ...(data.templates?.HV ?? []),
+    ].filter(t => usedIds.has(t.id));
+    if (used.length === 0) return '';
+    let html = '<h3 style="margin:18px 0 6px;font-size:13px;color:#b45309;font-weight:700">Template Components Breakdown</h3>';
+    for (const tmpl of used) {
+      const props = (tmpl.properties ?? {}) as Record<string, any>;
+      const displayNames: Record<string, string> = props.__displayNames || {};
+      const lockedRows: string[]                  = props.__locked || [];
+      const entries = Object.entries(props).filter(
+        ([k, val]) => k !== '__displayNames' && k !== '__locked'
+          && val && Array.isArray((val as any).parts) && (val as any).parts.length > 0
+      );
+      html += `<div style="margin:6px 0 12px;border:1px solid #fed7aa;border-radius:4px">
+        <div style="background:#fff7ed;padding:4px 10px;font-size:11px;font-weight:700;color:#9a3412">
+          ${tmpl.name} <span style="font-weight:500;color:#b45309">[${tmpl.type}]</span>
+        </div>`;
+      if (entries.length === 0) {
+        html += `<div style="padding:6px 10px;font-size:10px;color:#9ca3af;font-style:italic">No parts assigned.</div>`;
+      } else {
+        html += `<table style="width:100%;border-collapse:collapse;font-size:10px">
+          <thead><tr>${['Property','Part Number','Manufacturer','Rating','Label','Qty','Priority']
+            .map(h => `<th style="background:#fef3c7;padding:4px 8px;text-align:left;color:#92400e">${h}</th>`).join('')}</tr></thead><tbody>`;
+        for (const [propName, propVal] of entries) {
+          const label = displayNames[propName] || propName;
+          const locked = lockedRows.includes(propName);
+          const parts = (propVal as any).parts as any[];
+          parts.forEach((part, pi) => {
+            html += `<tr>${
+              pi === 0
+                ? `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6;font-weight:600${locked ? ';text-decoration:line-through;color:#9ca3af' : ''}" rowspan="${parts.length}">${label}${locked ? ' 🔒' : ''}</td>`
+                : ''
+            }<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6;font-family:monospace">${v(part.partNumber)}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6">${v(part.fullData?.Manufacturer)}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6">${v(part.fullData?.Designation3)}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6">${v(part.label)}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6;text-align:center">${part.quantity ?? 1}</td>` +
+              `<td style="padding:3px 8px;border-bottom:1px solid #f3f4f6;text-align:center">${part.priority ?? 1}</td></tr>`;
+          });
+        }
+        html += '</tbody></table>';
+      }
+      html += '</div>';
+    }
+    return html;
+  })()}
   <div style="margin-top:30px;border-top:1px solid #e5e7eb;padding-top:10px;font-size:10px;color:#9ca3af;display:flex;justify-content:space-between">
     <span>Simorgh Design Software</span><span>Generated: ${new Date().toLocaleString()}</span>
   </div>
@@ -437,12 +647,151 @@ function exportHTML(data: ProjectData) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TIER SECTION — wide equipment × template-property matrix table
+// One section per tier (LV → 04, MV → 05) with its own Excel/PDF buttons.
+// ─────────────────────────────────────────────────────────────────────────────
+interface TierEquipmentSectionProps {
+  tier: 'LV' | 'MV';
+  badge: string;
+  color: string;
+  equipments: any[];
+  projectData: ProjectData;
+}
+
+const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
+  tier, badge, color, equipments, projectData,
+}) => {
+  const [expanded, setExpanded] = useState(true);
+  const { headers, rows } = buildTierMatrix(projectData, tier);
+  const deviceColCount = (tier === 'LV' ? LV_DEVICE_COLS : MV_DEVICE_COLS).length;
+  const propCols = tier === 'LV' ? LV_TEMPLATE_PROPERTIES : MV_TEMPLATE_PROPERTIES;
+  const totalRows = rows.length;
+  const totalEquipments = equipments.length;
+
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden mb-3">
+      <div className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100">
+        <button
+          className="flex items-center gap-3 text-left flex-1"
+          onClick={() => setExpanded(e => !e)}
+        >
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: color }}>{badge}</span>
+          <span className="font-medium text-sm text-gray-800">
+            {tier} Equipment &amp; Templates ({totalEquipments} units, {totalRows} rows)
+          </span>
+          {expanded
+            ? <ChevronDownIcon className="w-4 h-4 text-gray-400" />
+            : <ChevronRightIcon className="w-4 h-4 text-gray-400" />}
+        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => exportTierExcel(projectData, tier)}
+            disabled={totalEquipments === 0}
+            className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700 disabled:opacity-50"
+            title={`Export ${tier} section to Excel`}
+          >
+            <FileSpreadsheetIcon className="w-3.5 h-3.5" /> Excel
+          </button>
+          <button
+            onClick={() => exportTierPDF(projectData, tier)}
+            disabled={totalEquipments === 0}
+            className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded text-xs hover:bg-red-700 disabled:opacity-50"
+            title={`Export ${tier} section to PDF`}
+          >
+            <FileTextIcon className="w-3.5 h-3.5" /> PDF
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="p-3 border-t border-gray-100 bg-white">
+          {totalEquipments === 0 ? (
+            <p className="text-sm text-gray-400">No {tier} equipment defined.</p>
+          ) : (
+            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+              <table className="text-[10px] border-collapse" style={{ minWidth: '1400px' }}>
+                <thead className="sticky top-0 z-10">
+                  <tr>
+                    {headers.map((h, i) => (
+                      <th
+                        key={h + i}
+                        className="px-2 py-1.5 border border-gray-300 text-left whitespace-nowrap font-semibold"
+                        style={{
+                          background: i === 0 || i <= deviceColCount ? color : '#374151',
+                          color: '#fff',
+                          minWidth: i === 0 ? '120px' : i <= deviceColCount ? '90px' : '130px',
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, ri) => (
+                    <tr key={ri} className={ri % 2 ? 'bg-gray-50' : 'bg-white'}>
+                      {r.map((cell, ci) => (
+                        <td
+                          key={ci}
+                          className="px-2 py-1 border border-gray-200 align-top whitespace-pre-wrap"
+                          style={{ fontWeight: ci === 0 ? 600 : 400 }}
+                        >
+                          {String(cell ?? '')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="mt-2 text-[10px] text-gray-500">
+                {propCols.length} property columns × {totalRows} device rows. Empty cells indicate the row's template doesn't define that property.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN TAB COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export const OutputTypesTab: React.FC = () => {
-  const { projectData } = useProject();
+  const { projectData, currentRevision } = useProject();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['project', 'tech', 'devices', 'equipment']));
+  const [showCompareModal, setShowCompareModal] = useState(false);
+  const [compareBaseRevision, setCompareBaseRevision] = useState<string>('');
+  const [compareTargetRevision, setCompareTargetRevision] = useState<string>('');
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [loadingRevisions, setLoadingRevisions] = useState(false);
+  const [diff, setDiff] = useState<RevisionDiff | null>(null);
+  const [diffError, setDiffError] = useState<string>('');
+
+  // Load revisions on mount
+  React.useEffect(() => {
+    loadRevisions();
+  }, []);
+
+  const loadRevisions = async () => {
+    if (!projectData._id) return;
+    try {
+      setLoadingRevisions(true);
+      const revisionsData = await projectService.getRevisions(projectData._id!);
+      setRevisions(revisionsData);
+      if (revisionsData.length > 0) {
+        setCompareBaseRevision(revisionsData[0]._id!);
+        if (revisionsData.length > 1) {
+          setCompareTargetRevision(revisionsData[1]._id!);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load revisions:', err);
+    } finally {
+      setLoadingRevisions(false);
+    }
+  };
 
   const trigger = async (key: string, fn: () => void) => {
     setDownloading(key);
@@ -461,6 +810,38 @@ export const OutputTypesTab: React.FC = () => {
   const devices = [...(lib?.LV ?? []), ...(lib?.MV ?? []), ...(lib?.HV ?? [])];
   const eqs     = projectData.equipments ?? [];
   const rowTotal = eqs.reduce((s, eq) => s + (eq.devices?.length ?? 0), 0);
+
+  const revisionById = (id: string) => revisions.find(r => r._id === id);
+  const revisionLabel = (r?: Revision) =>
+    r ? `REV ${r.revisionNumber}${r.source === 'tpms' ? ' (TPMS)' : ''}` : '—';
+
+  // The comparison is computed here, from the snapshots the revisions carry:
+  // a revision holds the whole project as it stood, so two of them can be
+  // compared without asking the server for anything.
+  const runComparison = () => {
+    setDiffError('');
+    setDiff(null);
+    const base = revisionById(compareBaseRevision);
+    const target = revisionById(compareTargetRevision);
+    if (!base || !target) { setDiffError('Pick two revisions to compare.'); return; }
+    if (base._id === target._id) { setDiffError('Pick two different revisions.'); return; }
+    if (!base.projectSnapshot || !target.projectSnapshot) {
+      setDiffError('One of these revisions has no snapshot stored, so it cannot be compared.');
+      return;
+    }
+    setDiff(diffProjectSnapshots(base.projectSnapshot, target.projectSnapshot));
+  };
+
+  const downloadComparison = () => {
+    const base = revisionById(compareBaseRevision);
+    const target = revisionById(compareTargetRevision);
+    if (!diff || !base || !target) return;
+    exportDiffExcel(diff, {
+      projectName: projectData.projectName,
+      base: base.revisionNumber,
+      target: target.revisionNumber,
+    });
+  };
 
   const Section: React.FC<{ id: string; title: string; badge: string; color: string; children: React.ReactNode }> = ({ id, title, badge, color, children }) => {
     const open = expandedSections.has(id);
@@ -496,7 +877,7 @@ export const OutputTypesTab: React.FC = () => {
           <p className="text-sm text-gray-500 mt-0.5">{projectData.projectName}</p>
         </div>
         {/* Export Buttons */}
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
           <button
             disabled={!!downloading}
             onClick={() => trigger('xlsx', () => exportExcel(projectData))}
@@ -526,6 +907,13 @@ export const OutputTypesTab: React.FC = () => {
               ? <span className="animate-spin">⏳</span>
               : <FileCode2Icon className="w-4 h-4" />}
             HTML Report
+          </button>
+          <div className="h-8 w-px bg-gray-300 mx-1"></div>
+          <button
+            onClick={() => setShowCompareModal(true)}
+            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm font-medium text-sm transition-colors"
+          >
+            🔄 Compare Revisions
           </button>
         </div>
       </div>
@@ -652,56 +1040,77 @@ export const OutputTypesTab: React.FC = () => {
         }
       </Section>
 
-      <Section id="equipment" title={`Equipment & Device Selections (${eqs.length} units, ${rowTotal} rows)`} badge="04" color="#b45309">
-        {eqs.length === 0
-          ? <p className="text-sm text-gray-400">No equipment defined.</p>
-          : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="bg-orange-700 text-white">
-                    {['Equipment','Type','Device (Library)','Row','Template','Bus Section','Feeder No','Wiring Type','Rating Power','FLC (A)']
-                      .map(h => <th key={h} className="px-3 py-2 text-left whitespace-nowrap">{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {eqs.flatMap((eq, eqi) => {
-                    const libItemId = eq.properties?.deviceLibraryItemId as string | undefined;
-                    const libItem   = libItemId
-                      ? [...(lib?.LV??[]),...(lib?.MV??[]),...(lib?.HV??[])].find(d=>d.id===libItemId)
-                      : null;
-                    const rowBg = eqi % 2 === 1 ? 'bg-orange-50' : 'bg-white';
-                    if (!eq.devices || eq.devices.length === 0) {
-                      return [(
-                        <tr key={eq.id} className={rowBg}>
-                          <td className="px-3 py-1.5 border-b font-semibold">{eq.name}</td>
-                          <td className="px-3 py-1.5 border-b">{eq.type}</td>
-                          <td className="px-3 py-1.5 border-b">{libItem?.name ?? '—'}</td>
-                          {Array(7).fill(null).map((_, i) => <td key={i} className="px-3 py-1.5 border-b text-gray-400">—</td>)}
-                        </tr>
-                      )];
-                    }
-                    return eq.devices.map((row, ri) => (
-                      <tr key={row.id} className={rowBg}>
-                        <td className="px-3 py-1.5 border-b font-semibold">{ri === 0 ? eq.name : ''}</td>
-                        <td className="px-3 py-1.5 border-b">{ri === 0 ? eq.type : ''}</td>
-                        <td className="px-3 py-1.5 border-b">{ri === 0 ? (libItem?.name ?? '—') : ''}</td>
-                        <td className="px-3 py-1.5 border-b">{row.rowNumber}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.templateName)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.busSection)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.feederNo)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.wiringType)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.ratingPower)}</td>
-                        <td className="px-3 py-1.5 border-b">{v(row.flc)}</td>
-                      </tr>
-                    ));
-                  })}
-                </tbody>
-              </table>
+      {/* ── BPMS export (LV only) ─────────────────────────────────────────── */}
+      {(() => {
+        const lvSheets = buildBpmsSheets(projectData);
+        const lvLines = lvSheets.reduce((sum, s) => sum + s.lineCount, 0);
+        const lvPartRows = lvSheets.reduce(
+          (sum, s) => sum + Math.max(0, s.rows.length - 3), 0);
+        return (
+          <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: '#0f766e' }}>
+                BPMS
+              </span>
+              <div className="min-w-0">
+                <p className="font-medium text-sm text-gray-800">BPMS Report — LV only</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {lvSheets.length === 0
+                    ? 'No LV equipment yet.'
+                    : `${lvSheets.length} switchgear${lvSheets.length === 1 ? '' : 's'} · ${lvLines} line${lvLines === 1 ? '' : 's'} · ${lvPartRows} row${lvPartRows === 1 ? '' : 's'} — one sheet each, one row per part.`}
+                </p>
+              </div>
             </div>
-          )
-        }
-      </Section>
+            <button
+              disabled={!!downloading || lvSheets.length === 0}
+              onClick={() => trigger('bpms', () => exportBpmsExcel(projectData, currentRevision?.revisionNumber))}
+              className="flex items-center gap-2 px-4 py-2 bg-teal-700 text-white rounded-lg hover:bg-teal-800 disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap"
+            >
+              {downloading === 'bpms'
+                ? <span className="animate-spin">⏳</span>
+                : <FileSpreadsheetIcon className="w-4 h-4" />}
+              BPMS Excel
+            </button>
+          </div>
+        );
+      })()}
+
+      {/* The single line, the layout and the mechanical items live in their
+          own tab now — Eplanix — where each one is previewed before it is
+          downloaded. */}
+      <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center gap-3 bg-blue-50/40">
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">EPLANIX</span>
+        <p className="text-sm text-gray-700">
+          Single line, panel layout and mechanical items have moved to the <strong>Eplanix</strong> tab.
+        </p>
+        <span className="text-sm text-gray-600 ml-auto" dir="rtl">
+          تک‌خطی، جانمایی و اقلام مکانیکال به تب «Eplanix» منتقل شد.
+        </span>
+      </div>
+
+      {/* ── Section 04: LV Equipment & Template Matrix ─────────────────────
+          Wide table — every row is one device-row from an LV equipment, and
+          every template property becomes its own column. Empty cells mean
+          that row's template doesn't define that property. */}
+      <TierEquipmentSection
+        tier="LV"
+        badge="04"
+        color="#065f46"
+        equipments={eqs.filter(e => e.type === 'LV')}
+        projectData={projectData}
+      />
+
+      {/* ── Section 05: MV Equipment & Template Matrix ───────────────────── */}
+      <TierEquipmentSection
+        tier="MV"
+        badge="05"
+        color="#92400e"
+        equipments={eqs.filter(e => e.type === 'MV')}
+        projectData={projectData}
+      />
+
+      {/* (HV equipment breakdown intentionally omitted — covered by the full
+          Excel/PDF export buttons at the top.) */}
 
       <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
         <CheckCircleIcon className="w-3.5 h-3.5 text-green-500" />
@@ -709,6 +1118,215 @@ export const OutputTypesTab: React.FC = () => {
         <DownloadIcon className="w-3.5 h-3.5 ml-2" />
         HTML report includes a "Print / Save as PDF" button for browser-based PDF export.
       </div>
+
+      {/* Compare revisions — for a TPMS project these are TPMS's own
+          revisions, so this is where its changes are read. */}
+      {showCompareModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-lg shadow-2xl w-[900px] max-w-full max-h-[88vh] flex flex-col">
+            <div className="px-6 py-4 border-b">
+              <h3 className="font-semibold text-lg">Compare revisions</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                What changed between two revisions of this project — master data, technical settings,
+                panel specifications, feeder lines and the parts on their templates.
+                {projectData.tpmsSync
+                  ? ' The revisions marked TPMS are the revisions TPMS holds, so this is also how TPMS changes are read.'
+                  : ''}
+              </p>
+            </div>
+
+            <div className="px-6 py-4 border-b bg-gray-50 grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Base revision</label>
+                <select
+                  value={compareBaseRevision}
+                  onChange={e => { setCompareBaseRevision(e.target.value); setDiff(null); }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                  disabled={loadingRevisions}
+                >
+                  <option value="">Select…</option>
+                  {revisions.map((rev, idx) => (
+                    <option key={rev._id || idx} value={rev._id}>
+                      {revisionLabel(rev)} — {rev.revisionName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Compare with</label>
+                <select
+                  value={compareTargetRevision}
+                  onChange={e => { setCompareTargetRevision(e.target.value); setDiff(null); }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                  disabled={loadingRevisions}
+                >
+                  <option value="">Select…</option>
+                  {revisions.map((rev, idx) => (
+                    <option key={rev._id || idx} value={rev._id}>
+                      {revisionLabel(rev)} — {rev.revisionName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+              {diffError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mb-3">{diffError}</div>
+              )}
+
+              {!diff && !diffError && (
+                <p className="text-sm text-gray-500">Pick two revisions and press Compare.</p>
+              )}
+
+              {diff && (
+                <div className="space-y-4">
+                  <div className="flex gap-3 text-sm">
+                    <span className="px-2 py-1 rounded bg-green-100 text-green-800">{diff.totals.added} added</span>
+                    <span className="px-2 py-1 rounded bg-red-100 text-red-800">{diff.totals.removed} removed</span>
+                    <span className="px-2 py-1 rounded bg-amber-100 text-amber-800">{diff.totals.changed} changed</span>
+                  </div>
+
+                  {diff.isEmpty && (
+                    <p className="text-sm text-gray-600">These two revisions are identical.</p>
+                  )}
+
+                  {(diff.project.length > 0 || diff.techSettings.length > 0) && (
+                    <div className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm font-medium">Project &amp; technical settings</div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {[...diff.project, ...diff.techSettings].map((c, i) => (
+                            <tr key={i} className="border-t border-gray-100">
+                              <td className="px-3 py-1.5 text-gray-600 w-56">{c.field}</td>
+                              <td className="px-3 py-1.5 text-red-700 line-through">{c.from || '—'}</td>
+                              <td className="px-3 py-1.5 text-green-700">{c.to || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {diff.equipments.map(eq => (
+                    <div key={`${eq.type}-${eq.name}`} className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                          eq.type === 'LV' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{eq.type}</span>
+                        <span className="font-medium">{eq.name}</span>
+                        {eq.kind !== 'changed' && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                            eq.kind === 'added' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {eq.kind}
+                          </span>
+                        )}
+                        <span className="text-gray-500 ml-auto">
+                          {eq.counts.added} added · {eq.counts.removed} removed · {eq.counts.changed} changed
+                          {eq.panel.length > 0 ? ` · ${eq.panel.length} panel field(s)` : ''}
+                        </span>
+                      </div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {eq.panel.map((c, i) => (
+                            <tr key={`p${i}`} className="border-t border-gray-100 bg-amber-50/40">
+                              <td className="px-3 py-1.5 text-gray-500 w-28">panel</td>
+                              <td className="px-3 py-1.5 text-gray-700 w-48">{c.field}</td>
+                              <td className="px-3 py-1.5 text-red-700 line-through">{c.from || '—'}</td>
+                              <td className="px-3 py-1.5 text-green-700">{c.to || '—'}</td>
+                            </tr>
+                          ))}
+                          {eq.lines.map(line => (
+                            <React.Fragment key={line.key}>
+                              <tr className="border-t border-gray-200">
+                                <td className="px-3 py-1.5 w-28">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                                    line.kind === 'added' ? 'bg-green-100 text-green-700'
+                                    : line.kind === 'removed' ? 'bg-red-100 text-red-700'
+                                    : 'bg-amber-100 text-amber-700'}`}>{line.kind}</span>
+                                </td>
+                                <td className="px-3 py-1.5 font-medium text-gray-800" colSpan={3}>
+                                  {line.feederNo || line.key}
+                                  {line.description ? <span className="text-gray-500 font-normal"> — {line.description}</span> : null}
+                                </td>
+                              </tr>
+                              {line.kind === 'changed' && line.changes.map((c, i) => (
+                                <tr key={`${line.key}-${i}`} className="border-t border-gray-50">
+                                  <td className="px-3 py-1"></td>
+                                  <td className="px-3 py-1 text-gray-600 w-48">{c.field}</td>
+                                  <td className="px-3 py-1 text-red-700 line-through">{c.from || '—'}</td>
+                                  <td className="px-3 py-1 text-green-700">{c.to || '—'}</td>
+                                </tr>
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+
+                  {diff.templates.length > 0 && (
+                    <div className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm font-medium">Templates</div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {diff.templates.map(t => (
+                            <React.Fragment key={`${t.type}-${t.name}`}>
+                              <tr className="border-t border-gray-200">
+                                <td className="px-3 py-1.5 w-28">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                                    t.kind === 'added' ? 'bg-green-100 text-green-700'
+                                    : t.kind === 'removed' ? 'bg-red-100 text-red-700'
+                                    : 'bg-amber-100 text-amber-700'}`}>{t.kind}</span>
+                                </td>
+                                <td className="px-3 py-1.5 font-medium text-gray-800" colSpan={3}>
+                                  {t.name} <span className="text-gray-400">({t.type})</span>
+                                </td>
+                              </tr>
+                              {t.changes.map((c, i) => (
+                                <tr key={`${t.name}-${i}`} className="border-t border-gray-50">
+                                  <td className="px-3 py-1"></td>
+                                  <td className="px-3 py-1 text-gray-600 w-48">{c.field}</td>
+                                  <td className="px-3 py-1 text-red-700 line-through whitespace-pre-wrap">{c.from || '—'}</td>
+                                  <td className="px-3 py-1 text-green-700 whitespace-pre-wrap">{c.to || '—'}</td>
+                                </tr>
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between gap-2 px-6 py-4 border-t bg-gray-50">
+              <button
+                className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
+                onClick={() => { setShowCompareModal(false); setDiff(null); setDiffError(''); }}
+              >
+                Close
+              </button>
+              <div className="flex gap-2">
+                <button
+                  className="px-4 py-2 border border-emerald-300 text-emerald-800 rounded text-sm hover:bg-emerald-50 disabled:opacity-40"
+                  disabled={!diff}
+                  onClick={downloadComparison}
+                >
+                  Excel (.xlsx)
+                </button>
+                <button
+                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                  disabled={!compareBaseRevision || !compareTargetRevision}
+                  onClick={runComparison}
+                >
+                  Compare
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

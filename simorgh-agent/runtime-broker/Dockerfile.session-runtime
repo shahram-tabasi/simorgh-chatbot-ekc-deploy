@@ -1,0 +1,54 @@
+# Base image for per-project session containers managed by runtime-broker.
+# Tag as `simorgh/session-runtime:latest`; runtime-broker pulls this on first
+# /sessions/{pid}/start. Using python:3.12-slim (debian trixie) for parity
+# with every other service in the stack — the registry mirror, apt mirror,
+# and pip mirror configs all line up the same way.
+FROM python:3.12-slim
+
+ARG APT_MIRROR=
+ARG APT_SECURITY_MIRROR=
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN printf '%s\n' \
+        'Acquire::Retries "20";' \
+        'Acquire::http::Timeout "300";' \
+        'Acquire::https::Timeout "300";' \
+        'Acquire::http::No-Cache "true";' \
+        > /etc/apt/apt.conf.d/99retries
+
+RUN if [ -n "$APT_MIRROR" ]; then \
+      printf 'deb %s trixie main\ndeb %s trixie-updates main\n' \
+        "$APT_MIRROR" "$APT_MIRROR" > /etc/apt/sources.list; \
+      if [ -n "$APT_SECURITY_MIRROR" ]; then \
+        printf 'deb %s trixie-security main\n' "$APT_SECURITY_MIRROR" \
+          >> /etc/apt/sources.list; \
+      fi; \
+      rm -f /etc/apt/sources.list.d/debian.sources; \
+      echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99nexus; \
+    fi
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        git-lfs \
+        curl wget \
+        nodejs npm \
+        bash \
+        smbclient cifs-utils \
+        openssh-client \
+        rsync \
+        jq \
+        tini \
+        less \
+    && git lfs install --system \
+    && rm -rf /var/lib/apt/lists/*
+
+# Working directory is mounted as a docker volume by runtime-broker.
+WORKDIR /work
+
+# Default identity for local commits; runtime-broker overrides per-commit.
+RUN git config --system user.email "simorgh-agent@local" \
+ && git config --system user.name  "simorgh-agent"
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/bin/bash", "-lc", "trap 'exit 0' TERM; while :; do sleep 3600 & wait $!; done"]

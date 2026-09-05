@@ -102,7 +102,16 @@ async def login(
         )
 
     # Create JWT token
-    access_token = create_access_token(data={"sub": user["EMPUSERNAME"]})
+    # TPMS is read-only and most legacy users don't carry a role string
+    # we can map. Treat every legacy-login user as a technical user by
+    # default — they are EplanIX engineers in the company TPMS.
+    # Downstream role gates (project-agent-service.require_role) check
+    # this claim. If TPMS ever exposes a higher-privilege role, swap the
+    # default for the mapped value.
+    access_token = create_access_token(data={
+        "sub":           user["EMPUSERNAME"],
+        "role_category": "expert_technical",
+    })
 
     # Cache user profile in Redis for LLM context (so chatbot knows the user's name)
     try:

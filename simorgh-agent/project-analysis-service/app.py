@@ -28,8 +28,11 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Project Analysis Service", version="1.0.0")
 
-SHELL_SERVICE_URL = os.getenv("SHELL_SERVICE_URL", "http://192.168.1.69:8010")
-SHELL_SERVICE_TOKEN = os.getenv("SHELL_SERVICE_TOKEN", "")
+# 2026-05: shell-service retired. We now talk to the per-project session
+# container via runtime-broker /sessions/{project_id}/exec for tree
+# listing, file reads, and git log.
+RUNTIME_BROKER_URL   = os.getenv("RUNTIME_BROKER_URL", "http://runtime-broker:8048")
+RUNTIME_BROKER_TOKEN = os.getenv("BROKER_TOKEN", "")
 
 _reports: Dict[str, Dict] = {}
 
@@ -46,28 +49,47 @@ class AnalyzeResponse(BaseModel):
     message: str
 
 
-def _shell_headers():
-    h = {}
-    if SHELL_SERVICE_TOKEN:
-        h["Authorization"] = f"Bearer {SHELL_SERVICE_TOKEN}"
-    return h
+def _broker_headers():
+    return ({"authorization": f"Bearer {RUNTIME_BROKER_TOKEN}"}
+            if RUNTIME_BROKER_TOKEN else {})
+
+
+async def _broker_exec(client: httpx.AsyncClient, project_id: str,
+                       command: str, timeout_sec: int = 60) -> dict:
+    r = await client.post(
+        f"{RUNTIME_BROKER_URL}/sessions/{project_id}/exec",
+        json={"command": command, "timeout_sec": timeout_sec},
+        headers=_broker_headers(),
+    )
+    r.raise_for_status()
+    return r.json()
 
 
 async def _run_analysis(report_id: str, req: AnalyzeRequest):
-    """Background: analyze project workspace."""
+    """Background: analyze project workspace inside its session container."""
     report = _reports[report_id]
     report["status"] = "running"
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            # Step 1: List all files
-            resp = await client.post(
-                f"{SHELL_SERVICE_URL}/file/list",
-                json={"project_id": req.project_id, "path": ".", "recursive": True},
-                headers=_shell_headers(),
+        async with httpx.AsyncClient(timeout=120) as client:
+            # Step 1: list all files via the container (gitlab clone lives
+            # at /work/gitlab when a repo was selected, otherwise /work).
+            ls_cmd = (
+                "( [ -d /work/gitlab ] && cd /work/gitlab || cd /work ) && "
+                "find . -not -path '*/\\.git/*' -printf '%y\\t%s\\t%p\\n'"
             )
-            resp.raise_for_status()
-            file_list = resp.json().get("files", [])
+            ls = await _broker_exec(client, req.project_id, ls_cmd, timeout_sec=60)
+            file_list = []
+            for line in (ls.get("stdout") or "").splitlines():
+                parts = line.split("\t", 2)
+                if len(parts) != 3:
+                    continue
+                kind, size, path = parts
+                file_list.append({
+                    "path": path.lstrip("./"),
+                    "is_dir": kind == "d",
+                    "size": int(size) if size.isdigit() else 0,
+                })
 
             # Build file tree
             tree_lines = []
@@ -92,7 +114,7 @@ async def _run_analysis(report_id: str, req: AnalyzeRequest):
                 icon = "/" if is_dir else ""
                 tree_lines.append(f"{indent}{name}{icon}")
 
-            # Step 2: Read key files (README, config files)
+            # Step 2: read key files via the container.
             key_files_content = {}
             key_patterns = ["README.md", "requirements.txt", "package.json",
                             "Dockerfile", "docker-compose.yml", ".gitignore",
@@ -103,27 +125,30 @@ async def _run_analysis(report_id: str, req: AnalyzeRequest):
                 name = path.split("/")[-1]
                 if name in key_patterns and not f.get("is_dir"):
                     try:
-                        resp = await client.post(
-                            f"{SHELL_SERVICE_URL}/file/read",
-                            json={"project_id": req.project_id, "path": path},
-                            headers=_shell_headers(),
+                        r2 = await client.get(
+                            f"{RUNTIME_BROKER_URL}/sessions/{req.project_id}/read_file",
+                            params={"path": path if path.startswith("gitlab/")
+                                    else f"gitlab/{path}"},
+                            headers=_broker_headers(),
                         )
-                        if resp.status_code == 200:
-                            content = resp.json().get("content", "")
-                            key_files_content[path] = content[:2000]
+                        if r2.status_code == 200 and r2.json().get("encoding") == "utf-8":
+                            key_files_content[path] = (r2.json().get("content", ""))[:2000]
                     except Exception:
                         pass
 
-            # Step 3: Get git history
+            # Step 3: git log via the container.
             git_log = []
             try:
-                resp = await client.post(
-                    f"{SHELL_SERVICE_URL}/git/log",
-                    json={"project_id": req.project_id, "limit": 10},
-                    headers=_shell_headers(),
+                gl = await _broker_exec(
+                    client, req.project_id,
+                    "cd /work/gitlab 2>/dev/null && "
+                    "git log -n 10 --pretty=format:'%H%x09%an%x09%s'",
+                    timeout_sec=30,
                 )
-                if resp.status_code == 200:
-                    git_log = resp.json().get("commits", [])
+                for line in (gl.get("stdout") or "").splitlines():
+                    h, author, subject = (line.split("\t", 2) + ["", ""])[:3]
+                    if h:
+                        git_log.append({"sha": h, "author": author, "subject": subject})
             except Exception:
                 pass
 
@@ -237,7 +262,27 @@ async def project_analyze(project_id: str, depth: str = "medium") -> str:
     return _json.dumps(report, default=str)
 
 
-app.mount("/mcp", mcp.streamable_http_app())
+# FastMCP's streamable_http_app exposes route /mcp internally. Mount at
+# "/" so its public path is /mcp (mounting at "/mcp" would produce /mcp/mcp).
+# Its session_manager needs an active TaskGroup; when the inner app is
+# mounted under another FastAPI, the inner lifespan never fires — start
+# the session manager from the outer app's lifespan instead, otherwise
+# every POST returns 500 with "Task group is not initialized".
+_mcp_streamable_app = mcp.streamable_http_app()
+
+@app.on_event("startup")
+async def _mcp_session_manager_start():
+    cm = mcp.session_manager.run()
+    app.state._mcp_session_manager_cm = cm
+    await cm.__aenter__()
+
+@app.on_event("shutdown")
+async def _mcp_session_manager_stop():
+    cm = getattr(app.state, "_mcp_session_manager_cm", None)
+    if cm is not None:
+        await cm.__aexit__(None, None, None)
+
+app.mount("/", _mcp_streamable_app)
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,7 +1,12 @@
 // src/components/TemplateCreation/TemplateProperties.tsx - FIXED SQL CONNECTION
 import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon } from 'lucide-react';
+
+// Reserved keys inside template.properties used to carry per-template metadata.
+// These keys are NOT real property rows; the renderer skips them.
+const META_DISPLAY_NAMES = '__displayNames';
+const META_LOCKED = '__locked';
 
 const PAGE_SIZE = 100;
 
@@ -372,8 +377,25 @@ const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
                   <DetailRow label="Designation 3" value={selectedPart.Designation3} />
                   <DetailRow label="Manufacturer" value={selectedPart.Manufacturer} highlight />
                   <DetailRow label="Supplier" value={selectedPart.Supplier} />
-                  <DetailRow label="Order number" value={selectedPart.OrderNumber} />
-                  <DetailRow label="Description" value={selectedPart.Description} multiline />
+                  
+                  {/* Eplanix section with Order Number */}
+                  <div className="mt-4 border-t pt-3">
+                    <div className="text-sm font-semibold text-gray-700 mb-2">Eplanix</div>
+                    <DetailRow label="Order Number" value={selectedPart.OrderNumber} />
+                    {/* Show Designation 3 if OrderNumber is empty, "-", or "_" */}
+                    {(!selectedPart.OrderNumber || 
+                      selectedPart.OrderNumber === '-' || 
+                      selectedPart.OrderNumber === '_' || 
+                      selectedPart.OrderNumber.trim() === '') && (
+                      <DetailRow label="Designation 3" value={selectedPart.Designation3} />
+                    )}
+                  </div>
+                  
+                  {/* Description from SQL Server */}
+                  <div className="mt-4 border-t pt-3">
+                    <div className="text-sm font-semibold text-gray-700 mb-2">Description</div>
+                    <DetailRow label="" value={selectedPart.Description} multiline />
+                  </div>
                 </div>
               </div>
             ) : (
@@ -470,29 +492,147 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     setProperties(template.properties || {});
   }, [template]);
 
-  const lvProperties = [
-    'CB ORDER', 'CONTACTOR. ORDER',
-    'OVER LOAD RELAY', 'EARTH FAULT', 'COREBALANCE CT',
-    'PROTECTION RELAY', 'CT RATING', 'AMMETER', 'AMMETER selector',
-    'PT RATING', 'VOLTMETER', 'VOLTMETER selector'
+  // ── LV property layout (per spec) ──────────────────────────────────────────
+  // All LV rows are now renamable (user can edit all property names)
+  const lvFixed = [
+    'CB ORDER',          // first row → auto-label "Q" when a part is added
+    'ACCESSORY',
+    'CONTACTOR. ORDER',
+    'OVER LOAD RELAY',
+    'EARTH FAULT',
+    'COREBALANCE CT',
+    'PROTECTION RELAY',
+    'CT RATING',
+    'AMMETER',
+    'AMMETER selector',
+    'PT RATING',
+    'VOLTMETER',
+    'VOLTMETER selector',
+    'MULTIMETER',
+    'TEST BLOCK',
+    'TRANSDUSER',
+    'ALARM ANUNCIATOR',
   ];
+  // Renamable SPARE rows that fill freely
+  const lvRenamableSpares = ['SPARE 1', 'SPARE 2', 'SPARE 3'];
+  // Extended SPARE rows: enabled only when an earlier row is empty
+  const lvExtendedSpares  = ['SPARE 4', 'SPARE 5', 'SPARE 6', 'SPARE 7'];
 
-  const mvProperties = [
-    'BREAKER TYPE', 'NOMINAL CURRENT', 'SHORT CIRCUIT CURRENT',
-    'PROTECTION RELAY', 'CT RATIO', 'VT RATIO'
+  // ── MV property layout (per spec) ──────────────────────────────────────────
+  // All MV rows are now renamable (user can edit all property names)
+  const mvFixed = [
+    'VCB OR VC/FUSE',    // first row → auto-label "Q" when a part is added
+    'ACCESSORY',
+    'VOLTAGE INDICATOR',
+    'COREBALANCE CT',
+    'PROTECTION RELAY',
+    'CT RATING',
+    'AMMETER',
+    'AMMETER selector',
+    'PT RATING',
+    'VOLTMETER',
+    'VOLTMETER selector',
+    'MULTIMETER',
+    'TEST BLOCK',
+    'TRANSDUSER',
+    'ALARM WINDDOW',
+    'SURGE ARRESTER',
   ];
+  const mvRenamableSpares = ['SPARE 1', 'SPARE 2', 'SPARE 3'];
+  const mvExtendedSpares  = ['SPARE 4', 'SPARE 5'];
 
+  // HV: untouched (existing layout)
   const hvProperties = [
     'BREAKER TYPE', 'NOMINAL VOLTAGE', 'NOMINAL CURRENT',
     'SHORT CIRCUIT CURRENT', 'PROTECTION RELAY', 'INSULATION LEVEL'
   ];
 
-  let propertiesToShow: string[] = [];
+  // Resolve layout for this template
+  let fixedRows: string[] = [];
+  let renamableSpares: string[] = [];
+  let extendedSpares: string[] = [];
   switch (template.type) {
-    case 'LV': propertiesToShow = lvProperties; break;
-    case 'MV': propertiesToShow = mvProperties; break;
-    case 'HV': propertiesToShow = hvProperties; break;
+    case 'LV': fixedRows = lvFixed; renamableSpares = lvRenamableSpares; extendedSpares = lvExtendedSpares; break;
+    case 'MV': fixedRows = mvFixed; renamableSpares = mvRenamableSpares; extendedSpares = mvExtendedSpares; break;
+    case 'HV': fixedRows = hvProperties; break;
   }
+  const propertiesToShow = [...fixedRows, ...renamableSpares, ...extendedSpares];
+  // Rows that come BEFORE the extended-spare block — used to count empty slots.
+  const regularRows = [...fixedRows, ...renamableSpares];
+  // The very first fixed row gets "Q" as default label when a part is added.
+  const firstQRow = fixedRows[0];
+
+  // ── Metadata accessors (display names + locked rows) ───────────────────────
+  const displayNames: Record<string, string> =
+    (properties as any)[META_DISPLAY_NAMES] || {};
+  const lockedRows: string[] =
+    (properties as any)[META_LOCKED] || [];
+
+  const getDisplayName = (rawName: string) => displayNames[rawName] || rawName;
+  const isRowLocked = (rawName: string) => lockedRows.includes(rawName);
+
+  // How many extended SPARE rows are filled (have parts)?
+  const filledExtendedCount = extendedSpares.filter(
+    s => (properties[s]?.parts?.length || 0) > 0
+  ).length;
+  // Empty regular rows that aren't already locked.
+  const emptyUnlockedRegular = regularRows.filter(
+    r => !(properties[r]?.parts?.length) && !isRowLocked(r)
+  );
+  // Extended SPARE N (0-indexed) is enabled iff there are enough empty regular
+  // slots to "spend" on it. The total enabled = empty regular + locked count.
+  const totalEnabledExtended = Math.min(
+    extendedSpares.length,
+    emptyUnlockedRegular.length + filledExtendedCount
+  );
+  const isExtendedEnabled = (spareName: string) => {
+    const idx = extendedSpares.indexOf(spareName);
+    if (idx < 0) return true;
+    return idx < totalEnabledExtended;
+  };
+
+  // ── Inline rename state for renamable rows ─────────────────────────────────
+  const [renamingRow, setRenamingRow] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+
+  const writeMetadata = (
+    nextDisplayNames: Record<string, string>,
+    nextLocked: string[]
+  ) => {
+    const updated = {
+      ...properties,
+      [META_DISPLAY_NAMES]: nextDisplayNames as any,
+      [META_LOCKED]: nextLocked as any,
+    };
+    setProperties(updated);
+    updateTemplate(template.id, updated as any);
+  };
+
+  const commitRename = (rawName: string, newName: string) => {
+    const trimmed = newName.trim();
+    const next = { ...displayNames };
+    if (!trimmed || trimmed === rawName) {
+      delete next[rawName];
+    } else {
+      next[rawName] = trimmed;
+    }
+    writeMetadata(next, lockedRows);
+    setRenamingRow(null);
+    setRenameDraft('');
+  };
+
+  const toggleLock = (rawName: string) => {
+    if (lockedRows.includes(rawName)) {
+      // Unlocking — show the warning required by spec.
+      const ok = window.confirm(
+        '⚠ Warning: this equipment will not be displayed in the single-line diagrams below.\n\nUnlock anyway?'
+      );
+      if (!ok) return;
+      writeMetadata(displayNames, lockedRows.filter(r => r !== rawName));
+    } else {
+      writeMetadata(displayNames, [...lockedRows, rawName]);
+    }
+  };
 
   const handleOpenPartDialog = (propertyName: string, currentPart?: PartInfo, partIndex?: number) => {
     setDialogState({
@@ -506,10 +646,14 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   const handlePartSelect = (part: any) => {
     const { propertyName, partIndex } = dialogState;
     const currentProperty = properties[propertyName] || { parts: [] };
-    
+
+    // First row of LV (CB ORDER) / MV (VCB OR VC/FUSE) → default label "Q"
+    const isFirstQRow = propertyName === firstQRow;
+    const defaultLabel = isFirstQRow ? 'Q' : (part.Designation1 || '');
+
     const newPart: PartInfo = {
       partNumber: part.PartNumber,
-      label: part.Designation1 || '',
+      label: defaultLabel,
       quantity: 1,
       priority: partIndex !== null ? partIndex + 1 : currentProperty.parts.length + 1,
       fullData: part
@@ -518,7 +662,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     let updatedParts;
     if (partIndex !== null) {
       // 🔹 تعویض پارت موجود
-      updatedParts = currentProperty.parts.map((p, i) => 
+      updatedParts = currentProperty.parts.map((p, i) =>
         i === partIndex ? newPart : p
       );
     } else {
@@ -527,13 +671,34 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     }
 
     const updatedProperty = { parts: updatedParts };
-    const updatedProperties = {
+    let updatedProperties: Record<string, PropertyValue> = {
       ...properties,
       [propertyName]: updatedProperty
     };
 
+    // ── Extended-spare substitution rule ─────────────────────────────────────
+    // When user fills an extended SPARE (e.g. SPARE 4) and there are still
+    // empty unlocked regular rows above, lock the first such row to signify
+    // it's been substituted by this spare.
+    if (
+      extendedSpares.includes(propertyName) &&
+      partIndex === null &&
+      currentProperty.parts.length === 0 // first part being added to this spare
+    ) {
+      const firstEmpty = regularRows.find(
+        r => !(updatedProperties[r]?.parts?.length) && !isRowLocked(r)
+      );
+      if (firstEmpty) {
+        const nextLocked = [...lockedRows, firstEmpty];
+        updatedProperties = {
+          ...updatedProperties,
+          [META_LOCKED]: nextLocked as any,
+        };
+      }
+    }
+
     setProperties(updatedProperties);
-    updateTemplate(template.id, updatedProperties);
+    updateTemplate(template.id, updatedProperties as any);
   };
 
   const handleRemovePart = (propertyName: string, partIndex: number) => {
@@ -607,6 +772,12 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-20">
                 Priority
               </th>
+              <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-32">
+                Eplanix
+              </th>
+              <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-40">
+                Description
+              </th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-12">
                 Del
               </th>
@@ -617,21 +788,102 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               const propertyValue = properties[property] || { parts: [] };
               const parts = propertyValue.parts || [];
 
+              // Distinct manufacturers under property name, joined with "/"
+              const manufacturers = Array.from(new Set(
+                parts.map(p => p.fullData?.Manufacturer)
+                     .filter((m: any): m is string => Boolean(m && String(m).trim()))
+              ));
+              const manufacturerLabel = manufacturers.join(' / ');
+
+              const displayLabel = getDisplayName(property);
+              // For LV and MV, all rows are renamable (including fixed rows)
+              const isRenamable  = template.type === 'LV' || template.type === 'MV';
+              const isExtended   = extendedSpares.includes(property);
+              const isLocked     = isRowLocked(property);
+              const isEnabled    = !isLocked && (!isExtended || isExtendedEnabled(property));
+
+              // Render the property-name cell with optional rename/lock controls.
+              const propNameCell = (
+                <div>
+                  {renamingRow === property ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        autoFocus
+                        type="text"
+                        className="flex-1 border border-gray-300 rounded px-1.5 py-0.5 text-xs"
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitRename(property, renameDraft);
+                          if (e.key === 'Escape') { setRenamingRow(null); setRenameDraft(''); }
+                        }}
+                      />
+                      <button
+                        title="Save"
+                        className="text-green-600 hover:text-green-800"
+                        onClick={() => commitRename(property, renameDraft)}
+                      ><CheckIcon className="w-4 h-4" /></button>
+                      <button
+                        title="Cancel"
+                        className="text-gray-500 hover:text-gray-700"
+                        onClick={() => { setRenamingRow(null); setRenameDraft(''); }}
+                      ><XIcon className="w-4 h-4" /></button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className={isLocked ? 'line-through text-gray-400' : ''}>{displayLabel}</span>
+                      {isRenamable && (
+                        <button
+                          title="Rename"
+                          className="text-gray-400 hover:text-blue-600"
+                          onClick={() => { setRenamingRow(property); setRenameDraft(displayLabel); }}
+                        ><Edit2Icon className="w-3.5 h-3.5" /></button>
+                      )}
+                      {isLocked && (
+                        <button
+                          title="Unlock (will warn)"
+                          className="text-amber-600 hover:text-amber-800"
+                          onClick={() => toggleLock(property)}
+                        ><UnlockIcon className="w-3.5 h-3.5" /></button>
+                      )}
+                      {!isLocked && isExtended && parts.length === 0 && !isEnabled && (
+                        <span title="Disabled — fill earlier rows first" className="text-gray-400">
+                          <LockIcon className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {manufacturerLabel && (
+                    <div className="text-[10px] font-normal text-gray-500 mt-0.5">
+                      {manufacturerLabel}
+                    </div>
+                  )}
+                </div>
+              );
+
               return (
                 <React.Fragment key={index}>
                   {parts.length === 0 ? (
                     <tr className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                       <td className="px-4 py-3 text-sm border-b font-medium text-gray-700">
-                        {property}
+                        {propNameCell}
                       </td>
                       <td className="px-4 py-2 border-b" colSpan={6}>
-                        <button
-                          onClick={() => handleOpenPartDialog(property)}
-                          className="flex items-center text-blue-600 hover:text-blue-800 text-sm"
-                        >
-                          <PlusIcon className="w-4 h-4 mr-1" />
-                          Add Part from SQL Server
-                        </button>
+                        {isEnabled ? (
+                          <button
+                            onClick={() => handleOpenPartDialog(property)}
+                            className="flex items-center text-blue-600 hover:text-blue-800 text-sm"
+                          >
+                            <PlusIcon className="w-4 h-4 mr-1" />
+                            Add Part from SQL Server
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">
+                            {isLocked
+                              ? 'Locked — substituted by an extended spare. Click the unlock icon to re-enable.'
+                              : 'Disabled — only available when a regular row above is empty.'}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ) : (
@@ -645,7 +897,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                             className="px-4 py-3 text-sm border-b font-medium text-gray-700 align-top"
                             rowSpan={parts.length + 1}
                           >
-                            {property}
+                            {propNameCell}
                           </td>
                         )}
                         {/* Part number + replace button */}
@@ -706,6 +958,33 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                               handleUpdatePart(property, partIndex, 'priority', parseInt(e.target.value) || 1)
                             }
                             min="1"
+                          />
+                        </td>
+                        {/* Eplanix column: OrderNumber or Designation3 */}
+                        <td className="px-4 py-2 border-b">
+                          <input
+                            type="text"
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-blue-50"
+                            value={
+                              (part.fullData?.OrderNumber && 
+                               part.fullData.OrderNumber !== '-' && 
+                               part.fullData.OrderNumber !== '_' && 
+                               part.fullData.OrderNumber.trim() !== '') 
+                                ? part.fullData.OrderNumber 
+                                : (part.fullData?.Designation3 || '')
+                            }
+                            readOnly
+                            title="Eplanix (Order Number or Designation 3)"
+                          />
+                        </td>
+                        {/* Description column from SQL Server */}
+                        <td className="px-4 py-2 border-b">
+                          <input
+                            type="text"
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-gray-50"
+                            value={part.fullData?.Description || ''}
+                            readOnly
+                            title="Description from SQL Server"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">

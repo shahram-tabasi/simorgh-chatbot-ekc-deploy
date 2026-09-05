@@ -28,6 +28,26 @@ export interface AgentProject {
   document_count?: number;
   created_at: string;
   updated_at: string;
+  // Sidebar-dot status; matches the backend RuntimeStatus shape.
+  runtime_status?: {
+    container:
+      | 'absent'
+      | 'running'
+      | 'busy'
+      | 'paused'
+      | 'stopped'
+      | 'stopped_incomplete'
+      | 'error';
+    branch:
+      | 'none'
+      | 'created'
+      | 'committed'
+      | 'pushed'
+      | 'merged'
+      | 'conflict';
+    simorgh_branch?: string | null;
+    pending_commit_sha?: string | null;
+  };
 }
 
 export interface AgentTask {
@@ -79,6 +99,21 @@ export interface AgentResponse {
   commit?: { commit_hash: string; message: string } | null;
 }
 
+// Server returns 425 Too Early while project-init is still running
+// (Phase 3 of the auto-exploration rollout). Surface the structured
+// progress payload so the chat UI can render a blocking overlay
+// rather than treating it as a generic error.
+export interface InitProgress {
+  status: 'pending' | 'running';
+  current_step: string | null;
+  completed_steps: string[];
+  failed_steps: { step: string; error?: string }[];
+  completed_count: number;
+  total_expected: number;
+  init_id?: string;
+  started_at?: string;
+}
+
 // =============================================================================
 // Hook
 // =============================================================================
@@ -92,6 +127,11 @@ export function useProjectAgent(userId?: string) {
   const [isSending, setIsSending] = useState(false);
   const [cotProgress, setCotProgress] = useState<COTProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Set when the server returns 425 init_in_progress so the chat UI
+  // can render a blocking overlay with live indexing progress and
+  // keep the input disabled until init completes. Cleared on the
+  // first successful sendMessage call after init finishes.
+  const [initProgress, setInitProgress] = useState<InitProgress | null>(null);
 
   const getHeaders = useCallback(() => {
     const token = localStorage.getItem('simorgh_token');
@@ -267,10 +307,30 @@ export function useProjectAgent(userId?: string) {
         return null;
       }
 
+      // 425 Too Early: project-init still indexing. Surface the
+      // structured progress so the UI can render a blocking overlay
+      // instead of an error toast, and return null so the caller
+      // doesn't treat this as a failed send. The caller (chat area)
+      // should poll /init-status to refresh progress.
+      if (response.status === 425) {
+        const errData = await response.json().catch(() => ({}));
+        const detail = errData?.detail;
+        const progress = (detail && typeof detail === 'object')
+          ? (detail.progress as InitProgress | undefined)
+          : undefined;
+        if (progress) setInitProgress(progress);
+        setIsSending(false);
+        return null;
+      }
+
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.detail || `HTTP ${response.status}`);
       }
+
+      // Anything that gets past the status checks above means init
+      // is no longer blocking — clear any stale overlay.
+      if (initProgress) setInitProgress(null);
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
@@ -482,6 +542,32 @@ export function useProjectAgent(userId?: string) {
   // Active project
   const activeProject = projects.find(p => p.id === activeProjectId) || null;
 
+  // Poll the init-status proxy until the project is ready. The chat
+  // overlay calls this when it's mounted with a non-null initProgress
+  // and clears the overlay when ready=true. Returns the latest
+  // progress snapshot (or null when ready) so the UI can render
+  // "Indexing... <current step> (3/8)" between polls.
+  const refreshInitProgress = useCallback(async (
+    projectId: string,
+  ): Promise<InitProgress | null> => {
+    try {
+      const res = await axios.get(
+        `${API_BASE}/v2/agent/projects/${projectId}/init-status`,
+        { headers: getHeaders() },
+      );
+      if (res.data?.ready) {
+        setInitProgress(null);
+        return null;
+      }
+      const progress = res.data?.progress as InitProgress | undefined;
+      if (progress) setInitProgress(progress);
+      return progress ?? null;
+    } catch (err) {
+      console.warn('init-status poll failed:', err);
+      return null;
+    }
+  }, [getHeaders]);
+
   return {
     // State
     projects,
@@ -493,10 +579,12 @@ export function useProjectAgent(userId?: string) {
     isSending,
     cotProgress,
     error,
+    initProgress,
     // Actions
     setActiveProjectId,
     createProject,
     deleteProject,
+    refreshInitProgress,
     sendMessage,
     fetchTasks,
     updateTask,

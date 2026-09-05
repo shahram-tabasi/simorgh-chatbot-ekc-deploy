@@ -27,6 +27,32 @@ export type AIMode = 'online' | 'local';
 // Project & Chat Types
 // ============================================
 
+// Live container + branch state for the sidebar dot. Mirrors the
+// backend `RuntimeStatus` pydantic model.
+export type ContainerStatus =
+  | 'absent'
+  | 'running'
+  | 'busy'
+  | 'paused'
+  | 'stopped'
+  | 'stopped_incomplete'
+  | 'error';
+
+export type BranchStatus =
+  | 'none'
+  | 'created'
+  | 'committed'
+  | 'pushed'
+  | 'merged'
+  | 'conflict';
+
+export interface RuntimeStatus {
+  container: ContainerStatus;
+  branch: BranchStatus;
+  simorgh_branch?: string | null;
+  pending_commit_sha?: string | null;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -37,6 +63,16 @@ export interface Project {
   updatedAt?: Date;
   isExpanded?: boolean;
   metadata?: Record<string, any>;
+  // Backend-supplied git context (populated lazily by selectChat).
+  repoPath?: string | null;
+  baseBranch?: string | null;
+  workingBranch?: string | null;
+  // Files-changed indicator since the active session's start. Refreshed
+  // by selectChat off the messages endpoint.
+  filesChangedCount?: number;
+  // Sidebar status icon — populated by /api/v2/agent/projects on list,
+  // refreshed by /api/v2/agent/projects/{id}/runtime on poll.
+  runtimeStatus?: RuntimeStatus;
 }
 
 export interface Chat {
@@ -49,6 +85,8 @@ export interface Chat {
   projectId?: string;
   conversationId?: string;
   metadata?: Record<string, any>;
+  // Soft-deleted; hidden from the default sidebar list but recoverable.
+  archived?: boolean;
 }
 
 // ============================================
@@ -99,6 +137,41 @@ export interface MessageMetadata {
   processingSteps?: ProcessingStep[];
   // Agent task stream (Claude Code-style)
   agentPlan?: AgentPlan;
+  // HR / Strategy direct-RAG path (general chat, modern users):
+  //   citations: top-K grounded passages the LLM was given, rendered
+  //     as numbered badges under the assistant bubble.
+  //   top_score:  best raw similarity score; lets the UI surface
+  //     "low confidence" hints if we ever wire one up.
+  //   refusal: true when retrieval was below threshold and the user
+  //     got the topic-suggestion fallback; suppresses citation badges
+  //     since there's nothing to cite.
+  citations?: Array<{
+    n: number;
+    doc_id?: string;
+    doc_title?: string;
+    doc_code?: string;
+    filename?: string;
+    section_path?: string;
+    category?: string;
+    topic?: string;
+    chunk_type?: string;
+    score?: number;
+  }>;
+  top_score?: number;
+  refusal?: boolean;
+  // Project-chat CoT routing telemetry (Phase 5). Emitted by the
+  // backend's `cot_plan_chosen` SSE event before the planner runs.
+  // MessageList renders cotPlan as a small chip above the bubble so
+  // operators can see at a glance which specialized plan the master
+  // router picked for this turn.
+  cotPlan?: string;
+  cotPlanSignals?: {
+    has_selected_repo?: boolean;
+    selected_repos_count?: number;
+    has_upload?: boolean;
+    upload_size_chars?: number;
+    input_modality?: string;
+  };
 }
 
 export interface ProcessingStep {

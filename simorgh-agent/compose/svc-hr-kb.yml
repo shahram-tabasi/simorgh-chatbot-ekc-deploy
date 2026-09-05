@@ -1,0 +1,70 @@
+# =============================================================================
+# HR-KB-SERVICE - HR / organization knowledge base
+# Port 8041. REST + MCP. Used by chat-service during "general" sessions.
+#
+# Watches HR_DOCS_PATH for filesystem drops by the HR manager and indexes
+# them into Qdrant collection HR_KB_COLLECTION (default "hr_general_kb").
+# Also accepts admin uploads via POST /upload.
+# =============================================================================
+services:
+  hr-kb-service:
+    image: simorgh-hr-kb-service:local
+    build: ../hr-kb-service
+    container_name: hr-kb-service
+    expose:
+      - "8041"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HR_DOCS_PATH=/app/hr_docs
+      - HR_KB_COLLECTION=${HR_KB_COLLECTION:-hr_general_kb}
+      - HR_DOCS_WATCH_INTERVAL=${HR_DOCS_WATCH_INTERVAL:-30}
+      - DOC_PROCESSOR_URL=http://doc-processor:8000
+      - EMBEDDINGS_URL=http://embeddings-service:8031
+      - QDRANT_URL=http://qdrant:6333
+      - POSTGRES_AUTH_HOST=${POSTGRES_AUTH_HOST:-postgres_auth}
+      - POSTGRES_AUTH_PORT=${POSTGRES_AUTH_PORT:-5432}
+      - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+      - POSTGRES_AUTH_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_AUTH_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+    volumes:
+      # HR manager drops files here on the host. Default path is on .68;
+      # override with HR_DOCS_HOST_PATH in .env if you mount it elsewhere.
+      - hr_docs:/app/hr_docs
+    depends_on:
+      qdrant:
+        condition: service_started
+      doc-processor:
+        condition: service_healthy
+      embeddings-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8041/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  hr_docs:
+    name: simorgh_hr_docs
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      # Curated HR/strategy corpus lives in the repo at Human Capital/
+      # (committed in 646e56d, name-corrected in 3f86db4). Override
+      # HR_DOCS_HOST_PATH in .env if you keep the docs elsewhere on
+      # the host (e.g. an SMB mount the HR manager writes to). The
+      # default below assumes the standard .68 deploy layout
+      # /home/ubuntu/simorgh-chatbot-ekc-deploy/Human Capital.
+      device: ${HR_DOCS_HOST_PATH:-/home/ubuntu/simorgh-chatbot-ekc-deploy/Human Capital}

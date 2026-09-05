@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
-import * as XLSX from 'xlsx';
-import { PlusIcon, UploadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import * as XLSX from 'xlsx-js-style';
+import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon } from 'lucide-react';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
+import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';
+import { useProject } from '../../context/ProjectContext';
 
 // ===== PROPS INTERFACES =====
 interface DeviceTableProps {
@@ -16,6 +19,7 @@ interface DeviceTableProps {
 }
 
 interface EquipmentTreeProps {
+  onImportFromTpms?: () => void;
   projectData: ProjectData;
   addEquipment: (equipment: Equipment) => void;
   deleteEquipment: (id: string) => void;
@@ -26,6 +30,7 @@ interface EquipmentTreeProps {
 }
 
 interface DeviceSelectionTabProps {
+  onImportFromTpms?: () => void;
   projectData: ProjectData;
   selectedEquipment: Equipment | null;
   setSelectedEquipment: (equipment: Equipment | null) => void;
@@ -46,15 +51,22 @@ interface TemplatePropertiesModalProps {
 }
 
 const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ template, onClose, onEdit }) => {
+  // Layout must mirror TemplateProperties.tsx so the read-only view always
+  // matches what the user configured on the editor screen.
   const lvProperties = [
-    'CB ORDER', 'CONTACTOR. ORDER',
-    'OVER LOAD RELAY', 'EARTH FAULT', 'COREBALANCE CT',
-    'PROTECTION RELAY', 'CT RATING', 'AMMETER', 'AMMETER selector',
-    'PT RATING', 'VOLTMETER', 'VOLTMETER selector'
+    'CB ORDER', 'ACCESSORY', 'CONTACTOR. ORDER', 'OVER LOAD RELAY',
+    'EARTH FAULT', 'COREBALANCE CT', 'PROTECTION RELAY', 'CT RATING',
+    'AMMETER', 'AMMETER selector', 'PT RATING', 'VOLTMETER',
+    'VOLTMETER selector', 'MULTIMETER', 'TEST BLOCK', 'TRANSDUSER',
+    'ALARM ANUNCIATOR',
+    'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5', 'SPARE 6', 'SPARE 7',
   ];
   const mvProperties = [
-    'BREAKER TYPE', 'NOMINAL CURRENT', 'SHORT CIRCUIT CURRENT',
-    'PROTECTION RELAY', 'CT RATIO', 'VT RATIO'
+    'VCB OR VC/FUSE', 'ACCESSORY', 'VOLTAGE INDICATOR', 'COREBALANCE CT',
+    'PROTECTION RELAY', 'CT RATING', 'AMMETER', 'AMMETER selector',
+    'PT RATING', 'VOLTMETER', 'VOLTMETER selector', 'MULTIMETER',
+    'TEST BLOCK', 'TRANSDUSER', 'ALARM WINDDOW', 'SURGE ARRESTER',
+    'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5',
   ];
   const hvProperties = [
     'BREAKER TYPE', 'NOMINAL VOLTAGE', 'NOMINAL CURRENT',
@@ -69,6 +81,9 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
   }
 
   const properties = (template.properties as Record<string, { parts: Array<{ partNumber: string; label: string; quantity: number; priority: number }> }>) || {};
+  // Pull display names / locked rows from the same metadata used by the editor.
+  const displayNames: Record<string, string> = (template.properties as any)?.__displayNames || {};
+  const lockedRows: string[]                  = (template.properties as any)?.__locked || [];
 
   const getTypeColor = (type: 'LV' | 'MV' | 'HV') => {
     switch (type) {
@@ -128,10 +143,24 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
                 {propertiesToShow.map((propName, idx) => {
                   const propValue = properties[propName] as { parts: Array<{ partNumber: string; label: string; quantity: number; priority: number; fullData?: any }> } | undefined;
                   const parts = propValue?.parts || [];
+
+                  // Collect distinct manufacturers across all parts for this property,
+                  // joined with "/" when multiple brands are present.
+                  const manufacturers = Array.from(new Set(
+                    parts.map(p => p.fullData?.Manufacturer)
+                         .filter((m): m is string => Boolean(m && String(m).trim()))
+                  ));
+                  const manufacturerLabel = manufacturers.join(' / ');
+                  const labelText = displayNames[propName] || propName;
+                  const isLocked  = lockedRows.includes(propName);
+
                   if (parts.length === 0) {
                     return (
                       <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-4 py-2 border-b font-medium text-gray-700">{propName}</td>
+                        <td className="px-4 py-2 border-b font-medium text-gray-700">
+                          <div className={isLocked ? 'line-through text-gray-400' : ''}>{labelText}</div>
+                          {isLocked && <div className="text-[10px] text-amber-600">🔒 locked</div>}
+                        </td>
                         <td className="px-4 py-2 border-b text-gray-400 italic" colSpan={5}>No part assigned</td>
                       </tr>
                     );
@@ -140,7 +169,13 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
                     <tr key={`${idx}-${pIdx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                       {pIdx === 0 && (
                         <td className="px-4 py-2 border-b font-medium text-gray-700 align-top" rowSpan={parts.length}>
-                          {propName}
+                          <div className={isLocked ? 'line-through text-gray-400' : ''}>{labelText}</div>
+                          {isLocked && <div className="text-[10px] text-amber-600">🔒 locked</div>}
+                          {manufacturerLabel && (
+                            <div className="text-[10px] font-normal text-gray-500 mt-0.5">
+                              {manufacturerLabel}
+                            </div>
+                          )}
                         </td>
                       )}
                       <td className="px-4 py-2 border-b text-xs font-mono">{part.partNumber || '-'}</td>
@@ -182,6 +217,287 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
   );
 };
 
+// ===== COLUMN DEFINITIONS (per equipment type) =====
+type DeviceColumnKey =
+  | 'templateName' | 'wiringType' | 'ratingPower' | 'flc' | 'feederNo'
+  | 'busSection' | 'sfdHfd' | 'tag' | 'description' | 'moduleNo'
+  | 'size' | 'cableSize';
+
+interface DeviceColumnDef {
+  key: DeviceColumnKey;
+  header: string;
+  isTemplate?: boolean;
+  width?: string; // tailwind width class
+}
+
+const MV_COLUMNS: DeviceColumnDef[] = [
+  { key: 'templateName', header: 'Template', isTemplate: true },
+  { key: 'wiringType',   header: 'WIRING TYPE' },
+  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
+  { key: 'flc',          header: 'FLC (A)' },
+  { key: 'feederNo',     header: 'FEEDER NO.' },
+  { key: 'busSection',   header: 'BUS SECTION' },
+  { key: 'tag',          header: 'TAG' },
+  { key: 'description',  header: 'DESCRIPTION' },
+  { key: 'cableSize',    header: 'CABLE SIZE' },
+];
+
+const LV_COLUMNS: DeviceColumnDef[] = [
+  { key: 'templateName', header: 'Template', isTemplate: true },
+  { key: 'wiringType',   header: 'WIRING TYPE' },
+  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
+  { key: 'flc',          header: 'FLC (A)' },
+  { key: 'feederNo',     header: 'FEEDER NO.' },
+  { key: 'busSection',   header: 'BUS SECTION' },
+  { key: 'sfdHfd',       header: 'SFD/HFD' },
+  { key: 'tag',          header: 'TAG' },
+  { key: 'description',  header: 'DESCRIPTION' },
+  { key: 'moduleNo',     header: 'MODULE NO.' },
+  { key: 'size',         header: 'SIZE' },
+  { key: 'cableSize',    header: 'CABLE SIZE' },
+];
+
+const getColumnsForType = (type: 'LV' | 'MV' | 'HV'): DeviceColumnDef[] =>
+  type === 'LV' ? LV_COLUMNS : MV_COLUMNS;
+
+// Row/cell color palette. Includes soft pastels plus saturated red/green/yellow
+// (per spec). Empty string = clear color.
+const ROW_COLOR_PALETTE: { label: string; value: string }[] = [
+  { label: 'No color',     value: '' },
+  // Saturated / bold (added per spec — sit at the top for quick access)
+  { label: 'Bold Red',     value: '#ef4444' },
+  { label: 'Bold Green',   value: '#22c55e' },
+  { label: 'Bold Yellow',  value: '#facc15' },
+  // Softer pastels
+  { label: 'Yellow',       value: '#fef3c7' },
+  { label: 'Amber',        value: '#fde68a' },
+  { label: 'Orange',       value: '#fed7aa' },
+  { label: 'Rose',         value: '#fecdd3' },
+  { label: 'Red',          value: '#fecaca' },
+  { label: 'Lime',         value: '#d9f99d' },
+  { label: 'Green',        value: '#bbf7d0' },
+  { label: 'Teal',         value: '#99f6e4' },
+  { label: 'Cyan',         value: '#a5f3fc' },
+  { label: 'Sky',          value: '#bae6fd' },
+  { label: 'Indigo',       value: '#c7d2fe' },
+  { label: 'Purple',       value: '#e9d5ff' },
+  { label: 'Pink',         value: '#fbcfe8' },
+  { label: 'Gray',         value: '#e5e7eb' },
+];
+
+// Excel-style per-column dropdown filter. Stores the SET of values kept
+// (i.e. only rows whose column value is in the set are shown). `undefined`
+// means no filter for this column. No sort capability is exposed — sort is
+// intentionally disabled per spec.
+//
+// Rendered through a portal so it escapes any overflow:auto/hidden parent
+// (the table scroll container would otherwise clip it). Position is given
+// in viewport coordinates by the caller (the anchor button's bounding rect).
+interface ColumnFilterDropdownProps {
+  columnHeader: string;
+  allValues: string[];           // unique values from the unfiltered dataset
+  selectedValues?: Set<string>;  // currently kept values (undefined = all)
+  anchorRect: DOMRect;
+  onApply: (next: Set<string> | undefined) => void;
+  onClose: () => void;
+}
+
+const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
+  columnHeader, allValues, selectedValues, anchorRect, onApply, onClose,
+}) => {
+  const initial = selectedValues ? new Set(selectedValues) : new Set(allValues);
+  const [draft, setDraft] = useState<Set<string>>(initial);
+  const [search, setSearch] = useState('');
+
+  const filteredValues = allValues.filter(v =>
+    !search || v.toLowerCase().includes(search.toLowerCase())
+  );
+  const allChecked = filteredValues.length > 0 && filteredValues.every(v => draft.has(v));
+
+  const toggle = (v: string) => {
+    const next = new Set(draft);
+    if (next.has(v)) next.delete(v); else next.add(v);
+    setDraft(next);
+  };
+  const toggleAll = () => {
+    const next = new Set(draft);
+    if (allChecked) filteredValues.forEach(v => next.delete(v));
+    else filteredValues.forEach(v => next.add(v));
+    setDraft(next);
+  };
+  const handleApply = () => {
+    if (allValues.every(v => draft.has(v))) onApply(undefined);
+    else onApply(draft);
+    onClose();
+  };
+  const handleClear = () => { onApply(undefined); onClose(); };
+
+  // Position the dropdown just below the anchor, clamped to viewport.
+  const dropdownWidth = 280;
+  let left = anchorRect.left;
+  if (left + dropdownWidth > window.innerWidth - 8) {
+    left = Math.max(8, window.innerWidth - dropdownWidth - 8);
+  }
+  const top = anchorRect.bottom + 4;
+
+  return createPortal(
+    <>
+      {/* Click-catcher behind the dropdown so clicks anywhere else close it. */}
+      <div className="fixed inset-0 z-[9998]" onClick={onClose} />
+      <div
+        className="fixed z-[9999] bg-white border border-gray-300 rounded shadow-2xl text-xs"
+        style={{ top, left, width: dropdownWidth }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-3 py-2 border-b bg-gradient-to-r from-blue-50 to-indigo-50">
+          <p className="font-semibold text-gray-700 truncate" title={columnHeader}>
+            Filter: {columnHeader}
+          </p>
+        </div>
+        <div className="p-2 border-b">
+          <input
+            type="text"
+            autoFocus
+            placeholder="Search…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-400"
+          />
+        </div>
+        <div className="max-h-60 overflow-y-auto">
+          <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-100 cursor-pointer border-b">
+            <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+            <span className="font-semibold">(Select All)</span>
+          </label>
+          {filteredValues.length === 0 && (
+            <div className="px-3 py-2 text-gray-400 italic">No values</div>
+          )}
+          {filteredValues.map(v => (
+            <label key={v} className="flex items-center gap-2 px-3 py-1 hover:bg-gray-100 cursor-pointer">
+              <input type="checkbox" checked={draft.has(v)} onChange={() => toggle(v)} />
+              <span className="truncate" title={v}>
+                {v === '' ? <em className="text-gray-400">(Blanks)</em> : v}
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="flex items-center justify-between gap-2 p-2 border-t bg-gray-50">
+          <button
+            className="text-xs text-gray-500 hover:text-red-600 underline"
+            onClick={handleClear}
+            title="Remove filter for this column"
+          >
+            Clear Filter
+          </button>
+          <div className="flex gap-2">
+            <button className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700" onClick={handleApply}>
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+};
+
+// Standalone "Filter by color" dropdown. Filters rows by their rowColor field;
+// `null` color means "rows with no colour set". Mirrors the same Excel-style
+// checkbox UX but operates on a colour palette rather than free-form values.
+interface ColorFilterDropdownProps {
+  /** Unique row colours currently present in the dataset. `''` = no colour. */
+  allColors: string[];
+  selectedColors?: Set<string>;
+  anchorRect: DOMRect;
+  onApply: (next: Set<string> | undefined) => void;
+  onClose: () => void;
+}
+
+const ColorFilterDropdown: React.FC<ColorFilterDropdownProps> = ({
+  allColors, selectedColors, anchorRect, onApply, onClose,
+}) => {
+  const initial = selectedColors ? new Set(selectedColors) : new Set(allColors);
+  const [draft, setDraft] = useState<Set<string>>(initial);
+
+  const colorLabel = (c: string) =>
+    ROW_COLOR_PALETTE.find(p => p.value === c)?.label || c || '(No colour)';
+
+  const toggle = (c: string) => {
+    const next = new Set(draft);
+    if (next.has(c)) next.delete(c); else next.add(c);
+    setDraft(next);
+  };
+  const toggleAll = () => {
+    const allChecked = allColors.every(c => draft.has(c));
+    if (allChecked) setDraft(new Set());
+    else setDraft(new Set(allColors));
+  };
+  const allChecked = allColors.length > 0 && allColors.every(c => draft.has(c));
+  const handleApply = () => {
+    if (allColors.every(c => draft.has(c))) onApply(undefined);
+    else onApply(draft);
+    onClose();
+  };
+
+  const width = 240;
+  let left = anchorRect.left;
+  if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[9998]" onClick={onClose} />
+      <div
+        className="fixed z-[9999] bg-white border border-gray-300 rounded shadow-2xl text-xs"
+        style={{ top: anchorRect.bottom + 4, left, width }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-3 py-2 border-b bg-gradient-to-r from-pink-50 to-amber-50 font-semibold text-gray-700">
+          Filter by row colour
+        </div>
+        <div className="max-h-60 overflow-y-auto">
+          <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-100 cursor-pointer border-b">
+            <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+            <span className="font-semibold">(Select All)</span>
+          </label>
+          {allColors.length === 0 && (
+            <div className="px-3 py-2 text-gray-400 italic">No coloured rows yet</div>
+          )}
+          {allColors.map(c => (
+            <label key={c || 'none'} className="flex items-center gap-2 px-3 py-1 hover:bg-gray-100 cursor-pointer">
+              <input type="checkbox" checked={draft.has(c)} onChange={() => toggle(c)} />
+              <span
+                className="inline-block w-4 h-4 rounded border border-gray-300 flex-shrink-0"
+                style={{ background: c || '#fff' }}
+              />
+              <span className="truncate">{colorLabel(c)}</span>
+            </label>
+          ))}
+        </div>
+        <div className="flex items-center justify-between gap-2 p-2 border-t bg-gray-50">
+          <button
+            className="text-xs text-gray-500 hover:text-red-600 underline"
+            onClick={() => { onApply(undefined); onClose(); }}
+          >
+            Clear
+          </button>
+          <div className="flex gap-2">
+            <button className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700" onClick={handleApply}>
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+};
+
 // ===== DEVICE TABLE COMPONENT =====
 const DeviceTable: React.FC<DeviceTableProps> = ({
   selectedEquipment,
@@ -193,10 +509,35 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   clipboardRows,
   onCopyRows
 }) => {
-  const [rows, setRows] = useState<DeviceTableRow[]>([]);
+  const [rows, setRowsRaw] = useState<DeviceTableRow[]>([]);
+  // Every table edit goes through setRows, so gating it here makes the whole
+  // grid read-only on a locked (non-latest) revision — with the warning
+  // dialog instead of a silently dropped change.
+  const { isCurrentRevisionEditable, notifyRevisionLocked } = useProject();
+  const setRows: React.Dispatch<React.SetStateAction<DeviceTableRow[]>> = value => {
+    if (!isCurrentRevisionEditable) { notifyRevisionLocked(); return; }
+    setRowsRaw(value);
+  };
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [lastSelectedIdx, setLastSelectedIdx] = useState<number>(-1);
-  const [filters, setFilters] = useState({ templateName: '', busSection: '', feederNo: '', wiringType: '', ratingPower: '', flc: '' });
+  // Per-column Excel-style filters. A column has an active filter iff its
+  // entry is a Set — and only rows whose value is in that Set are shown.
+  // `undefined` / absent entry = no filter for that column.
+  const [filters, setFilters] = useState<Partial<Record<DeviceColumnKey, Set<string>>>>({});
+  // Filter by row background colour. `undefined` = no colour filter.
+  const [colorFilter, setColorFilter] = useState<Set<string> | undefined>(undefined);
+  // Master "filtering enabled" switch. When OFF the per-column ▼ icons are
+  // hidden and existing filters are bypassed (visually clear, structurally
+  // remembered so flipping ON restores them).
+  const [filtersEnabled, setFiltersEnabled] = useState(false);
+  // Which column's filter dropdown is currently open (null = none).
+  const [openFilterCol, setOpenFilterCol] = useState<DeviceColumnKey | null>(null);
+  // Anchor rect for the currently-open dropdown (column filter or color filter).
+  const [filterAnchor, setFilterAnchor] = useState<DOMRect | null>(null);
+  // Whether the global "Filter by colour" popup is open.
+  const [colorFilterOpen, setColorFilterOpen] = useState(false);
+  // For cell colorize submenu: which cell is being targeted
+  const [colorTarget, setColorTarget] = useState<{ rowId: string; colKey: DeviceColumnKey } | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
@@ -207,24 +548,39 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const [moveToRow, setMoveToRow] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedCellRowId, setSelectedCellRowId] = useState<string | null>(null);
+  // Appends read-only "template item" columns (one per template property of
+  // the CURRENT equipment's type) to the right of the existing columns —
+  // same table, more columns, not a separate section.
+  const [showTemplateColumns, setShowTemplateColumns] = useState(false);
+  // How many columns (from the left, counting the # column) stay pinned in
+  // place while the rest of the table scrolls horizontally.
+  const [freezeCount, setFreezeCount] = useState(0);
 
   // Track previous equipment ID to only reload rows when equipment changes
   const prevEquipmentIdRef = useRef<string | null>(null);
+  // The exact rows array last loaded from an equipment, so the write-back
+  // effect below can tell "freshly loaded" from "edited by the user".
+  const loadedRowsRef = useRef<DeviceTableRow[] | null>(null);
 
   useEffect(() => {
     // Only reload rows when the selected equipment ID changes (different equipment selected)
     // NOT when the same equipment's data is updated (would cause infinite loop)
     if (selectedEquipment?.id !== prevEquipmentIdRef.current) {
       prevEquipmentIdRef.current = selectedEquipment?.id || null;
-      setRows(selectedEquipment?.devices || []);
+      // Loading rows for a newly selected equipment is not a user edit —
+      // bypass the read-only gate so viewing an old revision still works.
+      const loaded = selectedEquipment?.devices || [];
+      loadedRowsRef.current = loaded;
+      setRowsRaw(loaded);
       setSelectedRows(new Set());
     }
   }, [selectedEquipment]);
 
   useEffect(() => {
-    if (selectedEquipment) {
-      updateEquipment(selectedEquipment.id, { devices: rows });
-    }
+    // Skip the write-back right after loading an equipment's rows: `rows` is
+    // still the very array we got from it, so there is nothing to persist.
+    if (!selectedEquipment || rows === loadedRowsRef.current) return;
+    updateEquipment(selectedEquipment.id, { devices: rows });
   }, [rows]);
 
   const handleRowClick = (id: string, e: React.MouseEvent) => {
@@ -246,15 +602,97 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     }
   };
 
-  // Returns rows filtered by column search inputs
-  const getFilteredRows = () => rows.filter(row =>
-    (!filters.templateName || row.templateName.toLowerCase().includes(filters.templateName.toLowerCase())) &&
-    (!filters.busSection  || row.busSection.toLowerCase().includes(filters.busSection.toLowerCase())) &&
-    (!filters.feederNo    || row.feederNo.toLowerCase().includes(filters.feederNo.toLowerCase())) &&
-    (!filters.wiringType  || row.wiringType.toLowerCase().includes(filters.wiringType.toLowerCase())) &&
-    (!filters.ratingPower || row.ratingPower.toLowerCase().includes(filters.ratingPower.toLowerCase())) &&
-    (!filters.flc         || row.flc.toLowerCase().includes(filters.flc.toLowerCase()))
+  // Returns rows filtered by Excel-style per-column value filters and the
+  // optional row-colour filter. Both are bypassed entirely when filtering is
+  // disabled at the toolbar level.
+  const activeColumns = getColumnsForType(selectedEquipment?.type ?? 'MV');
+
+  // Template-item columns (read-only) — property list matches the CURRENT
+  // equipment's type, mirroring TemplateProperties.tsx's per-type layout.
+  const templatePropertyNames = !showTemplateColumns ? [] : (
+    selectedEquipment?.type === 'LV' ? LV_TEMPLATE_PROPERTIES :
+    selectedEquipment?.type === 'MV' ? MV_TEMPLATE_PROPERTIES :
+    selectedEquipment?.type === 'HV' ? HV_TEMPLATE_PROPERTIES : []
   );
+  const templatesById = useMemo(() => {
+    const list = selectedEquipment ? (projectData.templates[selectedEquipment.type] || []) : [];
+    return new Map(list.map(t => [t.id, t]));
+  }, [projectData.templates, selectedEquipment?.type]);
+  const getTemplatePropertyText = (row: DeviceTableRow, propName: string): string => {
+    const tmpl = row.templateId ? templatesById.get(row.templateId) : undefined;
+    if (!tmpl) return '';
+    return partsCellText(templateParts(tmpl)[propName] || []);
+  };
+
+  // ── Freeze-columns (sticky panes) ───────────────────────────────────────
+  // Column order is: # | ...activeColumns | ...templatePropertyNames (when
+  // shown). We measure each header cell's real rendered width (fluid table
+  // layout — no fixed widths) and sticky-position the first `freezeCount`
+  // columns using those measured offsets, so freeze works whether or not
+  // the extra template columns are visible.
+  const totalColumnCount = 1 + activeColumns.length + templatePropertyNames.length;
+  const colHeaderRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+  const [stickyLefts, setStickyLefts] = useState<number[]>([]);
+
+  useLayoutEffect(() => {
+    const recompute = () => {
+      const lefts: number[] = [];
+      let acc = 0;
+      for (let i = 0; i < totalColumnCount; i++) {
+        lefts[i] = acc;
+        acc += colHeaderRefs.current[i]?.offsetWidth || 0;
+      }
+      setStickyLefts(lefts);
+    };
+    recompute();
+    const observer = new ResizeObserver(recompute);
+    colHeaderRefs.current.slice(0, totalColumnCount).forEach(el => el && observer.observe(el));
+    return () => observer.disconnect();
+  }, [totalColumnCount, freezeCount, rows.length, showTemplateColumns]);
+
+  const stickyStyle = (colIndex: number, bg: string): React.CSSProperties | undefined =>
+    colIndex < freezeCount
+      ? {
+          position: 'sticky',
+          left: stickyLefts[colIndex] ?? 0,
+          zIndex: 2,
+          background: bg,
+          boxShadow: colIndex === freezeCount - 1 ? '2px 0 4px -2px rgba(0,0,0,0.25)' : undefined,
+        }
+      : undefined;
+  const getFilteredRows = () => {
+    if (!filtersEnabled) return rows;
+    return rows.filter(row => {
+      if (colorFilter && !colorFilter.has(row.rowColor || '')) return false;
+      return activeColumns.every(col => {
+        const allowed = filters[col.key];
+        if (!allowed) return true;
+        const val = String((row as any)[col.key] ?? '');
+        return allowed.has(val);
+      });
+    });
+  };
+
+  // Unique values for a column (used to populate the filter dropdown).
+  // Note: this looks at the FULL row set, not the filtered one, so users can
+  // re-broaden a filter even when other columns are filtered down.
+  const getUniqueValuesForColumn = (key: DeviceColumnKey): string[] => {
+    const values = new Set<string>();
+    rows.forEach(r => values.add(String((r as any)[key] ?? '')));
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  };
+
+  // Unique row colours (incl. '' for "no colour") for the colour-filter popup.
+  const getUniqueRowColors = (): string[] => {
+    const values = new Set<string>();
+    rows.forEach(r => values.add(r.rowColor || ''));
+    return Array.from(values);
+  };
+
+  const hasAnyFilter = filtersEnabled && (
+    !!colorFilter || Object.values(filters).some(f => !!f)
+  );
+  const clearAllFilters = () => { setFilters({}); setColorFilter(undefined); };
 
   const handleContextMenu = (e: React.MouseEvent, type: 'row' | 'cell', rowId?: string) => {
     e.preventDefault();
@@ -277,6 +715,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const handleCloseContextMenu = () => {
     setContextMenu(null);
     setMoveToRow('');
+    setColorTarget(null);
   };
 
   useEffect(() => {
@@ -286,6 +725,9 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [contextMenu]);
+
+  // Filter dropdowns are portals with their own click-catcher — no global
+  // listener needed here.
 
   const reorderRows = (newRows: DeviceTableRow[]) => {
     const reordered = newRows.map((row, index) => ({
@@ -413,6 +855,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       wiringType: '',
       ratingPower: '',
       flc: '',
+      tag: '',
+      description: '',
+      cableSize: '',
+      sfdHfd: '',
+      moduleNo: '',
+      size: '',
       equipmentId: selectedEquipment.id
     };
     setRows([...rows, newRow]);
@@ -462,11 +910,25 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             return busSection || feederNo || wiringType || ratingPower || flc;
           })
           .map((row, index) => {
-            const busSection = (row['Bus Section'] || row['busSection'] || row['bus section'] || row['BUS SECTION'] || '').toString().trim();
-            const feederNo = (row['Feeder No'] || row['feederNo'] || row['feeder no'] || row['FEEDER NO'] || row['Feeder Number'] || '').toString().trim();
-            const wiringType = (row['Wiring Type'] || row['wiringType'] || row['wiring type'] || row['WIRING TYPE'] || '').toString().trim();
-            const ratingPower = (row['Rating Power'] || row['ratingPower'] || row['rating power'] || row['RATING POWER'] || row['Rating (kW)'] || '').toString().trim();
-            const flc = (row['FLC (A)'] || row['FLC'] || row['flc'] || row['Flc'] || row['FLC(A)'] || '').toString().trim();
+            const pick = (...keys: string[]) => {
+              for (const k of keys) {
+                if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') {
+                  return String(row[k]).trim();
+                }
+              }
+              return '';
+            };
+            const busSection  = pick('Bus Section', 'busSection', 'bus section', 'BUS SECTION');
+            const feederNo    = pick('Feeder No', 'feederNo', 'feeder no', 'FEEDER NO', 'FEEDER NO.', 'Feeder Number');
+            const wiringType  = pick('Wiring Type', 'wiringType', 'wiring type', 'WIRING TYPE');
+            const ratingPower = pick('Rating Power', 'ratingPower', 'rating power', 'RATING POWER', 'RATING POWER(KW OR KVA)', 'Rating (kW)');
+            const flc         = pick('FLC (A)', 'FLC', 'flc', 'Flc', 'FLC(A)');
+            const tag         = pick('TAG', 'Tag', 'tag');
+            const description = pick('DESCRIPTION', 'Description', 'description');
+            const cableSize   = pick('CABLE SIZE', 'Cable Size', 'cableSize', 'CABEL SIZE');
+            const sfdHfd      = pick('SFD/HFD', 'sfdHfd', 'SFD HFD');
+            const moduleNo    = pick('MODULE NO.', 'MODULE NO', 'Module No', 'moduleNo');
+            const size        = pick('SIZE', 'SAIZE', 'Size', 'size');
 
             return {
               id: `device-${Date.now()}-${index}`,
@@ -478,6 +940,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               wiringType,
               ratingPower,
               flc,
+              tag,
+              description,
+              cableSize,
+              sfdHfd,
+              moduleNo,
+              size,
               equipmentId: selectedEquipment!.id
             };
           });
@@ -501,6 +969,24 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+  };
+
+  // Excel export mirrors handleFileUpload's expected headers exactly, so a
+  // round-trip (export → fill in Excel → import) works. The Template column
+  // is intentionally excluded — templates can only be assigned inside the
+  // software (drag-and-drop or right-click), never via Excel.
+  const handleExportExcel = () => {
+    if (!selectedEquipment) {
+      alert('Please select an equipment first!');
+      return;
+    }
+    const fillableColumns = activeColumns.filter(col => !col.isTemplate);
+    const headerRow = fillableColumns.map(col => col.header);
+    const dataRows = rows.map(row => fillableColumns.map(col => (row as any)[col.key] ?? ''));
+    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Devices');
+    XLSX.writeFile(wb, `${selectedEquipment.name}_Devices.xlsx`);
   };
 
   const updateRowField = (rowId: string, field: keyof DeviceTableRow, value: string) => {
@@ -559,6 +1045,22 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             <UploadIcon className="w-4 h-4 inline mr-1" />
             Import Excel
           </button>
+          <button
+            className="px-3 py-1 bg-teal-600 text-white rounded text-sm hover:bg-teal-700"
+            onClick={handleExportExcel}
+            title="Export the current device rows to Excel, with the same headers Import Excel expects. Template column is excluded — it can only be assigned inside the software."
+          >
+            <DownloadIcon className="w-4 h-4 inline mr-1" />
+            Export Excel
+          </button>
+          <button
+            className="px-3 py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700"
+            onClick={() => setShowTemplateColumns(v => !v)}
+            title={`Append read-only ${selectedEquipment.type} template item columns to the right of this table, formatted like the Output Types tab`}
+          >
+            <LayersIcon className="w-4 h-4 inline mr-1" />
+            {showTemplateColumns ? 'Hide Template Items' : 'Show Template Items'}
+          </button>
           {clipboardRows.length > 0 && (
             <button
               className="px-3 py-1 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600"
@@ -580,106 +1082,220 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         </div>
       </div>
 
-      {/* Active filter indicator */}
-      {Object.values(filters).some(f => f) && (
-        <div className="mb-2 flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-1.5">
-          <span>Filters active — showing {getFilteredRows().length} of {rows.length} rows</span>
-          <button className="ml-auto underline hover:no-underline" onClick={() => setFilters({ templateName: '', busSection: '', feederNo: '', wiringType: '', ratingPower: '', flc: '' })}>Clear all</button>
-        </div>
-      )}
+      {/* Filter toolbar — toggles whether column ▼ icons + colour filter
+          are surfaced. When OFF, all filters are bypassed (kept in memory
+          so flipping ON restores them). */}
+      <div className="mb-2 flex items-center gap-2 text-xs">
+        <button
+          onClick={() => {
+            // Turning OFF also clears any active filters per the user spec
+            // ("with another press, filter is removed").
+            if (filtersEnabled) clearAllFilters();
+            setFiltersEnabled(e => !e);
+          }}
+          className={`px-3 py-1.5 rounded border flex items-center gap-1.5 font-medium transition-colors ${
+            filtersEnabled
+              ? 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700'
+              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+          }`}
+          title="Toggle column filters and colour filter on/off"
+        >
+          <FilterIcon className="w-3.5 h-3.5" />
+          {filtersEnabled ? 'Filters: ON' : 'Filters: OFF'}
+        </button>
 
-      <div className="border border-gray-200 rounded overflow-hidden" onContextMenu={(e) => handleContextMenu(e, 'row')}>
+        <div
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded border font-medium ${
+            freezeCount > 0
+              ? 'bg-amber-500 text-white border-amber-600'
+              : 'bg-white text-gray-700 border-gray-300'
+          }`}
+          title="Freeze this many columns from the left (including #) so they stay put while you scroll the rest horizontally"
+        >
+          <PinIcon className="w-3.5 h-3.5" />
+          <span>Freeze</span>
+          <input
+            type="number"
+            min={0}
+            max={totalColumnCount}
+            value={freezeCount}
+            onChange={e => {
+              const n = parseInt(e.target.value, 10);
+              setFreezeCount(Number.isNaN(n) ? 0 : Math.max(0, Math.min(totalColumnCount, n)));
+            }}
+            className="w-12 border border-gray-300 rounded px-1 py-0.5 text-xs text-gray-900"
+          />
+          <span>/ {totalColumnCount} cols</span>
+        </div>
+
+        {filtersEnabled && (
+          <button
+            onClick={e => {
+              setFilterAnchor((e.currentTarget as HTMLElement).getBoundingClientRect());
+              setColorFilterOpen(true);
+            }}
+            className={`px-3 py-1.5 rounded border flex items-center gap-1.5 font-medium ${
+              colorFilter
+                ? 'bg-pink-600 text-white border-pink-700 hover:bg-pink-700'
+                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+            }`}
+            title="Filter rows by background colour"
+          >
+            <PaletteIcon className="w-3.5 h-3.5" />
+            Colour Filter
+            {colorFilter && <span className="ml-1 px-1.5 rounded-full bg-white/30 text-[10px]">{colorFilter.size}</span>}
+          </button>
+        )}
+
+        {hasAnyFilter && (
+          <div className="flex items-center gap-2 text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-1.5">
+            <span>Showing {getFilteredRows().length} of {rows.length} rows</span>
+            <button className="underline hover:no-underline" onClick={clearAllFilters}>Clear all</button>
+          </div>
+        )}
+      </div>
+
+      <div className="border border-gray-200 rounded overflow-auto" onContextMenu={(e) => handleContextMenu(e, 'row')}>
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50">
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b w-12">#</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Template</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Bus Section</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Feeder No</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Wiring Type</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">Rating Power</th>
-              <th className="px-4 py-2 text-left font-medium text-gray-600 border-b">FLC (A)</th>
-            </tr>
-            {/* Per-column filter row */}
-            <tr className="bg-white border-b border-gray-200">
-              <td className="px-2 py-1 w-12" />
-              {(['templateName', 'busSection', 'feederNo', 'wiringType', 'ratingPower', 'flc'] as const).map(col => (
-                <td key={col} className="px-2 py-1">
-                  <input
-                    type="text"
-                    placeholder="🔍"
-                    className="w-full border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-blue-400 bg-gray-50"
-                    value={filters[col]}
-                    onChange={e => setFilters(prev => ({ ...prev, [col]: e.target.value }))}
-                    onClick={e => e.stopPropagation()}
-                  />
-                </td>
-              ))}
+              <th
+                ref={el => { colHeaderRefs.current[0] = el; }}
+                className="px-4 py-2 text-left font-medium text-gray-600 border-b w-12"
+                style={stickyStyle(0, '#f9fafb')}
+              >
+                #
+              </th>
+              {activeColumns.map((col, i) => {
+                const hasActiveFilter = filtersEnabled && !!filters[col.key];
+                return (
+                  <th
+                    key={col.key}
+                    ref={el => { colHeaderRefs.current[1 + i] = el; }}
+                    className="px-4 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap"
+                    style={stickyStyle(1 + i, '#f9fafb')}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span>{col.header}</span>
+                      {filtersEnabled && (
+                        <button
+                          className={`ml-1 inline-flex items-center justify-center rounded transition-colors ${
+                            hasActiveFilter
+                              ? 'bg-blue-600 text-white hover:bg-blue-700 px-1.5 py-0.5'
+                              : 'text-gray-500 hover:bg-gray-200 px-1 py-0.5'
+                          }`}
+                          style={{ minWidth: hasActiveFilter ? 'auto' : '20px' }}
+                          title={hasActiveFilter ? 'Filter active — click to edit' : 'Filter column'}
+                          onClick={e => {
+                            e.stopPropagation();
+                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            setFilterAnchor(rect);
+                            setOpenFilterCol(openFilterCol === col.key ? null : col.key);
+                          }}
+                        >
+                          <FilterIcon className="w-3 h-3" />
+                          {hasActiveFilter && <span className="ml-0.5 text-[9px] font-bold">●</span>}
+                        </button>
+                      )}
+                    </div>
+                  </th>
+                );
+              })}
+              {showTemplateColumns && templatePropertyNames.map((propName, i) => {
+                const colIdx = 1 + activeColumns.length + i;
+                return (
+                  <th
+                    key={`tmpl-${propName}`}
+                    ref={el => { colHeaderRefs.current[colIdx] = el; }}
+                    className="px-3 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap bg-indigo-50"
+                    style={stickyStyle(colIdx, '#eef2ff')}
+                    title={`Template item — read-only (${selectedEquipment.type})`}
+                  >
+                    {propName}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
-            {getFilteredRows().map(row => (
-              <tr
-                key={row.id}
-                className={`cursor-pointer ${selectedRows.has(row.id) ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
-                onClick={(e) => handleRowClick(row.id, e)}
-                onContextMenu={(e) => handleContextMenu(e, 'row', row.id)}
-              >
-                <td className="px-4 py-2 border-b text-center font-medium bg-gray-50">
-                  {row.rowNumber}
-                </td>
-                <td
-                  className="px-4 py-2 border-b"
-                  onDragOver={handleDragOver}
-                  onDrop={e => handleDrop(e, row.id)}
-                  onContextMenu={(e) => handleContextMenu(e, 'cell', row.id)}
+            {getFilteredRows().map(row => {
+              const rowBg = selectedRows.has(row.id) ? '#dbeafe' : (row.rowColor || '#ffffff');
+              return (
+                <tr
+                  key={row.id}
+                  className={`cursor-pointer ${selectedRows.has(row.id) ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
+                  style={row.rowColor && !selectedRows.has(row.id) ? { backgroundColor: row.rowColor } : undefined}
+                  onClick={(e) => handleRowClick(row.id, e)}
+                  onContextMenu={(e) => handleContextMenu(e, 'row', row.id)}
                 >
-                  <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
-                    {row.templateName || 'Drop here or right-click'}
-                  </div>
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.busSection}
-                    onChange={e => updateRowField(row.id, 'busSection', e.target.value)}
-                  />
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.feederNo}
-                    onChange={e => updateRowField(row.id, 'feederNo', e.target.value)}
-                  />
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.wiringType}
-                    onChange={e => updateRowField(row.id, 'wiringType', e.target.value)}
-                  />
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.ratingPower}
-                    onChange={e => updateRowField(row.id, 'ratingPower', e.target.value)}
-                  />
-                </td>
-                <td className="px-4 py-2 border-b">
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                    value={row.flc}
-                    onChange={e => updateRowField(row.id, 'flc', e.target.value)}
-                  />
-                </td>
-              </tr>
-            ))}
+                  <td
+                    className="px-4 py-2 border-b text-center font-medium bg-gray-50"
+                    style={stickyStyle(0, '#f9fafb')}
+                  >
+                    {row.rowNumber}
+                  </td>
+                  {activeColumns.map((col, i) => {
+                    const colIdx = 1 + i;
+                    const cellBg = row.cellColors?.[col.key];
+                    const cellStyle = { ...(cellBg ? { backgroundColor: cellBg } : undefined), ...stickyStyle(colIdx, cellBg || rowBg) };
+                    if (col.isTemplate) {
+                      return (
+                        <td
+                          key={col.key}
+                          className="px-4 py-2 border-b"
+                          style={cellStyle}
+                          onDragOver={handleDragOver}
+                          onDrop={e => handleDrop(e, row.id)}
+                          onContextMenu={(e) => handleContextMenu(e, 'cell', row.id)}
+                        >
+                          <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
+                            {row.templateName || 'Drop here or right-click'}
+                          </div>
+                        </td>
+                      );
+                    }
+                    return (
+                      <td
+                        key={col.key}
+                        className="px-4 py-2 border-b"
+                        style={cellStyle}
+                        onContextMenu={(e) => {
+                          // Right-click on a data cell: open the row context menu
+                          // AND mark this cell as the colorize target so the
+                          // "Highlight Cell" palette appears alongside row ops.
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (!selectedRows.has(row.id)) {
+                            setSelectedRows(new Set([row.id]));
+                          }
+                          setColorTarget({ rowId: row.id, colKey: col.key });
+                          setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'row' });
+                        }}
+                      >
+                        <input
+                          type="text"
+                          className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-transparent"
+                          value={(row as any)[col.key] ?? ''}
+                          onChange={e => updateRowField(row.id, col.key as any, e.target.value)}
+                        />
+                      </td>
+                    );
+                  })}
+                  {showTemplateColumns && templatePropertyNames.map((propName, i) => {
+                    const colIdx = 1 + activeColumns.length + i;
+                    return (
+                      <td
+                        key={`tmpl-${propName}`}
+                        className="px-3 py-2 border-b text-xs text-gray-700 whitespace-pre-wrap bg-indigo-50/40"
+                        style={stickyStyle(colIdx, '#eef2ff')}
+                      >
+                        {getTemplatePropertyText(row, propName)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
 
@@ -694,6 +1310,35 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           </div>
         )}
       </div>
+
+      {/* Portal-rendered filter dropdowns (anchored to their trigger button).
+          Rendering through a portal so the table's overflow:auto can't clip
+          them — this was the previous "filter not visible" bug. */}
+      {openFilterCol && filterAnchor && (
+        <ColumnFilterDropdown
+          columnHeader={activeColumns.find(c => c.key === openFilterCol)?.header || openFilterCol}
+          allValues={getUniqueValuesForColumn(openFilterCol)}
+          selectedValues={filters[openFilterCol]}
+          anchorRect={filterAnchor}
+          onApply={next => setFilters(prev => {
+            const nextFilters = { ...prev };
+            if (next === undefined) delete nextFilters[openFilterCol];
+            else nextFilters[openFilterCol] = next;
+            return nextFilters;
+          })}
+          onClose={() => { setOpenFilterCol(null); setFilterAnchor(null); }}
+        />
+      )}
+
+      {colorFilterOpen && filterAnchor && (
+        <ColorFilterDropdown
+          allColors={getUniqueRowColors()}
+          selectedColors={colorFilter}
+          anchorRect={filterAnchor}
+          onApply={next => setColorFilter(next)}
+          onClose={() => { setColorFilterOpen(false); setFilterAnchor(null); }}
+        />
+      )}
 
       {contextMenu?.visible && contextMenu.type === 'row' && selectedEquipment && (
         <div
@@ -728,6 +1373,62 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               ))}
               <div className="border-t my-1" />
             </>
+          )}
+
+          {/* Row color palette */}
+          <div className="px-4 py-2 border-b bg-pink-50">
+            <p className="text-xs font-semibold text-pink-700 mb-1.5">Row Color</p>
+            <div className="flex flex-wrap gap-1.5">
+              {ROW_COLOR_PALETTE.map(c => (
+                <button
+                  key={c.value || 'none'}
+                  title={c.label}
+                  className="w-5 h-5 rounded border border-gray-300 flex items-center justify-center text-[10px]"
+                  style={{ backgroundColor: c.value || '#fff' }}
+                  onClick={() => {
+                    const targets = selectedRows.size > 0 ? selectedRows : new Set<string>();
+                    setRows(prev => prev.map(r =>
+                      targets.has(r.id) ? { ...r, rowColor: c.value || undefined } : r
+                    ));
+                    handleCloseContextMenu();
+                  }}
+                >
+                  {!c.value && '⊘'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Cell color palette (when a specific cell was shift+right-clicked) */}
+          {colorTarget && (
+            <div className="px-4 py-2 border-b bg-amber-50">
+              <p className="text-xs font-semibold text-amber-700 mb-1.5">
+                Highlight Cell: <span className="font-mono">{colorTarget.colKey}</span>
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {ROW_COLOR_PALETTE.map(c => (
+                  <button
+                    key={c.value || 'none'}
+                    title={c.label}
+                    className="w-5 h-5 rounded border border-gray-300 flex items-center justify-center text-[10px]"
+                    style={{ backgroundColor: c.value || '#fff' }}
+                    onClick={() => {
+                      const { rowId, colKey } = colorTarget;
+                      setRows(prev => prev.map(r => {
+                        if (r.id !== rowId) return r;
+                        const cellColors = { ...(r.cellColors || {}) };
+                        if (c.value) cellColors[colKey] = c.value; else delete cellColors[colKey];
+                        return { ...r, cellColors };
+                      }));
+                      setColorTarget(null);
+                      handleCloseContextMenu();
+                    }}
+                  >
+                    {!c.value && '⊘'}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100" onClick={() => handleMoveRows('up')}>
@@ -818,6 +1519,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
 // ===== EQUIPMENT TREE COMPONENT =====
 const EquipmentTree: React.FC<EquipmentTreeProps> = ({
+  onImportFromTpms,
   projectData,
   addEquipment,
   deleteEquipment,
@@ -839,6 +1541,9 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
     y: number;
     equipment: Equipment | null
   }>({ visible: false, x: 0, y: 0, equipment: null });
+  // Pending equipment removal from the project tree. This direction never
+  // touches the Device Library — the dialog says so explicitly.
+  const [equipDeleteTarget, setEquipDeleteTarget] = useState<Equipment | null>(null);
   const [expandedEquipment, setExpandedEquipment] = useState<Set<string>>(new Set());
   // key: `${equipmentId}::${templateName}`
   const [expandedTemplates, setExpandedTemplates] = useState<Set<string>>(new Set());
@@ -913,13 +1618,24 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
     <div className="h-full p-4 bg-gray-50">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-sm">Equipment</h3>
-        <button
-          className="px-2 py-1 bg-blue-600 text-white rounded text-xs"
-          onClick={() => setShowAddModal(true)}
-        >
-          <PlusIcon className="w-3 h-3 inline mr-1" />
-          Add
-        </button>
+        <div className="flex gap-1">
+          {onImportFromTpms && (
+            <button
+              className="px-2 py-1 bg-sky-700 text-white rounded text-xs"
+              onClick={onImportFromTpms}
+              title="Import a switchgear from TPMS — lines, parts and panel specification"
+            >
+              🗄️ TPMS
+            </button>
+          )}
+          <button
+            className="px-2 py-1 bg-blue-600 text-white rounded text-xs"
+            onClick={() => setShowAddModal(true)}
+          >
+            <PlusIcon className="w-3 h-3 inline mr-1" />
+            Add
+          </button>
+        </div>
       </div>
 
       <div className="space-y-1">
@@ -1106,9 +1822,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
           <button
             className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 text-red-600"
             onClick={() => {
-              if (confirm('Delete this equipment?')) {
-                deleteEquipment(contextMenu.equipment!.id);
-              }
+              setEquipDeleteTarget(contextMenu.equipment);
               setContextMenu({ visible: false, x: 0, y: 0, equipment: null });
             }}
           >
@@ -1125,6 +1839,56 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
           </button>
         </div>
       )}
+
+      {/* ── Delete equipment from the project arrangement ── */}
+      {equipDeleteTarget && (() => {
+        const rowCount = equipDeleteTarget.devices?.length ?? 0;
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]">
+            <div className="bg-white rounded-lg shadow-2xl w-[520px] flex flex-col">
+              <div className="flex items-start justify-between px-6 py-4 border-b bg-red-50 rounded-t-lg">
+                <div>
+                  <h3 className="font-semibold text-lg text-red-800">Delete Equipment</h3>
+                  <p className="text-sm text-red-700 mt-0.5">{equipDeleteTarget.name}</p>
+                </div>
+                <button className="p-1 hover:bg-red-100 rounded" onClick={() => setEquipDeleteTarget(null)}>
+                  <XIcon className="w-5 h-5 text-red-500" />
+                </button>
+              </div>
+              <div className="px-6 py-4 space-y-3">
+                <p className="text-sm text-gray-700">
+                  This removes the equipment from the project arrangement together with its{' '}
+                  <strong>{rowCount}</strong> device row{rowCount === 1 ? '' : 's'}.
+                </p>
+                <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                  <p className="text-sm text-blue-900">
+                    The Device Library entry it was created from is <strong>kept</strong>, so you can lay
+                    the same device out again from <em>Add</em>.
+                  </p>
+                  <p className="text-sm text-blue-800 mt-1" dir="rtl">
+                    این حذف فقط از چیدمان پروژه است — دستگاه در قسمت Device Library باقی می‌ماند و
+                    می‌توانید دوباره آن را اضافه و چیدمان کنید.
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+                <button
+                  className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
+                  onClick={() => setEquipDeleteTarget(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+                  onClick={() => { deleteEquipment(equipDeleteTarget.id); setEquipDeleteTarget(null); }}
+                >
+                  Delete from project
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Add Equipment – pick from Device Library ── */}
       {showAddModal && (() => {
@@ -1304,6 +2068,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
 
 // ===== DEVICE SELECTION TAB (MAIN COMPONENT) =====
 const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
+  onImportFromTpms,
   projectData,
   selectedEquipment,
   setSelectedEquipment,
@@ -1417,10 +2182,16 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
 
   if (isFullscreen) {
     return (
-      <div className="fixed inset-0 bg-white z-50 overflow-auto">
+      // `right` leaves room for the chatbot column (var set by Chatbot.tsx;
+      // falls back to 48px when the chatbot is not mounted). This way the
+      // assistant stays visible and usable while the device table is maximised.
+      <div
+        className="fixed top-0 left-0 bottom-0 bg-white z-40 overflow-auto shadow-xl"
+        style={{ right: 'var(--simorgh-chat-w, 0px)' }}
+      >
         <div className="p-6">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold">Device Specifications - Fullscreen</h2>
+            <h2 className="text-xl font-semibold">Device Specifications — Fullscreen</h2>
             <button
               className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 flex items-center"
               onClick={handleToggleFullscreen}
@@ -1482,14 +2253,18 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
     <div>
       <h2 className="text-xl font-semibold mb-4">Device Selection - {projectData.projectName}</h2>
 
-      <div className="grid grid-cols-4 gap-4">
+      {/* Templates and Equipment Tree get just enough fixed width for their
+          content (names/tree labels); Device Specifications takes all the
+          remaining space so the wide device table isn't squeezed into a
+          fixed 50% column. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_260px] gap-3 items-start">
         {renderTemplateLeftPanel()}
 
-        <div className="col-span-2 border rounded">
+        <div className="border rounded min-w-0">
           <div className="bg-gray-50 px-4 py-2 border-b">
             <h3 className="font-medium">Device Specifications</h3>
           </div>
-          <div className="p-4">
+          <div className="p-3">
             <DeviceTable
               selectedEquipment={currentEquipment}
               updateEquipment={updateEquipment}
@@ -1508,6 +2283,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
             <h3 className="font-medium">Equipment Tree</h3>
           </div>
           <EquipmentTree
+            onImportFromTpms={onImportFromTpms}
             projectData={projectData}
             addEquipment={addEquipment}
             deleteEquipment={deleteEquipment}

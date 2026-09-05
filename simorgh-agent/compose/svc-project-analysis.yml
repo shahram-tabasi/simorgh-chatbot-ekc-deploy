@@ -1,0 +1,32 @@
+# =============================================================================
+# PROJECT-ANALYSIS - Project workspace analyzer
+# Port 8023. Reads project content via gitlab-mcp; runs analysis via
+# runtime-broker. (Legacy shell-service @ 192.168.1.69 retired 2026-05.)
+# =============================================================================
+services:
+  project-analysis:
+    build: ../project-analysis-service
+    image: simorgh-project-analysis:local
+    container_name: project-analysis
+    expose:
+      - "8023"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GITLAB_MCP_URL=${GITLAB_MCP_URL:-http://gitlab-mcp:8047}
+      - RUNTIME_BROKER_URL=${RUNTIME_BROKER_URL:-http://runtime-broker:8048}
+      - BROKER_TOKEN=${BROKER_TOKEN:-}
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8023/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

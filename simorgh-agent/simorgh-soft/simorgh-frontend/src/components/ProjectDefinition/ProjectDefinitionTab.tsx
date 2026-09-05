@@ -2,6 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useProject } from '../../context/ProjectContext';
 import { DeviceLibraryItem, DeviceLibraryProperties, TechSettings } from '../../types/project';
 import {
+  findDeviceLibraryUsage, removeDeviceLibraryItemEverywhere, UsageReport,
+} from '../../utils/cascadeDelete';
+import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
+import {
   PlusIcon, EditIcon, TrashIcon, XIcon,
   ChevronDownIcon, ChevronRightIcon, CheckIcon, SaveIcon, CopyIcon, ClipboardIcon
 } from 'lucide-react';
@@ -270,7 +274,10 @@ interface ProjectDefinitionTabProps {
 export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   onComplete, requestedSubTab, requestedDeviceId
 }) => {
-  const { projectData, updateProjectData, saveProject } = useProject();
+  const {
+    projectData, updateProjectData, saveProject,
+    selectedEquipment, setSelectedEquipment,
+  } = useProject();
 
   const [activeSubTab,       setActiveSubTab]       = useState<SubTab>('project-data');
   const [projectNameEditing, setProjectNameEditing] = useState(false);
@@ -293,6 +300,12 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     mode:     ModalMode;
     addType?: 'LV' | 'MV' | 'HV';
   }>({ visible: false, item: null, mode: 'add' });
+
+  // Pending Device Library deletion — held until the user confirms in the
+  // cascade dialog, which lists everywhere the device is used.
+  const [libDeleteTarget, setLibDeleteTarget] = useState<{
+    item: DeviceLibraryItem; type: 'LV' | 'MV' | 'HV'; usage: UsageReport;
+  } | null>(null);
 
   // Navigate here from DeviceSelection → Device Library
   useEffect(() => {
@@ -337,7 +350,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
   const handleSave = async () => {
     try   { await saveProject(); alert('Project saved successfully!'); }
-    catch { alert('Error saving project'); }
+    catch (error) { alert((error as Error)?.message || 'Error saving project'); }
   };
 
   // ── Device Library CRUD ──────────────────────────────────────
@@ -361,14 +374,26 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     closeDeviceModal();
   };
 
+  // Deleting from the Device Library is the "delete everywhere" direction:
+  // the entry disappears from the library AND from the Device Selection tree
+  // — the equipment created from it and every row that equipment holds go
+  // with it. The user sees exactly what will be removed first.
   const deleteLib = (id: string, t: 'LV' | 'MV' | 'HV') => {
-    if (!confirm('Delete this device from the library?')) return;
-    updateProjectData({
-      deviceLibrary: {
-        ...deviceLibrary,
-        [t]: (deviceLibrary[t] ?? []).filter(d => d.id !== id)
-      }
-    });
+    const item = (deviceLibrary[t] ?? []).find(d => d.id === id);
+    if (!item) return;
+    setLibDeleteTarget({ item, type: t, usage: findDeviceLibraryUsage(projectData, id, t) });
+  };
+
+  const confirmDeleteLib = () => {
+    if (!libDeleteTarget) return;
+    const { item, type, usage } = libDeleteTarget;
+
+    // Drop the selection first if it points at an equipment about to vanish.
+    if (selectedEquipment && usage.equipments.some(eq => eq.id === selectedEquipment.id)) {
+      setSelectedEquipment(null);
+    }
+    updateProjectData(removeDeviceLibraryItemEverywhere(projectData, item.id, type));
+    setLibDeleteTarget(null);
   };
 
   const closeDeviceModal = () => setDeviceModal({ visible: false, item: null, mode: 'add' });
@@ -784,6 +809,25 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           addType={deviceModal.addType}
           onSave={handleDeviceSave}
           onClose={closeDeviceModal}
+        />
+      )}
+
+      {/* Device Library cascade-delete confirmation */}
+      {libDeleteTarget && (
+        <CascadeDeleteModal
+          itemName={libDeleteTarget.item.name}
+          itemKind="Device"
+          usage={libDeleteTarget.usage}
+          cascadeNote={
+            'Deleting it here removes it from the Device Library AND from Device Selection — ' +
+            'the equipment above and all of its device rows are deleted too.'
+          }
+          cascadeNoteFa={
+            'با حذف از این قسمت، دستگاه هم از Device Library و هم از Device Selection حذف می‌شود — ' +
+            'تجهیز مربوطه در شاخه پروژه و همه ردیف‌های آن هم پاک می‌شوند.'
+          }
+          onConfirm={confirmDeleteLib}
+          onCancel={() => setLibDeleteTarget(null)}
         />
       )}
 

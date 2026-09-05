@@ -1,0 +1,35 @@
+# =============================================================================
+# SEARCH-SERVICE - Web search via DuckDuckGo (MCP + REST)
+# Port 8020. AI/COT calls /mcp; backend fallback uses REST.
+# =============================================================================
+services:
+  search-service:
+    build: ../search-service
+    image: simorgh-search-service:local
+    container_name: search-service
+    expose:
+      - "8020"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MAX_RESULTS=${SEARCH_MAX_RESULTS:-10}
+      # Set USE_SEARXNG=1 (and uncomment svc-searxng.yml in docker-compose.yml)
+      # to route every web_search call through self-hosted SearXNG. On any
+      # failure (HTTP error, timeout, empty result) search-service silently
+      # falls back to DuckDuckGo — flipping this flag cannot break search.
+      - USE_SEARXNG=${USE_SEARXNG:-0}
+      - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
+      - SEARXNG_TIMEOUT_SEC=${SEARXNG_TIMEOUT_SEC:-20}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8020/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

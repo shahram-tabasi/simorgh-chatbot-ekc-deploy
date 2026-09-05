@@ -1,0 +1,30 @@
+# =============================================================================
+# EPLAN-BRIDGE - TCP-to-REST bridge to EPLAN electrical design software
+# Port 8026. EPLAN runs on a Windows host, this service relays requests over TCP.
+# =============================================================================
+services:
+  eplan-bridge:
+    build: ../eplan-bridge-service
+    image: simorgh-eplan-bridge:local
+    container_name: eplan-bridge
+    expose:
+      - "8026"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - EPLAN_HOST=${EPLAN_HOST:-127.0.0.1}
+      - EPLAN_DEFAULT_PORT=${EPLAN_DEFAULT_PORT:-12000}
+      - TCP_TIMEOUT=${EPLAN_TCP_TIMEOUT:-120}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8026/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

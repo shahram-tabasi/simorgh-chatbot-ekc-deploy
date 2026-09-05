@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
+import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
+import { findTemplateUsage, UsageReport } from '../../utils/cascadeDelete';
+import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
 
 interface TemplateTreeProps {
   projectData: any;
@@ -13,6 +16,11 @@ interface Template {
   name: string;
   type: 'LV' | 'MV' | 'HV';
   properties?: Record<string, any>;
+  hierarchy?: {
+    path?: string[];
+    leafKind?: string;
+    params?: { kw?: string; currentA?: string };
+  };
 }
 
 interface ContextMenuState {
@@ -32,6 +40,12 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     addTemplate,
     deleteTemplate
   } = useProject();
+
+  // Pending template deletion — confirmed through the cascade dialog, which
+  // lists every equipment row built on the template.
+  const [templateDeleteTarget, setTemplateDeleteTarget] = useState<{
+    id: string; name: string; usage: UsageReport;
+  } | null>(null);
   
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['LV', 'MV', 'HV']));
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -41,8 +55,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     nodeType: null,
     templateId: null
   });
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newTemplateName, setNewTemplateName] = useState('');
+  // The hierarchical wizard replaces the old "just a name" modal — we keep
+  // a separate flag so the rest of the file doesn't have to change.
+  const [wizardTier, setWizardTier] = useState<'LV' | 'MV' | 'HV' | null>(null);
 
   // 🔹 بررسی امن برای templates - اضافه شده
   const safeTemplates = {
@@ -74,33 +89,31 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   };
 
   const handleCreateTemplate = () => {
-    setShowCreateModal(true);
-    setContextMenu({
-      ...contextMenu,
-      visible: false
-    });
+    if (contextMenu.nodeType) setWizardTier(contextMenu.nodeType);
+    setContextMenu({ ...contextMenu, visible: false });
   };
 
-  const handleSubmitNewTemplate = () => {
-    if (contextMenu.nodeType && newTemplateName.trim()) {
-      addTemplate(contextMenu.nodeType, newTemplateName);
-      setNewTemplateName('');
-      setShowCreateModal(false);
-      // Expand the node to show the new template
-      const newExpanded = new Set(expandedNodes);
-      newExpanded.add(contextMenu.nodeType);
-      setExpandedNodes(newExpanded);
-    }
-  };
-
+  // A template is referenced by the device rows built on it, so deleting it
+  // has to clear those rows too — otherwise they keep pointing at a template
+  // that no longer exists and their property columns come out blank.
   const handleDeleteTemplate = () => {
-    if (contextMenu.templateId) {
-      deleteTemplate(contextMenu.templateId);
-      setContextMenu({
-        ...contextMenu,
-        visible: false
-      });
-    }
+    if (!contextMenu.templateId) return;
+    const id = contextMenu.templateId;
+    const all = [...safeTemplates.LV, ...safeTemplates.MV, ...safeTemplates.HV];
+    const tmpl = all.find((t: Template) => t.id === id);
+    setTemplateDeleteTarget({
+      id,
+      name: tmpl?.name || 'Template',
+      usage: findTemplateUsage(projectData, id),
+    });
+    setContextMenu({ ...contextMenu, visible: false });
+  };
+
+  const confirmDeleteTemplate = () => {
+    if (!templateDeleteTarget) return;
+    // deleteTemplate cascades to the rows built on the template.
+    deleteTemplate(templateDeleteTarget.id);
+    setTemplateDeleteTarget(null);
   };
 
   const handleCloseContextMenu = () => {
@@ -139,12 +152,20 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               ) : (
                 safeTemplates.LV.map((template: Template) => (
                   <li key={template.id}>
-                    <div 
-                      className={`flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`} 
-                      onClick={() => onTemplateSelect(template.id)} 
+                    <div
+                      className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
+                      onClick={() => onTemplateSelect(template.id)}
                       onContextMenu={event => handleContextMenu(event, 'LV', template.id)}
                     >
                       <span className="text-sm">{template.name}</span>
+                      {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
+                        <span className="text-[10px] text-gray-500 truncate">
+                          {template.hierarchy.path.join(' / ')}
+                          {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
+                          {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
+                          {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
+                        </span>
+                      )}
                     </div>
                   </li>
                 ))
@@ -172,12 +193,20 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               ) : (
                 safeTemplates.MV.map((template: Template) => (
                   <li key={template.id}>
-                    <div 
-                      className={`flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`} 
-                      onClick={() => onTemplateSelect(template.id)} 
+                    <div
+                      className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
+                      onClick={() => onTemplateSelect(template.id)}
                       onContextMenu={event => handleContextMenu(event, 'MV', template.id)}
                     >
                       <span className="text-sm">{template.name}</span>
+                      {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
+                        <span className="text-[10px] text-gray-500 truncate">
+                          {template.hierarchy.path.join(' / ')}
+                          {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
+                          {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
+                          {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
+                        </span>
+                      )}
                     </div>
                   </li>
                 ))
@@ -205,12 +234,20 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               ) : (
                 safeTemplates.HV.map((template: Template) => (
                   <li key={template.id}>
-                    <div 
-                      className={`flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`} 
-                      onClick={() => onTemplateSelect(template.id)} 
+                    <div
+                      className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
+                      onClick={() => onTemplateSelect(template.id)}
                       onContextMenu={event => handleContextMenu(event, 'HV', template.id)}
                     >
                       <span className="text-sm">{template.name}</span>
+                      {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
+                        <span className="text-[10px] text-gray-500 truncate">
+                          {template.hierarchy.path.join(' / ')}
+                          {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
+                          {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
+                          {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
+                        </span>
+                      )}
                     </div>
                   </li>
                 ))
@@ -257,49 +294,37 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
         </div>
       )}
 
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-20">
-          <div className="bg-white p-6 rounded-lg shadow-xl w-96">
-            <h3 className="text-lg font-semibold mb-4">Create New Template</h3>
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Template Type: {contextMenu.nodeType}
-              </label>
-              <label className="block text-sm font-medium text-gray-700 mb-1 mt-3">
-                Template Name
-              </label>
-              <input 
-                type="text" 
-                className="w-full border border-gray-300 rounded px-3 py-2" 
-                value={newTemplateName} 
-                onChange={e => setNewTemplateName(e.target.value)} 
-                onKeyPress={e => {
-                  if (e.key === 'Enter') {
-                    handleSubmitNewTemplate();
-                  }
-                }} 
-                autoFocus 
-              />
-            </div>
-            <div className="flex justify-end space-x-3">
-              <button 
-                className="px-4 py-2 border border-gray-300 rounded text-sm hover:bg-gray-50" 
-                onClick={() => {
-                  setNewTemplateName('');
-                  setShowCreateModal(false);
-                }}
-              >
-                Cancel
-              </button>
-              <button 
-                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" 
-                onClick={handleSubmitNewTemplate}
-              >
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
+      {templateDeleteTarget && (
+        <CascadeDeleteModal
+          itemName={templateDeleteTarget.name}
+          itemKind="Template"
+          usage={templateDeleteTarget.usage}
+          cascadeNote={
+            'Deleting the template also deletes the device rows built on it in Device Selection; ' +
+            'the equipment itself is kept and its remaining rows are renumbered.'
+          }
+          cascadeNoteFa={
+            'با حذف تمپلیت، ردیف‌هایی که در Device Selection با آن ساخته شده‌اند هم حذف می‌شوند؛ ' +
+            'خود تجهیز باقی می‌ماند و شماره ردیف‌های باقیمانده دوباره مرتب می‌شود.'
+          }
+          onConfirm={confirmDeleteTemplate}
+          onCancel={() => setTemplateDeleteTarget(null)}
+        />
+      )}
+
+      {wizardTier && (
+        <HierarchicalTemplateWizard
+          tier={wizardTier}
+          existing={safeTemplates[wizardTier]}
+          onCancel={() => setWizardTier(null)}
+          onSubmit={({ name, hierarchy, copyFromId }) => {
+            addTemplate(wizardTier, name, hierarchy, copyFromId);
+            const newExpanded = new Set(expandedNodes);
+            newExpanded.add(wizardTier);
+            setExpandedNodes(newExpanded);
+            setWizardTier(null);
+          }}
+        />
       )}
     </div>
   );

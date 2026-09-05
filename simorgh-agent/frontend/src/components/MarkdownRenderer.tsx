@@ -1,11 +1,12 @@
 // src/components/MarkdownRenderer.tsx
-import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeSanitize from 'rehype-sanitize';
 import rehypeRaw from 'rehype-raw';
 import 'highlight.js/styles/github-dark.css';
+import { autoLinkKesra } from '../utils/kesraLinks';
+import { autoLinkUrls } from '../utils/autolinkUrls';
 
 interface MarkdownRendererProps {
   content: string;
@@ -14,6 +15,30 @@ interface MarkdownRendererProps {
 }
 
 export function MarkdownRenderer({ content, className = '', dir = 'ltr' }: MarkdownRendererProps) {
+  // Pre-process the markdown source in two passes before the
+  // parser runs. ORDER MATTERS — and bit us in production
+  // (May 2026 — "kasra.http://electrokavir.com" rendered):
+  //
+  //   The Kesra autolinker wraps the bare word "kasra" as a
+  //   markdown link `[kasra](https://kasra.electrokavir.com)`.
+  //   Run on raw text containing "kasra.electrokavir.com", it
+  //   matched JUST the "kasra" prefix and left the rest
+  //   (".electrokavir.com") as bare text — which the URL
+  //   autolinker then wrapped as `<http://electrokavir.com>`.
+  //   Two adjacent links with a literal "." between them
+  //   rendered as the broken-looking
+  //   "kasra.http://electrokavir.com" the operator reported.
+  //
+  // Fix: run URL autolinker FIRST. Its angle-bracket form
+  // `<http://kasra.electrokavir.com>` is then a complete URL
+  // that autoLinkKesra's `skip` regex (which excludes
+  // `https?://\S+` segments) leaves untouched, so the "kasra"
+  // inside the URL doesn't get re-wrapped.
+  //
+  // The Kesra pass still handles bare word mentions of
+  // "kasra"/"کسرا" outside any URL, which is what it was
+  // designed for.
+  const processed = autoLinkKesra(autoLinkUrls(content));
   return (
     <div
       className={`markdown-content ${className}`}
@@ -170,7 +195,7 @@ export function MarkdownRenderer({ content, className = '', dir = 'ltr' }: Markd
           ),
         }}
       >
-        {content}
+        {processed}
       </ReactMarkdown>
     </div>
   );

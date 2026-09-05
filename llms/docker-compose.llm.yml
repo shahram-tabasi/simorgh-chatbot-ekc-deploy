@@ -1,0 +1,240 @@
+# =============================================================================
+# LLM SERVER — 192.168.1.61 (NVIDIA A30 24 GB × 1)
+# =============================================================================
+# Stack architecture (post-Qwen3 migration — replaced gpt-oss-20b/Harmony):
+#
+#   nginx :80
+#     ├── /generate-stream → ai_adapter :9100 (FastAPI translator)
+#     │                          └── calls ai_service /v1/chat/completions
+#     └── everything else  → ai_service :9000 (vLLM serve)
+#
+# ai_service runs vLLM's native OpenAI server with the HERMES tool-call
+# parser (Qwen3's native tool-call format), so `tools=[...]` requests get
+# parsed into proper `message.tool_calls` responses — INCLUDING MULTIPLE
+# parallel tool_calls in one assistant turn, which gpt-oss-20b's Harmony
+# path could not do (it returned one call per turn and looped; see vLLM
+# issues #22578 / #36849 / #32587). The model is the MoE
+# Qwen3-30B-A3B-Instruct-2507 (30.5B total / 3.3B active) quantized to
+# 4-bit AWQ so it fits the 24GB A30 with headroom for a 16k KV cache.
+# Apache-2.0, 119-language pretraining (incl. Persian), non-thinking
+# "Instruct" variant so it doesn't fight the agent's own CoT planner.
+#
+# ai_adapter is a tiny (~50 MB, no GPU) FastAPI sidecar that keeps the
+# seven legacy callers of /generate-stream working without touching
+# their code. It translates the legacy {system_prompt, user_prompt,
+# thinking_level, stream} body into an OpenAI /v1/chat/completions
+# request and streams the response back in the legacy SSE shape.
+#
+# Rollback to gpt-oss-20b: revert the ai_service `command:` block
+# (model → /models/unsloth-gpt-oss-20b-16bit, served-model-name →
+# gpt-oss-20b, tool-call-parser → openai, drop --quantization), restore
+# the harmony_cache volume mount + HF_HUB_OFFLINE env, and set
+# OFFLINE_TEXT_HARMONY=1 on the llm-gateway so its Harmony sanitiser
+# re-engages.
+#
+# Endpoints (post-migration):
+#   POST /v1/chat/completions     (vLLM serve, supports tools=)
+#   POST /v1/completions          (vLLM serve)
+#   GET  /v1/models               (vLLM serve)
+#   GET  /health                  (vLLM serve)
+#   POST /generate-stream         (ai_adapter, legacy-shape SSE)
+#
+# The companion VLM box on .62 still uses vllm/vllm-openai directly
+# (see docker-compose.vlm.yml) for actual vision workloads.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # AI service — vLLM OpenAI server serving Qwen3-30B-A3B-Instruct-2507
+  # (4-bit AWQ) with the Hermes tool-call parser. Replaces gpt-oss-20b:
+  # Qwen3 emits MULTIPLE parallel tool_calls per turn and recovers across
+  # tools in multi-turn ReAct, which gpt-oss/Harmony structurally could not.
+  # ---------------------------------------------------------------------------
+  ai_service:
+    image: vllm/vllm-openai:v0.21.0
+    container_name: ai_service
+    expose:
+      - "9000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HF_TOKEN=${HF_TOKEN:-}
+      # Weights are already on disk (downloaded once over the slow link);
+      # don't re-validate against HF.
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    command:
+      - "--model"
+      # AWQ 4-bit MoE. Drop the directory named below onto MODEL_CACHE_PATH;
+      # HF repo: cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit
+      # (alt: stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ).
+      - "/models/${VLLM_MODEL_DIR:-Qwen3-30B-A3B-Instruct-2507-AWQ-4bit}"
+      - "--served-model-name"
+      - "${LOCAL_LLM_MODEL_TEXT:-qwen3-30b-a3b}"
+      # Legacy alias — vLLM accepts multiple --served-model-name values
+      # (argparse nargs='+'); all of them route to the same loaded
+      # weights. Without this, any straggler caller on .68 that still
+      # POSTs {"model":"gpt-oss-20b"} (background loops, stale cached
+      # configs, hardcoded literals) hammers ai_service with 404s
+      # forever. With it, the same call just succeeds against Qwen3.
+      # Costs nothing — same weights, same KV cache. Remove only after
+      # every legacy caller has been audited and updated.
+      - "gpt-oss-20b"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "9000"
+      - "--tensor-parallel-size"
+      - "1"
+      # Let vLLM autodetect the quantization from config.json's
+      # quantization_config stanza. Pinning --quantization awq_marlin
+      # explicitly fights llm-compressor builds (incl. the
+      # cyankiwi/...-AWQ-4bit and stelterlab/...-AWQ repos) which declare
+      # themselves as "compressed-tensors" — a container format that
+      # wraps AWQ weights and still uses Marlin kernels at runtime, but
+      # rejects awq_marlin as a mismatch. Autodetect picks the right
+      # path for both pure-AWQ and llm-compressor builds.
+      # 16k input+output. VRAM budget on 24GB: ~16GB weights + ~1.5GB KV
+      # (16k, 1 seq) + ~2.5GB overhead ≈ 20GB. ~4GB headroom = 2-3
+      # concurrent 16k sessions. For more concurrency add
+      # --kv-cache-dtype fp8 (halves KV).
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-16384}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_UTIL:-0.92}"
+      - "--enable-auto-tool-choice"
+      # Qwen3's chat template carries Hermes-style <tool_call> tags; this
+      # is the parser vLLM documents for Qwen3. THIS is the change that
+      # unlocks parallel tool calls vs gpt-oss's broken Harmony path.
+      - "--tool-call-parser"
+      - "hermes"
+      - "--enable-prefix-caching"
+      - "--trust-remote-code"
+    volumes:
+      # Read-only model cache.
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}:/models:ro
+      # HF cache (writable so vLLM can drop tokenizer metadata).
+      - ${MODEL_CACHE_PATH:-/home/ubuntu/models}/huggingface:/root/.cache/huggingface
+    networks:
+      - ai_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # vLLM cold start = model load (60-180s on warm disk cache).
+      start_period: 300s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Adapter — translates legacy /generate-stream → /v1/chat/completions.
+  # No GPU. Tiny image. Keeps the seven existing callers of the legacy
+  # endpoint working (llm_async_client.py in chat / project-agent /
+  # documents-rag / etc.) without touching their code.
+  # ---------------------------------------------------------------------------
+  ai_adapter:
+    build:
+      context: ./ai_adapter
+      # The host .61 routes outbound through xray on 127.0.0.1:10809.
+      # Without host network, BuildKit's sandbox can't reach the proxy
+      # and pip install fails with "Cannot connect to proxy."
+      network: host
+    image: simorgh-llm-ai-adapter:local
+    container_name: ai_adapter
+    depends_on:
+      ai_service:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+      - UPSTREAM_URL=http://ai_service:9000
+      - UPSTREAM_MODEL=${LOCAL_LLM_MODEL_TEXT:-qwen3-30b-a3b}
+      - TIMEOUT_SEC=1800
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (xray)
+      # into every container so they can reach the internet. The adapter
+      # only ever talks to ai_service over the docker network, so the
+      # proxy isn't just unneeded — it actively breaks every call
+      # ("httpx.ConnectError: All connection attempts failed"). Wipe
+      # the proxy env entirely.
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
+    expose:
+      - "9100"
+    networks:
+      - ai_net
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9100/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # nginx — IP-allowlist + SSE-friendly proxy. Routes /generate-stream
+  # to ai_adapter; everything else to ai_service (vLLM serve).
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: ai_nginx
+    depends_on:
+      ai_service:
+        condition: service_healthy
+      ai_adapter:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    environment:
+      - TZ=Asia/Tehran
+    volumes:
+      - ./nginx_configs/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx_configs/conf.d/llm.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - ai_net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # GPU monitor — watches ai_service GPU memory + idle time, restarts
+  # if it hangs.
+  # ---------------------------------------------------------------------------
+  gpu_monitor:
+    build: ./gpu_monitor
+    image: simorgh-llm-gpu-monitor:local
+    container_name: gpu_monitor
+    environment:
+      - TARGET_CONTAINER=ai_service
+      - BACKEND_URL=http://ai_service:9000
+      - GPU_MEMORY_THRESHOLD=95
+      - GPU_IDLE_THRESHOLD=5
+      - IDLE_DURATION=300
+      - CHECK_INTERVAL=10
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [utility]
+    depends_on:
+      ai_service:
+        condition: service_healthy
+    networks:
+      - ai_net
+    restart: unless-stopped
+
+networks:
+  ai_net:
+    driver: bridge

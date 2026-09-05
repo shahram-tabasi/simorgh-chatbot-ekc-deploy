@@ -1,0 +1,153 @@
+# =============================================================================
+# ELK STACK - Elasticsearch + Logstash + Kibana + Filebeat
+#
+# Sized for office-scale observability + hybrid search. Defaults assume
+# ~8 GB available to the ELK tier. Override via .env for bigger hosts.
+#
+# Image source:
+#   ELK images live on docker.elastic.co (NOT Docker Hub) so the
+#   `daemon.json registry-mirrors` setting does NOT cover them. Pull
+#   them through Nexus by setting ELASTIC_REGISTRY in .env to your
+#   Nexus elastic-proxy host (default: 192.168.1.64:5000, matching the
+#   user's existing setup). To bypass Nexus, set
+#   ELASTIC_REGISTRY=docker.elastic.co.
+#
+# Web UIs (host-exposed):
+#   • Kibana:        http://<host>:${KIBANA_HTTP_PORT:-5601}/
+#   • Elasticsearch: http://<host>:${ELASTIC_HTTP_PORT:-9200}/    (admin/debug)
+# =============================================================================
+services:
+  elasticsearch:
+    image: ${ELASTIC_REGISTRY:-192.168.1.64:5000}/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.15.3}
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=${ELASTIC_SECURITY_ENABLED:-false}
+      - ES_JAVA_OPTS=-Xms${ELASTIC_HEAP:-4g} -Xmx${ELASTIC_HEAP:-4g}
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+      # Larger circuit breakers + thread pools for office workload.
+      - indices.memory.index_buffer_size=${ELASTIC_INDEX_BUFFER:-15%}
+      - search.max_buckets=${ELASTIC_MAX_BUCKETS:-65536}
+      - thread_pool.write.queue_size=${ELASTIC_WRITE_QUEUE:-1000}
+      - thread_pool.search.queue_size=${ELASTIC_SEARCH_QUEUE:-2000}
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile:  { soft: 65536, hard: 65536 }
+    deploy:
+      resources:
+        limits:
+          memory: ${ELASTIC_MEM_LIMIT:-6g}
+        reservations:
+          memory: ${ELASTIC_MEM_RESERVATION:-4g}
+    volumes:
+      - elastic_data:/usr/share/elasticsearch/data
+    ports:
+      - "${ELASTIC_HTTP_PORT:-9200}:9200"
+    expose:
+      - "9300"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+    restart: unless-stopped
+
+  logstash:
+    image: ${ELASTIC_REGISTRY:-192.168.1.64:5000}/logstash/logstash:${ELASTIC_VERSION:-8.15.3}
+    container_name: logstash
+    environment:
+      - LS_JAVA_OPTS=-Xms${LOGSTASH_HEAP:-1g} -Xmx${LOGSTASH_HEAP:-1g}
+      - PIPELINE_WORKERS=${LOGSTASH_PIPELINE_WORKERS:-4}
+      - PIPELINE_BATCH_SIZE=${LOGSTASH_PIPELINE_BATCH:-500}
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTIC_USER=elastic
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+    deploy:
+      resources:
+        limits:
+          memory: ${LOGSTASH_MEM_LIMIT:-1500m}
+        reservations:
+          memory: ${LOGSTASH_MEM_RESERVATION:-1g}
+    volumes:
+      - ../elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      # Not :ro — the logstash entrypoint script rewrites this file at
+      # startup to inject env-driven settings (pipeline.workers, etc).
+      - ../elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
+    expose:
+      - "5044"     # beats input
+      - "5045"     # tcp json input
+    networks:
+      - app_net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  kibana:
+    image: ${ELASTIC_REGISTRY:-192.168.1.64:5000}/kibana/kibana:${ELASTIC_VERSION:-8.15.3}
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_PUBLICBASEURL=${KIBANA_PUBLIC_URL:-https://simorghai.electrokavir.com/kibana}
+      - SERVER_BASEPATH=/kibana
+      - SERVER_REWRITEBASEPATH=true
+      - XPACK_SECURITY_ENABLED=${ELASTIC_SECURITY_ENABLED:-false}
+      - NODE_OPTIONS=--max-old-space-size=${KIBANA_NODE_HEAP_MB:-1500}
+    deploy:
+      resources:
+        limits:
+          memory: ${KIBANA_MEM_LIMIT:-2g}
+        reservations:
+          memory: ${KIBANA_MEM_RESERVATION:-1g}
+    ports:
+      - "${KIBANA_HTTP_PORT:-5601}:5601"
+    networks:
+      - app_net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  filebeat:
+    image: ${ELASTIC_REGISTRY:-192.168.1.64:5000}/beats/filebeat:${ELASTIC_VERSION:-8.15.3}
+    container_name: filebeat
+    user: root
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    deploy:
+      resources:
+        limits:
+          memory: ${FILEBEAT_MEM_LIMIT:-300m}
+    volumes:
+      - ../elk/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - filebeat_data:/usr/share/filebeat/data
+    networks:
+      - app_net
+    depends_on:
+      logstash:
+        condition: service_started
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  elastic_data:
+    name: simorgh_elastic_data
+    driver: local
+  filebeat_data:
+    name: simorgh_filebeat_data
+    driver: local

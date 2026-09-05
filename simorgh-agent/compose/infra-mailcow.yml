@@ -1,0 +1,42 @@
+# =============================================================================
+# MAILCOW - Full mail stack (Postfix + Dovecot + rspamd + SOGo + nginx)
+#
+# Mailcow ships its own ~20-container docker-compose.yml. We do NOT inline
+# all of it here — bring it up as a sibling stack and join it to our
+# `simorgh_app_net` so the in-cluster mail-bridge can reach it.
+#
+# One-time bring-up (on .68):
+#   git clone https://github.com/mailcow/mailcow-dockerized.git \
+#       /opt/mailcow-dockerized
+#   cd /opt/mailcow-dockerized
+#   ./generate_config.sh        # set MAILCOW_HOSTNAME=mail.simorgh.local
+#   docker compose up -d
+#   docker network connect simorgh_app_net postfix-mailcow
+#   docker network connect simorgh_app_net dovecot-mailcow
+#
+# This stub exists so `docker compose config` lists Mailcow as a managed
+# concern and so mail-bridge can declare a depends-on against the named
+# external containers.
+# =============================================================================
+services:
+  # Placeholder service used only as an aggregation point in `docker compose
+  # ps` / health dashboards. It is healthy iff postfix-mailcow accepts SMTP.
+  mailcow-probe:
+    image: alpine:3.20
+    container_name: mailcow-probe
+    command: >
+      sh -c "apk add --no-cache curl >/dev/null;
+             while true; do
+               nc -z postfix-mailcow 25 && echo OK || echo BAD;
+               sleep 30;
+             done"
+    networks:
+      - app_net
+    restart: unless-stopped
+    profiles: ["mailcow-probe"]   # opt-in; bring up with `--profile mailcow-probe`
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+    external: true

@@ -1,81 +1,107 @@
-name: Deploy LLM Services Only
+name: Build LLM service images
+
+# Builds the three custom LLM images and pushes each to
+# ghcr.io/<owner>/llm-<service>:<tag>. Triggered automatically on
+# pushes that touch llms/, or manually via workflow_dispatch.
+#
+# After a green run, on the GPU box (.61 or .62):
+#   docker pull  ghcr.io/<owner>/llm-<name>:<tag>
+#   docker tag   ghcr.io/<owner>/llm-<name>:<tag>  simorgh-llm-<name>:local
+#   docker compose -f docker-compose.llm.yml up -d   # or .vlm.yml
+#
+# The compose files pin `image: simorgh-llm-<name>:local`, so the retag
+# is what makes the locally-pulled image satisfy the compose contract.
 
 on:
   push:
-    branches:
-      - main
-      - develop
+    branches: [main, develop]
     paths:
       - 'llms/**'
       - '.github/workflows/llm-deploy.yml'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        type: string
+        default: "claude/review-codebase-p4gQf"
+      tag:
+        description: "Image tag to apply"
+        type: string
+        default: "local"
+
+permissions:
+  contents: read
+  packages: write
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-llm-services:
-    name: Build LLM Service Images
+  build:
+    name: build · ${{ matrix.service.name }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 120
 
     strategy:
+      fail-fast: false
+      max-parallel: 3
       matrix:
         service:
-          - name: ai-service
-            context: ./llms/ai
-            dockerfile: ./llms/ai/Dockerfile
-          - name: gpu-monitor
-            context: ./llms/gpu_monitor
-            dockerfile: ./llms/gpu_monitor/Dockerfile
-          - name: model-initializer
-            context: ./llms/initializer
-            dockerfile: ./llms/initializer/Dockerfile
+          # ─── 192.168.1.61 — text LLM (Unsloth + vLLM + FastAPI) ───
+          - { name: ai-service,        context: ./llms/ai,          dockerfile: ./llms/ai/Dockerfile,          big: true  }
+          - { name: model-initializer, context: ./llms/initializer, dockerfile: ./llms/initializer/Dockerfile, big: false }
+          # ─── Both .61 and .62 — VRAM watchdog ─────────────────────
+          - { name: gpu-monitor,       context: ./llms/gpu_monitor, dockerfile: ./llms/gpu_monitor/Dockerfile, big: false }
 
     steps:
-      - name: Checkout code
+      - name: Checkout ${{ inputs.ref || github.ref }}
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
-      - name: Lowercase repository owner
-        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+      - name: Lowercase owner (GHCR requires lowercase)
+        id: owner
+        run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - name: Sanitize branch name for Docker tag
-        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
-
-      - name: Free Disk Space
-        if: matrix.service.name == 'ai-service'
+      - name: Free runner disk (heavy)
+        if: ${{ matrix.service.big }}
         run: |
-          echo "=== Before cleanup ==="
-          df -h
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune -af
-          sudo docker system prune -af --volumes
-          echo "=== After cleanup ==="
-          df -h
+          set -eu
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h /
+
+      - name: Free runner disk (light)
+        if: ${{ !matrix.service.big }}
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}
+          images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/llm-${{ matrix.service.name }}
           tags: |
-            type=raw,value=${{ env.BRANCH_SAFE }}
-            type=raw,value=${{ env.BRANCH_SAFE }}-${{ github.sha }}
+            type=raw,value=${{ inputs.tag || 'local' }}
+            type=ref,event=branch
+            type=sha,format=short,enable=${{ github.event_name == 'push' }}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build & push
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.service.context }}
@@ -83,303 +109,29 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Use both GHA cache and registry cache for better hit rate
-          cache-from: |
-            type=gha,scope=${{ matrix.service.name }}
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}:cache
-          cache-to: |
-            type=gha,mode=max,scope=${{ matrix.service.name }}
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/llm-${{ matrix.service.name }}:cache,mode=max
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=llm-${{ matrix.service.name }}
+          cache-to:   type=gha,scope=llm-${{ matrix.service.name }},mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 
-  deploy-llm-servers:
-    name: Deploy to LLM Servers (1.61 & 1.62)
-    runs-on: ubuntu-latest
-    needs: [build-llm-services]
-
-    strategy:
-      matrix:
-        server:
-          - host: 192.168.1.61
-            name: llm-server-1
-          - host: 192.168.1.62
-            name: llm-server-2
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Lowercase repository owner
-        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-
-      - name: Sanitize branch name for Docker tag
-        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
-
-      - name: Setup SSH key for central server
+      - name: Print pull instructions
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
+          OWNER_LC="${{ steps.owner.outputs.lc }}"
+          TAG="${{ inputs.tag || 'local' }}"
+          cat <<EOF
+          ============================================================
+          Pushed: ghcr.io/\${OWNER_LC}/llm-${{ matrix.service.name }}:\${TAG}
 
-      - name: Test SSH to central server
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 "echo 'Connected to central server'"
+          ONE-TIME: flip the package PUBLIC so the GPU boxes can pull
+          anonymously (or use a read:packages PAT):
+            https://github.com/users/\${OWNER_LC}/packages/container/llm-${{ matrix.service.name }}/settings
 
-      - name: Setup SSH from central to target server
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh-keyscan -H ${{ matrix.server.host }} >> ~/.ssh/known_hosts 2>/dev/null || true"
-
-      - name: Test SSH to target server via central
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'echo Connected to ${{ matrix.server.name }}'"
-
-      - name: Create directories on target server
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'mkdir -p ~/llm-deployment ~/models/huggingface'"
-
-      - name: Check disk space on target server
-        run: |
-          echo "Checking disk space on ${{ matrix.server.host }}..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'df -h /tmp && df -h ~'"
-
-      # - name: Copy deployment files via central server
-      #   run: |
-      #     echo "Streaming deployment to ${{ matrix.server.host }}..."
-          
-      #     tar -czf - -C ./llms \
-      #       --exclude='__pycache__' \
-      #       --exclude='*.pyc' \
-      #       --exclude='.git' \
-      #       --exclude='tests' \
-      #       --exclude='*.md' \
-      #       . | ssh -p 2324 \
-      #       -o ConnectTimeout=60 \
-      #       -o ServerAliveInterval=30 \
-      #       -o ServerAliveCountMax=5 \
-      #       -o StrictHostKeyChecking=no \
-      #       -o Compression=yes \
-      #       -i ~/.ssh/deploy_key \
-      #       ${{ secrets.SSH_USER }}@95.38.203.173 \
-      #       "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf -'"
-          
-      #     echo "✓ Deployment complete"
-
-      - name: Copy deployment files via central server
-        run: |
-          echo "Cleaning up old files on target server..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'rm -f ~/llm-deployment/deploy.tar.gz'" || true
-
-
-          echo "Creating tarball..."
-          TAR_FILE="$RUNNER_TEMP/llms-deploy.tar.gz"  # Still avoid /tmp on runner
-          tar -czf "$TAR_FILE" -C ./llms \
-            --exclude='__pycache__' \
-            --exclude='*.pyc' \
-            --exclude='.git' \
-            --exclude='tests' \
-            --exclude='*.md' \
-            .
-
-          TAR_SIZE=$(du -h "$TAR_FILE" | cut -f1)
-          echo "Tarball size: $TAR_SIZE"
-
-          echo "Copying to central server..."
-          scp -P 2324 -i ~/.ssh/deploy_key "$TAR_FILE" \
-            ${{ secrets.SSH_USER }}@95.38.203.173:/tmp/deploy-${{ matrix.server.name }}.tar.gz
-
-          echo "Verifying file on central server..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ls -lh /tmp/deploy-${{ matrix.server.name }}.tar.gz"
-
-          echo "Copying to target server ${{ matrix.server.host }} (using home dir)..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 /tmp/deploy-${{ matrix.server.name }}.tar.gz ubuntu@${{ matrix.server.host }}:~/llm-deployment/deploy.tar.gz"
-
-          echo "Verifying file on target server..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'ls -lh ~/llm-deployment/deploy.tar.gz'"
-
-          echo "Extracting on target server..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh -o StrictHostKeyChecking=no ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && tar -xzf deploy.tar.gz && rm deploy.tar.gz'"
-
-          echo "Cleaning up central server..."
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "rm -f /tmp/deploy-${{ matrix.server.name }}.tar.gz" || true
-
-          echo "Cleaning up local..."
-          rm "$TAR_FILE"
-
-          echo "✓ Deployment complete"          
-      - name: Create .env file on target server
-        env:
-          OWNER_LC: ${{ env.OWNER_LC }}
-          BRANCH_SAFE: ${{ env.BRANCH_SAFE }}
-          IMAGE_TAG: ${{ env.BRANCH_SAFE }}-${{ github.sha }}
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && \
-            echo GITHUB_REGISTRY=${{ env.REGISTRY }} > .env && \
-            echo GITHUB_REPOSITORY_OWNER=${{ env.OWNER_LC }} >> .env && \
-            echo IMAGE_TAG=${{ env.BRANCH_SAFE }}-${{ github.sha }} >> .env && \
-            echo MODEL_CACHE_PATH=/home/ubuntu/models/huggingface >> .env && \
-            echo HF_TOKEN=${{ secrets.HF_TOKEN }} >> .env && \
-            echo ENABLE_SIEMENS_API=${{ secrets.ENABLE_SIEMENS_API }} >> .env && \
-            echo SIEMENS_API_KEY=${{ secrets.SIEMENS_API_KEY }} >> .env\"'"
-
-      - name: Verify .env file
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"echo === Environment File === && cat ~/llm-deployment/.env\"'"
-
-      - name: Login to GHCR on target server
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} \"echo '${{ secrets.GHCR_TOKEN }}' | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin\""
-
-      - name: Stop running containers
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && docker compose down || true\"'"
-
-      - name: Clean up old images
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'docker image prune -f || true'"
-
-      - name: Pull latest images (with retry)
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@\${{ matrix.server.host }} 'bash -c \"
-              cd ~/llm-deployment
-              MAX_RETRIES=4
-              RETRY_DELAY=10
-              for attempt in \\\$(seq 1 \\\$MAX_RETRIES); do
-                echo Pull attempt \\\$attempt/\\\$MAX_RETRIES...
-                if docker compose pull; then
-                  echo Pull successful
-                  break
-                else
-                  if [ \\\$attempt -eq \\\$MAX_RETRIES ]; then
-                    echo All pull attempts failed
-                    exit 1
-                  fi
-                  echo Pull failed, retrying in \\\${RETRY_DELAY}s...
-                  sleep \\\$RETRY_DELAY
-                  RETRY_DELAY=\\\$((RETRY_DELAY * 2))
-                fi
-              done
-            \"'"
-
-      - name: Start services
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && docker compose up -d\"'"
-
-      - name: Wait for model initializer
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"timeout 1800 bash -c \\\"
-              while docker ps -a --format {{.Names}} | grep -q model_initializer; do
-                STATUS=\\\\\\\$(docker inspect model_initializer --format={{.State.Status}} 2>/dev/null || echo not_found)
-                if [ \\\\\\\$STATUS = exited ]; then
-                  EXIT_CODE=\\\\\\\$(docker inspect model_initializer --format={{.State.ExitCode}})
-                  if [ \\\\\\\$EXIT_CODE = 0 ]; then
-                    echo Model initializer completed successfully
-                    break
-                  else
-                    echo Model initializer failed with exit code \\\\\\\$EXIT_CODE
-                    docker logs model_initializer --tail=50
-                    exit 1
-                  fi
-                fi
-                echo Initializer status: \\\\\\\$STATUS
-                sleep 10
-              done
-            \\\" || echo Warning: Initializer monitoring timed out\"'"
-
-      - name: Wait for AI service to be healthy
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && timeout 300 bash -c \\\"until docker compose ps | grep -q healthy; do sleep 10; echo Waiting for services...; done\\\" || echo Warning: Some services may not be healthy yet\"'"
-
-      - name: Show service status
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'bash -c \"cd ~/llm-deployment && echo === Docker Compose Status === && docker compose ps\"'"
-
-      - name: Check GPU availability
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'nvidia-smi || echo nvidia-smi not available'"
-
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 \
-            "ssh ubuntu@${{ matrix.server.host }} 'cd ~/llm-deployment && \
-            echo \"=== Docker Compose Status ===\" && docker compose ps -a && \
-            echo \"=== Initializer Logs ===\" && docker logs model_initializer --tail=100 2>/dev/null || echo \"model_initializer not found\" && \
-            echo \"=== AI Service Logs ===\" && docker logs ai_service --tail=100 2>/dev/null || echo \"ai_service not found\" && \
-            echo \"=== GPU Monitor Logs ===\" && docker logs gpu_monitor --tail=50 2>/dev/null || echo \"gpu_monitor not found\" && \
-            echo \"=== Nginx Logs ===\" && docker logs nginx_ai --tail=50 2>/dev/null || echo \"nginx_ai not found\"'"
-
-
-  health-check:
-    name: LLM Services Health Check
-    runs-on: ubuntu-latest
-    needs: [deploy-llm-servers]
-
-    steps:
-      - name: Sanitize branch name for display
-        run: echo "BRANCH_SAFE=$(echo '${{ github.ref_name }}' | sed 's/\//-/g')" >> $GITHUB_ENV
-
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p 2324 95.38.203.173 >> ~/.ssh/known_hosts
-
-      - name: Health check from central server
-        env:
-          IMAGE_TAG: ${{ env.BRANCH_SAFE }}-${{ github.sha }}
-        run: |
-          ssh -p 2324 -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@95.38.203.173 << ENDSSH
-          echo "================================"
-          echo "LLM Services Health Check"
-          echo "================================"
-          sleep 10
-
-          echo "Checking LLM Server 1.61..."
-          if curl -f -s --max-time 15 http://192.168.1.61/health; then
-            echo "✓ Server 1.61 is healthy"
-          else
-            echo "⚠ Warning: Server 1.61 health check failed"
-          fi
-
-          echo ""
-          echo "Checking LLM Server 1.62..."
-          if curl -f -s --max-time 15 http://192.168.1.62/health; then
-            echo "✓ Server 1.62 is healthy"
-          else
-            echo "⚠ Warning: Server 1.62 health check failed"
-          fi
-
-          echo ""
-          echo "================================"
-          echo "Deployment Summary"
-          echo "================================"
-          echo "LLM Server 1: http://192.168.1.61"
-          echo "LLM Server 2: http://192.168.1.62"
-          echo "Image Tag: $IMAGE_TAG"
-          echo "================================"
-          ENDSSH
+          On the GPU box:
+            docker pull ghcr.io/\${OWNER_LC}/llm-${{ matrix.service.name }}:\${TAG}
+            docker tag  ghcr.io/\${OWNER_LC}/llm-${{ matrix.service.name }}:\${TAG} \\
+                        simorgh-llm-${{ matrix.service.name }}:local
+            docker compose -f docker-compose.llm.yml up -d   # (or .vlm.yml)
+          ============================================================
+          EOF

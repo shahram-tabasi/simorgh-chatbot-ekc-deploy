@@ -1,0 +1,65 @@
+# =============================================================================
+# GITLAB-MCP - Sole entrypoint for project + technical-knowledge git access.
+# Replaces tech-kb-service and the techserver→shell tarball path. Exposes
+# REST + MCP tools for the agent (and admin) to read/write GitLab repos.
+# =============================================================================
+services:
+  gitlab-mcp:
+    build:
+      context: ..
+      dockerfile: gitlab-mcp-service/Dockerfile
+    image: simorgh-gitlab-mcp:local
+    container_name: gitlab-mcp
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8047",
+              "--workers", "${GITLAB_MCP_WORKERS:-4}"]
+    ports:
+      # Optional host exposure for direct REST/MCP debugging.
+      - "${GITLAB_MCP_HTTP_PORT:-8047}:8047"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GITLAB_URL=${GITLAB_INTERNAL_URL:-http://gitlab}
+      - GITLAB_TOKEN=${GITLAB_API_TOKEN:?set GITLAB_API_TOKEN in .env}
+      - GITLAB_PROJECTS_GROUP=${GITLAB_PROJECTS_GROUP:-simorgh-projects}
+      - GITLAB_TECH_KB_REPO=${GITLAB_TECH_KB_REPO:-simorgh-knowledge/technical-knowledge}
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
+      - DOC_PROCESSOR_URL=${DOC_PROCESSOR_URL:-http://doc-processor:8000}
+      - LOGSTASH_HOST=${LOGSTASH_HOST:-logstash}
+      - LOGSTASH_PORT=${LOGSTASH_PORT:-5045}
+      # Docker daemon injects HTTP_PROXY=http://172.17.0.1:10809 (xray) into
+      # every container. python-gitlab uses requests, which honours that env
+      # var and tunnels every call to http://gitlab/... through xray. Xray
+      # treats docker-internal DNS inconsistently (sometimes bypasses,
+      # sometimes tries to forward the connect upstream) which produces an
+      # intermittent "cannot list repos sometimes" symptom: list_projects /
+      # user-projects randomly time out or 5xx. We don't need a proxy for
+      # anything gitlab-mcp does — it only talks to the in-cluster gitlab
+      # container — so wipe the proxy env entirely. requests doesn't honour
+      # CIDR in NO_PROXY (only hostnames / suffixes), but with HTTP_PROXY
+      # blank the variable is moot.
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
+    deploy:
+      resources:
+        limits:
+          memory: ${GITLAB_MCP_MEM_LIMIT:-512m}
+    depends_on:
+      gitlab:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8047/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

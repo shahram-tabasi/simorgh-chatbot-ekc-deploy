@@ -90,13 +90,93 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setError(null);
   }, []);
 
-  // Store tokens and user
+  // Cross-device avatar hydration. Called on EVERY auth path that
+  // sets the user (fresh login AND the silent token-refresh path
+  // in validateToken). When the user has an avatar_url stored
+  // server-side (PATCHed on a previous device) and the local
+  // `simorgh_avatar_<id>` key is empty, seed it from the server
+  // value and fire the simorgh-avatar-changed CustomEvent so
+  // mounted components (MessageList, UserProfile) re-render
+  // without a full reload.
+  //
+  // Crucially: we do NOT overwrite a pre-existing local choice.
+  // That protects an unsaved selection from getting clobbered by
+  // a stale server value during the same session (e.g., user
+  // picked a new avatar in tab A, hasn't saved yet, opens tab B
+  // — tab B's validateToken shouldn't overwrite tab A's pending
+  // pick).
+  //
+  // Bug fixed May 2026: this used to live inline inside
+  // storeAuth(), so it only fired on fresh login. Users who just
+  // reloaded the page (validateToken path) never got their
+  // server avatar synced down, which is what made "issue #1
+  // avatar cross-device" still appear broken after the original
+  // commit (2a61b15).
+  const hydrateAvatarFromServer = useCallback((userData: User) => {
+    try {
+      const userId = (userData as any)?.id || (userData as any)?.EMPUSERNAME;
+      const serverAvatar = (userData as any)?.avatar_url;
+      if (!userId || !serverAvatar) return;
+      const localKey = `simorgh_avatar_${userId}`;
+      if (localStorage.getItem(localKey)) return;
+      localStorage.setItem(localKey, serverAvatar);
+      window.dispatchEvent(
+        new CustomEvent('simorgh-avatar-changed', { detail: serverAvatar })
+      );
+    } catch {
+      /* localStorage failure is non-fatal — UI falls back to default */
+    }
+  }, []);
+
+  // Cross-device pin sync (issue #4b, May 2026): pull the user's
+  // pinned_messages map from /api/auth/v2/me/preferences (JSONB
+  // column preferences_data.pinned_messages) and write each
+  // chat's array into the corresponding `simorgh_pinned_msgs_<chatId>`
+  // localStorage key. PinnedMessagesPanel listens for
+  // `simorgh-pins-synced` and re-reads, so the user sees their
+  // server-side pins after a fresh login on a new device.
+  //
+  // Unlike avatar, we DO overwrite local — the pin map is the
+  // source of truth across devices and last-write-wins is
+  // acceptable (network sync on togglePin keeps the server
+  // current; a stale local would only persist if the user
+  // pinned offline + then logged in elsewhere first, which is
+  // a rare edge that resolves on next sync anyway).
+  const hydratePinsFromServer = useCallback(async (authToken: string) => {
+    try {
+      const r = await fetch('/api/auth/v2/me/preferences', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      const pinMap = data?.preferences_data?.pinned_messages;
+      if (!pinMap || typeof pinMap !== 'object') return;
+      for (const [chatId, items] of Object.entries(pinMap)) {
+        if (!Array.isArray(items)) continue;
+        try {
+          localStorage.setItem(
+            `simorgh_pinned_msgs_${chatId}`,
+            JSON.stringify(items),
+          );
+        } catch { /* quota — skip this chat */ }
+      }
+      window.dispatchEvent(new CustomEvent('simorgh-pins-synced'));
+    } catch {
+      /* preferences endpoint failure → local pins stay as-is */
+    }
+  }, []);
+
+  // Store tokens and user (fresh-login path)
   const storeAuth = useCallback((accessToken: string, userData: User) => {
     setToken(accessToken);
     setUser(userData);
     localStorage.setItem('simorgh_token', accessToken);
     localStorage.setItem('simorgh_user', JSON.stringify(userData));
-  }, []);
+    hydrateAvatarFromServer(userData);
+    // Fire and forget — pin hydration is best-effort. Failure
+    // leaves local pins as the only source for this session.
+    void hydratePinsFromServer(accessToken);
+  }, [hydrateAvatarFromServer, hydratePinsFromServer]);
 
   // Clear auth
   const clearAuth = useCallback(() => {
@@ -139,6 +219,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
 
       setUser(response.data);
+      // Refresh-path avatar sync (May 2026 follow-up). storeAuth's
+      // hydration only fires on fresh login; this path runs on
+      // every page reload while logged in. Same one-way pull from
+      // server → localStorage, same no-clobber rule.
+      hydrateAvatarFromServer(response.data);
+      // Same path for pin sync (issue #4b) — also fire-and-forget.
+      void hydratePinsFromServer(authToken);
+      // Also persist the refreshed user back to localStorage so
+      // subsequent reloads inside this session see avatar_url
+      // (otherwise simorgh_user is whatever was saved at last
+      // storeAuth — stale if the user updated their avatar on
+      // another device since then).
+      try {
+        localStorage.setItem('simorgh_user', JSON.stringify(response.data));
+      } catch { /* quota / private mode — non-fatal */ }
       setIsLoading(false);
     } catch (error) {
       console.error('Token validation failed:', error);

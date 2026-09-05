@@ -1,0 +1,82 @@
+# =============================================================================
+# DOCLING-SERVE - IBM document-intelligence (PDF/DOCX/PPTX/HTML → Markdown)
+# Port 5001 (internal). Fully OFFLINE: models live in a persistent docker
+# volume, runtime has no internet egress.
+#
+# Used by: doc-processor (DOCLING_URL=http://docling-serve:5001) when
+# USE_DOCLING=1 — falls back to pdfplumber+EasyOCR otherwise.
+#
+# TWO PATHS for getting the ~1.5 GB of models onto the box:
+#
+# (A) — Recommended on the Iranian-proxy host (.68): pre-populate the
+#       `simorgh_docling_models` volume via the GitHub workflow. The
+#       proxy stalls on big HF downloads; doing it on a GH runner avoids
+#       the problem entirely.
+#
+#         1. Trigger `.github/workflows/docling-models-fetch.yml` (in the
+#            Actions tab; pick parts=1 if you have bandwidth, parts=2+
+#            if you need to stay under a daily cap).
+#         2. Follow the "Install instructions" the workflow prints to
+#            `scp` and extract into the `simorgh_docling_models` volume.
+#         3. Tag the upstream image so this compose's `image:` resolves:
+#              docker tag quay.io/docling-project/docling-serve-cpu:latest \
+#                         simorgh-docling:offline
+#         4. docker compose up -d docling-serve.
+#
+# (B) — Build models into the image (only works where HF is reachable):
+#         docker build -t simorgh-docling:offline -f docling/Dockerfile docling/
+#       Models end up at /opt/docling-models inside the image and get
+#       copied into the (initially empty) named volume on first start —
+#       Docker's "copy image contents on first mount" semantic. Slower
+#       cold start but no separate download step.
+# =============================================================================
+services:
+  docling-serve:
+    image: simorgh-docling:offline
+    build:
+      context: ../docling
+      dockerfile: Dockerfile
+    container_name: docling-serve
+    expose:
+      - "5001"
+    environment:
+      - DOCLING_SERVE_ARTIFACTS_PATH=/opt/docling-models
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/opt/docling-models/hf-cache
+      - DOCLING_SERVE_ENABLE_UI=0
+    volumes:
+      # Persistent home for the document-AI model bundle (~1.5 GB:
+      # docling-layout-heron, tableformer, code-equation, easyocr).
+      # Populate via workflow OR let the image fill it on first start
+      # (see header). Survives `docker compose down`.
+      - docling_models:/opt/docling-models
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:5001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+    # Belt-and-braces network lockdown for fully air-gapped operation:
+    # uncomment to forbid any outbound DNS/HTTP. The image is already
+    # offline-by-construction; this is just defence-in-depth for paranoid
+    # operators. Keep commented during the first deploy so model-cache
+    # warm-up (transformers may still touch ~/.cache/huggingface even
+    # with HF_HUB_OFFLINE=1 on first import) doesn't trip.
+    # network_mode: "none"
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  docling_models:
+    # Created out-of-band via `docker volume create simorgh_docling_models`
+    # and pre-populated by the docling-models-fetch workflow. `external: true`
+    # silences the compose warning about reusing a non-Compose-created volume.
+    name: simorgh_docling_models
+    external: true

@@ -1,0 +1,261 @@
+name: Build backend image (split download)
+
+# Build the simorgh-backend Docker image on a GitHub-hosted runner, save
+# it as a docker-load tarball, split that into N artifacts, and upload
+# each part separately. Same UX as hf-model-fetch.yml — designed for a
+# metered link (the 5 GB/day proxy cap is the concrete case) where the
+# image needs to land on .68 in two trips.
+#
+# After download:
+#   ./REASSEMBLE.sh                       → simorgh-backend.tar.gz
+#   docker load -i simorgh-backend.tar.gz → image is in local docker
+#   docker compose -f simorgh-agent/docker-compose.yml up -d backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch / tag / commit to build"
+        type: string
+        default: "claude/legacy-user-chat-changes-aSvtx"
+      tag:
+        description: "Image tag to apply"
+        type: string
+        default: "local"
+      parts:
+        description: "Split the saved-image tarball into N parts (1 = no split)"
+        type: choice
+        default: "2"
+        options: ["1", "2", "3", "4", "5", "6"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # backend pulls torch + cuDNN + a long pip set → 60-90 min is realistic.
+    timeout-minutes: 180
+    steps:
+      - name: Free up disk space
+        # Docker images for the backend can be 3-5 GB compressed; the
+        # default GHA runner has ~14 GB free. Strip stuff we don't need
+        # so `docker save` doesn't run out of room mid-pipe.
+        run: |
+          set -eu
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h / | tail -1
+
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Sanitise ref for filenames
+        id: name
+        env:
+          REF: ${{ inputs.ref }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          REF_SAFE="$(echo -n "$REF" | tr '/ :' '___')"
+          echo "ref_safe=$REF_SAFE"                      >> "$GITHUB_OUTPUT"
+          echo "fname=simorgh-backend-${REF_SAFE}-${TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=simorgh-backend:${TAG}"             >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        # We can't push to a registry here because the recipient is on a
+        # private network with metered egress and the workflow's whole
+        # point is to deliver the bytes via artifacts. Build with
+        # `--load` so the image lands in the runner's local docker.
+        uses: docker/build-push-action@v5
+        with:
+          context: simorgh-agent/backend
+          file:    simorgh-agent/backend/Dockerfile
+          tags:    ${{ steps.name.outputs.image }}
+          load:    true
+          push:    false
+          # Re-use buildx's GHA cache so reruns finish in minutes.
+          cache-from: type=gha,scope=simorgh-backend
+          cache-to:   type=gha,scope=simorgh-backend,mode=max
+
+      - name: Inspect image size
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+        run: docker image inspect "$IMAGE" --format='{{.Size}} bytes'
+
+      - name: Save + compress image
+        id: pack
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          FNAME: ${{ steps.name.outputs.fname }}
+        run: |
+          set -eu
+          OUT="${FNAME}.tar.gz"
+          echo "Saving $IMAGE → $OUT (this can take a while) …"
+          # Pipe straight through gzip so we never materialise the
+          # uncompressed tarball on disk (would risk filling the runner).
+          docker save "$IMAGE" | gzip -1 > "$OUT"
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Split tarball into N parts
+        id: split
+        env:
+          OUT: ${{ steps.pack.outputs.out }}
+          PARTS: ${{ inputs.parts }}
+        run: |
+          set -eu
+          mkdir -p parts
+          if [ "$PARTS" -le 1 ]; then
+            cp "$OUT" parts/
+            cp "$OUT.sha256" parts/
+            echo "split=false" >> "$GITHUB_OUTPUT"
+            ls -lh parts/
+            exit 0
+          fi
+          split -n "$PARTS" -d --suffix-length=2 "$OUT" "parts/${OUT}.part."
+          cp "$OUT.sha256" parts/
+          cat > "parts/REASSEMBLE.sh" <<BASH
+          #!/usr/bin/env bash
+          # Concatenate the .part.NN files back into the original
+          # docker-load tarball, verify the SHA-256, and load the image
+          # into the local docker daemon.
+          set -e
+          base="${OUT}"
+          parts=( \$(ls "\${base}".part.* | sort) )
+          echo "Reassembling \${#parts[@]} parts → \${base} …"
+          cat "\${parts[@]}" > "\${base}"
+          echo "Verifying SHA-256 …"
+          sha256sum -c "\${base}.sha256"
+          echo "Loading image into docker …"
+          docker load -i "\${base}"
+          echo "✅ Image ready. List with: docker images simorgh-backend"
+          BASH
+          chmod +x parts/REASSEMBLE.sh
+          ls -lh parts/
+          echo "split=true" >> "$GITHUB_OUTPUT"
+
+      # ── Single-piece upload ────────────────────────────────────────────
+      - name: Upload artifact (single piece)
+        if: steps.split.outputs.split == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: img-${{ steps.name.outputs.fname }}
+          path: |
+            parts/${{ steps.name.outputs.fname }}.tar.gz
+            parts/${{ steps.name.outputs.fname }}.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      # ── Split upload — one artifact per part, identical to hf-model-fetch.
+      - name: Upload part 1 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: img-${{ steps.name.outputs.fname }}-part-1of${{ inputs.parts }}
+          path: |
+            parts/${{ steps.name.outputs.fname }}.tar.gz.part.00
+            parts/${{ steps.name.outputs.fname }}.tar.gz.sha256
+            parts/REASSEMBLE.sh
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 2 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: img-${{ steps.name.outputs.fname }}-part-2of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.01
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 3 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: img-${{ steps.name.outputs.fname }}-part-3of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.02
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 4 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '4'
+        uses: actions/upload-artifact@v4
+        with:
+          name: img-${{ steps.name.outputs.fname }}-part-4of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.03
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 5 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '5'
+        uses: actions/upload-artifact@v4
+        with:
+          name: img-${{ steps.name.outputs.fname }}-part-5of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.04
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 6 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '6'
+        uses: actions/upload-artifact@v4
+        with:
+          name: img-${{ steps.name.outputs.fname }}-part-6of${{ inputs.parts }}
+          path: parts/${{ steps.name.outputs.fname }}.tar.gz.part.05
+          retention-days: 14
+          compression-level: 0
+
+      - name: Install instructions
+        env:
+          FNAME: ${{ steps.name.outputs.fname }}
+          PARTS: ${{ inputs.parts }}
+          SPLIT: ${{ steps.split.outputs.split }}
+          IMAGE: ${{ steps.name.outputs.image }}
+          REPO:  ${{ github.repository }}
+        run: |
+          if [ "$SPLIT" != "true" ]; then
+            cat <<EOF
+            ============================================================
+            Artifact: img-${FNAME}   (single piece)
+            ============================================================
+            gh run download \$RUN_ID -R ${REPO} -n img-${FNAME}
+            docker load -i ${FNAME}.tar.gz
+            docker images simorgh-backend
+            ============================================================
+          EOF
+            exit 0
+          fi
+
+          cat <<EOF
+          ============================================================
+          Artifact: img-${FNAME}   (split into ${PARTS} parts)
+          ============================================================
+          Each part is its own artifact — download whichever ones you
+          haven't fetched yet, on different days if you have a daily-
+          bandwidth cap.
+
+          # Download every part:
+          for i in \$(seq 1 ${PARTS}); do
+            gh run download \$RUN_ID -R ${REPO} \\
+              -n img-${FNAME}-part-\${i}of${PARTS}
+          done
+
+          # Reassemble + load into docker (script lives inside part 1):
+          chmod +x REASSEMBLE.sh
+          ./REASSEMBLE.sh
+          # → ${FNAME}.tar.gz reassembled, sha256 verified, docker loaded
+
+          # Bring up the backend on .68:
+          cd ~/simorgh-chatbot-ekc-deploy/simorgh-agent
+          docker compose up -d --force-recreate backend
+          docker compose logs -f backend
+          ============================================================
+          EOF

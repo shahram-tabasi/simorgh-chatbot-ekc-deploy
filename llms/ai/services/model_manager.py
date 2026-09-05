@@ -21,6 +21,49 @@ import gc
 logger = logging.getLogger(__name__)
 
 
+def _build_guided_decoding(kwargs: Dict[str, Any]):
+    """Translate guided_* / response_format kwargs into a vLLM
+    GuidedDecodingParams. Returns None if no constraint is requested.
+
+    Precedence: guided_json > guided_regex > guided_choice > guided_grammar.
+    response_format ({"type":"json_object"|"json_schema",...}) is the
+    OpenAI-style shortcut.
+    """
+    guided_json = kwargs.get("guided_json")
+    guided_regex = kwargs.get("guided_regex")
+    guided_choice = kwargs.get("guided_choice")
+    guided_grammar = kwargs.get("guided_grammar")
+    response_format = kwargs.get("response_format")
+
+    if response_format and not (guided_json or guided_regex or guided_choice or guided_grammar):
+        rf_type = response_format.get("type") if isinstance(response_format, dict) else None
+        if rf_type == "json_object":
+            guided_json = {"type": "object"}
+        elif rf_type == "json_schema":
+            schema = response_format.get("json_schema") or {}
+            guided_json = schema.get("schema") or schema
+
+    if not (guided_json or guided_regex or guided_choice or guided_grammar):
+        return None
+
+    try:
+        from vllm.sampling_params import GuidedDecodingParams  # vLLM ≥ 0.6
+    except ImportError:
+        try:
+            from vllm import GuidedDecodingParams  # older path
+        except ImportError:
+            logger.warning("GuidedDecodingParams not available in this vLLM build; ignoring constraint")
+            return None
+
+    if guided_json is not None:
+        return GuidedDecodingParams(json=guided_json)
+    if guided_regex is not None:
+        return GuidedDecodingParams(regex=guided_regex)
+    if guided_choice is not None:
+        return GuidedDecodingParams(choice=guided_choice)
+    return GuidedDecodingParams(grammar=guided_grammar)
+
+
 class ModelPrecision(Enum):
     """Model precision options"""
     FP16 = "16-bit"
@@ -345,11 +388,16 @@ class ModelManager:
         prompt = self._format_messages(messages)
         logger.info(f"🤖 vLLM generation - Prompt length: {len(prompt)} chars, max_tokens: {max_tokens}")
 
-        sampling_params = SamplingParams(
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-        )
+        guided = _build_guided_decoding(kwargs)
+        sp_kwargs: Dict[str, Any] = {
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+        if guided is not None:
+            sp_kwargs["guided_decoding"] = guided
+            logger.info(f"🔒 Guided decoding active: {list(guided.__dict__.keys())}")
+        sampling_params = SamplingParams(**sp_kwargs)
 
         loop = asyncio.get_event_loop()
 

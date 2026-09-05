@@ -1,0 +1,85 @@
+# =============================================================================
+# DOCUMENTS-RAG-SERVICE - Document upload, chunking, embedding, search
+# Port 8033. REST. Extracted from backend in Phase 5.
+# Routes mounted at /api/v2/documents/*.
+# =============================================================================
+services:
+  documents-rag-service:
+    image: simorgh-documents-rag-service:local
+    build: ../documents-rag-service
+    container_name: documents-rag-service
+    expose:
+      - "8033"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Redis
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_CHAT_DB=1
+      - REDIS_CACHE_DB=2
+      # Qdrant
+      - QDRANT_URL=http://qdrant:6333
+      # Neo4j (optional)
+      - NEO4J_URI=${NEO4J_URI:-}
+      - NEO4J_USER=${NEO4J_USER:-}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-}
+      # PostgreSQL
+      - POSTGRES_AUTH_HOST=${POSTGRES_AUTH_HOST:-postgres_auth}
+      - POSTGRES_AUTH_PORT=${POSTGRES_AUTH_PORT:-5432}
+      - POSTGRES_AUTH_DATABASE=${POSTGRES_AUTH_DATABASE:-simorgh_auth}
+      - POSTGRES_AUTH_USER=${POSTGRES_AUTH_USER:-simorgh}
+      - POSTGRES_AUTH_PASSWORD=${POSTGRES_AUTH_PASSWORD:-simorgh_secure_2024}
+      # LLM
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://nginx/api/llm}
+      - DEFAULT_LLM_MODE=${DEFAULT_LLM_MODE:-online}
+      # External services
+      - DOC_PROCESSOR_URL=http://doc-processor:8000
+      - LLM_GATEWAY_URL=http://llm-gateway:8030
+      - EMBEDDINGS_URL=http://embeddings-service:8031
+      # JWT (auth_utils)
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      # CORS
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      # HF caches
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
+      - HF_HOME=/root/.cache/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
+    volumes:
+      - ../uploads:/app/uploads
+      - ../logs:/app/logs
+      - huggingface_cache:/root/.cache/huggingface
+      - sentence_transformers_cache:/root/.cache/torch/sentence_transformers
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      postgres_auth:
+        condition: service_healthy
+      doc-processor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8033/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  huggingface_cache:
+    name: simorgh_huggingface_cache
+    driver: local
+  sentence_transformers_cache:
+    name: simorgh_sentence_transformers_cache
+    driver: local

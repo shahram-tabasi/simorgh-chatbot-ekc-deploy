@@ -1,0 +1,63 @@
+# =============================================================================
+# TECHSERVER-MCP - Read-only MCP over the legacy techserver (SMB host).
+# Port 8053. REST + MCP. Modelled on gitlab-mcp.
+#
+# Each engineering project is a top-level SMB share on 192.168.1.3 named
+# after its OE folder (OE12065, OE11071-Sunlight…). This service lists a
+# project's tree WITHOUT downloading and fetches single files on demand —
+# it never bulk-copies (the Drawing/ CAD subtree is gigabytes and is hard-
+# excluded). The CoT engine consumes it via TECHSERVER_MCP_URL.
+# =============================================================================
+services:
+  techserver-mcp:
+    image: simorgh-techserver-mcp:local
+    build:
+      context: ..
+      dockerfile: techserver-mcp-service/Dockerfile
+    container_name: techserver-mcp
+    expose:
+      - "8053"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Internal-only traffic (SMB to .3, HTTP to doc-processor/redis).
+      # The xray proxy 503s on RFC1918 dst, so disable it.
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - NO_PROXY=*
+      - http_proxy=
+      - https_proxy=
+      - no_proxy=*
+      # Techserver SMB connection. EKC\tech is the working login proven
+      # against the live host; password MUST be supplied via env/secret.
+      - TECHSERVER_HOST=${TECHSERVER_HOST:-192.168.1.3}
+      - TECHSERVER_USER=${TECHSERVER_USER:-EKC\tech}
+      - TECHSERVER_PASSWORD=${TECHSERVER_PASSWORD:-}
+      - TECHSERVER_DOMAIN=${TECHSERVER_DOMAIN:-}
+      - TECHSERVER_SMB_PROTO=${TECHSERVER_SMB_PROTO:-SMB3}
+      - TECHSERVER_SMB_TIMEOUT=${TECHSERVER_SMB_TIMEOUT:-120}
+      - TECHSERVER_GET_TIMEOUT=${TECHSERVER_GET_TIMEOUT:-300}
+      # Hard exclusions (never touch Drawing/, never pull CAD/archives).
+      - TECHSERVER_EXCLUDE_DIRS=${TECHSERVER_EXCLUDE_DIRS:-Drawing}
+      - TECHSERVER_EXCLUDE_EXTS=${TECHSERVER_EXCLUDE_EXTS:-.dwg,.dxf,.ema,.edb,.elk,.dwl,.bak,.7z,.rar,.zip}
+      - TECHSERVER_MAX_ARTIFACT_BYTES=${TECHSERVER_MAX_ARTIFACT_BYTES:-41943040}
+      # Tree cache.
+      - REDIS_URL=${TECHSERVER_REDIS_URL:-redis://redis:6379/0}
+      - TECHSERVER_TREE_TTL=${TECHSERVER_TREE_TTL:-3600}
+      - TECHSERVER_SHARE_TTL=${TECHSERVER_SHARE_TTL:-86400}
+      # Type-aware extraction (PDF/Office/text + VLM for images).
+      - DOC_PROCESSOR_URL=${DOC_PROCESSOR_URL:-http://doc-processor:8000}
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8053/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

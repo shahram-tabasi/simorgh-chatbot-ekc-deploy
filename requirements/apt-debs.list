@@ -1,0 +1,59 @@
+# =============================================================================
+# requirements/apt-debs.list — packages to bundle for offline apt install
+# =============================================================================
+# Union of apt-get install lists across simorgh-agent/*/Dockerfile, plus a
+# few obvious dependencies. Used by .github/workflows/build-deps-bundle.yml
+# to pre-download .deb files into deps/apt/<distro>/ so the deploy box at
+# 192.168.1.68 doesn't need to hit deb.debian.org / archive.ubuntu.com on
+# every container rebuild.
+#
+# Format: one package per line. Comments (#) ignored. Empty lines ignored.
+# To add a package: append the binary package name as you'd type it in
+# `apt-get install <name>`. Re-run the workflow afterwards.
+
+# Networking + downloads
+ca-certificates
+wget
+curl
+git
+openssh-client
+smbclient
+
+# Build chain (needed for any pip package that ships sdist without wheel
+# OR has a native ABI). Keep even if every dep currently has a wheel —
+# removing it makes the next "new transitive dep without wheel" a 1-day
+# debug session.
+build-essential
+gcc
+g++
+make
+pkg-config
+
+# PostgreSQL native client (psycopg2-binary actually has wheels but
+# psycopg[c] / asyncpg-related extensions can fall back to source)
+libpq-dev
+
+# Image / PDF / audio processing — for doc-processor, simorgh-soft, etc.
+ffmpeg
+ghostscript
+libgl1
+libglib2.0-0
+libsm6
+libxext6
+libxrender1
+libsndfile1
+libavformat-dev
+poppler-utils
+
+# Tesseract OCR (used by some doc-processor paths)
+tesseract-ocr
+tesseract-ocr-fas
+tesseract-ocr-eng
+
+# FreeTDS (SQL Server client used by legacy auth path)
+freetds-bin
+freetds-dev
+
+# Common shared libs (some torch/onnxruntime imports want these)
+libgomp1
+libstdc++6

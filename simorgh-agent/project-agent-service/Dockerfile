@@ -1,0 +1,43 @@
+# Base ships torch 2.6.0 via conda — satisfies requirements' torch>=2.6
+# (needed for the transformers CVE guard on pickled bge-m3 weights)
+# WITHOUT pip re-downloading the 821 MB CUDA wheel. Bumped from 2.5.0:
+# the old base had torch 2.5.0, so the pip pin forced a fresh 2.7.1
+# download on every build. The 2.6.0 image is already cached on the
+# host. (Same fix applied to documents-rag + grounding-verifier.)
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+# ---- Air-gapped registry proxies (override at build with --build-arg) ----
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG PIP_TRUSTED_HOST=
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    npm_config_registry=${NPM_REGISTRY}
+
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN printf '%s\n' 'Acquire::Retries "20";' 'Acquire::http::Timeout "300";' 'Acquire::https::Timeout "300";' 'Acquire::http::No-Cache "true";' > /etc/apt/apt.conf.d/99retries
+
+
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        wget curl ca-certificates build-essential libpq-dev git openssh-client \
+        poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --timeout 180 --retries 10 --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8035
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=30s \
+    CMD wget -qO- http://127.0.0.1:8035/health || exit 1
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8035"]

@@ -11,6 +11,54 @@
 #  Base Image: PyTorch 2.5 + CUDA 12.4 + cuDNN 9
 # -------------------------------------------------
 FROM pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+# ---- Air-gapped registry proxies (override at build with --build-arg) ----
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG PIP_TRUSTED_HOST=
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG UBUNTU_MIRROR=
+ARG UBUNTU_SECURITY_MIRROR=
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    npm_config_registry=${NPM_REGISTRY}
+
+# Rewrite apt sources to use the Nexus apt-proxy when provided
+# (jammy-style sources in /etc/apt/sources.list on the pytorch base image).
+# Also tell apt to talk to the Nexus host DIRECT, not via $http_proxy
+# (otherwise BuildKit's outer HTTP proxy tries to relay LAN traffic and 503s).
+RUN if [ -n "${UBUNTU_MIRROR}" ]; then \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list && \
+        sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" /etc/apt/sources.list || true; \
+    fi && \
+    if [ -n "${UBUNTU_SECURITY_MIRROR}" ]; then \
+        sed -i "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" /etc/apt/sources.list || true; \
+    fi && \
+    # Drop components we don't install from. A flaky Nexus upstream often
+    # returns 502 on the restricted/multiverse Packages indexes, and apt
+    # treats those as fatal errors even though we never use them.
+    # Use awk so we can also delete lines that end up with no components.
+    awk '/^[[:space:]]*#/ || /^[[:space:]]*$/ { print; next } \
+         /^[[:space:]]*deb(-src)?[[:space:]]/ { \
+             out=""; n=0; \
+             for (i=1; i<=NF; i++) { \
+                 if (i<=3) { out=(out?out" ":"")$i; continue } \
+                 if ($i=="restricted" || $i=="multiverse") continue; \
+                 out=out" "$i; n++; \
+             } \
+             if (n>0) print out; \
+             next \
+         } \
+         { print }' /etc/apt/sources.list > /etc/apt/sources.list.new && \
+    mv /etc/apt/sources.list.new /etc/apt/sources.list && \
+    for url in "${UBUNTU_MIRROR}" "${UBUNTU_SECURITY_MIRROR}"; do \
+        host=$(echo "$url" | sed -E 's|^https?://([^/:]+).*|\1|'); \
+        if [ -n "$host" ]; then \
+            printf 'Acquire::http::Proxy::%s "DIRECT";\n' "$host" >> /etc/apt/apt.conf.d/99nexus-direct; \
+        fi; \
+    done && \
+    if [ -f /etc/apt/apt.conf.d/99nexus-direct ]; then cat /etc/apt/apt.conf.d/99nexus-direct; fi && \
+    echo "--- /etc/apt/sources.list ---" && cat /etc/apt/sources.list
+
 
 # -------------------------------------------------
 #  Metadata
@@ -37,6 +85,17 @@ ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/torch/sentence_transformers
 #  Remove any broken NVIDIA apt repos (TLS errors)
 # -------------------------------------------------
 RUN rm -f /etc/apt/sources.list.d/cuda* /etc/apt/sources.list.d/nvidia* || true
+
+# -------------------------------------------------
+#  Defensive apt config for slow / flaky upstream proxies
+#  (Squid often disconnects mid-download on large .deb files).
+# -------------------------------------------------
+RUN printf '%s\n' \
+    'Acquire::Retries "20";' \
+    'Acquire::http::Timeout "300";' \
+    'Acquire::https::Timeout "300";' \
+    'Acquire::http::No-Cache "true";' \
+    > /etc/apt/apt.conf.d/99retries
 
 # -------------------------------------------------
 #  Install Python 3.11 (with BuildKit cache)
@@ -81,7 +140,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # -------------------------------------------------
 #  Upgrade pip, setuptools, wheel
 # -------------------------------------------------
-RUN python3.11 -m pip install --upgrade pip setuptools wheel
+RUN python3.11 -m pip install --timeout 180 --retries 10 --upgrade pip setuptools wheel
 
 # -------------------------------------------------
 #  Make python3.11 the default
@@ -110,7 +169,7 @@ COPY requirements.txt .
 # -------------------------------------------------
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "=== Installing Python dependencies ===" && \
-    python3.11 -m pip install -r requirements.txt && \
+    python3.11 -m pip install --timeout 180 --retries 10 -r requirements.txt && \
     echo "=== Python dependencies installed ==="
 
 # -------------------------------------------------
@@ -123,6 +182,20 @@ RUN echo "=== Downloading NLTK data ===" && \
     nltk.download('averaged_perceptron_tagger', quiet=True); \
     nltk.download('averaged_perceptron_tagger_eng', quiet=True)" && \
     echo "=== NLTK data downloaded ==="
+
+# -------------------------------------------------
+#  Pre-cache tiktoken BPE files (cl100k_base + o200k_base)
+#  Avoids runtime fetch of openaipublic.blob.core.windows.net
+#  on air-gapped hosts.
+# -------------------------------------------------
+ENV TIKTOKEN_CACHE_DIR=/root/.cache/tiktoken
+RUN mkdir -p ${TIKTOKEN_CACHE_DIR} && \
+    echo "=== Pre-caching tiktoken encodings ===" && \
+    python3.11 -c "import tiktoken; \
+    tiktoken.get_encoding('cl100k_base').encode('warm'); \
+    tiktoken.get_encoding('o200k_base').encode('warm'); \
+    print('tiktoken encodings cached')" && \
+    echo "=== tiktoken cached ==="
 
 # -------------------------------------------------
 #  Pre-download SentenceTransformer model

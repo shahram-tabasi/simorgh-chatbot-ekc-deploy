@@ -1,0 +1,78 @@
+# =============================================================================
+# TEI — HuggingFace Text Embeddings Inference (offline, OpenAI-compatible)
+# Internal port 80. Drop-in for embeddings-service.
+#
+# To switch existing services from embeddings-service to TEI:
+#   1. Build the offline image once on a connected host (see tei/Dockerfile).
+#   2. Uncomment the master include for this file.
+#   3. Update EMBEDDINGS_URL env in svc-chat.yml / svc-project-agent.yml /
+#      svc-documents-rag.yml / svc-hr-kb.yml from
+#        http://embeddings-service:8031
+#      to
+#        http://tei:80
+#      (TEI exposes /embed AND /v1/embeddings — most callers will work
+#      unchanged with the OpenAI-style /v1/embeddings endpoint.)
+# =============================================================================
+services:
+  tei:
+    image: simorgh-tei:offline
+    build:
+      context: ../tei
+      dockerfile: Dockerfile
+      args:
+        EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+    container_name: tei
+    expose:
+      - "80"
+      - "8031"             # legacy port — see network alias below
+    command:
+      # --model-id is the HF repo id, NOT a filesystem path. TEI then
+      # resolves it through its HF cache at HUGGINGFACE_HUB_CACHE
+      # (=/data) — which the workflow / Dockerfile pre-populates. A
+      # path like /data/models--<owner>--<repo> looks correct but
+      # fails: actual config.json files only exist under
+      # snapshots/<sha>/ inside the cache layout, so TEI's "open
+      # config.json in <model-id>" probe errors out. The repo-id
+      # form works regardless of which snapshot SHA the cache holds.
+      - "--model-id=sentence-transformers/all-MiniLM-L6-v2"
+      - "--port=8031"       # listen on the OLD embeddings-service port so
+                            # the alias below works with hardcoded clients
+    environment:
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/data
+    volumes:
+      # Persistent home for the embeddings-model cache. Pre-populated
+      # by the `tei-model-fetch` workflow (recommended on .68 — Xray
+      # tends to stall on the in-build HF download) OR auto-filled from
+      # the baked image's /data on first mount where HF egress is fast.
+      - tei_models:/data
+    networks:
+      app_net:
+        # Drop-in for embeddings-service: clients keep hitting
+        # http://embeddings-service:8031 and Docker DNS resolves
+        # to this container. Stop the old `embeddings-service`
+        # first (docker compose stop embeddings-service) — Docker
+        # refuses to bind two containers to the same alias.
+        aliases:
+          - embeddings-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8031/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  tei_models:
+    # External-style name: created out-of-band via `docker volume create
+    # simorgh_tei_models` and pre-populated by the workflow. Set to
+    # external: true so `docker compose` doesn't warn about reusing it.
+    name: simorgh_tei_models
+    external: true

@@ -14,9 +14,13 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
+    "exceljs": "^4.4.0",
     "express": "^4.22.1",
     "mongodb": "^6.3.0",
     "mssql": "^10.0.2",
-    "mysql2": "^3.6.5"
+    "multer": "^2.1.1",
+    "mysql2": "^3.6.5",
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.19.1"
   }
 }

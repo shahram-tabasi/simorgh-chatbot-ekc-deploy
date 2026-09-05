@@ -1,0 +1,320 @@
+name: Download Whisper model (CTranslate2 / int8)
+
+# Downloads a Whisper model from HuggingFace, converts it to CTranslate2
+# format (the format faster-whisper actually loads at runtime), and
+# ships the converted binaries as a tarball. Done on a GitHub runner so
+# .68's Xray link doesn't have to.
+#
+# Why convert here, not at runtime: the Persian-tuned models are
+# PyTorch-format HF repos, NOT pre-converted CT2 models. faster-whisper
+# can autoconvert, but it needs `transformers` + a working torch
+# environment and re-converts on every container start (~30s wasted per
+# restart). Doing it once on a runner ships pure CT2 binaries that
+# faster-whisper loads directly from a local path.
+#
+# After download, extract on .68:
+#   docker volume create simorgh_whisper_cache
+#   docker run --rm -v simorgh_whisper_cache:/dst -v /tmp:/src:ro alpine \
+#       sh -c 'tar xzf /src/whisper-model.tar.gz -C /dst && du -sh /dst'
+#   docker tag fedirz/faster-whisper-server:latest-cpu simorgh-whisper:offline
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_model:
+        description: "HF repo id for the Whisper model (default: vhdm/whisper-large-fa-v1; the Mohammad Gholizadeh repo from the original runbook is 401-gated/removed as of May 2026)"
+        type: string
+        default: "vhdm/whisper-large-fa-v1"
+      quantization:
+        description: "CTranslate2 quantization (drives the converted output)"
+        type: choice
+        default: "int8"
+        options: ["int8", "int8_float16", "float16", "float32"]
+      output_dirname:
+        description: "Output subdir name inside the volume (also goes into WHISPER_MODEL env)"
+        type: string
+        default: "whisper-large-fa"
+      parts:
+        description: "Split tarball into N artifacts (~1.5 GB model → 1 is fine; raise for tighter daily-bandwidth caps)"
+        type: choice
+        default: "1"
+        options: ["1", "2", "3", "4", "6", "8"]
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Free disk space on runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install converter deps
+        run: |
+          # ct2-transformers-converter ships with ctranslate2 and needs
+          # transformers + torch to load the source weights. Pin
+          # versions to ones known to work together; the unpinned
+          # combo occasionally pulls a transformers release that
+          # breaks ctranslate2's loader.
+          pip install --quiet \
+            "ctranslate2==4.4.0" \
+            "transformers==4.44.2" \
+            "torch==2.4.1" \
+            "huggingface_hub==0.24.6" \
+            "sentencepiece"
+
+      - name: Convert HF model to CT2 (int8)
+        env:
+          MODEL: ${{ inputs.whisper_model }}
+          QUANT: ${{ inputs.quantization }}
+          OUTDIR: ${{ inputs.output_dirname }}
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+          HF_HUB_DISABLE_XET: "1"
+          # huggingface_hub reads HF_TOKEN automatically. Set the
+          # `HF_TOKEN` repo secret to access gated/private models —
+          # ignored if the repo is public, costs nothing to leave on.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -eu
+          mkdir -p out
+
+          # Step 1: convert. Don't pass --copy_files here — different
+          # Whisper repos ship different tokenizer file sets (some have
+          # tokenizer.json, some only the slow-tokenizer files), so
+          # listing a fixed set would fail on whichever happens to be
+          # absent. We copy the aux files in step 3 once we know what's
+          # actually in the source.
+          ct2-transformers-converter \
+              --model "$MODEL" \
+              --output_dir "out/$OUTDIR" \
+              --quantization "$QUANT" \
+              --force
+
+          # Step 2: download the source repo's aux files into staging.
+          # Exclude the big weight files — we already converted those.
+          mkdir -p src
+          huggingface-cli download "$MODEL" \
+              --local-dir "src/$OUTDIR" \
+              --local-dir-use-symlinks False \
+              --exclude "*.bin" "*.safetensors" "*.h5" "*.msgpack" "*.onnx"
+
+          # Step 3: copy whichever tokenizer/preprocessor files the
+          # source actually has into the CT2 output. faster-whisper's
+          # runtime will pick up whatever's there. We deliberately do
+          # NOT copy the HF-format config.json — the converter already
+          # wrote a CT2-specific config.json that must win.
+          AUX_FILES=(
+            tokenizer.json
+            vocab.json
+            tokenizer_config.json
+            special_tokens_map.json
+            merges.txt
+            preprocessor_config.json
+            generation_config.json
+            normalizer.json
+            added_tokens.json
+          )
+          copied=0
+          for f in "${AUX_FILES[@]}"; do
+            if [ -f "src/$OUTDIR/$f" ]; then
+              cp "src/$OUTDIR/$f" "out/$OUTDIR/"
+              echo "  copied $f"
+              copied=$((copied + 1))
+            fi
+          done
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::No tokenizer/preprocessor files copied — source repo is missing all expected aux files."
+            exit 1
+          fi
+
+          echo "----- final CT2 model directory -----"
+          ls -lh "out/$OUTDIR"
+          du -sh "out/$OUTDIR"
+
+      - name: Pack tarball
+        id: pack
+        run: |
+          set -eu
+          OUT="whisper-model.tar.gz"
+          # gzip -1 — CT2 weights are already quantized; -6 vs -1 saves
+          # almost nothing and burns runner CPU.
+          tar -C out -czf "$OUT" --options gzip:compression-level=1 . \
+            2>/dev/null || tar -C out -czf "$OUT" .
+          ls -lh "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Split tarball into N parts
+        id: split
+        env:
+          OUT: ${{ steps.pack.outputs.out }}
+          PARTS: ${{ inputs.parts }}
+        run: |
+          set -eu
+          mkdir -p parts
+          if [ "$PARTS" -le 1 ]; then
+            cp "$OUT" "$OUT.sha256" parts/
+            echo "split=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          split -n "$PARTS" -d --suffix-length=2 "$OUT" "parts/${OUT}.part."
+          cp "$OUT.sha256" parts/
+          cat > "parts/REASSEMBLE.sh" <<BASH
+          #!/usr/bin/env bash
+          set -e
+          base="${OUT}"
+          parts=( \$(ls "\${base}".part.* | sort) )
+          echo "Reassembling \${#parts[@]} parts → \${base} …"
+          cat "\${parts[@]}" > "\${base}"
+          sha256sum -c "\${base}.sha256"
+          echo "✅ \${base} ready."
+          BASH
+          chmod +x parts/REASSEMBLE.sh
+          echo "split=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact (single piece)
+        if: steps.split.outputs.split == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model
+          path: |
+            parts/whisper-model.tar.gz
+            parts/whisper-model.tar.gz.sha256
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 1 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model-part-1of${{ inputs.parts }}
+          path: |
+            parts/whisper-model.tar.gz.part.00
+            parts/whisper-model.tar.gz.sha256
+            parts/REASSEMBLE.sh
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 2 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model-part-2of${{ inputs.parts }}
+          path: parts/whisper-model.tar.gz.part.01
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 3 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model-part-3of${{ inputs.parts }}
+          path: parts/whisper-model.tar.gz.part.02
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 4 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '4'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model-part-4of${{ inputs.parts }}
+          path: parts/whisper-model.tar.gz.part.03
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 5 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '5'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model-part-5of${{ inputs.parts }}
+          path: parts/whisper-model.tar.gz.part.04
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 6 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '6'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model-part-6of${{ inputs.parts }}
+          path: parts/whisper-model.tar.gz.part.05
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 7 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '7'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model-part-7of${{ inputs.parts }}
+          path: parts/whisper-model.tar.gz.part.06
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload part 8 of N
+        if: steps.split.outputs.split == 'true' && inputs.parts >= '8'
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-model-part-8of${{ inputs.parts }}
+          path: parts/whisper-model.tar.gz.part.07
+          retention-days: 14
+          compression-level: 0
+
+      - name: Install instructions
+        env:
+          MODEL: ${{ inputs.whisper_model }}
+          QUANT: ${{ inputs.quantization }}
+          OUTDIR: ${{ inputs.output_dirname }}
+          PARTS: ${{ inputs.parts }}
+          SPLIT: ${{ steps.split.outputs.split }}
+        run: |
+          if [ "$SPLIT" != "true" ]; then
+            cat <<EOF
+          ============================================================
+          Artifact: whisper-model   (${MODEL}, quant=${QUANT})
+          ============================================================
+          gh run download \$RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy -n whisper-model
+          sha256sum -c whisper-model.tar.gz.sha256
+          scp whisper-model.tar.gz ubuntu@192.168.1.68:/tmp/
+
+          docker volume create simorgh_whisper_cache
+          docker run --rm -v simorgh_whisper_cache:/dst -v /tmp:/src:ro alpine \\
+              sh -c 'tar xzf /src/whisper-model.tar.gz -C /dst && du -sh /dst && ls /dst'
+          # expect: /dst contains directory ${OUTDIR}/ with model.bin etc.
+
+          docker pull fedirz/faster-whisper-server:latest-cpu
+          docker tag fedirz/faster-whisper-server:latest-cpu simorgh-whisper:offline
+
+          # The compose env WHISPER_MODEL must be a LOCAL PATH pointing
+          # into the volume, NOT an HF repo id. Confirm svc-whisper.yml
+          # has:  WHISPER_MODEL=/models/${OUTDIR}
+          ============================================================
+          EOF
+            exit 0
+          fi
+          cat <<EOF
+          ============================================================
+          Artifact: whisper-model   (${MODEL}, ${PARTS} parts)
+          ============================================================
+          for i in \$(seq 1 ${PARTS}); do
+            gh run download \$RUN_ID -R shahram-tabasi/simorgh-chatbot-ekc-deploy \\
+                -n whisper-model-part-\${i}of${PARTS}
+          done
+          chmod +x REASSEMBLE.sh && ./REASSEMBLE.sh
+          scp whisper-model.tar.gz ubuntu@192.168.1.68:/tmp/
+
+          ssh ubuntu@192.168.1.68 'docker volume create simorgh_whisper_cache && \\
+              docker run --rm -v simorgh_whisper_cache:/dst -v /tmp:/src:ro alpine \\
+                sh -c "tar xzf /src/whisper-model.tar.gz -C /dst && du -sh /dst" && \\
+              docker pull fedirz/faster-whisper-server:latest-cpu && \\
+              docker tag fedirz/faster-whisper-server:latest-cpu simorgh-whisper:offline'
+          # Then confirm compose/svc-whisper.yml has  WHISPER_MODEL=/models/${OUTDIR}
+          ============================================================
+          EOF

@@ -47,6 +47,17 @@ class ChatCompletionRequest(BaseModel):
     # Custom parameters
     reasoning_effort: Optional[str] = Field(default="medium", pattern="^(low|medium|high)$")
 
+    # vLLM grammar-constrained decoding. gpt-oss-20b drifts on free-form JSON;
+    # these pin the output to a schema/regex/choice/grammar. Mutually exclusive
+    # in vLLM — only the first one set is used. response_format is the
+    # OpenAI-compatible shortcut for {"type":"json_object"} or
+    # {"type":"json_schema","json_schema":{...}}.
+    guided_json: Optional[Union[str, Dict[str, Any]]] = None
+    guided_regex: Optional[str] = None
+    guided_choice: Optional[List[str]] = None
+    guided_grammar: Optional[str] = None
+    response_format: Optional[Dict[str, Any]] = None
+
 
 class UsageInfo(BaseModel):
     """Token usage information"""

@@ -1,0 +1,40 @@
+# =============================================================================
+# ORG-DATA-SERVICE - read-only HR / org MySQL gateway
+# Port 8042. MCP. Used by chat-service during "general" sessions.
+#
+# Uses a SEPARATE MySQL user (ORG_MYSQL_USER) with grants only on the
+# HR / org tables — NOT the TPMS project tables. Keep that user
+# read-only and minimally-privileged.
+# =============================================================================
+services:
+  org-data-service:
+    image: simorgh-org-data-service:local
+    build: ../org-data-service
+    container_name: org-data-service
+    expose:
+      - "8042"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ORG_MYSQL_HOST=${ORG_MYSQL_HOST:-${MYSQL_HOST:-192.168.1.148}}
+      - ORG_MYSQL_PORT=${ORG_MYSQL_PORT:-${MYSQL_PORT:-3306}}
+      - ORG_MYSQL_USER=${ORG_MYSQL_USER:-}
+      - ORG_MYSQL_PASSWORD=${ORG_MYSQL_PASSWORD:-}
+      - ORG_MYSQL_DATABASE=${ORG_MYSQL_DATABASE:-${MYSQL_DATABASE:-TPMS}}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+    healthcheck:
+      # /health queries MySQL synchronously; widen window so a slow
+      # dep doesn't trip the probe.
+      test: ["CMD-SHELL", "wget -qO /dev/null --timeout=25 http://127.0.0.1:8042/health || exit 1"]
+      interval: 45s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

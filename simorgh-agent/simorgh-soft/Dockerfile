@@ -5,12 +5,28 @@
 
 # Stage 1: Build the React frontend
 FROM node:20-alpine AS frontend-build
+# ---- Air-gapped registry proxies (override at build with --build-arg) ----
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG PIP_TRUSTED_HOST=
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    npm_config_registry=${NPM_REGISTRY}
+
 WORKDIR /app
 COPY simorgh-frontend/package*.json ./
 RUN npm ci
 COPY simorgh-frontend/ ./
-# Build with empty API URL so fetch calls use relative paths (proxied by nginx)
-ENV VITE_API_URL=
+# The app is served under /simorgh-design-suite/ behind two layers of nginx.
+# - VITE_BASE_PATH controls vite's `base` -- used by index.html asset URLs
+#   (and exposed to the SPA via import.meta.env.BASE_URL → React Router basename).
+# - VITE_API_URL is the prefix for fetch('${VITE_API_URL}/api/...') calls,
+#   so the built bundle issues requests to /simorgh-design-suite/api/* (which the
+#   docker nginx then strips and forwards to the simorgh-soft container's
+#   internal nginx, which proxies /api/ to the Express backend on :3001).
+ENV VITE_BASE_PATH=/simorgh-design-suite/
+ENV VITE_API_URL=/simorgh-design-suite
 RUN npm run build
 
 # Stage 2: Install backend dependencies

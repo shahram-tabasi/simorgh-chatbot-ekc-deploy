@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
-  UserIcon,
   SparklesIcon,
   FileIcon,
   ThumbsUpIcon,
@@ -14,10 +13,20 @@ import {
   Edit2Icon,
   Volume2Icon,
   LoaderIcon,
-  SquareIcon
+  SquareIcon,
+  PinIcon,
+  PinOffIcon
 } from 'lucide-react';
 import { Message } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { showError } from '../utils/alerts';
+import { useAuth, isModernUser, isLegacyUser } from '../context/AuthContext';
+import { loadStoredAvatar, presetAvatarUrl } from './AvatarPicker';
+import {
+  usePinnedMessages,
+  PinnedMessagesPanel,
+  scrollToPinnedMessage,
+} from './PinnedMessages';
 import {
   ProcessingActivity,
   generateProcessingSteps,
@@ -32,6 +41,10 @@ interface MessageListProps {
   onUpdateReaction?: (messageId: string, reaction: 'like' | 'dislike' | 'none') => void;
   onSwitchVersion?: (messageId: string, versionIndex: number) => void;
   onEditMessage?: (message: Message) => void;
+  /** Scopes the pinned-messages localStorage key. Without this the
+      Pin button still works but pins from different chats would
+      bleed into each other. Pass the current active chat id. */
+  chatId?: string | null;
 }
 
 // Helper function to detect if text contains Persian/Arabic characters
@@ -133,8 +146,14 @@ export function MessageList({
   onRegenerateResponse,
   onUpdateReaction,
   onSwitchVersion,
-  onEditMessage
+  onEditMessage,
+  chatId
 }: MessageListProps) {
+  // clearPin is unused now that the dash column is read-only —
+  // unpinning happens via the per-message pin button via
+  // togglePin. Kept the hook's return signature unchanged for
+  // future callers; just doesn't bind clearPin here.
+  const { pinned, togglePin, isPinned } = usePinnedMessages(chatId);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = React.useState(true);
@@ -142,6 +161,35 @@ export function MessageList({
   const [speakingMessageId, setSpeakingMessageId] = React.useState<string | null>(null);
   const [speechLoading, setSpeechLoading] = React.useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Resolve the current user's chosen avatar (preset SVG or uploaded
+  // image) from localStorage so the user bubble shows their picture
+  // instead of the generic person glyph. Re-derives on the same
+  // `simorgh-avatar-changed` CustomEvent the SettingsPanel listens to.
+  const { user } = useAuth();
+  const avatarUserId = user
+    ? isModernUser(user)
+      ? (user.id as string)
+      : isLegacyUser(user)
+        ? user.EMPUSERNAME
+        : null
+    : null;
+  const avatarInitial = (
+    (user && isModernUser(user) && (user.display_name || user.first_name || user.email)) ||
+    (user && isLegacyUser(user) && user.EMPUSERNAME) ||
+    'U'
+  ).trim().charAt(0).toUpperCase();
+  const [userAvatarUrl, setUserAvatarUrl] = React.useState<string>(() =>
+    loadStoredAvatar(avatarUserId, avatarInitial) || presetAvatarUrl('indigo', avatarInitial)
+  );
+  React.useEffect(() => {
+    setUserAvatarUrl(loadStoredAvatar(avatarUserId, avatarInitial) || presetAvatarUrl('indigo', avatarInitial));
+    const onChange = () => {
+      setUserAvatarUrl(loadStoredAvatar(avatarUserId, avatarInitial) || presetAvatarUrl('indigo', avatarInitial));
+    };
+    window.addEventListener('simorgh-avatar-changed', onChange);
+    return () => window.removeEventListener('simorgh-avatar-changed', onChange);
+  }, [avatarUserId, avatarInitial]);
   const scrollAnimationRef = useRef<number | null>(null);
   const lastMessageCountRef = useRef(messages.length);
 
@@ -326,6 +374,31 @@ export function MessageList({
       });
 
       if (!response.ok) {
+        // tts-service returns 503 with a structured body
+        // ({error_code, user_message_fa, user_message_en, ...}) when the
+        // upstream speech provider is unreachable. Surface that to the
+        // user instead of silently failing — see the matching backend
+        // path in tts-service/app.py.
+        let userMessage: string | null = null;
+        try {
+          const errBody = await response.json();
+          // Prefer the Persian message when the rendered reply is in
+          // Persian script (same regex used to pick the voice above),
+          // else fall back to English. Backend always provides both.
+          userMessage = (persianArabicRegex.test(plainText)
+            ? errBody?.user_message_fa
+            : errBody?.user_message_en) ?? null;
+        } catch {
+          /* response wasn't JSON — fall through to the generic toast */
+        }
+        const isPersian = persianArabicRegex.test(plainText);
+        showError(
+          isPersian ? 'پخش صدا ممکن نشد' : 'Voice playback failed',
+          userMessage
+            ?? (isPersian
+              ? 'در حال حاضر امکان پخش صوتی پاسخ وجود ندارد. لطفاً بعداً دوباره تلاش کنید.'
+              : 'Could not play the spoken reply right now. Please try again later.')
+        );
         throw new Error(`TTS failed: ${response.status}`);
       }
 
@@ -432,16 +505,22 @@ export function MessageList({
     }
   }, [isStreaming]);
 
-  // Auto-scroll when messages change
+  // Auto-scroll only when a brand-new message is appended — NOT on
+  // every streaming chunk. Previously the effect re-ran on the full
+  // `messages` array reference (which changes on each SSE chunk) and
+  // kept yanking the viewport downward as text was being typed,
+  // making the reply visibly "crawl upward" while the operator was
+  // mid-read. By depending on length alone and scrolling once per
+  // new message, the content now grows downward in-place and the
+  // user can read at their own pace.
   useEffect(() => {
     const newMessageAdded = messages.length > lastMessageCountRef.current;
     lastMessageCountRef.current = messages.length;
 
-    if (shouldAutoScroll) {
-      // Use instant scroll during streaming, smooth for new messages
-      scrollToBottom(isStreaming);
+    if (newMessageAdded && shouldAutoScroll) {
+      scrollToBottom(false);
     }
-  }, [messages, shouldAutoScroll, scrollToBottom, isStreaming]);
+  }, [messages.length, shouldAutoScroll, scrollToBottom]);
 
   // Also scroll when typing indicator appears
   useEffect(() => {
@@ -460,10 +539,18 @@ export function MessageList({
   }, []);
 
   return (
+    // Outer wrapper: relatively positioned so the floating
+    // PinnedMessagesPanel can anchor to the top-right of the chat
+    // area (issue #3, May 2026).
+    <div className="relative flex-1 min-h-0">
+      <PinnedMessagesPanel
+        pinned={pinned}
+        onJump={scrollToPinnedMessage}
+      />
     <div
       ref={containerRef}
       // Mobile: ensure scrollable messages with proper spacing
-      className="flex-1 overflow-y-auto overflow-x-hidden px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6"
+      className="h-full overflow-y-auto overflow-x-hidden px-2 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6"
       onScroll={handleScroll}
     >
       {messages.map((message, index) => {
@@ -473,15 +560,30 @@ export function MessageList({
         return (
           <motion.div
             key={message.id}
+            data-message-id={message.id}
             initial={{ opacity: 1, y: 0 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0 }}
-            // Mobile: reduce gap and ensure proper layout
+            // Mobile: reduce gap and ensure proper layout. Pin-flash
+            // class added briefly when jumping from PinnedMessages
+            // (see scrollToPinnedMessage in PinnedMessages.tsx).
             className={`flex gap-2 sm:gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {message.role === 'assistant' && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
-                <SparklesIcon className="w-4 h-4 text-white" />
+              // Bare Simorgh mark — no circle, no scale.
+              // Uses favicon.svg (square viewBox) instead of simorgh.svg
+              // — the latter is a 3:2 wordmark-style asset whose bird
+              // sits in the upper portion of its viewBox, so in a
+              // square avatar slot the tail was getting clipped.
+              <div className="flex-shrink-0 w-10 h-10 sm:w-11 sm:h-11 flex items-center justify-center">
+                <img
+                  src={`${import.meta.env.BASE_URL}favicon.svg`}
+                  alt="Simorgh"
+                  className="w-full h-full object-contain"
+                  style={{
+                    filter: 'drop-shadow(0 0 6px rgba(96,165,250,0.35))',
+                  }}
+                />
               </div>
             )}
 
@@ -507,6 +609,41 @@ export function MessageList({
                     ))}
                   </div>
                 )}
+                {/* Phase 5 — CoT plan chip. Surfaces the master
+                    router's per-turn decision. Color-coded by plan
+                    family so the operator can spot at a glance which
+                    strategy each reply used. */}
+                {message.role === 'assistant' && message.metadata?.cotPlan && (
+                  <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-mono">
+                    <span
+                      className={
+                        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ' +
+                        (message.metadata.cotPlan === 'upload_deep'
+                          ? 'bg-amber-500/10 text-amber-300 border-amber-400/30'
+                          : message.metadata.cotPlan === 'repo_plus_upload'
+                          ? 'bg-orange-500/10 text-orange-300 border-orange-400/30'
+                          : message.metadata.cotPlan === 'multi_repo'
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-400/30'
+                          : message.metadata.cotPlan === 'single_repo'
+                          ? 'bg-sky-500/10 text-sky-300 border-sky-400/30'
+                          : message.metadata.cotPlan === 'knowledge_only'
+                          ? 'bg-violet-500/10 text-violet-300 border-violet-400/30'
+                          : message.metadata.cotPlan === 'voice_first'
+                          ? 'bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-400/30'
+                          : 'bg-white/5 text-gray-300 border-white/15')
+                      }
+                      title={
+                        'CoT plan picked by the master router' +
+                        (message.metadata.cotPlanSignals
+                          ? ` — signals: ${JSON.stringify(message.metadata.cotPlanSignals)}`
+                          : '')
+                      }
+                    >
+                      <span className="opacity-60">plan:</span>
+                      <span>{message.metadata.cotPlan}</span>
+                    </span>
+                  </div>
+                )}
                 {/* Agent Task Stream (Claude Code-style task display) */}
                 {message.role === 'assistant' && message.metadata?.agentPlan && (
                   <AgentTaskStream
@@ -526,6 +663,12 @@ export function MessageList({
                     {message.content}
                   </p>
                 )}
+                {/* Source citation chips intentionally hidden from the
+                    default view — operators found them noisy in
+                    everyday HR Q&A. The metadata is still attached to
+                    each assistant message (message.metadata.citations)
+                    so we can wire an opt-in "show sources" toggle
+                    later without re-fetching. */}
               </div>
 
               {/* AI Message Controls */}
@@ -616,6 +759,25 @@ export function MessageList({
                     <Share2Icon className="w-3.5 h-3.5" />
                   </button>
 
+                  {/* Pin — bookmarks this reply so the user can jump
+                      back to it from the PinnedMessages panel that
+                      floats at the top of the chat (issue #3). Pin
+                      state lives in localStorage scoped per chat. */}
+                  <button
+                    onClick={() => togglePin(message.id, message.content)}
+                    className={`p-1.5 rounded-lg hover:bg-white/10 transition-colors ${
+                      isPinned(message.id) ? 'text-violet-300 bg-violet-400/10' : 'text-gray-400'
+                    }`}
+                    title={isPinned(message.id) ? 'Unpin this reply' : 'Pin this reply'}
+                    aria-pressed={isPinned(message.id)}
+                  >
+                    {isPinned(message.id) ? (
+                      <PinOffIcon className="w-3.5 h-3.5" />
+                    ) : (
+                      <PinIcon className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+
                   {/* Version Navigator */}
                   {message.versions && message.versions.length > 0 && (
                     <>
@@ -692,8 +854,16 @@ export function MessageList({
             </div>
 
             {message.role === 'user' && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
-                <UserIcon className="w-4 h-4 text-white" />
+              // Use the operator's chosen avatar (preset SVG or uploaded
+              // image) instead of the generic person glyph — same source
+              // the SettingsPanel renders, kept in sync via the
+              // `simorgh-avatar-changed` event.
+              <div className="flex-shrink-0 w-8 h-8 rounded-full overflow-hidden bg-white/10 flex items-center justify-center">
+                <img
+                  src={userAvatarUrl}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
               </div>
             )}
           </motion.div>
@@ -712,6 +882,8 @@ export function MessageList({
           Copied to clipboard
         </div>
       )}
+    </div>
+    {/* /relative outer wrapper added for PinnedMessagesPanel */}
     </div>
   );
 }

@@ -1,7 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
-import { PanelLeftIcon, PanelRightIcon, SparklesIcon, PlusIcon, SearchIcon, BrainCircuitIcon } from 'lucide-react';
+import { PanelLeftIcon, PanelRightIcon, SparklesIcon, PlusIcon } from 'lucide-react';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -11,7 +10,12 @@ interface SidebarProps {
   className?: string;
   onNewProject?: () => void;
   onNewGeneralChat?: () => void;
-  onSearchClick?: () => void;
+  /** Optional slot rendered in the brand row, just before the
+      collapse-toggle button. Used by App.tsx to drop the
+      QuotaIndicator (small ring + click-to-open popover) into the
+      header without giving the Sidebar a hard dependency on the
+      quota hook. */
+  headerExtra?: React.ReactNode;
 }
 
 export function Sidebar({
@@ -22,8 +26,8 @@ export function Sidebar({
   className = '',
   onNewProject,
   onNewGeneralChat,
+  headerExtra,
 }: SidebarProps) {
-  const navigate = useNavigate();
   const [isMobile, setIsMobile] = React.useState(false);
 
   // Detect mobile screen size
@@ -80,26 +84,64 @@ export function Sidebar({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: side === 'right' ? -20 : 20 }}
               transition={{ duration: 0.2 }}
-              className={`${isMobile ? 'w-full' : 'w-80'} h-full overflow-y-auto`}
+              // The sidebar shell no longer scrolls — the contents
+              // (top brand/quota/new-project/filters + General row)
+              // stay pinned and only the inner chat list scrolls.
+              // Previously this was `h-full overflow-y-auto` which
+              // let everything scroll together.
+              className={`${isMobile ? 'w-full' : 'w-80'} h-full flex flex-col overflow-hidden`}
             >
-              {/* Header with Logo and toggle button */}
+              {/* Brand row — fixed at the top, never scrolls. */}
               <div
-                className="flex items-center justify-between px-4 pt-3 pb-2"
+                className="flex-shrink-0 flex items-center justify-between px-4 pt-3 pb-2"
               >
-                {/* Simorgh Logo - only on right sidebar, hidden on mobile */}
+                {/* "Simorgh AI" wordmark.
+                    Design v3 (May 2026 — operator's third pass):
+                    "tiny and ugly" was the verdict on the 12px
+                    gradient-mark form. Per operator direction:
+                    bold, bright white, slightly smaller than
+                    "Simorgh" but in the same weight family, with
+                    a soft violet/fuchsia glow that ties it back
+                    into the gradient on the left. The glow uses
+                    text-shadow (CSS, no Tailwind plugin) so it
+                    works inline; the shadow's hues match the
+                    Simorgh gradient's right edge so the two
+                    pieces still read as one wordmark. */}
                 {side === 'right' && !isMobile && (
-                  <div className="flex items-left gap-0">
+                  <div className="flex items-center gap-2.5">
                     <img
                       src={`${import.meta.env.BASE_URL}simorgh.svg`}
-                      alt="Simorgh"
-                      className="w-14 h-14"
+                      alt=""
+                      className="w-12 h-12 flex-shrink-0"
                     />
-                    <img
-                      src={`${import.meta.env.BASE_URL}text_simorgh.svg`}
-                      alt="Simorgh"
-                      className="h-14 mt-3"
-                    />
+                    <div className="flex items-baseline gap-1.5 leading-tight pb-1">
+                      <span
+                        className="text-[28px] font-bold tracking-tight bg-gradient-to-r from-sky-400 via-violet-400 to-fuchsia-400 bg-clip-text text-transparent"
+                        style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif", lineHeight: 1.15 }}
+                      >
+                        Simorgh
+                      </span>
+                      <span
+                        className="text-[22px] font-bold text-white"
+                        style={{
+                          fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+                          lineHeight: 1.15,
+                          letterSpacing: '0.02em',
+                          textShadow:
+                            '0 0 8px rgba(167, 139, 250, 0.55), 0 0 16px rgba(217, 70, 239, 0.30)',
+                        }}
+                      >
+                        AI
+                      </span>
+                    </div>
                   </div>
+                )}
+
+                {/* App-supplied slot — quota indicator etc. — kept
+                    on the same row as the wordmark so the popover
+                    anchors near the brand mark. */}
+                {headerExtra && (
+                  <div className="flex-shrink-0">{headerExtra}</div>
                 )}
 
                 <button
@@ -115,21 +157,11 @@ export function Sidebar({
                 </button>
               </div>
 
-              {/* Agent Dashboard link - right sidebar only */}
-              {side === 'right' && (
-                <div className="px-3 mb-2">
-                  <button
-                    onClick={() => navigate('/agent')}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 hover:border-emerald-500/40 transition-all text-left group"
-                  >
-                    <BrainCircuitIcon className="w-4 h-4 text-emerald-400 group-hover:text-emerald-300" />
-                    <span className="text-sm font-medium text-emerald-300 group-hover:text-emerald-200">Agent Projects</span>
-                  </button>
-                </div>
-              )}
-
-              {/* محتوای sidebar */}
-              <div className="h-full">{children}</div>
+              {/* Sidebar body — flex column that lets the inner
+                  ProjectTree decide which subsections scroll. The
+                  brand row above is flex-shrink-0; everything else
+                  inherits a flex-1 + min-h-0 to honour child scroll. */}
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">{children}</div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -187,24 +219,11 @@ export function Sidebar({
               )}
             </>
           )}
-
-          {/* Agent Dashboard */}
-          <button
-            onClick={() => navigate('/agent')}
-            className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg group"
-            title="Agent Projects"
-          >
-            <BrainCircuitIcon className="w-5 h-5 text-emerald-400 group-hover:text-emerald-300" />
-          </button>
-
-          {/* Search Icon */}
-          <button
-            onClick={onToggle}
-            className="p-2.5 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 backdrop-blur-sm transition-all shadow-lg group"
-            title="Search History"
-          >
-            <SearchIcon className="w-5 h-5 text-blue-400 group-hover:text-blue-300" />
-          </button>
+          {/* The dedicated Search/History affordance was redundant
+              with the sidebar toggle (both did onToggle) and added
+              UI noise on every screen. Removed per operator request.
+              The full chat history list still opens via the chevron
+              edge-toggle button below. */}
         </div>
       )}
     </>

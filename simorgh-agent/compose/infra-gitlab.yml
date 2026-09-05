@@ -1,0 +1,143 @@
+# =============================================================================
+# GITLAB CE - Source of truth for project repos + technical-knowledge.
+# Sized for an office-scale deployment (~50–200 concurrent users) on a
+# single host with at least 16 GB RAM available to GitLab alone.
+#
+# Web UI:  http://<host>:${GITLAB_HTTP_PORT:-8929}/
+# SSH:     ssh -p ${GITLAB_SSH_PORT:-2222} git@<host>
+# =============================================================================
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:${GITLAB_VERSION:-17.5.1-ce.0}
+    container_name: gitlab
+    hostname: ${GITLAB_HOSTNAME:-gitlab.simorgh.local}
+    restart: unless-stopped
+    environment:
+      # external_url tells GitLab how to compose links (clone URLs, MR
+      # references, OAuth callbacks). It MUST match what users type in the
+      # browser — including the host port — or links break.
+      #
+      # nginx['listen_port'] = 80 forces the in-container nginx to listen
+      # on 80 regardless of what's in external_url, so the docker port
+      # mapping host:${GITLAB_HTTP_PORT} → container:80 actually works.
+      # Without this line, omnibus binds nginx to the URL's port (8929)
+      # inside the container, which is NOT what the compose mapping
+      # targets, and every host request gets a TCP RST.
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url '${GITLAB_EXTERNAL_URL:-https://simorghai.electrokavir.com/gitlab}'
+        nginx['listen_port']                     = 80
+        nginx['listen_https']                    = false
+        # Trust the host nginx in front of us — needed for OAuth callbacks
+        # and avatar URLs to come back as https://.../gitlab/...
+        nginx['real_ip_trusted_addresses']       = ['172.16.0.0/12', '192.168.0.0/16']
+        nginx['real_ip_header']                  = 'X-Forwarded-For'
+        gitlab_rails['gitlab_https']             = true
+        gitlab_rails['trusted_proxies']          = ['172.16.0.0/12', '192.168.0.0/16']
+        gitlab_rails['initial_root_password']    = ENV['GITLAB_ROOT_PASSWORD']
+        gitlab_rails['gitlab_shell_ssh_port']    = ${GITLAB_SSH_PORT:-2222}
+        gitlab_rails['time_zone']                = '${TZ:-UTC}'
+
+        ## --- Office-scale tuning (override via .env) -------------------- ##
+        # Puma web workers — rule of thumb: workers ≈ vCPU. Each worker uses
+        # ~1.2 GB. With the default 4 workers + 4 threads each you get
+        # ~16 concurrent web requests with ~5 GB RSS for the web tier alone.
+        puma['worker_processes']                 = ${GITLAB_PUMA_WORKERS:-4}
+        puma['min_threads']                      = ${GITLAB_PUMA_MIN_THREADS:-4}
+        puma['max_threads']                      = ${GITLAB_PUMA_MAX_THREADS:-8}
+
+        # Sidekiq background jobs (CI, repository housekeeping, MR notes …).
+        # 25 concurrent is comfortable for ~200 users.
+        sidekiq['max_concurrency']               = ${GITLAB_SIDEKIQ_CONCURRENCY:-25}
+
+        # Bundled PostgreSQL — bumped from 256 MB to give Rails decent
+        # working memory for searches and large MRs.
+        postgresql['shared_buffers']             = '${GITLAB_PG_SHARED_BUFFERS:-1GB}'
+        postgresql['max_connections']            = ${GITLAB_PG_MAX_CONNECTIONS:-300}
+        postgresql['effective_cache_size']       = '${GITLAB_PG_EFFECTIVE_CACHE:-3GB}'
+        postgresql['work_mem']                   = '${GITLAB_PG_WORK_MEM:-16MB}'
+        postgresql['maintenance_work_mem']       = '${GITLAB_PG_MAINT_WORK_MEM:-256MB}'
+
+        # Bundled Redis — in-memory cache for sessions / job queues.
+        redis['maxmemory']                       = '${GITLAB_REDIS_MAXMEMORY:-1gb}'
+        redis['maxmemory_policy']                = 'allkeys-lru'
+
+        # Gitaly (storage layer for git data) — bump from default 8 to 32.
+        gitaly['configuration'] = {
+          concurrency: [{ rpc: '/gitaly.SmartHTTPService/PostReceivePack',
+                          max_per_repo: ${GITLAB_GITALY_CONCURRENCY:-32} }],
+        }
+
+        # Disable subsystems we don't use to reclaim memory.
+        prometheus_monitoring['enable']          = false
+        mattermost['enable']                     = false
+        pages_external_url nil
+        gitlab_rails['gitlab_default_projects_features_container_registry'] = false
+        registry['enable']                       = false
+
+        # Backups — store inside the container; map a host volume to keep
+        # them outside if you want long-term retention.
+        gitlab_rails['backup_keep_time']         = ${GITLAB_BACKUP_KEEP_TIME:-604800}
+
+        # SMTP for outbound notifications (optional; routes via mail-bridge).
+        gitlab_rails['smtp_enable']              = true
+        gitlab_rails['smtp_address']             = 'mail-bridge'
+        gitlab_rails['smtp_port']                = 8051
+        gitlab_rails['smtp_domain']              = '${GITLAB_SMTP_DOMAIN:-simorgh.local}'
+        gitlab_rails['smtp_authentication']      = false
+        gitlab_rails['smtp_enable_starttls_auto'] = false
+        gitlab_rails['gitlab_email_from']        = '${GITLAB_EMAIL_FROM:-gitlab@simorgh.local}'
+
+      GITLAB_ROOT_PASSWORD: ${GITLAB_ROOT_PASSWORD:?set GITLAB_ROOT_PASSWORD in .env}
+      TZ: ${TZ:-UTC}
+
+    # GitLab is heavy. Pin reasonable resource limits so a runaway
+    # background job can't eat the whole host. Defaults assume 16 GB
+    # available; tune via .env to match the host.
+    deploy:
+      resources:
+        limits:
+          memory: ${GITLAB_MEM_LIMIT:-12g}
+        reservations:
+          memory: ${GITLAB_MEM_RESERVATION:-6g}
+
+    ports:
+      # HTTP — accessed by users via the host's nginx OR directly here.
+      - "${GITLAB_HTTP_PORT:-8929}:80"
+      # SSH — git clone / push over SSH (uses GITLAB_SSH_PORT, not 22).
+      - "${GITLAB_SSH_PORT:-2222}:22"
+    expose:
+      - "80"
+      - "443"
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+    shm_size: "${GITLAB_SHM_SIZE:-512m}"
+    networks:
+      - app_net
+    healthcheck:
+      # GitLab is configured under a /gitlab/ path prefix (see external_url
+      # in gitlab.rb), so /-/readiness on the bare root returns 404 from
+      # nginx. The actual probe is /gitlab/-/readiness?all=1 — returns 200
+      # once Rails + Postgres + Redis are up, 503 while still booting.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/gitlab/-/readiness?all=1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s     # cold start can take 5 min
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge
+
+volumes:
+  gitlab_config:
+    name: simorgh_gitlab_config
+    driver: local
+  gitlab_logs:
+    name: simorgh_gitlab_logs
+    driver: local
+  gitlab_data:
+    name: simorgh_gitlab_data
+    driver: local

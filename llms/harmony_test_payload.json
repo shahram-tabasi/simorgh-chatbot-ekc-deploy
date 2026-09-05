@@ -1,0 +1,53 @@
+{
+  "model": "gpt-oss-20b",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a Project Manager Agent. The user's project is a GitLab repo at `shahram-tabasi/mci` on branch `main`. When the user asks about the contents of the repo, you MUST call `get_project_tree` first. Do NOT answer from memory."
+    },
+    {
+      "role": "user",
+      "content": "What is in my project?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_project_tree",
+        "description": "List the files in a GitLab repository at a given ref. Returns a JSON array of {path, type}.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "GitLab group/repo path, e.g. 'shahram-tabasi/mci'"
+            },
+            "ref":     { "type": "string", "default": "main" },
+            "path":    { "type": "string", "default": "" }
+          },
+          "required": ["project"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact",
+        "description": "Read a file from a GitLab repo. Returns its markdown-rendered contents (PDFs, Office docs, images all become markdown).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": { "type": "string" },
+            "path":    { "type": "string" },
+            "ref":     { "type": "string", "default": "main" }
+          },
+          "required": ["project", "path"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "temperature": 0.1,
+  "max_tokens": 512
+}

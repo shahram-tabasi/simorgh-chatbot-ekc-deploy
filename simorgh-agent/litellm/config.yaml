@@ -1,0 +1,69 @@
+# =============================================================================
+# LiteLLM Proxy config — OpenAI-compatible gateway in front of your vLLMs
+# =============================================================================
+# Replaces llm-gateway's custom routing code with battle-tested LiteLLM.
+# All your existing client code (chat-service, project-agent-service, etc.)
+# can keep using /v1/chat/completions and /v1/completions — LiteLLM speaks
+# OpenAI natively.
+#
+# Hardware topology (from compose/README.md + llms/docker-compose.llm.yml):
+#   - 192.168.1.61 :80  → nginx → ai_service:9000 (vLLM serve + Harmony tool-call
+#                                                  parser, model gpt-oss-20b)
+#   - 192.168.1.61 :9001 → vllm/vllm-openai:v0.7.3 (Harmony A/B test, direct host
+#                                                   bind, bypasses nginx)
+#   - 192.168.1.62 :80  → nginx → vllm:8000        (vllm-openai, qwen2.5-vl-7b)
+#
+# IMPORTANT: vLLM listens on container ports (9000, 8000) BEHIND each GPU box's
+# nginx. The only externally-routable surfaces are :80 (production) and :9001
+# (Harmony A/B test on .61 only). Never point api_base at :8000/:9000 directly.
+#
+# Update model_list[].litellm_params.api_base values when topology moves.
+# =============================================================================
+
+model_list:
+  # Primary: qwen3-30b-a3b on .61 — used for CoT planner + project-agent synth.
+  # Production path through .61's nginx → ai_service:9000 (hermes tool calls).
+  - model_name: qwen3-30b-a3b
+    litellm_params:
+      model: openai/qwen3-30b-a3b
+      api_base: http://192.168.1.61/v1
+      api_key: dummy-required-by-openai-sdk
+      timeout: 180
+      max_retries: 1
+
+  # Vision-capable backup: qwen2.5-vl-7b on .62 — image/PDF understanding.
+  # Production path through .62's nginx → vllm:8000.
+  - model_name: qwen2.5-vl-7b
+    litellm_params:
+      model: openai/qwen2.5-vl-7b
+      api_base: http://192.168.1.62/v1
+      api_key: dummy-required-by-openai-sdk
+      timeout: 180
+      max_retries: 1
+
+  # Alias that legacy clients use — points at the same .61 production path.
+  - model_name: simorgh-default
+    litellm_params:
+      model: openai/qwen3-30b-a3b
+      api_base: http://192.168.1.61/v1
+      api_key: dummy
+
+router_settings:
+  routing_strategy: simple-shuffle   # round-robin across replicas of same model
+  num_retries: 1
+  timeout: 180
+
+litellm_settings:
+  drop_params: true                  # silently drop unsupported params (e.g. seed
+                                     # on a backend that doesn't honour it) instead
+                                     # of failing the request
+  set_verbose: false
+  telemetry: false                   # do NOT phone home — required for offline ops
+  request_timeout: 180
+
+general_settings:
+  # No master key here — set LITELLM_MASTER_KEY in compose env if you want
+  # /v1 endpoints authenticated. Leave unset to keep parity with your current
+  # llm-gateway behaviour (network-isolated, no auth).
+  background_health_checks: true
+  health_check_interval: 60
