@@ -240,25 +240,51 @@ The shapes, as the legend draws them:
 | Motor / generator | a circle carrying `M` or `G` |
 | Capacitor delta, magnet, heating element, LCS, ATS, bus duct, key interlock, capacitive divider | as the legend draws them |
 
-### Series and parallel
+### The order of a cell
 
-A device is either **in the power path** — the line runs through it — or it is
-an **instrument** working off a transformer beside the line. The drawing keeps
-the two apart, because a single line that puts an ammeter in the power path
-reads as a board with an ammeter in series with the motor:
+Every device on a feeder is one of three things, and the drawing keeps them
+apart — a single line that puts an ammeter in the power path reads as a board
+with an ammeter in series with the motor:
 
-* the power path runs down the branch: breaker, contactor, fuse, CT, core
-  balance CT, surge arrester…
-* the instruments hang beside it, in groups — one group per transformer that
-  feeds them, each group starting level with its own transformer:
-  * the **CT** feeds the ammeter, the selector, the meters and the
-    **protection relay**;
-  * the **core-balance CT** feeds the **earth-fault relay**, and its second
-    connection comes down its own elbow into the protection relay, which works
-    off both;
-  * the **VT** feeds the voltmeter, its selector and the frequency meter;
-  * an instrument no transformer on the line feeds is control wiring, drawn
-    with the dashed link the legend uses for it.
+| | where it is drawn |
+|---|---|
+| **series** | the current runs through it — on the line |
+| **shunt** | it works between the line and earth — beside the line, with the earth under it |
+| **instrument** | it works off a transformer — in the secondary column to the right |
+
+An MV cell comes out in the order the office draws it in, whatever order the
+template filed its slots:
+
+1. **the main switch** — the disconnector, the vacuum breaker (fixed or
+   withdrawable, with its spring charge and racking), or the vacuum contactor
+   with its fuse;
+2. **the earth switch**, beside the line down to earth, with the **magnet**
+   under it on the dashed interlock;
+3. **the current transformer**, in series — one secondary out of it **per
+   core** (`300/5A x3` draws three), into the test block;
+4. **the capacitive voltage divider**, beside the line to earth;
+5. **the surge arrester**, beside the line to earth;
+6. **the core-balance CT**, in series, out to the relay.
+
+The secondary side follows the same rule:
+
+* the **CT** and the **core-balance CT** both come out into the **test block
+  (XD)**, the core-balance one on its own elbow into the bottom of it, and
+  everything below the test block on that column reaches the relay through it;
+* the **protection relay** sits under the test block, and the **alarm window**
+  under the relay;
+* with no test block on the feeder, the CT feeds the ammeter, the selectors,
+  the meters and the protection relay, and the core-balance CT feeds the
+  earth-fault relay with its second connection into the relay;
+* the **VT** feeds the voltmeter, its selector and the frequency meter;
+* an instrument no transformer on the line feeds is control wiring, drawn with
+  the dashed link the legend uses for it.
+
+What a device *is* comes from EPLAN's function definition when the parts
+database has one; otherwise from the part's own TPMS descriptions
+(`SEC_DES` / `ENG_DES` / `SHR_DES`), so an earth switch, a magnet or a
+capacitive divider is recognised from TPMS alone; otherwise from the slot it
+sits in.
 
 ### The sheet
 

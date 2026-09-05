@@ -163,6 +163,8 @@ const SLOT_SYMBOL: Record<string, SymbolId> = {
 // transformer", "Motor, 3 phase" — is what the part actually is, so it wins
 // over the slot it was filed under.
 const FUNCTION_SYMBOL: [RegExp, SymbolId][] = [
+  [/earth(ing)?[\s-]?switch|earthing.?device|erdungsschalter/i, 'earthing-switch'],
+  [/capacitive.?(voltage.?)?divider|voltage.?divider|capacitive.?indicator/i, 'capacitive-divider'],
   [/vacuum.?contactor|contactor.*fuse|\bv\.?c\b.*fuse/i, 'vacuum-contactor-fuse'],
   [/vacuum.?(circuit.?)?breaker|\bvcb\b/i, 'vcb'],
   [/withdraw|draw.?out|truck|racking/i, 'withdrawable-cb'],
@@ -224,6 +226,16 @@ export function kindFromFunction(functionDefinition?: string): SymbolId | null {
   if (!value) return null;
   for (const [pattern, id] of FUNCTION_SYMBOL) if (pattern.test(value)) return id;
   return null;
+}
+
+/** What TPMS itself says a part is — its own descriptions, which is all there
+ *  is to go on when the EPLAN parts database is out of reach or holds nothing
+ *  for it: an earth switch, a capacitive divider, a magnet, a test block. */
+export function partDescription(part: any): string {
+  return [
+    part?.fullData?.Designation1, part?.fullData?.Designation2,
+    part?.fullData?.Designation3, part?.fullData?.TypeNumber,
+  ].map(v => stripLocaleTags(v)).filter(Boolean).join(' ');
 }
 
 // The keys a part might be found under in EPLAN: its order number, its part
@@ -292,9 +304,13 @@ function chainFor(
     const primary = inSlot[0];
     const eplan = lookupSymbol(primary, symbols);
     const fromFunction = kindFromFunction(eplan?.functionDefinition);
+    const described = partDescription(primary);
+    // The accessory test comes before the description: "auxiliary switch for
+    // circuit breaker" is an accessory of the breaker, not a second breaker.
     const isAccessory = !fromFunction &&
-      ACCESSORY.test(`${eplan?.functionDefinition ?? ''} ${stripLocaleTags(primary?.fullData?.Designation1)}`);
-    const id: SymbolId = fromFunction ?? (isAccessory ? 'accessory' : (SLOT_SYMBOL[slot] ?? 'accessory'));
+      ACCESSORY.test(`${eplan?.functionDefinition ?? ''} ${described}`);
+    const id: SymbolId = fromFunction ??
+      (isAccessory ? 'accessory' : (kindFromFunction(described) ?? SLOT_SYMBOL[slot] ?? 'accessory'));
 
     const label = stripLocaleTags(primary?.label) || SLOT_LETTER[slot] || 'A';
     counters[label] = (counters[label] ?? 0) + 1;
@@ -406,45 +422,116 @@ function stepFor(item: ChainItem): number {
   return Math.max(CELL, 26 + lines * 9);
 }
 
-// ── Series and parallel ─────────────────────────────────────────────────────
+// ── The order of a cell, and what hangs off it ──────────────────────────────
 //
-// A device is either in the power path — the line runs through it — or it is
-// an instrument working off a transformer beside the line. The office draws
-// the first down the branch and the second out to the side, joined by its own
-// connection: the CT feeds the ammeter and the protection relay, the
-// core-balance CT feeds the protection and earth-fault relays, the VT feeds
-// the voltmeter. So an instrument never sits in the power path, where it would
-// read as another device the current runs through.
+// An MV cell is drawn in one order, the order the office draws it in:
 //
-// The rank is the order they hang off the line: the current instruments first,
-// then the relays (the protection relay between the CT above it and the
-// core-balance CT below, since both feed it), then the voltage instruments.
+//   1. the main switch      — the disconnector, the vacuum breaker (fixed or
+//                             withdrawable), or the vacuum contactor with its
+//                             fuse
+//   2. the earth switch     — beside the line, down to earth, interlocked with
+//                             the magnet under it
+//   3. the current transformer, in series with the switch — one secondary out
+//      of it per core, into the test block
+//   4. the capacitive voltage divider, beside the line to earth
+//   5. the surge arrester, beside the line to earth
+//   6. the core-balance CT, in series, out to the relay
+//
+// and the secondary side of it: the CT and the core-balance CT both come out
+// through the test block (XD) into the protection relay, and the alarm window
+// hangs on the relay.
+//
+// So every device on a feeder is one of three things, and the drawing keeps
+// them apart:
+//
+//   series      the current runs through it — it sits on the line
+//   shunt       it works between the line and earth — it sits beside the line
+//               with the earth under it
+//   instrument  it works off a transformer — it sits in the secondary column
+//               to the right, on the connection from what feeds it
+
+// The place a device takes in the power path, whatever order the template
+// filed it under.
+const POWER_RANK: Partial<Record<SymbolId, number>> = {
+  'bus-duct': 4, incoming: 4, ats: 8,
+  disconnector: 10, 'switch-disconnector': 12, 'withdrawable-cb': 18,
+  vcb: 20, 'vcb-racking': 20, 'circuit-breaker': 22, mcb: 24,
+  'vacuum-contactor-fuse': 26, 'hrc-fuse': 28, fuse: 28, 'switch-fuse': 28,
+  contactor: 30, 'motor-starter': 31, 'thermal-overload': 34,
+  drive: 36, 'soft-starter': 36, 'key-interlock': 42, 'mechanical-interlock': 42,
+  accessory: 44, link: 44,
+  'current-transformer': 50, 'voltage-transformer': 52, transformer: 54,
+  'core-balance-ct': 70, capacitor: 74, 'capacitor-delta': 74,
+};
+const powerRank = (id: SymbolId) => POWER_RANK[id] ?? 45;
+
+// The devices that work between the line and earth: they hang beside the line
+// with the earth under them, never in the power path.
+const SHUNT_RANK: Partial<Record<SymbolId, number>> = {
+  'earthing-switch': 40, magnet: 41,
+  'capacitive-divider': 60, 'surge-arrester': 65, 'surge-limiter': 66,
+};
+const isShunt = (id: SymbolId) => SHUNT_RANK[id] != null;
+
+// The order the instruments hang down the secondary column: the test block
+// first — everything reaches the relay through it — then the current
+// instruments, the relays, the voltage instruments, and the alarm window on
+// the end of the relay.
 const INSTRUMENT_RANK: Partial<Record<SymbolId, number>> = {
+  'test-block': 0,
   ammeter: 1, 'ampere-selector': 2, multimeter: 3, 'watt-meter': 4, 'var-meter': 5,
   'power-factor-meter': 6, 'kwh-meter': 7, 'kvarh-meter': 8, transducer: 9,
-  'test-block': 10, 'protection-relay': 11, 'earth-fault-relay': 12,
+  'protection-relay': 11, 'earth-fault-relay': 12,
   voltmeter: 13, 'voltage-selector': 14, 'frequency-meter': 15, 'hour-meter': 16,
   'alarm-annunciator': 17, lamp: 18, ptc: 19, lcs: 20,
 };
 const isInstrument = (id: SymbolId) => INSTRUMENT_RANK[id] != null;
 
+/** How many cores a transformer has: `300/5A x3`, `3 core`, `3C`. */
+export function coreCount(item: ChainItem): number {
+  const text_ = `${item.code} ${item.accessories.join(' ')}`;
+  const m = /x\s*([1-9])\b/i.exec(text_) ?? /\b([1-9])\s*(?:core|c)\b/i.exec(text_);
+  return m ? Number(m[1]) : 1;
+}
+
 interface Branch {
   /** The devices the current runs through, in order down the line. */
   series: ChainItem[];
-  /** The instruments beside the line, in the order they hang off it. */
+  /** The devices between the line and earth, beside it. */
+  shunts: ChainItem[];
+  /** For each shunt, the series device it hangs below (an index into
+   *  `series`), or -1 for the top of the branch. */
+  shuntAfter: number[];
+  /** The instruments in the secondary column, in the order they hang down. */
   instruments: ChainItem[];
   /** For each instrument, the series device that feeds it (an index into
    *  `series`), or null when nothing on this line does — control wiring, drawn
    *  as the legend draws it, with a dashed link. */
   fedBy: (number | null)[];
-  /** A second transformer the instrument also works off: the protection relay
-   *  takes the phase CTs and the core-balance CT both, and the drawing has to
-   *  show both, or the earth-fault side of it is not there. */
+  /** A second transformer the instrument also works off: the core-balance CT
+   *  comes into the test block beside the CT, so both reach the relay through
+   *  it — and where there is no test block, straight into the relay. */
   alsoFed: (number | null)[];
 }
 
 function splitBranch(chain: ChainItem[]): Branch {
-  const series = chain.filter(i => !isInstrument(i.id));
+  // The power path, in the order a cell is drawn rather than the order the
+  // template filed its slots.
+  const series = chain.filter(i => !isInstrument(i.id) && !isShunt(i.id))
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => powerRank(a.item.id) - powerRank(b.item.id) || a.index - b.index)
+    .map(e => e.item);
+
+  const shunts = chain.filter(i => isShunt(i.id))
+    .sort((a, b) => (SHUNT_RANK[a.id] ?? 99) - (SHUNT_RANK[b.id] ?? 99));
+  // A shunt hangs below the last device in the path it comes after.
+  const shuntAfter = shunts.map(s => {
+    const rank = SHUNT_RANK[s.id] ?? 99;
+    let after = -1;
+    series.forEach((item, index) => { if (powerRank(item.id) <= rank) after = index; });
+    return after;
+  });
+
   const instruments = chain.filter(i => isInstrument(i.id))
     .sort((a, b) => (INSTRUMENT_RANK[a.id] ?? 99) - (INSTRUMENT_RANK[b.id] ?? 99));
 
@@ -453,10 +540,14 @@ function splitBranch(chain: ChainItem[]): Branch {
   const cbct = at('core-balance-ct');
   const vt = at('voltage-transformer');
   const any = [ct, cbct, vt].find(n => n >= 0) ?? -1;
+  const xd = instruments.findIndex(i => i.id === 'test-block');
 
   const fedBy = instruments.map(item => {
     let source: number;
-    if (item.id === 'earth-fault-relay') source = cbct >= 0 ? cbct : ct;
+    // With a test block on the feeder everything reaches the relay through it,
+    // so the whole column hangs on the one connection out of the CT.
+    if (xd >= 0) source = ct >= 0 ? ct : (cbct >= 0 ? cbct : vt);
+    else if (item.id === 'earth-fault-relay') source = cbct >= 0 ? cbct : ct;
     else if (item.id === 'voltmeter' || item.id === 'voltage-selector' || item.id === 'frequency-meter')
       source = vt >= 0 ? vt : ct;
     else source = ct >= 0 ? ct : (cbct >= 0 ? cbct : vt);
@@ -464,12 +555,14 @@ function splitBranch(chain: ChainItem[]): Branch {
     return source >= 0 ? source : null;
   });
 
-  // The protection relay works off the core-balance CT as well as the phase
-  // CTs, so it gets its second connection drawn.
-  const alsoFed = instruments.map((item, k) =>
-    item.id === 'protection-relay' && cbct >= 0 && fedBy[k] !== cbct ? cbct : null);
+  // The core-balance CT's own connection: into the test block when there is
+  // one — that is how it reaches the relay — and into the relay when there is
+  // not.
+  const link = xd >= 0 ? xd : instruments.findIndex(i => i.id === 'protection-relay');
+  const alsoFed = instruments.map((_, k) =>
+    k === link && cbct >= 0 && fedBy[k] !== cbct ? cbct : null);
 
-  return { series, instruments, fedBy, alsoFed };
+  return { series, shunts, shuntAfter, instruments, fedBy, alsoFed };
 }
 
 // ── Where everything on a branch sits ───────────────────────────────────────
@@ -492,16 +585,41 @@ interface BranchLayout {
   ys: number[];
   /** Where the power path leaves the branch. */
   seriesBottom: number;
+  /** Where each shunt sits beside the line. */
+  shuntYs: number[];
   groups: InstrumentGroup[];
   /** The lowest point anything on the branch reaches. */
   bottom: number;
 }
 
+// A shunt needs its own cell and the earth under it.
+const SHUNT_STEP = CELL + 16;
+
 function layoutBranch(branch: Branch, top: number): BranchLayout {
+  // The path and the shunts are laid out together, walking down the cell: a
+  // shunt takes its own place on the line, between the device it comes after
+  // and the one that follows, so the order down the drawing is the order of
+  // the cell — switch, earth switch, CT, divider, arrester, core balance.
   const ys: number[] = [];
+  const shuntYs: number[] = new Array(branch.shunts.length).fill(top);
+  const step = (item: ChainItem) => (item.id === 'magnet' ? CELL + 4 : SHUNT_STEP);
   let y = top;
-  for (const item of branch.series) { ys.push(y); y += stepFor(item); }
-  const seriesBottom = branch.series.length > 0 ? y : top;
+
+  const placeShunts = (after: number) => {
+    branch.shunts.forEach((item, k) => {
+      if (branch.shuntAfter[k] !== after) return;
+      shuntYs[k] = y;
+      y += step(item);
+    });
+  };
+
+  placeShunts(-1);
+  branch.series.forEach((item, index) => {
+    ys.push(y);
+    y += stepFor(item);
+    placeShunts(index);
+  });
+  const seriesBottom = y;
 
   // One group per feeding device, in the order those devices sit on the line;
   // control wiring (nothing feeds it) comes last.
@@ -515,51 +633,62 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
     const items = branch.instruments
       .map((_, k) => k).filter(k => branch.fedBy[k] === source);
     if (items.length === 0) continue;
-    const start = Math.max(cursor, source == null ? top : ys[source] - CELL / 2);
+    const start = Math.max(cursor, source == null ? top : ys[source]);
     groups.push({ source, items, ys: items.map((_, k) => start + k * CELL) });
     cursor = start + items.length * CELL;
   }
 
   return {
-    ys, seriesBottom, groups,
+    ys, seriesBottom, shuntYs, groups,
     bottom: Math.max(seriesBottom, cursor),
   };
 }
 
-/** How tall a branch is: the power path, or the instruments beside it. */
+/** How tall a branch is: the power path, or whatever hangs beside it. */
 const branchHeight = (b: Branch) => layoutBranch(b, 0).bottom;
 
-// How far right of the line the instruments stand: clear of the tags and codes
-// written beside the devices in the power path.
+// How far the shunts and the instruments stand from the line: far enough that
+// the tags and codes written beside the devices never reach them.
+const SHUNT_DX = 56;
 const INSTR_DX = 120;
 
 const line = (x1: number, y1: number, x2: number, y2: number, w = 1.3, dash = '') =>
   `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#111" stroke-width="${w}"${
     dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
 
+/** The earth under a shunt. */
+const earth = (x: number, y: number) => [
+  line(x, y - 6, x, y),
+  line(x - 7, y, x + 7, y, 1.5),
+  line(x - 4.5, y + 3, x + 4.5, y + 3, 1.2),
+  line(x - 2, y + 6, x + 2, y + 6, 1.2),
+].join('');
+
 // The tag in black and the part code in blue, with the accessories under them:
 // the office writes the codes in colour beside the symbol, and it keeps the
 // two apart at a glance.
-function deviceText(item: ChainItem, tx: number, y: number, codeChars = 17): string {
+function deviceText(item: ChainItem, tx: number, y: number, codeChars = 17, anchor = 'start'): string {
+  const a = anchor === 'start' ? '' : ` text-anchor="${anchor}"`;
   const out = [
-    `<text x="${tx}" y="${y}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`,
-    `<text x="${tx}" y="${y + 11}" font-size="8.5" fill="#1d4ed8"><title>${esc(item.code)}</title>${
+    `<text x="${tx}" y="${y}" font-size="9" font-weight="600" fill="#111"${a}>${esc(item.tag)}</text>`,
+    `<text x="${tx}" y="${y + 11}" font-size="8.5" fill="#1d4ed8"${a}><title>${esc(item.code)}</title>${
       esc(clip(item.code, codeChars))}</text>`,
   ];
-  item.accessories.slice(0, 2).forEach((a, ai) => {
-    out.push(`<text x="${tx}" y="${y + 21 + ai * 9}" font-size="7.5" fill="#6b7280"><title>${
-      esc(a)}</title>+ ${esc(clip(a, codeChars))}</text>`);
+  item.accessories.slice(0, 2).forEach((ac, ai) => {
+    out.push(`<text x="${tx}" y="${y + 21 + ai * 9}" font-size="7.5" fill="#6b7280"${a}><title>${
+      esc(ac)}</title>+ ${esc(clip(ac, codeChars))}</text>`);
   });
   if (item.accessories.length > 2) {
-    out.push(`<text x="${tx}" y="${y + 39}" font-size="7.5" fill="#6b7280">+ ${
+    out.push(`<text x="${tx}" y="${y + 39}" font-size="7.5" fill="#6b7280"${a}>+ ${
       item.accessories.length - 2} more</text>`);
   }
   return out.join('');
 }
 
 /**
- * One branch: the power path down the line with its devices, and the
- * instruments beside it, each joined to what feeds it.
+ * One branch: the power path down the line with its devices, the shunts
+ * beside it down to earth, and the instruments in the secondary column, each
+ * joined to what feeds it.
  *
  * Returns the drawing and the y the power path leaves at, so the caller can
  * run the line on to the load.
@@ -567,7 +696,8 @@ function deviceText(item: ChainItem, tx: number, y: number, codeChars = 17): str
 function drawBranch(branch: Branch, x: number, top: number): { svg: string; bottom: number } {
   const out: string[] = [];
   const ix = x + INSTR_DX;
-  const { ys, seriesBottom, groups } = layoutBranch(branch, top);
+  const sx = x - SHUNT_DX;
+  const { ys, seriesBottom, shuntYs, groups } = layoutBranch(branch, top);
 
   // A device whose connection leaves at the middle of its cell has its own
   // text written above it, so the connection never runs through the text.
@@ -585,7 +715,23 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   branch.series.forEach((item, index) => {
     out.push(drawDevice(item, x, ys[index]));
     out.push(deviceText(item, x + Math.max(40, labelOffset(item)),
-      ys[index] + (feeds.has(index) ? 5 : 14), 15));
+      ys[index] + (feeds.has(index) ? 2 : 14), 15));
+  });
+
+  // The shunts: beside the line, down to earth. The magnet is the exception —
+  // it is what the earth switch is interlocked with, so it hangs under the
+  // earth switch on the dashed link instead of on an earth of its own.
+  branch.shunts.forEach((item, k) => {
+    const y = shuntYs[k];
+    if (item.id === 'magnet' && k > 0 && branch.shunts[k - 1].id === 'earthing-switch') {
+      out.push(line(sx, shuntYs[k - 1] + CELL, sx, y, 1, '4 3'));
+    } else {
+      out.push(line(sx, y, x, y, 1.2));
+      out.push(`<circle cx="${x}" cy="${y}" r="2.4" fill="#111"/>`);
+    }
+    out.push(drawDevice(item, sx, y));
+    if (item.id !== 'magnet' && item.id !== 'earthing-switch') out.push(earth(sx, y + CELL + 8));
+    out.push(deviceText(item, sx - 24, y + 14, 11, 'end'));
   });
 
   // The instruments beside the line, group by group: the transformer's
@@ -598,9 +744,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
       : ys[group.source] + CELL / 2;
 
     out.push(line(ix, Math.min(first, ty), ix, Math.max(last, ty)));
-    out.push(line(x + 8, ty, ix, ty, group.source == null ? 1 : 1.1,
-      group.source == null ? '4 3' : ''));
-    if (group.source != null) out.push(`<circle cx="${ix}" cy="${ty}" r="2.4" fill="#111"/>`);
+    out.push(secondary(x, ty, ix, group.source == null ? null : branch.series[group.source]));
 
     group.items.forEach((k, n) => {
       const item = branch.instruments[k];
@@ -608,14 +752,14 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
       out.push(deviceText(item, ix + Math.max(34, labelOffset(item)), group.ys[n] + 17, 14));
 
       // The second transformer feeding this instrument — the core-balance CT
-      // under the relay — comes in on its own elbow beside the column, so the
-      // two connections stay apart and each one is followed by eye.
+      // into the test block — comes in on its own elbow beside the column, so
+      // the two connections stay apart and each one is followed by eye.
       const also = branch.alsoFed[k];
       if (also != null) {
         const ay = ys[also] + CELL / 2;
-        const my = group.ys[n] + CELL / 2;
+        const my = group.ys[n] + CELL - 8;
         const ex = ix - 12;
-        out.push(line(x + 8, ay, ex, ay, 1.1));
+        out.push(secondary(x, ay, ex, branch.series[also]));
         out.push(line(ex, ay, ex, my, 1.1));
         out.push(line(ex, my, ix, my, 1.1));
         out.push(`<circle cx="${ix}" cy="${my}" r="2.4" fill="#111"/>`);
@@ -624,6 +768,23 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   }
 
   return { svg: out.join('\n'), bottom: seriesBottom };
+}
+
+/**
+ * A transformer's secondary out to the column: one line per core, because the
+ * cell needs one output per core of the CT — and a dashed control line where
+ * no transformer feeds the instrument at all.
+ */
+function secondary(x: number, y: number, to: number, source: ChainItem | null): string {
+  if (!source) return line(x + 8, y, to, y, 1, '4 3');
+  const cores = Math.min(coreCount(source), 4);
+  const out: string[] = [];
+  for (let c = 0; c < cores; c++) {
+    const cy = y + (c - (cores - 1) / 2) * 3.4;
+    out.push(line(x + 8, cy, to, cy, 1));
+  }
+  out.push(`<circle cx="${to}" cy="${y}" r="2.4" fill="#111"/>`);
+  return out.join('');
 }
 
 function drawSheet(o: {
@@ -650,6 +811,8 @@ function drawSheet(o: {
   // to the incomer's own sheet, not to this one.
   const supplyBranch: Branch | null = supplyAll && {
     series: supplyAll.series.slice(0, 3),
+    shunts: supplyAll.shunts.slice(0, 2),
+    shuntAfter: supplyAll.shuntAfter.slice(0, 2).map(a => (a < 3 ? a : -1)),
     instruments: supplyAll.instruments.slice(0, 3),
     fedBy: supplyAll.fedBy.slice(0, 3).map(s => (s != null && s < 3 ? s : null)),
     alsoFed: supplyAll.alsoFed.slice(0, 3).map(s => (s != null && s < 3 ? s : null)),
@@ -657,10 +820,14 @@ function drawSheet(o: {
 
   // A feeder with instruments beside it needs the room for them; one without
   // stays narrow, so a board of plain feeders still fits the sheet.
-  const wide = [...branches, ...(supplyBranch ? [supplyBranch] : [])]
-    .some(b => b.instruments.length > 0);
-  const colWidth = wide ? 290 : 200;
-  const branchDx = 34;
+  const all = [...branches, ...(supplyBranch ? [supplyBranch] : [])];
+  const wide = all.some(b => b.instruments.length > 0);
+  const hasShunt = all.some(b => b.shunts.length > 0);
+  // A cell with something beside the line needs the room for it: the shunts
+  // stand to the left of the line with their tags, the instruments to the
+  // right with theirs.
+  const branchDx = hasShunt ? 130 : 34;
+  const colWidth = Math.max(200, hasShunt || wide ? branchDx + INSTR_DX + 104 : 0);
 
   const supplyWidth = o.supply ? colWidth : 90;
   const bodyLeft = margin + supplyWidth;
