@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
+import { findTemplateUsage, UsageReport } from '../../utils/cascadeDelete';
+import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
 
 interface TemplateTreeProps {
   projectData: any;
@@ -38,6 +40,12 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     addTemplate,
     deleteTemplate
   } = useProject();
+
+  // Pending template deletion — confirmed through the cascade dialog, which
+  // lists every equipment row built on the template.
+  const [templateDeleteTarget, setTemplateDeleteTarget] = useState<{
+    id: string; name: string; usage: UsageReport;
+  } | null>(null);
   
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['LV', 'MV', 'HV']));
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -85,14 +93,27 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     setContextMenu({ ...contextMenu, visible: false });
   };
 
+  // A template is referenced by the device rows built on it, so deleting it
+  // has to clear those rows too — otherwise they keep pointing at a template
+  // that no longer exists and their property columns come out blank.
   const handleDeleteTemplate = () => {
-    if (contextMenu.templateId) {
-      deleteTemplate(contextMenu.templateId);
-      setContextMenu({
-        ...contextMenu,
-        visible: false
-      });
-    }
+    if (!contextMenu.templateId) return;
+    const id = contextMenu.templateId;
+    const all = [...safeTemplates.LV, ...safeTemplates.MV, ...safeTemplates.HV];
+    const tmpl = all.find((t: Template) => t.id === id);
+    setTemplateDeleteTarget({
+      id,
+      name: tmpl?.name || 'Template',
+      usage: findTemplateUsage(projectData, id),
+    });
+    setContextMenu({ ...contextMenu, visible: false });
+  };
+
+  const confirmDeleteTemplate = () => {
+    if (!templateDeleteTarget) return;
+    // deleteTemplate cascades to the rows built on the template.
+    deleteTemplate(templateDeleteTarget.id);
+    setTemplateDeleteTarget(null);
   };
 
   const handleCloseContextMenu = () => {
@@ -271,6 +292,24 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
             </>
           )}
         </div>
+      )}
+
+      {templateDeleteTarget && (
+        <CascadeDeleteModal
+          itemName={templateDeleteTarget.name}
+          itemKind="Template"
+          usage={templateDeleteTarget.usage}
+          cascadeNote={
+            'Deleting the template also deletes the device rows built on it in Device Selection; ' +
+            'the equipment itself is kept and its remaining rows are renumbered.'
+          }
+          cascadeNoteFa={
+            'با حذف تمپلیت، ردیف‌هایی که در Device Selection با آن ساخته شده‌اند هم حذف می‌شوند؛ ' +
+            'خود تجهیز باقی می‌ماند و شماره ردیف‌های باقیمانده دوباره مرتب می‌شود.'
+          }
+          onConfirm={confirmDeleteTemplate}
+          onCancel={() => setTemplateDeleteTarget(null)}
+        />
       )}
 
       {wizardTier && (

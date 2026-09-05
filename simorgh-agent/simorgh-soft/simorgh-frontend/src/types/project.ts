@@ -45,6 +45,9 @@ export interface DeviceLibraryItem {
   name: string;
   type: 'LV' | 'MV' | 'HV';
   properties: DeviceLibraryProperties;
+  /** 'tpms' when this entry was read from TPMS rather than typed here. */
+  source?: 'tpms';
+  tpmsScopeId?: number;
 }
 
 // ==============================
@@ -146,6 +149,29 @@ export interface ProjectData {
   devices: DeviceItem[];
   equipments: Equipment[];
   outputTypes?: OutputType[];
+  /** Set on a project that came from TPMS — see TpmsSyncState. */
+  tpmsSync?: TpmsSyncState;
+}
+
+// ── TPMS-linked projects ─────────────────────────────────────────────────────
+// A project opened from TPMS keeps a link back to it. While `master` is
+// 'tpms', TPMS owns the data: every time the project is opened it is read from
+// TPMS again, and the app refuses edits. Raising a revision inside Design Suite
+// hands ownership over ('suite'): syncing stops and the new revision is the
+// one being worked on.
+export interface TpmsSyncState {
+  projectMainId: number;
+  oeNumber: string;
+  projectName: string;
+  master: 'tpms' | 'suite';
+  lastSyncedAt: string;
+  /** The TPMS revisions that became revisions on this side. */
+  revisions: number[];
+  /** Switchgear (scope) ids and names last read from TPMS. */
+  switchgears: { scopeId: number; scopeName: string; panelType: 'LV' | 'MV' | 'HV' }[];
+  /** When and at which revision the suite took over. */
+  detachedAt?: string;
+  detachedAtRevision?: string;
 }
 
 // ── Hierarchical template path ───────────────────────────────────────────────
@@ -183,6 +209,9 @@ export interface TemplateItem {
   properties: Record<string, string>;
   /** Optional hierarchical classification used by recommendations / AI tools. */
   hierarchy?: TemplateHierarchy;
+  /** 'tpms' when this template was built from a TPMS draft. */
+  source?: 'tpms';
+  tpmsScopeId?: number;
 }
 
 export interface DeviceItem {
@@ -281,6 +310,11 @@ export interface Revision {
   projectSnapshot: ProjectData;
   isLocked: boolean;
   parentRevisionId?: string;
+  /** 'tpms' for a revision that mirrors a TPMS revision, 'suite' for one
+   *  raised here. Absent on revisions created before this existed. */
+  source?: 'tpms' | 'suite';
+  /** The TPMS revision number this revision mirrors. */
+  tpmsRevision?: number;
 }
 
 export interface RevisionComparison {

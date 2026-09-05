@@ -16,6 +16,9 @@ import {
   ProjectData, Equipment, DeviceTableRow, TemplateItem, TemplateHierarchy,
   DeviceLibraryItem,
 } from '../types/project';
+import {
+  findDeviceLibraryUsage, removeDeviceLibraryItemEverywhere, describeUsage,
+} from '../utils/cascadeDelete';
 
 // ── Shared context passed to every tool ──────────────────────────────────────
 // The frontend wires every relevant ProjectContext / UI handle in here, so
@@ -538,8 +541,14 @@ const delete_library_device: ChatTool = {
       ? list.find(d => d.id === id)
       : list.find(d => d.name?.toLowerCase() === String(name || '').toLowerCase());
     if (!target) return { ok: false, summary: `Device not found in ${tier} library.` };
-    ctx.updateProjectData({ deviceLibrary: { ...lib, [tier]: list.filter(d => d.id !== target.id) } });
-    return { ok: true, summary: `Deleted ${tier} device "${target.name}".` };
+    // Same cascade as the Device Library screen: the entry and every
+    // equipment (with its rows) created from it go together.
+    const usage = findDeviceLibraryUsage(ctx.projectData, target.id, tier);
+    ctx.updateProjectData(removeDeviceLibraryItemEverywhere(ctx.projectData, target.id, tier));
+    const cascade = usage.equipments.length > 0
+      ? ` Also removed ${describeUsage(usage)} from Device Selection.`
+      : '';
+    return { ok: true, summary: `Deleted ${tier} device "${target.name}".${cascade}` };
   },
 };
 

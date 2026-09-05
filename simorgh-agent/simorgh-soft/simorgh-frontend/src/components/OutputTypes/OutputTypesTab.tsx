@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
   FileSpreadsheetIcon, FileTextIcon, FileCode2Icon,
@@ -7,6 +7,13 @@ import {
 } from 'lucide-react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService } from '../../services/projectService';
+import {
+  LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
+  LV_DEVICE_COLS, MV_DEVICE_COLS,
+  buildTierMatrix,
+} from '../../utils/tierEquipmentMatrix';
+import { buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
+import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/revisionDiff';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
 const DEVICE_PROP_LABELS: Record<string, string> = {
@@ -47,137 +54,6 @@ const DEVICE_PROP_LABELS: Record<string, string> = {
 const v = (val: any) => (val == null || val === '' ? '—' : String(val));
 const boolStr = (val: any) => (val ? '✓' : '—');
 
-// ─── Per-tier template property lists (must mirror TemplateProperties.tsx &
-//     DeviceSelection so the wide LV/MV report tables align with the editor) ─
-const LV_TEMPLATE_PROPERTIES = [
-  'CB ORDER', 'ACCESSORY', 'CONTACTOR. ORDER', 'OVER LOAD RELAY',
-  'EARTH FAULT', 'COREBALANCE CT', 'PROTECTION RELAY', 'CT RATING',
-  'AMMETER', 'AMMETER selector', 'PT RATING', 'VOLTMETER',
-  'VOLTMETER selector', 'MULTIMETER', 'TEST BLOCK', 'TRANSDUSER',
-  'ALARM ANUNCIATOR',
-  'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5', 'SPARE 6', 'SPARE 7',
-];
-const MV_TEMPLATE_PROPERTIES = [
-  'VCB OR VC/FUSE', 'ACCESSORY', 'VOLTAGE INDICATOR', 'COREBALANCE CT',
-  'PROTECTION RELAY', 'CT RATING', 'AMMETER', 'AMMETER selector',
-  'PT RATING', 'VOLTMETER', 'VOLTMETER selector', 'MULTIMETER',
-  'TEST BLOCK', 'TRANSDUSER', 'ALARM WINDDOW', 'SURGE ARRESTER',
-  'SPARE 1', 'SPARE 2', 'SPARE 3', 'SPARE 4', 'SPARE 5',
-];
-
-// Per-tier "device row identifier" columns (left side of the wide table)
-// LV-only columns (SIZE, SFD/HFD, MODULE NO.) are absent in MV.
-interface DeviceColSpec { key: string; header: string; }
-const LV_DEVICE_COLS: DeviceColSpec[] = [
-  { key: 'rowNumber',    header: 'ORDER NO.' },   // matches device row's rowNumber (= equipment label idx)
-  { key: 'templateName', header: 'TEMPLATE' },
-  { key: 'size',         header: 'SIZE' },
-  { key: 'sfdHfd',       header: 'SFD/HFD' },
-  { key: 'cableSize',    header: 'CABLE SIZE' },
-  { key: 'wiringType',   header: 'WIRING TYPE' },
-  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
-  { key: 'flc',          header: 'FLC (A)' },
-  { key: 'feederNo',     header: 'FEEDER NO.' },
-  { key: 'busSection',   header: 'BUS SECTION' },
-  { key: 'moduleNo',     header: 'MODULE NO.' },
-  { key: 'tag',          header: 'TAG' },
-  { key: 'description',  header: 'DESCRIPTION' },
-];
-const MV_DEVICE_COLS: DeviceColSpec[] = [
-  { key: 'rowNumber',    header: 'ORDER NO.' },
-  { key: 'templateName', header: 'TEMPLATE' },
-  { key: 'cableSize',    header: 'CABLE SIZE' },
-  { key: 'wiringType',   header: 'WIRING TYPE' },
-  { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
-  { key: 'flc',          header: 'FLC (A)' },
-  { key: 'feederNo',     header: 'FEEDER NO.' },
-  { key: 'busSection',   header: 'BUS SECTION' },
-  { key: 'tag',          header: 'TAG' },
-  { key: 'description',  header: 'DESCRIPTION' },
-];
-
-// Extract a part's "alt / catalog" number from arbitrary fullData shapes.
-// `partNumber` carries the (typically Siemens-style) ORDER NUMBER, while the
-// raw imported records often also expose a separate catalog/article number.
-function partAltNumber(part: any): string {
-  const d = part?.fullData ?? {};
-  return (
-    d['Article Number'] || d['ArticleNumber'] ||
-    d['Part Number']    || d['PartNumber']    ||
-    d['Designation1']   || d['Catalog Number'] || ''
-  );
-}
-
-// Compose the multi-line text for one Property cell across export targets:
-//   ORDER NO. | PART NO. | LABEL | ×QTY
-// Lines that are empty / redundant are skipped. Joined with the separator.
-function partsCellText(parts: any[], separator = '\n'): string {
-  if (!parts || parts.length === 0) return '';
-  return parts.map(p => {
-    const lines: string[] = [];
-    if (p.partNumber) lines.push(`Order: ${p.partNumber}`);
-    const alt = partAltNumber(p);
-    if (alt && alt !== p.partNumber) lines.push(`Part: ${alt}`);
-    if (p.label) lines.push(`Label: ${p.label}`);
-    const q = p.quantity ?? 1;
-    lines.push(`×${q}`);
-    return lines.join(separator);
-  }).join(`${separator}— —${separator}`);
-}
-
-// Build {propKey → parts[]} for a single template, ignoring metadata keys.
-function templateParts(template: any): Record<string, any[]> {
-  const out: Record<string, any[]> = {};
-  const props = (template?.properties ?? {}) as Record<string, any>;
-  for (const [k, val] of Object.entries(props)) {
-    if (k === '__displayNames' || k === '__locked') continue;
-    if (val && Array.isArray((val as any).parts) && (val as any).parts.length > 0) {
-      out[k] = (val as any).parts;
-    }
-  }
-  return out;
-}
-
-// Flatten LV/MV equipment + device rows into a 2-D array for Excel + table
-// rendering. The number of columns is fixed; cells without a matching
-// template property come out empty (per spec).
-function buildTierMatrix(
-  data: ProjectData,
-  tier: 'LV' | 'MV'
-): { headers: string[]; rows: (string | number)[][] } {
-  const deviceCols = tier === 'LV' ? LV_DEVICE_COLS : MV_DEVICE_COLS;
-  const propCols   = tier === 'LV' ? LV_TEMPLATE_PROPERTIES : MV_TEMPLATE_PROPERTIES;
-  const headers = ['EQUIPMENT', ...deviceCols.map(c => c.header), ...propCols];
-
-  const tierTemplates = (data.templates?.[tier] ?? []);
-  const tmplById = new Map(tierTemplates.map(t => [t.id, t]));
-
-  const rows: (string | number)[][] = [];
-  const eqs = (data.equipments ?? []).filter(e => e.type === tier);
-  for (const eq of eqs) {
-    const devices = eq.devices ?? [];
-    if (devices.length === 0) {
-      rows.push([eq.name, ...deviceCols.map(() => ''), ...propCols.map(() => '')]);
-      continue;
-    }
-    devices.forEach((row, ri) => {
-      const tmpl  = row.templateId ? tmplById.get(row.templateId) : undefined;
-      const parts = tmpl ? templateParts(tmpl) : {};
-      const baseValues = deviceCols.map(c => {
-        const raw = (row as any)[c.key];
-        return raw == null ? '' : String(raw);
-      });
-      const propValues = propCols.map(p => partsCellText(parts[p] || []));
-      rows.push([
-        ri === 0 ? eq.name : '',
-        ...baseValues,
-        ...propValues,
-      ]);
-    });
-  }
-  return { headers, rows };
-}
-
 // ─── Per-section Excel export ─────────────────────────────────────────────────
 function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {
   const { headers, rows } = buildTierMatrix(data, tier);
@@ -185,6 +61,47 @@ function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
   XLSX.utils.book_append_sheet(wb, ws, `${tier} Equipment`);
   XLSX.writeFile(wb, `${data.projectName}_${tier}_Equipment.xlsx`);
+}
+
+// ─── BPMS export (LV only) ────────────────────────────────────────────────────
+// One sheet per LV switchgear, laid out like the hand-made BPMS workbook: the
+// line columns from Device Selection, then one row per part on that line's
+// template from Create Template.
+function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
+  const sheets = buildBpmsSheets(data, { revisionNumber });
+  if (sheets.length === 0) {
+    alert('No LV equipment in this project — the BPMS report covers LV switchgears only.');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  const taken = new Set<string>();
+  for (const sheet of sheets) {
+    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
+    styleBpmsSheet(ws, sheet);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName(sheet.name, taken));
+  }
+  const rev = revisionNumber ? `_REV${revisionNumber}` : '';
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_BPMS${rev}.xlsx`);
+}
+
+// ─── EPLAN single line ────────────────────────────────────────────────────────
+// The device list EPLAN imports (one sheet per switchgear, one row per device
+// on a feeder), and the schematic drawing of the same lines.
+
+
+
+// ─── Layout (جانمایی) ─────────────────────────────────────────────────────────
+
+
+// ─── Mechanical items (اقلام مکانیکال) ────────────────────────────────────────
+
+// ─── Revision comparison ──────────────────────────────────────────────────────
+function exportDiffExcel(diff: RevisionDiff, meta: { projectName: string; base: string; target: string }) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(buildDiffRows(diff, meta));
+  ws['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 10 }, { wch: 22 }, { wch: 30 }, { wch: 30 }];
+  XLSX.utils.book_append_sheet(wb, ws, `REV ${meta.base} to ${meta.target}`.slice(0, 31));
+  XLSX.writeFile(wb, `${meta.projectName || 'project'}_REV${meta.base}_vs_REV${meta.target}.xlsx`);
 }
 
 // ─── Per-section PDF (print-to-PDF window) ────────────────────────────────────
@@ -841,15 +758,16 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
 // MAIN TAB COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export const OutputTypesTab: React.FC = () => {
-  const { projectData } = useProject();
+  const { projectData, currentRevision } = useProject();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['project', 'tech', 'devices', 'equipment']));
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [compareBaseRevision, setCompareBaseRevision] = useState<string>('');
   const [compareTargetRevision, setCompareTargetRevision] = useState<string>('');
   const [revisions, setRevisions] = useState<Revision[]>([]);
-  const [compareDeviceType, setCompareDeviceType] = useState<'LV' | 'MV' | 'Total'>('Total');
   const [loadingRevisions, setLoadingRevisions] = useState(false);
+  const [diff, setDiff] = useState<RevisionDiff | null>(null);
+  const [diffError, setDiffError] = useState<string>('');
 
   // Load revisions on mount
   React.useEffect(() => {
@@ -893,35 +811,36 @@ export const OutputTypesTab: React.FC = () => {
   const eqs     = projectData.equipments ?? [];
   const rowTotal = eqs.reduce((s, eq) => s + (eq.devices?.length ?? 0), 0);
 
-  const handleCompareRevisions = async () => {
-    if (!compareBaseRevision || !compareTargetRevision) {
-      alert('Please select both base and target revisions.');
+  const revisionById = (id: string) => revisions.find(r => r._id === id);
+  const revisionLabel = (r?: Revision) =>
+    r ? `REV ${r.revisionNumber}${r.source === 'tpms' ? ' (TPMS)' : ''}` : '—';
+
+  // The comparison is computed here, from the snapshots the revisions carry:
+  // a revision holds the whole project as it stood, so two of them can be
+  // compared without asking the server for anything.
+  const runComparison = () => {
+    setDiffError('');
+    setDiff(null);
+    const base = revisionById(compareBaseRevision);
+    const target = revisionById(compareTargetRevision);
+    if (!base || !target) { setDiffError('Pick two revisions to compare.'); return; }
+    if (base._id === target._id) { setDiffError('Pick two different revisions.'); return; }
+    if (!base.projectSnapshot || !target.projectSnapshot) {
+      setDiffError('One of these revisions has no snapshot stored, so it cannot be compared.');
       return;
     }
-    
-    try {
-      // Download PDF comparison
-      const pdfBlob = await projectService.exportComparisonReport(compareBaseRevision, compareTargetRevision, 'pdf');
-      const pdfUrl = URL.createObjectURL(pdfBlob);
-      const pdfLink = document.createElement('a');
-      pdfLink.href = pdfUrl;
-      pdfLink.download = `revision_comparison_${compareBaseRevision}_${compareTargetRevision}.pdf`;
-      pdfLink.click();
-      
-      // Download Excel comparison
-      const excelBlob = await projectService.exportComparisonReport(compareBaseRevision, compareTargetRevision, 'excel');
-      const excelUrl = URL.createObjectURL(excelBlob);
-      const excelLink = document.createElement('a');
-      excelLink.href = excelUrl;
-      excelLink.download = `revision_comparison_${compareBaseRevision}_${compareTargetRevision}.xlsx`;
-      excelLink.click();
-      
-      setShowCompareModal(false);
-      alert('✅ Comparison reports downloaded successfully!');
-    } catch (error) {
-      console.error('Failed to export comparison:', error);
-      alert('❌ Failed to generate comparison reports. Please try again.');
-    }
+    setDiff(diffProjectSnapshots(base.projectSnapshot, target.projectSnapshot));
+  };
+
+  const downloadComparison = () => {
+    const base = revisionById(compareBaseRevision);
+    const target = revisionById(compareTargetRevision);
+    if (!diff || !base || !target) return;
+    exportDiffExcel(diff, {
+      projectName: projectData.projectName,
+      base: base.revisionNumber,
+      target: target.revisionNumber,
+    });
   };
 
   const Section: React.FC<{ id: string; title: string; badge: string; color: string; children: React.ReactNode }> = ({ id, title, badge, color, children }) => {
@@ -1121,6 +1040,54 @@ export const OutputTypesTab: React.FC = () => {
         }
       </Section>
 
+      {/* ── BPMS export (LV only) ─────────────────────────────────────────── */}
+      {(() => {
+        const lvSheets = buildBpmsSheets(projectData);
+        const lvLines = lvSheets.reduce((sum, s) => sum + s.lineCount, 0);
+        const lvPartRows = lvSheets.reduce(
+          (sum, s) => sum + Math.max(0, s.rows.length - 3), 0);
+        return (
+          <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: '#0f766e' }}>
+                BPMS
+              </span>
+              <div className="min-w-0">
+                <p className="font-medium text-sm text-gray-800">BPMS Report — LV only</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {lvSheets.length === 0
+                    ? 'No LV equipment yet.'
+                    : `${lvSheets.length} switchgear${lvSheets.length === 1 ? '' : 's'} · ${lvLines} line${lvLines === 1 ? '' : 's'} · ${lvPartRows} row${lvPartRows === 1 ? '' : 's'} — one sheet each, one row per part.`}
+                </p>
+              </div>
+            </div>
+            <button
+              disabled={!!downloading || lvSheets.length === 0}
+              onClick={() => trigger('bpms', () => exportBpmsExcel(projectData, currentRevision?.revisionNumber))}
+              className="flex items-center gap-2 px-4 py-2 bg-teal-700 text-white rounded-lg hover:bg-teal-800 disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap"
+            >
+              {downloading === 'bpms'
+                ? <span className="animate-spin">⏳</span>
+                : <FileSpreadsheetIcon className="w-4 h-4" />}
+              BPMS Excel
+            </button>
+          </div>
+        );
+      })()}
+
+      {/* The single line, the layout and the mechanical items live in their
+          own tab now — Eplanix — where each one is previewed before it is
+          downloaded. */}
+      <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center gap-3 bg-blue-50/40">
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">EPLANIX</span>
+        <p className="text-sm text-gray-700">
+          Single line, panel layout and mechanical items have moved to the <strong>Eplanix</strong> tab.
+        </p>
+        <span className="text-sm text-gray-600 ml-auto" dir="rtl">
+          تک‌خطی، جانمایی و اقلام مکانیکال به تب «Eplanix» منتقل شد.
+        </span>
+      </div>
+
       {/* ── Section 04: LV Equipment & Template Matrix ─────────────────────
           Wide table — every row is one device-row from an LV equipment, and
           every template property becomes its own column. Empty cells mean
@@ -1152,94 +1119,210 @@ export const OutputTypesTab: React.FC = () => {
         HTML report includes a "Print / Save as PDF" button for browser-based PDF export.
       </div>
 
-      {/* Compare Revisions Modal */}
+      {/* Compare revisions — for a TPMS project these are TPMS's own
+          revisions, so this is where its changes are read. */}
       {showCompareModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl w-[700px] max-h-[80vh] flex flex-col">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-lg shadow-2xl w-[900px] max-w-full max-h-[88vh] flex flex-col">
             <div className="px-6 py-4 border-b">
-              <h3 className="font-semibold text-lg">Compare Revisions</h3>
-              <p className="text-xs text-gray-500 mt-1">Select two revisions to compare and generate PDF/Excel reports</p>
+              <h3 className="font-semibold text-lg">Compare revisions</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                What changed between two revisions of this project — master data, technical settings,
+                panel specifications, feeder lines and the parts on their templates.
+                {projectData.tpmsSync
+                  ? ' The revisions marked TPMS are the revisions TPMS holds, so this is also how TPMS changes are read.'
+                  : ''}
+              </p>
             </div>
-            
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-              {/* Device Type Selection */}
+
+            <div className="px-6 py-4 border-b bg-gray-50 grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
-                <select
-                  value={compareDeviceType}
-                  onChange={(e) => setCompareDeviceType(e.target.value as 'LV' | 'MV' | 'Total')}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
-                >
-                  <option value="Total">Total (All Devices)</option>
-                  <option value="LV">LV Devices</option>
-                  <option value="MV">MV Devices</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Base Revision (Reference)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Base revision</label>
                 <select
                   value={compareBaseRevision}
-                  onChange={(e) => setCompareBaseRevision(e.target.value)}
+                  onChange={e => { setCompareBaseRevision(e.target.value); setDiff(null); }}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
                   disabled={loadingRevisions}
                 >
-                  <option value="">Select base revision...</option>
+                  <option value="">Select…</option>
                   {revisions.map((rev, idx) => (
                     <option key={rev._id || idx} value={rev._id}>
-                      Revision {rev.revisionNumber}: {rev.revisionName}
+                      {revisionLabel(rev)} — {rev.revisionName}
                     </option>
                   ))}
                 </select>
               </div>
-              
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Target Revision (To Compare)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Compare with</label>
                 <select
                   value={compareTargetRevision}
-                  onChange={(e) => setCompareTargetRevision(e.target.value)}
+                  onChange={e => { setCompareTargetRevision(e.target.value); setDiff(null); }}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
                   disabled={loadingRevisions}
                 >
-                  <option value="">Select target revision...</option>
+                  <option value="">Select…</option>
                   {revisions.map((rev, idx) => (
                     <option key={rev._id || idx} value={rev._id}>
-                      Revision {rev.revisionNumber}: {rev.revisionName}
+                      {revisionLabel(rev)} — {rev.revisionName}
                     </option>
                   ))}
                 </select>
-              </div>
-              
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <p className="text-sm text-blue-800">
-                  <strong>Note:</strong> Comparison will generate both PDF and Excel reports showing:
-                </p>
-                <ul className="text-sm text-blue-700 mt-2 list-disc list-inside space-y-1">
-                  <li>Added equipment/templates</li>
-                  <li>Removed equipment/templates</li>
-                  <li>Modified properties with old/new values</li>
-                </ul>
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+              {diffError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded mb-3">{diffError}</div>
+              )}
+
+              {!diff && !diffError && (
+                <p className="text-sm text-gray-500">Pick two revisions and press Compare.</p>
+              )}
+
+              {diff && (
+                <div className="space-y-4">
+                  <div className="flex gap-3 text-sm">
+                    <span className="px-2 py-1 rounded bg-green-100 text-green-800">{diff.totals.added} added</span>
+                    <span className="px-2 py-1 rounded bg-red-100 text-red-800">{diff.totals.removed} removed</span>
+                    <span className="px-2 py-1 rounded bg-amber-100 text-amber-800">{diff.totals.changed} changed</span>
+                  </div>
+
+                  {diff.isEmpty && (
+                    <p className="text-sm text-gray-600">These two revisions are identical.</p>
+                  )}
+
+                  {(diff.project.length > 0 || diff.techSettings.length > 0) && (
+                    <div className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm font-medium">Project &amp; technical settings</div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {[...diff.project, ...diff.techSettings].map((c, i) => (
+                            <tr key={i} className="border-t border-gray-100">
+                              <td className="px-3 py-1.5 text-gray-600 w-56">{c.field}</td>
+                              <td className="px-3 py-1.5 text-red-700 line-through">{c.from || '—'}</td>
+                              <td className="px-3 py-1.5 text-green-700">{c.to || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {diff.equipments.map(eq => (
+                    <div key={`${eq.type}-${eq.name}`} className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                          eq.type === 'LV' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{eq.type}</span>
+                        <span className="font-medium">{eq.name}</span>
+                        {eq.kind !== 'changed' && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                            eq.kind === 'added' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {eq.kind}
+                          </span>
+                        )}
+                        <span className="text-gray-500 ml-auto">
+                          {eq.counts.added} added · {eq.counts.removed} removed · {eq.counts.changed} changed
+                          {eq.panel.length > 0 ? ` · ${eq.panel.length} panel field(s)` : ''}
+                        </span>
+                      </div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {eq.panel.map((c, i) => (
+                            <tr key={`p${i}`} className="border-t border-gray-100 bg-amber-50/40">
+                              <td className="px-3 py-1.5 text-gray-500 w-28">panel</td>
+                              <td className="px-3 py-1.5 text-gray-700 w-48">{c.field}</td>
+                              <td className="px-3 py-1.5 text-red-700 line-through">{c.from || '—'}</td>
+                              <td className="px-3 py-1.5 text-green-700">{c.to || '—'}</td>
+                            </tr>
+                          ))}
+                          {eq.lines.map(line => (
+                            <React.Fragment key={line.key}>
+                              <tr className="border-t border-gray-200">
+                                <td className="px-3 py-1.5 w-28">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                                    line.kind === 'added' ? 'bg-green-100 text-green-700'
+                                    : line.kind === 'removed' ? 'bg-red-100 text-red-700'
+                                    : 'bg-amber-100 text-amber-700'}`}>{line.kind}</span>
+                                </td>
+                                <td className="px-3 py-1.5 font-medium text-gray-800" colSpan={3}>
+                                  {line.feederNo || line.key}
+                                  {line.description ? <span className="text-gray-500 font-normal"> — {line.description}</span> : null}
+                                </td>
+                              </tr>
+                              {line.kind === 'changed' && line.changes.map((c, i) => (
+                                <tr key={`${line.key}-${i}`} className="border-t border-gray-50">
+                                  <td className="px-3 py-1"></td>
+                                  <td className="px-3 py-1 text-gray-600 w-48">{c.field}</td>
+                                  <td className="px-3 py-1 text-red-700 line-through">{c.from || '—'}</td>
+                                  <td className="px-3 py-1 text-green-700">{c.to || '—'}</td>
+                                </tr>
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+
+                  {diff.templates.length > 0 && (
+                    <div className="border rounded">
+                      <div className="px-3 py-2 bg-gray-50 border-b text-sm font-medium">Templates</div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {diff.templates.map(t => (
+                            <React.Fragment key={`${t.type}-${t.name}`}>
+                              <tr className="border-t border-gray-200">
+                                <td className="px-3 py-1.5 w-28">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                                    t.kind === 'added' ? 'bg-green-100 text-green-700'
+                                    : t.kind === 'removed' ? 'bg-red-100 text-red-700'
+                                    : 'bg-amber-100 text-amber-700'}`}>{t.kind}</span>
+                                </td>
+                                <td className="px-3 py-1.5 font-medium text-gray-800" colSpan={3}>
+                                  {t.name} <span className="text-gray-400">({t.type})</span>
+                                </td>
+                              </tr>
+                              {t.changes.map((c, i) => (
+                                <tr key={`${t.name}-${i}`} className="border-t border-gray-50">
+                                  <td className="px-3 py-1"></td>
+                                  <td className="px-3 py-1 text-gray-600 w-48">{c.field}</td>
+                                  <td className="px-3 py-1 text-red-700 line-through whitespace-pre-wrap">{c.from || '—'}</td>
+                                  <td className="px-3 py-1 text-green-700 whitespace-pre-wrap">{c.to || '—'}</td>
+                                </tr>
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between gap-2 px-6 py-4 border-t bg-gray-50">
               <button
                 className="px-4 py-2 border rounded text-sm hover:bg-gray-100"
-                onClick={() => {
-                  setShowCompareModal(false);
-                  setCompareBaseRevision('');
-                  setCompareTargetRevision('');
-                }}
+                onClick={() => { setShowCompareModal(false); setDiff(null); setDiffError(''); }}
               >
-                Cancel
+                Close
               </button>
-              <button
-                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
-                disabled={!compareBaseRevision || !compareTargetRevision}
-                onClick={handleCompareRevisions}
-              >
-                Generate Reports (PDF + Excel)
-              </button>
+              <div className="flex gap-2">
+                <button
+                  className="px-4 py-2 border border-emerald-300 text-emerald-800 rounded text-sm hover:bg-emerald-50 disabled:opacity-40"
+                  disabled={!diff}
+                  onClick={downloadComparison}
+                >
+                  Excel (.xlsx)
+                </button>
+                <button
+                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                  disabled={!compareBaseRevision || !compareTargetRevision}
+                  onClick={runComparison}
+                >
+                  Compare
+                </button>
+              </div>
             </div>
           </div>
         </div>

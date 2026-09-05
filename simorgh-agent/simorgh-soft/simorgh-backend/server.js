@@ -9,6 +9,12 @@ import multer from 'multer';
 import { PDFParse } from 'pdf-parse';
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { registerDesktopRoutes } from './desktopDownload.js';
+import { registerTpmsImportRoutes } from './tpmsImport.js';
+import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 
 dotenv.config();
 
@@ -18,7 +24,12 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const DATABASE_NAME = process.env.DATABASE_NAME || 'simorgh_db';
 
 app.use(cors());
-app.use(express.json());
+// A project's snapshot is the whole project — for a switchgear plant with a
+// dozen panels that is megabytes, and express.json()'s default 100 KB was
+// rejecting every save of one with 413 "entity.too.large". Reads were fine,
+// which is exactly why a big project appeared to open and then never landed.
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.JSON_BODY_LIMIT || '100mb' }));
 
 let db;
 
@@ -190,6 +201,25 @@ app.get('/api/projects/name/:name', async (req, res) => {
   }
 });
 
+// Get one project by its _id. Declared after /search and /name/:name so those
+// literal paths keep matching first — this one only catches real ids.
+app.get('/api/projects/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  try {
+    const project = await db.collection('projects').findOne({ _id: new ObjectId(id) });
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json(project);
+  } catch (error) {
+    console.error('Error fetching project by id:', error);
+    res.status(500).json({ error: 'Failed to fetch project' });
+  }
+});
+
 app.post('/api/projects', async (req, res) => {
   try {
     // Check if project with same name already exists
@@ -223,6 +253,16 @@ app.put('/api/projects/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to update project' });
   }
 });
+
+// Windows desktop client — the installer drop folder and its two routes.
+registerDesktopRoutes(app);
+
+// TPMS import — the same MySQL reads Eplanix does, mapped for this app.
+registerTpmsImportRoutes(app, connectToMySql);
+
+// EPLAN symbols — the single-line symbol each part carries in EPLAN's parts
+// database, plus the folder of symbols exported from EPLAN itself.
+registerEplanSymbolRoutes(app, connectToSqlServer, process.env.EPLAN_SYMBOL_DIR);
 
 app.get('/api/health', async (req, res) => {
   try {
@@ -277,119 +317,16 @@ app.get('/', (req, res) => {
  * Returns: [{ value: IdprojectMain, text: Oenum + ProjectName }]
  * Equivalent to C#: _tpmsContext.ViewProjectMains.Select(p => new SelectListItem { Value = p.IdprojectMain.ToString(), Text = p.Oenum + p.ProjectName })
  */
-app.get('/api/tpms/projects', async (req, res) => {
-  console.log('📥 GET /api/tpms/projects - Request received');
-
-  try {
-    const pool = await connectToMySql();
-
-    // Query ViewProjectMains table (READ-ONLY)
-    // Matches C# query: Select(p => new SelectListItem { Value = p.IdprojectMain.ToString(), Text = p.Oenum + p.ProjectName })
-    const [rows] = await pool.execute(`
-      SELECT
-        IdprojectMain as value,
-        CONCAT(COALESCE(Oenum, ''), COALESCE(ProjectName, '')) as text
-      FROM ViewProjectMains
-      ORDER BY ProjectName
-    `);
-
-    console.log(`✅ Loaded ${rows.length} projects from TPMS`);
-
-    res.json({
-      success: true,
-      count: rows.length,
-      projects: rows
-    });
-
-  } catch (err) {
-    console.error("❌ Error in /api/tpms/projects:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      projects: []
-    });
-  }
-});
 
 /**
  * GET /api/tpms/scopes/:projectId - Get scopes for a project
  * For future implementation when needed
  */
-app.get('/api/tpms/scopes/:projectId', async (req, res) => {
-  console.log('📥 GET /api/tpms/scopes - Request received');
-
-  try {
-    const pool = await connectToMySql();
-    const { projectId } = req.params;
-
-    // Query for scopes based on project (READ-ONLY)
-    // Adjust table/column names based on your actual schema
-    const [rows] = await pool.execute(`
-      SELECT
-        IdScope as value,
-        ScopeName as text
-      FROM ViewScopes
-      WHERE IdprojectMain = ?
-      ORDER BY ScopeName
-    `, [projectId]);
-
-    console.log(`✅ Loaded ${rows.length} scopes for project ${projectId}`);
-
-    res.json({
-      success: true,
-      count: rows.length,
-      scopes: rows
-    });
-
-  } catch (err) {
-    console.error("❌ Error in /api/tpms/scopes:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      scopes: []
-    });
-  }
-});
 
 /**
  * GET /api/tpms/revisions/:scopeId - Get revisions for a scope
  * For future implementation when needed
  */
-app.get('/api/tpms/revisions/:scopeId', async (req, res) => {
-  console.log('📥 GET /api/tpms/revisions - Request received');
-
-  try {
-    const pool = await connectToMySql();
-    const { scopeId } = req.params;
-
-    // Query for revisions based on scope (READ-ONLY)
-    // Adjust table/column names based on your actual schema
-    const [rows] = await pool.execute(`
-      SELECT
-        IdRevision as value,
-        RevName as text
-      FROM ViewRevisions
-      WHERE IdScope = ?
-      ORDER BY RevName
-    `, [scopeId]);
-
-    console.log(`✅ Loaded ${rows.length} revisions for scope ${scopeId}`);
-
-    res.json({
-      success: true,
-      count: rows.length,
-      revisions: rows
-    });
-
-  } catch (err) {
-    console.error("❌ Error in /api/tpms/revisions:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      revisions: []
-    });
-  }
-});
 
 // ============================================
 // ADDED: SQL Parts API with Manufacturer Filter

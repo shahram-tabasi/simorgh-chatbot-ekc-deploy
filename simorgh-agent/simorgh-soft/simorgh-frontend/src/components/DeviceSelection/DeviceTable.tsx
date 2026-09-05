@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { PlusIcon, UploadIcon, MoveIcon, Trash2Icon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import { DeviceItem, DeviceRow } from '../../types/project';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 
 interface DeviceTableProps {
   devices: DeviceItem[];

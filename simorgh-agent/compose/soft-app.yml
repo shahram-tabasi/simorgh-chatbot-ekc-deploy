@@ -28,6 +28,15 @@ services:
       - MYSQL_USER=${MYSQL_USER}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      - EPLAN_SYMBOL_DIR=/app/eplan-symbols
+    volumes:
+      # Windows installer drop folder — the app offers whatever .exe is in here,
+      # so publishing a new desktop build is a copy, not an image rebuild.
+      - ../simorgh-soft/simorgh-backend/downloads:/app/downloads:ro
+      # Symbols exported from EPLAN as SVG, named after the symbol (SG3.svg).
+      # Whatever is in here is drawn on the single line instead of the app's
+      # own symbol — again a copy, not an image rebuild.
+      - ../simorgh-soft/simorgh-backend/eplan-symbols:/app/eplan-symbols:ro
     depends_on:
       simorgh-soft-mongo:
         condition: service_healthy
