@@ -36,13 +36,25 @@ downloads on the first run and keeps in `~/.cache/electron-builder`. The build
 takes about two minutes and lands in
 `release/SimorghDesignSuite-Setup-<version>.exe` (~76 MB).
 
-**From GitHub Actions — there is always one waiting**
+**From GitHub — there is always one waiting**
 
-Every push that touches this folder builds the installer, so the newest run
-already has one:
+Every push that touches this folder builds the installer and publishes it, so
+the newest build is always at the same address:
 
-> Actions → **Desktop installer (Windows)** → the newest run → **Artifacts** →
-> `SimorghDesignSuite-Setup-<version>` → unzip → the `.exe` is inside.
+> **Releases → `desktop-latest`** →
+> `SimorghDesignSuite-Setup-<version>.exe`
+
+```
+https://github.com/shahram-tabasi/simorgh-chatbot-ekc-deploy/releases/tag/desktop-latest
+```
+
+The same file is attached to the run as an artifact too — Actions → **Desktop
+installer (Windows)** → the newest run → **Artifacts** — but that copy is the
+first thing to go when the account's Actions artifact storage fills up (the
+upload then fails with *Artifact storage quota has been hit*, which is why the
+release is the one to rely on). Freeing that quota is a matter of deleting old
+artifacts under Actions, or lowering the retention in
+Settings → Actions → *Artifact and log retention*.
 
 **Building one on demand**
 

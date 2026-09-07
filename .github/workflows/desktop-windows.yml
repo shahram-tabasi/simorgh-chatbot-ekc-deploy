@@ -71,12 +71,37 @@ jobs:
       - name: Build the installer
         run: npm run dist:win
 
+      # The artifact is the convenient copy — and it is the one that goes when
+      # the account's artifact storage fills up, which is why the installer is
+      # published as a release below as well. A full quota must not fail a
+      # build whose installer is finished.
       - name: Upload the installer
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: SimorghDesignSuite-Setup-${{ steps.version.outputs.value }}
           path: simorgh-agent/simorgh-soft/desktop/release/*.exe
           if-no-files-found: error
+
+      # The newest build, always at the same address, whatever the artifact
+      # storage is doing:
+      #   .../releases/download/desktop-latest/SimorghDesignSuite-Setup-<version>.exe
+      - name: Publish it as the latest build
+        if: github.event_name != 'workflow_dispatch' || !inputs.make_release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: simorgh-agent/simorgh-soft/desktop/release/*.exe
+          tag_name: desktop-latest
+          name: Simorgh Design Suite — latest Windows build
+          prerelease: true
+          body: |
+            The Windows installer as it is built from `${{ github.ref_name }}`,
+            replaced by every build — version ${{ steps.version.outputs.value }},
+            commit ${{ github.sha }}.
+
+            Install it (no admin rights needed), then give it the address of the
+            server that serves `/simorgh-design-suite/`. It can be changed later
+            from **File → Change server address…**.
 
       # Asked for outright, the .exe also becomes a release, which gives it a
       # plain URL to hand out — or to drop into the server's downloads folder.
