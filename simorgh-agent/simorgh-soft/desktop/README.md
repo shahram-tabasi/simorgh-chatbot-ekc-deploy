@@ -18,8 +18,33 @@ Windows (or on Linux with wine, which the deploy environment does not have).
 **Through GitHub Actions (no Windows machine needed)**
 
 1. Actions → **Desktop installer (Windows)** → *Run workflow*.
-   (Pushing a tag that starts with `desktop-v` runs it too.)
-2. Download **SimorghDesignSuite-Windows-Setup** from the finished run.
+   * **Server address** — the site this build should open, e.g.
+     `http://192.168.1.68/simorgh-design-suite/`. Leave it blank and the app
+     asks on first run, as it always has.
+   * Run it on whichever branch carries the version you want to ship.
+2. Download **SimorghDesignSuite-Setup-<version>** from the finished run
+   and unzip it — the `.exe` is inside.
+
+A tag builds it too, and attaches the `.exe` to a release, which gives it a
+plain URL to hand out:
+
+```bash
+git tag desktop-v1.0.0 && git push origin desktop-v1.0.0
+```
+
+**Serving it from the app itself**
+
+The suite offers the installer for download from its own footer. Put the `.exe`
+in `simorgh-backend/downloads/` on the server — the folder is mounted into the
+container, so it is a copy, not a rebuild:
+
+```bash
+scp SimorghDesignSuite-Setup-1.0.0.exe \
+    ubuntu@server:~/simorgh-chatbot-ekc-deploy/simorgh-agent/simorgh-soft/simorgh-backend/downloads/
+```
+
+Whatever `.exe` is newest in that folder is what `/api/desktop/latest` reports
+and the download button serves.
 
 **On a Windows machine**
 
@@ -27,6 +52,13 @@ Windows (or on Linux with wine, which the deploy environment does not have).
 cd simorgh-agent\simorgh-soft\desktop
 npm install
 npm run dist:win
+```
+
+To have that build open a particular server by itself, write the address beside
+`main.js` before building:
+
+```powershell
+'{ "url": "http://192.168.1.68/simorgh-design-suite/" }' | Set-Content server.json
 ```
 
 The installer lands in `desktop\release\SimorghDesignSuite-Setup-<version>.exe`.
@@ -42,7 +74,8 @@ SIMORGH_URL=http://localhost/simorgh-design-suite/ npm start
 ```
 
 `SIMORGH_URL` only sets what the first-run dialog suggests; once an address is
-saved, the saved one wins.
+saved, the saved one wins. The order is: the address the user saved →
+`SIMORGH_URL` → `server.json` baked into the build → `http://localhost/simorgh-design-suite/`.
 
 ## Version
 

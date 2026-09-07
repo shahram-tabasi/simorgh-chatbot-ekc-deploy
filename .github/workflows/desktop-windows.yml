@@ -1,14 +1,29 @@
 # Builds the Windows installer for the Simorgh Design Suite desktop client.
+#
 # electron-builder needs a Windows runner for an NSIS installer, so this is the
-# supported way to produce the .exe — run it from the Actions tab, or let it run
-# on a tag, and download the installer from the run's artifacts.
+# supported way to produce the .exe: run it from the Actions tab, or push a tag
+# that starts with `desktop-v`, and take the installer from the run's artifacts
+# (a tag also attaches it to a release, which gives it a plain download URL).
+#
+# The installer carries no database and no backend — the suite keeps running in
+# the simorgh-soft container, and this is the window onto it. `server_url` bakes
+# the site's own address into the build, so the first run already points at the
+# right server instead of asking for it.
 name: Desktop installer (Windows)
 
 on:
   workflow_dispatch:
+    inputs:
+      server_url:
+        description: 'Server address the app opens (blank = ask on first run)'
+        required: false
+        default: ''
   push:
     tags:
       - 'desktop-v*'
+
+permissions:
+  contents: write          # so a tagged build can attach the .exe to a release
 
 jobs:
   build:
@@ -23,9 +38,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
+          cache-dependency-path: simorgh-agent/simorgh-soft/desktop/package-lock.json
+
+      # The version in the file name and in Help → About.
+      - name: Read the version
+        id: version
+        shell: bash
+        run: echo "value=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Shipped inside the app when an address was given; skipped otherwise, and
+      # then the app asks on first run as it always has.
+      - name: Bake in the server address
+        if: inputs.server_url != ''
+        shell: bash
+        run: |
+          node -e "require('fs').writeFileSync('server.json', JSON.stringify({ url: process.argv[1] }, null, 2))" "${{ inputs.server_url }}"
+          cat server.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build the installer
         run: npm run dist:win
@@ -33,6 +65,21 @@ jobs:
       - name: Upload the installer
         uses: actions/upload-artifact@v4
         with:
-          name: SimorghDesignSuite-Windows-Setup
+          name: SimorghDesignSuite-Setup-${{ steps.version.outputs.value }}
           path: simorgh-agent/simorgh-soft/desktop/release/*.exe
           if-no-files-found: error
+
+      # A tagged build is a release, so the .exe has a URL that can be handed
+      # out — and dropped straight into the server's downloads folder.
+      - name: Attach it to the release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: simorgh-agent/simorgh-soft/desktop/release/*.exe
+          name: Simorgh Design Suite ${{ steps.version.outputs.value }} — Windows
+          body: |
+            Windows installer for the Simorgh Design Suite desktop client.
+
+            Install it (no admin rights needed), then give it the address of the
+            server that serves `/simorgh-design-suite/`. It can be changed later
+            from **File → Change server address…**.

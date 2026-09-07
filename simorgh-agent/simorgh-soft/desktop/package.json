@@ -27,6 +27,7 @@
       "main.js",
       "preload.js",
       "setup.html",
+      "server.json",
       "build/icon.png",
       "build/icon.ico"
     ],

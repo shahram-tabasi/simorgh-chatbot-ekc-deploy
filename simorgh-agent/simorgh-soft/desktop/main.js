@@ -10,7 +10,20 @@ const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron')
 const path = require('path');
 const fs = require('fs');
 
-const DEFAULT_URL = process.env.SIMORGH_URL || 'http://localhost/simorgh-design-suite/';
+// The address the first-run dialog suggests. A build can carry the site's own
+// address in server.json beside this file — the installer then already points
+// at the right server and nobody has to type it — and SIMORGH_URL overrides
+// even that, for running it from a terminal during development.
+function packagedUrl() {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(__dirname, 'server.json'), 'utf8')).url || '');
+  } catch {
+    return '';
+  }
+}
+
+const DEFAULT_URL =
+  process.env.SIMORGH_URL || packagedUrl() || 'http://localhost/simorgh-design-suite/';
 const configPath = () => path.join(app.getPath('userData'), 'config.json');
 
 function readConfig() {
