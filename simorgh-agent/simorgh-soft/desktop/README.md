@@ -36,7 +36,15 @@ downloads on the first run and keeps in `~/.cache/electron-builder`. The build
 takes about two minutes and lands in
 `release/SimorghDesignSuite-Setup-<version>.exe` (~76 MB).
 
-**Through GitHub Actions (no Windows machine needed)**
+**From GitHub Actions — there is always one waiting**
+
+Every push that touches this folder builds the installer, so the newest run
+already has one:
+
+> Actions → **Desktop installer (Windows)** → the newest run → **Artifacts** →
+> `SimorghDesignSuite-Setup-<version>` → unzip → the `.exe` is inside.
+
+**Building one on demand**
 
 1. Actions → **Desktop installer (Windows)** → *Run workflow*.
    * **Server address** — the site this build should open, e.g.
@@ -46,12 +54,9 @@ takes about two minutes and lands in
 2. Download **SimorghDesignSuite-Setup-<version>** from the finished run
    and unzip it — the `.exe` is inside.
 
-A tag builds it too, and attaches the `.exe` to a release, which gives it a
-plain URL to hand out:
-
-```bash
-git tag desktop-v1.0.0 && git push origin desktop-v1.0.0
-```
+   * **Also publish it as a GitHub release** — ticking this attaches the `.exe`
+     to a release tagged `desktop-v<version>`, which gives it a plain URL to
+     hand out instead of a zipped artifact.
 
 **Serving it from the app itself**
 

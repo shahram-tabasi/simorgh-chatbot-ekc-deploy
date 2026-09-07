@@ -12,15 +12,24 @@
 name: Desktop installer (Windows)
 
 on:
+  # Every push that touches the desktop client builds it, so a finished
+  # installer is always waiting in Actions → the newest run → Artifacts.
+  push:
+    branches: ['**']
+    paths:
+      - 'simorgh-agent/simorgh-soft/desktop/**'
+      - '.github/workflows/desktop-windows.yml'
   workflow_dispatch:
     inputs:
       server_url:
         description: 'Server address the app opens (blank = ask on first run)'
         required: false
         default: ''
-  push:
-    tags:
-      - 'desktop-v*'
+      make_release:
+        description: 'Also publish it as a GitHub release'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write          # so a tagged build can attach the .exe to a release
@@ -50,7 +59,7 @@ jobs:
       # Shipped inside the app when an address was given; skipped otherwise, and
       # then the app asks on first run as it always has.
       - name: Bake in the server address
-        if: inputs.server_url != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.server_url != ''
         shell: bash
         run: |
           node -e "require('fs').writeFileSync('server.json', JSON.stringify({ url: process.argv[1] }, null, 2))" "${{ inputs.server_url }}"
@@ -69,13 +78,14 @@ jobs:
           path: simorgh-agent/simorgh-soft/desktop/release/*.exe
           if-no-files-found: error
 
-      # A tagged build is a release, so the .exe has a URL that can be handed
-      # out — and dropped straight into the server's downloads folder.
-      - name: Attach it to the release
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
+      # Asked for outright, the .exe also becomes a release, which gives it a
+      # plain URL to hand out — or to drop into the server's downloads folder.
+      - name: Publish it as a release
+        if: github.event_name == 'workflow_dispatch' && inputs.make_release
         uses: softprops/action-gh-release@v2
         with:
           files: simorgh-agent/simorgh-soft/desktop/release/*.exe
+          tag_name: desktop-v${{ steps.version.outputs.value }}
           name: Simorgh Design Suite ${{ steps.version.outputs.value }} — Windows
           body: |
             Windows installer for the Simorgh Design Suite desktop client.
