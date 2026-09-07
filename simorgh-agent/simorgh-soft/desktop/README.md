@@ -12,8 +12,29 @@ later from **File → Change server address…**.
 
 ## Building the installer
 
-The `.exe` is an NSIS installer, which electron-builder can only produce on
-Windows (or on Linux with wine, which the deploy environment does not have).
+The `.exe` is an NSIS installer. Any of these three produce the same file.
+
+**On the Linux server (one command)**
+
+```bash
+cd simorgh-agent/simorgh-soft/desktop
+./build-win.sh                                        # asks for the server on first run
+./build-win.sh http://192.168.1.68/simorgh-design-suite/   # or opens it by itself
+```
+
+It needs wine once — including its 32-bit side, because the NSIS stub and
+rcedit (which writes the icon and version into the .exe) are 32-bit programs:
+
+```bash
+sudo dpkg --add-architecture i386
+sudo apt-get update
+sudo apt-get install -y wine libgd3:i386 wine32:i386
+```
+
+Everything else — the Electron binaries, NSIS, rcedit — electron-builder
+downloads on the first run and keeps in `~/.cache/electron-builder`. The build
+takes about two minutes and lands in
+`release/SimorghDesignSuite-Setup-<version>.exe` (~76 MB).
 
 **Through GitHub Actions (no Windows machine needed)**
 

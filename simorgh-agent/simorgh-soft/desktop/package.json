@@ -17,6 +17,7 @@
   },
   "build": {
     "appId": "ir.simorghfanavari.designsuite",
+    "publish": null,
     "productName": "Simorgh Design Suite",
     "copyright": "© Simorgh Smart Technology of Iranians Co.",
     "directories": {
