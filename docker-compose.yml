@@ -18,6 +18,12 @@
 # ./deploy-soft.sh does the same thing with a health check after it.
 # =============================================================================
 
+# The project name compose uses when it is run from simorgh-agent/ is that
+# folder's name. Pinning it here means the two ways of running it are the same
+# project — the same containers and the same network, not a second set beside
+# the running one.
+name: simorgh-agent
+
 include:
   - path: simorgh-agent/docker-compose.yml
     project_directory: simorgh-agent
