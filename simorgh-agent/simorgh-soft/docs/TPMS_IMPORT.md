@@ -347,3 +347,31 @@ objects. They now query `View_Project_Main` and `View_draft`, which is what
 TPMS actually has. The project list also returns `code` (OE number) and
 `name` separately, so the combo box can show the OE number muted in front of
 the name the way it does for the suite's own projects.
+
+## Deploying it
+
+```bash
+cd ~/simorgh-chatbot-ekc-deploy
+git pull
+./deploy-soft.sh
+```
+
+`deploy-soft.sh` rebuilds and restarts the Design Suite container, prints its
+state and health, and says whether this pull touched anything nginx serves. It
+runs compose from `simorgh-agent/`, where the compose file and its `.env` live
+— compose run from the repository root reports `no configuration file
+provided: not found`, because there is none there.
+
+nginx is a separate matter and rarely needed: a rebuild replaces the app inside
+its container and leaves both proxies alone. Only a change under
+`simorgh-agent/nginx_configs/` (the container's nginx) or `host-nginx-config/`
+(the host's) needs one, and the host's reload wants root:
+
+```bash
+docker compose exec nginx nginx -t && docker compose exec nginx nginx -s reload
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+A symbol dropped into `simorgh-backend/eplan-symbols/` needs neither: the
+folder is mounted into the container, so a copy and a hard refresh
+(Ctrl+Shift+R) is the whole of it.
