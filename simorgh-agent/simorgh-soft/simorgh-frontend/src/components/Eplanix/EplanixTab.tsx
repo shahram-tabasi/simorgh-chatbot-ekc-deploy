@@ -10,7 +10,13 @@ import {
   EPLAN_HEADERS, EplanSymbolMap, buildEplanRows, buildSingleLinePages, buildSingleLineHtml,
   buildSymbolLibraryHtml, partKeys,
 } from '../../utils/eplanSingleLine';
-import { IEC_SYMBOLS, SYMBOL_GROUPS, CELL } from '../../utils/iecSymbols';
+import {
+  IEC_SYMBOLS, SYMBOL_GROUPS, CELL, SymbolId, SymbolOverride,
+  setSymbolOverrides, symbolOverride, symbolHeight, drawIecSymbol,
+} from '../../utils/iecSymbols';
+
+// The library's own ids, to match a file in the pack against by name.
+const SYMBOL_IDS = new Map(Object.keys(IEC_SYMBOLS).map(id => [id.toLowerCase(), id as SymbolId]));
 import {
   LAYOUT_HEADERS, buildPanelLayout, buildLayoutRows, buildLayoutSvg, buildLayoutHtml,
 } from '../../utils/panelLayout';
@@ -78,6 +84,7 @@ export const EplanixTab: React.FC = () => {
   // What EPLAN says each part is — the symbol it places for it. Without this
   // the drawing falls back to the slot the part sits in.
   const [symbols, setSymbols] = useState<EplanSymbolMap>({});
+  const [packReplaced, setPackReplaced] = useState(0);
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
 
   const equipments = projectData.equipments ?? [];
@@ -108,20 +115,47 @@ export const EplanixTab: React.FC = () => {
       if (cancelled) return;
       // A symbol the office exported from EPLAN is used as it is; the rest are
       // drawn here, from what EPLAN says the part is.
-      const packLower = new Map(pack.map(name => [name.toLowerCase(), name]));
+      const packLower = new Map(pack.map(entry => [entry.name.toLowerCase(), entry]));
       const map: EplanSymbolMap = {};
       let fromPack = 0;
       for (const [key, entry] of Object.entries(found)) {
         const exported = packLower.get(String(entry.symbol || '').toLowerCase());
         if (exported) fromPack += 1;
-        map[key] = { ...entry, packUrl: exported ? eplanSymbolService.svgUrl(exported) : undefined };
+        map[key] = {
+          ...entry,
+          packUrl: exported ? eplanSymbolService.svgUrl(exported.name) : undefined,
+          packWidth: exported?.width,
+          packHeight: exported?.height,
+          packPinX: exported?.pinX,
+        };
       }
       setSymbols(map);
+
+      // A file named after one of the library's own symbols — `vcb.svg`,
+      // `current-transformer.svg` — replaces that symbol everywhere, with no
+      // part number and no EPLAN look-up involved.
+      const overrides: Partial<Record<SymbolId, SymbolOverride>> = {};
+      let replaced = 0;
+      for (const entry of pack) {
+        const id = SYMBOL_IDS.get(entry.name.toLowerCase());
+        if (!id) continue;
+        overrides[id] = {
+          url: eplanSymbolService.svgUrl(entry.name),
+          width: entry.width, height: entry.height, pinX: entry.pinX,
+          cells: entry.cells, title: entry.title,
+        };
+        replaced += 1;
+      }
+      setSymbolOverrides(overrides);
+      setPackReplaced(replaced);
       const matched = new Set(Object.values(found).map(e => e.partNumber || e.symbol)).size;
+      const replacedNote = Object.keys(overrides).length > 0
+        ? ` ${Object.keys(overrides).length} library symbol(s) replaced by the pack.` : '';
       setSymbolNote(
-        Object.keys(found).length === 0
+        (Object.keys(found).length === 0
           ? 'EPLAN parts database has no symbol for these parts (or is out of reach) — symbols come from the template slots.'
-          : `EPLAN symbols: ${matched} part(s) matched${fromPack > 0 ? `, ${fromPack} drawn with symbols exported from EPLAN` : ''}.`);
+          : `EPLAN symbols: ${matched} part(s) matched${fromPack > 0 ? `, ${fromPack} drawn with symbols exported from EPLAN` : ''}.`)
+        + replacedNote);
     })();
     return () => { cancelled = true; };
   }, [partCodes]);
@@ -393,8 +427,13 @@ export const EplanixTab: React.FC = () => {
                   {Object.keys(IEC_SYMBOLS).length} single-line symbols
                 </p>
                 <p className="text-xs text-gray-500">
-                  What the drawing uses for each device. A symbol exported from EPLAN into the
-                  symbol pack replaces the one here, by name.
+                  What the drawing uses for each device. An SVG dropped into the symbol pack
+                  under one of these names replaces the symbol here, everywhere.
+                  {packReplaced > 0 && (
+                    <span className="text-emerald-700 font-medium">
+                      {' '}{packReplaced} replaced by the pack.
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
@@ -412,15 +451,27 @@ export const EplanixTab: React.FC = () => {
               <div key={group}>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{group}</p>
                 <div className="grid grid-cols-6 gap-3">
-                  {Object.values(IEC_SYMBOLS).filter(sym => sym.group === group).map(sym => (
-                    <div key={sym.id} className="border border-gray-200 rounded p-2 bg-white">
-                      <svg width="100%" height={CELL + 16} viewBox={`0 0 90 ${CELL + 16}`}>
-                        <g dangerouslySetInnerHTML={{ __html: sym.draw(28, 8) }} />
-                      </svg>
-                      <p className="text-[11px] text-gray-800 leading-tight mt-1">{sym.title}</p>
-                      <p className="text-[11px] text-gray-500 leading-tight" dir="rtl">{sym.titleFa}</p>
-                    </div>
-                  ))}
+                  {Object.values(IEC_SYMBOLS).filter(sym => sym.group === group).map(sym => {
+                    // Drawn the way a sheet draws it, so a symbol the pack has
+                    // replaced shows here as what the drawing will use.
+                    const replaced = !!symbolOverride(sym.id);
+                    const tall = symbolHeight(sym.id) / CELL;
+                    return (
+                      <div key={sym.id}
+                           className={`border rounded p-2 bg-white ${
+                             replaced ? 'border-emerald-400' : 'border-gray-200'}`}>
+                        <svg width="100%" height={CELL + 16} viewBox={`0 0 90 ${CELL + 16}`}>
+                          <g transform={tall > 1 ? `translate(28 8) scale(${1 / tall}) translate(-28 -8)` : undefined}
+                             dangerouslySetInnerHTML={{ __html: drawIecSymbol(sym.id, 28, 8) }} />
+                        </svg>
+                        <p className="text-[11px] text-gray-800 leading-tight mt-1">{sym.title}</p>
+                        <p className="text-[11px] text-gray-500 leading-tight" dir="rtl">{sym.titleFa}</p>
+                        {replaced && (
+                          <p className="text-[10px] text-emerald-700 leading-tight">from the pack</p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}

@@ -317,6 +317,14 @@ differs between EPLAN versions. If the parts database is out of reach, or
 holds no symbol for a part, the drawing falls back to the slot mapping and the
 Eplanix tab says so.
 
+A file in that folder named after one of the library's own symbols — `vcb.svg`,
+`current-transformer.svg` — replaces that symbol **everywhere** instead of for
+one part, and the file itself says where its conductor runs (`data-pin-x`) and
+how many cells it takes (`data-cells`), so it lands on the branch line at the
+right size. `simorgh-backend/eplan-symbols/README.md` is the whole of it: both
+ways a file is used, what a file has to look like, how to turn a picture into
+one, what to do when it looks wrong, and the list of names.
+
 The symbol folder is `simorgh-backend/eplan-symbols/`, mounted read-only into
 the container at `/app/eplan-symbols` (`EPLAN_SYMBOL_DIR`) — adding a symbol
 is a copy, not a rebuild.

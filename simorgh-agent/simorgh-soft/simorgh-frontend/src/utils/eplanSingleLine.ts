@@ -19,7 +19,10 @@ import {
   templateParts, formatPartEntry, stripLocaleTags, getEplanixValue,
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
 } from './tierEquipmentMatrix';
-import { CELL, SymbolId, drawIecSymbol, symbolRight, buildSymbolCatalogueSvg } from './iecSymbols';
+import {
+  CELL, SymbolId, drawIecSymbol, symbolRight, symbolLeft, symbolHeight, overrideBox,
+  buildSymbolCatalogueSvg,
+} from './iecSymbols';
 
 export const EPLAN_HEADERS = [
   'Page', 'Higher-level function', 'Location', 'DT', 'Function text',
@@ -131,6 +134,11 @@ export interface EplanSymbolInfo {
   functionDefinition?: string;
   /** An SVG exported from EPLAN, when the symbol pack has one. */
   packUrl?: string;
+  /** That file's own box and the place its conductor runs in it, so it is
+   *  drawn to the cell with its connection point on the branch line. */
+  packWidth?: number;
+  packHeight?: number;
+  packPinX?: number;
 }
 export type EplanSymbolMap = Record<string, EplanSymbolInfo>;
 
@@ -401,8 +409,14 @@ export function buildSingleLinePages(
 function drawDevice(item: ChainItem, x: number, y: number): string {
   const url = item.eplan?.packUrl;
   if (url) {
+    const { w, h, dx } = overrideBox({
+      url,
+      width: item.eplan?.packWidth,
+      height: item.eplan?.packHeight,
+      pinX: item.eplan?.packPinX,
+    });
     return `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + CELL}" stroke="#111" stroke-width="0.8"/>` +
-      `<image href="${esc(url)}" x="${x - 18}" y="${y + 2}" width="36" height="36" ` +
+      `<image href="${esc(url)}" x="${x + dx}" y="${y}" width="${w}" height="${h}" ` +
       `preserveAspectRatio="xMidYMid meet"><title>${esc(item.eplan?.symbol || '')}</title></image>`;
   }
   return drawIecSymbol(item.id, x, y);
@@ -411,7 +425,14 @@ function drawDevice(item: ChainItem, x: number, y: number): string {
 // Where the text beside a device starts: clear of a symbol exported from
 // EPLAN (they are drawn 36 wide) or of the library symbol's own box.
 function labelOffset(item: ChainItem): number {
-  return item.eplan?.packUrl ? 24 : symbolRight(item.id) + 6;
+  if (item.eplan?.packUrl) {
+    const { w, dx } = overrideBox({
+      url: item.eplan.packUrl,
+      width: item.eplan.packWidth, height: item.eplan.packHeight, pinX: item.eplan.packPinX,
+    });
+    return Math.max(24, w + dx + 6);
+  }
+  return symbolRight(item.id) + 6;
 }
 
 // How much room a device needs down the line: its own cell, and enough for the
@@ -419,7 +440,7 @@ function labelOffset(item: ChainItem): number {
 // next device's tag.
 function stepFor(item: ChainItem): number {
   const lines = Math.min(item.accessories.length, 3);
-  return Math.max(CELL, 26 + lines * 9);
+  return Math.max(symbolHeight(item.id), CELL, 26 + lines * 9);
 }
 
 // ── The order of a cell, and what hangs off it ──────────────────────────────
@@ -826,7 +847,11 @@ function drawSheet(o: {
   // A cell with something beside the line needs the room for it: the shunts
   // stand to the left of the line with their tags, the instruments to the
   // right with theirs.
-  const branchDx = hasShunt ? 130 : 34;
+  // A symbol from the pack can reach out to the left — a breaker drawn with
+  // its racking does — so the line is set far enough in for the widest of them.
+  const reach = Math.max(...all.flatMap(b =>
+    [...b.series, ...b.instruments].map(i => symbolLeft(i.id))), 16);
+  const branchDx = Math.max(hasShunt ? 130 : 34, reach + 10);
   const colWidth = Math.max(200, hasShunt || wide ? branchDx + INSTR_DX + 104 : 0);
 
   const supplyWidth = o.supply ? colWidth : 90;

@@ -72,6 +72,8 @@ const solid = (x: number, y: number, w: number, h: number) =>
 const dot = (cx: number, cy: number, r = 1.6) => `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${S}"/>`;
 const path = (d: string, w = 1.2, fill = 'none') =>
   `<path d="${d}" fill="${fill}" stroke="${S}" stroke-width="${w}"/>`;
+const esc = (s: string) => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const txt = (x: number, y: number, s: string, size = 8, anchor = 'middle') =>
   `<text x="${x}" y="${y}" font-size="${size}" text-anchor="${anchor}" fill="${S}" font-family="Segoe UI, Arial, sans-serif">${s}</text>`;
 
@@ -602,13 +604,91 @@ const SYMBOL_RIGHT: Partial<Record<SymbolId, number>> = {
   transformer: 24, 'bus-duct': 20, 'key-interlock': 24, magnet: 24, heater: 24,
 };
 
+// ── Symbols exported from EPLAN, in place of the ones here ──────────────────
+//
+// A file in the symbol pack named after one of these ids — `vcb.svg`,
+// `current-transformer.svg` — replaces that symbol everywhere: on every sheet,
+// in the printed set and in the library view. It is drawn to the same cell:
+// scaled to the cell's height, and placed so its own conductor (`data-pin-x`
+// in the file, the middle of it otherwise) lands on the branch line.
+export interface SymbolOverride {
+  url: string;
+  /** The symbol's own box, from its viewBox. */
+  width?: number;
+  height?: number;
+  /** Where the conductor runs inside that box. */
+  pinX?: number;
+  /** How many cells down the line it takes (`data-cells` in the file). */
+  cells?: number;
+  title?: string;
+}
+
+let OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+
+/** Hand the library the pack's own symbols. Passing {} goes back to these. */
+export function setSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
+  OVERRIDES = map ?? {};
+}
+
+/** What the library will draw for an id, when the pack has replaced it. */
+export function symbolOverride(id: string): SymbolOverride | undefined {
+  return OVERRIDES[id as SymbolId];
+}
+
+/**
+ * The geometry an overriding symbol is drawn with.
+ *
+ * A symbol keeps its own proportions and takes as many cells down the line as
+ * those proportions ask for — a whole vacuum breaker with its racking is taller
+ * than it is wide and needs two, where a meter needs one. The file decides it
+ * outright with `data-cells`; otherwise it comes from the symbol's own box.
+ */
+export function overrideBox(o: SymbolOverride): { w: number; h: number; dx: number; cells: number } {
+  const w0 = o.width && o.width > 0 ? o.width : 1;
+  const h0 = o.height && o.height > 0 ? o.height : 1;
+  const cells = Math.max(1, Math.min(4, Math.round(o.cells ?? h0 / w0) || 1));
+  const h = cells * CELL;
+  const scale = h / h0;
+  const pin = o.pinX != null && o.pinX >= 0 && o.pinX <= w0 ? o.pinX : w0 / 2;
+  return { w: w0 * scale, h, dx: -pin * scale, cells };   // dx: the box's left, from x
+}
+
+/** How tall a symbol is on the line: one cell, or as many as an overriding
+ *  symbol from the pack asks for. */
+export function symbolHeight(id: string): number {
+  const o = symbolOverride(id);
+  return o ? overrideBox(o).h : CELL;
+}
+
 /** The right-hand extent of a symbol, so a caller can place text clear of it. */
 export function symbolRight(id: string): number {
+  const o = symbolOverride(id);
+  if (o) {
+    const { w, dx } = overrideBox(o);
+    return Math.max(16, w + dx);
+  }
   return SYMBOL_RIGHT[id as SymbolId] ?? 16;
+}
+
+/** The left-hand extent of a symbol — an overriding symbol can reach out to
+ *  the left, the way a breaker with its racking does. */
+export function symbolLeft(id: string): number {
+  const o = symbolOverride(id);
+  return o ? Math.max(16, -overrideBox(o).dx) : 16;
 }
 
 /** One symbol, drawn with the branch line through it. */
 export function drawIecSymbol(id: SymbolId, x: number, y: number): string {
+  const o = symbolOverride(id);
+  if (o) {
+    const { w, h, dx } = overrideBox(o);
+    // The line is drawn through the cell first: a symbol trimmed to its own
+    // ink leaves the conductor short at the top and the bottom otherwise.
+    return `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${S}" stroke-width="1"/>` +
+      `<image href="${esc(o.url)}" x="${x + dx}" y="${y}" width="${w}" height="${h}" ` +
+      `preserveAspectRatio="xMidYMid meet">` +
+      `<title>${esc(o.title || IEC_SYMBOLS[id]?.title || id)}</title></image>`;
+  }
   return (IEC_SYMBOLS[id] ?? IEC_SYMBOLS.link).draw(x, y);
 }
 
@@ -630,7 +710,13 @@ export function buildSymbolCatalogueSvg(perRow = 5): string {
       const bx = 20 + col * cellW;
       const by = y + row * cellH;
       out.push(box(bx, by, cellW - 8, cellH - 8, '#fff', 0.8));
-      out.push(symbol.draw(bx + 46, by + 10));
+      // Drawn the way the sheet draws it, so a symbol the pack has replaced is
+      // the one on show here too — scaled into the card when it is a tall one.
+      const tall = symbolHeight(symbol.id) / CELL;
+      const art = drawIecSymbol(symbol.id, bx + 46, by + 10);
+      out.push(tall > 1
+        ? `<g transform="translate(${bx + 46} ${by + 10}) scale(${1 / tall}) translate(${-(bx + 46)} ${-(by + 10)})">${art}</g>`
+        : art);
       out.push(`<text x="${bx + 8}" y="${by + cellH - 22}" font-size="9" fill="#111" font-family="Segoe UI, Arial, sans-serif">${symbol.title}</text>`);
       out.push(`<text x="${bx + 8}" y="${by + cellH - 11}" font-size="9" fill="#666" font-family="Segoe UI, Arial, sans-serif">${symbol.titleFa}</text>`);
     });

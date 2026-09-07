@@ -93,6 +93,51 @@ export function indexSymbolRows(rows) {
   return out;
 }
 
+// How big a symbol in the pack is, and where its conductor runs — so the
+// drawing can size it to the cell and put its own connection point on the
+// branch line instead of guessing at the middle of the picture.
+//
+//   viewBox / width / height   the symbol's own coordinate box
+//   data-pin-x / data-pin-y    the conductor's place in that box, optional
+//
+// Only the head of the file is read: an SVG carrying a bitmap can be large,
+// and everything wanted here is in its opening tag.
+export function readSymbolBox(file) {
+  let head = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    const buffer = Buffer.alloc(4096);
+    const read = fs.readSync(fd, buffer, 0, 4096, 0);
+    fs.closeSync(fd);
+    head = buffer.slice(0, read).toString('utf8');
+  } catch {
+    return {};
+  }
+  const tag = /<svg\b[^>]*>/i.exec(head)?.[0] ?? '';
+  const attr = name => new RegExp(`${name}\\s*=\\s*"([^"]*)"`, 'i').exec(tag)?.[1];
+  const number = value => {
+    const n = parseFloat(String(value ?? '').replace(/[^0-9.+-].*$/, ''));
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+
+  const box = (attr('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  const viewBox = box.length === 4 && box.every(Number.isFinite) ? box : null;
+  const width = viewBox ? viewBox[2] : number(attr('width'));
+  const height = viewBox ? viewBox[3] : number(attr('height'));
+  const pinX = number(attr('data-pin-x'));
+  const pinY = number(attr('data-pin-y'));
+  const cells = number(attr('data-cells'));
+
+  return {
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
+    ...(pinX != null ? { pinX } : {}),
+    ...(pinY != null ? { pinY } : {}),
+    ...(cells != null ? { cells } : {}),
+    ...(attr('data-title') ? { title: attr('data-title') } : {}),
+  };
+}
+
 export function registerEplanSymbolRoutes(app, getSqlPool, symbolDir) {
   const dir = symbolDir || path.join(process.cwd(), 'eplan-symbols');
   // Remembered after the first look-up so every request doesn't re-read
@@ -199,7 +244,7 @@ export function registerEplanSymbolRoutes(app, getSqlPool, symbolDir) {
       if (!fs.existsSync(dir)) return res.json({ success: true, dir, symbols: [] });
       const symbols = fs.readdirSync(dir)
         .filter(f => f.toLowerCase().endsWith('.svg'))
-        .map(f => path.basename(f, path.extname(f)));
+        .map(f => ({ name: path.basename(f, path.extname(f)), ...readSymbolBox(path.join(dir, f)) }));
       res.json({ success: true, dir, symbols });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message, symbols: [] });

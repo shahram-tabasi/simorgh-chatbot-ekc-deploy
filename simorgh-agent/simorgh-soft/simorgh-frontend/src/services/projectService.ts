@@ -104,6 +104,20 @@ export interface EplanSymbol {
   packUrl?: string;
 }
 
+/** One SVG in the symbol pack: its name, its own box, and where its conductor
+ *  runs inside that box (`data-pin-x`), so the drawing can put the symbol on
+ *  the branch line at the right size. */
+export interface PackSymbol {
+  name: string;
+  width?: number;
+  height?: number;
+  pinX?: number;
+  pinY?: number;
+  /** How many cells down the line it should take (`data-cells`). */
+  cells?: number;
+  title?: string;
+}
+
 export const eplanSymbolService = {
   async schema(): Promise<any> {
     const r = await fetch(`${API_BASE_URL}/eplan-symbols/schema`);
@@ -127,11 +141,15 @@ export const eplanSymbolService = {
     }
   },
 
-  async pack(): Promise<string[]> {
+  async pack(): Promise<PackSymbol[]> {
     try {
       const r = await fetch(`${API_BASE_URL}/eplan-symbols/pack`);
       if (!r.ok) return [];
-      return (await r.json()).symbols ?? [];
+      const list = (await r.json()).symbols ?? [];
+      // A name on its own is all older packs reported; the size and the pin
+      // come with it now.
+      return list.map((entry: any) =>
+        (typeof entry === 'string' ? { name: entry } : entry)) as PackSymbol[];
     } catch {
       return [];
     }
