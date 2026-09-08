@@ -262,6 +262,47 @@ export const DEFAULT_LOCAL_MODEL_URL =
 export const DEFAULT_LOCAL_MODEL_NAME =
   process.env.LOCAL_MODEL_NAME || 'qwen2.5-vl-7b';
 
+// The name a vLLM server answers to is whatever it was launched with — a
+// path, a tag, a shortened alias — and guessing it wrong is a 404 that reads
+// like the whole assistant is down ("The model qwen2.5-vl-7b does not
+// exist"). So ask the server what it serves, and use that. Cached for the
+// life of the process; re-asked when a call is refused.
+const servedModels = new Map();   // chat URL → the ids that URL serves
+
+/** `…/v1/chat/completions` → `…/v1/models`. */
+function modelsUrlFor(chatUrl) {
+  return String(chatUrl).replace(/\/chat\/completions\/?$/, '/models');
+}
+
+export async function listServedModels(chatUrl, headers = {}, force = false) {
+  const key = String(chatUrl);
+  if (!force && servedModels.has(key)) return servedModels.get(key);
+  let ids = [];
+  try {
+    const res = await fetch(modelsUrlFor(key), { headers });
+    if (res.ok) {
+      const json = await res.json();
+      ids = (json?.data || []).map(m => m?.id).filter(Boolean);
+    }
+  } catch { /* host unreachable — fall through with nothing */ }
+  servedModels.set(key, ids);
+  return ids;
+}
+
+/**
+ * The model to ask for. An explicit LOCAL_MODEL_NAME wins, but only if the
+ * server actually serves it — otherwise the first model it does serve, which
+ * on a single-model host is the right answer every time.
+ */
+async function resolveModelName(chatUrl, headers, preferred, force = false) {
+  const served = await listServedModels(chatUrl, headers, force);
+  if (served.length === 0) return preferred;          // can't ask — try anyway
+  if (preferred && served.includes(preferred)) return preferred;
+  // Case-insensitive second chance before giving up on the configured name.
+  const loose = served.find(id => id.toLowerCase() === String(preferred || '').toLowerCase());
+  return loose || served[0];
+}
+
 // Call the local LLM. Three transports are supported (see paths A/B/C below).
 // `history` is the prior turns (alternating user/assistant) without the
 // system message — we prepend system here and append the new user turn.
@@ -349,23 +390,47 @@ export async function callLocalModel({ system, user, history, model, abortMs }) 
     // response_format for guided JSON decoding. That plus the VLM's
     // instruction-following is what makes the tool calls reliable.
     const url = explicit;
-    const body = {
-      model: model || DEFAULT_LOCAL_MODEL_NAME,
-      messages,
-      temperature: 0.1,
-      max_tokens: Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
-      response_format: { type: 'json_object' },
+    const wanted = model || process.env.LOCAL_MODEL_NAME || DEFAULT_LOCAL_MODEL_NAME;
+    const ask = async (name) => {
+      const body = {
+        model: name,
+        messages,
+        temperature: 0.1,
+        max_tokens: Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
+        response_format: { type: 'json_object' },
+      };
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+      return { res, text: await res.text() };
     };
-    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`Local model ${res.status}: ${text.slice(0, 500)}`);
+
+    let name = await resolveModelName(url, headers, wanted);
+    let { res, text } = await ask(name);
+
+    // A 404 here means the name is wrong, not that the server is down — the
+    // list may have changed since it was cached. Re-ask and try once more.
+    if (res.status === 404) {
+      const fresh = await resolveModelName(url, headers, wanted, true);
+      if (fresh && fresh !== name) {
+        name = fresh;
+        ({ res, text } = await ask(name));
+      }
+    }
+
+    if (!res.ok) {
+      const served = await listServedModels(url, headers);
+      const hint = served.length
+        ? ` — this server serves: ${served.join(', ')}. Set LOCAL_MODEL_NAME to one of them.`
+        : ' — and it did not answer /v1/models either, so it may not be up.';
+      throw new Error(`Local model ${res.status} for "${name}": ${text.slice(0, 300)}${hint}`);
+    }
+
     let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
     const content =
       json?.choices?.[0]?.message?.content ??
       json?.response ??
       json?.raw ??
       '';
-    return { content, raw: json, url, transport: 'openai-compatible', model: body.model };
+    return { content, raw: json, url, transport: 'openai-compatible', model: name };
   } finally {
     clearTimeout(timer);
   }

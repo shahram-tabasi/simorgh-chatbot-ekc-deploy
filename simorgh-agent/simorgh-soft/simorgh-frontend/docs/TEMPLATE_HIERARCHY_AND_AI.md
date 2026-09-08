@@ -233,6 +233,25 @@ both through, so a different host or port is a restart, not a rebuild), and
 the chat panel shows the model and host that answered the last turn —
 "the AI is not working" is usually "the AI is not the one you think it is".
 
+The **name** is not guessed. A vLLM server answers to whatever it was
+launched with — a repo path, a tag, a shortened alias — and a wrong guess is
+a 404 that reads like the whole assistant is down ("The model qwen2.5-vl-7b
+does not exist"). So the backend asks `GET /v1/models` and uses what the host
+actually serves: a configured `LOCAL_MODEL_NAME` wins when the server has it,
+otherwise the served model does. A 404 re-asks and retries once, and if the
+call still fails the error names every model the host does serve.
+
+### One line, several commands
+
+"سطح دریا 2000 و دما را بکن 50" is two instructions. Read as one sentence it
+became a single setting with the other one's number attached, so
+`intentParseAll` splits on "و" / "and" / commas and parses each clause, and a
+value is taken from the number that follows *its own* term. The split is only
+trusted when it yields more than one command, which keeps a value that
+contains "and" (a project name, say) intact. A clause that reads as a
+question is left alone entirely — answering it is the model's job, and acting
+on it would turn "what is the client?" into a client named "the client".
+
 ### Backend contract
 
 The backend that the chatbot is pointed at must:

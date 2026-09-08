@@ -23,7 +23,7 @@ import {
   chatToolSchemas, executeChatToolBatch, ChatToolCall, ChatToolResult,
   ChatToolContext, ProposedAction, isMutatingTool, describeToolCall,
 } from '../../services/chatbotTools';
-import { intentParse } from '../../services/intentParser';
+import { intentParseAll } from '../../services/intentParser';
 import { MarkdownView } from './MarkdownView';
 import { ProposalCard } from './ProposalCard';
 
@@ -502,9 +502,11 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       // being uncooperative.
       let fallbackUsed = false;
       if (agentMode && callsToRun.length === 0) {
-        const intent = intentParse(text, { projectData, selectedEquipment, activeTab });
-        if (intent) {
-          callsToRun = [intent.call];
+        // One line can carry several instructions ("سطح دریا 2000 و دما را
+        // بکن 50"); each becomes its own call.
+        const intents = intentParseAll(text, { projectData, selectedEquipment, activeTab });
+        if (intents.length > 0) {
+          callsToRun = intents.map(i => i.call);
           fallbackUsed = true;
         }
       }

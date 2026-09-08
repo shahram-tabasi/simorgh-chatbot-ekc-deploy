@@ -82,7 +82,8 @@ const COLUMN_ALIASES: { match: RegExp; field: string }[] = [
 
 // Technical Settings (Project Definition). Most specific first.
 const TECH_ALIASES: { match: RegExp; path: string }[] = [
-  { match: term('altitude', 'ارتفاع از سطح دریا', 'ارتفاع'),                    path: 'general.altitudeAboveSeaLevel' },
+  { match: term('altitude', 'ارتفاع از سطح دریا', 'سطح دریا', 'سطح آب دریا',
+                'ارتفاع'),                                                        path: 'general.altitudeAboveSeaLevel' },
   { match: term('design\\s*temp(?:erature)?', 'temp(?:erature)?',
                 'دمای طراحی', 'دمای', 'دما', 'حرارت'),                           path: 'general.designTemperature' },
   { match: term('control\\s*circuit', 'مدار کنترل'),                            path: 'wireSize.controlCircuit' },
@@ -145,13 +146,35 @@ function findColumnField(s: string): string | null {
   for (const a of COLUMN_ALIASES) if (a.match.test(s)) return a.field;
   return null;
 }
-function findTechPath(s: string): string | null {
-  for (const a of TECH_ALIASES) if (a.match.test(s)) return a.path;
+function findTechPath(s: string): { path: string; end: number } | null {
+  for (const a of TECH_ALIASES) {
+    const m = s.match(a.match);
+    if (m) return { path: a.path, end: (m.index ?? 0) + m[0].length };
+  }
   return null;
 }
-function findProjectField(s: string): string | null {
-  for (const a of PROJECT_ALIASES) if (a.match.test(s)) return a.field;
+function findProjectField(s: string): { field: string; end: number } | null {
+  for (const a of PROJECT_ALIASES) {
+    const m = s.match(a.match);
+    if (m) return { field: a.field, end: (m.index ?? 0) + m[0].length };
+  }
   return null;
+}
+
+// A question is not an instruction: "what is the client?" must not set the
+// client to "the client". Only a short, plain remainder is taken as a value.
+const ASKING = /[?؟]|(?:^|[^\w\u0600-\u06FF])(?:what|which|why|how|چی|چیه|چیست|کیست|کجاست|چه|کدام|چند|چقدر|چطور|آیا)(?:$|[^\w\u0600-\u06FF])/i;
+
+/** The words right after a field name — "client NIORDC" with no connector. */
+function valueAfterTerm(p: string, end: number): string {
+  if (ASKING.test(p)) return '';
+  const rest = p.slice(end)
+    .replace(TRAILING_VERBS, ' ')
+    .replace(/[.,;:!?]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!rest) return '';
+  return rest.split(' ').length <= 5 ? rest : '';
 }
 
 // ── Navigation ──────────────────────────────────────────────────────────────
@@ -203,51 +226,60 @@ function trailingValue(p: string): string {
   return phrase.split(' ')[0];
 }
 
-/** The first number in the sentence, which is what a value usually is. */
-function firstNumber(p: string): string | null {
-  const m = p.match(/(\d+(?:[.,]\d+)?)/);
-  return m ? m[1].replace(',', '.') : null;
+/**
+ * The number that belongs to a term — the first one AFTER it, falling back to
+ * the one before when the sentence puts the value first. Taking simply the
+ * first number in the sentence is what turned "سطح دریا 2000 و دما را بکن 50"
+ * into a design temperature of 2000.
+ */
+function numberFor(p: string, termEnd: number): string | null {
+  const after = p.slice(termEnd).match(/(\d+(?:[.,]\d+)?)/);
+  if (after) return after[1].replace(',', '.');
+  const before = p.slice(0, termEnd).match(/(\d+(?:[.,]\d+)?)(?!.*\d)/);
+  return before ? before[1].replace(',', '.') : null;
 }
 
 // ── Tab-scoped families ─────────────────────────────────────────────────────
 
 /** Project Definition: Technical Settings and project master data. */
 function projectScopedParse(p: string): Intent | null {
-  const techPath = findTechPath(p);
-  if (techPath) {
-    if (/colou?r/i.test(techPath)) {
+  const tech = findTechPath(p);
+  if (tech) {
+    const { path } = tech;
+    if (/colou?r/i.test(path)) {
       const hex = findColour(p);
       if (hex) {
         const value = colourName(hex, '');
         return {
-          call: { name: 'set_tech_setting', args: { path: techPath, value } },
-          summary: `Set ${techPath} = "${value}".`,
+          call: { name: 'set_tech_setting', args: { path, value } },
+          summary: `Set ${path} = "${value}".`,
         };
       }
     }
-    const num = firstNumber(p);
+    const num = numberFor(p, tech.end);
     if (num) {
       return {
-        call: { name: 'set_tech_setting', args: { path: techPath, value: num } },
-        summary: `Set ${techPath} = "${num}".`,
+        call: { name: 'set_tech_setting', args: { path, value: num } },
+        summary: `Set ${path} = "${num}".`,
       };
     }
     const v = trailingValue(p);
     if (v) {
       return {
-        call: { name: 'set_tech_setting', args: { path: techPath, value: v } },
-        summary: `Set ${techPath} = "${v}".`,
+        call: { name: 'set_tech_setting', args: { path, value: v } },
+        summary: `Set ${path} = "${v}".`,
       };
     }
   }
 
-  const projField = findProjectField(p);
-  if (projField) {
-    const v = trailingPhrase(p).replace(/^["'`]+|["'`]+$/g, '');
+  const proj = findProjectField(p);
+  if (proj) {
+    const v = (trailingPhrase(p) || valueAfterTerm(p, proj.end))
+      .replace(/^["'`]+|["'`]+$/g, '');
     if (v.length > 0 && v.length < 200) {
       return {
-        call: { name: 'set_project_fields', args: { fields: { [projField]: v } } },
-        summary: `Set project.${projField} = "${v}".`,
+        call: { name: 'set_project_fields', args: { fields: { [proj.field]: v } } },
+        summary: `Set project.${proj.field} = "${v}".`,
       };
     }
   }
@@ -324,13 +356,13 @@ function navigationParse(p: string): Intent | null {
  * The active tab decides which family is asked first; whatever the sentence
  * names explicitly (a row number, "هرجا …") still wins.
  */
-export function intentParse(prompt: string, ctx: IntentContext): Intent | null {
-  if (!prompt) return null;
-  const p = normalize(prompt);
-  if (!p) return null;
-
+function parseOne(p: string, ctx: IntentContext): Intent | null {
   const nav = navigationParse(p);
   if (nav) return nav;
+
+  // A question is for the model to answer. Acting on one would turn "what is
+  // the client?" into a client named "the client".
+  if (ASKING.test(p)) return null;
 
   const namesARow = (ROW_RE as RegExp).test(p);
   const onProjectTab = ctx.activeTab === TAB_PROJECT;
@@ -346,4 +378,46 @@ export function intentParse(prompt: string, ctx: IntentContext): Intent | null {
     if (hit) return hit;
   }
   return null;
+}
+
+/**
+ * Every command in the sentence, in order.
+ *
+ * People put more than one instruction in a line — "سطح دریا 2000 و دما را
+ * بکن 50" is two. Read as one sentence it becomes a single setting with the
+ * wrong number attached, so the clauses are parsed separately. The split is
+ * only trusted when it yields more than one command; otherwise the sentence
+ * is read whole, which keeps values that contain "and" or "و" intact.
+ */
+export function intentParseAll(prompt: string, ctx: IntentContext): Intent[] {
+  if (!prompt) return [];
+  const p = normalize(prompt);
+  if (!p) return [];
+
+  const clauses = p
+    .split(new RegExp(`(?:${EDGE}(?:و|and)${EDGE}|[،؛,;]|\\bو\\b)`, 'i'))
+    .map(c => c.trim())
+    .filter(Boolean);
+
+  if (clauses.length > 1) {
+    const found: Intent[] = [];
+    const seen = new Set<string>();
+    for (const clause of clauses) {
+      const hit = parseOne(clause, ctx);
+      // The same call twice (a term repeated across clauses) is one command.
+      if (hit) {
+        const key = JSON.stringify(hit.call);
+        if (!seen.has(key)) { seen.add(key); found.push(hit); }
+      }
+    }
+    if (found.length > 1) return found;
+  }
+
+  const whole = parseOne(p, ctx);
+  return whole ? [whole] : [];
+}
+
+/** The first command in the sentence, for callers that want just one. */
+export function intentParse(prompt: string, ctx: IntentContext): Intent | null {
+  return intentParseAll(prompt, ctx)[0] ?? null;
 }
