@@ -7,17 +7,10 @@ network instead of downloaded as a file.
 
 ## The address
 
-The EPLAN machine is one IP and one port. Both live in `.env`, so pointing
-the app at another server is an edit and a restart — never a rebuild.
-
-**Frontend** — `simorgh-frontend/.env`:
-
-```
-VITE_EPLAN_API_HOST=192.168.1.39
-VITE_EPLAN_API_PORT=8000
-```
-
-**Backend** — `simorgh-backend/.env` (used when the two above are empty):
+The EPLAN machine is one IP and one port, and they live in the **backend's**
+environment — `simorgh-backend/.env` when it runs on its own, and for the
+deployed stack `simorgh-agent/.env`, which `compose/soft-app.yml` passes into
+the container:
 
 ```
 EPLAN_API_HOST=192.168.1.39
@@ -26,8 +19,16 @@ EPLAN_API_PATH=/draw          # the endpoint that takes the records
 EPLAN_API_TIMEOUT_MS=120000   # how long a drawing job may take
 ```
 
-In Docker the same four are passed through by `compose/soft-app.yml`, so
-`EPLAN_API_HOST` / `EPLAN_API_PORT` in the stack's `.env` reach the container.
+Changing them is an edit and `docker compose up -d simorgh-soft` — never a
+frontend rebuild. That is the whole reason the address is read from the
+server at runtime instead of being compiled in: the app asks
+`GET /api/eplan/target` when the dialog opens.
+
+`simorgh-frontend/.env` carries `VITE_EPLAN_API_HOST` / `VITE_EPLAN_API_PORT`
+as an override, and they are **empty on purpose**. Vite bakes anything put
+there into the bundle, so filling them in pins the address to whatever was
+true at build time. Use them only for a locally built bundle that has to
+point somewhere else.
 
 The dialog shows whichever address is in force and lets it be changed for a
 single send — useful for trying a second machine without touching a file.
