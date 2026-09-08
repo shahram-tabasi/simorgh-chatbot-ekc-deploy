@@ -28,12 +28,20 @@ export interface ChatToolContext {
   selectedEquipment: Equipment | null;
   updateEquipment: (id: string, data: Partial<Equipment>) => void;
   updateProjectData: (data: Partial<ProjectData>) => void;
+  /** Derive the patch from the project as it is at the moment of the write.
+   *  Applying several staged changes in one go runs them back to back, and
+   *  React has not re-rendered in between — without this each one would be
+   *  computed from the same stale copy and only the last would survive. */
+  patchProjectData?: (updater: (prev: ProjectData) => Partial<ProjectData>) => void;
+  /** Which top-level tab the user is looking at. Tools use it the way a
+   *  colleague would: an unqualified instruction means "here". */
+  activeTab?: number;
   addEquipment: (eq: Equipment) => void;
   deleteEquipment: (id: string) => void;
   setSelectedEquipment: (eq: Equipment | null) => void;
   deleteTemplate: (id: string) => void;
   /** Switch between top-level tabs. Indices: 0 Project Definition,
-   *  1 Template Creation, 2 Device Selection, 3 Output Types. */
+   *  1 Template Creation, 2 Device Selection, 3 Output Types, 4 Eplanix. */
   setActiveTab?: (idx: number) => void;
   /** Save the project to the backend (Mongo). */
   saveProject?: () => Promise<void>;
@@ -59,6 +67,29 @@ export interface ChatTool {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Write through the functional updater when the context carries one, so a
+ *  batch of edits never computes from a stale copy of the project. */
+function patch(
+  ctx: ChatToolContext,
+  updater: (prev: ProjectData) => Partial<ProjectData>,
+) {
+  if (ctx.patchProjectData) ctx.patchProjectData(updater);
+  else ctx.updateProjectData(updater(ctx.projectData));
+}
+
+/** Rewrite one equipment in place, reading it from the live project. */
+function patchEquipment(
+  ctx: ChatToolContext,
+  equipmentId: string,
+  change: (eq: Equipment) => Partial<Equipment>,
+) {
+  patch(ctx, prev => ({
+    equipments: (prev.equipments ?? []).map(eq =>
+      eq.id === equipmentId ? { ...eq, ...change(eq) } : eq),
+  }));
+}
+
 function findEquipment(ctx: ChatToolContext, name?: string): Equipment | null {
   if (!name) return ctx.selectedEquipment;
   const target = name.toLowerCase().trim();
@@ -119,10 +150,11 @@ const update_row: ChatTool = {
     if (!eq) return { ok: false, summary: 'Equipment not found.' };
     const idx = (eq.devices ?? []).findIndex(r => r.rowNumber === Number(rowNumber));
     if (idx < 0) return { ok: false, summary: `Row #${rowNumber} not found in ${eq.name}.` };
-    const nextDevices = eq.devices.map((r, i) =>
-      i === idx ? { ...r, [column]: String(value) } as DeviceTableRow : r
-    );
-    ctx.updateEquipment(eq.id, { devices: nextDevices });
+    patchEquipment(ctx, eq.id, live => ({
+      devices: (live.devices ?? []).map(r =>
+        r.rowNumber === Number(rowNumber)
+          ? ({ ...r, [column]: String(value) } as DeviceTableRow) : r),
+    }));
     return { ok: true, summary: `Set row #${rowNumber} of ${eq.name}: ${column} = "${value}".` };
   },
 };
@@ -143,15 +175,16 @@ const bulk_update: ChatTool = {
     const eq = findEquipment(ctx, equipmentName);
     if (!eq) return { ok: false, summary: 'Equipment not found.' };
     let changed = 0;
-    const next = (eq.devices ?? []).map(r => {
-      const current = (r as any)[where.column];
-      if (isMatch(current, where.equals, !!fuzzy)) {
-        changed++;
-        return { ...r, [set.column]: String(set.value) } as DeviceTableRow;
-      }
-      return r;
-    });
-    if (changed > 0) ctx.updateEquipment(eq.id, { devices: next });
+    for (const r of (eq.devices ?? [])) {
+      if (isMatch((r as any)[where.column], where.equals, !!fuzzy)) changed++;
+    }
+    if (changed > 0) {
+      patchEquipment(ctx, eq.id, live => ({
+        devices: (live.devices ?? []).map(r =>
+          isMatch((r as any)[where.column], where.equals, !!fuzzy)
+            ? ({ ...r, [set.column]: String(set.value) } as DeviceTableRow) : r),
+      }));
+    }
     return {
       ok: true,
       summary: `Updated ${changed} row(s) in ${eq.name} where ${where.column}="${where.equals}" → ${set.column}="${set.value}".`,
@@ -179,7 +212,10 @@ const add_row: ChatTool = {
       equipmentId: eq.id,
       ...(values || {}),
     } as DeviceTableRow;
-    ctx.updateEquipment(eq.id, { devices: [...(eq.devices ?? []), next] });
+    patchEquipment(ctx, eq.id, live => ({
+      devices: [...(live.devices ?? []),
+                { ...next, rowNumber: (live.devices?.length ?? 0) + 1 }],
+    }));
     return { ok: true, summary: `Added row #${next.rowNumber} to ${eq.name}.` };
   },
 };
@@ -196,14 +232,15 @@ const set_cell_color: ChatTool = {
   execute: ({ rowNumber, column, color, equipmentName }, ctx) => {
     const eq = findEquipment(ctx, equipmentName);
     if (!eq) return { ok: false, summary: 'Equipment not found.' };
-    const next = (eq.devices ?? []).map(r => {
-      if (r.rowNumber !== Number(rowNumber)) return r;
-      const cellColors = { ...(r.cellColors || {}) };
-      if (color) cellColors[column] = String(color);
-      else delete cellColors[column];
-      return { ...r, cellColors };
-    });
-    ctx.updateEquipment(eq.id, { devices: next });
+    patchEquipment(ctx, eq.id, live => ({
+      devices: (live.devices ?? []).map(r => {
+        if (r.rowNumber !== Number(rowNumber)) return r;
+        const cellColors = { ...(r.cellColors || {}) };
+        if (color) cellColors[column] = String(color);
+        else delete cellColors[column];
+        return { ...r, cellColors };
+      }),
+    }));
     return { ok: true, summary: `Cell colour for row #${rowNumber} / ${column} → ${color || 'cleared'}.` };
   },
 };
@@ -219,10 +256,10 @@ const set_row_color: ChatTool = {
   execute: ({ rowNumber, color, equipmentName }, ctx) => {
     const eq = findEquipment(ctx, equipmentName);
     if (!eq) return { ok: false, summary: 'Equipment not found.' };
-    const next = (eq.devices ?? []).map(r =>
-      r.rowNumber === Number(rowNumber) ? { ...r, rowColor: color || undefined } : r
-    );
-    ctx.updateEquipment(eq.id, { devices: next });
+    patchEquipment(ctx, eq.id, live => ({
+      devices: (live.devices ?? []).map(r =>
+        r.rowNumber === Number(rowNumber) ? { ...r, rowColor: color || undefined } : r),
+    }));
     return { ok: true, summary: `Row #${rowNumber} colour → ${color || 'cleared'}.` };
   },
 };
@@ -273,7 +310,7 @@ const apply_excel: ChatTool = {
     }
     // Renumber.
     const renumbered = existing.map((r, i) => r ? { ...r, rowNumber: i + 1 } : r).filter(Boolean) as DeviceTableRow[];
-    ctx.updateEquipment(eq.id, { devices: renumbered });
+    patchEquipment(ctx, eq.id, () => ({ devices: renumbered }));
     return { ok: true, summary: `Applied ${updated} Excel row(s) into ${eq.name} (rows ${startIdx + 1}–${endIdx + 1}).` };
   },
 };
@@ -357,8 +394,10 @@ const create_template: ChatTool = {
       properties: {},
       hierarchy,
     };
-    const tmpls = ctx.projectData.templates ?? { LV: [], MV: [], HV: [] };
-    ctx.updateProjectData({ templates: { ...tmpls, [tier]: [...(tmpls[tier] ?? []), newTmpl] } });
+    patch(ctx, prev => {
+      const tmpls = prev.templates ?? { LV: [], MV: [], HV: [] };
+      return { templates: { ...tmpls, [tier]: [...(tmpls[tier] ?? []), newTmpl] } };
+    });
     return { ok: true, summary: `Created template "${name}" at ${path.join('/')}.`, data: { id: newTmpl.id } };
   },
 };
@@ -372,20 +411,21 @@ const TAB_NAMES: Record<string, number> = {
   'template':           1, 'templates': 1, 'create-template': 1, 'create_template': 1, 'create template': 1,
   'devices':            2, 'device-selection': 2, 'device_selection': 2, 'device selection': 2,
   'output':             3, 'output-types': 3, 'output_types': 3, 'output types': 3, 'export': 3,
+  'eplanix':            4, 'single-line': 4, 'single line': 4, 'layout': 4,
 };
 
 const set_active_tab: ChatTool = {
   name: 'set_active_tab',
-  description: 'Switch the visible tab. Accepts "project", "template", "devices", or "output" (case-insensitive; spaces/hyphens/underscores are OK).',
+  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output" or "eplanix" (case-insensitive; spaces/hyphens/underscores are OK).',
   args: {
-    tab: { type: 'string', description: 'project | template | devices | output', required: true },
+    tab: { type: 'string', description: 'project | template | devices | output | eplanix', required: true },
   },
   execute: ({ tab }, ctx) => {
     const idx = TAB_NAMES[String(tab || '').toLowerCase().trim()];
     if (idx === undefined) return { ok: false, summary: `Unknown tab "${tab}".` };
     if (!ctx.setActiveTab) return { ok: false, summary: 'Tab navigation not wired into this context.' };
     ctx.setActiveTab(idx);
-    const label = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types'][idx];
+    const label = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types', 'Eplanix'][idx];
     return { ok: true, summary: `Switched to "${label}" tab.` };
   },
 };
@@ -417,7 +457,7 @@ const set_project_fields: ChatTool = {
     if (Object.keys(accepted).length === 0) {
       return { ok: false, summary: `No accepted fields. Unknown: ${rejected.join(', ')}` };
     }
-    ctx.updateProjectData(accepted);
+    patch(ctx, () => accepted);
     return {
       ok: true,
       summary: `Updated ${Object.keys(accepted).length} project field(s): ${Object.keys(accepted).join(', ')}.` +
@@ -437,15 +477,17 @@ const set_tech_setting: ChatTool = {
     if (!path) return { ok: false, summary: 'path is required.' };
     const segments = String(path).split('.').filter(Boolean);
     if (segments.length < 2) return { ok: false, summary: 'path must have at least 2 segments (e.g. general.altitudeAboveSeaLevel).' };
-    const tech = JSON.parse(JSON.stringify(ctx.projectData.techSettings || {}));
-    let node: any = tech;
-    for (let i = 0; i < segments.length - 1; i++) {
-      const seg = segments[i];
-      if (typeof node[seg] !== 'object' || node[seg] == null) node[seg] = {};
-      node = node[seg];
-    }
-    node[segments[segments.length - 1]] = String(value);
-    ctx.updateProjectData({ techSettings: tech });
+    patch(ctx, prev => {
+      const tech = JSON.parse(JSON.stringify(prev.techSettings || {}));
+      let node: any = tech;
+      for (let i = 0; i < segments.length - 1; i++) {
+        const seg = segments[i];
+        if (typeof node[seg] !== 'object' || node[seg] == null) node[seg] = {};
+        node = node[seg];
+      }
+      node[segments[segments.length - 1]] = String(value);
+      return { techSettings: tech };
+    });
     return { ok: true, summary: `Set techSettings.${path} = "${value}".` };
   },
 };
@@ -486,8 +528,10 @@ const add_library_device: ChatTool = {
       type: tier,
       properties: (properties && typeof properties === 'object' ? properties : {}) as any,
     };
-    const lib = ctx.projectData.deviceLibrary || { LV: [], MV: [], HV: [] };
-    ctx.updateProjectData({ deviceLibrary: { ...lib, [tier]: [...(lib[tier] ?? []), item] } });
+    patch(ctx, prev => {
+      const lib = prev.deviceLibrary || { LV: [], MV: [], HV: [] };
+      return { deviceLibrary: { ...lib, [tier]: [...(lib[tier] ?? []), item] } };
+    });
     return { ok: true, summary: `Added ${tier} device "${name}" to the library.`, data: { id: item.id } };
   },
 };
@@ -513,13 +557,15 @@ const update_library_device: ChatTool = {
     if (idx < 0) return { ok: false, summary: `Device not found in ${tier} library.` };
     const target = list[idx];
     const { name: newName, ...propPatch } = fields as any;
-    const next: DeviceLibraryItem = {
-      ...target,
-      ...(newName ? { name: String(newName) } : {}),
-      properties: { ...(target.properties as any), ...propPatch } as any,
-    };
-    const nextList = [...list]; nextList[idx] = next;
-    ctx.updateProjectData({ deviceLibrary: { ...lib, [tier]: nextList } });
+    patch(ctx, prev => {
+      const liveLib = prev.deviceLibrary || { LV: [], MV: [], HV: [] };
+      const nextList = (liveLib[tier] ?? []).map(d => d.id === target.id ? ({
+        ...d,
+        ...(newName ? { name: String(newName) } : {}),
+        properties: { ...(d.properties as any), ...propPatch },
+      } as DeviceLibraryItem) : d);
+      return { deviceLibrary: { ...liveLib, [tier]: nextList } };
+    });
     return { ok: true, summary: `Updated ${tier} device "${target.name}".` };
   },
 };
@@ -544,7 +590,7 @@ const delete_library_device: ChatTool = {
     // Same cascade as the Device Library screen: the entry and every
     // equipment (with its rows) created from it go together.
     const usage = findDeviceLibraryUsage(ctx.projectData, target.id, tier);
-    ctx.updateProjectData(removeDeviceLibraryItemEverywhere(ctx.projectData, target.id, tier));
+    patch(ctx, prev => removeDeviceLibraryItemEverywhere(prev, target.id, tier));
     const cascade = usage.equipments.length > 0
       ? ` Also removed ${describeUsage(usage)} from Device Selection.`
       : '';
@@ -626,10 +672,13 @@ const delete_row: ChatTool = {
     const eq = findEquipment(ctx, equipmentName);
     if (!eq) return { ok: false, summary: 'Equipment not found.' };
     const before = eq.devices.length;
-    const next = (eq.devices || []).filter(r => r.rowNumber !== Number(rowNumber))
-      .map((r, i) => ({ ...r, rowNumber: i + 1 }));
+    const next = (eq.devices || []).filter(r => r.rowNumber !== Number(rowNumber));
     if (next.length === before) return { ok: false, summary: `Row #${rowNumber} not found.` };
-    ctx.updateEquipment(eq.id, { devices: next });
+    patchEquipment(ctx, eq.id, live => ({
+      devices: (live.devices ?? [])
+        .filter(r => r.rowNumber !== Number(rowNumber))
+        .map((r, i) => ({ ...r, rowNumber: i + 1 })),
+    }));
     return { ok: true, summary: `Deleted row #${rowNumber} from ${eq.name}.` };
   },
 };
@@ -715,11 +764,16 @@ const set_template_property_parts: ChatTool = {
         priority:   typeof p.priority === 'number' ? p.priority : (i + 1),
       })),
     };
-    const nextList = templates[foundTier].map(t =>
-      t.id === templateId ? ({ ...t, properties: props } as TemplateItem) : t
-    );
-    ctx.updateProjectData({
-      templates: { ...templates, [foundTier]: nextList },
+    const tier = foundTier;
+    patch(ctx, prev => {
+      const live = prev.templates ?? { LV: [], MV: [], HV: [] };
+      return {
+        templates: {
+          ...live,
+          [tier]: (live[tier] ?? []).map(t =>
+            t.id === templateId ? ({ ...t, properties: props } as TemplateItem) : t),
+        },
+      };
     });
     return { ok: true, summary: `Set ${parts.length} part(s) on "${found.name}" → "${property}".` };
   },
@@ -788,6 +842,66 @@ const TOOLS: ChatTool[] = [
 export const CHAT_TOOLS: Record<string, ChatTool> = Object.fromEntries(
   TOOLS.map(t => [t.name, t])
 );
+
+// Tools that only read, or only move the view. Everything else changes the
+// project and is therefore staged for the engineer to approve rather than
+// applied the moment the model asks for it.
+export const READ_ONLY_TOOLS = new Set([
+  'list_equipments', 'list_rows', 'search_templates', 'find_similar_templates',
+  'set_active_tab', 'select_equipment', 'propose_changes',
+]);
+
+export function isMutatingTool(name: string): boolean {
+  return !!CHAT_TOOLS[name] && !READ_ONLY_TOOLS.has(name);
+}
+
+/** One line describing what a call would do, for the approval card. */
+export function describeToolCall(call: ChatToolCall): string {
+  const a = call.args || {};
+  const val = (v: any) => (v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  switch (call.name) {
+    case 'set_project_fields':
+      return 'Project: ' + Object.entries(a.fields || {})
+        .map(([k, v]) => `${k} = "${val(v)}"`).join(', ');
+    case 'set_tech_setting':
+      return `Technical settings: ${val(a.path)} = "${val(a.value)}"`;
+    case 'update_row':
+      return `Row #${val(a.rowNumber)}${a.equipmentName ? ` of ${val(a.equipmentName)}` : ''}: ${val(a.column)} = "${val(a.value)}"`;
+    case 'bulk_update':
+      return `Every row where ${val(a.where?.column)} = "${val(a.where?.equals)}" → ${val(a.set?.column)} = "${val(a.set?.value)}"`;
+    case 'add_row':
+      return `Add a row${a.equipmentName ? ` to ${val(a.equipmentName)}` : ''}`;
+    case 'delete_row':
+      return `Delete row #${val(a.rowNumber)}${a.equipmentName ? ` of ${val(a.equipmentName)}` : ''}`;
+    case 'set_row_color':
+      return `Colour row #${val(a.rowNumber)} → ${val(a.color) || 'cleared'}`;
+    case 'set_cell_color':
+      return `Colour row #${val(a.rowNumber)} · ${val(a.column)} → ${val(a.color) || 'cleared'}`;
+    case 'apply_excel':
+      return `Apply ${Array.isArray(a.excelRows) ? a.excelRows.length : '?'} Excel row(s)`;
+    case 'add_equipment':
+      return `Add ${val(a.type)} equipment "${val(a.name)}"`;
+    case 'delete_equipment':
+      return `Delete equipment "${val(a.name)}" and its rows`;
+    case 'add_library_device':
+      return `Add ${val(a.type)} device "${val(a.name)}" to the Device Library`;
+    case 'update_library_device':
+      return `Device Library — ${val(a.name || a.id)}: ` + Object.entries(a.fields || {})
+        .map(([k, v]) => `${k} = "${val(v)}"`).join(', ');
+    case 'delete_library_device':
+      return `Delete "${val(a.name || a.id)}" from the ${val(a.type)} library (and everywhere it is used)`;
+    case 'create_template':
+      return `Create ${val(a.type)} template "${val(a.name)}" at ${(a.path || []).join('/')}`;
+    case 'delete_template':
+      return `Delete template "${val(a.name || a.id)}"`;
+    case 'set_template_property_parts':
+      return `Set ${Array.isArray(a.parts) ? a.parts.length : '?'} part(s) on "${val(a.property)}"`;
+    case 'save_project':
+      return 'Save the project';
+    default:
+      return `${call.name}(${Object.keys(a).join(', ')})`;
+  }
+}
 
 /** Compact schema sent to the backend so the LLM knows what's callable. */
 export function chatToolSchemas() {

@@ -21,7 +21,7 @@ import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
   chatToolSchemas, executeChatToolBatch, ChatToolCall, ChatToolResult,
-  ChatToolContext, ProposedAction,
+  ChatToolContext, ProposedAction, isMutatingTool, describeToolCall,
 } from '../../services/chatbotTools';
 import { intentParse } from '../../services/intentParser';
 import { MarkdownView } from './MarkdownView';
@@ -29,7 +29,26 @@ import { ProposalCard } from './ProposalCard';
 
 // Tab labels used both in the context snapshot we send to the model and in
 // the local tool runner that resolves `set_active_tab`.
-const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types'] as const;
+const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types', 'Eplanix'] as const;
+
+// What each tab owns, in the words the model is given. Sent with every turn
+// so an unqualified instruction ("set the temperature to 50") is read against
+// the screen the user is actually looking at.
+const TAB_SCOPE: Record<number, string> = {
+  0: 'Project Definition — project master data (name, client, standard, planner…), '
+   + 'Technical Settings (altitude, design temperature, wire sizes, wire colours, painting) '
+   + 'and the Device Library (panel specifications). Tools: set_project_fields, set_tech_setting, '
+   + 'add_library_device, update_library_device, delete_library_device.',
+  1: 'Create Template — the template tree and the parts on each template. '
+   + 'Tools: create_template, search_templates, find_similar_templates, delete_template, '
+   + 'set_template_property_parts.',
+  2: 'Device Selection — the switchgears and their feeder rows. '
+   + 'Tools: add_equipment, delete_equipment, select_equipment, add_row, update_row, '
+   + 'bulk_update, delete_row, apply_excel, set_cell_color, set_row_color.',
+  3: 'Output Types — the export formats. No editing tools; answer questions.',
+  4: 'Eplanix — single line, panel layout, mechanical items and Send to EPLAN. '
+   + 'Read-only here; the data comes from the other tabs.',
+};
 
 type Mode = 'local' | 'online';
 
@@ -175,11 +194,16 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       role: 'assistant',
       text:
         "## Hi — I'm Simorgh AI ✨\n\n" +
-        "I can drive **every tab** for you. Some things to try:\n\n" +
+        "I work on **the tab you are on**: ask for a change and I read it against that screen — " +
+        "on Project Definition `دما` is the design temperature, on Device Selection it is the rows.\n\n" +
+        "**Nothing lands until you approve it.** With **Review** on (the default) every change I propose " +
+        "appears as a checklist with an **Apply** button, so an engineer signs it off.\n\n" +
+        "Some things to try:\n\n" +
         "**📄 Upload a project PDF** — I read it, extract project metadata, technical settings, equipment & devices, and show you a preview card. Pick which items to keep and hit **Apply** to fill the project.\n\n" +
         "**Project Definition**\n" +
         "- `Set project name to Pars Refinery, client NIORDC, standard IEC`\n" +
-        "- `Altitude is 1200 m and design temperature is 45 °C`\n\n" +
+        "- `Altitude is 1200 m and design temperature is 45 °C`\n" +
+        "- `دمای طراحی 50 درجه شود`\n\n" +
         "**Create Template**\n" +
         "- `Make a new LV template at S8 / OFW / FCB1 / OUTGOING for a 22 kW motor`\n" +
         "- `Search templates that contain FCB1`\n\n" +
@@ -209,12 +233,26 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
   // project state (update rows, set colours, create templates, …). When off,
   // the chatbot only displays text replies and ignores any tool_calls.
   const [agentMode, setAgentMode] = useState<boolean>(true);
+  // Review mode = nothing the assistant decides is written into the project
+  // until an engineer has read it and pressed Apply. On by default: this is
+  // design data, and the model is a proposer, not an approver.
+  const [reviewMode, setReviewMode] = useState<boolean>(true);
+  // Which model actually answered the last turn, as the backend reports it.
+  const [modelNote, setModelNote] = useState<string>('');
 
   const {
     projectData, selectedEquipment, updateEquipment, updateProjectData,
-    addEquipment, deleteEquipment, setSelectedEquipment, deleteTemplate,
-    saveProject,
+    patchProjectData, addEquipment, deleteEquipment, setSelectedEquipment,
+    deleteTemplate, saveProject,
   } = useProject();
+
+  // One place that builds the handle set the tools run against, so the chat
+  // turn and the Apply button can never drift apart.
+  const toolContext = (): ChatToolContext => ({
+    projectData, selectedEquipment, updateEquipment, updateProjectData,
+    patchProjectData, addEquipment, deleteEquipment, setSelectedEquipment,
+    deleteTemplate, setActiveTab, saveProject, activeTab,
+  });
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const scrollRef    = useRef<HTMLDivElement | null>(null);
@@ -382,7 +420,11 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         planner:           projectData.planner,
         designOffice:      projectData.designOffice,
         techSettings:      projectData.techSettings || null,
-        activeTab:         activeTab != null ? { index: activeTab, label: TAB_LABELS[activeTab] || '?' } : null,
+        activeTab:         activeTab != null ? {
+          index: activeTab,
+          label: TAB_LABELS[activeTab] || '?',
+          owns:  TAB_SCOPE[activeTab] || '',
+        } : null,
         activeEquipment:   selectedEquipment ? {
           id:        selectedEquipment.id,
           name:      selectedEquipment.name,
@@ -422,6 +464,12 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         if (j && Array.isArray(j._extractedDocs)) {
           backendExtractedDocs = j._extractedDocs;
         }
+        // The backend says which model and host actually answered — worth
+        // showing, because "the AI is not working" is usually "the AI is not
+        // the one you think it is".
+        if (j && (j._model || j._host)) {
+          setModelNote([j._model, j._host].filter(Boolean).join(' @ '));
+        }
         // If the backend already returned a {reply, tool_calls} shape, keep it
         // as-is by re-stringifying so parseToolEnvelope handles it uniformly.
         if (j && (Array.isArray(j.tool_calls) || typeof j.reply === 'string')) {
@@ -454,23 +502,30 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       // being uncooperative.
       let fallbackUsed = false;
       if (agentMode && callsToRun.length === 0) {
-        const intent = intentParse(text, { projectData, selectedEquipment });
+        const intent = intentParse(text, { projectData, selectedEquipment, activeTab });
         if (intent) {
           callsToRun = [intent.call];
           fallbackUsed = true;
         }
       }
 
-      // Run any tools the assistant asked for. The full context handle set
+      // In review mode nothing that changes the project runs on its own: it
+      // is staged into the approval card below and an engineer presses Apply.
+      // Reads and navigation still run, so the answer above the card is the
+      // real state of the project rather than a guess.
+      const staged: ChatToolCall[] = [];
+      const runNow: ChatToolCall[] = [];
+      for (const call of callsToRun) {
+        if (reviewMode && isMutatingTool(call.name)) staged.push(call);
+        else runNow.push(call);
+      }
+
+      // Run the tools that are allowed to run. The full context handle set
       // lets the AI drive every tab (project metadata, device library,
       // templates, equipment, rows, navigation).
       let toolResults: ChatToolResult[] = [];
-      if (callsToRun.length > 0) {
-        toolResults = await executeChatToolBatch(callsToRun, {
-          projectData, selectedEquipment, updateEquipment, updateProjectData,
-          addEquipment, deleteEquipment, setSelectedEquipment, deleteTemplate,
-          setActiveTab, saveProject,
-        });
+      if (runNow.length > 0) {
+        toolResults = await executeChatToolBatch(runNow, toolContext());
       }
 
       // Pull out `propose_changes` results — those are staged for user
@@ -485,16 +540,28 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
           proposals.push({ title: String(proposal.title || 'Proposed changes'), actions: proposal.actions });
         }
       });
+      if (staged.length > 0) {
+        const where = activeTab != null ? TAB_LABELS[activeTab] : null;
+        proposals.push({
+          title: where ? `Proposed changes — ${where}` : 'Proposed changes',
+          actions: staged.map(c => ({
+            name: c.name, args: c.args || {}, summary: describeToolCall(c),
+          })),
+        });
+      }
 
       // If the model gave an empty / unstructured reply but the fallback
       // matched something, prefix the reply with a one-line note so the
       // user knows the action came from a heuristic rather than the AI.
       const finalReply = (() => {
-        const base = reply || (callsToRun.length > 0
-          ? `Executed ${callsToRun.length} action(s).`
+        let base = reply || (callsToRun.length > 0
+          ? `Prepared ${callsToRun.length} action(s).`
           : '(empty reply)');
         if (fallbackUsed) {
-          return `_Heuristic match — the model didn't return a tool call but your prompt looked like a command, so I ran it directly._\n\n${base}`;
+          base = `_The model didn't return an action, so your prompt was matched against the known commands._\n\n${base}`;
+        }
+        if (staged.length > 0) {
+          base += `\n\n_Nothing has changed yet — review the ${staged.length} item(s) below and press **Apply**._`;
         }
         return base;
       })();
@@ -504,7 +571,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
           ...m,
           text: finalReply,
           toolResults: toolResults.map((r, i) => ({
-            tool: callsToRun[i]?.name || '?',
+            tool: runNow[i]?.name || '?',
             summary: r.summary,
             ok: r.ok,
           })),
@@ -521,7 +588,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         ? '\n\nCommon causes:\n' +
           '• The simorgh-soft Node backend (port 3001) is not running — `docker compose logs simorgh-soft`.\n' +
           '• The request body exceeded the nginx limit. We set `client_max_body_size 50M` in `simorgh-agent/simorgh-soft/docker/nginx.conf` — re-build the container if you uploaded a large PDF.\n' +
-          '• The local LLM (.62 by default) timed out — try a shorter prompt or check `docker compose logs nginx` on the .62 host.'
+          '• The local model (the VLM on 192.168.1.61 by default) timed out or refused the call — check `docker compose logs -n 50 simorgh-soft`, and that the model host allows this server.'
         : `\n\nCheck the endpoint at "${endpoint}" is reachable from the browser.`;
       setMessages(prev => prev.map(m =>
         m.id === pendingId
@@ -627,6 +694,19 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
           />
           Agent
         </label>
+        <label
+          className="inline-flex items-center gap-1 text-xs text-gray-600"
+          title="Nothing is written into the project until you read the proposed changes and press Apply. Turn this off only if you want the assistant to edit directly."
+        >
+          <input
+            type="checkbox"
+            checked={reviewMode}
+            onChange={e => setReviewMode(e.target.checked)}
+            className="accent-amber-600"
+            disabled={!agentMode}
+          />
+          Review
+        </label>
         <button
           className="ml-auto text-xs text-red-600 hover:underline flex items-center gap-1"
           onClick={clearChat}
@@ -634,6 +714,19 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         >
           <Trash2Icon className="w-3 h-3" /> Clear
         </button>
+      </div>
+
+      {/* What the assistant is looking at, and what answered last turn. */}
+      <div className="border-b border-gray-200 px-3 py-1 flex items-center gap-2 text-[10px] text-gray-500 bg-white flex-shrink-0">
+        <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">
+          {activeTab != null ? TAB_LABELS[activeTab] : 'No tab'}
+        </span>
+        <span className="truncate">
+          {reviewMode
+            ? 'changes are proposed here and applied by you'
+            : 'changes are applied straight away'}
+        </span>
+        {modelNote && <span className="ml-auto font-mono truncate max-w-[45%]" title={modelNote}>{modelNote}</span>}
       </div>
 
       {showSettings && (
@@ -695,12 +788,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
                       key={i}
                       title={p.title}
                       actions={p.actions}
-                      ctx={{
-                        projectData, selectedEquipment, updateEquipment,
-                        updateProjectData, addEquipment, deleteEquipment,
-                        setSelectedEquipment, deleteTemplate, setActiveTab,
-                        saveProject,
-                      } as ChatToolContext}
+                      ctx={toolContext()}
                       onApplied={results => {
                         setMessages(prev => prev.map(mm =>
                           mm.id === m.id ? {
