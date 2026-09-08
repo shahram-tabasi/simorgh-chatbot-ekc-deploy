@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import { registerDesktopRoutes } from './desktopDownload.js';
 import { registerTpmsImportRoutes } from './tpmsImport.js';
 import { registerEplanSymbolRoutes } from './eplanSymbols.js';
+import { registerEplanRoutes } from './eplanSend.js';
 
 dotenv.config();
 
@@ -28,6 +29,7 @@ app.use(cors());
 // dozen panels that is megabytes, and express.json()'s default 100 KB was
 // rejecting every save of one with 413 "entity.too.large". Reads were fine,
 // which is exactly why a big project appeared to open and then never landed.
+// The EPLAN payload (one record per feeder) needs the same headroom.
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: process.env.JSON_BODY_LIMIT || '100mb' }));
 
@@ -263,6 +265,9 @@ registerTpmsImportRoutes(app, connectToMySql);
 // EPLAN symbols — the single-line symbol each part carries in EPLAN's parts
 // database, plus the folder of symbols exported from EPLAN itself.
 registerEplanSymbolRoutes(app, connectToSqlServer, process.env.EPLAN_SYMBOL_DIR);
+
+// EPLAN drawing server — address in .env (EPLAN_API_HOST / EPLAN_API_PORT).
+registerEplanRoutes(app);
 
 app.get('/api/health', async (req, res) => {
   try {

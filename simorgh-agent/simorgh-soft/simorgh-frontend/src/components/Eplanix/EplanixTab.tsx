@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
-import { DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
+import { DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, SendIcon } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
+import { SendToEplanDialog } from './SendToEplanDialog';
 import { ProjectData, Equipment } from '../../types/project';
 import { sheetName } from '../../utils/bpmsExport';
 import { eplanSymbolService } from '../../services/projectService';
@@ -76,7 +77,7 @@ function exportMechanicalExcel(data: ProjectData, equipments: Equipment[]) {
 }
 
 export const EplanixTab: React.FC = () => {
-  const { projectData } = useProject();
+  const { projectData, currentRevision } = useProject();
   const [view, setView] = useState<View>('single-line');
   const [selected, setSelected] = useState<string>('');   // equipment id, '' = all
   const [perPage, setPerPage] = useState(8);
@@ -86,6 +87,7 @@ export const EplanixTab: React.FC = () => {
   const [symbols, setSymbols] = useState<EplanSymbolMap>({});
   const [packReplaced, setPackReplaced] = useState(0);
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
+  const [showSend, setShowSend] = useState(false);
 
   const equipments = projectData.equipments ?? [];
 
@@ -226,6 +228,19 @@ export const EplanixTab: React.FC = () => {
               <option key={eq.id} value={eq.id}>{eq.name} — {eq.type}</option>
             ))}
           </select>
+          {/* The same feeder lines, sent to the EPLAN drawing server instead
+              of downloaded. The address is in .env — see the dialog. */}
+          <button
+            onClick={() => setShowSend(true)}
+            disabled={chosenWithLines.length === 0}
+            title={chosenWithLines.length === 0
+              ? 'Add feeder lines in Device Selection first'
+              : 'Send these switchgears to the EPLAN drawing server'}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40"
+          >
+            <SendIcon className="w-4 h-4" />
+            Send to EPLAN
+          </button>
         </div>
       </div>
 
@@ -477,6 +492,16 @@ export const EplanixTab: React.FC = () => {
             ))}
           </div>
         </div>
+      )}
+
+      {showSend && (
+        <SendToEplanDialog
+          projectData={projectData}
+          equipments={chosenWithLines}
+          currentRevision={currentRevision}
+          feedersPerPage={perPage}
+          onClose={() => setShowSend(false)}
+        />
       )}
 
       <p className="mt-4 text-xs text-gray-400">
