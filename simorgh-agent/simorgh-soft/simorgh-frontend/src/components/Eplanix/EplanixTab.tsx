@@ -6,9 +6,11 @@ import { ProjectData, Equipment } from '../../types/project';
 import { sheetName } from '../../utils/bpmsExport';
 import {
   EPLAN_HEADERS, buildEplanRows, buildSingleLinePages, buildSingleLineHtml,
+  buildSingleLineDxf,
 } from '../../utils/eplanSingleLine';
 import {
   LAYOUT_HEADERS, buildPanelLayout, buildLayoutRows, buildLayoutSvg, buildLayoutHtml,
+  buildLayoutDxf,
 } from '../../utils/panelLayout';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
@@ -20,6 +22,37 @@ import {
 // what leaves the app has been looked at first.
 
 type View = 'single-line' | 'layout' | 'mechanical';
+
+// Anything unsafe in a file name, and the runs of spaces around it, collapse
+// to a single underscore — the same file has to survive Windows and Linux.
+const fileSafe = (s: string) =>
+  (s || 'project').replace(/[^\w.\-]+/g, '_').replace(/^_+|_+$/g, '') || 'project';
+
+function downloadText(filename: string, content: string, mime: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoked late: Safari reads the blob after the click returns.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** One DXF per switchgear, spaced out so the browser does not block the run. */
+function downloadDxfSet(files: { name: string; dxf: string }[]) {
+  files.forEach((file, i) => {
+    setTimeout(() => downloadText(file.name, file.dxf, 'image/vnd.dxf'), i * 250);
+  });
+}
+
+function exportSingleLineDxf(data: ProjectData, equipments: Equipment[], perPage: number) {
+  downloadDxfSet(equipments.map(eq => ({
+    name: `${fileSafe(data.projectName)}_${fileSafe(eq.name)}_single_line.dxf`,
+    dxf: buildSingleLineDxf(data, eq, perPage),
+  })));
+}
 
 function openPrintable(html: string, what: string) {
   const w = window.open('', '_blank');
@@ -187,6 +220,13 @@ export const EplanixTab: React.FC = () => {
               >
                 EPLAN device list
               </Btn>
+              <Btn
+                onClick={() => exportSingleLineDxf(projectData, chosenWithLines, perPage)}
+                className="bg-teal-700 text-white hover:bg-teal-800"
+                disabled={chosenWithLines.length === 0}
+              >
+                DXF (CAD)
+              </Btn>
             </div>
           </div>
 
@@ -254,6 +294,16 @@ export const EplanixTab: React.FC = () => {
                 disabled={chosenWithLines.length === 0}
               >
                 Layout Excel
+              </Btn>
+              <Btn
+                onClick={() => downloadText(
+                  `${fileSafe(projectData.projectName)}_layout.dxf`,
+                  buildLayoutDxf(projectData, chosenWithLines.map(eq => buildPanelLayout(projectData, eq))),
+                  'image/vnd.dxf')}
+                className="bg-teal-700 text-white hover:bg-teal-800"
+                disabled={chosenWithLines.length === 0}
+              >
+                DXF (CAD)
               </Btn>
             </div>
           </div>
@@ -330,6 +380,7 @@ export const EplanixTab: React.FC = () => {
       <p className="mt-4 text-xs text-gray-400">
         {withLines.length} switchgear{withLines.length === 1 ? '' : 's'} with feeder lines ·
         {' '}the drawings are schematic: they show what the project holds, they are not a substitute for the EPLAN drawing set.
+        {' '}DXF carries the same sheets as CAD geometry, on named layers, for customers who do not run EPLAN.
       </p>
     </div>
   );

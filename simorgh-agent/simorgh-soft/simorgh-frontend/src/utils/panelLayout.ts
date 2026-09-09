@@ -12,6 +12,9 @@
 // height is the tallest column in the project's own data, and the cabinet
 // dimensions come from the Device Library entry for that switchgear.
 import { ProjectData, Equipment, DeviceTableRow, DeviceLibraryProperties } from '../types/project';
+import { Drawing } from './cad/shapes';
+import { renderSvg } from './cad/svg';
+import { renderDxf, mergeDrawings } from './cad/dxf';
 
 export interface LayoutSlot {
   row: DeviceTableRow;
@@ -140,8 +143,8 @@ export function buildLayoutRows(layouts: PanelLayout[]): (string | number)[][] {
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-/** The front elevation drawn: one box per column, one band per feeder. */
-export function buildLayoutSvg(layout: PanelLayout): string {
+/** The front elevation as geometry: one box per column, one band per feeder. */
+export function buildLayoutDrawing(layout: PanelLayout): Drawing {
   const colWidth = 150;
   const gap = 10;
   const top = 76;
@@ -150,56 +153,91 @@ export function buildLayoutSvg(layout: PanelLayout): string {
   const width = Math.max(560, layout.columns.length * (colWidth + gap) + 60);
   const height = top + bodyHeight + 90;
 
-  const out: string[] = [];
-  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="Segoe UI, Arial, sans-serif">`);
-  out.push(`<rect width="${width}" height="${height}" fill="#fff"/>`);
+  const d = new Drawing(width, height, `${text(layout.equipment.name)} — panel layout`);
 
   const dims = [
     layout.spec.height && `H ${layout.spec.height}`,
     layout.spec.width && `W ${layout.spec.width}`,
     layout.spec.depth && `D ${layout.spec.depth}`,
   ].filter(Boolean).join(' × ');
-  out.push(`<text x="30" y="22" font-size="13" font-weight="700" fill="#111">${esc(layout.equipment.name)}</text>`);
-  out.push(`<text x="30" y="40" font-size="10" fill="#555">${esc([
+  d.text(30, 22, text(layout.equipment.name), 13, { layer: 'TITLE', color: '#111', bold: true });
+  d.text(30, 40, [
     layout.equipment.type,
     dims && `${dims} mm`,
     layout.statedCells && `${layout.statedCells} cells (TPMS)`,
     `${layout.columns.length} column(s)`,
     `tallest ${layout.tallest}${layout.unit}`,
-  ].filter(Boolean).join(' · '))}</text>`);
+  ].filter(Boolean).join(' · '), 10, { layer: 'TITLE', color: '#555' });
 
   layout.columns.forEach((column, i) => {
     const x = 30 + i * (colWidth + gap);
-    out.push(`<rect x="${x}" y="${top}" width="${colWidth}" height="${bodyHeight}" fill="#f8fafc" stroke="#111" stroke-width="1.6"/>`);
-    out.push(`<text x="${x + colWidth / 2}" y="${top - 10}" font-size="10" font-weight="600" text-anchor="middle" fill="#111">COLUMN ${column.column}</text>`);
+    d.rect(x, top, colWidth, bodyHeight,
+      { layer: 'PANEL', color: '#111', fill: '#f8fafc', width: 1.6 });
+    d.text(x + colWidth / 2, top - 10, `COLUMN ${column.column}`, 10,
+      { layer: 'TITLE', color: '#111', anchor: 'middle', bold: true });
 
     for (const slot of column.slots) {
       const y = top + slot.offset * perModule;
       const h = Math.max(14, slot.modules * perModule);
       const busy = slot.row.busSection ? '#dbeafe' : '#e2e8f0';
-      out.push(`<rect x="${x + 3}" y="${y + 1.5}" width="${colWidth - 6}" height="${h - 3}" fill="${busy}" stroke="#334155" stroke-width="1"/>`);
-      out.push(`<text x="${x + 9}" y="${y + 14}" font-size="10" font-weight="700" fill="#0f172a">${esc(text(slot.row.feederNo) || '—')}</text>`);
-      out.push(`<text x="${x + colWidth - 9}" y="${y + 14}" font-size="9" text-anchor="end" fill="#475569">${slot.modules}${layout.unit}</text>`);
+      d.rect(x + 3, y + 1.5, colWidth - 6, h - 3,
+        { layer: 'SLOT', color: '#334155', fill: busy, width: 1 });
+      d.text(x + 9, y + 14, text(slot.row.feederNo) || '—', 10,
+        { layer: 'TAG', color: '#0f172a', bold: true });
+      d.text(x + colWidth - 9, y + 14, `${slot.modules}${layout.unit}`, 9,
+        { layer: 'TEXT', color: '#475569', anchor: 'end' });
       if (h > 28) {
-        out.push(`<text x="${x + 9}" y="${y + 26}" font-size="8.5" fill="#475569">${esc(text(slot.row.description).slice(0, 24))}</text>`);
+        d.text(x + 9, y + 26, text(slot.row.description).slice(0, 24), 8.5,
+          { layer: 'TEXT', color: '#475569' });
       }
       if (h > 42) {
-        out.push(`<text x="${x + 9}" y="${y + 38}" font-size="8.5" fill="#64748b">${esc([text(slot.row.templateName), text(slot.row.ratingPower) && `${slot.row.ratingPower} kW`].filter(Boolean).join(' · ').slice(0, 26))}</text>`);
+        d.text(x + 9, y + 38, [
+          text(slot.row.templateName),
+          text(slot.row.ratingPower) && `${slot.row.ratingPower} kW`,
+        ].filter(Boolean).join(' · ').slice(0, 26), 8.5, { layer: 'TEXT', color: '#64748b' });
       }
     }
 
     const free = layout.tallest - column.modules;
     if (free > 0) {
       const y = top + column.modules * perModule;
-      out.push(`<rect x="${x + 3}" y="${y + 1.5}" width="${colWidth - 6}" height="${Math.max(0, free * perModule - 3)}" fill="#ffffff" stroke="#cbd5e1" stroke-dasharray="4 3"/>`);
-      out.push(`<text x="${x + colWidth / 2}" y="${y + Math.min(20, free * perModule)}" font-size="9" text-anchor="middle" fill="#94a3b8">free ${free}${layout.unit}</text>`);
+      d.rect(x + 3, y + 1.5, colWidth - 6, Math.max(0, free * perModule - 3),
+        { layer: 'FREE', color: '#cbd5e1', fill: '#ffffff', width: 1, dash: '4 3' });
+      d.text(x + colWidth / 2, y + Math.min(20, free * perModule),
+        `free ${free}${layout.unit}`, 9, { layer: 'FREE', color: '#94a3b8', anchor: 'middle' });
     }
 
-    out.push(`<text x="${x + colWidth / 2}" y="${top + bodyHeight + 16}" font-size="9" text-anchor="middle" fill="#475569">${column.modules}${layout.unit} used · ${column.slots.length} feeder(s)</text>`);
+    d.text(x + colWidth / 2, top + bodyHeight + 16,
+      `${column.modules}${layout.unit} used · ${column.slots.length} feeder(s)`, 9,
+      { layer: 'TEXT', color: '#475569', anchor: 'middle' });
   });
 
-  out.push('</svg>');
-  return out.join('\n');
+  return d;
+}
+
+/** The front elevation drawn: one box per column, one band per feeder. */
+export function buildLayoutSvg(layout: PanelLayout): string {
+  return renderSvg(buildLayoutDrawing(layout));
+}
+
+/**
+ * The elevation as a DXF file — the layout equivalent of the single line's CAD
+ * output, for the customer who works in AutoCAD rather than EPLAN.
+ */
+export function buildLayoutDxf(data: ProjectData, layouts: PanelLayout[]): string {
+  const drawings = layouts.map(buildLayoutDrawing);
+  const drawing = drawings.length === 1
+    ? drawings[0]
+    : mergeDrawings(drawings, 60, `${text(data.projectName)} — panel layout`);
+
+  return renderDxf(drawing, {
+    titleBlock: [
+      layouts.length === 1 ? text(layouts[0].equipment.name) : `${layouts.length} switchgears`,
+      text(data.projectName) || 'PROJECT',
+      'Panel layout — front elevation',
+      new Date().toLocaleDateString(),
+    ].filter(Boolean),
+  });
 }
 
 /** A print-ready page: one elevation per switchgear. */

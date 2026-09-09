@@ -14,11 +14,17 @@
 //                         busbar with one branch per feeder, the devices on it
 //                         in slot order. For reading and checking, not a
 //                         substitute for the EPLAN drawing.
+//   buildSingleLineDxf()  that same drawing as CAD geometry, for the customer
+//                         who has no EPLAN: layers, lines, arcs and text that
+//                         AutoCAD, BricsCAD, ZWCAD or LibreCAD can edit.
 import { ProjectData, Equipment, TemplateItem, DeviceTableRow } from '../types/project';
 import {
   templateParts, formatPartEntry, stripLocaleTags, getEplanixValue,
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
 } from './tierEquipmentMatrix';
+import { Drawing } from './cad/shapes';
+import { renderSvg } from './cad/svg';
+import { renderDxf, mergeDrawings } from './cad/dxf';
 
 export const EPLAN_HEADERS = [
   'Page', 'Higher-level function', 'Location', 'DT', 'Function text',
@@ -181,15 +187,21 @@ function chainFor(
 }
 
 // Symbols are drawn on the branch line, centred on x, occupying 34 px of it.
-function drawSymbol(kind: SymbolKind, x: number, y: number): string {
-  const g: string[] = [];
+// Symbols are drawn on the branch line, centred on x, occupying 34 units of it.
+// They are our own geometry, drawn to the IEC 60617 conventions — no symbol
+// library is copied — which is what lets the same shapes go out as DXF.
+function drawSymbol(d: Drawing, kind: SymbolKind, x: number, y: number): void {
+  const S = { layer: 'SYMBOL' as const, color: '#111' };
   const line = (x1: number, y1: number, x2: number, y2: number, w = 1.3) =>
-    g.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#111" stroke-width="${w}"/>`);
+    d.line(x1, y1, x2, y2, { ...S, width: w });
+  const box = (bx: number, by: number, bw: number, bh: number, w = 1.3, dash?: string) =>
+    d.rect(bx, by, bw, bh, { ...S, fill: '#fff', width: w, dash });
+
   switch (kind) {
     case 'breaker':
       // IEC circuit breaker: a switch whose fixed contact carries the cross.
       line(x, y, x, y + 8);
-      g.push(`<circle cx="${x}" cy="${y + 8}" r="1.8" fill="#111"/>`);
+      d.circle(x, y + 8, 1.8, { ...S, fill: '#111', width: 0 });
       line(x, y + 8, x + 11, y + 26, 1.5);          // moving contact
       line(x - 5, y + 21, x + 5, y + 31, 1.5);      // ×
       line(x + 5, y + 21, x - 5, y + 31, 1.5);
@@ -198,58 +210,59 @@ function drawSymbol(kind: SymbolKind, x: number, y: number): string {
     case 'switch-fuse':
       line(x, y, x, y + 6);
       line(x, y + 6, x + 11, y + 22, 1.5);
-      g.push(`<rect x="${x - 5}" y="${y + 22}" width="10" height="12" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
+      box(x - 5, y + 22, 10, 12);
       break;
     case 'contactor':
       // Switch stroke with the contactor's arc under the moving contact.
       line(x, y, x, y + 6);
       line(x, y + 6, x + 12, y + 22, 1.5);
-      g.push(`<path d="M ${x - 6} ${y + 22} a 6 6 0 0 0 12 0" fill="none" stroke="#111" stroke-width="1.3"/>`);
+      d.arc(x, y + 22, 6, 0, 180, { ...S, width: 1.3 });
       line(x, y + 26, x, y + 34);
       break;
     case 'overload':
-      g.push(`<rect x="${x - 8}" y="${y + 6}" width="16" height="22" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
-      g.push(`<path d="M ${x - 4} ${y + 11} q 5 6 0 12" fill="none" stroke="#111" stroke-width="1.3"/>`);
+      box(x - 8, y + 6, 16, 22);
+      d.curve(x - 4, y + 11, x + 1, y + 17, x - 4, y + 23, { ...S, width: 1.3 });
       line(x, y, x, y + 6); line(x, y + 28, x, y + 34);
       break;
     case 'ct':
       line(x, y, x, y + 34);
-      g.push(`<path d="M ${x + 2} ${y + 10} a 7 7 0 1 1 0 14" fill="none" stroke="#111" stroke-width="1.3"/>`);
+      d.arc(x + 2, y + 17, 7, 270, 450, { ...S, width: 1.3 });
       break;
     case 'pt':
       line(x, y, x, y + 34);
-      g.push(`<circle cx="${x + 9}" cy="${y + 12}" r="6" fill="#fff" stroke="#111" stroke-width="1.2"/>`);
-      g.push(`<circle cx="${x + 9}" cy="${y + 22}" r="6" fill="#fff" stroke="#111" stroke-width="1.2"/>`);
+      d.circle(x + 9, y + 12, 6, { ...S, fill: '#fff', width: 1.2 });
+      d.circle(x + 9, y + 22, 6, { ...S, fill: '#fff', width: 1.2 });
       break;
     case 'meter':
       line(x, y, x, y + 34);
-      g.push(`<circle cx="${x + 12}" cy="${y + 17}" r="8" fill="#fff" stroke="#111" stroke-width="1.2"/>`);
+      d.circle(x + 12, y + 17, 8, { ...S, fill: '#fff', width: 1.2 });
       break;
     case 'relay':
       line(x, y, x, y + 34);
-      g.push(`<rect x="${x + 4}" y="${y + 7}" width="18" height="20" fill="#fff" stroke="#111" stroke-width="1.2"/>`);
+      box(x + 4, y + 7, 18, 20, 1.2);
       break;
     case 'arrester':
       line(x, y, x, y + 6);
-      g.push(`<rect x="${x - 7}" y="${y + 6}" width="14" height="20" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
+      box(x - 7, y + 6, 14, 20);
       line(x - 4, y + 11, x + 4, y + 21);
       line(x, y + 26, x, y + 34);
       break;
     case 'fuse':
       line(x, y, x, y + 8);
-      g.push(`<rect x="${x - 6}" y="${y + 8}" width="12" height="18" fill="#fff" stroke="#111" stroke-width="1.3"/>`);
+      box(x - 6, y + 8, 12, 18);
       line(x, y + 26, x, y + 34);
       break;
     default:
       line(x, y, x, y + 34);
-      g.push(`<rect x="${x + 4}" y="${y + 9}" width="16" height="16" fill="#fff" stroke="#111" stroke-width="1" stroke-dasharray="3 2"/>`);
+      box(x + 4, y + 9, 16, 16, 1, '3 2');
   }
-  return g.join('');
 }
 
 export interface SingleLinePage {
   page: number;
   of: number;
+  /** The sheet as geometry — what `renderSvg` and `renderDxf` both read. */
+  drawing: Drawing;
   svg: string;
   feeders: number;
 }
@@ -294,17 +307,21 @@ export function buildSingleLinePages(
   for (let i = 0; i < branches.length; i += perPage) chunks.push(branches.slice(i, i + perPage));
   if (chunks.length === 0) chunks.push([]);
 
-  return chunks.map((chunk, index) => ({
-    page: index + 1,
-    of: chunks.length,
-    feeders: chunk.length,
-    svg: drawSheet({
+  return chunks.map((chunk, index) => {
+    const drawing = drawSheet({
       data, equipment, spec, templates, order,
       supply, lines: chunk,
       firstIndex: index * perPage,
       page: index + 1, of: chunks.length,
-    }),
-  }));
+    });
+    return {
+      page: index + 1,
+      of: chunks.length,
+      feeders: chunk.length,
+      drawing,
+      svg: renderSvg(drawing),
+    };
+  });
 }
 
 function drawSheet(o: {
@@ -318,7 +335,7 @@ function drawSheet(o: {
   firstIndex: number;
   page: number;
   of: number;
-}): string {
+}): Drawing {
   const { margin, colWidth, chainStep, cardRows, cardRowHeight } = GEOM;
   const supplyWidth = o.supply ? colWidth : 90;
   const bodyLeft = margin + supplyWidth;
@@ -339,47 +356,48 @@ function drawSheet(o: {
   const width = Math.max(900, bodyLeft + Math.max(1, o.lines.length) * colWidth + margin);
   const height = cardY + cardHeight + 46;
 
-  const out: string[] = [];
-  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="Segoe UI, Arial, sans-serif">`);
-  out.push(`<rect width="${width}" height="${height}" fill="#fff"/>`);
+  const d = new Drawing(width, height,
+    `${text(o.equipment.name)} — single line ${o.page}/${o.of}`);
 
   // ── Title band ────────────────────────────────────────────────────────
-  out.push(`<line x1="${margin}" y1="52" x2="${width - margin}" y2="52" stroke="#111" stroke-width="1.6"/>`);
-  out.push(`<text x="${margin}" y="24" font-size="13.5" font-weight="700" fill="#111">${esc(o.equipment.name)}</text>`);
-  out.push(`<text x="${margin}" y="42" font-size="10" fill="#444">${esc([
+  d.line(margin, 52, width - margin, 52, { layer: 'FRAME', color: '#111', width: 1.6 });
+  d.text(margin, 24, text(o.equipment.name), 13.5, { layer: 'TITLE', color: '#111', bold: true });
+  d.text(margin, 42, [
     o.data.projectName,
     o.data.projectNumber && `OE ${o.data.projectNumber}`,
     o.equipment.type,
     o.equipment.description,
-  ].filter(Boolean).join('  ·  '))}</text>`);
-  out.push(`<text x="${width - margin}" y="24" font-size="10" text-anchor="end" fill="#444">Single line diagram</text>`);
-  out.push(`<text x="${width - margin}" y="42" font-size="10" text-anchor="end" fill="#444">${
-    esc(`${new Date().toLocaleDateString()}   sheet ${o.page}/${o.of}`)}</text>`);
+  ].filter(Boolean).join('  ·  '), 10, { layer: 'TITLE', color: '#444' });
+  d.text(width - margin, 24, 'Single line diagram', 10,
+    { layer: 'TITLE', color: '#444', anchor: 'end' });
+  d.text(width - margin, 42, `${new Date().toLocaleDateString()}   sheet ${o.page}/${o.of}`, 10,
+    { layer: 'TITLE', color: '#444', anchor: 'end' });
 
   // ── Supply ────────────────────────────────────────────────────────────
   const supplyX = margin + supplyWidth / 2;
   if (o.supply) {
-    out.push(`<text x="${supplyX}" y="82" font-size="10" font-weight="700" text-anchor="middle" fill="#111">${
-      esc(clip(String(o.supply.feederNo || 'INCOMING'), 22))}</text>`);
-    out.push(`<text x="${supplyX}" y="96" font-size="9" text-anchor="middle" fill="#555">${
-      esc(clip(String(o.supply.description || ''), 26))}</text>`);
+    d.text(supplyX, 82, clip(String(o.supply.feederNo || 'INCOMING'), 22), 10,
+      { layer: 'TEXT', color: '#111', anchor: 'middle', bold: true });
+    d.text(supplyX, 96, clip(String(o.supply.description || ''), 26), 9,
+      { layer: 'TEXT', color: '#555', anchor: 'middle' });
     // The incomer's own devices, drawn compactly above the busbar.
     let y = 104;
     for (const item of supplyShown) {
-      out.push(drawSymbol(item.kind, supplyX, y));
-      out.push(`<text x="${supplyX + 26}" y="${y + 20}" font-size="8.5" fill="#111">${esc(clip(item.code, 18))}</text>`);
+      drawSymbol(d, item.kind, supplyX, y);
+      d.text(supplyX + 26, y + 20, clip(item.code, 18), 8.5, { layer: 'TEXT', color: '#111' });
       y += 34;
     }
-    out.push(`<line x1="${supplyX}" y1="${y}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
+    d.line(supplyX, y, supplyX, busY, { layer: 'WIRE', color: '#111', width: 1.4 });
   } else {
     // No incomer on this board: the busbar is simply fed from elsewhere.
-    out.push(`<path d="M ${supplyX} 96 L ${supplyX} ${busY}" stroke="#111" stroke-width="1.4"/>`);
-    out.push(`<path d="M ${supplyX - 7} 96 L ${supplyX} 84 L ${supplyX + 7} 96 Z" fill="#111"/>`);
-    out.push(`<text x="${supplyX}" y="78" font-size="9" text-anchor="middle" fill="#555">supply</text>`);
+    d.line(supplyX, 96, supplyX, busY, { layer: 'WIRE', color: '#111', width: 1.4 });
+    d.poly([[supplyX - 7, 96], [supplyX, 84], [supplyX + 7, 96]],
+      { layer: 'WIRE', fill: '#111', width: 0, close: true });
+    d.text(supplyX, 78, 'supply', 9, { layer: 'TEXT', color: '#555', anchor: 'middle' });
   }
 
   // ── Busbar ────────────────────────────────────────────────────────────
-  out.push(`<line x1="${margin}" y1="${busY}" x2="${width - margin}" y2="${busY}" stroke="#111" stroke-width="5"/>`);
+  d.line(margin, busY, width - margin, busY, { layer: 'BUS', color: '#111', width: 5 });
   const busText = [
     o.spec.mainBusbarConfiguration,
     o.spec.mainBusbarRatedCurrent && `${o.spec.mainBusbarRatedCurrent} A`,
@@ -388,7 +406,8 @@ function drawSheet(o: {
   ].filter(Boolean).join('  ·  ');
   if (busText) {
     // Right of the sheet, clear of the supply column.
-    out.push(`<text x="${width - margin}" y="${busY - 10}" font-size="9.5" text-anchor="end" fill="#333">${esc(busText)}</text>`);
+    d.text(width - margin, busY - 10, busText, 9.5,
+      { layer: 'TEXT', color: '#333', anchor: 'end' });
   }
 
   // ── Outgoing branches ─────────────────────────────────────────────────
@@ -396,33 +415,34 @@ function drawSheet(o: {
     const x = bodyLeft + i * colWidth + colWidth / 2;
     const chain = chains[i];
 
-    out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
-    out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
+    d.line(x, busY, x, chainTop, { layer: 'WIRE', color: '#111', width: 1.3 });
+    d.circle(x, busY, 3, { layer: 'WIRE', color: '#111', fill: '#111', width: 0 });
 
     let y = chainTop;
     for (const item of chain) {
-      out.push(drawSymbol(item.kind, x, y));
-      out.push(`<text x="${x + 26}" y="${y + 14}" font-size="9" font-weight="600" fill="#111">${esc(item.tag)}</text>`);
-      out.push(`<text x="${x + 26}" y="${y + 26}" font-size="8.5" fill="#444"><title>${esc(item.code)}</title>${
-        esc(clip(item.code, 17))}</text>`);
+      drawSymbol(d, item.kind, x, y);
+      d.text(x + 26, y + 14, item.tag, 9, { layer: 'TAG', color: '#111', bold: true });
+      d.text(x + 26, y + 26, clip(item.code, 17), 8.5,
+        { layer: 'TEXT', color: '#444', title: item.code });
       y += chainStep;
     }
-    out.push(`<line x1="${x}" y1="${y}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
+    d.line(x, y, x, loadY, { layer: 'WIRE', color: '#111', width: 1.3 });
 
     // The load at the foot: a motor when the line says so, an outgoing arrow
     // otherwise.
     if (isMotorLoad(line)) {
-      out.push(`<circle cx="${x}" cy="${loadY + 14}" r="13" fill="#fff" stroke="#111" stroke-width="1.4"/>`);
-      out.push(`<text x="${x}" y="${loadY + 18}" font-size="11" text-anchor="middle" fill="#111">M</text>`);
+      d.circle(x, loadY + 14, 13, { layer: 'LOAD', color: '#111', fill: '#fff', width: 1.4 });
+      d.text(x, loadY + 18, 'M', 11, { layer: 'LOAD', color: '#111', anchor: 'middle' });
     } else {
-      out.push(`<path d="M ${x - 7} ${loadY + 6} L ${x} ${loadY + 20} L ${x + 7} ${loadY + 6} Z" fill="#111"/>`);
+      d.poly([[x - 7, loadY + 6], [x, loadY + 20], [x + 7, loadY + 6]],
+        { layer: 'LOAD', fill: '#111', width: 0, close: true });
     }
 
     // ── Data block, the same rows on every branch so the sheet reads as a
     //    table under the drawing.
     const cx = bodyLeft + i * colWidth + 6;
     const cw = colWidth - 12;
-    out.push(`<rect x="${cx}" y="${cardY}" width="${cw}" height="${cardHeight}" fill="#fff" stroke="#111" stroke-width="1"/>`);
+    d.rect(cx, cardY, cw, cardHeight, { layer: 'TABLE', color: '#111', fill: '#fff', width: 1 });
     const rows: [string, string][] = [
       ['Feeder', String(line.feederNo || '—')],
       ['Tag', String(line.tag || '—')],
@@ -435,20 +455,20 @@ function drawSheet(o: {
     rows.forEach(([label, value], r) => {
       const ry = cardY + 3 + r * cardRowHeight;
       if (r > 0) {
-        out.push(`<line x1="${cx}" y1="${ry}" x2="${cx + cw}" y2="${ry}" stroke="#e5e7eb" stroke-width="0.8"/>`);
+        d.line(cx, ry, cx + cw, ry, { layer: 'TABLE', color: '#e5e7eb', width: 0.8 });
       }
-      out.push(`<text x="${cx + 6}" y="${ry + 11}" font-size="8" fill="#6b7280">${esc(label)}</text>`);
-      out.push(`<text x="${cx + cw - 6}" y="${ry + 11}" font-size="8.5" text-anchor="end" fill="#111">` +
-        `<title>${esc(value)}</title>${esc(clip(value, 20))}</text>`);
+      d.text(cx + 6, ry + 11, label, 8, { layer: 'TABLE', color: '#6b7280' });
+      d.text(cx + cw - 6, ry + 11, clip(value, 20), 8.5,
+        { layer: 'TEXT', color: '#111', anchor: 'end', title: value });
     });
   });
 
   if (o.lines.length === 0) {
-    out.push(`<text x="${bodyLeft + 20}" y="${chainTop + 30}" font-size="11" fill="#888">No outgoing feeders on this switchgear.</text>`);
+    d.text(bodyLeft + 20, chainTop + 30, 'No outgoing feeders on this switchgear.', 11,
+      { layer: 'TEXT', color: '#888' });
   }
 
-  out.push('</svg>');
-  return out.join('\n');
+  return d;
 }
 
 /** One switchgear's sheets, joined for preview or print. */
@@ -479,4 +499,34 @@ export function buildSingleLineHtml(
 <button class="no-print" onclick="window.print()" style="margin-bottom:10px;padding:8px 14px;background:#1d4ed8;color:#fff;border:0;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
 ${pages.join('')}
 </body></html>`;
+}
+
+/**
+ * The switchgear as a DXF file — every sheet in one drawing, tiled left to
+ * right, on the layers a drawing office expects (BUS, WIRE, SYMBOL, TAG…).
+ *
+ * This is the output for customers without EPLAN: DXF is Autodesk's published
+ * interchange format, so the file opens and edits in essentially any CAD
+ * package, and in EPLAN's own DXF import.
+ */
+export function buildSingleLineDxf(
+  data: ProjectData,
+  equipment: Equipment,
+  perPage = 8,
+): string {
+  const pages = buildSingleLinePages(data, equipment, perPage);
+  const name = `${text(equipment.name)} — single line`;
+  const drawing = pages.length === 1
+    ? pages[0].drawing
+    : mergeDrawings(pages.map(p => p.drawing), 60, name);
+
+  return renderDxf(drawing, {
+    titleBlock: [
+      text(equipment.name) || 'SWITCHGEAR',
+      [text(data.projectName), text(data.projectNumber) && `OE ${text(data.projectNumber)}`]
+        .filter(Boolean).join('   ·   '),
+      `Single line diagram · ${equipment.type} · ${pages.length} sheet(s)`,
+      new Date().toLocaleDateString(),
+    ].filter(Boolean),
+  });
 }

@@ -1,0 +1,157 @@
+// src/utils/cad/shapes.ts
+//
+// A drawing, before it is a file.
+//
+// The single line and the panel layout used to build SVG strings directly, so
+// the only thing that could come out of them was SVG — and, through the print
+// dialog, a PDF of that SVG. A drawing office wants the geometry itself: the
+// same sheet as DXF, opened and edited in AutoCAD, BricsCAD, ZWCAD or EPLAN.
+//
+// So the drawing is built once, here, as plain geometry — lines, arcs, text,
+// on named layers — and each back-end renders it: `renderSvg` for the screen,
+// `renderDxf` for CAD. Adding a third back-end costs one file, not a rewrite.
+//
+// Coordinates are the ones the sheets already use: pixels, origin top-left,
+// y downwards. `renderDxf` flips and scales to millimetres; nothing upstream
+// needs to know.
+
+/** Where a text sits relative to its anchor point — SVG's text-anchor. */
+export type Anchor = 'start' | 'middle' | 'end';
+
+/**
+ * Layers a sheet draws on. The names are what a draughtsman sees in the CAD
+ * layer manager, so they say what the geometry *is*, not what it looks like.
+ */
+export type Layer =
+  | 'FRAME'    // sheet border and title band
+  | 'TITLE'    // sheet heading text
+  | 'TEXT'     // notes, ratings, descriptions
+  | 'TAG'      // device designations (-Q1, -F2 …)
+  | 'BUS'      // busbar
+  | 'WIRE'     // connections between devices
+  | 'SYMBOL'   // device symbols
+  | 'LOAD'     // motors, outgoing arrows
+  | 'TABLE'    // the data block under each feeder
+  | 'PANEL'    // panel/column outlines in the layout
+  | 'SLOT'     // feeder bands in the layout
+  | 'FREE';    // spare space in the layout
+
+/** DXF colour (ACI) and linetype for each layer. */
+export const LAYERS: Record<Layer, { aci: number; linetype: 'CONTINUOUS' | 'DASHED' }> = {
+  FRAME:  { aci: 7, linetype: 'CONTINUOUS' },
+  TITLE:  { aci: 7, linetype: 'CONTINUOUS' },
+  TEXT:   { aci: 3, linetype: 'CONTINUOUS' },
+  TAG:    { aci: 5, linetype: 'CONTINUOUS' },
+  BUS:    { aci: 1, linetype: 'CONTINUOUS' },
+  WIRE:   { aci: 7, linetype: 'CONTINUOUS' },
+  SYMBOL: { aci: 7, linetype: 'CONTINUOUS' },
+  LOAD:   { aci: 6, linetype: 'CONTINUOUS' },
+  TABLE:  { aci: 8, linetype: 'CONTINUOUS' },
+  PANEL:  { aci: 7, linetype: 'CONTINUOUS' },
+  SLOT:   { aci: 4, linetype: 'CONTINUOUS' },
+  FREE:   { aci: 8, linetype: 'DASHED' },
+};
+
+/** How a shape is drawn. `layer` decides the DXF colour; `color` only the SVG. */
+export interface Pen {
+  layer: Layer;
+  /** SVG stroke / text colour. CAD takes its colour from the layer. */
+  color?: string;
+  width?: number;
+  /** SVG fill. `renderDxf` fills triangles and quads, and outlines the rest. */
+  fill?: string;
+  /** SVG stroke-dasharray. In CAD, use the FREE layer for dashed geometry. */
+  dash?: string;
+}
+
+export type Pt = [number, number];
+
+export type Shape =
+  | ({ t: 'line'; x1: number; y1: number; x2: number; y2: number } & Pen)
+  | ({ t: 'rect'; x: number; y: number; w: number; h: number } & Pen)
+  | ({ t: 'circle'; cx: number; cy: number; r: number } & Pen)
+  /** Angles in degrees, measured in sheet space (y down) — see `renderDxf`. */
+  | ({ t: 'arc'; cx: number; cy: number; r: number; a0: number; a1: number } & Pen)
+  /** Quadratic Bézier — CAD gets it flattened, SVG gets the curve. */
+  | ({ t: 'curve'; x1: number; y1: number; cx: number; cy: number; x2: number; y2: number } & Pen)
+  | ({ t: 'poly'; pts: Pt[]; close?: boolean } & Pen)
+  | ({ t: 'text'; x: number; y: number; s: string; size: number; anchor?: Anchor;
+       bold?: boolean; title?: string } & Pen);
+
+/**
+ * A sheet: its size in drawing units and the geometry on it.
+ *
+ * The helpers are deliberately thin — they exist so the drawing code reads as
+ * geometry rather than as string building, which is what made the old SVG
+ * impossible to retarget.
+ */
+export class Drawing {
+  readonly shapes: Shape[] = [];
+
+  constructor(
+    public width: number,
+    public height: number,
+    /** Goes into the DXF as a comment and the SVG as its accessible title. */
+    public name = '',
+  ) {}
+
+  add(shape: Shape): this { this.shapes.push(shape); return this; }
+
+  line(x1: number, y1: number, x2: number, y2: number, pen: Pen): this {
+    return this.add({ t: 'line', x1, y1, x2, y2, ...pen });
+  }
+
+  rect(x: number, y: number, w: number, h: number, pen: Pen): this {
+    return this.add({ t: 'rect', x, y, w, h, ...pen });
+  }
+
+  circle(cx: number, cy: number, r: number, pen: Pen): this {
+    return this.add({ t: 'circle', cx, cy, r, ...pen });
+  }
+
+  arc(cx: number, cy: number, r: number, a0: number, a1: number, pen: Pen): this {
+    return this.add({ t: 'arc', cx, cy, r, a0, a1, ...pen });
+  }
+
+  curve(x1: number, y1: number, cx: number, cy: number, x2: number, y2: number, pen: Pen): this {
+    return this.add({ t: 'curve', x1, y1, cx, cy, x2, y2, ...pen });
+  }
+
+  poly(pts: Pt[], pen: Pen & { close?: boolean }): this {
+    const { close, ...rest } = pen;
+    return this.add({ t: 'poly', pts, close, ...rest });
+  }
+
+  text(
+    x: number, y: number, s: string, size: number,
+    pen: Pen & { anchor?: Anchor; bold?: boolean; title?: string },
+  ): this {
+    const { anchor, bold, title, ...rest } = pen;
+    // Empty labels would become stray zero-length TEXT entities in CAD.
+    if (s === '') return this;
+    return this.add({ t: 'text', x, y, s, size, anchor, bold, title, ...rest });
+  }
+
+  /** Every layer the sheet actually drew on, in the order LAYERS declares. */
+  usedLayers(): Layer[] {
+    const used = new Set(this.shapes.map(s => s.layer));
+    return (Object.keys(LAYERS) as Layer[]).filter(l => used.has(l));
+  }
+}
+
+/** Points along a quadratic Bézier — how CAD back-ends flatten `curve`. */
+export function flattenCurve(
+  x1: number, y1: number, cx: number, cy: number, x2: number, y2: number,
+  segments = 12,
+): Pt[] {
+  const pts: Pt[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const u = 1 - t;
+    pts.push([
+      u * u * x1 + 2 * u * t * cx + t * t * x2,
+      u * u * y1 + 2 * u * t * cy + t * t * y2,
+    ]);
+  }
+  return pts;
+}
