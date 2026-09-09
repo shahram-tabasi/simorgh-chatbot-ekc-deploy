@@ -52,6 +52,31 @@ export const LAYERS: Record<Layer, { aci: number; linetype: 'CONTINUOUS' | 'DASH
   FREE:   { aci: 8, linetype: 'DASHED' },
 };
 
+/** The AutoCAD Color Index, as the swatch a layer list shows for it. */
+const ACI_HEX: Record<number, string> = {
+  1: '#e11d48', 2: '#ca8a04', 3: '#16a34a', 4: '#0891b2',
+  5: '#2563eb', 6: '#c026d3', 7: '#111827', 8: '#6b7280', 9: '#9ca3af',
+};
+
+/** The colour a CAD layer manager would show against this layer. */
+export const layerColor = (layer: Layer): string => ACI_HEX[LAYERS[layer].aci] ?? '#111827';
+
+/** What each layer holds, for a layer list that has to be read by a human. */
+export const LAYER_NOTES: Record<Layer, string> = {
+  FRAME: 'Sheet border and title block',
+  TITLE: 'Sheet headings',
+  TEXT: 'Notes, ratings, descriptions',
+  TAG: 'Device designations',
+  BUS: 'Busbar',
+  WIRE: 'Connections between devices',
+  SYMBOL: 'Device symbols',
+  LOAD: 'Motors and outgoing arrows',
+  TABLE: 'The data block under each feeder',
+  PANEL: 'Column outlines',
+  SLOT: 'Feeder bands',
+  FREE: 'Spare space and picture symbols',
+};
+
 /** How a shape is drawn. `layer` decides the DXF colour; `color` only the SVG. */
 export interface Pen {
   layer: Layer;
@@ -142,6 +167,21 @@ export class Drawing {
   usedLayers(): Layer[] {
     const used = new Set(this.shapes.map(s => s.layer));
     return (Object.keys(LAYERS) as Layer[]).filter(l => used.has(l));
+  }
+}
+
+/** One shape moved. Every back-end and the editor share this one definition. */
+export function translateShape(s: Shape, dx: number, dy: number): Shape {
+  switch (s.t) {
+    case 'line':    return { ...s, x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy };
+    case 'rect':    return { ...s, x: s.x + dx, y: s.y + dy };
+    case 'circle':  return { ...s, cx: s.cx + dx, cy: s.cy + dy };
+    case 'ellipse': return { ...s, cx: s.cx + dx, cy: s.cy + dy };
+    case 'arc':     return { ...s, cx: s.cx + dx, cy: s.cy + dy };
+    case 'curve':   return { ...s, x1: s.x1 + dx, y1: s.y1 + dy, cx: s.cx + dx, cy: s.cy + dy,
+                              x2: s.x2 + dx, y2: s.y2 + dy };
+    case 'poly':    return { ...s, pts: s.pts.map(p => [p[0] + dx, p[1] + dy] as Pt) };
+    case 'text':    return { ...s, x: s.x + dx, y: s.y + dy };
   }
 }
 

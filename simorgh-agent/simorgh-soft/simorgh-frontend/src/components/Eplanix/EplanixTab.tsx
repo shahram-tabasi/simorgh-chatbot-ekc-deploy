@@ -23,33 +23,19 @@ import {
   buildLayoutDxf,
 } from '../../utils/panelLayout';
 import { sheetsToDxf } from '../../utils/cad/sheetDxf';
+import { drawingFromSvg } from '../../utils/cad/fromSvg';
+import { DrawingEditor, EditorSheet } from '../SimorghDraw/DrawingEditor';
+import { downloadText, fileSafe } from '../../utils/download';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
 } from '../../utils/mechanicalItems';
 
-// The Eplanix tab: the three drawings-and-lists outputs that come off the
+// The Simorgh Draw tab: the drawings-and-lists outputs that come off the
 // switchgear itself — the single line, the panel layout, and the mechanical
 // items. Each one is previewed here before it is downloaded or printed, so
 // what leaves the app has been looked at first.
 
-type View = 'single-line' | 'layout' | 'mechanical' | 'symbols';
-
-// Anything unsafe in a file name, and the runs of spaces around it, collapse
-// to a single underscore — the same file has to survive Windows and Linux.
-const fileSafe = (s: string) =>
-  (s || 'project').replace(/[^\w.\-]+/g, '_').replace(/^_+|_+$/g, '') || 'project';
-
-function downloadText(filename: string, content: string, mime: string) {
-  const url = URL.createObjectURL(new Blob([content], { type: mime }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoked late: Safari reads the blob after the click returns.
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
+type View = 'single-line' | 'editor' | 'layout' | 'mechanical' | 'symbols';
 
 /**
  * The single line as CAD, one file per switchgear — the output for a customer
@@ -214,6 +200,18 @@ export const EplanixTab: React.FC = () => {
     [projectData, preview, perPage, symbols]);
   const current = pages[Math.min(sheet, Math.max(0, pages.length - 1))];
 
+  // The drawn sheets read back as geometry, which is what the editor edits and
+  // what DXF and PDF are written from. Only built when that tab is open — the
+  // parse is quick, but there is no reason to do it while nobody is editing.
+  const editorSheets = useMemo<EditorSheet[]>(
+    () => (view === 'editor'
+      ? pages.map(page => ({
+          name: `Sheet ${page.page} of ${page.of}`,
+          drawing: drawingFromSvg(page.svg, `${preview?.name ?? ''} ${page.page}/${page.of}`),
+        }))
+      : []),
+    [view, pages, preview]);
+
   const layout = useMemo(
     () => (preview ? buildPanelLayout(projectData, preview) : null),
     [projectData, preview]);
@@ -252,7 +250,7 @@ export const EplanixTab: React.FC = () => {
     <div>
       <div className="flex justify-between items-start mb-5 gap-4">
         <div>
-          <h2 className="text-xl font-bold text-gray-800">Eplanix</h2>
+          <h2 className="text-xl font-bold text-gray-800">Simorgh Draw</h2>
           <p className="text-sm text-gray-500 mt-0.5">
             {projectData.projectName} — single line, panel layout and mechanical items,
             drawn from Device Selection and the templates behind it.
@@ -286,8 +284,9 @@ export const EplanixTab: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-5 gap-3 mb-5">
         <Tab id="single-line" label="Single line — تک‌خطی" note="Busbar, feeders, devices, data blocks" />
+        <Tab id="editor" label="Edit — ویرایش نقشه" note="Move, retype, layers, DXF / PDF / SVG" />
         <Tab id="layout" label="Layout — جانمایی" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical — اقلام مکانیکال" note="Enclosure, busbars, compartments" />
         <Tab id="symbols" label="Symbols — علائم" note="The IEC single-line library" />
@@ -374,6 +373,27 @@ export const EplanixTab: React.FC = () => {
             </p>
           )}
         </div>
+      )}
+
+      {/* ── Edit ──────────────────────────────────────────────────────── */}
+      {view === 'editor' && (
+        editorSheets.length > 0 ? (
+          <DrawingEditor
+            sheets={editorSheets}
+            fileBase={`${projectData.projectName || 'project'}_${preview?.name ?? ''}`}
+            titleBlock={[
+              preview?.name || 'SWITCHGEAR',
+              [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]
+                .filter(Boolean).join('   ·   '),
+              `Single line diagram · ${preview?.type ?? ''}`,
+              new Date().toLocaleDateString(),
+            ].filter(Boolean)}
+          />
+        ) : (
+          <p className="p-6 text-sm text-gray-500 border border-gray-200 rounded-lg">
+            Nothing to edit yet — add feeder lines in Device Selection, or import a switchgear from TPMS.
+          </p>
+        )
       )}
 
       {/* ── Layout ────────────────────────────────────────────────────── */}

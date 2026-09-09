@@ -15,14 +15,10 @@
 //
 // Units are millimetres. The sheet is drawn in pixels, y downwards; here it is
 // scaled, flipped, and centred on the smallest ISO sheet it fits.
-import { Drawing, LAYERS, Layer, Pt, Shape, flattenCurve } from './shapes';
+import { Drawing, LAYERS, Layer, Pt, Shape, flattenCurve, translateShape } from './shapes';
+import { MARGIN, Paper, fitToPaper, titleBlockBox } from './paper';
 
-/** ISO A landscape sheets, widest first is not needed — smallest fit wins. */
-const PAPERS: [string, number, number][] = [
-  ['A4', 297, 210], ['A3', 420, 297], ['A2', 594, 420], ['A1', 841, 594], ['A0', 1189, 841],
-];
-
-const MARGIN = 10;          // mm, frame inset from the paper edge
+// DXF text height is the cap height; SVG font-size is the em.
 const CAP_HEIGHT = 0.72;    // DXF text height is cap height; SVG font-size is the em
 
 export interface DxfOptions {
@@ -229,32 +225,19 @@ function tables(t: Tape, layers: Layer[]) {
 
 // ── The file ────────────────────────────────────────────────────────────────
 
-/** The smallest ISO landscape sheet the content fits on, else one made to fit. */
-function paperFor(w: number, h: number): { name: string; w: number; h: number } {
-  for (const [name, pw, ph] of PAPERS) {
-    if (w <= pw - 2 * MARGIN && h <= ph - 2 * MARGIN) return { name, w: pw, h: ph };
-  }
-  return { name: 'CUSTOM', w: w + 2 * MARGIN, h: h + 2 * MARGIN };
-}
-
-function drawFrame(
-  t: Tape, paper: { name: string; w: number; h: number },
-  lines: string[], mode: 'escape' | 'raw',
-) {
+function drawFrame(t: Tape, paper: Paper, lines: string[], mode: 'escape' | 'raw') {
   const x0 = MARGIN, y0 = MARGIN, x1 = paper.w - MARGIN, y1 = paper.h - MARGIN;
   polyline(t, 'FRAME', [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true);
 
   if (lines.length === 0) return;
   // A title block in the corner every drawing office looks at first.
-  const bw = Math.min(170, x1 - x0);
   const rows = Math.min(lines.length, 5);
-  const bh = 6 + rows * 6;
-  const bx = x1 - bw, by = y0;
-  polyline(t, 'FRAME', [[bx, by], [x1, by], [x1, by + bh], [bx, by + bh]], true);
+  const b = titleBlockBox(paper, lines.length);
+  polyline(t, 'FRAME', [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]], true);
   lines.slice(0, rows).forEach((row, i) => {
-    const y = by + bh - 6 - i * 6;
-    if (i > 0) line(t, 'FRAME', bx, y + 4.5, x1, y + 4.5);
-    text(t, 'TITLE', bx + 3, y, i === 0 ? 3.5 : 2.5, row, 0, mode);
+    const y = b.y + b.h - 6 - i * 6;
+    if (i > 0) line(t, 'FRAME', b.x, y + 4.5, b.x + b.w, y + 4.5);
+    text(t, 'TITLE', b.x + 3, y, i === 0 ? 3.5 : 2.5, row, 0, mode);
   });
 }
 
@@ -269,15 +252,8 @@ export function renderDxf(d: Drawing, options: DxfOptions = {}): string {
     mmPerUnit = 0.5, frame = true, titleBlock = [], unicode = 'escape',
   } = options;
 
-  const contentW = d.width * mmPerUnit;
-  const contentH = d.height * mmPerUnit;
-  const paper = paperFor(contentW, contentH);
-  const f: Frame = {
-    s: mmPerUnit,
-    ox: (paper.w - contentW) / 2,
-    oy: (paper.h - contentH) / 2,
-    height: d.height,
-  };
+  const { paper, ox, oy } = fitToPaper(d.width, d.height, mmPerUnit);
+  const f: Frame = { s: mmPerUnit, ox, oy, height: d.height };
 
   const t = new Tape();
 
@@ -317,22 +293,8 @@ export function mergeDrawings(sheets: Drawing[], gap = 60, name = ''): Drawing {
   const merged = new Drawing(width, height, name);
   let x = 0;
   for (const sheet of sheets) {
-    for (const s of sheet.shapes) merged.add(shift(s, x));
+    for (const s of sheet.shapes) merged.add(translateShape(s, x, 0));
     x += sheet.width + gap;
   }
   return merged;
-}
-
-/** One shape moved along x — used only by `mergeDrawings`. */
-function shift(s: Shape, dx: number): Shape {
-  switch (s.t) {
-    case 'line':   return { ...s, x1: s.x1 + dx, x2: s.x2 + dx };
-    case 'rect':   return { ...s, x: s.x + dx };
-    case 'circle': return { ...s, cx: s.cx + dx };
-    case 'ellipse': return { ...s, cx: s.cx + dx };
-    case 'arc':    return { ...s, cx: s.cx + dx };
-    case 'curve':  return { ...s, x1: s.x1 + dx, cx: s.cx + dx, x2: s.x2 + dx };
-    case 'poly':   return { ...s, pts: s.pts.map(p => [p[0] + dx, p[1]] as Pt) };
-    case 'text':   return { ...s, x: s.x + dx };
-  }
 }
