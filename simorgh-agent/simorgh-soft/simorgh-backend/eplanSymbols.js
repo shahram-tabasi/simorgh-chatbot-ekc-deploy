@@ -250,7 +250,8 @@ export function registerEplanSymbolRoutes(app, getSqlPool, symbolDir) {
     try {
       if (!fs.existsSync(dir)) return res.json({ success: true, dir, symbols: [] });
       const symbols = fs.readdirSync(dir)
-        .filter(f => /\.(svg|dxf)$/i.test(f))
+        // A leading dot is a hidden file or an upload still being written.
+        .filter(f => !f.startsWith('.') && /\.(svg|dxf)$/i.test(f))
         .map(f => {
           const kind = path.extname(f).slice(1).toLowerCase();
           const entry = { name: path.basename(f, path.extname(f)), kind };
@@ -277,5 +278,67 @@ export function registerEplanSymbolRoutes(app, getSqlPool, symbolDir) {
     const file = path.join(dir, `${name}.dxf`);
     if (!name || !fs.existsSync(file)) return res.status(404).send('');
     res.type('image/vnd.dxf').send(fs.readFileSync(file, 'utf8'));
+  });
+
+  // ── Adding a symbol from the browser ───────────────────────────────────
+  // Copying a file onto the server is still the way to add a symbol, and this
+  // does the same thing for an office that has the drawing but not a shell on
+  // the machine. It only ever writes: a symbol is removed by deleting the file,
+  // deliberately, by someone who can see the folder.
+  //
+  // Whether it works at all depends on how the folder is mounted. It was
+  // read-only for a long time, and on a server where it still is the write
+  // fails and says so rather than looking as though it worked.
+  const MAX_SYMBOL_BYTES = 8 * 1024 * 1024;
+
+  app.post('/api/eplan-symbols/upload', (req, res) => {
+    const asked = String(req.body?.name ?? '').trim();
+    const kind = String(req.body?.kind || '').toLowerCase();
+    const content = req.body?.content;
+
+    // Checked rather than scrubbed. A name that had to be repaired to be safe
+    // was not the name anybody meant, and writing it under some third name is
+    // how a folder fills up with files nobody recognises.
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$/.test(asked) || asked.includes('..')) {
+      return res.status(400).json({
+        success: false,
+        error: 'A symbol name starts with a letter or digit and holds only letters, digits, _ . or -.',
+      });
+    }
+    const name = asked;
+    if (kind !== 'svg' && kind !== 'dxf') {
+      return res.status(400).json({ success: false, error: 'A symbol is an .svg or a .dxf.' });
+    }
+    if (typeof content !== 'string' || content.trim() === '') {
+      return res.status(400).json({ success: false, error: 'The file was empty.' });
+    }
+    if (Buffer.byteLength(content, 'utf8') > MAX_SYMBOL_BYTES) {
+      return res.status(413).json({ success: false, error: 'The file is over 8 MB.' });
+    }
+
+    const file = path.join(dir, `${name}.${kind}`);
+    // Belt and braces over the scrubbed name: the file must land in the folder.
+    if (path.dirname(path.resolve(file)) !== path.resolve(dir)) {
+      return res.status(400).json({ success: false, error: 'That name is not allowed.' });
+    }
+
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const replaced = fs.existsSync(file);
+      // Written beside and moved into place, so a half-written file is never
+      // served to a browser that asks for it mid-upload.
+      const temp = path.join(dir, `.${name}.${kind}.${process.pid}.tmp`);
+      fs.writeFileSync(temp, content, 'utf8');
+      fs.renameSync(temp, file);
+      res.json({ success: true, name, kind, replaced });
+    } catch (err) {
+      const readOnly = err && (err.code === 'EROFS' || err.code === 'EACCES' || err.code === 'EPERM');
+      res.status(readOnly ? 409 : 500).json({
+        success: false,
+        error: readOnly
+          ? 'The symbol folder is read-only on this server. Copy the file into eplan-symbols/ instead, or take :ro off that mount in compose/soft-app.yml.'
+          : err.message,
+      });
+    }
   });
 }

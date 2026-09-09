@@ -174,10 +174,18 @@ is read in that browser only, on top of the pack, which is what you want while
 a drawing is still being got right. `eplan-symbols/README.md` is the reference
 for both.
 
-The pack folder is mounted read-only, so putting a file there is a copy and a
-refresh — no upload route, and no rebuild. Making it writable and adding one is
-a compose change (`:ro` off `eplan-symbols`) plus a route, if the office would
-rather add symbols from the browser than from the server.
+A symbol reaches the pack either way: copy the file into the folder, or press
+**Send to the pack** in the Symbols tab, which posts it to
+`POST /api/eplan-symbols/upload` under the name of the library symbol it
+replaces. The route only ever writes — there is no delete, on purpose: a symbol
+is taken out of the pack by removing the file, deliberately, by someone who can
+see the folder. Names are checked rather than repaired, hidden and half-written
+files are never listed, and the file is written beside its place and moved in,
+so a browser asking for it mid-upload never gets half of one.
+
+That needs the pack folder mounted writable, which it now is in
+`compose/soft-app.yml`. Put `:ro` back to close it off: reads are unchanged and
+the upload answers with the reason rather than appearing to work.
 
 ## Adding a format
 

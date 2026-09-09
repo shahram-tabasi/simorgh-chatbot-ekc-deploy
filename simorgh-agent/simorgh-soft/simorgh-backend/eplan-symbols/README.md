@@ -17,8 +17,18 @@ hand. See *A DXF symbol* below.
 
 ```bash
 cp MY-SYMBOL.svg ~/simorgh-chatbot-ekc-deploy/simorgh-agent/simorgh-soft/simorgh-backend/eplan-symbols/
-# then reload the Eplanix tab in the browser (Ctrl+Shift+R)
+# then reload the Simorgh Draw tab in the browser (Ctrl+Shift+R)
 ```
+
+**Or from the browser.** *Simorgh Draw → Symbols* takes a DXF from the machine
+you are sitting at, shows you the terminals it found, and **Send to the pack**
+puts it in this folder for everyone. It only ever writes: a symbol is taken out
+by deleting the file here, deliberately, by someone who can see the folder.
+
+That needs the folder mounted writable, which it is in
+`simorgh-agent/compose/soft-app.yml`. Put `:ro` back on that line to close it
+off — everything else about the pack works the same either way, and the button
+then says the folder is read-only instead of looking as though it worked.
 
 Check what the app can see:
 
@@ -207,6 +217,9 @@ EPLAN is sharper, and nothing else about the file changes.
 | too short or too tall for the sheet | the app guessed the cells from the proportions | set `data-cells` (1–4) |
 | nothing changed | the browser cached the old sheet | Ctrl+Shift+R; check the file is listed by `/api/eplan-symbols/pack` |
 | the file is not listed at all | wrong folder, or not `.svg`/`.dxf` | it must be `eplan-symbols/*.svg` or `*.dxf`; the name is the part before the extension |
+| a name starting with `.` is not listed | hidden files and half-written uploads are skipped on purpose | rename it without the leading dot |
+| **Send to the pack** says the folder is read-only | the mount still has `:ro` | copy the file in over the shell, or take `:ro` off the `eplan-symbols` line in `compose/soft-app.yml` |
+| **Send to the pack** is greyed out | the browser no longer holds the file itself, only the symbol it made | load the `.dxf` again, then send it |
 | a DXF symbol sits beside the line | no `CONN` layer, so the conductor was guessed | add points on a `CONN` layer at the terminals |
 | a DXF symbol is missing pieces | it uses entities this reader passes over | the Symbols tab lists what was passed over; explode splines and dimensions before exporting |
 

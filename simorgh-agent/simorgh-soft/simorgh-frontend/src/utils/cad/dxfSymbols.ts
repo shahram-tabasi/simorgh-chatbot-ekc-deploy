@@ -44,6 +44,12 @@ export interface DxfSymbol {
   skipped: Record<string, number>;
   /** How the box was decided, in a sentence the user can act on. */
   note: string;
+  /**
+   * The file itself, so the symbol can be sent to the pack later without
+   * asking for it again. Dropped first if the browser runs out of room to
+   * keep these — the symbol still draws; it just cannot be sent on.
+   */
+  source?: string;
 }
 
 /** Shapes moved so the geometry sits where the box says it does. */
@@ -94,6 +100,7 @@ export function symbolFromDxf(text: string, fileName: string, id: string): DxfSy
   return {
     id,
     fileName,
+    source: text,
     art: renderFragment(framed),
     width,
     height,
@@ -126,11 +133,25 @@ export function loadDxfSymbols(): DxfSymbol[] {
   }
 }
 
-/** Keep them for next time. Silent when the browser will not store. */
+/**
+ * Keep them for next time.
+ *
+ * The file each symbol came from is the bulky part and the one that can be
+ * done without, so a browser that will not hold everything is given the
+ * symbols without their sources rather than nothing at all. Silent either way:
+ * a symbol that cannot be stored still draws for the rest of the session.
+ */
 export function saveDxfSymbols(symbols: DxfSymbol[]): void {
   try {
     localStorage.setItem(STORE, JSON.stringify(symbols));
+    return;
   } catch {
-    /* A private window, or the quota — the symbols still work this session. */
+    /* Out of room, most likely. Try again with the sources left out. */
+  }
+  try {
+    localStorage.setItem(STORE, JSON.stringify(
+      symbols.map(({ source, ...rest }) => rest)));
+  } catch {
+    /* A private window, or still no room — this session is unaffected. */
   }
 }

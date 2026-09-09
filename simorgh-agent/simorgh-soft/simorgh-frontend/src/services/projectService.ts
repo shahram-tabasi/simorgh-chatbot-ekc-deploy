@@ -179,6 +179,33 @@ export const eplanSymbolService = {
     }
   },
 
+  /**
+   * Put a symbol in the pack, so everyone who opens a project draws with it.
+   *
+   * Copying the file onto the server does the same thing and still works; this
+   * is for an office that has the drawing but not a shell on that machine. It
+   * only ever writes — a symbol is taken out by deleting the file, by someone
+   * who can see the folder.
+   */
+  async upload(name: string, kind: 'svg' | 'dxf', content: string): Promise<
+    { ok: true; replaced: boolean } | { ok: false; error: string }
+  > {
+    try {
+      const r = await fetch(`${API_BASE_URL}/eplan-symbols/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, kind, content }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || !body?.success) {
+        return { ok: false, error: body?.error || `The server refused it (${r.status}).` };
+      }
+      return { ok: true, replaced: Boolean(body.replaced) };
+    } catch {
+      return { ok: false, error: 'The server could not be reached.' };
+    }
+  },
+
   // Absolute, because the printable window is opened on about:blank and a
   // relative URL there has nothing to resolve against.
   svgUrl(name: string): string {

@@ -45,10 +45,17 @@ services:
       # Windows installer drop folder — the app offers whatever .exe is in here,
       # so publishing a new desktop build is a copy, not an image rebuild.
       - ../simorgh-soft/simorgh-backend/downloads:/app/downloads:ro
-      # Symbols exported from EPLAN as SVG, named after the symbol (SG3.svg).
-      # Whatever is in here is drawn on the single line instead of the app's
-      # own symbol — again a copy, not an image rebuild.
-      - ../simorgh-soft/simorgh-backend/eplan-symbols:/app/eplan-symbols:ro
+      # Symbols exported from EPLAN or drawn by the office, as SVG or DXF and
+      # named after the symbol (SG3.svg, circuit-breaker.dxf). Whatever is in
+      # here is drawn on the single line instead of the app's own symbol —
+      # again a copy, not an image rebuild.
+      #
+      # Writable, so the Symbols tab can put a symbol here as well as read one:
+      # the app only ever writes a file, never removes one, and a symbol is
+      # taken out by deleting it here, deliberately. Put :ro back to close that
+      # off — everything else about the pack works exactly the same either way,
+      # and the upload says plainly that the folder is read-only.
+      - ../simorgh-soft/simorgh-backend/eplan-symbols:/app/eplan-symbols
     depends_on:
       simorgh-soft-mongo:
         condition: service_healthy

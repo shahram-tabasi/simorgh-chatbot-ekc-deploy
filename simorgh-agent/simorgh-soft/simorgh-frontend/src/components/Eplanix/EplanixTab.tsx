@@ -127,6 +127,9 @@ export const EplanixTab: React.FC = () => {
   // when they change.
   const [symbolVersion, setSymbolVersion] = useState(0);
   const [paper, setPaper] = useState<PaperChoice>('auto');
+  // Bumped when a symbol is sent to the pack, so the pack is read again
+  // without waiting for the parts on the sheet to change.
+  const [packVersion, setPackVersion] = useState(0);
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
   const [showSend, setShowSend] = useState(false);
 
@@ -227,7 +230,7 @@ export const EplanixTab: React.FC = () => {
         + replacedNote);
     })();
     return () => { cancelled = true; };
-  }, [partCodes]);
+  }, [partCodes, packVersion]);
   useEffect(() => {
     const fromDxf: Partial<Record<SymbolId, SymbolOverride>> = {};
     for (const s of dxfSymbols) {
@@ -603,7 +606,11 @@ export const EplanixTab: React.FC = () => {
       {/* ── The symbol library ────────────────────────────────────────── */}
       {view === 'symbols' && (
         <div className="space-y-4">
-        <DxfSymbolPack symbols={dxfSymbols} onChange={setDxfSymbols} />
+        <DxfSymbolPack
+          symbols={dxfSymbols}
+          onChange={setDxfSymbols}
+          onPackChanged={() => setPackVersion(v => v + 1)}
+        />
         <div className="border border-gray-200 rounded-lg">
           <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
             <div className="flex items-center gap-3 min-w-0">
