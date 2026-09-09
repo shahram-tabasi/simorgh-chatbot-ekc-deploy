@@ -344,6 +344,21 @@ function sizeOf(svg: Element): { width: number; height: number } {
 }
 
 /**
+ * How big a sheet says it is, read straight off the markup.
+ *
+ * Cheap enough to call while a menu is open, where parsing the whole sheet to
+ * learn two numbers would not be.
+ */
+export function svgSize(svg: string): { width: number; height: number } {
+  const box = /viewBox="([^"]+)"/.exec(svg);
+  const parts = box ? box[1].trim().split(/[\s,]+/).map(Number) : [];
+  if (parts.length === 4 && parts.every(Number.isFinite)) {
+    return { width: parts[2], height: parts[3] };
+  }
+  return { width: 1000, height: 700 };
+}
+
+/**
  * An SVG sheet read back as a `Drawing`, ready for `renderDxf`.
  *
  * Runs in the browser — it uses `DOMParser`, so the sheet is parsed by the

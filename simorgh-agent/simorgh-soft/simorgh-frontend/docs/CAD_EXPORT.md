@@ -79,9 +79,26 @@ shape is drawn — a 5-unit stroke is the busbar, bold text is a device tag.
 Emitting `data-layer` from the sheet code would make it exact, and needs no
 change on this side.
 
-**Scale.** `mmPerUnit`, 0.5 by default: text lands at about 4 mm and a sheet of
-eight feeders comes out around 1.6 m wide, which is a roll plot rather than an
-A-size one. Drop it to 0.25 to put the same sheet on an A1.
+**Paper and scale.** Two ways of making the same decision. Leave the paper on
+*fit the drawing* and `mmPerUnit` (0.5) fixes the scale while the sheet grows —
+eight feeders come out about 1.6 m wide, a roll plot. Name a sheet instead and
+the scale is whatever fits it, which is how a drawing office works when the
+paper is what it has.
+
+Naming a small sheet shrinks the text with everything else, so the number that
+matters is what a label plots at. A device label is 9 units:
+
+| feeders / sheet | A4 | A3 | A2 | A1 |
+|---|---|---|---|---|
+| 2 | **2.1 mm** | 3.0 | 4.4 | 6.2 |
+| 3 | 1.7 | **2.4** | 3.5 | 5.0 |
+| 4 | 1.4 | **2.0** | 2.8 | 4.0 |
+| 6 | 1.0 | 1.4 | **2.0** | 2.9 |
+| 8 | 0.8 | 1.1 | 1.6 | **2.3** |
+
+Below about 1.8 mm a plot stops being readable, so an A4 holds two feeders, an
+A3 four, an A2 six, an A1 eight. Both the export bar and the editor say what
+the current choice comes to and mark it when it falls under that.
 
 **Text in DXF.** R12 predates UTF-8, so non-ASCII is written as `\U+00E7`,
 which AutoCAD and BricsCAD render correctly. Punctuation the sheets use as
@@ -100,6 +117,37 @@ browser, stays the exact route for a drawing that carries them.
 **Picture symbols.** A symbol supplied through the symbol pack as an image file
 has no R12 equivalent. Its cell is marked with a dashed box rather than dropped,
 so the drawing says something is there.
+
+## Bringing in your own schematics
+
+`utils/cad/readDxf.ts` reads a DXF back into geometry — the other direction
+from `dxf.ts`. A device drawn once in AutoCAD and saved as DXF becomes a symbol
+on the single line: lines, arcs and text, not a picture, so it goes back out to
+DXF and PDF as geometry that can be edited and plots sharp at any scale.
+
+What it reads is what CAD packages write for a symbol: LINE, CIRCLE, ARC,
+ELLIPSE, LWPOLYLINE and POLYLINE (bulges included, as real arcs), TEXT, MTEXT,
+SOLID, POINT, and blocks placed by INSERT with their own scale and rotation.
+Anything else is counted and reported rather than dropped silently.
+
+**Connection points are the wiring.** EPLAN knows where a symbol's conductor
+enters and leaves because its symbols say so; a plain DXF does not. The
+convention here is a layer named `CONN`, `CONNECTION`, `PIN` or `TERMINAL`
+carrying a point at each terminal. Those are read, not drawn, and the symbol is
+normalised so its top terminal sits at the top of its box and its bottom
+terminal at the bottom — which is what the library already expresses as `pinX`
+and `cells`, so the device lands on the branch and the line joins it with
+nothing to place by hand.
+
+Without that layer the geometry's own outline is used: conductor through the
+middle, top to bottom. It draws correctly; it is a guess about where the
+terminals are, and the panel says so.
+
+A file named after one of the library's symbols — `vcb.dxf`,
+`current-transformer.dxf` — takes that symbol's place. A file named after the
+device instead is loaded all the same and pointed at the right symbol in the
+panel, which is the ordinary case. Symbols are kept in the browser, so they
+survive a reload; they are per-machine, not part of the project.
 
 ## Adding a format
 

@@ -612,7 +612,18 @@ const SYMBOL_RIGHT: Partial<Record<SymbolId, number>> = {
 // scaled to the cell's height, and placed so its own conductor (`data-pin-x`
 // in the file, the middle of it otherwise) lands on the branch line.
 export interface SymbolOverride {
+  /** A picture of the symbol. Ignored when `art` is present. */
   url: string;
+  /**
+   * The symbol as geometry rather than as a picture — the markup for its
+   * shapes, in its own coordinate space, with no `<svg>` around it.
+   *
+   * A symbol brought in from a DXF arrives this way. It matters beyond how it
+   * looks: geometry goes back out to DXF and PDF as lines and arcs that can be
+   * edited and plotted at any scale, where a picture would have to be
+   * re-drawn by hand at the other end.
+   */
+  art?: string;
   /** The symbol's own box, from its viewBox. */
   width?: number;
   height?: number;
@@ -684,7 +695,16 @@ export function drawIecSymbol(id: SymbolId, x: number, y: number): string {
     const { w, h, dx } = overrideBox(o);
     // The line is drawn through the cell first: a symbol trimmed to its own
     // ink leaves the conductor short at the top and the bottom otherwise.
-    return `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${S}" stroke-width="1"/>` +
+    const conductor =
+      `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${S}" stroke-width="1"/>`;
+    if (o.art) {
+      // Geometry, placed by the same box the picture would have used, so the
+      // conductor runs through the symbol's own connection point.
+      const k = h / (o.height && o.height > 0 ? o.height : 1);
+      return conductor +
+        `<g transform="translate(${x + dx} ${y}) scale(${k})">${o.art}</g>`;
+    }
+    return conductor +
       `<image href="${esc(o.url)}" x="${x + dx}" y="${y}" width="${w}" height="${h}" ` +
       `preserveAspectRatio="xMidYMid meet">` +
       `<title>${esc(o.title || IEC_SYMBOLS[id]?.title || id)}</title></image>`;

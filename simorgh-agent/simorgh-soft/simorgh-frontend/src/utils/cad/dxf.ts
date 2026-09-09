@@ -16,7 +16,7 @@
 // Units are millimetres. The sheet is drawn in pixels, y downwards; here it is
 // scaled, flipped, and centred on the smallest ISO sheet it fits.
 import { Drawing, LAYERS, Layer, Pt, Shape, flattenCurve, translateShape } from './shapes';
-import { MARGIN, Paper, fitToPaper, titleBlockBox } from './paper';
+import { MARGIN, Paper, PaperChoice, fitToNamedPaper, titleBlockBox } from './paper';
 
 // DXF text height is the cap height; SVG font-size is the em.
 const CAP_HEIGHT = 0.72;    // DXF text height is cap height; SVG font-size is the em
@@ -24,6 +24,8 @@ const CAP_HEIGHT = 0.72;    // DXF text height is cap height; SVG font-size is t
 export interface DxfOptions {
   /** Millimetres per drawing unit. 0.5 puts a 1600-unit sheet on an A1. */
   mmPerUnit?: number;
+  /** Name a sheet and the scale is whatever fits it; 'auto' keeps mmPerUnit. */
+  paper?: PaperChoice;
   /** Draw the sheet border and title block. */
   frame?: boolean;
   /** Lines under the title block: project, switchgear, sheet number… */
@@ -249,11 +251,12 @@ function drawFrame(t: Tape, paper: Paper, lines: string[], mode: 'escape' | 'raw
  */
 export function renderDxf(d: Drawing, options: DxfOptions = {}): string {
   const {
-    mmPerUnit = 0.5, frame = true, titleBlock = [], unicode = 'escape',
+    mmPerUnit = 0.5, paper: choice = 'auto', frame = true, titleBlock = [],
+    unicode = 'escape',
   } = options;
 
-  const { paper, ox, oy } = fitToPaper(d.width, d.height, mmPerUnit);
-  const f: Frame = { s: mmPerUnit, ox, oy, height: d.height };
+  const { paper, scale, ox, oy } = fitToNamedPaper(d.width, d.height, choice, mmPerUnit);
+  const f: Frame = { s: scale, ox, oy, height: d.height };
 
   const t = new Tape();
 

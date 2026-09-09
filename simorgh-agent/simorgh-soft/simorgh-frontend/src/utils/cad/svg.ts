@@ -127,4 +127,21 @@ export function renderSvg(d: Drawing, options: SvgOptions = {}): string {
   return out.join('\n');
 }
 
+/**
+ * The shapes alone, with no `<svg>` around them.
+ *
+ * A symbol read out of a DXF has to be dropped inside a sheet that is already
+ * being drawn, so what it needs is the markup for its geometry and nothing
+ * else — no viewBox of its own to fight with the one it lands in.
+ */
+export function renderFragment(d: Drawing, hidden?: ReadonlySet<string>): string {
+  const out: string[] = [];
+  for (const s of d.shapes) {
+    if (hidden?.has(s.layer)) continue;
+    const node = shapeToNode(s);
+    if (node) out.push(serialise(node, s.layer));
+  }
+  return out.join('');
+}
+
 export { flattenCurve };

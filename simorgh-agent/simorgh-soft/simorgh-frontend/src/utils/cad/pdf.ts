@@ -12,11 +12,13 @@
 import { jsPDF } from 'jspdf';
 import { Drawing, Shape, flattenCurve } from './shapes';
 import { onArc } from './svg';
-import { MARGIN, Paper, fitToPaper, titleBlockBox } from './paper';
+import { MARGIN, Paper, PaperChoice, fitToNamedPaper, titleBlockBox } from './paper';
 
 export interface PdfOptions {
   /** Millimetres per drawing unit. 0.5 puts a 1600-unit sheet on an A1. */
   mmPerUnit?: number;
+  /** Name a sheet and the scale is whatever fits it; 'auto' keeps mmPerUnit. */
+  paper?: PaperChoice;
   /** Draw the sheet border and title block. */
   frame?: boolean;
   /** Lines for the title block: project, switchgear, sheet number… */
@@ -200,18 +202,18 @@ function drawFrame(doc: jsPDF, paper: Paper, lines: string[]) {
  * exact. Everything geometric is identical either way.
  */
 export function renderPdf(sheets: Drawing[], options: PdfOptions = {}): Blob {
-  const { mmPerUnit = 0.5, frame = true, titleBlock = [] } = options;
+  const { mmPerUnit = 0.5, paper: choice = 'auto', frame = true, titleBlock = [] } = options;
   const pages = sheets.length > 0 ? sheets : [new Drawing(297 / mmPerUnit, 210 / mmPerUnit)];
 
   let doc: jsPDF | null = null;
   pages.forEach((sheet, index) => {
-    const { paper, ox, oy } = fitToPaper(sheet.width, sheet.height, mmPerUnit);
+    const { paper, scale, ox, oy } = fitToNamedPaper(sheet.width, sheet.height, choice, mmPerUnit);
     const format: [number, number] = [paper.w, paper.h];
     if (index === 0) doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format });
     else doc!.addPage(format, 'landscape');
 
     if (frame) drawFrame(doc!, paper, titleBlock);
-    const place: Place = { s: mmPerUnit, ox, oy };
+    const place: Place = { s: scale, ox, oy };
     for (const s of sheet.shapes) drawShape(doc!, s, place);
   });
 

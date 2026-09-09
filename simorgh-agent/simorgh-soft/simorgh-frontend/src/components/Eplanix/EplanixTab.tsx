@@ -23,8 +23,11 @@ import {
   buildLayoutDxf,
 } from '../../utils/panelLayout';
 import { sheetsToDxf } from '../../utils/cad/sheetDxf';
-import { drawingFromSvg } from '../../utils/cad/fromSvg';
+import { drawingFromSvg, svgSize } from '../../utils/cad/fromSvg';
 import { DrawingEditor, EditorSheet } from '../SimorghDraw/DrawingEditor';
+import { DxfSymbolPack } from '../SimorghDraw/DxfSymbolPack';
+import { DxfSymbol, loadDxfSymbols, saveDxfSymbols } from '../../utils/cad/dxfSymbols';
+import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
 import { downloadText, fileSafe } from '../../utils/download';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
@@ -43,7 +46,8 @@ type View = 'single-line' | 'editor' | 'layout' | 'mechanical' | 'symbols';
  * the run as a pop-up storm.
  */
 function exportSingleLineDxf(
-  data: ProjectData, equipments: Equipment[], perPage: number, symbols?: EplanSymbolMap,
+  data: ProjectData, equipments: Equipment[], perPage: number, paper: PaperChoice,
+  symbols?: EplanSymbolMap,
 ) {
   equipments.forEach((eq, i) => {
     const sheets = buildSingleLinePages(data, eq, perPage, symbols).map(page => page.svg);
@@ -52,7 +56,7 @@ function exportSingleLineDxf(
       [data.projectName, data.projectNumber && `OE ${data.projectNumber}`].filter(Boolean).join('   ·   '),
       `Single line diagram · ${eq.type} · ${sheets.length} sheet(s)`,
       new Date().toLocaleDateString(),
-    ].filter(Boolean), `${eq.name} single line`);
+    ].filter(Boolean), `${eq.name} single line`, { paper });
     setTimeout(
       () => downloadText(`${fileSafe(data.projectName)}_${fileSafe(eq.name)}_single_line.dxf`,
         dxf, 'image/vnd.dxf'),
@@ -114,6 +118,14 @@ export const EplanixTab: React.FC = () => {
   // the drawing falls back to the slot the part sits in.
   const [symbols, setSymbols] = useState<EplanSymbolMap>({});
   const [packReplaced, setPackReplaced] = useState(0);
+  // The pack's own symbols and the office's DXF ones are separate sources that
+  // have to reach the library as one map, or whichever arrives last wins.
+  const [packOverrides, setPackOverrides] = useState<Partial<Record<SymbolId, SymbolOverride>>>({});
+  const [dxfSymbols, setDxfSymbols] = useState<DxfSymbol[]>(loadDxfSymbols);
+  // The library keeps its overrides outside React, so the sheet needs telling
+  // when they change.
+  const [symbolVersion, setSymbolVersion] = useState(0);
+  const [paper, setPaper] = useState<PaperChoice>('auto');
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
   const [showSend, setShowSend] = useState(false);
 
@@ -176,7 +188,7 @@ export const EplanixTab: React.FC = () => {
         };
         replaced += 1;
       }
-      setSymbolOverrides(overrides);
+      setPackOverrides(overrides);
       setPackReplaced(replaced);
       const matched = new Set(Object.values(found).map(e => e.partNumber || e.symbol)).size;
       const replacedNote = Object.keys(overrides).length > 0
@@ -189,6 +201,20 @@ export const EplanixTab: React.FC = () => {
     })();
     return () => { cancelled = true; };
   }, [partCodes]);
+  useEffect(() => {
+    const fromDxf: Partial<Record<SymbolId, SymbolOverride>> = {};
+    for (const s of dxfSymbols) {
+      fromDxf[s.id as SymbolId] = {
+        url: '', art: s.art, width: s.width, height: s.height,
+        pinX: s.pinX, cells: s.cells, title: s.fileName,
+      };
+    }
+    // The office's own drawing wins over the pack's picture of the same device.
+    setSymbolOverrides({ ...packOverrides, ...fromDxf });
+    setSymbolVersion(v => v + 1);
+    saveDxfSymbols(dxfSymbols);
+  }, [packOverrides, dxfSymbols]);
+
   const withLines = equipments.filter(e => (e.devices ?? []).length > 0);
   const chosen = selected ? equipments.filter(e => e.id === selected) : equipments;
   const chosenWithLines = chosen.filter(e => (e.devices ?? []).length > 0);
@@ -197,8 +223,16 @@ export const EplanixTab: React.FC = () => {
 
   const pages = useMemo(
     () => (preview ? buildSingleLinePages(projectData, preview, perPage, symbols) : []),
-    [projectData, preview, perPage, symbols]);
+    [projectData, preview, perPage, symbols, symbolVersion]);
   const current = pages[Math.min(sheet, Math.max(0, pages.length - 1))];
+
+  // A device label is 9 units on these sheets; what it plots at says whether
+  // the chosen paper is readable before anyone sends it to a plotter.
+  const exportLabelMm = useMemo(() => {
+    if (paper === 'auto' || pages.length === 0) return null;
+    const { width, height } = svgSize(pages[0].svg);
+    return textHeightOn(width, height, paper, 0.5, 9);
+  }, [paper, pages]);
 
   // The drawn sheets read back as geometry, which is what the editor edits and
   // what DXF and PDF are written from. Only built when that tab is open — the
@@ -314,7 +348,8 @@ export const EplanixTab: React.FC = () => {
                 value={perPage}
                 onChange={e => { setPerPage(Number(e.target.value)); setSheet(0); }}
               >
-                {[4, 6, 8, 10, 12].map(n => <option key={n} value={n}>{n} feeders / sheet</option>)}
+                {/* Two to a sheet is what an A4 holds and stays readable. */}
+                {[2, 3, 4, 6, 8, 10, 12].map(n => <option key={n} value={n}>{n} feeders / sheet</option>)}
               </select>
               <Btn
                 onClick={() => openPrintable(
@@ -332,8 +367,27 @@ export const EplanixTab: React.FC = () => {
               >
                 EPLAN device list
               </Btn>
+              <select
+                className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+                value={paper}
+                onChange={e => setPaper(e.target.value as PaperChoice)}
+                title="The sheet DXF and PDF are put on. 'Fit the drawing' keeps the scale and lets the sheet grow."
+              >
+                <option value="auto">fit the drawing</option>
+                {(['A4', 'A3', 'A2', 'A1', 'A0'] as const).map(n => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+              {exportLabelMm != null && exportLabelMm < LEGIBLE_MM && (
+                <span
+                  className="text-[11px] text-amber-700 font-medium tabular-nums"
+                  title={`A device label plots at ${exportLabelMm.toFixed(2)} mm on ${paper}, under the ${LEGIBLE_MM} mm a drawing stays readable at. Fewer feeders to a sheet, or a bigger sheet.`}
+                >
+                  labels {exportLabelMm.toFixed(1)} mm
+                </span>
+              )}
               <Btn
-                onClick={() => exportSingleLineDxf(projectData, chosenWithLines, perPage, symbols)}
+                onClick={() => exportSingleLineDxf(projectData, chosenWithLines, perPage, paper, symbols)}
                 className="bg-teal-700 text-white hover:bg-teal-800"
                 disabled={chosenWithLines.length === 0}
               >
@@ -381,6 +435,7 @@ export const EplanixTab: React.FC = () => {
           <DrawingEditor
             sheets={editorSheets}
             fileBase={`${projectData.projectName || 'project'}_${preview?.name ?? ''}`}
+            paper={paper}
             titleBlock={[
               preview?.name || 'SWITCHGEAR',
               [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]
@@ -512,6 +567,8 @@ export const EplanixTab: React.FC = () => {
 
       {/* ── The symbol library ────────────────────────────────────────── */}
       {view === 'symbols' && (
+        <div className="space-y-4">
+        <DxfSymbolPack symbols={dxfSymbols} onChange={setDxfSymbols} />
         <div className="border border-gray-200 rounded-lg">
           <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
             <div className="flex items-center gap-3 min-w-0">
@@ -570,6 +627,7 @@ export const EplanixTab: React.FC = () => {
               </div>
             ))}
           </div>
+        </div>
         </div>
       )}
 

@@ -7,6 +7,7 @@ import {
 import { Drawing, Layer, LAYER_NOTES, Shape, layerColor } from '../../utils/cad/shapes';
 import { renderSvg } from '../../utils/cad/svg';
 import { renderDxf } from '../../utils/cad/dxf';
+import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
 import { renderPdf } from '../../utils/cad/pdf';
 import {
   History, boundsOfAll, deleteShapes, duplicateShapes, moveShapes, setText, withShapes,
@@ -31,12 +32,14 @@ interface Props {
   /** Lines for the title block on exported sheets. */
   titleBlock: string[];
   mmPerUnit?: number;
+  /** The sheet exports are put on; 'auto' keeps `mmPerUnit` and grows the sheet. */
+  paper?: PaperChoice;
 }
 
 const SNAPS = [0, 1, 5, 10, 25];
 
 export const DrawingEditor: React.FC<Props> = ({
-  sheets, fileBase, titleBlock, mmPerUnit = 0.5,
+  sheets, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
 }) => {
   const [index, setIndex] = useState(0);
   const sheet = sheets[Math.min(index, Math.max(0, sheets.length - 1))];
@@ -57,6 +60,7 @@ export const DrawingEditor: React.FC<Props> = ({
   const [snap, setSnap] = useState(5);
   const [showGrid, setShowGrid] = useState(false);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const [paper, setPaper] = useState<PaperChoice>(initialPaper);
   const [view, setView] = useState<Viewport>({ x: 0, y: 0, w: 1000, h: 600 });
   const [, forceRender] = useState(0);
 
@@ -164,11 +168,11 @@ export const DrawingEditor: React.FC<Props> = ({
   const exportDxf = () => {
     const drawing = editedDrawing(index);
     downloadText(`${fileSafe(fileBase)}_${fileSafe(sheet.name)}.dxf`,
-      renderDxf(drawing, { mmPerUnit, titleBlock: [...titleBlock, sheet.name] }), 'image/vnd.dxf');
+      renderDxf(drawing, { mmPerUnit, paper, titleBlock: [...titleBlock, sheet.name] }), 'image/vnd.dxf');
   };
   const exportPdf = () => {
     downloadBlob(`${fileSafe(fileBase)}.pdf`,
-      renderPdf(sheets.map((_, i) => editedDrawing(i)), { mmPerUnit, titleBlock }));
+      renderPdf(sheets.map((_, i) => editedDrawing(i)), { mmPerUnit, paper, titleBlock }));
   };
   const exportSvg = () => {
     downloadText(`${fileSafe(fileBase)}_${fileSafe(sheet.name)}.svg`,
@@ -187,6 +191,13 @@ export const DrawingEditor: React.FC<Props> = ({
     if (next.has(value)) next.delete(value); else next.add(value);
     apply(next);
   };
+
+  // What the smallest label on this sheet comes out as, on the chosen paper.
+  const smallest = useMemo(() => {
+    const sizes = shapes.filter(s => s.t === 'text').map(s => (s as { size: number }).size);
+    if (!sheet || sizes.length === 0) return null;
+    return textHeightOn(sheet.drawing.width, sheet.drawing.height, paper, mmPerUnit, Math.min(...sizes));
+  }, [shapes, sheet, paper, mmPerUnit]);
 
   const picked = [...selection].map(i => shapes[i]).filter(Boolean);
   const onlyText = picked.length === 1 && picked[0].t === 'text'
@@ -281,6 +292,26 @@ export const DrawingEditor: React.FC<Props> = ({
         </select>
 
         <div className="ml-auto flex items-center gap-2">
+          <select
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+            value={paper}
+            onChange={e => setPaper(e.target.value as PaperChoice)}
+            title="The sheet DXF and PDF are put on. 'Fit the drawing' keeps the scale and lets the sheet grow."
+          >
+            <option value="auto">fit the drawing</option>
+            {(['A4', 'A3', 'A2', 'A1', 'A0'] as const).map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+          {smallest != null && (
+            <span
+              className={`text-[11px] tabular-nums ${
+                smallest < LEGIBLE_MM ? 'text-amber-700 font-medium' : 'text-gray-500'}`}
+              title={smallest < LEGIBLE_MM
+                ? `The smallest label plots at ${smallest.toFixed(2)} mm, under the ${LEGIBLE_MM} mm a drawing stays readable at. Fewer feeders to a sheet, or a bigger sheet.`
+                : `The smallest label plots at ${smallest.toFixed(2)} mm.`}
+            >
+              text {smallest.toFixed(1)} mm
+            </span>
+          )}
           <button
             onClick={exportDxf}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-teal-700 text-white text-sm font-medium hover:bg-teal-800"
