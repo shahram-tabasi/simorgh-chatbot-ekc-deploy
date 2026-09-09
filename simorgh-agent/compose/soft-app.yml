@@ -28,10 +28,27 @@ services:
       - MYSQL_USER=${MYSQL_USER}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
+      - EPLAN_SYMBOL_DIR=/app/eplan-symbols
+      # The AI assistant's model. Defaults to the VLM on 192.168.1.61; set
+      # these in simorgh-agent/.env to move it without rebuilding the image.
+      - LOCAL_MODEL_URL=${LOCAL_MODEL_URL:-http://192.168.1.61/v1/chat/completions}
+      - LOCAL_MODEL_NAME=${LOCAL_MODEL_NAME:-qwen2.5-vl-7b}
+      - LOCAL_MODEL_KEY=${LOCAL_MODEL_KEY:-}
+      - LOCAL_MODEL_MAX_TOKENS=${LOCAL_MODEL_MAX_TOKENS:-4096}
+      - LLM_GATEWAY_URL=${SOFT_LLM_GATEWAY_URL:-}
+      # EPLAN drawing server — where "Send to EPLAN" in the Eplanix tab posts.
+      - EPLAN_API_HOST=${EPLAN_API_HOST:-192.168.1.39}
+      - EPLAN_API_PORT=${EPLAN_API_PORT:-8000}
+      - EPLAN_API_PATH=${EPLAN_API_PATH:-/draw}
+      - EPLAN_API_TIMEOUT_MS=${EPLAN_API_TIMEOUT_MS:-120000}
     volumes:
       # Windows installer drop folder — the app offers whatever .exe is in here,
       # so publishing a new desktop build is a copy, not an image rebuild.
       - ../simorgh-soft/simorgh-backend/downloads:/app/downloads:ro
+      # Symbols exported from EPLAN as SVG, named after the symbol (SG3.svg).
+      # Whatever is in here is drawn on the single line instead of the app's
+      # own symbol — again a copy, not an image rebuild.
+      - ../simorgh-soft/simorgh-backend/eplan-symbols:/app/eplan-symbols:ro
     depends_on:
       simorgh-soft-mongo:
         condition: service_healthy

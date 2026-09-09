@@ -49,6 +49,12 @@ export interface TpmsSyncOptions {
 // project doesn't crawl.
 const SCOPE_BATCH = 3;
 
+// MongoDB stores one document in at most 16 MB, and a revision's snapshot is
+// one document. A plant-sized project runs around 1 MB, so this is headroom —
+// but a project that did cross it would fail with a database error nobody
+// could read, so it is checked here and said plainly instead.
+const MAX_SNAPSHOT_BYTES = 14 * 1024 * 1024;
+
 export type TpmsSyncProgress = (message: string, done: number, total: number) => void;
 
 /** The project on this side that stands for a TPMS project, if there is one. */
@@ -176,6 +182,13 @@ export async function syncProjectFromTpms(
   for (const snapshot of snapshots) {
     const number = String(snapshot.revision);
     const snapshotData = { ...snapshot.data, _id: projectId, tpmsSync: sync };
+    const size = JSON.stringify(snapshotData).length;
+    if (size > MAX_SNAPSHOT_BYTES) {
+      problems.push(
+        `REV ${number}: ${(size / 1048576).toFixed(1)} MB is more than one MongoDB ` +
+        `document holds (16 MB), so this revision was not stored.`);
+      continue;
+    }
     const fields = {
       projectId,
       revisionNumber: number,
@@ -191,11 +204,15 @@ export async function syncProjectFromTpms(
       tpmsRevision: snapshot.revision,
     };
 
+    // One revision that will not save must not cost the whole import: it is
+    // reported and the rest still lands.
     const previous = known.find(r => r.revisionNumber === number);
-    if (previous?._id) {
-      out.push(await projectService.updateRevision(previous._id, fields));
-    } else {
-      out.push(await projectService.createRevision(fields as any));
+    try {
+      out.push(previous?._id
+        ? await projectService.updateRevision(previous._id, fields)
+        : await projectService.createRevision(fields as any));
+    } catch (err) {
+      problems.push(`REV ${number}: ${(err as Error).message}`);
     }
   }
 

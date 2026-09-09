@@ -6,6 +6,12 @@ import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 interface ProjectContextType {
   projectData: ProjectData;
   updateProjectData: (data: Partial<ProjectData>) => void;
+  /** Same as updateProjectData, but the patch is derived from the project as
+   *  it is at the moment of the write rather than from whatever the caller
+   *  last rendered. A batch of edits applied in one go (the AI assistant's
+   *  Apply button) would otherwise have each edit computed from the same
+   *  stale copy, and the last one would throw the others away. */
+  patchProjectData: (updater: (prev: ProjectData) => Partial<ProjectData>) => void;
   saveProject: () => Promise<void>;
   addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
@@ -221,6 +227,15 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     setProjectData(prev => ({
       ...prev,
       ...data,
+      changedOn: new Date().toISOString()
+    }));
+  };
+
+  const patchProjectData = (updater: (prev: ProjectData) => Partial<ProjectData>) => {
+    if (!guardEdit()) return;
+    setProjectData(prev => ({
+      ...prev,
+      ...updater(prev),
       changedOn: new Date().toISOString()
     }));
   };
@@ -603,6 +618,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       value={{
         projectData,
         updateProjectData,
+        patchProjectData,
         saveProject,
         addTemplate,
         updateTemplate,

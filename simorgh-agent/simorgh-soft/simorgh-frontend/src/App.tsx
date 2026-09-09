@@ -18,6 +18,9 @@ import { findFeederDuplicates, DuplicateGroup } from './utils/feederDuplicates';
 import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
 
+// The build shown in Help → About.
+const APP_VERSION = '1.0.0';
+
 // هوک Auto-save
 const useAutoSave = (projectData: any, saveProject: () => Promise<void>, enabled = true) => {
   const timeoutRef = useRef<NodeJS.Timeout>();
@@ -81,9 +84,14 @@ interface MenuBarProps {
 const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, onImportFromTpms, currentRevision, isCurrentRevisionEditable }) => {
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showAbout,     setShowAbout]     = useState(false);
+  const [zoom,          setZoom]          = useState(100);
   const { projectData, saveProject, notifyRevisionLocked } = useProject();
   const desktopInstaller = useDesktopInstaller();
   const menuRef = useRef<HTMLDivElement>(null);
+  // Cut / Copy / Paste act on the field the user was last in: opening the
+  // menu takes the focus away, so the field is remembered as it is left.
+  const lastFieldRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   // Click outside handler
   useEffect(() => {
@@ -95,6 +103,24 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
+
+  // Remember the last text field that held the caret.
+  useEffect(() => {
+    const remember = (event: FocusEvent) => {
+      const target = event.target as HTMLElement;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+        lastFieldRef.current = target;
+      }
+    };
+    document.addEventListener('focusin', remember);
+    return () => document.removeEventListener('focusin', remember);
+  }, []);
+
+  // View -> Zoom scales the whole app. Chromium (and the Electron desktop
+  // client) honour `zoom`; the reset simply clears it again.
+  useEffect(() => {
+    (document.documentElement.style as any).zoom = zoom === 100 ? '' : `${zoom}%`;
+  }, [zoom]);
 
   const handleMenuClick = (menu: string) => {
     setActiveMenu(activeMenu === menu ? null : menu);
@@ -116,7 +142,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
 
   const handleExport = () => {
     // Export به JSON
-    const dataStr = JSON.stringify(projectData, { type: 'application/json' });
+    const dataStr = JSON.stringify(projectData, null, 2);
     const dataBlob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(dataBlob);
     const link = document.createElement('a');
@@ -130,6 +156,65 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
     window.print();
     setActiveMenu(null);
   };
+
+  // Writing to `.value` of a controlled input is discarded on the next
+  // render — React keeps its own copy. Go through the native setter and
+  // raise the `input` event React actually listens to.
+  const writeField = (
+    field: HTMLInputElement | HTMLTextAreaElement, value: string, caret: number,
+  ) => {
+    const proto = field instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value')?.set?.call(field, value);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.setSelectionRange(caret, caret);
+  };
+
+  const handleClipboard = async (action: 'cut' | 'copy' | 'paste') => {
+    setActiveMenu(null);
+    const field = lastFieldRef.current;
+    if (!field || !field.isConnected) {
+      alert('Click inside a field first, then use Edit → ' + action + '.');
+      return;
+    }
+    field.focus();
+    const start = field.selectionStart ?? field.value.length;
+    const end   = field.selectionEnd   ?? field.value.length;
+    const marked = field.value.slice(start, end);
+    try {
+      if (action === 'paste') {
+        const text = await navigator.clipboard.readText();
+        writeField(field, field.value.slice(0, start) + text + field.value.slice(end), start + text.length);
+        return;
+      }
+      await navigator.clipboard.writeText(marked || field.value);
+      if (action === 'cut' && marked) {
+        writeField(field, field.value.slice(0, start) + field.value.slice(end), start);
+      }
+    } catch {
+      alert('The browser would not give the app the clipboard — use Ctrl+X / Ctrl+C / Ctrl+V instead.');
+    }
+  };
+
+  // The user guide ships with the app (public/help.html), so it opens from
+  // wherever the suite is mounted rather than from a hard-coded path.
+  const helpUrl = `${import.meta.env.BASE_URL}help.html`;
+  const openHelp = (hash = '') => {
+    window.open(`${helpUrl}${hash}`, '_blank', 'noopener');
+    setActiveMenu(null);
+  };
+
+  // F1 opens the guide from anywhere, the way the rest of the desktop does.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'F1') {
+        event.preventDefault();
+        window.open(`${import.meta.env.BASE_URL}help.html`, '_blank', 'noopener');
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   const canCreateRevision = isCurrentRevisionEditable !== false;
 
@@ -206,11 +291,23 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
           {activeMenu === 'edit' && (
             <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
               <div className="py-1">
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">✂️ Cut</button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">📋 Copy</button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">📄 Paste</button>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={() => handleClipboard('cut')}>
+                  ✂️ Cut <span className="text-xs text-gray-400 float-right">Ctrl+X</span>
+                </button>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={() => handleClipboard('copy')}>
+                  📋 Copy <span className="text-xs text-gray-400 float-right">Ctrl+C</span>
+                </button>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={() => handleClipboard('paste')}>
+                  📄 Paste <span className="text-xs text-gray-400 float-right">Ctrl+V</span>
+                </button>
                 <div className="border-t border-gray-600 my-1"></div>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">🔍 Find</button>
+                <button
+                  className="block w-full text-left px-4 py-2 opacity-40 cursor-not-allowed"
+                  disabled
+                  title="Coming soon — use the browser's own find (Ctrl+F) for now"
+                >
+                  🔍 Find
+                </button>
                 <div className="border-t border-gray-600 my-1"></div>
                 <button
                   className="block w-full text-left px-4 py-2 hover:bg-gray-600"
@@ -234,9 +331,24 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
           {activeMenu === 'view' && (
             <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
               <div className="py-1">
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">🔍 Zoom In</button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">🔍 Zoom Out</button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">🔄 Reset View</button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => setZoom(z => Math.min(200, z + 10))}
+                >
+                  🔍 Zoom In <span className="text-xs text-gray-400 float-right">{zoom}%</span>
+                </button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => setZoom(z => Math.max(50, z - 10))}
+                >
+                  🔍 Zoom Out
+                </button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => setZoom(100)}
+                >
+                  🔄 Reset View
+                </button>
               </div>
             </div>
           )}
@@ -253,7 +365,25 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
           {activeMenu === 'help' && (
             <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
               <div className="py-1">
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">❓ Help Contents</button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => openHelp()}
+                >
+                  ❓ Help Contents <span className="text-xs text-gray-400 float-right">F1</span>
+                </button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => openHelp('#overview')}
+                >
+                  📚 Tutorials
+                </button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => { setShowShortcuts(true); setActiveMenu(null); }}
+                >
+                  ⌨️ Keyboard Shortcuts
+                </button>
+                <div className="border-t border-gray-600 my-1"></div>
                 {desktopInstaller.available && (
                   <a
                     className="block w-full text-left px-4 py-2 hover:bg-gray-600"
@@ -263,7 +393,12 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                     🪟 Windows app{desktopInstaller.version ? ` (${desktopInstaller.version})` : ''}
                   </a>
                 )}
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600">ℹ️ About Simorgh</button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => { setShowAbout(true); setActiveMenu(null); }}
+                >
+                  ℹ️ About Simorgh
+                </button>
               </div>
             </div>
           )}
@@ -283,9 +418,46 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
         </div>
       </div>
       {showShortcuts && <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} />}
+      {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
     </div>
   );
 };
+
+// What "About Simorgh" shows: the build the user is running and where the
+// guide lives, so a support question can name a version.
+const AboutDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]" onClick={onClose}>
+    <div
+      className="bg-white text-gray-800 rounded-lg shadow-2xl w-[420px] overflow-hidden"
+      onClick={e => e.stopPropagation()}
+    >
+      <div className="flex items-center gap-3 px-6 py-5 bg-slate-800 text-white">
+        <img src={logoMark} alt="" className="w-10 h-10 rounded" />
+        <div>
+          <h3 className="font-semibold text-lg leading-tight">Simorgh Design Suite</h3>
+          <p className="text-xs text-slate-300">Electrical switchgear design &amp; documentation</p>
+        </div>
+      </div>
+      <div className="px-6 py-4 text-sm space-y-1.5">
+        <p><span className="text-gray-500">Version:</span> <strong>{APP_VERSION}</strong></p>
+        <p><span className="text-gray-500">Modules:</span> Project Definition · Create Template · Device Selection · Output · Eplanix</p>
+        <p><span className="text-gray-500">Guide:</span>{' '}
+          <a
+            className="text-blue-600 hover:underline"
+            href={`${import.meta.env.BASE_URL}help.html`}
+            target="_blank"
+            rel="noopener"
+          >
+            help.html
+          </a>
+        </p>
+      </div>
+      <div className="flex justify-end px-6 py-3 border-t bg-gray-50">
+        <button className="px-4 py-2 border rounded text-sm hover:bg-gray-100" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  </div>
+);
 
 // کامپوننت اصلی اپ
 const MainApp: React.FC = () => {

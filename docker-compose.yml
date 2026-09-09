@@ -1,0 +1,29 @@
+# =============================================================================
+# The stack, from the repository root.
+#
+# The real menu is simorgh-agent/docker-compose.yml, with every service in its
+# own file under simorgh-agent/compose/. This file is here so that compose can
+# be run from the root of the repository as well as from simorgh-agent/ —
+# running it from the root used to answer "no configuration file provided: not
+# found", which cost a deploy more than once.
+#
+#   docker compose up -d --build simorgh-soft     # the Design Suite
+#   docker compose ps simorgh-soft
+#   docker compose logs -n 100 simorgh-soft
+#
+# `project_directory` is what makes it work: every path inside the included
+# files — build contexts, volume mounts — and the `.env` beside them are
+# resolved from simorgh-agent/, exactly as if compose had been run there.
+#
+# ./deploy-soft.sh does the same thing with a health check after it.
+# =============================================================================
+
+# The project name compose uses when it is run from simorgh-agent/ is that
+# folder's name. Pinning it here means the two ways of running it are the same
+# project — the same containers and the same network, not a second set beside
+# the running one.
+name: simorgh-agent
+
+include:
+  - path: simorgh-agent/docker-compose.yml
+    project_directory: simorgh-agent

@@ -7,7 +7,8 @@ import {
 import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
 import {
   PlusIcon, EditIcon, TrashIcon, XIcon,
-  ChevronDownIcon, ChevronRightIcon, CheckIcon, SaveIcon, CopyIcon, ClipboardIcon
+  ChevronDownIcon, ChevronRightIcon, CheckIcon, SaveIcon, CopyIcon, ClipboardIcon,
+  Maximize2Icon, Minimize2Icon
 } from 'lucide-react';
 
 // ──────────────────────────────────────────────────────────────
@@ -88,9 +89,23 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
   const [type,  setType]  = useState<'LV' | 'MV' | 'HV'>(item?.type ?? addType ?? 'LV');
   const [props, setProps] = useState<DeviceLibraryProperties>(item?.properties ?? {});
   const [activeSection, setActiveSection] = useState<'electrical' | 'control' | 'busbar' | 'padlock'>('electrical');
+  // A panel specification is a long form; full screen gives it the whole
+  // window (and two columns of fields) instead of a 760px dialog.
+  const [fullScreen, setFullScreen] = useState(false);
 
   const setProp = (key: keyof DeviceLibraryProperties, value: string | boolean) =>
     setProps(prev => ({ ...prev, [key]: value }));
+
+  // F11 toggles full screen, Esc steps back out of it before it closes the
+  // dialog — so leaving full screen never loses what was typed.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'F11') { e.preventDefault(); setFullScreen(v => !v); }
+      if (e.key === 'Escape' && fullScreen) { e.preventDefault(); setFullScreen(false); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [fullScreen]);
 
   const isEditable = mode !== 'view';
 
@@ -113,8 +128,14 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-2xl w-[760px] max-h-[92vh] flex flex-col">
+    <div className={`fixed inset-0 bg-black bg-opacity-50 flex z-50 ${
+      fullScreen ? 'p-0' : 'items-center justify-center'
+    }`}>
+      <div className={`bg-white shadow-2xl flex flex-col ${
+        fullScreen
+          ? 'w-screen h-screen rounded-none'
+          : 'rounded-lg w-[760px] max-h-[92vh]'
+      }`}>
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-6 py-4 border-b">
@@ -135,7 +156,16 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
                 <EditIcon className="w-3 h-3" /> Edit
               </button>
             )}
-            <button className="p-1 hover:bg-gray-100 rounded" onClick={onClose}>
+            <button
+              className="p-1 hover:bg-gray-100 rounded"
+              onClick={() => setFullScreen(v => !v)}
+              title={fullScreen ? 'Exit full screen (F11)' : 'Full screen (F11)'}
+            >
+              {fullScreen
+                ? <Minimize2Icon className="w-5 h-5 text-gray-500" />
+                : <Maximize2Icon className="w-5 h-5 text-gray-500" />}
+            </button>
+            <button className="p-1 hover:bg-gray-100 rounded" onClick={onClose} title="Close">
               <XIcon className="w-5 h-5 text-gray-500" />
             </button>
           </div>
@@ -192,7 +222,10 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
         {/* ── Section content ── */}
         <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
           {activeSection === 'electrical' && (
-            <div>
+            <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
+              <PropField label="Rated Insulation Voltage"              value={props.ratedInsulationVoltage ?? ''}              isEditable={isEditable} onChange={v => setProp('ratedInsulationVoltage', v)} />
+              <PropField label="Service Voltage"                       value={props.serviceVoltage ?? ''}                       isEditable={isEditable} onChange={v => setProp('serviceVoltage', v)} />
+              <PropField label="Rated Power-Frequency Withstand Voltage" value={props.ratedPowerFrequencyWithstandVoltage ?? ''} isEditable={isEditable} onChange={v => setProp('ratedPowerFrequencyWithstandVoltage', v)} />
               <PropField label="Frequency"                              value={props.frequency ?? ''}                              isEditable={isEditable} onChange={v => setProp('frequency', v)} />
               <PropField label="Main Busbar Configuration"             value={props.mainBusbarConfiguration ?? ''}             isEditable={isEditable} onChange={v => setProp('mainBusbarConfiguration', v)} />
               <PropField label="Main Busbar Rated Current"             value={props.mainBusbarRatedCurrent ?? ''}             isEditable={isEditable} onChange={v => setProp('mainBusbarRatedCurrent', v)} />
@@ -204,19 +237,18 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
               <PropField label="Rated Impulse Withstand Voltage"       value={props.ratedImpulseWithstandVoltage ?? ''}       isEditable={isEditable} onChange={v => setProp('ratedImpulseWithstandVoltage', v)} />
             </div>
           )}
+          {/* The three voltages that used to sit here now open the
+              Electrical / Mechanical tab — they belong with the ratings. */}
           {activeSection === 'control' && (
-            <div>
+            <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
               <PropField label="Control, Protection, Closing, Tripping & Signalling" value={props.controlProtectionClosingTrippingSignalling ?? ''} isEditable={isEditable} onChange={v => setProp('controlProtectionClosingTrippingSignalling', v)} />
-              <PropField label="Rated Insulation Voltage"              value={props.ratedInsulationVoltage ?? ''}              isEditable={isEditable} onChange={v => setProp('ratedInsulationVoltage', v)} />
-              <PropField label="Service Voltage"                       value={props.serviceVoltage ?? ''}                       isEditable={isEditable} onChange={v => setProp('serviceVoltage', v)} />
               <PropField label="Spring Charging Motor"                 value={props.springChargingMotor ?? ''}                 isEditable={isEditable} onChange={v => setProp('springChargingMotor', v)} />
               <PropField label="Switchgear Lighting & Space Heater"    value={props.switchgearLightingSpaceHeater ?? ''}    isEditable={isEditable} onChange={v => setProp('switchgearLightingSpaceHeater', v)} />
               <PropField label="Motors Space Heater"                   value={props.motorsSpaceHeater ?? ''}                   isEditable={isEditable} onChange={v => setProp('motorsSpaceHeater', v)} />
-              <PropField label="Rated Power-Frequency Withstand Voltage" value={props.ratedPowerFrequencyWithstandVoltage ?? ''} isEditable={isEditable} onChange={v => setProp('ratedPowerFrequencyWithstandVoltage', v)} />
             </div>
           )}
           {activeSection === 'busbar' && (
-            <div>
+            <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
               <PropField label="Main Busbar Size"       value={props.mainBusbarSize ?? ''}       isEditable={isEditable} onChange={v => setProp('mainBusbarSize', v)} />
               <PropField label="Earth Busbar Size"      value={props.earthBusbarSize ?? ''}      isEditable={isEditable} onChange={v => setProp('earthBusbarSize', v)} />
               <PropField label="Neutral Busbar Size"    value={props.neutralBusbarSize ?? ''}    isEditable={isEditable} onChange={v => setProp('neutralBusbarSize', v)} />

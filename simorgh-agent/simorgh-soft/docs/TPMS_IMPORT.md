@@ -136,9 +136,25 @@ open at all. Three things were in the way, and all three are fixed:
   seconds; the project read on a big project takes longer than that and came
   back as a 504. It is 600s now, matching the container's own nginx.
 
+- **The body-size limits — the one that actually stopped them.** Reading a
+  project was never the problem; *saving* it was. A project's snapshot is the
+  whole project, and for 01A11766 (14 switchgears, 14 revisions, 2968 lines,
+  38 000 part rows) each write is about **1.15 MB** — one for the project and
+  one per revision. `express.json()` defaults to **100 KB** and nginx's
+  `client_max_body_size` to **1 MB**, so every one of those writes came back
+  413 while the reads sailed through in milliseconds. The backend now takes
+  100 MB (`JSON_BODY_LIMIT`), and both nginx layers say `client_max_body_size
+  100M`.
+
 The dialog also offers **Newest only** instead of all revisions — the quick
 way into a project with a long history; the revisions already stored here are
 left untouched.
+
+MongoDB itself was never the limit: 1.15 MB is a fourteenth of what one
+document holds. A snapshot that did approach 16 MB is now reported by name
+instead of failing as a database error, and a revision that will not save
+costs only itself — the rest of the project still lands, and the dialog lists
+what did not.
 
 ## Engineering outputs
 
@@ -167,6 +183,152 @@ in:
   cabinet width"); nothing is estimated from outside the project, and a row
   the project has no data for is left out rather than guessed.
 
+## EPLAN symbols on the single line
+
+Each template row was picked from EPLAN's parts database, and a part there
+carries *function templates* — each naming the symbol EPLAN places for it and
+what the part is ("Circuit breaker, 3 pole", "Current transformer"). The
+single line follows that instead of guessing from the slot the part sits in:
+
+1. `POST /api/eplan-symbols/lookup` asks the parts database for the symbol of
+   every part on the project's templates, matching on part number **and**
+   order number (TPMS usually carries the order number).
+2. The part's **function definition** decides the symbol drawn — breaker,
+   disconnector, contactor, overload, CT, PT, meter, relay, arrester,
+   transformer, capacitor, drive, motor.
+3. If a symbol exported from EPLAN sits in the symbol folder under that
+   symbol's name (`SG3.svg`), that graphic is drawn instead — the office's own
+   symbol, in the app's sheet.
+
+### The symbol library
+
+`src/utils/iecSymbols.ts` is the library the drawing uses — 61 single-line
+symbols drawn from **the office's own legend sheet** (the `SYMBOL /
+DESCRIPTION` table the SLD set carries on its last sheet), not from a generic
+IEC list, so a sheet this app produces reads the same as the sheets the office
+already issues. Every symbol is drawn to the same cell so they stack on a
+branch: entered at the top, left at the bottom, and whatever reaches sideways
+(a CT's secondary, a relay box) goes right, where the tag and the code are
+written. The whole set is on screen under **Eplanix → Symbols**, and prints
+from there.
+
+The shapes, as the legend draws them:
+
+| Device | Symbol |
+|---|---|
+| V.C.B | isolating contacts top and bottom, the blade open to the upper left, the trip cross on the line |
+| V.C.B with racking | the same, with the motor circle and the racking box beside it |
+| Vacuum contactor with HRC fuse | the isolating contacts, the fuse, the contactor arc |
+| Circuit breaker | the blade with the cross on the fixed contact |
+| Disconnector | an open blade between two contacts |
+| Switch disconnector | the blade with the load-break bar on the fixed contact |
+| Contactor | the open contact with the contactor arc under it |
+| Miniature circuit breaker | the hooked blade with the arrow |
+| Earth switch | the blade down to the earth symbol |
+| HRC fuse | a rectangle with the diagonal through it, marked `3` |
+| Thermal overload (bimetal) | a rectangle with the half-split square inside it |
+| Surge limiter / surge arrester | a box with the cross / with the filled triangle |
+| Protection relay | a box carrying `PROTECTION RELAY` |
+| Current transformer | one circle on the line, secondary to the side, marked `1` |
+| Core balance CT | an ellipse with the three phases through it |
+| Two-winding transformer | interlocking circles with their star points |
+| Meters | a square carrying `A`, `V`, `M`, `TD`, `F`, `H.M`, `W`, `VAR`, `COSΦ`, `PTC` |
+| kWh / kVArh meter | a box with the band across the top |
+| Selector switches | a box carrying `V.S` or `A.S` |
+| Alarm annunciator | the four-by-four window grid |
+| Test box | a circle with the dot, in the line |
+| Motor / generator | a circle carrying `M` or `G` |
+| Capacitor delta, magnet, heating element, LCS, ATS, bus duct, key interlock, capacitive divider | as the legend draws them |
+
+### The order of a cell
+
+Every device on a feeder is one of three things, and the drawing keeps them
+apart — a single line that puts an ammeter in the power path reads as a board
+with an ammeter in series with the motor:
+
+| | where it is drawn |
+|---|---|
+| **series** | the current runs through it — on the line |
+| **shunt** | it works between the line and earth — beside the line, with the earth under it |
+| **instrument** | it works off a transformer — in the secondary column to the right |
+
+An MV cell comes out in the order the office draws it in, whatever order the
+template filed its slots:
+
+1. **the main switch** — the disconnector, the vacuum breaker (fixed or
+   withdrawable, with its spring charge and racking), or the vacuum contactor
+   with its fuse;
+2. **the earth switch**, beside the line down to earth, with the **magnet**
+   under it on the dashed interlock;
+3. **the current transformer**, in series — one secondary out of it **per
+   core** (`300/5A x3` draws three), into the test block;
+4. **the capacitive voltage divider**, beside the line to earth;
+5. **the surge arrester**, beside the line to earth;
+6. **the core-balance CT**, in series, out to the relay.
+
+The secondary side follows the same rule:
+
+* the **CT** and the **core-balance CT** both come out into the **test block
+  (XD)**, the core-balance one on its own elbow into the bottom of it, and
+  everything below the test block on that column reaches the relay through it;
+* the **protection relay** sits under the test block, and the **alarm window**
+  under the relay;
+* with no test block on the feeder, the CT feeds the ammeter, the selectors,
+  the meters and the protection relay, and the core-balance CT feeds the
+  earth-fault relay with its second connection into the relay;
+* the **VT** feeds the voltmeter, its selector and the frequency meter;
+* an instrument no transformer on the line feeds is control wiring, drawn with
+  the dashed link the legend uses for it.
+
+What a device *is* comes from EPLAN's function definition when the parts
+database has one; otherwise from the part's own TPMS descriptions
+(`SEC_DES` / `ENG_DES` / `SHR_DES`), so an earth switch, a magnet or a
+capacitive divider is recognised from TPMS alone; otherwise from the slot it
+sits in.
+
+### The sheet
+
+A sheet is drawn the way the office draws one: the incoming column on the
+left, the busbar across with its rating written above it (`BUS A, 400 V,
+3P + N + PE, 4000 A, 50 kA / 1 Sec`, from the panel specification), one branch
+per feeder — tag in black, part code in blue, accessories under the device,
+and the text of a device that feeds an instrument written above its connection
+so nothing is written over anything — and under the drawing the data block:
+one row per property (BUS, Line, Type, Power, Nominal Current, Position, Tag,
+Description, Cable) and one column per feeder, each column standing under its
+own branch.
+
+Each device is given the room its own text needs, so a device carrying three
+accessories pushes the next one further down instead of running into it. The
+sheet is sized by its viewBox, so a wide one is scaled to fit the screen
+rather than running off the side of it.
+
+### One slot, one device
+
+A slot is one device. The first part in a slot is the device — the breaker,
+the contactor, the CT — and everything after it in that slot is its
+accessories: an auxiliary switch, a shunt trip, a terminal cover. Those are
+written under the device (`+ Q:3VA9988-0AA12 ×2`), never drawn as a second
+switch on the line, which is what a single line means by a device.
+
+`GET /api/eplan-symbols/schema` reports which table and columns this EPLAN
+database keeps its symbols in; nothing is hard-coded, because the schema
+differs between EPLAN versions. If the parts database is out of reach, or
+holds no symbol for a part, the drawing falls back to the slot mapping and the
+Eplanix tab says so.
+
+A file in that folder named after one of the library's own symbols — `vcb.svg`,
+`current-transformer.svg` — replaces that symbol **everywhere** instead of for
+one part, and the file itself says where its conductor runs (`data-pin-x`) and
+how many cells it takes (`data-cells`), so it lands on the branch line at the
+right size. `simorgh-backend/eplan-symbols/README.md` is the whole of it: both
+ways a file is used, what a file has to look like, how to turn a picture into
+one, what to do when it looks wrong, and the list of names.
+
+The symbol folder is `simorgh-backend/eplan-symbols/`, mounted read-only into
+the container at `/app/eplan-symbols` (`EPLAN_SYMBOL_DIR`) — adding a symbol
+is a copy, not a rebuild.
+
 ## The API
 
 | Route | What it returns |
@@ -185,3 +347,31 @@ objects. They now query `View_Project_Main` and `View_draft`, which is what
 TPMS actually has. The project list also returns `code` (OE number) and
 `name` separately, so the combo box can show the OE number muted in front of
 the name the way it does for the suite's own projects.
+
+## Deploying it
+
+```bash
+cd ~/simorgh-chatbot-ekc-deploy
+git pull
+./deploy-soft.sh
+```
+
+`deploy-soft.sh` rebuilds and restarts the Design Suite container, prints its
+state and health, and says whether this pull touched anything nginx serves. It
+runs compose from `simorgh-agent/`, where the compose file and its `.env` live
+— compose run from the repository root reports `no configuration file
+provided: not found`, because there is none there.
+
+nginx is a separate matter and rarely needed: a rebuild replaces the app inside
+its container and leaves both proxies alone. Only a change under
+`simorgh-agent/nginx_configs/` (the container's nginx) or `host-nginx-config/`
+(the host's) needs one, and the host's reload wants root:
+
+```bash
+docker compose exec nginx nginx -t && docker compose exec nginx nginx -s reload
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+A symbol dropped into `simorgh-backend/eplan-symbols/` needs neither: the
+folder is mounted into the container, so a copy and a hard refresh
+(Ctrl+Shift+R) is the whole of it.

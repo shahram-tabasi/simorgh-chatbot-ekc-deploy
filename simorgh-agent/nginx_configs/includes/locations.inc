@@ -21,6 +21,11 @@ location /simorgh-design-suite/ {
     proxy_http_version 1.1;
     proxy_set_header Connection "";
 
+    # Saving a project imported from TPMS sends the whole project — and one
+    # snapshot per revision. On a plant with a dozen panels that is megabytes,
+    # and nginx's 1 MB default answered every one of them with 413.
+    client_max_body_size 100M;
+
     proxy_connect_timeout 30s;
     # Reading a TPMS project (its switchgears and their panel specifications)
     # is a long single request on a big project; 120s was cutting those off

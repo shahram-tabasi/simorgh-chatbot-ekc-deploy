@@ -90,6 +90,81 @@ export const tpmsService = {
   },
 };
 
+// ── EPLAN symbols ───────────────────────────────────────────────────────────
+// The single-line symbol each part carries in EPLAN's parts database, and the
+// folder of symbols exported from EPLAN itself.
+export interface EplanSymbol {
+  symbol: string;
+  library?: string;
+  variant?: string;
+  functionDefinition?: string;
+  partNumber?: string;
+  orderNumber?: string;
+  /** Set when the symbol pack has an SVG for this symbol. */
+  packUrl?: string;
+}
+
+/** One SVG in the symbol pack: its name, its own box, and where its conductor
+ *  runs inside that box (`data-pin-x`), so the drawing can put the symbol on
+ *  the branch line at the right size. */
+export interface PackSymbol {
+  name: string;
+  width?: number;
+  height?: number;
+  pinX?: number;
+  pinY?: number;
+  /** How many cells down the line it should take (`data-cells`). */
+  cells?: number;
+  title?: string;
+}
+
+export const eplanSymbolService = {
+  async schema(): Promise<any> {
+    const r = await fetch(`${API_BASE_URL}/eplan-symbols/schema`);
+    if (!r.ok) throw new Error('Could not read the EPLAN symbol schema');
+    return r.json();
+  },
+
+  // Never throws: a project must still draw when EPLAN is out of reach.
+  async lookup(parts: string[]): Promise<Record<string, EplanSymbol>> {
+    if (parts.length === 0) return {};
+    try {
+      const r = await fetch(`${API_BASE_URL}/eplan-symbols/lookup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parts }),
+      });
+      if (!r.ok) return {};
+      return (await r.json()).symbols ?? {};
+    } catch {
+      return {};
+    }
+  },
+
+  async pack(): Promise<PackSymbol[]> {
+    try {
+      const r = await fetch(`${API_BASE_URL}/eplan-symbols/pack`);
+      if (!r.ok) return [];
+      const list = (await r.json()).symbols ?? [];
+      // A name on its own is all older packs reported; the size and the pin
+      // come with it now.
+      return list.map((entry: any) =>
+        (typeof entry === 'string' ? { name: entry } : entry)) as PackSymbol[];
+    } catch {
+      return [];
+    }
+  },
+
+  // Absolute, because the printable window is opened on about:blank and a
+  // relative URL there has nothing to resolve against.
+  svgUrl(name: string): string {
+    const base = API_BASE_URL.startsWith('/')
+      ? `${window.location.origin}${API_BASE_URL}`
+      : API_BASE_URL;
+    return `${base}/eplan-symbols/svg/${encodeURIComponent(name)}`;
+  },
+};
+
 export interface DesktopInstallerInfo {
   available: boolean;
   fileName?: string;

@@ -3,7 +3,11 @@
 // ==============================
 
 export interface DeviceLibraryProperties {
-  // Electrical / Mechanical
+  // Electrical / Mechanical — the three voltages lead the tab: they are the
+  // ratings the rest of the panel is sized against.
+  ratedInsulationVoltage?: string;
+  serviceVoltage?: string;
+  ratedPowerFrequencyWithstandVoltage?: string;
   frequency?: string;
   mainBusbarConfiguration?: string;
   mainBusbarRatedCurrent?: string;
@@ -15,12 +19,9 @@ export interface DeviceLibraryProperties {
   ratedImpulseWithstandVoltage?: string;
   // Control & Auxiliary
   controlProtectionClosingTrippingSignalling?: string;
-  ratedInsulationVoltage?: string;
-  serviceVoltage?: string;
   springChargingMotor?: string;
   switchgearLightingSpaceHeater?: string;
   motorsSpaceHeater?: string;
-  ratedPowerFrequencyWithstandVoltage?: string;
   // Busbar & Construction
   mainBusbarSize?: string;
   earthBusbarSize?: string;

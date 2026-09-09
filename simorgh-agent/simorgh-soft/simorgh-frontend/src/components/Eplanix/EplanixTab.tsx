@@ -1,16 +1,25 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
-import { DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
+import { DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, SendIcon } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
+import { SendToEplanDialog } from './SendToEplanDialog';
 import { ProjectData, Equipment } from '../../types/project';
 import { sheetName } from '../../utils/bpmsExport';
+import { eplanSymbolService } from '../../services/projectService';
+import { templateParts } from '../../utils/tierEquipmentMatrix';
 import {
-  EPLAN_HEADERS, buildEplanRows, buildSingleLinePages, buildSingleLineHtml,
-  buildSingleLineDxf,
+  EPLAN_HEADERS, EplanSymbolMap, buildEplanRows, buildSingleLinePages, buildSingleLineHtml,
+  buildSymbolLibraryHtml, partKeys,
 } from '../../utils/eplanSingleLine';
 import {
+  IEC_SYMBOLS, SYMBOL_GROUPS, CELL, SymbolId, SymbolOverride,
+  setSymbolOverrides, symbolOverride, symbolHeight, drawIecSymbol,
+} from '../../utils/iecSymbols';
+
+// The library's own ids, to match a file in the pack against by name.
+const SYMBOL_IDS = new Map(Object.keys(IEC_SYMBOLS).map(id => [id.toLowerCase(), id as SymbolId]));
+import {
   LAYOUT_HEADERS, buildPanelLayout, buildLayoutRows, buildLayoutSvg, buildLayoutHtml,
-  buildLayoutDxf,
 } from '../../utils/panelLayout';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
@@ -21,38 +30,7 @@ import {
 // items. Each one is previewed here before it is downloaded or printed, so
 // what leaves the app has been looked at first.
 
-type View = 'single-line' | 'layout' | 'mechanical';
-
-// Anything unsafe in a file name, and the runs of spaces around it, collapse
-// to a single underscore — the same file has to survive Windows and Linux.
-const fileSafe = (s: string) =>
-  (s || 'project').replace(/[^\w.\-]+/g, '_').replace(/^_+|_+$/g, '') || 'project';
-
-function downloadText(filename: string, content: string, mime: string) {
-  const url = URL.createObjectURL(new Blob([content], { type: mime }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoked late: Safari reads the blob after the click returns.
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
-
-/** One DXF per switchgear, spaced out so the browser does not block the run. */
-function downloadDxfSet(files: { name: string; dxf: string }[]) {
-  files.forEach((file, i) => {
-    setTimeout(() => downloadText(file.name, file.dxf, 'image/vnd.dxf'), i * 250);
-  });
-}
-
-function exportSingleLineDxf(data: ProjectData, equipments: Equipment[], perPage: number) {
-  downloadDxfSet(equipments.map(eq => ({
-    name: `${fileSafe(data.projectName)}_${fileSafe(eq.name)}_single_line.dxf`,
-    dxf: buildSingleLineDxf(data, eq, perPage),
-  })));
-}
+type View = 'single-line' | 'layout' | 'mechanical' | 'symbols';
 
 function openPrintable(html: string, what: string) {
   const w = window.open('', '_blank');
@@ -99,13 +77,90 @@ function exportMechanicalExcel(data: ProjectData, equipments: Equipment[]) {
 }
 
 export const EplanixTab: React.FC = () => {
-  const { projectData } = useProject();
+  const { projectData, currentRevision } = useProject();
   const [view, setView] = useState<View>('single-line');
   const [selected, setSelected] = useState<string>('');   // equipment id, '' = all
   const [perPage, setPerPage] = useState(8);
   const [sheet, setSheet] = useState(0);
+  // What EPLAN says each part is — the symbol it places for it. Without this
+  // the drawing falls back to the slot the part sits in.
+  const [symbols, setSymbols] = useState<EplanSymbolMap>({});
+  const [packReplaced, setPackReplaced] = useState(0);
+  const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
+  const [showSend, setShowSend] = useState(false);
 
   const equipments = projectData.equipments ?? [];
+
+  // Every part on the project's templates, by the codes EPLAN might know it
+  // under. Looked up once per project, not once per sheet.
+  const partCodes = useMemo(() => {
+    const keys = new Set<string>();
+    for (const tier of ['LV', 'MV', 'HV'] as const) {
+      for (const template of projectData.templates?.[tier] ?? []) {
+        for (const parts of Object.values(templateParts(template))) {
+          for (const part of parts) for (const key of partKeys(part)) keys.add(key);
+        }
+      }
+    }
+    return [...keys].slice(0, 500);
+  }, [projectData.templates]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (partCodes.length === 0) { setSymbols({}); setSymbolNote('No parts on the templates yet.'); return; }
+      setSymbolNote('Reading the EPLAN symbols…');
+      const [found, pack] = await Promise.all([
+        eplanSymbolService.lookup(partCodes),
+        eplanSymbolService.pack(),
+      ]);
+      if (cancelled) return;
+      // A symbol the office exported from EPLAN is used as it is; the rest are
+      // drawn here, from what EPLAN says the part is.
+      const packLower = new Map(pack.map(entry => [entry.name.toLowerCase(), entry]));
+      const map: EplanSymbolMap = {};
+      let fromPack = 0;
+      for (const [key, entry] of Object.entries(found)) {
+        const exported = packLower.get(String(entry.symbol || '').toLowerCase());
+        if (exported) fromPack += 1;
+        map[key] = {
+          ...entry,
+          packUrl: exported ? eplanSymbolService.svgUrl(exported.name) : undefined,
+          packWidth: exported?.width,
+          packHeight: exported?.height,
+          packPinX: exported?.pinX,
+        };
+      }
+      setSymbols(map);
+
+      // A file named after one of the library's own symbols — `vcb.svg`,
+      // `current-transformer.svg` — replaces that symbol everywhere, with no
+      // part number and no EPLAN look-up involved.
+      const overrides: Partial<Record<SymbolId, SymbolOverride>> = {};
+      let replaced = 0;
+      for (const entry of pack) {
+        const id = SYMBOL_IDS.get(entry.name.toLowerCase());
+        if (!id) continue;
+        overrides[id] = {
+          url: eplanSymbolService.svgUrl(entry.name),
+          width: entry.width, height: entry.height, pinX: entry.pinX,
+          cells: entry.cells, title: entry.title,
+        };
+        replaced += 1;
+      }
+      setSymbolOverrides(overrides);
+      setPackReplaced(replaced);
+      const matched = new Set(Object.values(found).map(e => e.partNumber || e.symbol)).size;
+      const replacedNote = Object.keys(overrides).length > 0
+        ? ` ${Object.keys(overrides).length} library symbol(s) replaced by the pack.` : '';
+      setSymbolNote(
+        (Object.keys(found).length === 0
+          ? 'EPLAN parts database has no symbol for these parts (or is out of reach) — symbols come from the template slots.'
+          : `EPLAN symbols: ${matched} part(s) matched${fromPack > 0 ? `, ${fromPack} drawn with symbols exported from EPLAN` : ''}.`)
+        + replacedNote);
+    })();
+    return () => { cancelled = true; };
+  }, [partCodes]);
   const withLines = equipments.filter(e => (e.devices ?? []).length > 0);
   const chosen = selected ? equipments.filter(e => e.id === selected) : equipments;
   const chosenWithLines = chosen.filter(e => (e.devices ?? []).length > 0);
@@ -113,8 +168,8 @@ export const EplanixTab: React.FC = () => {
   const preview = chosenWithLines[0];
 
   const pages = useMemo(
-    () => (preview ? buildSingleLinePages(projectData, preview, perPage) : []),
-    [projectData, preview, perPage]);
+    () => (preview ? buildSingleLinePages(projectData, preview, perPage, symbols) : []),
+    [projectData, preview, perPage, symbols]);
   const current = pages[Math.min(sheet, Math.max(0, pages.length - 1))];
 
   const layout = useMemo(
@@ -173,13 +228,27 @@ export const EplanixTab: React.FC = () => {
               <option key={eq.id} value={eq.id}>{eq.name} — {eq.type}</option>
             ))}
           </select>
+          {/* The same feeder lines, sent to the EPLAN drawing server instead
+              of downloaded. The address is in .env — see the dialog. */}
+          <button
+            onClick={() => setShowSend(true)}
+            disabled={chosenWithLines.length === 0}
+            title={chosenWithLines.length === 0
+              ? 'Add feeder lines in Device Selection first'
+              : 'Send these switchgears to the EPLAN drawing server'}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40"
+          >
+            <SendIcon className="w-4 h-4" />
+            Send to EPLAN
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3 mb-5">
+      <div className="grid grid-cols-4 gap-3 mb-5">
         <Tab id="single-line" label="Single line — تک‌خطی" note="Busbar, feeders, devices, data blocks" />
         <Tab id="layout" label="Layout — جانمایی" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical — اقلام مکانیکال" note="Enclosure, busbars, compartments" />
+        <Tab id="symbols" label="Symbols — علائم" note="The IEC single-line library" />
       </div>
 
       {/* ── Single line ───────────────────────────────────────────────── */}
@@ -195,6 +264,7 @@ export const EplanixTab: React.FC = () => {
                 <p className="text-xs text-gray-500">
                   One sheet per {perPage} feeders · supply, busbar, device chain and a data block per feeder.
                 </p>
+                <p className="text-[11px] text-blue-700 mt-0.5">{symbolNote}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -206,7 +276,8 @@ export const EplanixTab: React.FC = () => {
                 {[4, 6, 8, 10, 12].map(n => <option key={n} value={n}>{n} feeders / sheet</option>)}
               </select>
               <Btn
-                onClick={() => openPrintable(buildSingleLineHtml(projectData, chosenWithLines, perPage), 'single-line diagram')}
+                onClick={() => openPrintable(
+                  buildSingleLineHtml(projectData, chosenWithLines, perPage, symbols), 'single-line diagram')}
                 icon="print"
                 className="bg-slate-700 text-white hover:bg-slate-800"
                 disabled={chosenWithLines.length === 0}
@@ -219,13 +290,6 @@ export const EplanixTab: React.FC = () => {
                 disabled={chosenWithLines.length === 0}
               >
                 EPLAN device list
-              </Btn>
-              <Btn
-                onClick={() => exportSingleLineDxf(projectData, chosenWithLines, perPage)}
-                className="bg-teal-700 text-white hover:bg-teal-800"
-                disabled={chosenWithLines.length === 0}
-              >
-                DXF (CAD)
               </Btn>
             </div>
           </div>
@@ -294,16 +358,6 @@ export const EplanixTab: React.FC = () => {
                 disabled={chosenWithLines.length === 0}
               >
                 Layout Excel
-              </Btn>
-              <Btn
-                onClick={() => downloadText(
-                  `${fileSafe(projectData.projectName)}_layout.dxf`,
-                  buildLayoutDxf(projectData, chosenWithLines.map(eq => buildPanelLayout(projectData, eq))),
-                  'image/vnd.dxf')}
-                className="bg-teal-700 text-white hover:bg-teal-800"
-                disabled={chosenWithLines.length === 0}
-              >
-                DXF (CAD)
               </Btn>
             </div>
           </div>
@@ -377,10 +431,82 @@ export const EplanixTab: React.FC = () => {
         </div>
       )}
 
+      {/* ── The symbol library ────────────────────────────────────────── */}
+      {view === 'symbols' && (
+        <div className="border border-gray-200 rounded-lg">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-slate-700">IEC</span>
+              <div className="min-w-0">
+                <p className="font-medium text-sm text-gray-800">
+                  {Object.keys(IEC_SYMBOLS).length} single-line symbols
+                </p>
+                <p className="text-xs text-gray-500">
+                  What the drawing uses for each device. An SVG dropped into the symbol pack
+                  under one of these names replaces the symbol here, everywhere.
+                  {packReplaced > 0 && (
+                    <span className="text-emerald-700 font-medium">
+                      {' '}{packReplaced} replaced by the pack.
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+            <Btn
+              onClick={() => openPrintable(buildSymbolLibraryHtml(), 'symbol library')}
+              icon="print"
+              className="bg-slate-700 text-white hover:bg-slate-800"
+            >
+              Print / PDF
+            </Btn>
+          </div>
+
+          <div className="p-4 space-y-5">
+            {SYMBOL_GROUPS.map(group => (
+              <div key={group}>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{group}</p>
+                <div className="grid grid-cols-6 gap-3">
+                  {Object.values(IEC_SYMBOLS).filter(sym => sym.group === group).map(sym => {
+                    // Drawn the way a sheet draws it, so a symbol the pack has
+                    // replaced shows here as what the drawing will use.
+                    const replaced = !!symbolOverride(sym.id);
+                    const tall = symbolHeight(sym.id) / CELL;
+                    return (
+                      <div key={sym.id}
+                           className={`border rounded p-2 bg-white ${
+                             replaced ? 'border-emerald-400' : 'border-gray-200'}`}>
+                        <svg width="100%" height={CELL + 16} viewBox={`0 0 90 ${CELL + 16}`}>
+                          <g transform={tall > 1 ? `translate(28 8) scale(${1 / tall}) translate(-28 -8)` : undefined}
+                             dangerouslySetInnerHTML={{ __html: drawIecSymbol(sym.id, 28, 8) }} />
+                        </svg>
+                        <p className="text-[11px] text-gray-800 leading-tight mt-1">{sym.title}</p>
+                        <p className="text-[11px] text-gray-500 leading-tight" dir="rtl">{sym.titleFa}</p>
+                        {replaced && (
+                          <p className="text-[10px] text-emerald-700 leading-tight">from the pack</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showSend && (
+        <SendToEplanDialog
+          projectData={projectData}
+          equipments={chosenWithLines}
+          currentRevision={currentRevision}
+          feedersPerPage={perPage}
+          onClose={() => setShowSend(false)}
+        />
+      )}
+
       <p className="mt-4 text-xs text-gray-400">
         {withLines.length} switchgear{withLines.length === 1 ? '' : 's'} with feeder lines ·
         {' '}the drawings are schematic: they show what the project holds, they are not a substitute for the EPLAN drawing set.
-        {' '}DXF carries the same sheets as CAD geometry, on named layers, for customers who do not run EPLAN.
       </p>
     </div>
   );

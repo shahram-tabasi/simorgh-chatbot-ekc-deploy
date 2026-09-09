@@ -14,17 +14,15 @@
 //                         busbar with one branch per feeder, the devices on it
 //                         in slot order. For reading and checking, not a
 //                         substitute for the EPLAN drawing.
-//   buildSingleLineDxf()  that same drawing as CAD geometry, for the customer
-//                         who has no EPLAN: layers, lines, arcs and text that
-//                         AutoCAD, BricsCAD, ZWCAD or LibreCAD can edit.
 import { ProjectData, Equipment, TemplateItem, DeviceTableRow } from '../types/project';
 import {
   templateParts, formatPartEntry, stripLocaleTags, getEplanixValue,
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
 } from './tierEquipmentMatrix';
-import { Drawing } from './cad/shapes';
-import { renderSvg } from './cad/svg';
-import { renderDxf, mergeDrawings } from './cad/dxf';
+import {
+  CELL, SymbolId, drawIecSymbol, symbolRight, symbolLeft, symbolHeight, overrideBox,
+  buildSymbolCatalogueSvg,
+} from './iecSymbols';
 
 export const EPLAN_HEADERS = [
   'Page', 'Higher-level function', 'Location', 'DT', 'Function text',
@@ -114,35 +112,160 @@ export function buildEplanRows(
 }
 
 
+
 // ── The drawing ──────────────────────────────────────────────────────────────
 //
-// Laid out the way SIMARIS draws a distribution board: the supply at the top
-// left, a busbar across the sheet with its ratings beside it, one branch per
-// outgoing feeder hanging off it with its devices in order, and under each
-// branch a data block — feeder, tag, description, rating, current, cable —
-// so the sheet can be read without the tables. Sheets are paginated, a fixed
-// number of feeders each, like SIMARIS pages a board over several drawings.
+// Laid out the way a distribution board is drawn: the supply at the top left,
+// a busbar across the sheet, one branch per outgoing feeder with its devices
+// down it, and under each branch a data block. The symbols themselves are the
+// IEC library in iecSymbols.ts.
+//
+// One rule decides what becomes a symbol: **a slot is one device**. The first
+// part in a slot is the device — the breaker, the contactor, the CT — and the
+// rest of that slot is its accessories: an auxiliary switch, a shunt trip, a
+// terminal cover. Those are written beside the device, never drawn as a second
+// switch on the line, which is how a single line is read.
 
-type SymbolKind = 'breaker' | 'switch-fuse' | 'contactor' | 'overload' | 'ct' | 'pt'
-                | 'meter' | 'relay' | 'arrester' | 'fuse' | 'box';
+/** What EPLAN says a part is: the symbol it places, and for what function. */
+export interface EplanSymbolInfo {
+  symbol: string;
+  library?: string;
+  variant?: string;
+  functionDefinition?: string;
+  /** An SVG exported from EPLAN, when the symbol pack has one. */
+  packUrl?: string;
+  /** That file's own box and the place its conductor runs in it, so it is
+   *  drawn to the cell with its connection point on the branch line. */
+  packWidth?: number;
+  packHeight?: number;
+  packPinX?: number;
+}
+export type EplanSymbolMap = Record<string, EplanSymbolInfo>;
 
-// Which symbol stands for a slot. Anything not named here is drawn as a dashed
-// box carrying its code, which is honest: the part is on the line, and the
-// drawing does not pretend to know its schematic shape.
-const SLOT_SYMBOL: Record<string, SymbolKind> = {
-  'CB ORDER': 'breaker', 'VCB OR VC/FUSE': 'breaker',
+// The slot a part sits in says what the device is, unless EPLAN says better.
+const SLOT_SYMBOL: Record<string, SymbolId> = {
+  'CB ORDER': 'circuit-breaker',
+  'VCB OR VC/FUSE': 'vcb',              // MV: the vacuum breaker of the legend
   'CONTACTOR. ORDER': 'contactor',
-  'OVER LOAD RELAY': 'overload',
-  'CT RATING': 'ct', 'COREBALANCE CT': 'ct', 'PT RATING': 'pt',
-  'AMMETER': 'meter', 'VOLTMETER': 'meter', 'MULTIMETER': 'meter', 'TRANSDUSER': 'meter',
-  'PROTECTION RELAY': 'relay', 'EARTH FAULT': 'relay',
-  'SURGE ARRESTER': 'arrester',
-  'TEST BLOCK': 'box', 'ACCESSORY': 'box', 'VOLTAGE INDICATOR': 'box',
+  'OVER LOAD RELAY': 'thermal-overload',
+  'EARTH FAULT': 'earth-fault-relay',
+  'COREBALANCE CT': 'core-balance-ct',
+  'PROTECTION RELAY': 'protection-relay',
+  'CT RATING': 'current-transformer',
+  'PT RATING': 'voltage-transformer',
+  'AMMETER': 'ammeter',
+  'VOLTMETER': 'voltmeter',
+  'MULTIMETER': 'multimeter',
+  'TRANSDUSER': 'transducer',
+  'AMMETER selector': 'ampere-selector',
+  'VOLTMETER selector': 'voltage-selector',
+  'TEST BLOCK': 'test-block',
+  'SURGE ARRESTER': 'surge-arrester',
+  'VOLTAGE INDICATOR': 'lamp',
+  'ALARM ANUNCIATOR': 'alarm-annunciator',
+  'ALARM WINDDOW': 'alarm-annunciator',
+  'ACCESSORY': 'accessory',
 };
+
+// EPLAN's function definition — "Circuit breaker, 3 pole", "Current
+// transformer", "Motor, 3 phase" — is what the part actually is, so it wins
+// over the slot it was filed under.
+const FUNCTION_SYMBOL: [RegExp, SymbolId][] = [
+  [/earth(ing)?[\s-]?switch|earthing.?device|erdungsschalter/i, 'earthing-switch'],
+  [/capacitive.?(voltage.?)?divider|voltage.?divider|capacitive.?indicator/i, 'capacitive-divider'],
+  [/vacuum.?contactor|contactor.*fuse|\bv\.?c\b.*fuse/i, 'vacuum-contactor-fuse'],
+  [/vacuum.?(circuit.?)?breaker|\bvcb\b/i, 'vcb'],
+  [/withdraw|draw.?out|truck|racking/i, 'withdrawable-cb'],
+  [/miniature.?circuit.?breaker|\bmcb\b/i, 'mcb'],
+  [/circuit.?breaker|leistungsschalter|\bmccb\b|\bacb\b/i, 'circuit-breaker'],
+  [/switch.?disconnector|load.?break|sectionali[sz]er/i, 'switch-disconnector'],
+  [/disconnector|isolator/i, 'disconnector'],
+  [/fuse.?switch|switch.?fuse/i, 'switch-fuse'],
+  [/hrc.?fuse|high.?rupturing/i, 'hrc-fuse'],
+  [/\bfuse\b|sicherung/i, 'fuse'],
+  [/contactor|sch(ü|u)tz/i, 'contactor'],
+  [/overload|thermal.?relay|bimetal/i, 'thermal-overload'],
+  [/earth.?fault|residual.?current|\brcd\b/i, 'earth-fault-relay'],
+  [/core.?balance|summation.?transformer/i, 'core-balance-ct'],
+  [/current.?transformer|stromwandler|\bct\b/i, 'current-transformer'],
+  [/voltage.?transformer|potential.?transformer|spannungswandler|\bpt\b|\bvt\b/i, 'voltage-transformer'],
+  [/power.?transformer|transformer|transformator/i, 'transformer'],
+  [/\bkwh\b|kilo.?watt.?hour|energy.?meter/i, 'kwh-meter'],
+  [/\bkvarh\b|kilo.?var.?hour/i, 'kvarh-meter'],
+  [/ammeter|amperemeter/i, 'ammeter'],
+  [/voltmeter/i, 'voltmeter'],
+  [/power.?factor|cos.?(φ|phi)/i, 'power-factor-meter'],
+  [/\bvar.?meter\b/i, 'var-meter'],
+  [/watt.?meter/i, 'watt-meter'],
+  [/frequency.?meter/i, 'frequency-meter'],
+  [/hour.?meter|running.?hour/i, 'hour-meter'],
+  [/multimeter|power.?meter/i, 'multimeter'],
+  [/transducer/i, 'transducer'],
+  [/\bptc\b|thermistor/i, 'ptc'],
+  [/ampere.?selector/i, 'ampere-selector'],
+  [/voltage.?selector/i, 'voltage-selector'],
+  [/selector/i, 'selector-switch'],
+  [/protection.?relay|protective|\brelay\b/i, 'protection-relay'],
+  [/surge.?arrester|arrester|\bspd\b|overvoltage/i, 'surge-arrester'],
+  [/capacitor.*delta|delta.*capacitor/i, 'capacitor-delta'],
+  [/capacitor|kondensator/i, 'capacitor'],
+  [/surge.?limiter/i, 'surge-limiter'],
+  [/annunciator|alarm.?window/i, 'alarm-annunciator'],
+  [/local.?control.?station|\blcs\b/i, 'lcs'],
+  [/transfer.?switch|\bats\b/i, 'ats'],
+  [/magnet\b/i, 'magnet'],
+  [/key.?interlock/i, 'key-interlock'],
+  [/bus.?duct|bus.?bridge/i, 'bus-duct'],
+  [/soft.?start/i, 'soft-starter'],
+  [/frequency.?(converter|inverter)|\bvfd\b|\bvsd\b|inverter|drive/i, 'drive'],
+  [/heater|heating/i, 'heater'],
+  [/lamp|indicator|signal|annunciator/i, 'lamp'],
+  [/socket|outlet/i, 'socket'],
+  [/terminal|test.?block|test.?disconnect/i, 'test-block'],
+  [/generator/i, 'generator'],
+  [/\bmotor\b/i, 'motor'],
+];
+
+// Parts that are not a device of their own: they belong to the device above.
+const ACCESSORY = /auxiliary|aux\.|shunt.?trip|under.?voltage|trip.?coil|closing.?coil|handle|cover|terminal.?cover|accessor|spare.?part|connection.?cable|mounting|adapter|link.?kit/i;
+
+export function kindFromFunction(functionDefinition?: string): SymbolId | null {
+  const value = String(functionDefinition ?? '');
+  if (!value) return null;
+  for (const [pattern, id] of FUNCTION_SYMBOL) if (pattern.test(value)) return id;
+  return null;
+}
+
+/** What TPMS itself says a part is — its own descriptions, which is all there
+ *  is to go on when the EPLAN parts database is out of reach or holds nothing
+ *  for it: an earth switch, a capacitive divider, a magnet, a test block. */
+export function partDescription(part: any): string {
+  return [
+    part?.fullData?.Designation1, part?.fullData?.Designation2,
+    part?.fullData?.Designation3, part?.fullData?.TypeNumber,
+  ].map(v => stripLocaleTags(v)).filter(Boolean).join(' ');
+}
+
+// The keys a part might be found under in EPLAN: its order number, its part
+// number, its type number — whichever the template row carries.
+export function partKeys(part: any): string[] {
+  return [
+    getEplanixValue(part?.fullData),
+    stripLocaleTags(part?.fullData?.OrderNumber),
+    stripLocaleTags(part?.fullData?.PartNumber),
+    stripLocaleTags(part?.fullData?.TypeNumber),
+    stripLocaleTags(part?.partNumber),
+  ].map(v => String(v ?? '').trim()).filter(Boolean);
+}
+
+export function lookupSymbol(part: any, symbols?: EplanSymbolMap): EplanSymbolInfo | undefined {
+  if (!symbols) return undefined;
+  for (const key of partKeys(part)) if (symbols[key]) return symbols[key];
+  return undefined;
+}
 
 const esc = (s: string) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** Feeders that bring power in rather than take it out. */
@@ -154,14 +277,23 @@ const isMotorLoad = (line: DeviceTableRow) =>
   /^m/i.test(String(line.wiringType || '')) ||
   /motor|pump|fan|blower|compressor|mill/i.test(String(line.description || ''));
 
-// One device on a branch: its symbol, its tag and its code.
-interface ChainItem { kind: SymbolKind; tag: string; code: string; slot: string }
+/** One device on a branch: its symbol, its tag, its code and its accessories. */
+interface ChainItem {
+  id: SymbolId;
+  tag: string;
+  code: string;
+  slot: string;
+  /** The rest of the parts in this slot — written, not drawn. */
+  accessories: string[];
+  eplan?: EplanSymbolInfo;
+}
 
 function chainFor(
   line: DeviceTableRow,
   templates: Map<string, TemplateItem>,
   order: string[],
   page: number,
+  symbols?: EplanSymbolMap,
 ): ChainItem[] {
   const template = line.templateId ? templates.get(line.templateId) : undefined;
   const parts = template ? templateParts(template) : {};
@@ -169,123 +301,77 @@ function chainFor(
     ...order.filter(p => parts[p]?.length),
     ...Object.keys(parts).filter(p => !order.includes(p)),
   ];
+
   const counters: Record<string, number> = {};
   const out: ChainItem[] = [];
+
   for (const slot of slots) {
-    for (const part of parts[slot]) {
-      const label = stripLocaleTags(part?.label) || SLOT_LETTER[slot] || 'A';
-      counters[label] = (counters[label] ?? 0) + 1;
-      out.push({
-        kind: SLOT_SYMBOL[slot] ?? 'box',
-        tag: `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`,
-        code: formatPartEntry(part),
-        slot,
-      });
-    }
+    const inSlot = parts[slot];
+    // The device of this slot is its first part; anything after it is an
+    // accessory of that device, not a device of its own.
+    const primary = inSlot[0];
+    const eplan = lookupSymbol(primary, symbols);
+    const fromFunction = kindFromFunction(eplan?.functionDefinition);
+    const described = partDescription(primary);
+    // The accessory test comes before the description: "auxiliary switch for
+    // circuit breaker" is an accessory of the breaker, not a second breaker.
+    const isAccessory = !fromFunction &&
+      ACCESSORY.test(`${eplan?.functionDefinition ?? ''} ${described}`);
+    const id: SymbolId = fromFunction ??
+      (isAccessory ? 'accessory' : (kindFromFunction(described) ?? SLOT_SYMBOL[slot] ?? 'accessory'));
+
+    const label = stripLocaleTags(primary?.label) || SLOT_LETTER[slot] || 'A';
+    counters[label] = (counters[label] ?? 0) + 1;
+
+    out.push({
+      id,
+      tag: `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`,
+      code: formatPartEntry(primary),
+      slot,
+      accessories: inSlot.slice(1).map(p => formatPartEntry(p)),
+      eplan,
+    });
   }
+
   return out;
-}
-
-// Symbols are drawn on the branch line, centred on x, occupying 34 px of it.
-// Symbols are drawn on the branch line, centred on x, occupying 34 units of it.
-// They are our own geometry, drawn to the IEC 60617 conventions — no symbol
-// library is copied — which is what lets the same shapes go out as DXF.
-function drawSymbol(d: Drawing, kind: SymbolKind, x: number, y: number): void {
-  const S = { layer: 'SYMBOL' as const, color: '#111' };
-  const line = (x1: number, y1: number, x2: number, y2: number, w = 1.3) =>
-    d.line(x1, y1, x2, y2, { ...S, width: w });
-  const box = (bx: number, by: number, bw: number, bh: number, w = 1.3, dash?: string) =>
-    d.rect(bx, by, bw, bh, { ...S, fill: '#fff', width: w, dash });
-
-  switch (kind) {
-    case 'breaker':
-      // IEC circuit breaker: a switch whose fixed contact carries the cross.
-      line(x, y, x, y + 8);
-      d.circle(x, y + 8, 1.8, { ...S, fill: '#111', width: 0 });
-      line(x, y + 8, x + 11, y + 26, 1.5);          // moving contact
-      line(x - 5, y + 21, x + 5, y + 31, 1.5);      // ×
-      line(x + 5, y + 21, x - 5, y + 31, 1.5);
-      line(x, y + 26, x, y + 34);
-      break;
-    case 'switch-fuse':
-      line(x, y, x, y + 6);
-      line(x, y + 6, x + 11, y + 22, 1.5);
-      box(x - 5, y + 22, 10, 12);
-      break;
-    case 'contactor':
-      // Switch stroke with the contactor's arc under the moving contact.
-      line(x, y, x, y + 6);
-      line(x, y + 6, x + 12, y + 22, 1.5);
-      d.arc(x, y + 22, 6, 0, 180, { ...S, width: 1.3 });
-      line(x, y + 26, x, y + 34);
-      break;
-    case 'overload':
-      box(x - 8, y + 6, 16, 22);
-      d.curve(x - 4, y + 11, x + 1, y + 17, x - 4, y + 23, { ...S, width: 1.3 });
-      line(x, y, x, y + 6); line(x, y + 28, x, y + 34);
-      break;
-    case 'ct':
-      line(x, y, x, y + 34);
-      d.arc(x + 2, y + 17, 7, 270, 450, { ...S, width: 1.3 });
-      break;
-    case 'pt':
-      line(x, y, x, y + 34);
-      d.circle(x + 9, y + 12, 6, { ...S, fill: '#fff', width: 1.2 });
-      d.circle(x + 9, y + 22, 6, { ...S, fill: '#fff', width: 1.2 });
-      break;
-    case 'meter':
-      line(x, y, x, y + 34);
-      d.circle(x + 12, y + 17, 8, { ...S, fill: '#fff', width: 1.2 });
-      break;
-    case 'relay':
-      line(x, y, x, y + 34);
-      box(x + 4, y + 7, 18, 20, 1.2);
-      break;
-    case 'arrester':
-      line(x, y, x, y + 6);
-      box(x - 7, y + 6, 14, 20);
-      line(x - 4, y + 11, x + 4, y + 21);
-      line(x, y + 26, x, y + 34);
-      break;
-    case 'fuse':
-      line(x, y, x, y + 8);
-      box(x - 6, y + 8, 12, 18);
-      line(x, y + 26, x, y + 34);
-      break;
-    default:
-      line(x, y, x, y + 34);
-      box(x + 4, y + 9, 16, 16, 1, '3 2');
-  }
 }
 
 export interface SingleLinePage {
   page: number;
   of: number;
-  /** The sheet as geometry — what `renderSvg` and `renderDxf` both read. */
-  drawing: Drawing;
   svg: string;
   feeders: number;
 }
 
 const GEOM = {
   margin: 30,
-  colWidth: 190,
-  headerHeight: 58,
   busY: 150,
-  chainStep: 44,
-  cardRows: 7,
-  cardRowHeight: 15,
+  cardRowHeight: 16,
 };
 
+// The rows of the block under the drawing, as the office's own sheets carry
+// them: one line per property, one column per feeder.
+const TABLE_ROWS: { label: string; value: (line: DeviceTableRow) => string }[] = [
+  { label: 'BUS', value: l => String(l.busSection || '—') },
+  { label: 'Line', value: l => String(l.feederNo || '—') },
+  { label: 'Type', value: l => String(l.templateName || l.wiringType || '—') },
+  { label: 'Power', value: l => (l.ratingPower ? `${l.ratingPower} kW` : '—') },
+  { label: 'Nominal Current', value: l => (l.flc ? `${l.flc} A` : '—') },
+  { label: 'Position', value: l => [l.size, l.moduleNo && `M${l.moduleNo}`, l.sfdHfd].filter(Boolean).join(' · ') || '—' },
+  { label: 'Tag', value: l => String(l.tag || '—') },
+  { label: 'Description', value: l => String(l.description || '—') },
+  { label: 'Cable', value: l => String(l.cableSize || '—') },
+];
+
 /**
- * The switchgear drawn as single-line sheets, SIMARIS-fashion: supply, busbar,
- * outgoing branches with their devices, and a data block under each branch.
- * `perPage` feeders to a sheet.
+ * The switchgear drawn as single-line sheets: supply, busbar, outgoing
+ * branches with their devices, and a data block under each branch.
  */
 export function buildSingleLinePages(
   data: ProjectData,
   equipment: Equipment,
   perPage = 8,
+  symbols?: EplanSymbolMap,
 ): SingleLinePage[] {
   const templates = new Map(
     [...(data.templates?.[equipment.type] ?? [])].map(t => [t.id, t as TemplateItem]));
@@ -298,8 +384,6 @@ export function buildSingleLinePages(
   const all = equipment.devices ?? [];
   const incomers = all.filter(isIncomer);
   const outgoing = all.filter(l => !isIncomer(l));
-  // A board drawn with no outgoing feeder at all would be an empty sheet; in
-  // that case the incomers are drawn as the branches instead.
   const branches = outgoing.length > 0 ? outgoing : all;
   const supply = outgoing.length > 0 ? incomers[0] : undefined;
 
@@ -307,21 +391,421 @@ export function buildSingleLinePages(
   for (let i = 0; i < branches.length; i += perPage) chunks.push(branches.slice(i, i + perPage));
   if (chunks.length === 0) chunks.push([]);
 
-  return chunks.map((chunk, index) => {
-    const drawing = drawSheet({
-      data, equipment, spec, templates, order,
+  return chunks.map((chunk, index) => ({
+    page: index + 1,
+    of: chunks.length,
+    feeders: chunk.length,
+    svg: drawSheet({
+      data, equipment, spec, templates, order, symbols,
       supply, lines: chunk,
       firstIndex: index * perPage,
       page: index + 1, of: chunks.length,
+    }),
+  }));
+}
+
+// A device is drawn with the symbol exported from EPLAN when the pack has one,
+// and with the library's IEC symbol otherwise.
+function drawDevice(item: ChainItem, x: number, y: number): string {
+  const url = item.eplan?.packUrl;
+  if (url) {
+    const { w, h, dx } = overrideBox({
+      url,
+      width: item.eplan?.packWidth,
+      height: item.eplan?.packHeight,
+      pinX: item.eplan?.packPinX,
     });
-    return {
-      page: index + 1,
-      of: chunks.length,
-      feeders: chunk.length,
-      drawing,
-      svg: renderSvg(drawing),
-    };
+    return `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + CELL}" stroke="#111" stroke-width="0.8"/>` +
+      `<image href="${esc(url)}" x="${x + dx}" y="${y}" width="${w}" height="${h}" ` +
+      `preserveAspectRatio="xMidYMid meet"><title>${esc(item.eplan?.symbol || '')}</title></image>`;
+  }
+  return drawIecSymbol(item.id, x, y);
+}
+
+// Where the text beside a device starts: clear of a symbol exported from
+// EPLAN (they are drawn 36 wide) or of the library symbol's own box.
+function labelOffset(item: ChainItem): number {
+  if (item.eplan?.packUrl) {
+    const { w, dx } = overrideBox({
+      url: item.eplan.packUrl,
+      width: item.eplan.packWidth, height: item.eplan.packHeight, pinX: item.eplan.packPinX,
+    });
+    return Math.max(24, w + dx + 6);
+  }
+  return symbolRight(item.id) + 6;
+}
+
+// How much room a device needs down the line: its own cell, and enough for the
+// accessory lines written beside it, so one device's text never runs into the
+// next device's tag.
+function stepFor(item: ChainItem): number {
+  const lines = Math.min(item.accessories.length, 3);
+  return Math.max(symbolHeight(item.id), CELL, 26 + lines * 9);
+}
+
+// ── The order of a cell, and what hangs off it ──────────────────────────────
+//
+// An MV cell is drawn in one order, the order the office draws it in:
+//
+//   1. the main switch      — the disconnector, the vacuum breaker (fixed or
+//                             withdrawable), or the vacuum contactor with its
+//                             fuse
+//   2. the earth switch     — beside the line, down to earth, interlocked with
+//                             the magnet under it
+//   3. the current transformer, in series with the switch — one secondary out
+//      of it per core, into the test block
+//   4. the capacitive voltage divider, beside the line to earth
+//   5. the surge arrester, beside the line to earth
+//   6. the core-balance CT, in series, out to the relay
+//
+// and the secondary side of it: the CT and the core-balance CT both come out
+// through the test block (XD) into the protection relay, and the alarm window
+// hangs on the relay.
+//
+// So every device on a feeder is one of three things, and the drawing keeps
+// them apart:
+//
+//   series      the current runs through it — it sits on the line
+//   shunt       it works between the line and earth — it sits beside the line
+//               with the earth under it
+//   instrument  it works off a transformer — it sits in the secondary column
+//               to the right, on the connection from what feeds it
+
+// The place a device takes in the power path, whatever order the template
+// filed it under.
+const POWER_RANK: Partial<Record<SymbolId, number>> = {
+  'bus-duct': 4, incoming: 4, ats: 8,
+  disconnector: 10, 'switch-disconnector': 12, 'withdrawable-cb': 18,
+  vcb: 20, 'vcb-racking': 20, 'circuit-breaker': 22, mcb: 24,
+  'vacuum-contactor-fuse': 26, 'hrc-fuse': 28, fuse: 28, 'switch-fuse': 28,
+  contactor: 30, 'motor-starter': 31, 'thermal-overload': 34,
+  drive: 36, 'soft-starter': 36, 'key-interlock': 42, 'mechanical-interlock': 42,
+  accessory: 44, link: 44,
+  'current-transformer': 50, 'voltage-transformer': 52, transformer: 54,
+  'core-balance-ct': 70, capacitor: 74, 'capacitor-delta': 74,
+};
+const powerRank = (id: SymbolId) => POWER_RANK[id] ?? 45;
+
+// The devices that work between the line and earth: they hang beside the line
+// with the earth under them, never in the power path.
+const SHUNT_RANK: Partial<Record<SymbolId, number>> = {
+  'earthing-switch': 40, magnet: 41,
+  'capacitive-divider': 60, 'surge-arrester': 65, 'surge-limiter': 66,
+};
+const isShunt = (id: SymbolId) => SHUNT_RANK[id] != null;
+
+// The order the instruments hang down the secondary column: the test block
+// first — everything reaches the relay through it — then the current
+// instruments, the relays, the voltage instruments, and the alarm window on
+// the end of the relay.
+const INSTRUMENT_RANK: Partial<Record<SymbolId, number>> = {
+  'test-block': 0,
+  ammeter: 1, 'ampere-selector': 2, multimeter: 3, 'watt-meter': 4, 'var-meter': 5,
+  'power-factor-meter': 6, 'kwh-meter': 7, 'kvarh-meter': 8, transducer: 9,
+  'protection-relay': 11, 'earth-fault-relay': 12,
+  voltmeter: 13, 'voltage-selector': 14, 'frequency-meter': 15, 'hour-meter': 16,
+  'alarm-annunciator': 17, lamp: 18, ptc: 19, lcs: 20,
+};
+const isInstrument = (id: SymbolId) => INSTRUMENT_RANK[id] != null;
+
+/** How many cores a transformer has: `300/5A x3`, `3 core`, `3C`. */
+export function coreCount(item: ChainItem): number {
+  const text_ = `${item.code} ${item.accessories.join(' ')}`;
+  const m = /x\s*([1-9])\b/i.exec(text_) ?? /\b([1-9])\s*(?:core|c)\b/i.exec(text_);
+  return m ? Number(m[1]) : 1;
+}
+
+interface Branch {
+  /** The devices the current runs through, in order down the line. */
+  series: ChainItem[];
+  /** The devices between the line and earth, beside it. */
+  shunts: ChainItem[];
+  /** For each shunt, the series device it hangs below (an index into
+   *  `series`), or -1 for the top of the branch. */
+  shuntAfter: number[];
+  /** The instruments in the secondary column, in the order they hang down. */
+  instruments: ChainItem[];
+  /** For each instrument, the series device that feeds it (an index into
+   *  `series`), or null when nothing on this line does — control wiring, drawn
+   *  as the legend draws it, with a dashed link. */
+  fedBy: (number | null)[];
+  /** A second transformer the instrument also works off: the core-balance CT
+   *  comes into the test block beside the CT, so both reach the relay through
+   *  it — and where there is no test block, straight into the relay. */
+  alsoFed: (number | null)[];
+}
+
+function splitBranch(chain: ChainItem[]): Branch {
+  // The power path, in the order a cell is drawn rather than the order the
+  // template filed its slots.
+  const series = chain.filter(i => !isInstrument(i.id) && !isShunt(i.id))
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => powerRank(a.item.id) - powerRank(b.item.id) || a.index - b.index)
+    .map(e => e.item);
+
+  const shunts = chain.filter(i => isShunt(i.id))
+    .sort((a, b) => (SHUNT_RANK[a.id] ?? 99) - (SHUNT_RANK[b.id] ?? 99));
+  // A shunt hangs below the last device in the path it comes after.
+  const shuntAfter = shunts.map(s => {
+    const rank = SHUNT_RANK[s.id] ?? 99;
+    let after = -1;
+    series.forEach((item, index) => { if (powerRank(item.id) <= rank) after = index; });
+    return after;
   });
+
+  const instruments = chain.filter(i => isInstrument(i.id))
+    .sort((a, b) => (INSTRUMENT_RANK[a.id] ?? 99) - (INSTRUMENT_RANK[b.id] ?? 99));
+
+  const at = (id: SymbolId) => series.findIndex(s => s.id === id);
+  const ct = at('current-transformer');
+  const cbct = at('core-balance-ct');
+  const vt = at('voltage-transformer');
+  const any = [ct, cbct, vt].find(n => n >= 0) ?? -1;
+  const xd = instruments.findIndex(i => i.id === 'test-block');
+
+  const fedBy = instruments.map(item => {
+    let source: number;
+    // With a test block on the feeder everything reaches the relay through it,
+    // so the whole column hangs on the one connection out of the CT.
+    if (xd >= 0) source = ct >= 0 ? ct : (cbct >= 0 ? cbct : vt);
+    else if (item.id === 'earth-fault-relay') source = cbct >= 0 ? cbct : ct;
+    else if (item.id === 'voltmeter' || item.id === 'voltage-selector' || item.id === 'frequency-meter')
+      source = vt >= 0 ? vt : ct;
+    else source = ct >= 0 ? ct : (cbct >= 0 ? cbct : vt);
+    if (source < 0) source = any;
+    return source >= 0 ? source : null;
+  });
+
+  // The core-balance CT's own connection: into the test block when there is
+  // one — that is how it reaches the relay — and into the relay when there is
+  // not.
+  const link = xd >= 0 ? xd : instruments.findIndex(i => i.id === 'protection-relay');
+  const alsoFed = instruments.map((_, k) =>
+    k === link && cbct >= 0 && fedBy[k] !== cbct ? cbct : null);
+
+  return { series, shunts, shuntAfter, instruments, fedBy, alsoFed };
+}
+
+// ── Where everything on a branch sits ───────────────────────────────────────
+//
+// The instruments hang off the line in groups — one group per transformer that
+// feeds them — and a group starts level with its own transformer, so the
+// connection runs straight out of it into the instruments it feeds and no
+// group is left pointing at another's.
+interface InstrumentGroup {
+  /** The series device feeding this group, or null for control wiring. */
+  source: number | null;
+  /** Indices into `branch.instruments`, in the order they hang down. */
+  items: number[];
+  /** Where each of them sits. */
+  ys: number[];
+}
+
+interface BranchLayout {
+  /** Where each device in the power path sits. */
+  ys: number[];
+  /** Where the power path leaves the branch. */
+  seriesBottom: number;
+  /** Where each shunt sits beside the line. */
+  shuntYs: number[];
+  groups: InstrumentGroup[];
+  /** The lowest point anything on the branch reaches. */
+  bottom: number;
+}
+
+// A shunt needs its own cell and the earth under it.
+const SHUNT_STEP = CELL + 16;
+
+function layoutBranch(branch: Branch, top: number): BranchLayout {
+  // The path and the shunts are laid out together, walking down the cell: a
+  // shunt takes its own place on the line, between the device it comes after
+  // and the one that follows, so the order down the drawing is the order of
+  // the cell — switch, earth switch, CT, divider, arrester, core balance.
+  const ys: number[] = [];
+  const shuntYs: number[] = new Array(branch.shunts.length).fill(top);
+  const step = (item: ChainItem) => (item.id === 'magnet' ? CELL + 4 : SHUNT_STEP);
+  let y = top;
+
+  const placeShunts = (after: number) => {
+    branch.shunts.forEach((item, k) => {
+      if (branch.shuntAfter[k] !== after) return;
+      shuntYs[k] = y;
+      y += step(item);
+    });
+  };
+
+  placeShunts(-1);
+  branch.series.forEach((item, index) => {
+    ys.push(y);
+    y += stepFor(item);
+    placeShunts(index);
+  });
+  const seriesBottom = y;
+
+  // One group per feeding device, in the order those devices sit on the line;
+  // control wiring (nothing feeds it) comes last.
+  const order: (number | null)[] = [];
+  branch.fedBy.forEach(source => { if (!order.includes(source)) order.push(source); });
+  order.sort((a, b) => (a == null ? 1e6 : ys[a]) - (b == null ? 1e6 : ys[b]));
+
+  const groups: InstrumentGroup[] = [];
+  let cursor = top;
+  for (const source of order) {
+    const items = branch.instruments
+      .map((_, k) => k).filter(k => branch.fedBy[k] === source);
+    if (items.length === 0) continue;
+    const start = Math.max(cursor, source == null ? top : ys[source]);
+    groups.push({ source, items, ys: items.map((_, k) => start + k * CELL) });
+    cursor = start + items.length * CELL;
+  }
+
+  return {
+    ys, seriesBottom, shuntYs, groups,
+    bottom: Math.max(seriesBottom, cursor),
+  };
+}
+
+/** How tall a branch is: the power path, or whatever hangs beside it. */
+const branchHeight = (b: Branch) => layoutBranch(b, 0).bottom;
+
+// How far the shunts and the instruments stand from the line: far enough that
+// the tags and codes written beside the devices never reach them.
+const SHUNT_DX = 56;
+const INSTR_DX = 120;
+
+const line = (x1: number, y1: number, x2: number, y2: number, w = 1.3, dash = '') =>
+  `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#111" stroke-width="${w}"${
+    dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
+
+/** The earth under a shunt. */
+const earth = (x: number, y: number) => [
+  line(x, y - 6, x, y),
+  line(x - 7, y, x + 7, y, 1.5),
+  line(x - 4.5, y + 3, x + 4.5, y + 3, 1.2),
+  line(x - 2, y + 6, x + 2, y + 6, 1.2),
+].join('');
+
+// The tag in black and the part code in blue, with the accessories under them:
+// the office writes the codes in colour beside the symbol, and it keeps the
+// two apart at a glance.
+function deviceText(item: ChainItem, tx: number, y: number, codeChars = 17, anchor = 'start'): string {
+  const a = anchor === 'start' ? '' : ` text-anchor="${anchor}"`;
+  const out = [
+    `<text x="${tx}" y="${y}" font-size="9" font-weight="600" fill="#111"${a}>${esc(item.tag)}</text>`,
+    `<text x="${tx}" y="${y + 11}" font-size="8.5" fill="#1d4ed8"${a}><title>${esc(item.code)}</title>${
+      esc(clip(item.code, codeChars))}</text>`,
+  ];
+  item.accessories.slice(0, 2).forEach((ac, ai) => {
+    out.push(`<text x="${tx}" y="${y + 21 + ai * 9}" font-size="7.5" fill="#6b7280"${a}><title>${
+      esc(ac)}</title>+ ${esc(clip(ac, codeChars))}</text>`);
+  });
+  if (item.accessories.length > 2) {
+    out.push(`<text x="${tx}" y="${y + 39}" font-size="7.5" fill="#6b7280"${a}>+ ${
+      item.accessories.length - 2} more</text>`);
+  }
+  return out.join('');
+}
+
+/**
+ * One branch: the power path down the line with its devices, the shunts
+ * beside it down to earth, and the instruments in the secondary column, each
+ * joined to what feeds it.
+ *
+ * Returns the drawing and the y the power path leaves at, so the caller can
+ * run the line on to the load.
+ */
+function drawBranch(branch: Branch, x: number, top: number): { svg: string; bottom: number } {
+  const out: string[] = [];
+  const ix = x + INSTR_DX;
+  const sx = x - SHUNT_DX;
+  const { ys, seriesBottom, shuntYs, groups } = layoutBranch(branch, top);
+
+  // A device whose connection leaves at the middle of its cell has its own
+  // text written above it, so the connection never runs through the text.
+  const feeds = new Set<number>();
+  for (const g of groups) if (g.source != null) feeds.add(g.source);
+  branch.alsoFed.forEach(s => { if (s != null) feeds.add(s); });
+  // With no transformer on the line, control wiring leaves from the first
+  // device, so that one's text moves up too.
+  const controlFrom = groups.some(g => g.source == null) && branch.series.length > 0 ? 0 : null;
+  if (controlFrom != null) feeds.add(controlFrom);
+
+  // The power path: the line first, so the white boxes of the symbols sit on
+  // top of it.
+  if (branch.series.length > 0) out.push(line(x, top, x, seriesBottom));
+  branch.series.forEach((item, index) => {
+    out.push(drawDevice(item, x, ys[index]));
+    out.push(deviceText(item, x + Math.max(40, labelOffset(item)),
+      ys[index] + (feeds.has(index) ? 2 : 14), 15));
+  });
+
+  // The shunts: beside the line, down to earth. The magnet is the exception —
+  // it is what the earth switch is interlocked with, so it hangs under the
+  // earth switch on the dashed link instead of on an earth of its own.
+  branch.shunts.forEach((item, k) => {
+    const y = shuntYs[k];
+    if (item.id === 'magnet' && k > 0 && branch.shunts[k - 1].id === 'earthing-switch') {
+      out.push(line(sx, shuntYs[k - 1] + CELL, sx, y, 1, '4 3'));
+    } else {
+      out.push(line(sx, y, x, y, 1.2));
+      out.push(`<circle cx="${x}" cy="${y}" r="2.4" fill="#111"/>`);
+    }
+    out.push(drawDevice(item, sx, y));
+    if (item.id !== 'magnet' && item.id !== 'earthing-switch') out.push(earth(sx, y + CELL + 8));
+    out.push(deviceText(item, sx - 24, y + 14, 11, 'end'));
+  });
+
+  // The instruments beside the line, group by group: the transformer's
+  // connection out to the column, and the instruments strung on it.
+  for (const group of groups) {
+    const first = group.ys[0];
+    const last = group.ys[group.ys.length - 1] + CELL;
+    const ty = group.source == null
+      ? (controlFrom == null ? first + CELL / 2 : ys[controlFrom] + CELL / 2)
+      : ys[group.source] + CELL / 2;
+
+    out.push(line(ix, Math.min(first, ty), ix, Math.max(last, ty)));
+    out.push(secondary(x, ty, ix, group.source == null ? null : branch.series[group.source]));
+
+    group.items.forEach((k, n) => {
+      const item = branch.instruments[k];
+      out.push(drawDevice(item, ix, group.ys[n]));
+      out.push(deviceText(item, ix + Math.max(34, labelOffset(item)), group.ys[n] + 17, 14));
+
+      // The second transformer feeding this instrument — the core-balance CT
+      // into the test block — comes in on its own elbow beside the column, so
+      // the two connections stay apart and each one is followed by eye.
+      const also = branch.alsoFed[k];
+      if (also != null) {
+        const ay = ys[also] + CELL / 2;
+        const my = group.ys[n] + CELL - 8;
+        const ex = ix - 12;
+        out.push(secondary(x, ay, ex, branch.series[also]));
+        out.push(line(ex, ay, ex, my, 1.1));
+        out.push(line(ex, my, ix, my, 1.1));
+        out.push(`<circle cx="${ix}" cy="${my}" r="2.4" fill="#111"/>`);
+      }
+    });
+  }
+
+  return { svg: out.join('\n'), bottom: seriesBottom };
+}
+
+/**
+ * A transformer's secondary out to the column: one line per core, because the
+ * cell needs one output per core of the CT — and a dashed control line where
+ * no transformer feeds the instrument at all.
+ */
+function secondary(x: number, y: number, to: number, source: ChainItem | null): string {
+  if (!source) return line(x + 8, y, to, y, 1, '4 3');
+  const cores = Math.min(coreCount(source), 4);
+  const out: string[] = [];
+  for (let c = 0; c < cores; c++) {
+    const cy = y + (c - (cores - 1) / 2) * 3.4;
+    out.push(line(x + 8, cy, to, cy, 1));
+  }
+  out.push(`<circle cx="${to}" cy="${y}" r="2.4" fill="#111"/>`);
+  return out.join('');
 }
 
 function drawSheet(o: {
@@ -330,150 +814,161 @@ function drawSheet(o: {
   spec: any;
   templates: Map<string, TemplateItem>;
   order: string[];
+  symbols?: EplanSymbolMap;
   supply?: DeviceTableRow;
   lines: DeviceTableRow[];
   firstIndex: number;
   page: number;
   of: number;
-}): Drawing {
-  const { margin, colWidth, chainStep, cardRows, cardRowHeight } = GEOM;
+}): string {
+  const { margin, cardRowHeight } = GEOM;
+
+  const branches = o.lines.map((line_, i) =>
+    splitBranch(chainFor(line_, o.templates, o.order, o.firstIndex + i + 1, o.symbols)));
+  const supplyAll = o.supply
+    ? splitBranch(chainFor(o.supply, o.templates, o.order, 0, o.symbols))
+    : null;
+  // The incoming column shows the head of its chain; the whole of it belongs
+  // to the incomer's own sheet, not to this one.
+  const supplyBranch: Branch | null = supplyAll && {
+    series: supplyAll.series.slice(0, 3),
+    shunts: supplyAll.shunts.slice(0, 2),
+    shuntAfter: supplyAll.shuntAfter.slice(0, 2).map(a => (a < 3 ? a : -1)),
+    instruments: supplyAll.instruments.slice(0, 3),
+    fedBy: supplyAll.fedBy.slice(0, 3).map(s => (s != null && s < 3 ? s : null)),
+    alsoFed: supplyAll.alsoFed.slice(0, 3).map(s => (s != null && s < 3 ? s : null)),
+  };
+
+  // A feeder with instruments beside it needs the room for them; one without
+  // stays narrow, so a board of plain feeders still fits the sheet.
+  const all = [...branches, ...(supplyBranch ? [supplyBranch] : [])];
+  const wide = all.some(b => b.instruments.length > 0);
+  const hasShunt = all.some(b => b.shunts.length > 0);
+  // A cell with something beside the line needs the room for it: the shunts
+  // stand to the left of the line with their tags, the instruments to the
+  // right with theirs.
+  // A symbol from the pack can reach out to the left — a breaker drawn with
+  // its racking does — so the line is set far enough in for the widest of them.
+  const reach = Math.max(...all.flatMap(b =>
+    [...b.series, ...b.instruments].map(i => symbolLeft(i.id))), 16);
+  const branchDx = Math.max(hasShunt ? 130 : 34, reach + 10);
+  const colWidth = Math.max(200, hasShunt || wide ? branchDx + INSTR_DX + 104 : 0);
+
   const supplyWidth = o.supply ? colWidth : 90;
   const bodyLeft = margin + supplyWidth;
+  const supplyX = margin + branchDx;
 
-  const chains = o.lines.map((line, i) =>
-    chainFor(line, o.templates, o.order, o.firstIndex + i + 1));
-  const supplyChain = o.supply ? chainFor(o.supply, o.templates, o.order, 0) : [];
-  const supplyShown = supplyChain.slice(0, 3);
-  const deepest = Math.max(1, ...chains.map(c => c.length));
-  // The busbar sits below whatever the incomer needs, never above its own
-  // minimum — so the supply never runs into it.
-  const busY = Math.max(GEOM.busY, 104 + supplyShown.length * 34 + 26);
+  const supplyTop = 104;
+  const busY = Math.max(GEOM.busY,
+    supplyTop + (supplyBranch ? branchHeight(supplyBranch) : 0) + 26);
 
   const chainTop = busY + 26;
-  const loadY = chainTop + deepest * chainStep + 26;
-  const cardY = loadY + 44;
-  const cardHeight = cardRows * cardRowHeight + 6;
-  const width = Math.max(900, bodyLeft + Math.max(1, o.lines.length) * colWidth + margin);
-  const height = cardY + cardHeight + 46;
+  const body = Math.max(CELL, ...branches.map(branchHeight));
+  const loadY = chainTop + body + 20;
+  const tableTop = loadY + CELL + 36;
+  const tableHeight = TABLE_ROWS.length * cardRowHeight;
+  // The sheet is exactly as wide as the feeders on it: busbar and the block
+  // underneath both end at the last column, never in mid-air.
+  const contentRight = bodyLeft + Math.max(1, o.lines.length) * colWidth;
+  const width = contentRight + margin;
+  const height = tableTop + tableHeight + 40;
 
-  const d = new Drawing(width, height,
-    `${text(o.equipment.name)} — single line ${o.page}/${o.of}`);
+  const out: string[] = [];
+  // Sized by its viewBox and left to fit whatever it is put in, so a wide
+  // sheet is scaled down to the screen instead of running off the side of it.
+  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="100%" ` +
+    `preserveAspectRatio="xMidYMin meet" style="max-width:${width}px;height:auto;display:block" ` +
+    `font-family="Segoe UI, Arial, sans-serif">`);
+  out.push(`<rect width="${width}" height="${height}" fill="#fff"/>`);
 
   // ── Title band ────────────────────────────────────────────────────────
-  d.line(margin, 52, width - margin, 52, { layer: 'FRAME', color: '#111', width: 1.6 });
-  d.text(margin, 24, text(o.equipment.name), 13.5, { layer: 'TITLE', color: '#111', bold: true });
-  d.text(margin, 42, [
+  out.push(`<line x1="${margin}" y1="52" x2="${width - margin}" y2="52" stroke="#111" stroke-width="1.6"/>`);
+  out.push(`<text x="${margin}" y="24" font-size="13.5" font-weight="700" fill="#111">${esc(o.equipment.name)}</text>`);
+  out.push(`<text x="${margin}" y="42" font-size="10" fill="#444">${esc([
     o.data.projectName,
     o.data.projectNumber && `OE ${o.data.projectNumber}`,
     o.equipment.type,
     o.equipment.description,
-  ].filter(Boolean).join('  ·  '), 10, { layer: 'TITLE', color: '#444' });
-  d.text(width - margin, 24, 'Single line diagram', 10,
-    { layer: 'TITLE', color: '#444', anchor: 'end' });
-  d.text(width - margin, 42, `${new Date().toLocaleDateString()}   sheet ${o.page}/${o.of}`, 10,
-    { layer: 'TITLE', color: '#444', anchor: 'end' });
+  ].filter(Boolean).join('  ·  '))}</text>`);
+  out.push(`<text x="${width - margin}" y="24" font-size="10" text-anchor="end" fill="#444">Single line diagram (SLD)</text>`);
+  out.push(`<text x="${width - margin}" y="42" font-size="10" text-anchor="end" fill="#444">${
+    esc(`${new Date().toLocaleDateString()}   sheet ${o.page}/${o.of}`)}</text>`);
 
-  // ── Supply ────────────────────────────────────────────────────────────
-  const supplyX = margin + supplyWidth / 2;
-  if (o.supply) {
-    d.text(supplyX, 82, clip(String(o.supply.feederNo || 'INCOMING'), 22), 10,
-      { layer: 'TEXT', color: '#111', anchor: 'middle', bold: true });
-    d.text(supplyX, 96, clip(String(o.supply.description || ''), 26), 9,
-      { layer: 'TEXT', color: '#555', anchor: 'middle' });
-    // The incomer's own devices, drawn compactly above the busbar.
-    let y = 104;
-    for (const item of supplyShown) {
-      drawSymbol(d, item.kind, supplyX, y);
-      d.text(supplyX + 26, y + 20, clip(item.code, 18), 8.5, { layer: 'TEXT', color: '#111' });
-      y += 34;
-    }
-    d.line(supplyX, y, supplyX, busY, { layer: 'WIRE', color: '#111', width: 1.4 });
-  } else {
-    // No incomer on this board: the busbar is simply fed from elsewhere.
-    d.line(supplyX, 96, supplyX, busY, { layer: 'WIRE', color: '#111', width: 1.4 });
-    d.poly([[supplyX - 7, 96], [supplyX, 84], [supplyX + 7, 96]],
-      { layer: 'WIRE', fill: '#111', width: 0, close: true });
-    d.text(supplyX, 78, 'supply', 9, { layer: 'TEXT', color: '#555', anchor: 'middle' });
-  }
-
-  // ── Busbar ────────────────────────────────────────────────────────────
-  d.line(margin, busY, width - margin, busY, { layer: 'BUS', color: '#111', width: 5 });
-  const busText = [
+  // ── The busbar, labelled the way the office labels it ────────────────
+  const busLabel = [
+    `BUS ${o.lines[0]?.busSection || 'A'}`,
+    o.spec.serviceVoltage || o.spec.ratedInsulationVoltage,
     o.spec.mainBusbarConfiguration,
     o.spec.mainBusbarRatedCurrent && `${o.spec.mainBusbarRatedCurrent} A`,
-    o.spec.ratedShortTimeWithstandCurrent && `Icw ${o.spec.ratedShortTimeWithstandCurrent} kA`,
-    o.spec.mainBusbarSize,
-  ].filter(Boolean).join('  ·  ');
-  if (busText) {
-    // Right of the sheet, clear of the supply column.
-    d.text(width - margin, busY - 10, busText, 9.5,
-      { layer: 'TEXT', color: '#333', anchor: 'end' });
+    o.spec.ratedShortTimeWithstandCurrent && `${o.spec.ratedShortTimeWithstandCurrent} kA / 1 Sec`,
+  ].filter(Boolean).join(', ');
+  // Written above the bar and clear of the incoming column, so the label never
+  // runs across the supply drop.
+  out.push(`<text x="${bodyLeft + 4}" y="${busY - 9}" font-size="9.5" font-weight="600" fill="#111">${esc(busLabel)}</text>`);
+  out.push(`<line x1="${margin}" y1="${busY}" x2="${contentRight}" y2="${busY}" stroke="#111" stroke-width="4.5"/>`);
+
+  // ── The incoming column ───────────────────────────────────────────────
+  if (o.supply && supplyBranch) {
+    out.push(`<text x="${supplyX}" y="80" font-size="10" font-weight="700" fill="#111">${
+      esc(clip(String(o.supply.feederNo || 'INCOMING'), 22))}</text>`);
+    out.push(`<text x="${supplyX}" y="94" font-size="9" fill="#555">${
+      esc(clip(String(o.supply.description || ''), 30))}</text>`);
+    const drawn = drawBranch(supplyBranch, supplyX, supplyTop);
+    out.push(drawn.svg);
+    out.push(`<line x1="${supplyX}" y1="${drawn.bottom}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
+  } else {
+    out.push(drawIecSymbol('incoming', supplyX, 92));
+    out.push(`<line x1="${supplyX}" y1="132" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
+    out.push(`<text x="${supplyX}" y="84" font-size="9" text-anchor="middle" fill="#555">supply</text>`);
   }
 
-  // ── Outgoing branches ─────────────────────────────────────────────────
-  o.lines.forEach((line, i) => {
-    const x = bodyLeft + i * colWidth + colWidth / 2;
-    const chain = chains[i];
+  // ── Outgoing feeders ──────────────────────────────────────────────────
+  o.lines.forEach((line_, i) => {
+    const x = bodyLeft + i * colWidth + branchDx;
+    out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
+    out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
 
-    d.line(x, busY, x, chainTop, { layer: 'WIRE', color: '#111', width: 1.3 });
-    d.circle(x, busY, 3, { layer: 'WIRE', color: '#111', fill: '#111', width: 0 });
+    const drawn = drawBranch(branches[i], x, chainTop);
+    out.push(drawn.svg);
+    out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
+    out.push(drawIecSymbol(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
+  });
 
-    let y = chainTop;
-    for (const item of chain) {
-      drawSymbol(d, item.kind, x, y);
-      d.text(x + 26, y + 14, item.tag, 9, { layer: 'TAG', color: '#111', bold: true });
-      d.text(x + 26, y + 26, clip(item.code, 17), 8.5,
-        { layer: 'TEXT', color: '#444', title: item.code });
-      y += chainStep;
-    }
-    d.line(x, y, x, loadY, { layer: 'WIRE', color: '#111', width: 1.3 });
-
-    // The load at the foot: a motor when the line says so, an outgoing arrow
-    // otherwise.
-    if (isMotorLoad(line)) {
-      d.circle(x, loadY + 14, 13, { layer: 'LOAD', color: '#111', fill: '#fff', width: 1.4 });
-      d.text(x, loadY + 18, 'M', 11, { layer: 'LOAD', color: '#111', anchor: 'middle' });
-    } else {
-      d.poly([[x - 7, loadY + 6], [x, loadY + 20], [x + 7, loadY + 6]],
-        { layer: 'LOAD', fill: '#111', width: 0, close: true });
-    }
-
-    // ── Data block, the same rows on every branch so the sheet reads as a
-    //    table under the drawing.
-    const cx = bodyLeft + i * colWidth + 6;
-    const cw = colWidth - 12;
-    d.rect(cx, cardY, cw, cardHeight, { layer: 'TABLE', color: '#111', fill: '#fff', width: 1 });
-    const rows: [string, string][] = [
-      ['Feeder', String(line.feederNo || '—')],
-      ['Tag', String(line.tag || '—')],
-      ['Description', String(line.description || '—')],
-      ['Template', String(line.templateName || '—')],
-      ['Rating', [line.ratingPower && `${line.ratingPower} kW`, line.flc && `${line.flc} A`].filter(Boolean).join(' / ') || '—'],
-      ['Cable', String(line.cableSize || '—')],
-      ['Position', [line.busSection && `BUS ${line.busSection}`, line.size, line.moduleNo && `M${line.moduleNo}`].filter(Boolean).join(' · ') || '—'],
-    ];
-    rows.forEach(([label, value], r) => {
-      const ry = cardY + 3 + r * cardRowHeight;
-      if (r > 0) {
-        d.line(cx, ry, cx + cw, ry, { layer: 'TABLE', color: '#e5e7eb', width: 0.8 });
-      }
-      d.text(cx + 6, ry + 11, label, 8, { layer: 'TABLE', color: '#6b7280' });
-      d.text(cx + cw - 6, ry + 11, clip(value, 20), 8.5,
-        { layer: 'TEXT', color: '#111', anchor: 'end', title: value });
+  // ── The block under the drawing ───────────────────────────────────────
+  out.push(`<rect x="${margin}" y="${tableTop}" width="${contentRight - margin}" height="${tableHeight}" fill="none" stroke="#111" stroke-width="1"/>`);
+  TABLE_ROWS.forEach((row, r) => {
+    const ry = tableTop + r * cardRowHeight;
+    if (r > 0) out.push(`<line x1="${margin}" y1="${ry}" x2="${contentRight}" y2="${ry}" stroke="#c9ced6" stroke-width="0.7"/>`);
+    out.push(`<text x="${margin + 6}" y="${ry + 11}" font-size="8.5" font-weight="600" fill="#111">${esc(row.label)} :</text>`);
+    o.lines.forEach((line_, i) => {
+      const cx = bodyLeft + i * colWidth + colWidth / 2;
+      const value = row.value(line_);
+      out.push(`<text x="${cx}" y="${ry + 11}" font-size="8.5" text-anchor="middle" fill="#111">` +
+        `<title>${esc(value)}</title>${esc(clip(value, 30))}</text>`);
     });
+  });
+  // The column rules: the label column ends where the first feeder column
+  // begins, so every column below the drawing stands under its own feeder.
+  out.push(`<line x1="${bodyLeft}" y1="${tableTop}" x2="${bodyLeft}" y2="${tableTop + tableHeight}" stroke="#111" stroke-width="1"/>`);
+  o.lines.forEach((_, i) => {
+    if (i === 0) return;
+    const cx = bodyLeft + i * colWidth;
+    out.push(`<line x1="${cx}" y1="${tableTop}" x2="${cx}" y2="${tableTop + tableHeight}" stroke="#c9ced6" stroke-width="0.7"/>`);
   });
 
   if (o.lines.length === 0) {
-    d.text(bodyLeft + 20, chainTop + 30, 'No outgoing feeders on this switchgear.', 11,
-      { layer: 'TEXT', color: '#888' });
+    out.push(`<text x="${bodyLeft + 20}" y="${chainTop + 30}" font-size="11" fill="#888">No outgoing feeders on this switchgear.</text>`);
   }
 
-  return d;
+  out.push('</svg>');
+  return out.join('\n');
 }
 
 /** One switchgear's sheets, joined for preview or print. */
-export function buildSingleLineSvg(data: ProjectData, equipment: Equipment, perPage = 8): string {
-  return buildSingleLinePages(data, equipment, perPage).map(p => p.svg).join('\n');
+export function buildSingleLineSvg(
+  data: ProjectData, equipment: Equipment, perPage = 8, symbols?: EplanSymbolMap,
+): string {
+  return buildSingleLinePages(data, equipment, perPage, symbols).map(p => p.svg).join('\n');
 }
 
 /** A print-ready document: every switchgear, every sheet, one page each. */
@@ -481,9 +976,10 @@ export function buildSingleLineHtml(
   data: ProjectData,
   equipments: Equipment[],
   perPage = 8,
+  symbols?: EplanSymbolMap,
 ): string {
   const pages = equipments.flatMap(eq =>
-    buildSingleLinePages(data, eq, perPage).map(page => `
+    buildSingleLinePages(data, eq, perPage, symbols).map(page => `
     <section style="page-break-after:always;padding:6px 0">
       <div style="overflow-x:auto">${page.svg}</div>
     </section>`));
@@ -501,32 +997,19 @@ ${pages.join('')}
 </body></html>`;
 }
 
-/**
- * The switchgear as a DXF file — every sheet in one drawing, tiled left to
- * right, on the layers a drawing office expects (BUS, WIRE, SYMBOL, TAG…).
- *
- * This is the output for customers without EPLAN: DXF is Autodesk's published
- * interchange format, so the file opens and edits in essentially any CAD
- * package, and in EPLAN's own DXF import.
- */
-export function buildSingleLineDxf(
-  data: ProjectData,
-  equipment: Equipment,
-  perPage = 8,
-): string {
-  const pages = buildSingleLinePages(data, equipment, perPage);
-  const name = `${text(equipment.name)} — single line`;
-  const drawing = pages.length === 1
-    ? pages[0].drawing
-    : mergeDrawings(pages.map(p => p.drawing), 60, name);
-
-  return renderDxf(drawing, {
-    titleBlock: [
-      text(equipment.name) || 'SWITCHGEAR',
-      [text(data.projectName), text(data.projectNumber) && `OE ${text(data.projectNumber)}`]
-        .filter(Boolean).join('   ·   '),
-      `Single line diagram · ${equipment.type} · ${pages.length} sheet(s)`,
-      new Date().toLocaleDateString(),
-    ].filter(Boolean),
-  });
+/** The symbol library on its own sheet, for printing or checking. */
+export function buildSymbolLibraryHtml(): string {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>IEC single-line symbols</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#111;padding:16px}
+  @page{size:A3 landscape;margin:10mm}
+  @media print{.no-print{display:none}body{padding:0}}
+</style></head><body>
+<button class="no-print" onclick="window.print()" style="margin-bottom:10px;padding:8px 14px;background:#1d4ed8;color:#fff;border:0;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
+<h1 style="font-size:16px;margin-bottom:4px">IEC single-line symbols — علائم تک‌خطی</h1>
+<p style="font-size:11px;color:#555;margin-bottom:10px">The symbols this app draws on a single line. A symbol exported from EPLAN into the symbol pack replaces the one here.</p>
+${buildSymbolCatalogueSvg()}
+</body></html>`;
 }

@@ -173,11 +173,84 @@ The tools below cover the user stories in the spec:
 | `find_similar_templates`   | The recommender described in §2.3                                           |
 | `create_template`          | Creates a template at a given hierarchical path with given properties       |
 
+### The tab decides what a command means
+
+The snapshot sent with every turn names the tab the user is on and what
+that tab owns, and the system prompt puts it before anything else. An
+instruction with no other subject is read against that screen: on Project
+Definition "دما را ۵۰ کن" is `set_tech_setting general.designTemperature`;
+the same words on Device Selection are about the rows. Whatever the
+sentence names explicitly — a row number, an equipment, another tab — still
+wins over the tab.
+
+Without that rule the model reached for `bulk_update` for a temperature,
+found no column of that name, and the user was told "Equipment not found"
+about something that was never equipment.
+
+The heuristic fallback in `src/services/intentParser.ts` follows the same
+rule, so a command works the same way when the model returns prose instead
+of an envelope. Two things that parser has to get right, and used to get
+wrong: `\b` cannot bound a Persian word (it marks an ASCII word boundary, and
+Persian letters are not ASCII word characters), and `\d` does not match
+Persian digits — so every Persian command silently fell through. Terms are
+matched through `term()` and the prompt is normalised to ASCII digits first.
+
+### Nothing lands until an engineer says so
+
+With **Review** on — the default — a tool call that would change the
+project is not executed. It is staged into an approval card with one line
+per change and an **Apply** button, and an engineer ticks what should
+happen. Reads and navigation still run, so the answer above the card
+describes the project as it really is.
+
+`READ_ONLY_TOOLS` in `chatbotTools.ts` is what separates the two, and
+`describeToolCall()` turns a call into the line shown on the card. Turning
+Review off puts the assistant back to editing directly.
+
+Applying several changes at once runs them back to back, with no React
+render in between. Every tool therefore writes through
+`patchProjectData(prev => …)` rather than deriving its patch from the
+snapshot it was handed — otherwise the second change is computed from the
+project as it was before the first, and the last write wins over all of
+them.
+
 ### Safety
 
 Tool execution mutates the project. Every tool reports a one-line
 summary so the user sees what changed; the chatbot UI shows them inline
 so destructive edits aren't silent.
+
+### Which model answers
+
+The assistant runs on the VLM (Qwen2.5-VL) served OpenAI-compatibly on
+192.168.1.61. It is instruction-tuned and honours
+`response_format: json_object`, which the tool-call contract needs — a
+reasoning model narrates its thinking instead of answering in JSON, and the
+app is left with nothing to execute.
+
+`LOCAL_MODEL_URL` / `LOCAL_MODEL_NAME` in `.env` move it (compose passes
+both through, so a different host or port is a restart, not a rebuild), and
+the chat panel shows the model and host that answered the last turn —
+"the AI is not working" is usually "the AI is not the one you think it is".
+
+The **name** is not guessed. A vLLM server answers to whatever it was
+launched with — a repo path, a tag, a shortened alias — and a wrong guess is
+a 404 that reads like the whole assistant is down ("The model qwen2.5-vl-7b
+does not exist"). So the backend asks `GET /v1/models` and uses what the host
+actually serves: a configured `LOCAL_MODEL_NAME` wins when the server has it,
+otherwise the served model does. A 404 re-asks and retries once, and if the
+call still fails the error names every model the host does serve.
+
+### One line, several commands
+
+"سطح دریا 2000 و دما را بکن 50" is two instructions. Read as one sentence it
+became a single setting with the other one's number attached, so
+`intentParseAll` splits on "و" / "and" / commas and parses each clause, and a
+value is taken from the number that follows *its own* term. The split is only
+trusted when it yields more than one command, which keeps a value that
+contains "and" (a project name, say) intact. A clause that reads as a
+question is left alone entirely — answering it is the model's job, and acting
+on it would turn "what is the client?" into a client named "the client".
 
 ### Backend contract
 
