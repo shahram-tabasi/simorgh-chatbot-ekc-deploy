@@ -70,6 +70,8 @@ export type Shape =
   | ({ t: 'line'; x1: number; y1: number; x2: number; y2: number } & Pen)
   | ({ t: 'rect'; x: number; y: number; w: number; h: number } & Pen)
   | ({ t: 'circle'; cx: number; cy: number; r: number } & Pen)
+  /** SVG draws it directly; DXF R12 has no ellipse and walks it instead. */
+  | ({ t: 'ellipse'; cx: number; cy: number; rx: number; ry: number } & Pen)
   /** Angles in degrees, measured in sheet space (y down) — see `renderDxf`. */
   | ({ t: 'arc'; cx: number; cy: number; r: number; a0: number; a1: number } & Pen)
   /** Quadratic Bézier — CAD gets it flattened, SVG gets the curve. */
@@ -107,6 +109,10 @@ export class Drawing {
 
   circle(cx: number, cy: number, r: number, pen: Pen): this {
     return this.add({ t: 'circle', cx, cy, r, ...pen });
+  }
+
+  ellipse(cx: number, cy: number, rx: number, ry: number, pen: Pen): this {
+    return this.add({ t: 'ellipse', cx, cy, rx, ry, ...pen });
   }
 
   arc(cx: number, cy: number, r: number, a0: number, a1: number, pen: Pen): this {

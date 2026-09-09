@@ -155,6 +155,19 @@ function shapeToDxf(t: Tape, s: Shape, f: Frame, mode: 'escape' | 'raw') {
         .pair(40, s.r * f.s);
       break;
 
+    case 'ellipse': {
+      // R12 has no ELLIPSE entity, so it is walked. At 72 segments the flat
+      // side sits well inside the width of the line that draws it.
+      const STEPS = 72;
+      const pts: Pt[] = [];
+      for (let i = 0; i < STEPS; i++) {
+        const a = (i / STEPS) * Math.PI * 2;
+        pts.push([X(s.cx + s.rx * Math.cos(a)), Y(s.cy + s.ry * Math.sin(a))]);
+      }
+      polyline(t, s.layer, pts, true);
+      break;
+    }
+
     case 'arc':
       // Sheet angles run clockwise once y is flipped; DXF arcs run the other
       // way, so the ends swap and both are negated.
@@ -316,6 +329,7 @@ function shift(s: Shape, dx: number): Shape {
     case 'line':   return { ...s, x1: s.x1 + dx, x2: s.x2 + dx };
     case 'rect':   return { ...s, x: s.x + dx };
     case 'circle': return { ...s, cx: s.cx + dx };
+    case 'ellipse': return { ...s, cx: s.cx + dx };
     case 'arc':    return { ...s, cx: s.cx + dx };
     case 'curve':  return { ...s, x1: s.x1 + dx, cx: s.cx + dx, x2: s.x2 + dx };
     case 'poly':   return { ...s, pts: s.pts.map(p => [p[0] + dx, p[1]] as Pt) };

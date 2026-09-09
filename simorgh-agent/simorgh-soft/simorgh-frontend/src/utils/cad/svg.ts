@@ -43,6 +43,10 @@ function shapeToSvg(s: Shape): string {
       return `<circle cx="${n(s.cx)}" cy="${n(s.cy)}" r="${n(s.r)}" ` +
         `${paint(s, '#111')}${layer}/>`;
 
+    case 'ellipse':
+      return `<ellipse cx="${n(s.cx)}" cy="${n(s.cy)}" rx="${n(s.rx)}" ry="${n(s.ry)}" ` +
+        `${paint(s, '#111')}${layer}/>`;
+
     case 'arc': {
       const [x1, y1] = onArc(s.cx, s.cy, s.r, s.a0);
       const [x2, y2] = onArc(s.cx, s.cy, s.r, s.a1);

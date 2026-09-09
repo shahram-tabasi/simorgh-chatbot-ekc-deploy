@@ -20,7 +20,9 @@ import {
 const SYMBOL_IDS = new Map(Object.keys(IEC_SYMBOLS).map(id => [id.toLowerCase(), id as SymbolId]));
 import {
   LAYOUT_HEADERS, buildPanelLayout, buildLayoutRows, buildLayoutSvg, buildLayoutHtml,
+  buildLayoutDxf,
 } from '../../utils/panelLayout';
+import { sheetsToDxf } from '../../utils/cad/sheetDxf';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
 } from '../../utils/mechanicalItems';
@@ -31,6 +33,46 @@ import {
 // what leaves the app has been looked at first.
 
 type View = 'single-line' | 'layout' | 'mechanical' | 'symbols';
+
+// Anything unsafe in a file name, and the runs of spaces around it, collapse
+// to a single underscore — the same file has to survive Windows and Linux.
+const fileSafe = (s: string) =>
+  (s || 'project').replace(/[^\w.\-]+/g, '_').replace(/^_+|_+$/g, '') || 'project';
+
+function downloadText(filename: string, content: string, mime: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoked late: Safari reads the blob after the click returns.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
+ * The single line as CAD, one file per switchgear — the output for a customer
+ * who has no EPLAN. The downloads are spaced out so the browser does not treat
+ * the run as a pop-up storm.
+ */
+function exportSingleLineDxf(
+  data: ProjectData, equipments: Equipment[], perPage: number, symbols?: EplanSymbolMap,
+) {
+  equipments.forEach((eq, i) => {
+    const sheets = buildSingleLinePages(data, eq, perPage, symbols).map(page => page.svg);
+    const dxf = sheetsToDxf(sheets, [
+      eq.name || 'SWITCHGEAR',
+      [data.projectName, data.projectNumber && `OE ${data.projectNumber}`].filter(Boolean).join('   ·   '),
+      `Single line diagram · ${eq.type} · ${sheets.length} sheet(s)`,
+      new Date().toLocaleDateString(),
+    ].filter(Boolean), `${eq.name} single line`);
+    setTimeout(
+      () => downloadText(`${fileSafe(data.projectName)}_${fileSafe(eq.name)}_single_line.dxf`,
+        dxf, 'image/vnd.dxf'),
+      i * 250);
+  });
+}
 
 function openPrintable(html: string, what: string) {
   const w = window.open('', '_blank');
@@ -291,6 +333,13 @@ export const EplanixTab: React.FC = () => {
               >
                 EPLAN device list
               </Btn>
+              <Btn
+                onClick={() => exportSingleLineDxf(projectData, chosenWithLines, perPage, symbols)}
+                className="bg-teal-700 text-white hover:bg-teal-800"
+                disabled={chosenWithLines.length === 0}
+              >
+                DXF (CAD)
+              </Btn>
             </div>
           </div>
 
@@ -358,6 +407,16 @@ export const EplanixTab: React.FC = () => {
                 disabled={chosenWithLines.length === 0}
               >
                 Layout Excel
+              </Btn>
+              <Btn
+                onClick={() => downloadText(
+                  `${fileSafe(projectData.projectName)}_layout.dxf`,
+                  buildLayoutDxf(projectData, chosenWithLines.map(eq => buildPanelLayout(projectData, eq))),
+                  'image/vnd.dxf')}
+                className="bg-teal-700 text-white hover:bg-teal-800"
+                disabled={chosenWithLines.length === 0}
+              >
+                DXF (CAD)
               </Btn>
             </div>
           </div>
