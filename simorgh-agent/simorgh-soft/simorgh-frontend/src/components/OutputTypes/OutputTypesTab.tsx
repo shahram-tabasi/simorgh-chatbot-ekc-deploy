@@ -1076,15 +1076,15 @@ export const OutputTypesTab: React.FC = () => {
       })()}
 
       {/* The single line, the layout and the mechanical items live in their
-          own tab now — Eplanix — where each one is previewed before it is
+          own tab now — Simorgh Draw — where each one is previewed before it is
           downloaded. */}
       <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center gap-3 bg-blue-50/40">
-        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">EPLANIX</span>
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">SIMORGH DRAW</span>
         <p className="text-sm text-gray-700">
-          Single line, panel layout and mechanical items have moved to the <strong>Eplanix</strong> tab.
+          Single line, panel layout and mechanical items have moved to the <strong>Simorgh Draw</strong> tab.
         </p>
         <span className="text-sm text-gray-600 ml-auto" dir="rtl">
-          تک‌خطی، جانمایی و اقلام مکانیکال به تب «Eplanix» منتقل شد.
+          تک‌خطی، جانمایی و اقلام مکانیکال به تب «Simorgh Draw» منتقل شد.
         </span>
       </div>
 

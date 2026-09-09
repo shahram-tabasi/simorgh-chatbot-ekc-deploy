@@ -116,7 +116,7 @@ export const TpmsImportModal: React.FC<TpmsImportModalProps> = ({ onClose, onImp
             <div>
               <h3 className="font-semibold text-lg text-sky-900">Import from TPMS</h3>
               <p className="text-sm text-sky-800 mt-0.5">
-                The same switchgear data Eplanix reads — project, panel specification, feeder lines and their parts.
+                The same switchgear data Simorgh Draw reads — project, panel specification, feeder lines and their parts.
               </p>
             </div>
           </div>

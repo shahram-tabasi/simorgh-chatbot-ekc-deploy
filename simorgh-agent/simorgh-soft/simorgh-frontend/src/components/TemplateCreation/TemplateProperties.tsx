@@ -380,7 +380,7 @@ const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
                   
                   {/* Eplanix section with Order Number */}
                   <div className="mt-4 border-t pt-3">
-                    <div className="text-sm font-semibold text-gray-700 mb-2">Eplanix</div>
+                    <div className="text-sm font-semibold text-gray-700 mb-2">Order No.</div>
                     <DetailRow label="Order Number" value={selectedPart.OrderNumber} />
                     {/* Show Designation 3 if OrderNumber is empty, "-", or "_" */}
                     {(!selectedPart.OrderNumber || 
@@ -773,7 +773,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                 Priority
               </th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-32">
-                Eplanix
+                Order No.
               </th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-40">
                 Description
@@ -974,7 +974,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                                 : (part.fullData?.Designation3 || '')
                             }
                             readOnly
-                            title="Eplanix (Order Number or Designation 3)"
+                            title="Order No. (Order Number or Designation 3)"
                           />
                         </td>
                         {/* Description column from SQL Server */}

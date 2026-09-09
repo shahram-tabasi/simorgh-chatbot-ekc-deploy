@@ -440,7 +440,7 @@ const AboutDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
       </div>
       <div className="px-6 py-4 text-sm space-y-1.5">
         <p><span className="text-gray-500">Version:</span> <strong>{APP_VERSION}</strong></p>
-        <p><span className="text-gray-500">Modules:</span> Project Definition · Create Template · Device Selection · Output · Eplanix</p>
+        <p><span className="text-gray-500">Modules:</span> Project Definition · Create Template · Device Selection · Output · Simorgh Draw</p>
         <p><span className="text-gray-500">Guide:</span>{' '}
           <a
             className="text-blue-600 hover:underline"
@@ -718,7 +718,7 @@ const MainApp: React.FC = () => {
     },
     {
       id: 4,
-      title: `Eplanix`,
+      title: `Simorgh Draw`,
       component: <EplanixTab />
     }
   ];
@@ -1079,7 +1079,7 @@ const MainApp: React.FC = () => {
         </div>
       )}
 
-      {/* TPMS import — the switchgear data Eplanix reads from MySQL */}
+      {/* TPMS import — the switchgear data Simorgh Draw reads from MySQL */}
       {showTpmsImport && (
         <TpmsImportModal
           onClose={() => setShowTpmsImport(false)}

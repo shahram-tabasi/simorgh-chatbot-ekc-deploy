@@ -29,7 +29,7 @@ import { ProposalCard } from './ProposalCard';
 
 // Tab labels used both in the context snapshot we send to the model and in
 // the local tool runner that resolves `set_active_tab`.
-const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types', 'Eplanix'] as const;
+const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types', 'Simorgh Draw'] as const;
 
 // What each tab owns, in the words the model is given. Sent with every turn
 // so an unqualified instruction ("set the temperature to 50") is read against
@@ -46,7 +46,7 @@ const TAB_SCOPE: Record<number, string> = {
    + 'Tools: add_equipment, delete_equipment, select_equipment, add_row, update_row, '
    + 'bulk_update, delete_row, apply_excel, set_cell_color, set_row_color.',
   3: 'Output Types — the export formats. No editing tools; answer questions.',
-  4: 'Eplanix — single line, panel layout, mechanical items and Send to EPLAN. '
+  4: 'Simorgh Draw — single line, panel layout, mechanical items, CAD export and Send to EPLAN. '
    + 'Read-only here; the data comes from the other tabs.',
 };
 

@@ -41,7 +41,7 @@ export interface ChatToolContext {
   setSelectedEquipment: (eq: Equipment | null) => void;
   deleteTemplate: (id: string) => void;
   /** Switch between top-level tabs. Indices: 0 Project Definition,
-   *  1 Template Creation, 2 Device Selection, 3 Output Types, 4 Eplanix. */
+   *  1 Template Creation, 2 Device Selection, 3 Output Types, 4 Simorgh Draw. */
   setActiveTab?: (idx: number) => void;
   /** Save the project to the backend (Mongo). */
   saveProject?: () => Promise<void>;
@@ -411,21 +411,23 @@ const TAB_NAMES: Record<string, number> = {
   'template':           1, 'templates': 1, 'create-template': 1, 'create_template': 1, 'create template': 1,
   'devices':            2, 'device-selection': 2, 'device_selection': 2, 'device selection': 2,
   'output':             3, 'output-types': 3, 'output_types': 3, 'output types': 3, 'export': 3,
+  'simorgh draw':       4, 'simorgh-draw': 4, 'draw': 4, 'cad': 4,
+  // The tab was called Eplanix until it was named; both still resolve.
   'eplanix':            4, 'single-line': 4, 'single line': 4, 'layout': 4,
 };
 
 const set_active_tab: ChatTool = {
   name: 'set_active_tab',
-  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output" or "eplanix" (case-insensitive; spaces/hyphens/underscores are OK).',
+  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output" or "draw" (case-insensitive; spaces/hyphens/underscores are OK).',
   args: {
-    tab: { type: 'string', description: 'project | template | devices | output | eplanix', required: true },
+    tab: { type: 'string', description: 'project | template | devices | output | draw', required: true },
   },
   execute: ({ tab }, ctx) => {
     const idx = TAB_NAMES[String(tab || '').toLowerCase().trim()];
     if (idx === undefined) return { ok: false, summary: `Unknown tab "${tab}".` };
     if (!ctx.setActiveTab) return { ok: false, summary: 'Tab navigation not wired into this context.' };
     ctx.setActiveTab(idx);
-    const label = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types', 'Eplanix'][idx];
+    const label = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types', 'Simorgh Draw'][idx];
     return { ok: true, summary: `Switched to "${label}" tab.` };
   },
 };

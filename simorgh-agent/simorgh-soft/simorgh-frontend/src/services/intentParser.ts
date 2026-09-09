@@ -180,12 +180,15 @@ function valueAfterTerm(p: string, end: number): string {
 // ── Navigation ──────────────────────────────────────────────────────────────
 const GO_RE = term('go to', 'open', 'switch to', 'برو', 'برو به', 'باز کن', 'تب');
 const TAB_PATTERN =
-  /(project[\s-]?(?:definition)?|create[\s-]?template|template|device[\s-]?selection|devices?|output[\s-]?types?|output|export|eplanix|پروژه|تمپلیت|دستگاه|خروجی)/i;
+  /(project[\s-]?(?:definition)?|create[\s-]?template|template|device[\s-]?selection|devices?|output[\s-]?types?|output|export|simorgh[\s-]?draw|draw|eplanix|پروژه|تمپلیت|دستگاه|خروجی)/i;
 const TAB_TO_NAME: Record<string, string> = {
   project: 'project', 'project definition': 'project', 'پروژه': 'project',
   template: 'template', 'create template': 'template', 'تمپلیت': 'template',
   devices: 'devices', device: 'devices', 'device selection': 'devices', 'دستگاه': 'devices',
   output: 'output', 'output types': 'output', export: 'output', 'خروجی': 'output',
+  'simorgh draw': 'eplanix',
+  'simorgh-draw': 'eplanix',
+  draw: 'eplanix',
   eplanix: 'eplanix',
 };
 

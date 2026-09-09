@@ -605,7 +605,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
               <div className="flex items-center gap-2">
                 <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold">TPMS</span>
                 <span className="text-sm text-gray-700">
-                  The whole project is read from TPMS — the same data Eplanix shows. Nothing is written back.
+                  The whole project is read from TPMS — the same data Simorgh Draw shows. Nothing is written back.
                 </span>
               </div>
 
