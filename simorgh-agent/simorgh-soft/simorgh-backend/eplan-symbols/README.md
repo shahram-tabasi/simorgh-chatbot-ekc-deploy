@@ -1,7 +1,15 @@
 # EPLAN symbols — the symbol pack
 
-Whatever SVG is in this folder is drawn on the single line **instead of** the
-app's own symbol. Adding one is a copy and a refresh: no rebuild, no restart.
+Whatever SVG or DXF is in this folder is drawn on the single line **instead of**
+the app's own symbol. Adding one is a copy and a refresh: no rebuild, no
+restart.
+
+**SVG or DXF?** A DXF, when you have one. It goes on the sheet as geometry —
+lines and arcs — so it leaves again as geometry in the DXF and PDF the office
+sends out, editable at the other end and sharp at any plot scale. An SVG is
+placed as a picture; it looks right, but what leaves is a picture of a drawing.
+A DXF also carries its own terminals, so there is no `data-pin-x` to measure by
+hand. See *A DXF symbol* below.
 
 * on the server: `simorgh-agent/simorgh-soft/simorgh-backend/eplan-symbols/`
 * in the container: `/app/eplan-symbols` (read-only, `EPLAN_SYMBOL_DIR`,
@@ -49,7 +57,44 @@ list of names is at the bottom of this file.
 
 ---
 
-## What a symbol file has to look like
+## A DXF symbol
+
+Draw the device once in AutoCAD, BricsCAD, ZWCAD — anything that writes DXF —
+and save it here under the name of the symbol it replaces (`vcb.dxf`,
+`circuit-breaker.dxf`). Nothing else to set up: the app reads the file itself
+and takes the symbol's box, its conductor and how many cells it needs from the
+drawing.
+
+**Put the terminals on a `CONN` layer.** This is the one thing worth doing, and
+it is what makes the wiring automatic. A layer named `CONN`, `CONNECTION`,
+`PIN` or `TERMINAL` carrying a *point* at each terminal tells the app where the
+conductor enters and leaves; the symbol is then placed so the branch line runs
+through both, the way EPLAN does it. The points are read, not drawn — they
+never appear on the sheet.
+
+Without that layer the app puts the conductor through the middle of the
+drawing's outline. It draws correctly, and it is a guess; the Symbols tab says
+which of the two happened for every file.
+
+| | |
+|---|---|
+| entities read | `LINE`, `CIRCLE`, `ARC`, `ELLIPSE`, `LWPOLYLINE` and `POLYLINE` (bulges become real arcs), `TEXT`, `MTEXT`, `SOLID`, `POINT`, and blocks placed by `INSERT` with their own scale and rotation |
+| passed over | dimensions, attributes, viewports, and anything else — counted and reported in the Symbols tab, never dropped silently |
+| units | whatever the file uses; the app scales the symbol onto the branch |
+| cells | rounded from the terminal span ÷ width, 1–4, and adjustable in the Symbols tab |
+
+```bash
+cp CIRCUIT-BREAKER.dxf ~/simorgh-chatbot-ekc-deploy/simorgh-agent/simorgh-soft/simorgh-backend/eplan-symbols/circuit-breaker.dxf
+curl -s http://127.0.0.1/simorgh-design-suite/api/eplan-symbols/pack | jq
+# {"symbols":[{"name":"circuit-breaker","kind":"dxf"}, …]}
+```
+
+While a symbol is still being got right, **Simorgh Draw → Symbols** takes a DXF
+straight from the machine you are sitting at: it is read in that browser only,
+layered over this folder, and shows you the terminals it found. Once it is
+settled, copy the same file here so everyone has it.
+
+## What an SVG symbol file has to look like
 
 | | |
 |---|---|
@@ -161,7 +206,9 @@ EPLAN is sharper, and nothing else about the file changes.
 | it is squashed or stretched | `width`/`height` disagree with the drawing's proportions | let the `viewBox` set the proportions and drop `width`/`height` |
 | too short or too tall for the sheet | the app guessed the cells from the proportions | set `data-cells` (1–4) |
 | nothing changed | the browser cached the old sheet | Ctrl+Shift+R; check the file is listed by `/api/eplan-symbols/pack` |
-| the file is not listed at all | wrong folder, or not `.svg` | it must be `eplan-symbols/*.svg`; the name is the part before `.svg` |
+| the file is not listed at all | wrong folder, or not `.svg`/`.dxf` | it must be `eplan-symbols/*.svg` or `*.dxf`; the name is the part before the extension |
+| a DXF symbol sits beside the line | no `CONN` layer, so the conductor was guessed | add points on a `CONN` layer at the terminals |
+| a DXF symbol is missing pieces | it uses entities this reader passes over | the Symbols tab lists what was passed over; explode splines and dimensions before exporting |
 
 The name is matched without case (`VCB.svg` and `vcb.svg` are the same symbol),
 and only letters, digits, `_`, `.` and `-` are allowed in it.
@@ -170,7 +217,8 @@ and only letters, digits, `_`, `.` and `-` are allowed in it.
 
 ## The library names
 
-One of these as a file name replaces that symbol everywhere.
+One of these as a file name — `.svg` or `.dxf` — replaces that symbol
+everywhere.
 
 **Switching**
 

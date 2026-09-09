@@ -62,8 +62,24 @@ than a string, everything a drawing office expects is only a function away:
 - **Export** — DXF, PDF and SVG all read the edited shapes, so what leaves is
   what is on the screen.
 
-Edits are held per sheet and per session; nothing is written back to the project
-data. Revert puts a sheet back to as drawn.
+**Edits are kept with the project.** Save hands them to `ProjectData.drawingEdits`
+and the ordinary project save writes them out, so a corrected sheet is still
+corrected tomorrow and for whoever opens the project next. Revert puts one sheet
+back to as drawn; Discard all does it for the set, in the project too.
+
+What is stored is the sheet itself — the whole array of shapes, not a list of
+changes — because an edited sheet is a document, and a document that quietly
+redraws itself underneath its own corrections is worse than one that does not
+move. The key is `switchgearId#feedersPerSheet#sheetIndex`, so changing the
+feeders per sheet repaginates into different keys and leaves the old edits
+alone rather than dropping them onto sheets they were never made against.
+
+Each entry also records what the sheet looked like when it was edited. When the
+project changes underneath it, the fingerprint stops matching and the status bar
+says which sheets were edited against an older drawing. Saving re-stamps only
+the sheets touched in that session: saving one sheet must not vouch for another.
+
+A view-only revision cannot keep edits, and the Save button says so.
 
 ## Choices worth knowing
 
@@ -146,8 +162,22 @@ terminals are, and the panel says so.
 A file named after one of the library's symbols — `vcb.dxf`,
 `current-transformer.dxf` — takes that symbol's place. A file named after the
 device instead is loaded all the same and pointed at the right symbol in the
-panel, which is the ordinary case. Symbols are kept in the browser, so they
-survive a reload; they are per-machine, not part of the project.
+panel, which is the ordinary case.
+
+**Two ways in, and they layer.** A file dropped into the symbol pack on the
+server — `simorgh-backend/eplan-symbols/circuit-breaker.dxf` — reaches everyone
+who opens the project: the pack endpoint lists it, the app fetches it and reads
+it into geometry, and its box, conductor, cells and terminals all come out of
+the drawing rather than out of a `data-pin-x` somebody had to measure. That is
+where a schematic belongs once it is settled. A file picked in the Symbols tab
+is read in that browser only, on top of the pack, which is what you want while
+a drawing is still being got right. `eplan-symbols/README.md` is the reference
+for both.
+
+The pack folder is mounted read-only, so putting a file there is a copy and a
+refresh — no upload route, and no rebuild. Making it writable and adding one is
+a compose change (`:ro` off `eplan-symbols`) plus a route, if the office would
+rather add symbols from the browser than from the server.
 
 ## Adding a format
 

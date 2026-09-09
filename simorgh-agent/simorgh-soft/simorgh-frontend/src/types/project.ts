@@ -2,6 +2,9 @@
 // Device Library Types
 // ==============================
 
+// A sheet edited in Simorgh Draw is kept as its own geometry — see DrawingEdits.
+import { Shape } from '../utils/cad/shapes';
+
 export interface DeviceLibraryProperties {
   // Electrical / Mechanical — the three voltages lead the tab: they are the
   // ratings the rest of the panel is sized against.
@@ -152,7 +155,36 @@ export interface ProjectData {
   outputTypes?: OutputType[];
   /** Set on a project that came from TPMS — see TpmsSyncState. */
   tpmsSync?: TpmsSyncState;
+  /** Sheets edited in Simorgh Draw — see DrawingEdits. */
+  drawingEdits?: DrawingEdits;
 }
+
+// ── Edited sheets ────────────────────────────────────────────────────────────
+// A sheet is drawn from the project every time it is shown, so an edit made on
+// the canvas has nowhere to live unless the project keeps it. What is kept is
+// the sheet itself — the whole array of shapes, not a list of changes — because
+// an edited sheet is a document, and a document that quietly redraws itself
+// underneath its own corrections is worse than one that does not move.
+//
+// The key says which sheet: the switchgear, how many feeders were on a sheet
+// when it was drawn, and which sheet of the set. Changing the feeders per sheet
+// therefore repaginates into different keys and leaves the old edits alone
+// rather than dropping them onto sheets they were never made against.
+//
+// `drawnAs` is what the sheet looked like when it was edited. When the project
+// changes underneath it the fingerprint stops matching, and the tab says so
+// instead of showing corrections against numbers that have moved on.
+
+export interface SheetEdit {
+  /** The sheet as edited. */
+  shapes: Shape[];
+  /** Fingerprint of the sheet as it was drawn when the edits were made. */
+  drawnAs: string;
+  editedAt: string;
+}
+
+/** Keyed `switchgearId#feedersPerSheet#sheetIndex`. */
+export type DrawingEdits = Record<string, SheetEdit>;
 
 // ── TPMS-linked projects ─────────────────────────────────────────────────────
 // A project opened from TPMS keeps a link back to it. While `master` is

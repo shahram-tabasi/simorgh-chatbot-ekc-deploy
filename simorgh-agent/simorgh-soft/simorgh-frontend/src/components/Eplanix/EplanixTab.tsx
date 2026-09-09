@@ -24,9 +24,10 @@ import {
 } from '../../utils/panelLayout';
 import { sheetsToDxf } from '../../utils/cad/sheetDxf';
 import { drawingFromSvg, svgSize } from '../../utils/cad/fromSvg';
+import { fingerprint } from '../../utils/cad/edit';
 import { DrawingEditor, EditorSheet } from '../SimorghDraw/DrawingEditor';
 import { DxfSymbolPack } from '../SimorghDraw/DxfSymbolPack';
-import { DxfSymbol, loadDxfSymbols, saveDxfSymbols } from '../../utils/cad/dxfSymbols';
+import { DxfSymbol, loadDxfSymbols, saveDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
 import { downloadText, fileSafe } from '../../utils/download';
 import {
@@ -109,7 +110,7 @@ function exportMechanicalExcel(data: ProjectData, equipments: Equipment[]) {
 }
 
 export const EplanixTab: React.FC = () => {
-  const { projectData, currentRevision } = useProject();
+  const { projectData, currentRevision, patchProjectData, isCurrentRevisionEditable } = useProject();
   const [view, setView] = useState<View>('single-line');
   const [selected, setSelected] = useState<string>('');   // equipment id, '' = all
   const [perPage, setPerPage] = useState(8);
@@ -174,13 +175,37 @@ export const EplanixTab: React.FC = () => {
       setSymbols(map);
 
       // A file named after one of the library's own symbols — `vcb.svg`,
-      // `current-transformer.svg` — replaces that symbol everywhere, with no
-      // part number and no EPLAN look-up involved.
+      // `circuit-breaker.dxf` — replaces that symbol everywhere, with no part
+      // number and no EPLAN look-up involved.
+      //
+      // An SVG is placed as a picture, by the box the server read out of its
+      // opening tag. A DXF is read here into geometry, and its box, its
+      // conductor and how many cells it takes all come out of the drawing —
+      // including the terminals on its CONN layer, which is what puts the
+      // branch line through the device rather than beside it.
       const overrides: Partial<Record<SymbolId, SymbolOverride>> = {};
       let replaced = 0;
+      let fromDrawings = 0;
       for (const entry of pack) {
         const id = SYMBOL_IDS.get(entry.name.toLowerCase());
         if (!id) continue;
+
+        if (entry.kind === 'dxf') {
+          const text = await eplanSymbolService.dxf(entry.name);
+          if (cancelled) return;
+          const drawn = text ? symbolFromDxf(text, `${entry.name}.dxf`, id) : null;
+          // A file that holds nothing this reader understands is left out
+          // rather than replacing a good symbol with an empty one.
+          if (!drawn) continue;
+          overrides[id] = {
+            url: '', art: drawn.art, width: drawn.width, height: drawn.height,
+            pinX: drawn.pinX, cells: drawn.cells, title: entry.title || `${entry.name}.dxf`,
+          };
+          replaced += 1;
+          fromDrawings += 1;
+          continue;
+        }
+
         overrides[id] = {
           url: eplanSymbolService.svgUrl(entry.name),
           width: entry.width, height: entry.height, pinX: entry.pinX,
@@ -192,7 +217,9 @@ export const EplanixTab: React.FC = () => {
       setPackReplaced(replaced);
       const matched = new Set(Object.values(found).map(e => e.partNumber || e.symbol)).size;
       const replacedNote = Object.keys(overrides).length > 0
-        ? ` ${Object.keys(overrides).length} library symbol(s) replaced by the pack.` : '';
+        ? ` ${Object.keys(overrides).length} library symbol(s) replaced by the pack`
+          + (fromDrawings > 0 ? `, ${fromDrawings} of them read from DXF as geometry.` : '.')
+        : '';
       setSymbolNote(
         (Object.keys(found).length === 0
           ? 'EPLAN parts database has no symbol for these parts (or is out of reach) — symbols come from the template slots.'
@@ -238,13 +265,18 @@ export const EplanixTab: React.FC = () => {
   // what DXF and PDF are written from. Only built when that tab is open — the
   // parse is quick, but there is no reason to do it while nobody is editing.
   const editorSheets = useMemo<EditorSheet[]>(
-    () => (view === 'editor'
+    () => (view === 'editor' && preview
       ? pages.map(page => ({
           name: `Sheet ${page.page} of ${page.of}`,
-          drawing: drawingFromSvg(page.svg, `${preview?.name ?? ''} ${page.page}/${page.of}`),
+          drawing: drawingFromSvg(page.svg, `${preview.name} ${page.page}/${page.of}`),
+          // Where the project keeps this sheet's edits. The pagination is part
+          // of it, so changing the feeders per sheet leaves the old edits where
+          // they are rather than dropping them onto sheets they never matched.
+          key: `${preview.id}#${perPage}#${page.page}`,
+          drawnAs: fingerprint(page.svg),
         }))
       : []),
-    [view, pages, preview]);
+    [view, pages, preview, perPage]);
 
   const layout = useMemo(
     () => (preview ? buildPanelLayout(projectData, preview) : null),
@@ -436,6 +468,9 @@ export const EplanixTab: React.FC = () => {
             sheets={editorSheets}
             fileBase={`${projectData.projectName || 'project'}_${preview?.name ?? ''}`}
             paper={paper}
+            savedEdits={projectData.drawingEdits}
+            canEdit={isCurrentRevisionEditable}
+            onSaveEdits={next => patchProjectData(() => ({ drawingEdits: next }))}
             titleBlock={[
               preview?.name || 'SWITCHGEAR',
               [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]

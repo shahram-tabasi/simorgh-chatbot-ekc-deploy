@@ -3,7 +3,9 @@ import {
   ZoomInIcon, ZoomOutIcon, MaximizeIcon, MousePointer2Icon, HandIcon,
   UndoIcon, RedoIcon, CopyIcon, Trash2Icon, GridIcon, RotateCcwIcon,
   EyeIcon, EyeOffIcon, LockIcon, UnlockIcon, DownloadIcon, ScanSearchIcon,
+  SaveIcon, TriangleAlertIcon,
 } from 'lucide-react';
+import { DrawingEdits } from '../../types/project';
 import { Drawing, Layer, LAYER_NOTES, Shape, layerColor } from '../../utils/cad/shapes';
 import { renderSvg } from '../../utils/cad/svg';
 import { renderDxf } from '../../utils/cad/dxf';
@@ -23,7 +25,14 @@ import { DrawingCanvas, Viewport, fitView, viewOn } from './DrawingCanvas';
 // as DXF or PDF is what is on the screen, edits and all — the thing that was
 // impossible while the sheet was a string of SVG.
 
-export interface EditorSheet { name: string; drawing: Drawing }
+export interface EditorSheet {
+  name: string;
+  drawing: Drawing;
+  /** Where this sheet's edits are kept in the project. */
+  key: string;
+  /** Fingerprint of the sheet as drawn, so a stale edit can be spotted. */
+  drawnAs: string;
+}
 
 interface Props {
   sheets: EditorSheet[];
@@ -34,18 +43,56 @@ interface Props {
   mmPerUnit?: number;
   /** The sheet exports are put on; 'auto' keeps `mmPerUnit` and grows the sheet. */
   paper?: PaperChoice;
+  /** Edits already kept with the project. */
+  savedEdits?: DrawingEdits;
+  /** Hand the edits back to the project. Absent means they cannot be kept. */
+  onSaveEdits?: (next: DrawingEdits) => void;
+  /** False on a revision that is view-only. */
+  canEdit?: boolean;
 }
 
 const SNAPS = [0, 1, 5, 10, 25];
 
 export const DrawingEditor: React.FC<Props> = ({
   sheets, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
+  savedEdits, onSaveEdits, canEdit = true,
 }) => {
   const [index, setIndex] = useState(0);
   const sheet = sheets[Math.min(index, Math.max(0, sheets.length - 1))];
 
   // Edits live per sheet, so paging through a set does not lose them.
   const [edits, setEdits] = useState<Record<number, Shape[]>>({});
+  // Which sheets this session has actually changed. A boolean would do for the
+  // Save button, but not for what Save writes: re-stamping a sheet nobody
+  // touched would quietly clear its "edited against an older drawing" warning
+  // without anyone having looked at it.
+  const [touched, setTouched] = useState<ReadonlySet<number>>(new Set());
+  const dirty = touched.size > 0;
+  const touch = (i: number) => setTouched(prev => new Set(prev).add(i));
+
+  // Read at the moment a set of sheets is seeded rather than followed, so
+  // keeping edits does not immediately re-seed the canvas from its own output.
+  const saved = useRef(savedEdits);
+  saved.current = savedEdits;
+
+  useEffect(() => {
+    const seeded: Record<number, Shape[]> = {};
+    sheets.forEach((sheet, i) => {
+      const kept = saved.current?.[sheet.key];
+      if (kept?.shapes) seeded[i] = kept.shapes;
+    });
+    setEdits(seeded);
+    setTouched(new Set());
+    histories.current.clear();
+  }, [sheets]);
+
+  /** Sheets whose edits were made against a drawing that has since changed. */
+  const stale = useMemo(
+    () => sheets.filter(sheet => {
+      const kept = saved.current?.[sheet.key];
+      return kept && kept.drawnAs !== sheet.drawnAs;
+    }).map(sheet => sheet.name),
+    [sheets, savedEdits]);
   const histories = useRef(new Map<number, History<Shape[]>>());
   const historyFor = (i: number) => {
     if (!histories.current.has(i)) histories.current.set(i, new History<Shape[]>());
@@ -69,6 +116,7 @@ export const DrawingEditor: React.FC<Props> = ({
     historyFor(index).push(shapes);
     setEdits(e => ({ ...e, [index]: next }));
     if (nextSelection) setSelection(nextSelection);
+    touch(index);
     forceRender(n => n + 1);
   }, [index, shapes]);
 
@@ -82,12 +130,12 @@ export const DrawingEditor: React.FC<Props> = ({
   const undo = () => {
     const h = historyFor(index);
     const previous = h.undo(shapes);
-    if (previous) { setEdits(e => ({ ...e, [index]: previous })); setSelection(new Set()); forceRender(n => n + 1); }
+    if (previous) { setEdits(e => ({ ...e, [index]: previous })); setSelection(new Set()); touch(index); forceRender(n => n + 1); }
   };
   const redo = () => {
     const h = historyFor(index);
     const next = h.redo(shapes);
-    if (next) { setEdits(e => ({ ...e, [index]: next })); setSelection(new Set()); forceRender(n => n + 1); }
+    if (next) { setEdits(e => ({ ...e, [index]: next })); setSelection(new Set()); touch(index); forceRender(n => n + 1); }
   };
 
   const remove = () => {
@@ -107,6 +155,38 @@ export const DrawingEditor: React.FC<Props> = ({
     historyFor(index).clear();
     setEdits(e => { const next = { ...e }; delete next[index]; return next; });
     setSelection(new Set());
+    touch(index);
+    forceRender(n => n + 1);
+  };
+
+  /** Hand every sheet's edits to the project, and drop the ones undone away. */
+  const keep = () => {
+    if (!onSaveEdits) return;
+    const next: DrawingEdits = { ...(saved.current ?? {}) };
+    const now = new Date().toISOString();
+    sheets.forEach((sheet, i) => {
+      // A sheet nobody touched keeps the entry it already had, fingerprint and
+      // all — saving one sheet must not vouch for another.
+      if (!touched.has(i)) return;
+      const current = edits[i];
+      // Undone all the way back is not an edit; it is the sheet as drawn.
+      if (!current || current === sheet.drawing.shapes) delete next[sheet.key];
+      else next[sheet.key] = { shapes: current, drawnAs: sheet.drawnAs, editedAt: now };
+    });
+    onSaveEdits(next);
+    setTouched(new Set());
+  };
+
+  /** Put every sheet back to as drawn, in the project as well as on screen. */
+  const discardAll = () => {
+    if (!onSaveEdits) return;
+    const next: DrawingEdits = { ...(saved.current ?? {}) };
+    for (const sheet of sheets) delete next[sheet.key];
+    onSaveEdits(next);
+    setEdits({});
+    setSelection(new Set());
+    histories.current.clear();
+    setTouched(new Set());
     forceRender(n => n + 1);
   };
 
@@ -202,6 +282,7 @@ export const DrawingEditor: React.FC<Props> = ({
   const picked = [...selection].map(i => shapes[i]).filter(Boolean);
   const onlyText = picked.length === 1 && picked[0].t === 'text'
     ? (picked[0] as Extract<Shape, { t: 'text' }>) : null;
+  const anySaved = sheets.some(sheet => Boolean(savedEdits?.[sheet.key]));
   const history = historyFor(index);
   // Undoing all the way back leaves the original array in place, not none of
   // it, so "edited" is a question of identity rather than of presence.
@@ -277,6 +358,29 @@ export const DrawingEditor: React.FC<Props> = ({
         <Tool title="Revert this sheet to as drawn" disabled={!edited} on={revert}>
           <RotateCcwIcon className="w-4 h-4" />
         </Tool>
+        <Divider />
+
+        <Tool
+          title={
+            !onSaveEdits ? 'These edits cannot be kept with this project'
+            : !canEdit ? 'This revision is view-only — raise a revision to keep edits'
+            : dirty ? 'Keep these edits with the project (then save the project)'
+            : 'The project already holds these edits'
+          }
+          disabled={!onSaveEdits || !canEdit || !dirty}
+          on={keep}
+        >
+          <SaveIcon className="w-4 h-4" />
+        </Tool>
+        {onSaveEdits && canEdit && (anySaved || dirty) && (
+          <button
+            onClick={discardAll}
+            className="px-2 py-1.5 rounded-md border border-gray-300 bg-white text-xs text-gray-600 hover:bg-gray-100"
+            title="Put every sheet back to as drawn, in the project too"
+          >
+            Discard all
+          </button>
+        )}
         <Divider />
 
         <Tool title="Show the grid" active={showGrid} on={() => setShowGrid(g => !g)}>
@@ -410,7 +514,11 @@ export const DrawingEditor: React.FC<Props> = ({
                       value={onlyText.s}
                       onChange={e => {
                         const value = e.target.value;
+                        // Typed a character at a time, so the history step is
+                        // taken once on focus rather than per keystroke — but
+                        // the project still has to know it is behind.
                         setEdits(prev => ({ ...prev, [index]: setText(shapes, [...selection][0], value) }));
+                        touch(index);
                       }}
                       onFocus={() => historyFor(index).push(shapes)}
                     />
@@ -432,6 +540,18 @@ export const DrawingEditor: React.FC<Props> = ({
         <span>{shapes.length} shapes</span>
         {selection.size > 0 && <span className="text-blue-700">{selection.size} picked</span>}
         {edited && <span className="text-amber-700">edited</span>}
+        {dirty
+          ? <span className="text-amber-700">not kept yet</span>
+          : anySaved && <span className="text-emerald-700">kept with the project</span>}
+        {stale.length > 0 && (
+          <span
+            className="flex items-center gap-1 text-amber-700"
+            title={`The project has changed since ${stale.join(', ')} ${stale.length === 1 ? 'was' : 'were'} edited, so these corrections were made against an older drawing. Revert the sheet to take the new one.`}
+          >
+            <TriangleAlertIcon className="w-3 h-3" />
+            {stale.length} sheet{stale.length === 1 ? '' : 's'} edited against an older drawing
+          </span>
+        )}
         <span className="ml-auto">Space pans · wheel zooms · F fits · Ctrl+Z undoes</span>
       </div>
     </div>

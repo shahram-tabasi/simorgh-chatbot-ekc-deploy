@@ -109,6 +109,16 @@ export interface EplanSymbol {
  *  the branch line at the right size. */
 export interface PackSymbol {
   name: string;
+  /**
+   * Which kind of file it came from.
+   *
+   * An SVG is a picture, and its box is read on the server out of the opening
+   * tag. A DXF is geometry, read by the app itself — same reader the Simorgh
+   * Draw tab uses — so its box, its conductor and its terminals come out of
+   * the drawing rather than out of an attribute someone had to write. Older
+   * servers report neither and everything they list is an SVG.
+   */
+  kind?: 'svg' | 'dxf';
   width?: number;
   height?: number;
   pinX?: number;
@@ -148,10 +158,24 @@ export const eplanSymbolService = {
       const list = (await r.json()).symbols ?? [];
       // A name on its own is all older packs reported; the size and the pin
       // come with it now.
-      return list.map((entry: any) =>
-        (typeof entry === 'string' ? { name: entry } : entry)) as PackSymbol[];
+      return list.map((entry: any) => (typeof entry === 'string'
+        ? { name: entry, kind: 'svg' as const }
+        : { kind: 'svg' as const, ...entry })) as PackSymbol[];
     } catch {
       return [];
+    }
+  },
+
+  /** A pack DXF's text. Never throws: a symbol out of reach falls back to the
+   *  library's own drawing of that device. */
+  async dxf(name: string): Promise<string | null> {
+    try {
+      const r = await fetch(`${API_BASE_URL}/eplan-symbols/dxf/${encodeURIComponent(name)}`);
+      if (!r.ok) return null;
+      const text = await r.text();
+      return text.trim() ? text : null;
+    } catch {
+      return null;
     }
   },
 

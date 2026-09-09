@@ -237,25 +237,45 @@ export function registerEplanSymbolRoutes(app, getSqlPool, symbolDir) {
   });
 
   // ── The symbol pack ────────────────────────────────────────────────────
-  // SVGs exported from EPLAN, named after the symbol (SG3.svg, Q1.svg …).
-  // Whatever is here is used in place of the app's own drawing of it.
+  // Symbols exported from EPLAN or drawn by the office, named after the symbol
+  // (SG3.svg, Q1.svg, vcb.dxf …). Whatever is here is used in place of the
+  // app's own drawing of it.
+  //
+  // An SVG is a picture and its box is read here, out of its opening tag. A
+  // DXF is geometry, and geometry is read by the app itself — the same reader
+  // the Simorgh Draw tab uses for a file the user picks — so the file is
+  // listed and served, and its box, its conductor and its terminals come out
+  // of the drawing rather than out of an attribute someone had to write.
   app.get('/api/eplan-symbols/pack', (req, res) => {
     try {
       if (!fs.existsSync(dir)) return res.json({ success: true, dir, symbols: [] });
       const symbols = fs.readdirSync(dir)
-        .filter(f => f.toLowerCase().endsWith('.svg'))
-        .map(f => ({ name: path.basename(f, path.extname(f)), ...readSymbolBox(path.join(dir, f)) }));
+        .filter(f => /\.(svg|dxf)$/i.test(f))
+        .map(f => {
+          const kind = path.extname(f).slice(1).toLowerCase();
+          const entry = { name: path.basename(f, path.extname(f)), kind };
+          return kind === 'svg' ? { ...entry, ...readSymbolBox(path.join(dir, f)) } : entry;
+        });
       res.json({ success: true, dir, symbols });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message, symbols: [] });
     }
   });
 
+  // Only a plain name — never a path — can be asked for.
+  const safeName = value => String(value || '').replace(/[^A-Za-z0-9_.-]/g, '');
+
   app.get('/api/eplan-symbols/svg/:name', (req, res) => {
-    // Only a plain name — never a path — can be asked for.
-    const name = String(req.params.name || '').replace(/[^A-Za-z0-9_.-]/g, '');
+    const name = safeName(req.params.name);
     const file = path.join(dir, `${name}.svg`);
     if (!name || !fs.existsSync(file)) return res.status(404).send('');
     res.type('image/svg+xml').send(fs.readFileSync(file, 'utf8'));
+  });
+
+  app.get('/api/eplan-symbols/dxf/:name', (req, res) => {
+    const name = safeName(req.params.name);
+    const file = path.join(dir, `${name}.dxf`);
+    if (!name || !fs.existsSync(file)) return res.status(404).send('');
+    res.type('image/vnd.dxf').send(fs.readFileSync(file, 'utf8'));
   });
 }

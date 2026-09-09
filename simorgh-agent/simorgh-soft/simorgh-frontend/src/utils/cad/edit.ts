@@ -11,6 +11,23 @@ import { onArc } from './svg';
 
 export interface Box { x: number; y: number; w: number; h: number }
 
+/**
+ * A short fingerprint of a sheet, to tell whether it is still the sheet an
+ * edit was made against.
+ *
+ * FNV-1a over the markup: not a checksum anybody has to trust, just a value
+ * that changes when the drawing does, so a correction is never shown against
+ * numbers that have moved on underneath it.
+ */
+export function fingerprint(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${text.length.toString(36)}.${hash.toString(36)}`;
+}
+
 const box = (xs: number[], ys: number[]): Box => ({
   x: Math.min(...xs), y: Math.min(...ys),
   w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys),

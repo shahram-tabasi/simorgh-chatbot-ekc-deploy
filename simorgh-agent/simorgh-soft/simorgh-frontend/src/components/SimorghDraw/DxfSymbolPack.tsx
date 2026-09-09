@@ -5,10 +5,16 @@ import { DxfSymbol, symbolFromDxf } from '../../utils/cad/dxfSymbols';
 
 // The office's own DXF schematics, brought in and put on the line.
 //
-// A file named after one of the library's symbols — vcb.dxf, contactor.dxf —
-// takes that symbol's place everywhere. A file named after anything else is
-// loaded all the same and the symbol it stands for is chosen here, which is
-// the ordinary case: a schematic is named after the device, not after us.
+// There are two ways in, and they layer. A file dropped into the symbol pack
+// on the server — eplan-symbols/vcb.dxf — reaches everyone who opens the
+// project, which is where a schematic belongs once it is settled. A file
+// picked here is read in this browser only, on top of the pack, which is what
+// you want while a drawing is still being got right.
+//
+// A file named after one of the library's symbols takes that symbol's place.
+// A file named after anything else is loaded all the same and the symbol it
+// stands for is chosen here, which is the ordinary case: a schematic is named
+// after the device, not after us.
 
 interface Props {
   symbols: DxfSymbol[];
@@ -82,11 +88,15 @@ export const DxfSymbolPack: React.FC<Props> = ({ symbols, onChange }) => {
     <div className="border border-gray-200 rounded-lg bg-white">
       <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
         <div className="min-w-0">
-          <p className="font-medium text-sm text-gray-800">Your own DXF schematics</p>
+          <p className="font-medium text-sm text-gray-800">Your own DXF schematics — this browser</p>
           <p className="text-xs text-gray-500">
             A device drawn in AutoCAD replaces the library symbol and goes back out as
             geometry, not as a picture. Put points on a layer named <code>CONN</code> at the
             terminals and the branch line runs through them by itself.
+          </p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            These are read here only, on top of the symbol pack. Copy the same file into
+            {' '}<code>simorgh-backend/eplan-symbols/</code> to give it to everyone.
           </p>
         </div>
         <div className="flex items-center gap-2">
