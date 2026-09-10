@@ -54,6 +54,26 @@ It is kept in the browser rather than in the project on purpose. Two engineers
 on one project have different screens and different habits, and neither should
 be rearranging the other's workspace by saving.
 
+### What is a panel
+
+Five so far, and adding a sixth is one component:
+
+| Panel | Screen |
+|---|---|
+| Simorgh AI | everywhere |
+| Project Templates | Create Template |
+| Template graphic | Create Template |
+| Templates | Device Selection |
+| Equipment Tree | Device Selection |
+
+A panel that shares a row has to give its width back when it closes, and only
+the parent knows how the row is built — so the parent asks `usePanel` the same
+question the panel does and sizes itself from the answer. Device Selection
+builds its `gridTemplateColumns` from which of its two side columns are open;
+Create Template swaps `w-3/4` for `w-full`. A closed panel leaves no track
+behind it, which is the difference between the workspace gaining the width and
+the workspace gaining a gap.
+
 ### The workspace
 
 The content band runs to the edges of the window rather than sitting in a
@@ -65,6 +85,22 @@ The parts table carries `min-w-[1180px]` inside an `overflow-x-auto` box. Nine
 columns of fixed width plus the part name genuinely need that much; without the
 minimum the table squeezed itself into whatever the schematic left it, and with
 `overflow-hidden` the far columns could not be reached at all.
+
+## Language
+
+The suite is in **English**, everywhere, with one exception: Simorgh Draw's own
+editor, which has an EN / فا / TR switch on its toolbar and the guide behind it
+(`src/components/SimorghDraw/lang.ts`, `public/help-drawing.html`). That is the
+only place another language appears, and it appears because the person chose it.
+
+Two things that look like exceptions and are not:
+
+- **`src/services/intentParser.ts`** matches what a person *types* to the
+  assistant. Its Persian is input, not output — deleting it would stop the
+  assistant understanding a Persian sentence.
+- **`IEC_SYMBOLS[...].titleFa`** is still on every symbol. Nothing renders it
+  any more, but the data stays: it costs nothing, and a Persian symbol sheet is
+  a switch away rather than a retyping job.
 
 ## Type
 

@@ -1093,8 +1093,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
       <PanelFrame
         id="template-graphic"
-        title="Template graphic — گرافیک تمپلیت"
-        menuLabel="Template graphic — گرافیک تمپلیت"
+        title="Template graphic"
+        menuLabel="Template graphic"
         group="Create Template"
         note="The whole cell, drawn the way a feeder built on it will be."
         className="w-80 shrink-0 border-0 bg-transparent"

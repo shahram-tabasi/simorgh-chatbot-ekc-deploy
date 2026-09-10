@@ -72,7 +72,7 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
               {IEC_SYMBOLS[symbolId]?.title ?? symbolId}
             </h2>
             <p className="text-[11px] text-slate-200">
-              {IEC_SYMBOLS[symbolId]?.titleFa} · one cell is {CELL} units ·
+              One cell is {CELL} units ·
               {' '}the conductor stays at {pinX.toFixed(0)}
               {override ? ' · this project has its own drawing of it' : ''}
             </p>

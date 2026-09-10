@@ -1139,7 +1139,7 @@ export function buildSymbolLibraryHtml(): string {
   @media print{.no-print{display:none}body{padding:0}}
 </style></head><body>
 <button class="no-print" onclick="window.print()" style="margin-bottom:10px;padding:8px 14px;background:#1d4ed8;color:#fff;border:0;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
-<h1 style="font-size:16px;margin-bottom:4px">IEC single-line symbols — علائم تک‌خطی</h1>
+<h1 style="font-size:16px;margin-bottom:4px">IEC single-line symbols</h1>
 <p style="font-size:11px;color:#555;margin-bottom:10px">The symbols this app draws on a single line. A symbol exported from EPLAN into the symbol pack replaces the one here.</p>
 ${buildSymbolCatalogueSvg()}
 </body></html>`;

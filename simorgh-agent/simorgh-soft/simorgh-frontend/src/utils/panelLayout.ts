@@ -246,7 +246,7 @@ export function buildLayoutHtml(data: ProjectData, layouts: PanelLayout[]): stri
     <section style="page-break-after:always;padding:10px 0">
       <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:10px">
         <div>
-          <div style="font-size:9px;letter-spacing:.8px;color:#666">PANEL LAYOUT / جانمایی — ${esc(data.projectName || '')}</div>
+          <div style="font-size:9px;letter-spacing:.8px;color:#666">PANEL LAYOUT — ${esc(data.projectName || '')}</div>
           <div style="font-size:16px;font-weight:800">${esc(layout.equipment.name)}</div>
         </div>
         <div style="font-size:10px;color:#666">${new Date().toLocaleString()}</div>

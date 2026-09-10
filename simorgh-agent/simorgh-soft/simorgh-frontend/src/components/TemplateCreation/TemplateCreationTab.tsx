@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Keyboard, X, RotateCcw } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { TemplateTree } from './TemplateTree';
+import { PanelFrame } from '../shared/PanelFrame';
+import { usePanel } from '../../context/PanelsContext';
 import { TemplateProperties } from './TemplateProperties';
 
 interface TemplateCreationTabProps {
@@ -260,6 +262,13 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
 
   const selectedTemplateData = getSelectedTemplateData();
 
+  // Whether the tree is on screen, so the properties beside it can take the
+  // room when it is not. The panel registers itself; this only reads it.
+  const treePanel = usePanel({
+    id: 'project-templates', label: 'Project Templates', group: 'Create Template',
+    note: 'LV, MV and HV, and the sections under them',
+  });
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -268,14 +277,24 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
       </div>
 
       <div className="flex flex-grow border border-gray-200 rounded-md overflow-hidden">
-        <div className="w-1/4 border-r border-gray-200 overflow-y-auto">
+        {/* Closed, the tree leaves no column behind it: the properties take
+            the whole width rather than three quarters of it. */}
+        <PanelFrame
+          id="project-templates"
+          title="Project Templates"
+          group="Create Template"
+          note="LV, MV and HV, and the sections under them"
+          className="w-1/4 border-0 border-r border-gray-200 rounded-none"
+          bodyClassName="overflow-y-auto"
+        >
           <TemplateTree
+            bare
             projectData={projectData}
             onTemplateSelect={handleTemplateSelect}
             selectedTemplateId={selectedTemplate}
           />
-        </div>
-        <div className="w-3/4 p-4 overflow-y-auto">
+        </PanelFrame>
+        <div className={`${treePanel.open ? 'w-3/4' : 'w-full'} p-4 overflow-y-auto`}>
           {selectedTemplateData ? (
             <TemplateProperties template={selectedTemplateData} />
           ) : (

@@ -854,10 +854,6 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
             'Deleting it here removes it from the Device Library AND from Device Selection — ' +
             'the equipment above and all of its device rows are deleted too.'
           }
-          cascadeNoteFa={
-            'با حذف از این قسمت، دستگاه هم از Device Library و هم از Device Selection حذف می‌شود — ' +
-            'تجهیز مربوطه در شاخه پروژه و همه ردیف‌های آن هم پاک می‌شوند.'
-          }
           onConfirm={confirmDeleteLib}
           onCancel={() => setLibDeleteTarget(null)}
         />

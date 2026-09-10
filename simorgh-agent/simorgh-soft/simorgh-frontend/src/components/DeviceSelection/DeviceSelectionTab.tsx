@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 're
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx-js-style';
 import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon } from 'lucide-react';
+import { PanelFrame } from '../shared/PanelFrame';
+import { usePanel } from '../../context/PanelsContext';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
 import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';
 import { useProject } from '../../context/ProjectContext';
@@ -1865,10 +1867,6 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
                     The Device Library entry it was created from is <strong>kept</strong>, so you can lay
                     the same device out again from <em>Add</em>.
                   </p>
-                  <p className="text-sm text-blue-800 mt-1" dir="rtl">
-                    این حذف فقط از چیدمان پروژه است — دستگاه در قسمت Device Library باقی می‌ماند و
-                    می‌توانید دوباره آن را اضافه و چیدمان کنید.
-                  </p>
                 </div>
               </div>
               <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
@@ -2150,12 +2148,32 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
     ? getTemplateById(propertiesModal.templateId)
     : null;
 
+  // Which of the two side columns are on screen. Asking here rather than
+  // inside the panels themselves, because the grid has to be built from the
+  // answer — a closed panel that still held a 220px track would have put its
+  // width into a gap instead of into the table.
+  const templatesPanel = usePanel({
+    id: 'ds-templates', label: 'Templates', group: 'Device Selection',
+    note: 'The templates a device row can be dropped onto',
+  });
+  const treePanel = usePanel({
+    id: 'ds-equipment-tree', label: 'Equipment Tree', group: 'Device Selection',
+    note: 'The switchgears of this project, by voltage level',
+  });
+  const columns = [
+    templatesPanel.open ? '220px' : null,
+    'minmax(0,1fr)',
+    treePanel.open ? '260px' : null,
+  ].filter(Boolean).join(' ');
+
   // Left panel templates section with right-click support
   const renderTemplateLeftPanel = () => (
-    <div className="border rounded">
-      <div className="bg-gray-50 px-4 py-2 border-b">
-        <h3 className="font-medium">Templates</h3>
-      </div>
+    <PanelFrame
+      id="ds-templates"
+      title="Templates"
+      group="Device Selection"
+      note="The templates a device row can be dropped onto"
+    >
       <div className="p-2 max-h-96 overflow-y-auto">
         {(['LV', 'MV', 'HV'] as const).map(type => (
           <div key={type} className="mb-3">
@@ -2177,7 +2195,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
           </div>
         ))}
       </div>
-    </div>
+    </PanelFrame>
   );
 
   if (isFullscreen) {
@@ -2256,8 +2274,13 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
       {/* Templates and Equipment Tree get just enough fixed width for their
           content (names/tree labels); Device Specifications takes all the
           remaining space so the wide device table isn't squeezed into a
-          fixed 50% column. */}
-      <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_260px] gap-3 items-start">
+          fixed 50% column.
+          The columns are built from which panels are open: a closed one leaves
+          no track behind it, so its width becomes table rather than a gap. */}
+      <div
+        className="grid grid-cols-1 gap-3 items-start"
+        style={{ gridTemplateColumns: columns }}
+      >
         {renderTemplateLeftPanel()}
 
         <div className="border rounded min-w-0">
@@ -2278,10 +2301,12 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
           </div>
         </div>
 
-        <div className="border rounded">
-          <div className="bg-gray-50 px-4 py-2 border-b">
-            <h3 className="font-medium">Equipment Tree</h3>
-          </div>
+        <PanelFrame
+          id="ds-equipment-tree"
+          title="Equipment Tree"
+          group="Device Selection"
+          note="The switchgears of this project, by voltage level"
+        >
           <EquipmentTree
             onImportFromTpms={onImportFromTpms}
             projectData={projectData}
@@ -2292,7 +2317,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
             setSelectedEquipment={setSelectedEquipment}
             onNavigateToDeviceLibrary={onNavigateToDeviceLibrary ?? ((_id?: string) => {})}
           />
-        </div>
+        </PanelFrame>
       </div>
 
       {/* Template right-click context menu */}

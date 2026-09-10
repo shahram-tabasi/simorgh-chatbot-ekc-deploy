@@ -345,7 +345,7 @@ export const EplanixTab: React.FC = () => {
             drawn from Device Selection and the templates behind it.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center flex-wrap gap-2">
           <label className="text-sm text-gray-600">Switchgear</label>
           <select
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
@@ -374,17 +374,17 @@ export const EplanixTab: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-4 gap-3 mb-5">
-        <Tab id="single-line" label="Single line — تک‌خطی" note="Busbar, feeders, devices, data blocks" />
-        <Tab id="layout" label="Layout — جانمایی" note="Front elevation, column by column" />
-        <Tab id="mechanical" label="Mechanical — اقلام مکانیکال" note="Enclosure, busbars, compartments" />
-        <Tab id="symbols" label="Symbols — علائم" note="The IEC single-line library" />
+        <Tab id="single-line" label="Single line" note="Busbar, feeders, devices, data blocks" />
+        <Tab id="layout" label="Layout" note="Front elevation, column by column" />
+        <Tab id="mechanical" label="Mechanical" note="Enclosure, busbars, compartments" />
+        <Tab id="symbols" label="Symbols" note="The IEC single-line library" />
       </div>
 
       {/* ── Single line ───────────────────────────────────────────────── */}
       {view === 'single-line' && (
         <div className="border border-gray-200 rounded-lg">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="px-4 py-3 bg-gray-50 border-b space-y-2.5">
+            <div className="flex items-start gap-3 min-w-0">
               <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">EPLAN</span>
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800">
@@ -396,7 +396,7 @@ export const EplanixTab: React.FC = () => {
                 <p className="text-[11px] text-blue-700 mt-0.5">{symbolNote}</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center flex-wrap gap-2">
               <select
                 className="border border-gray-300 rounded px-2 py-1.5 text-sm"
                 value={perPage}
@@ -415,7 +415,7 @@ export const EplanixTab: React.FC = () => {
                 className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40"
               >
                 <PencilRulerIcon className="w-4 h-4" />
-                Edit drawing — ویرایش نقشه
+                Edit drawing
               </button>
               <Btn
                 onClick={() => openPrintable(
@@ -467,7 +467,7 @@ export const EplanixTab: React.FC = () => {
               <div
                 className="p-3 overflow-x-auto bg-white cursor-pointer"
                 onDoubleClick={() => setEditing(true)}
-                title="Double-click to edit this drawing — برای ویرایش نقشه دوبار کلیک کنید"
+                title="Double-click to edit this drawing"
               >
                 <div dangerouslySetInnerHTML={{ __html: current.svg }} />
               </div>
@@ -503,7 +503,7 @@ export const EplanixTab: React.FC = () => {
       {editing && (
         editorSheets.length > 0 && preview ? (
           <SheetEditorWindow
-            title={`ویرایش نقشه — ${preview.name}`}
+            title={`Edit drawing — ${preview.name}`}
             note={`Single line · ${pages.length} sheet(s) at ${perPage} feeders each · move, retype, draw, and write DXF / PDF / SVG`}
             sheets={editorSheets}
             fileBase={`${projectData.projectName || 'project'}_${preview.name}`}
@@ -526,8 +526,8 @@ export const EplanixTab: React.FC = () => {
       {/* ── Layout ────────────────────────────────────────────────────── */}
       {view === 'layout' && (
         <div className="border border-gray-200 rounded-lg">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="px-4 py-3 bg-gray-50 border-b space-y-2.5">
+            <div className="flex items-start gap-3 min-w-0">
               <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-violet-600">LAYOUT</span>
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800">
@@ -538,7 +538,7 @@ export const EplanixTab: React.FC = () => {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center flex-wrap gap-2">
               <Btn
                 onClick={() => openPrintable(
                   buildLayoutHtml(projectData, chosenWithLines.map(eq => buildPanelLayout(projectData, eq))), 'layout')}
@@ -583,8 +583,8 @@ export const EplanixTab: React.FC = () => {
       {/* ── Mechanical items ──────────────────────────────────────────── */}
       {view === 'mechanical' && (
         <div className="border border-gray-200 rounded-lg">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="px-4 py-3 bg-gray-50 border-b space-y-2.5">
+            <div className="flex items-start gap-3 min-w-0">
               <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-amber-700">MECH</span>
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800">
@@ -646,8 +646,8 @@ export const EplanixTab: React.FC = () => {
           onPackChanged={() => setPackVersion(v => v + 1)}
         />
         <div className="border border-gray-200 rounded-lg">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="px-4 py-3 bg-gray-50 border-b space-y-2.5">
+            <div className="flex items-start gap-3 min-w-0">
               <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-slate-700">IEC</span>
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800">
@@ -695,7 +695,6 @@ export const EplanixTab: React.FC = () => {
                              dangerouslySetInnerHTML={{ __html: drawIecSymbol(sym.id, 28, 8) }} />
                         </svg>
                         <p className="text-[11px] text-gray-800 leading-tight mt-1">{sym.title}</p>
-                        <p className="text-[11px] text-gray-500 leading-tight" dir="rtl">{sym.titleFa}</p>
                         {replaced && (
                           <p className="text-[10px] text-emerald-700 leading-tight">
                             {projectData.symbolOverrides?.[sym.id] ? 'redrawn for this project' : 'from the pack'}

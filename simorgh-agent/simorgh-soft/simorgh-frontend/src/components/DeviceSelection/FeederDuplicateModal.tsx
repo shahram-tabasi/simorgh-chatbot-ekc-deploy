@@ -101,10 +101,6 @@ export const FeederDuplicateModal: React.FC<FeederDuplicateModalProps> = ({
             Two rows of the same switchgear carry the same FEEDER NO. Correct them here — the
             change is written straight into the table — or continue and fix them later.
           </p>
-          <p className="text-sm text-gray-600 mt-1" dir="rtl">
-            در یک تابلو، شمارهٔ فیدر تکراری است. می‌توانید همین‌جا اصلاح کنید (تغییر روی جدول اصلی
-            اعمال می‌شود)، یا فعلاً رد شوید، یا برگردید و در خود تب اصلاح کنید.
-          </p>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0 space-y-4">

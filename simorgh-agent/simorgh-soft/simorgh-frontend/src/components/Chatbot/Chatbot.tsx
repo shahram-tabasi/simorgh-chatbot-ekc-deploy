@@ -188,7 +188,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
   // which is where EPLAN keeps its navigators too.
   const panel = usePanel({
     id: 'simorgh-ai',
-    label: 'Simorgh AI — دستیار هوشمند',
+    label: 'Simorgh AI',
     group: 'Assistant',
     note: 'The assistant column down the right-hand side',
   });

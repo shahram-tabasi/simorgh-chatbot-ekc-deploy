@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Loader2, Circle } from 'lucide-react';
 import logoMark from '../../assets/logo-mark.png';
 import splashArtwork from '../../assets/splash-artwork.png';
-import { ShineStyles, ShineImage, SheenText, LightBeam, COMPANY_RIGHTS_FA } from '../shared/ShineEffects';
+import { ShineStyles, ShineImage, SheenText, LightBeam, COMPANY_RIGHTS_EN } from '../shared/ShineEffects';
 import { projectService } from '../../services/projectService';
 
 interface Step {
@@ -185,7 +185,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         </div>
 
         <div className="mt-8 flex items-center justify-between text-[11px] text-slate-500">
-          <span dir="rtl">{COMPANY_RIGHTS_FA}</span>
+          <span>{COMPANY_RIGHTS_EN}</span>
           <span>Version 1.0.0</span>
         </div>
       </div>

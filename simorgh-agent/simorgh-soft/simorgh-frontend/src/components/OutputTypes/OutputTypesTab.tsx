@@ -1084,7 +1084,7 @@ export const OutputTypesTab: React.FC = () => {
           Single line, panel layout and mechanical items have moved to the <strong>Simorgh Draw</strong> tab.
         </p>
         <span className="text-sm text-gray-600 ml-auto" dir="rtl">
-          تک‌خطی، جانمایی و اقلام مکانیکال به تب «Simorgh Draw» منتقل شد.
+          Single line, panel layout and mechanical items have moved to the Simorgh Draw tab.
         </span>
       </div>
 

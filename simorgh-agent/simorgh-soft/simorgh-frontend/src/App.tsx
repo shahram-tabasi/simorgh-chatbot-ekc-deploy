@@ -373,7 +373,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                   <>
                     <div className="border-t border-gray-600 my-1"></div>
                     <div className="px-4 py-1 text-[11px] uppercase tracking-wide text-gray-400">
-                      Panels — پنجره‌ها
+                      Panels
                     </div>
                     {panels.map(panel => (
                       <button
@@ -430,7 +430,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                   className="block w-full text-left px-4 py-2 hover:bg-gray-600"
                   onClick={openDrawingGuide}
                 >
-                  📐 Simorgh Draw — راهنمای نقشه‌کشی
+                  📐 Simorgh Draw guide
                 </button>
                 <button
                   className="block w-full text-left px-4 py-2 hover:bg-gray-600"
@@ -972,9 +972,6 @@ const MainApp: React.FC = () => {
             >
               + New Revision
             </button>
-            <span dir="rtl" className="text-purple-800">
-              برای ویرایش، یک ریویژن جدید بسازید.
-            </span>
           </div>
         </div>
       )}
@@ -991,8 +988,8 @@ const MainApp: React.FC = () => {
                 ? ` — a newer revision (${blockingRevisionNumbers.map(n => `REV ${n}`).join(', ')}) exists.`
                 : ' — a newer revision exists.'}
             </span>
-            <span dir="rtl" className="ml-auto text-amber-800">
-              برای اعمال تغییرات، ابتدا ریویژن‌های بالاتر را حذف کنید.
+            <span className="ml-auto text-amber-800">
+              Delete the newer revisions first to make changes here.
             </span>
           </div>
         </div>

@@ -10,6 +10,13 @@ interface TemplateTreeProps {
   projectData: any;
   onTemplateSelect: (templateId: string) => void;
   selectedTemplateId: string | null;
+  /**
+   * Leave off the panel's own caption.
+   *
+   * Set when a frame outside already draws a title bar. Off by default, so
+   * every existing use looks exactly as it did.
+   */
+  bare?: boolean;
 }
 
 interface Template {
@@ -44,7 +51,8 @@ interface ContextMenuState {
 export const TemplateTree: React.FC<TemplateTreeProps> = ({
   projectData,
   onTemplateSelect,
-  selectedTemplateId
+  selectedTemplateId,
+  bare,
 }) => {
   const {
     addTemplate,
@@ -156,7 +164,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
 
   return (
     <div className="h-full p-2" onClick={handleClickOutside}>
-      <div className="text-sm font-medium mb-2">Project Templates</div>
+      {!bare && <div className="text-sm font-medium mb-2">Project Templates</div>}
       <ul className="space-y-1">
         <li>
           <div className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded" onContextMenu={event => handleContextMenu(event, 'LV')}>
@@ -389,10 +397,6 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           cascadeNote={
             'Deleting the template also deletes the device rows built on it in Device Selection; ' +
             'the equipment itself is kept and its remaining rows are renumbered.'
-          }
-          cascadeNoteFa={
-            'با حذف تمپلیت، ردیف‌هایی که در Device Selection با آن ساخته شده‌اند هم حذف می‌شوند؛ ' +
-            'خود تجهیز باقی می‌ماند و شماره ردیف‌های باقیمانده دوباره مرتب می‌شود.'
           }
           onConfirm={confirmDeleteTemplate}
           onCancel={() => setTemplateDeleteTarget(null)}

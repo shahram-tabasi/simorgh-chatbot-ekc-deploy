@@ -656,7 +656,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                         </option>
                       </select>
                       <p className="text-xs text-gray-500 mt-1" dir="rtl">
-                        پروژه‌های سنگین را می‌توانید فقط با آخرین ریویژن باز کنید؛ بقیهٔ ریویژن‌ها دست‌نخورده می‌مانند.
+                        A heavy project can be opened with its latest revision only; the other revisions are left untouched.
                       </p>
                     </div>
                   )}
@@ -727,7 +727,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                 {pending.problems.length} part{pending.problems.length === 1 ? '' : 's'} of this project could not be read.
               </p>
               <p className="text-xs text-amber-800 mt-1" dir="rtl">
-                بخشی از پروژه خوانده نشد. می‌توانید همین‌طور باز کنید یا دوباره تلاش کنید.
+                Part of the project could not be read. Open it as it is, or try again.
               </p>
               <ul className="mt-2 max-h-28 overflow-y-auto text-xs text-amber-900 list-disc list-inside space-y-0.5">
                 {pending.problems.map((p, i) => <li key={i}>{p}</li>)}
