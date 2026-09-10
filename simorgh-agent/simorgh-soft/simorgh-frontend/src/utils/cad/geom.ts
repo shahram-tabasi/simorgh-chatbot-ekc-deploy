@@ -670,3 +670,188 @@ export function dimensionShapes(from: Pt, to: Pt, through: Pt, style: DimensionS
     },
   ];
 }
+
+// ── Grips ───────────────────────────────────────────────────────────────────
+//
+// The little squares on a picked shape that drag one point of it rather than
+// the whole thing. This is how a line is shortened from the end you took hold
+// of, which is the difference between editing a drawing and redrawing it.
+
+/** One draggable point of a shape. */
+export interface Grip {
+  /** Which point of the shape this is — passed back to `moveGrip`. */
+  id: string;
+  at: Pt;
+  /**
+   * `end` moves one point and leaves the rest. `size` changes an extent — a
+   * radius, a width — about a fixed centre. `whole` shifts the shape entire.
+   * The canvas draws them differently so a hand knows which is which.
+   */
+  kind: 'end' | 'size' | 'whole';
+}
+
+/** The points of a shape a pointer can take hold of. */
+export function gripsOf(s: Shape): Grip[] {
+  switch (s.t) {
+    case 'line':
+      return [
+        { id: 'a', at: [s.x1, s.y1], kind: 'end' },
+        { id: 'b', at: [s.x2, s.y2], kind: 'end' },
+        { id: 'mid', at: [(s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2], kind: 'whole' },
+      ];
+
+    case 'rect':
+      return [
+        { id: 'nw', at: [s.x, s.y], kind: 'end' },
+        { id: 'ne', at: [s.x + s.w, s.y], kind: 'end' },
+        { id: 'se', at: [s.x + s.w, s.y + s.h], kind: 'end' },
+        { id: 'sw', at: [s.x, s.y + s.h], kind: 'end' },
+        { id: 'mid', at: [s.x + s.w / 2, s.y + s.h / 2], kind: 'whole' },
+      ];
+
+    case 'circle':
+      return [
+        { id: 'centre', at: [s.cx, s.cy], kind: 'whole' },
+        { id: 'r', at: [s.cx + s.r, s.cy], kind: 'size' },
+      ];
+
+    case 'ellipse':
+      return [
+        { id: 'centre', at: [s.cx, s.cy], kind: 'whole' },
+        { id: 'rx', at: [s.cx + s.rx, s.cy], kind: 'size' },
+        { id: 'ry', at: [s.cx, s.cy + s.ry], kind: 'size' },
+      ];
+
+    case 'arc':
+      return [
+        { id: 'centre', at: [s.cx, s.cy], kind: 'whole' },
+        { id: 'a0', at: onArc(s.cx, s.cy, s.r, s.a0), kind: 'end' },
+        { id: 'a1', at: onArc(s.cx, s.cy, s.r, s.a1), kind: 'end' },
+      ];
+
+    case 'curve':
+      return [
+        { id: 'a', at: [s.x1, s.y1], kind: 'end' },
+        { id: 'c', at: [s.cx, s.cy], kind: 'size' },
+        { id: 'b', at: [s.x2, s.y2], kind: 'end' },
+      ];
+
+    case 'poly':
+      return s.pts.map((p, i) => ({ id: `p${i}`, at: p, kind: 'end' as const }));
+
+    case 'text':
+      return [{ id: 'at', at: [s.x, s.y], kind: 'whole' }];
+  }
+}
+
+/**
+ * The shape with one of its grips moved to `to`.
+ *
+ * A `whole` grip carries the shape with it; the others move the one point they
+ * name. An unknown id leaves the shape alone rather than guessing, so a stale
+ * grip from a shape that has since changed kind cannot deform it.
+ */
+export function moveGrip(s: Shape, id: string, to: Pt): Shape {
+  const [x, y] = to;
+
+  if (id === 'mid' || id === 'at' || (id === 'centre' && s.t !== 'arc')) {
+    // The handle that shifts the whole shape, wherever it sits on it.
+    const from = gripsOf(s).find(g => g.id === id)?.at;
+    if (!from) return s;
+    return mapShape(s, translation(x - from[0], y - from[1]));
+  }
+
+  switch (s.t) {
+    case 'line':
+      if (id === 'a') return { ...s, x1: x, y1: y };
+      if (id === 'b') return { ...s, x2: x, y2: y };
+      return s;
+
+    case 'rect': {
+      // The corner opposite the one being dragged stays put, so the rectangle
+      // follows the pointer the way every drawing package does it.
+      const corners: Record<string, [Pt, Pt]> = {
+        nw: [[s.x + s.w, s.y + s.h], [x, y]],
+        ne: [[s.x, s.y + s.h], [x, y]],
+        se: [[s.x, s.y], [x, y]],
+        sw: [[s.x + s.w, s.y], [x, y]],
+      };
+      const pair = corners[id];
+      if (!pair) return s;
+      const [fixed, moved] = pair;
+      return {
+        ...s,
+        x: Math.min(fixed[0], moved[0]), y: Math.min(fixed[1], moved[1]),
+        w: Math.abs(moved[0] - fixed[0]), h: Math.abs(moved[1] - fixed[1]),
+      };
+    }
+
+    case 'circle':
+      return id === 'r' ? { ...s, r: Math.max(0.1, Math.hypot(x - s.cx, y - s.cy)) } : s;
+
+    case 'ellipse':
+      if (id === 'rx') return { ...s, rx: Math.max(0.1, Math.abs(x - s.cx)) };
+      if (id === 'ry') return { ...s, ry: Math.max(0.1, Math.abs(y - s.cy)) };
+      return s;
+
+    case 'arc': {
+      // The radius follows whichever end is dragged, and the other end keeps
+      // the angle it had — dragging an end sweeps the arc rather than moving
+      // its centre, which is what the handle looks like it should do.
+      const deg = norm360((Math.atan2(y - s.cy, x - s.cx) * 180) / Math.PI);
+      const r = Math.max(0.1, Math.hypot(x - s.cx, y - s.cy));
+      if (id === 'centre') return { ...s, cx: x, cy: y };
+      if (id === 'a0') {
+        let a0 = deg, a1 = s.a1;
+        while (a1 <= a0) a1 += 360;
+        return { ...s, r, a0, a1 };
+      }
+      if (id === 'a1') {
+        let a0 = s.a0, a1 = deg;
+        while (a1 <= a0) a1 += 360;
+        return { ...s, r, a0, a1 };
+      }
+      return s;
+    }
+
+    case 'curve':
+      if (id === 'a') return { ...s, x1: x, y1: y };
+      if (id === 'b') return { ...s, x2: x, y2: y };
+      if (id === 'c') return { ...s, cx: x, cy: y };
+      return s;
+
+    case 'poly': {
+      const i = Number(id.slice(1));
+      if (!Number.isInteger(i) || i < 0 || i >= s.pts.length) return s;
+      return { ...s, pts: s.pts.map((p, k) => (k === i ? [x, y] as Pt : p)) };
+    }
+
+    case 'text':
+      return s;
+  }
+}
+
+// ── Reading a shape as numbers ──────────────────────────────────────────────
+
+/**
+ * How long a line is and which way it points, the way a drawing office says it.
+ *
+ * The angle runs anticlockwise from horizontal — 0 along the sheet, 90 straight
+ * up — which is what EPLAN's own readout shows and the opposite of the y-down
+ * sense the geometry is stored in.
+ */
+export function lineMetrics(s: Extract<Shape, { t: 'line' }>): { length: number; angle: number } {
+  const dx = s.x2 - s.x1, dy = s.y2 - s.y1;
+  return {
+    length: Math.hypot(dx, dy),
+    angle: norm360(-(Math.atan2(dy, dx) * 180) / Math.PI),
+  };
+}
+
+/** The same line at a given length and angle, its first end held fast. */
+export function lineFrom(
+  s: Extract<Shape, { t: 'line' }>, length: number, angleDeg: number,
+): Extract<Shape, { t: 'line' }> {
+  const a = -angleDeg * DEG;
+  return { ...s, x2: s.x1 + Math.cos(a) * length, y2: s.y1 + Math.sin(a) * length };
+}

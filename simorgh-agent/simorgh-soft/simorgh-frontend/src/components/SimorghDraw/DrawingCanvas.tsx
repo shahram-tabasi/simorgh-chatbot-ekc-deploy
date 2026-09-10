@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Drawing, Layer, Pen, Pt, Shape } from '../../utils/cad/shapes';
-import { dimensionShapes } from '../../utils/cad/geom';
+import { Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip } from '../../utils/cad/geom';
 import { shapeToNode } from '../../utils/cad/svg';
 import {
   Box, boundsOf, boundsOfAll, hitTest, nearestSnap, shapesInBox, snapPoints,
@@ -86,6 +86,12 @@ interface Props {
   /** A command tool was used on the shape at `index`. */
   onPick: (index: number, at: Pt) => void;
   /**
+   * A grip drag that has finished: the shape at `index` has one of its points
+   * moved to `to`. Reported once on release, so undo gets one step for the
+   * whole drag rather than one per pixel.
+   */
+  onGrip: (index: number, grip: string, to: Pt) => void;
+  /**
    * Whether something is half-drawn.
    *
    * The editor listens for the same keys this does — Escape and Backspace —
@@ -101,10 +107,40 @@ type Drag =
   | { kind: 'pan'; startX: number; startY: number; view: Viewport }
   | { kind: 'move'; startX: number; startY: number; dx: number; dy: number }
   | { kind: 'band'; startX: number; startY: number; x: number; y: number; additive: boolean }
+  /** One point of one shape, taken hold of by its grip. */
+  | { kind: 'grip'; index: number; grip: string; at: Pt }
   | null;
 
 /** A shape being drawn: the points given so far, and where the cursor is. */
 interface Draft { tool: Tool; pts: Pt[]; cursor: Pt }
+
+/**
+ * The point a dragged grip is measured from.
+ *
+ * Holding Shift squares a line up — level, upright or 45° — and that only
+ * means anything against a fixed point. For a line's end that is its other
+ * end; for a radius or an arc it is the centre. Undefined where there is no
+ * such point, and then Shift simply does nothing.
+ */
+function otherEndOf(s: Shape | undefined, grip: string): Pt | undefined {
+  if (!s) return undefined;
+  switch (s.t) {
+    case 'line':
+      return grip === 'a' ? [s.x2, s.y2] : grip === 'b' ? [s.x1, s.y1] : undefined;
+    case 'circle': case 'ellipse': case 'arc':
+      return grip === 'centre' ? undefined : [s.cx, s.cy];
+    case 'curve':
+      return grip === 'a' ? [s.x2, s.y2] : grip === 'b' ? [s.x1, s.y1] : undefined;
+    case 'poly': {
+      // The vertex before this one, so a leg of a polyline squares up the way
+      // it did when it was drawn.
+      const i = Number(grip.slice(1));
+      return Number.isInteger(i) && i > 0 ? s.pts[i - 1] : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
 
 const SELECTED = '#2563eb';
 
@@ -121,7 +157,7 @@ export const DrawingCanvas: React.FC<Props> = ({
   drawing, shapes, selection, hidden, locked, view, grid, showGrid, tool,
   pen, textSize, objectSnap, mmPerUnit,
   onView, onSelection, onMove, onCursor, onEditText, onDraw, onPlaceText,
-  onPick, onDrafting, onCancelTool,
+  onPick, onGrip, onDrafting, onCancelTool,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag>(null);
@@ -182,6 +218,40 @@ export const DrawingCanvas: React.FC<Props> = ({
 
   /** The shapes a click is allowed to find. */
   const offLimits = useMemo(() => new Set([...hidden, ...locked]), [hidden, locked]);
+
+  /**
+   * The handles on what is picked.
+   *
+   * Only while the pick tool is in hand — a grip under a drawing tool would
+   * swallow the click that was meant to start a line. And only for a handful
+   * of shapes at a time: grips on two hundred picked shapes are not handles,
+   * they are confetti, and the bounding box already says what is selected.
+   */
+  const GRIP_LIMIT = 12;
+  const grips = useMemo<{ index: number; grip: Grip }[]>(() => {
+    if (tool !== 'select' || selection.size === 0 || selection.size > GRIP_LIMIT) return [];
+    const out: { index: number; grip: Grip }[] = [];
+    for (const i of selection) {
+      const s = shapes[i];
+      if (!s || offLimits.has(s.layer)) continue;
+      for (const grip of gripsOf(s)) out.push({ index: i, grip });
+    }
+    return out;
+  }, [tool, selection, shapes, offLimits]);
+
+  /** The grip within reach of a point, nearest first. */
+  const gripAt = useCallback((x: number, y: number) => {
+    // A little more generous than a shape pick, because a grip is the thing
+    // you are aiming at and it sits on top of the geometry it belongs to.
+    const reach = unitsPerPixel() * 8;
+    let best: { index: number; grip: Grip } | null = null;
+    let bestDistance = reach;
+    for (const g of grips) {
+      const d = Math.hypot(g.grip.at[0] - x, g.grip.at[1] - y);
+      if (d <= bestDistance) { best = g; bestDistance = d; }
+    }
+    return best;
+  }, [grips, unitsPerPixel]);
 
   /**
    * Where a click lands.
@@ -346,6 +416,14 @@ export const DrawingCanvas: React.FC<Props> = ({
       return;
     }
 
+    // A grip is taken before the shape it sits on: it is smaller, it is on
+    // top, and it is what the pointer was aiming at.
+    const held = gripAt(p.x, p.y);
+    if (held && !e.shiftKey) {
+      setDrag({ kind: 'grip', index: held.index, grip: held.grip.id, at: held.grip.at });
+      return;
+    }
+
     const hit = hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, offLimits);
     if (hit === null) {
       setDrag({ kind: 'band', startX: p.x, startY: p.y, x: p.x, y: p.y, additive: e.shiftKey });
@@ -395,6 +473,18 @@ export const DrawingCanvas: React.FC<Props> = ({
       setDrag({ ...drag, dx: snap(p.x - drag.startX), dy: snap(p.y - drag.startY) });
       return;
     }
+    if (drag.kind === 'grip') {
+      // The same rules a new point obeys: it catches the ends and corners of
+      // what is already drawn, Shift squares it up against the other end, and
+      // failing both it lands on the grid. An end dragged onto another line's
+      // end has to land on it exactly, or the DXF gets a gap in it.
+      const anchor = otherEndOf(shapes[drag.index], drag.grip);
+      const { point, onGeometry } = resolve(e.clientX, e.clientY, e.shiftKey, anchor);
+      setSnapped(onGeometry ? point : null);
+      setDrag({ ...drag, at: point });
+      onCursor({ x: point[0], y: point[1] });
+      return;
+    }
     setDrag({ ...drag, x: p.x, y: p.y });
   };
 
@@ -415,6 +505,18 @@ export const DrawingCanvas: React.FC<Props> = ({
       return;
     }
     if (!drag) return;
+    if (drag.kind === 'grip') {
+      const was = gripsOf(shapes[drag.index] ?? { t: 'line', x1: 0, y1: 0, x2: 0, y2: 0, layer: 'FREE' })
+        .find(g => g.id === drag.grip)?.at;
+      // A grip put back where it started is not an edit, and should not cost
+      // an undo step or mark the sheet changed.
+      if (!was || was[0] !== drag.at[0] || was[1] !== drag.at[1]) {
+        onGrip(drag.index, drag.grip, drag.at);
+      }
+      setDrag(null);
+      setSnapped(null);
+      return;
+    }
     if (drag.kind === 'move' && (drag.dx !== 0 || drag.dy !== 0)) onMove(drag.dx, drag.dy);
     if (drag.kind === 'band') {
       const area: Box = {
@@ -449,13 +551,57 @@ export const DrawingCanvas: React.FC<Props> = ({
 
   const moving = drag?.kind === 'move' ? drag : null;
   const band = drag?.kind === 'band' ? drag : null;
+  const gripping = drag?.kind === 'grip' ? drag : null;
+
+  /** The shape as it would be if the grip were let go now. */
+  const dragged = useMemo(() => {
+    if (!gripping) return null;
+    const s = shapes[gripping.index];
+    return s ? moveGrip(s, gripping.grip, gripping.at) : null;
+  }, [gripping, shapes]);
+
+  /**
+   * What the drag is doing, in the words EPLAN puts in the same place.
+   *
+   * A length and an angle while a line is being drawn or dragged; a radius for
+   * a circle; the offset for anything else. It follows the cursor, because
+   * that is where the eye already is.
+   */
+  const readout = useMemo<string | null>(() => {
+    const say = (v: number) => (v * mmPerUnit).toFixed(2);
+    const inHand = dragged ?? (draft ? shapeOf(draft.tool, [...draft.pts, draft.cursor])?.[0] : null);
+    if (inHand) {
+      if (inHand.t === 'line') {
+        const { length, angle } = lineMetrics(inHand);
+        return `Length=${say(length)}  Angle=${angle.toFixed(2)}`;
+      }
+      if (inHand.t === 'circle') return `R=${say(inHand.r)}`;
+      if (inHand.t === 'ellipse') return `Rx=${say(inHand.rx)}  Ry=${say(inHand.ry)}`;
+      if (inHand.t === 'arc') {
+        return `R=${say(inHand.r)}  Sweep=${(inHand.a1 - inHand.a0).toFixed(2)}`;
+      }
+      if (inHand.t === 'rect') return `${say(inHand.w)} × ${say(inHand.h)}`;
+    }
+    if (moving && (moving.dx !== 0 || moving.dy !== 0)) {
+      return `dX=${say(moving.dx)}  dY=${say(moving.dy)}`;
+    }
+    return null;
+  }, [dragged, draft, shapeOf, moving, mmPerUnit]);
 
   const selectionBox = useMemo(() => {
+    // Hidden while a grip is in hand: the box would be drawn round where the
+    // shape was, not where it is going, and two rectangles disagreeing is
+    // worse than none.
+    if (gripping) return null;
+    // And hidden on a single shape that is showing its handles. The handles
+    // already say what is picked, and a box drawn tight round a level line is
+    // a dashed strip lying on top of the line itself.
+    if (selection.size === 1 && grips.length > 0) return null;
     const picked = [...selection].map(i => shapes[i]).filter(Boolean);
     const b = boundsOfAll(picked);
     if (!b) return null;
     return moving ? { ...b, x: b.x + moving.dx, y: b.y + moving.dy } : b;
-  }, [selection, shapes, moving]);
+  }, [selection, shapes, moving, gripping, grips]);
 
   const stroke = unitsPerPixel();
 
@@ -467,6 +613,7 @@ export const DrawingCanvas: React.FC<Props> = ({
       style={{
         background: '#fff',
         cursor: panning ? 'grab'
+          : drag?.kind === 'grip' ? 'crosshair'
           : drag?.kind === 'move' ? 'move'
           : DRAWS.has(tool) ? 'crosshair'
           : PICKS.has(tool) ? 'cell'
@@ -593,6 +740,44 @@ export const DrawingCanvas: React.FC<Props> = ({
           : React.createElement(node.tag, props);
       })()}
 
+      {/* The shape as the grip is dragging it, over the one still on the
+          sheet — so the old position is visible to judge the new one by. */}
+      {dragged && (() => {
+        const node = shapeToNode(dragged);
+        if (!node) return null;
+        const props: Record<string, unknown> = { pointerEvents: 'none' };
+        for (const [attr, v] of Object.entries(node.attrs)) props[REACT_PROP[attr] ?? attr] = v;
+        props.stroke = SELECTED;
+        props.strokeWidth = Math.max(Number(node.attrs['stroke-width']) || 1, stroke * 1.6);
+        if (node.tag === 'text') props.fill = SELECTED;
+        else if (!dragged.fill || dragged.fill === 'none') props.fill = 'none';
+        return node.tag === 'text'
+          ? <text {...props}>{node.body}</text>
+          : React.createElement(node.tag, props);
+      })()}
+
+      {/* The handles themselves. A square for a point that moves on its own, a
+          diamond for one that moves the whole shape — the difference a hand
+          needs to know before it presses, not after. */}
+      {grips.length > 0 && !gripping && (
+        <g pointerEvents="none">
+          {grips.map(({ index, grip }, k) => {
+            // About ten screen pixels across at any zoom — the size a pointer
+            // can land on without aiming, and what every CAD package uses.
+            const r = stroke * 5;
+            const [x, y] = grip.at;
+            const fill = grip.kind === 'whole' ? '#fff' : SELECTED;
+            return grip.kind === 'whole'
+              ? <polygon key={`${index}.${grip.id}.${k}`}
+                         points={`${x},${y - r} ${x + r},${y} ${x},${y + r} ${x - r},${y}`}
+                         fill={fill} stroke={SELECTED} strokeWidth={stroke} />
+              : <rect key={`${index}.${grip.id}.${k}`}
+                      x={x - r} y={y - r} width={r * 2} height={r * 2}
+                      fill={fill} stroke="#fff" strokeWidth={stroke * 0.8} />;
+          })}
+        </g>
+      )}
+
       {/* The cursor has caught the end or corner of something already drawn. */}
       {snapped && (
         <g pointerEvents="none">
@@ -612,6 +797,26 @@ export const DrawingCanvas: React.FC<Props> = ({
                 stroke={SELECTED} strokeWidth={stroke} />
         </g>
       )}
+
+      {/* Length and angle while something is in hand. Placed to the lower
+          right of the cursor and sized in screen pixels, so it stays legible
+          at every zoom instead of growing with the drawing. */}
+      {readout && cursorHint && (() => {
+        const pad = stroke * 5;
+        const size = stroke * 12;
+        const w = readout.length * size * 0.55 + pad * 2;
+        const x = cursorHint.x + stroke * 14;
+        const y = cursorHint.y + stroke * 14;
+        return (
+          <g pointerEvents="none">
+            <rect x={x} y={y} width={w} height={size + pad * 2}
+                  fill="#fffbeb" stroke="#94a3b8" strokeWidth={stroke} />
+            <text x={x + pad} y={y + pad + size * 0.8} fontSize={size} fill="#1f2937">
+              {readout}
+            </text>
+          </g>
+        );
+      })()}
 
       {band && Math.abs(band.x - band.startX) > 1 && (
         <rect

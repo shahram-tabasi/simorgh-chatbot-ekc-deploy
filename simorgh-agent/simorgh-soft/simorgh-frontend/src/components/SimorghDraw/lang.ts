@@ -57,6 +57,16 @@ export interface Strings {
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
 
+  // Geometry, in the panel where it can be typed
+  geometry: string; inMm: string;
+  lengthOf: string; angleOf: string; radiusOf: string;
+  startX: string; startY: string; endX: string; endY: string;
+  centreXOf: string; centreYOf: string; widthMm: string; heightMm: string;
+  radiusXOf: string; radiusYOf: string; sweepFrom: string; sweepTo: string;
+  atX: string; atY: string; rotationOf: string;
+  pointsN: (n: number) => string;
+  dragGrips: string;
+
   // Panels
   layers: string; selection: string; typeOf: string; textOf: string;
   pickedN: (n: number) => string;
@@ -136,6 +146,15 @@ const EN: Strings = {
   paperOf: "The sheet DXF and PDF are put on. 'Fit the drawing' keeps the scale and lets the sheet grow.",
   fitDrawing: 'fit the drawing',
 
+  geometry: 'Geometry', inMm: 'millimetres',
+  lengthOf: 'Length', angleOf: 'Angle', radiusOf: 'Radius',
+  startX: 'Start X', startY: 'Start Y', endX: 'End X', endY: 'End Y',
+  centreXOf: 'Centre X', centreYOf: 'Centre Y', widthMm: 'Width', heightMm: 'Height',
+  radiusXOf: 'Radius X', radiusYOf: 'Radius Y', sweepFrom: 'From', sweepTo: 'To',
+  atX: 'X', atY: 'Y', rotationOf: 'Rotation',
+  pointsN: n => `${n} points`,
+  dragGrips: 'Drag a square handle to move that end on its own; the diamond carries the whole shape. Hold Shift to keep it level, upright or on 45°.',
+
   layers: 'Layers', selection: 'Selection', typeOf: 'Type', textOf: 'Text',
   pickedN: n => `${n} shapes`,
   nothingPicked: 'Click something to pick it, or drag a box around several. Double-click a label to retype it.',
@@ -183,7 +202,8 @@ const EN: Strings = {
     ],
     modify: [
       'Click a shape to pick it, shift-click to add another, or drag a box around several.',
-      'With something picked, the Selection panel on the right changes its layer, its line weight, its line type and — for a label — its height and its wording.',
+      'A picked shape shows handles. Drag a square one and only that end moves, so a line is shortened from the end you took hold of; the diamond in the middle carries the whole shape. Hold Shift to keep it level, upright or on 45°, and the length and angle are shown against the cursor as you go.',
+      'With something picked, the Selection panel on the right shows its geometry in millimetres — start, end, length, angle — and every one of them can be typed. That is how a line goes from about right to exactly 111.00 mm.',
       'Turn, mirror, scale, align and spread out are on the modify bar. They all work on whatever is picked.',
       'Trim cuts a line back to whatever crosses it — click the piece you want gone.',
       'Extend runs a line on until it meets something — click the end that should grow.',
@@ -253,6 +273,15 @@ const FA: Strings = {
   paperOf: 'کاغذی که DXF و PDF روی آن می‌نشیند. «اندازه نقشه» مقیاس را نگه می‌دارد و کاغذ را بزرگ می‌کند.',
   fitDrawing: 'اندازه نقشه',
 
+  geometry: 'هندسه', inMm: 'میلی‌متر',
+  lengthOf: 'طول', angleOf: 'زاویه', radiusOf: 'شعاع',
+  startX: 'X شروع', startY: 'Y شروع', endX: 'X پایان', endY: 'Y پایان',
+  centreXOf: 'X مرکز', centreYOf: 'Y مرکز', widthMm: 'عرض', heightMm: 'ارتفاع',
+  radiusXOf: 'شعاع X', radiusYOf: 'شعاع Y', sweepFrom: 'از', sweepTo: 'تا',
+  atX: 'X', atY: 'Y', rotationOf: 'چرخش',
+  pointsN: n => `${n} نقطه`,
+  dragGrips: 'دستگیره مربعی را بکشید تا فقط همان سر جابه‌جا شود؛ لوزی کل شکل را می‌برد. با نگه‌داشتن Shift خط افقی یا عمودی یا ۴۵ درجه می‌ماند.',
+
   layers: 'لایه‌ها', selection: 'انتخاب‌شده', typeOf: 'نوع', textOf: 'متن',
   pickedN: n => `${n} شکل`,
   nothingPicked: 'روی چیزی کلیک کنید تا انتخاب شود، یا با کشیدن کادر چند شکل را بگیرید. برای تغییر متن، روی آن دوبار کلیک کنید.',
@@ -300,7 +329,8 @@ const FA: Strings = {
     ],
     modify: [
       'برای انتخاب روی شکل کلیک کنید، با Shift شکل دیگری اضافه کنید، یا کادری دور چند شکل بکشید.',
-      'با انتخاب یک شکل، پنل «انتخاب‌شده» در سمت راست لایه و ضخامت و نوع خط آن — و برای متن، ارتفاع و خود نوشته — را تغییر می‌دهد.',
+      'شکل انتخاب‌شده دستگیره نشان می‌دهد. دستگیره مربعی را بکشید تا فقط همان سر جابه‌جا شود — یعنی خط از همان سمتی که گرفته‌اید کوتاه می‌شود؛ لوزی وسط، کل شکل را می‌برد. با Shift خط افقی یا عمودی یا ۴۵ درجه می‌ماند و طول و زاویه هم کنار مکان‌نما نشان داده می‌شود.',
+      'با انتخاب یک شکل، پنل «انتخاب‌شده» در سمت راست هندسه آن را به میلی‌متر نشان می‌دهد — شروع، پایان، طول، زاویه — و همه را می‌شود تایپ کرد. این‌طور یک خط از «تقریباً درست» به دقیقاً ۱۱۱٫۰۰ میلی‌متر می‌رسد.',
       'چرخش، قرینه، مقیاس، تراز و یکسان‌کردن فاصله‌ها روی نوار ویرایش هستند و همه روی چیزی که انتخاب شده کار می‌کنند.',
       'Trim خط را تا محل تقاطعش می‌برد — روی تکه‌ای که باید برود کلیک کنید.',
       'Extend خط را تا اولین مانع پیش می‌برد — روی سری که باید رشد کند کلیک کنید.',
@@ -371,6 +401,15 @@ const TR: Strings = {
   paperOf: "DXF ve PDF'in oturacağı kâğıt. 'Çizime sığdır' ölçeği korur, kâğıdı büyütür.",
   fitDrawing: 'çizime sığdır',
 
+  geometry: 'Geometri', inMm: 'milimetre',
+  lengthOf: 'Uzunluk', angleOf: 'Açı', radiusOf: 'Yarıçap',
+  startX: 'Başlangıç X', startY: 'Başlangıç Y', endX: 'Bitiş X', endY: 'Bitiş Y',
+  centreXOf: 'Merkez X', centreYOf: 'Merkez Y', widthMm: 'Genişlik', heightMm: 'Yükseklik',
+  radiusXOf: 'Yarıçap X', radiusYOf: 'Yarıçap Y', sweepFrom: 'Başlangıç', sweepTo: 'Bitiş',
+  atX: 'X', atY: 'Y', rotationOf: 'Dönüş',
+  pointsN: n => `${n} nokta`,
+  dragGrips: 'Kare tutamağı sürükleyin, yalnızca o uç gitsin; baklava tutamak nesnenin tamamını taşır. Shift basılıyken yatay, dikey ya da 45° kalır.',
+
   layers: 'Katmanlar', selection: 'Seçim', typeOf: 'Tür', textOf: 'Yazı',
   pickedN: n => `${n} nesne`,
   nothingPicked: 'Seçmek için bir nesneye tıklayın ya da birkaçının etrafına kutu çizin. Yazıyı değiştirmek için üstüne çift tıklayın.',
@@ -419,7 +458,8 @@ const TR: Strings = {
     ],
     modify: [
       'Seçmek için nesneye tıklayın, Shift ile bir tane daha ekleyin ya da birkaçının etrafına kutu çizin.',
-      'Bir nesne seçiliyken sağdaki Seçim paneli katmanını, çizgi kalınlığını, çizgi tipini — yazıysa yüksekliğini ve metnini — değiştirir.',
+      'Seçili nesne tutamaklarını gösterir. Kare tutamağı sürükleyin, yalnızca o uç gitsin — yani çizgi tuttuğunuz uçtan kısalır; ortadaki baklava tutamak nesnenin tamamını taşır. Shift basılıyken yatay, dikey ya da 45° kalır; uzunluk ve açı imlecin yanında yazar.',
+      'Bir nesne seçiliyken sağdaki Seçim paneli geometriyi milimetre olarak gösterir — başlangıç, bitiş, uzunluk, açı — ve hepsi yazılabilir. Bir çizgi “yaklaşık”tan tam 111,00 mm’ye böyle gider.',
       'Döndürme, aynalama, ölçekleme, hizalama ve aralık eşitleme değiştirme çubuğundadır; hepsi seçili olan üzerinde çalışır.',
       'Trim çizgiyi kesiştiği yere kadar budar — gitmesini istediğiniz parçaya tıklayın.',
       'Extend çizgiyi önündeki ilk nesneye kadar uzatır — uzayacak uca tıklayın.',

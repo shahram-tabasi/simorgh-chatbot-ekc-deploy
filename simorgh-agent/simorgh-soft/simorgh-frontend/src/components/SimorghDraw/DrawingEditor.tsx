@@ -27,8 +27,8 @@ import {
 } from '../../utils/cad/edit';
 import {
   AlignTo, EditResult, alignShapes, centreOf, cornerLines, distributeShapes,
-  extendLine, mirrorX, mirrorY, reorderShapes, rotation, scaling,
-  transformShapes, trimLine,
+  extendLine, lineFrom, lineMetrics, mirrorX, mirrorY, moveGrip, norm360,
+  reorderShapes, rotation, scaling, transformShapes, trimLine,
 } from '../../utils/cad/geom';
 import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
 import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang';
@@ -346,6 +346,20 @@ export const DrawingEditor: React.FC<Props> = ({
     transform((cx, cy) => scaling(cx, cy, k));
   };
 
+  /** A grip let go: the shape at `i` has one of its points somewhere new. */
+  const grip = (i: number, id: string, to: Pt) => {
+    const s = shapes[i];
+    if (!s) return;
+    commit(shapes.map((x, k) => (k === i ? moveGrip(x, id, to) : x)), new Set([i]));
+  };
+
+  /** One picked shape, replaced by a version of itself. */
+  const reshape = (next: Shape) => {
+    const i = [...selection][0];
+    if (i === undefined || !shapes[i]) return;
+    commit(shapes.map((s, k) => (k === i ? next : s)), new Set([i]));
+  };
+
   const align = (to: AlignTo) => {
     if (selection.size < 2) return;
     commit(alignShapes(shapes, selection, to));
@@ -567,6 +581,9 @@ export const DrawingEditor: React.FC<Props> = ({
     : tool === 'extend' ? T.hintExtend
     : tool === 'corner' ? (pendingCorner ? T.hintCornerSecond : T.hintCornerFirst)
     : DRAWS.has(tool) ? T.hintTwoClicks
+    // Something picked and the pick tool in hand: the handles are on show, so
+    // say what they do rather than repeating the general shortcuts.
+    : selection.size > 0 && selection.size <= 12 ? T.dragGrips
     : T.hintIdle;
 
   if (!sheet) {
@@ -874,6 +891,7 @@ export const DrawingEditor: React.FC<Props> = ({
             onDraw={draw}
             onPlaceText={placeText}
             onPick={command}
+            onGrip={grip}
             onDrafting={setDrafting}
             onCancelTool={() => { setPendingCorner(null); setTool('select'); }}
             onEditText={i => {
@@ -925,6 +943,20 @@ export const DrawingEditor: React.FC<Props> = ({
             )}
 
             {picked.length === 1 && <Row label={T.typeOf} value={picked[0].t} />}
+
+            {/* The numbers behind the shape, where they can be typed.
+                Everything is in millimetres of real size, the same units the
+                status bar and the dimension tool use — a drawing office thinks
+                in millimetres, not in the sheet's own grid. */}
+            {picked.length === 1 && (
+              <Geometry
+                shape={picked[0]}
+                t={T}
+                mmPerUnit={mmPerUnit}
+                onChange={reshape}
+                onFocus={() => historyFor(index).push(shapes)}
+              />
+            )}
             {picked.length > 1 && <Row label={T.selection} value={T.pickedN(picked.length)} />}
 
             {/* Everything about how the picked shapes are drawn, changed where
@@ -1071,6 +1103,179 @@ function commonOf<T>(picked: Shape[], read: (s: Shape) => T): T | null {
 /** Which of the four line types a dash pattern is, for the dropdown. */
 const lineTypeIdOf = (dash?: string): string =>
   LINE_TYPES.find(l => (l.dash ?? '') === (dash ?? ''))?.id ?? 'solid';
+
+/**
+ * The numbers behind one shape, in millimetres, editable.
+ *
+ * This is the other half of the grips: the mouse puts a line roughly where it
+ * belongs and these put it exactly there. Both write the same shape, so a line
+ * dragged to about 110 mm and then typed as 111.00 ends up at 111.00.
+ *
+ * Everything is shown in millimetres of real size rather than in the sheet's
+ * own units, because that is what the status bar reads, what the dimension
+ * tool writes, and what a drawing office measures in.
+ */
+const Geometry: React.FC<{
+  shape: Shape;
+  t: Strings;
+  mmPerUnit: number;
+  onChange: (next: Shape) => void;
+  /** Called before the first keystroke of an edit, to take one undo step. */
+  onFocus: () => void;
+}> = ({ shape, t, mmPerUnit, onChange, onFocus }) => {
+  const toMm = (v: number) => Number((v * mmPerUnit).toFixed(2));
+  const toUnits = (mm: number) => mm / mmPerUnit;
+
+  const Field: React.FC<{
+    label: string; value: number; onSet: (v: number) => void;
+    /** Degrees rather than millimetres — no conversion, and it wraps. */
+    degrees?: boolean;
+    name: string;
+  }> = ({ label, value, onSet, degrees, name }) => (
+    <label className="block min-w-0">
+      <span className="text-[11px] text-gray-500 truncate block">{label}</span>
+      <input
+        type="number"
+        step={degrees ? 1 : 0.1}
+        data-geom={name}
+        // Rounded for showing, never for storing: what is typed is what is
+        // used, and an untouched field puts back exactly what it read.
+        value={degrees ? Number(value.toFixed(2)) : toMm(value)}
+        onFocus={onFocus}
+        onChange={e => {
+          const typed = Number(e.target.value);
+          if (!Number.isFinite(typed)) return;
+          onSet(degrees ? typed : toUnits(typed));
+        }}
+        className="w-full mt-0.5 border border-gray-300 rounded px-2 py-1 text-sm tabular-nums"
+      />
+    </label>
+  );
+
+  const Pair: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <div className="grid grid-cols-2 gap-2">{children}</div>
+  );
+
+  const head = (
+    <div className="flex items-baseline justify-between gap-2 pt-1">
+      <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{t.geometry}</span>
+      <span className="text-[10px] text-gray-400">{t.inMm}</span>
+    </div>
+  );
+
+  switch (shape.t) {
+    case 'line': {
+      const { length, angle } = lineMetrics(shape);
+      return (
+        <div className="space-y-2">
+          {head}
+          <Pair>
+            <Field name="x1" label={t.startX} value={shape.x1} onSet={v => onChange({ ...shape, x1: v })} />
+            <Field name="y1" label={t.startY} value={shape.y1} onSet={v => onChange({ ...shape, y1: v })} />
+          </Pair>
+          <Pair>
+            <Field name="x2" label={t.endX} value={shape.x2} onSet={v => onChange({ ...shape, x2: v })} />
+            <Field name="y2" label={t.endY} value={shape.y2} onSet={v => onChange({ ...shape, y2: v })} />
+          </Pair>
+          {/* Length and angle hold the first end and swing the second, which
+              is how a line is given a size without first working out where
+              its far end would have to be. */}
+          <Pair>
+            <Field name="length" label={t.lengthOf} value={length}
+                   onSet={v => onChange(lineFrom(shape, Math.max(0, v), angle))} />
+            <Field name="angle" label={t.angleOf} value={angle} degrees
+                   onSet={v => onChange(lineFrom(shape, length, v))} />
+          </Pair>
+        </div>
+      );
+    }
+
+    case 'rect':
+      return (
+        <div className="space-y-2">
+          {head}
+          <Pair>
+            <Field name="x" label={t.atX} value={shape.x} onSet={v => onChange({ ...shape, x: v })} />
+            <Field name="y" label={t.atY} value={shape.y} onSet={v => onChange({ ...shape, y: v })} />
+          </Pair>
+          <Pair>
+            <Field name="w" label={t.widthMm} value={shape.w} onSet={v => onChange({ ...shape, w: Math.max(0, v) })} />
+            <Field name="h" label={t.heightMm} value={shape.h} onSet={v => onChange({ ...shape, h: Math.max(0, v) })} />
+          </Pair>
+        </div>
+      );
+
+    case 'circle':
+      return (
+        <div className="space-y-2">
+          {head}
+          <Pair>
+            <Field name="cx" label={t.centreXOf} value={shape.cx} onSet={v => onChange({ ...shape, cx: v })} />
+            <Field name="cy" label={t.centreYOf} value={shape.cy} onSet={v => onChange({ ...shape, cy: v })} />
+          </Pair>
+          <Field name="r" label={t.radiusOf} value={shape.r}
+                 onSet={v => onChange({ ...shape, r: Math.max(0.01, v) })} />
+        </div>
+      );
+
+    case 'ellipse':
+      return (
+        <div className="space-y-2">
+          {head}
+          <Pair>
+            <Field name="cx" label={t.centreXOf} value={shape.cx} onSet={v => onChange({ ...shape, cx: v })} />
+            <Field name="cy" label={t.centreYOf} value={shape.cy} onSet={v => onChange({ ...shape, cy: v })} />
+          </Pair>
+          <Pair>
+            <Field name="rx" label={t.radiusXOf} value={shape.rx} onSet={v => onChange({ ...shape, rx: Math.max(0.01, v) })} />
+            <Field name="ry" label={t.radiusYOf} value={shape.ry} onSet={v => onChange({ ...shape, ry: Math.max(0.01, v) })} />
+          </Pair>
+        </div>
+      );
+
+    case 'arc':
+      return (
+        <div className="space-y-2">
+          {head}
+          <Pair>
+            <Field name="cx" label={t.centreXOf} value={shape.cx} onSet={v => onChange({ ...shape, cx: v })} />
+            <Field name="cy" label={t.centreYOf} value={shape.cy} onSet={v => onChange({ ...shape, cy: v })} />
+          </Pair>
+          <Field name="r" label={t.radiusOf} value={shape.r}
+                 onSet={v => onChange({ ...shape, r: Math.max(0.01, v) })} />
+          <Pair>
+            <Field name="a0" label={t.sweepFrom} value={shape.a0} degrees
+                   onSet={v => onChange({ ...shape, a0: v, a1: v < shape.a1 ? shape.a1 : v + 1 })} />
+            <Field name="a1" label={t.sweepTo} value={shape.a1} degrees
+                   onSet={v => onChange({ ...shape, a1: v > shape.a0 ? v : shape.a0 + 1 })} />
+          </Pair>
+        </div>
+      );
+
+    case 'text':
+      return (
+        <div className="space-y-2">
+          {head}
+          <Pair>
+            <Field name="x" label={t.atX} value={shape.x} onSet={v => onChange({ ...shape, x: v })} />
+            <Field name="y" label={t.atY} value={shape.y} onSet={v => onChange({ ...shape, y: v })} />
+          </Pair>
+          <Field name="rot" label={t.rotationOf} value={shape.rot ?? 0} degrees
+                 onSet={v => onChange({ ...shape, rot: norm360(v) || undefined })} />
+        </div>
+      );
+
+    case 'poly': case 'curve':
+      // Typing thirty vertices is not editing, it is data entry — the grips
+      // are the way to move these, and the panel says so rather than pretending.
+      return (
+        <div className="space-y-1">
+          {head}
+          <Row label={t.geometry} value={t.pointsN(shape.t === 'poly' ? shape.pts.length : 3)} />
+        </div>
+      );
+  }
+};
 
 const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div className="flex justify-between gap-2">

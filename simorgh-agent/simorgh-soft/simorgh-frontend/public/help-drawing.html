@@ -127,12 +127,13 @@
       <a href="#tools">2. The tools</a>
       <a href="#precise">3. Drawing accurately</a>
       <a href="#trim">4. Trim, extend and corner</a>
-      <a href="#change">5. Turning, mirroring, lining up</a>
-      <a href="#style">6. Line weight, line type, layer</a>
-      <a href="#dims">7. Dimensions</a>
-      <a href="#keep">8. Keeping the work</a>
-      <a href="#out">9. Getting it out</a>
-      <a href="#keys">10. Keys</a>
+      <a href="#grips">5. Handles, and exact numbers</a>
+      <a href="#change">6. Turning, mirroring, lining up</a>
+      <a href="#style">7. Line weight, line type, layer</a>
+      <a href="#dims">8. Dimensions</a>
+      <a href="#keep">9. Keeping the work</a>
+      <a href="#out">10. Getting it out</a>
+      <a href="#keys">11. Keys</a>
     </div>
     <div data-lang="fa">
       <div class="nav-title">فهرست مطالب</div>
@@ -140,12 +141,13 @@
       <a href="#tools">۲. ابزارها</a>
       <a href="#precise">۳. ترسیم دقیق</a>
       <a href="#trim">۴. بریدن، امتداد و گوشه</a>
-      <a href="#change">۵. چرخش، قرینه، تراز</a>
-      <a href="#style">۶. ضخامت خط، نوع خط، لایه</a>
-      <a href="#dims">۷. اندازه‌گذاری</a>
-      <a href="#keep">۸. ثبت کار</a>
-      <a href="#out">۹. خروجی گرفتن</a>
-      <a href="#keys">۱۰. کلیدها</a>
+      <a href="#grips">۵. دستگیره‌ها و اعداد دقیق</a>
+      <a href="#change">۶. چرخش، قرینه، تراز</a>
+      <a href="#style">۷. ضخامت خط، نوع خط، لایه</a>
+      <a href="#dims">۸. اندازه‌گذاری</a>
+      <a href="#keep">۹. ثبت کار</a>
+      <a href="#out">۱۰. خروجی گرفتن</a>
+      <a href="#keys">۱۱. کلیدها</a>
     </div>
     <div data-lang="tr">
       <div class="nav-title">İçindekiler</div>
@@ -153,12 +155,13 @@
       <a href="#tools">2. Araçlar</a>
       <a href="#precise">3. Hassas çizim</a>
       <a href="#trim">4. Budama, uzatma ve köşe</a>
-      <a href="#change">5. Döndürme, aynalama, hizalama</a>
-      <a href="#style">6. Çizgi kalınlığı, tipi, katman</a>
-      <a href="#dims">7. Ölçülendirme</a>
-      <a href="#keep">8. Yapılanı saklamak</a>
-      <a href="#out">9. Dışa aktarmak</a>
-      <a href="#keys">10. Tuşlar</a>
+      <a href="#grips">5. Tutamaklar ve kesin sayılar</a>
+      <a href="#change">6. Döndürme, aynalama, hizalama</a>
+      <a href="#style">7. Çizgi kalınlığı, tipi, katman</a>
+      <a href="#dims">8. Ölçülendirme</a>
+      <a href="#keep">9. Yapılanı saklamak</a>
+      <a href="#out">10. Dışa aktarmak</a>
+      <a href="#keys">11. Tuşlar</a>
     </div>
   </nav>
 
@@ -432,9 +435,98 @@
       <div class="warn">Üçü de düz çizgilerde çalışır. Bir daireye ya da yazıya tıklarsanız durum çubuğu bunu söyler, beklenmedik bir şey yapmaz.</div>
     </div>
     </section>
+    <section id="grips">
+    <div data-lang="en">
+      <h2><span class="num">5</span>Handles, and exact numbers</h2>
+      <p>A picked shape shows handles. A <b>square</b> moves that point on its own — so a line is shortened from the end you took hold of, not from whichever end the software fancies. The <b>diamond</b> in the middle carries the whole shape.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#2563eb;stroke-width:2.5;fill:none}.g{stroke:#94a3b8;stroke-width:2;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="40" y1="45" x2="200" y2="45"/>
+  <rect x="34" y="39" width="12" height="12" fill="#2563eb"/>
+  <rect x="194" y="39" width="12" height="12" fill="#2563eb"/>
+  <polygon points="120,38 127,45 120,52 113,45" fill="#fff" stroke="#2563eb" stroke-width="2"/>
+  <text class="t" x="24" y="76">this end only</text>
+  <text class="t" x="96" y="30">whole shape</text>
+  <text class="t" x="176" y="76">this end only</text>
+  <line class="a" x1="270" y1="45" x2="360" y2="45"/>
+  <rect x="264" y="39" width="12" height="12" fill="#2563eb"/>
+  <rect x="354" y="39" width="12" height="12" fill="#2563eb"/>
+  <text class="t" x="232" y="30">&#8592; dragged in</text>
+  <rect x="252" y="62" width="132" height="20" fill="#fffbeb" stroke="#94a3b8"/>
+  <text class="t" x="258" y="76">Length=90.00 Angle=0.00</text>
+</svg><figcaption>The handles on a line, and the readout while one is dragged.</figcaption></figure>
+      <ul>
+        <li>While a handle is in hand the <b>length and angle</b> follow the cursor, the way they do in EPLAN.</li>
+        <li>The magnet still applies, so an end dragged onto another line’s end lands on it exactly — no gap in the DXF.</li>
+        <li>Holding <b>Shift</b> squares the line up against its other end: level, upright or 45°.</li>
+        <li>A whole drag is one undo step, however far the pointer travelled.</li>
+      </ul>
+      <p>And the <b>Selection</b> panel on the right shows the same shape as numbers, in millimetres: start, end, length, angle — and every one of them can be typed. That is how a line goes from about right to exactly 111.00 mm. Length and angle hold the first end and swing the second, so a line can be given a size without first working out where its far end would have to be.</p>
+      <div class="tip">Every shape has handles, not just lines: a rectangle by its corners, a circle by its radius, an arc by its ends, a polyline by every vertex.</div>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۵</span>دستگیره‌ها و اعداد دقیق</h2>
+      <p>شکل انتخاب‌شده دستگیره نشان می‌دهد. <b>مربع</b> فقط همان نقطه را جابه‌جا می‌کند — یعنی خط از همان سمتی که گرفته‌اید کوتاه می‌شود، نه از سری که نرم‌افزار دلش بخواهد. <b>لوزی</b> وسط، کل شکل را می‌برد.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#2563eb;stroke-width:2.5;fill:none}.g{stroke:#94a3b8;stroke-width:2;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="40" y1="45" x2="200" y2="45"/>
+  <rect x="34" y="39" width="12" height="12" fill="#2563eb"/>
+  <rect x="194" y="39" width="12" height="12" fill="#2563eb"/>
+  <polygon points="120,38 127,45 120,52 113,45" fill="#fff" stroke="#2563eb" stroke-width="2"/>
+  <text class="t" x="24" y="76">this end only</text>
+  <text class="t" x="96" y="30">whole shape</text>
+  <text class="t" x="176" y="76">this end only</text>
+  <line class="a" x1="270" y1="45" x2="360" y2="45"/>
+  <rect x="264" y="39" width="12" height="12" fill="#2563eb"/>
+  <rect x="354" y="39" width="12" height="12" fill="#2563eb"/>
+  <text class="t" x="232" y="30">&#8592; dragged in</text>
+  <rect x="252" y="62" width="132" height="20" fill="#fffbeb" stroke="#94a3b8"/>
+  <text class="t" x="258" y="76">Length=90.00 Angle=0.00</text>
+</svg><figcaption>دستگیره‌های یک خط، و عددی که موقع کشیدن نشان داده می‌شود.</figcaption></figure>
+      <ul>
+        <li>وقتی دستگیره در دست است، <b>طول و زاویه</b> کنار مکان‌نما نشان داده می‌شود، همان‌طور که در ایپلن هست.</li>
+        <li>آهن‌ربا هم کار می‌کند، پس سری که روی سر خط دیگر کشیده شود دقیقاً روی آن می‌نشیند — بدون شکاف در DXF.</li>
+        <li>نگه‌داشتن <b>Shift</b> خط را نسبت به سر دیگرش صاف نگه می‌دارد: افقی، عمودی یا ۴۵ درجه.</li>
+        <li>یک کشیدن کامل، یک پله واگرد است، هر چقدر هم که مکان‌نما راه رفته باشد.</li>
+      </ul>
+      <p>و پنل <b>انتخاب‌شده</b> در سمت راست، همان شکل را به‌صورت عدد و به میلی‌متر نشان می‌دهد: شروع، پایان، طول، زاویه — و همه را می‌شود تایپ کرد. این‌طور یک خط از «تقریباً درست» به دقیقاً ۱۱۱٫۰۰ میلی‌متر می‌رسد. طول و زاویه، سر اول را نگه می‌دارند و سر دوم را می‌چرخانند، پس می‌شود به خط اندازه داد بدون اینکه اول حساب کنید سر دورش باید کجا باشد.</p>
+      <div class="tip">هر شکلی دستگیره دارد، نه فقط خط: مستطیل از گوشه‌ها، دایره از شعاع، کمان از دو سرش، و چندخطی از تک‌تک نقاطش.</div>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">5</span>Tutamaklar ve kesin sayılar</h2>
+      <p>Seçili nesne tutamaklarını gösterir. <b>Kare</b> yalnızca o noktayı taşır — yani çizgi, yazılımın canı ne isterse o uçtan değil, sizin tuttuğunuz uçtan kısalır. Ortadaki <b>baklava</b> nesnenin tamamını taşır.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#2563eb;stroke-width:2.5;fill:none}.g{stroke:#94a3b8;stroke-width:2;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="40" y1="45" x2="200" y2="45"/>
+  <rect x="34" y="39" width="12" height="12" fill="#2563eb"/>
+  <rect x="194" y="39" width="12" height="12" fill="#2563eb"/>
+  <polygon points="120,38 127,45 120,52 113,45" fill="#fff" stroke="#2563eb" stroke-width="2"/>
+  <text class="t" x="24" y="76">this end only</text>
+  <text class="t" x="96" y="30">whole shape</text>
+  <text class="t" x="176" y="76">this end only</text>
+  <line class="a" x1="270" y1="45" x2="360" y2="45"/>
+  <rect x="264" y="39" width="12" height="12" fill="#2563eb"/>
+  <rect x="354" y="39" width="12" height="12" fill="#2563eb"/>
+  <text class="t" x="232" y="30">&#8592; dragged in</text>
+  <rect x="252" y="62" width="132" height="20" fill="#fffbeb" stroke="#94a3b8"/>
+  <text class="t" x="258" y="76">Length=90.00 Angle=0.00</text>
+</svg><figcaption>Bir çizginin tutamakları ve sürüklerken çıkan değer.</figcaption></figure>
+      <ul>
+        <li>Tutamak elinizdeyken <b>uzunluk ve açı</b> imleci izler, EPLAN’daki gibi.</li>
+        <li>Mıknatıs yine çalışır; başka bir çizginin ucuna sürüklenen uç tam oraya oturur — DXF’te boşluk kalmaz.</li>
+        <li><b>Shift</b> basılıyken çizgi öteki ucuna göre düzlenir: yatay, dikey ya da 45°.</li>
+        <li>Bir sürüklemenin tamamı tek bir geri alma adımıdır, imleç ne kadar yol giderse gitsin.</li>
+      </ul>
+      <p>Sağdaki <b>Seçim</b> paneli de aynı nesneyi sayı olarak, milimetre cinsinden gösterir: başlangıç, bitiş, uzunluk, açı — hepsi yazılabilir. Bir çizgi “yaklaşık”tan tam 111,00 mm’ye böyle gider. Uzunluk ve açı ilk ucu sabit tutup ikincisini çevirir; böylece uzak ucun nereye düşmesi gerektiğini önceden hesaplamadan çizgiye ölçü verilir.</p>
+      <div class="tip">Yalnız çizgilerin değil, her nesnenin tutamağı var: dikdörtgen köşelerinden, daire yarıçapından, yay uçlarından, çoklu çizgi her noktasından.</div>
+    </div>
+    </section>
     <section id="change">
     <div data-lang="en">
-      <h2><span class="num">5</span>Turning, mirroring, lining up</h2>
+      <h2><span class="num">6</span>Turning, mirroring, lining up</h2>
       <p>The second row of the toolbar changes what is already there. Everything on it works on whatever is picked, and stays dark until something is.</p>
       <ul>
         <li><b>Turn</b> 90° either way, or by any angle you type. A label turns with it and still reads the right way up in the DXF and the PDF.</li>
@@ -446,7 +538,7 @@
       </ul>
     </div>
     <div data-lang="fa">
-      <h2><span class="num">۵</span>چرخش، قرینه، تراز</h2>
+      <h2><span class="num">۶</span>چرخش، قرینه، تراز</h2>
       <p>ردیف دوم نوار ابزار، آنچه را که هست تغییر می‌دهد. همه دکمه‌های آن روی چیزی که انتخاب شده کار می‌کنند و تا وقتی چیزی انتخاب نشده خاموش‌اند.</p>
       <ul>
         <li><b>چرخش</b> ۹۰ درجه به هر طرف، یا با هر زاویه‌ای که تایپ کنید. نوشته هم با آن می‌چرخد و در DXF و PDF هم درست خوانده می‌شود.</li>
@@ -458,7 +550,7 @@
       </ul>
     </div>
     <div data-lang="tr">
-      <h2><span class="num">5</span>Döndürme, aynalama, hizalama</h2>
+      <h2><span class="num">6</span>Döndürme, aynalama, hizalama</h2>
       <p>Araç çubuğunun ikinci satırı, var olanı değiştirir. Üzerindeki her şey seçili olan üzerinde çalışır ve bir şey seçilene kadar sönük durur.</p>
       <ul>
         <li><b>Döndür</b>: iki yöne de 90°, ya da yazdığınız herhangi bir açıyla. Yazı da onunla döner ve DXF ile PDF’te de doğru okunur.</li>
@@ -472,21 +564,21 @@
     </section>
     <section id="style">
     <div data-lang="en">
-      <h2><span class="num">6</span>Line weight, line type, layer</h2>
+      <h2><span class="num">7</span>Line weight, line type, layer</h2>
       <p>Click a shape and the <b>Selection</b> panel on the right shows what it is drawn with — its layer, its line weight, its line type and, for a label, its height and its wording. Change any of them there and the picked shapes are redrawn.</p>
       <p>The same four controls sit on the toolbar. There they set up what is drawn <i>next</i> — and if something is picked at the time, they restyle that too, which is the shortest path from "that should be dashed" to it being dashed.</p>
       <div class="warn">A shape that is picked stays picked after it is drawn. So if you draw a line and then change the line type, you are changing <i>that</i> line, not setting up the next one. Press Esc first to let go.</div>
       <p>Layers can be hidden or locked while you work — the busbar, the tags, the data block. A hidden layer stays out of the SVG you export. New geometry takes the colour of the layer it goes on, and in CAD the colour comes from the layer anyway.</p>
     </div>
     <div data-lang="fa">
-      <h2><span class="num">۶</span>ضخامت خط، نوع خط، لایه</h2>
+      <h2><span class="num">۷</span>ضخامت خط، نوع خط، لایه</h2>
       <p>روی یک شکل کلیک کنید تا پنل <b>انتخاب‌شده</b> در سمت راست نشان دهد با چه چیزی ترسیم شده — لایه، ضخامت خط، نوع خط و برای نوشته، ارتفاع و خود متن. هرکدام را همان‌جا عوض کنید، همان چیزی که انتخاب شده دوباره ترسیم می‌شود.</p>
       <p>همین چهار کنترل روی نوار ابزار هم هستند. آن‌جا تعیین می‌کنند که ترسیم <i>بعدی</i> چگونه باشد — و اگر همان موقع چیزی انتخاب شده باشد، آن را هم تغییر می‌دهند؛ کوتاه‌ترین راه از «این باید خط‌چین باشد» تا خط‌چین‌شدنش.</p>
       <div class="warn">شکلی که ترسیم می‌شود، انتخاب‌شده می‌ماند. پس اگر خطی بکشید و بعد نوع خط را عوض کنید، دارید <i>همان</i> خط را عوض می‌کنید، نه خط بعدی را. اول Esc بزنید تا انتخاب برداشته شود.</div>
       <p>لایه‌ها را می‌شود هنگام کار پنهان یا قفل کرد — شینه، تگ‌ها، بلوک داده. لایه پنهان در خروجی SVG هم نمی‌آید. ترسیم جدید رنگ لایه‌ای را می‌گیرد که روی آن می‌رود، و در CAD هم رنگ به‌هرحال از لایه گرفته می‌شود.</p>
     </div>
     <div data-lang="tr">
-      <h2><span class="num">6</span>Çizgi kalınlığı, tipi, katman</h2>
+      <h2><span class="num">7</span>Çizgi kalınlığı, tipi, katman</h2>
       <p>Bir nesneye tıklayın; sağdaki <b>Seçim</b> paneli onun neyle çizildiğini gösterir — katmanı, çizgi kalınlığı, çizgi tipi ve yazıysa yüksekliği ile metni. Herhangi birini orada değiştirin, seçili olan yeniden çizilir.</p>
       <p>Aynı dört denetim araç çubuğunda da var. Orada <i>bir sonraki</i> çizimin nasıl olacağını belirler — o sırada bir şey seçiliyse onu da yeniden biçimlendirir; “şu kesikli olmalı”dan kesikli olmasına giden en kısa yol budur.</p>
       <div class="warn">Çizilen nesne seçili kalır. Yani bir çizgi çizip sonra çizgi tipini değiştirirseniz, <i>o</i> çizgiyi değiştiriyorsunuz, bir sonrakini ayarlamıyorsunuz. Önce Esc’e basıp bırakın.</div>
@@ -495,7 +587,7 @@
     </section>
     <section id="dims">
     <div data-lang="en">
-      <h2><span class="num">7</span>Dimensions</h2>
+      <h2><span class="num">8</span>Dimensions</h2>
       <p>The dimension tool (D) takes three clicks: what it measures from, what it measures to, then where the dimension line sits. The label is written in <b>millimetres of real size</b>, worked out from the drawing scale.</p>
       <figure><svg viewBox="0 0 420 130" width="420" height="130" role="img">
   <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:1.6;fill:none}
@@ -511,7 +603,7 @@
       <p>It goes down as ordinary geometry — two extension lines, the dimension line, two filled arrowheads and the label — so every format carries it without needing to know what a dimension is. The number is measured once, when you place it: move the geometry afterwards and the number does not follow, so re-measure rather than trusting an old one.</p>
     </div>
     <div data-lang="fa">
-      <h2><span class="num">۷</span>اندازه‌گذاری</h2>
+      <h2><span class="num">۸</span>اندازه‌گذاری</h2>
       <p>ابزار اندازه (D) سه کلیک می‌گیرد: از کجا، تا کجا، و بعد جای خط اندازه. عدد به <b>میلی‌متر اندازه واقعی</b> نوشته می‌شود، محاسبه‌شده از مقیاس نقشه.</p>
       <figure><svg viewBox="0 0 420 130" width="420" height="130" role="img">
   <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:1.6;fill:none}
@@ -527,7 +619,7 @@
       <p>به‌صورت هندسه معمولی ثبت می‌شود — دو خط رابط، خط اندازه، دو سرپیکان توپر و نوشته — پس هر فرمتی آن را می‌برد بدون آن‌که لازم باشد بداند «اندازه» چیست. عدد فقط یک‌بار، موقع گذاشتن، اندازه گرفته می‌شود: اگر بعداً هندسه را جابه‌جا کنید عدد دنبالش نمی‌آید، پس دوباره اندازه بگیرید و به عدد قدیمی اعتماد نکنید.</p>
     </div>
     <div data-lang="tr">
-      <h2><span class="num">7</span>Ölçülendirme</h2>
+      <h2><span class="num">8</span>Ölçülendirme</h2>
       <p>Ölçü aracı (D) üç tık ister: nereden, nereye, sonra ölçü çizgisinin yeri. Değer, çizim ölçeğinden hesaplanarak <b>gerçek boyutun milimetresi</b> olarak yazılır.</p>
       <figure><svg viewBox="0 0 420 130" width="420" height="130" role="img">
   <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:1.6;fill:none}
@@ -545,7 +637,7 @@
     </section>
     <section id="keep">
     <div data-lang="en">
-      <h2><span class="num">8</span>Keeping the work</h2>
+      <h2><span class="num">9</span>Keeping the work</h2>
       <ul>
         <li><b>Save</b> (the disk) hands the edits to the project. Then save the project itself, the ordinary way.</li>
         <li><b>Revert</b> puts the sheet on screen back to as drawn. <b>Discard all</b> does it for every sheet, in the project too.</li>
@@ -554,7 +646,7 @@
       </ul>
     </div>
     <div data-lang="fa">
-      <h2><span class="num">۸</span>ثبت کار</h2>
+      <h2><span class="num">۹</span>ثبت کار</h2>
       <ul>
         <li><b>Save</b> (آیکون دیسک) ویرایش‌ها را به پروژه می‌سپارد. بعد خود پروژه را به روش معمول ذخیره کنید.</li>
         <li><b>Revert</b> صفحه روی صفحه‌نمایش را به حالت اولیه برمی‌گرداند. <b>انصراف از همه</b> این کار را برای همه صفحات، در پروژه هم، انجام می‌دهد.</li>
@@ -563,7 +655,7 @@
       </ul>
     </div>
     <div data-lang="tr">
-      <h2><span class="num">8</span>Yapılanı saklamak</h2>
+      <h2><span class="num">9</span>Yapılanı saklamak</h2>
       <ul>
         <li><b>Save</b> (disk simgesi) değişiklikleri projeye teslim eder. Sonra projenin kendisini her zamanki gibi kaydedin.</li>
         <li><b>Revert</b> ekrandaki sayfayı çizildiği hâle döndürür. <b>Hepsini geri al</b> bunu bütün sayfalar için, projede de yapar.</li>
@@ -574,7 +666,7 @@
     </section>
     <section id="out">
     <div data-lang="en">
-      <h2><span class="num">9</span>Getting it out</h2>
+      <h2><span class="num">10</span>Getting it out</h2>
       <ul>
         <li><b>DXF</b> — R12 (AC1009), the dialect every CAD reader since 1990 understands. Layers, colours and line types all come across; a dashed line stays a dashed line.</li>
         <li><b>PDF</b> — vector, one page per sheet.</li>
@@ -584,7 +676,7 @@
       <div class="tip">Watch the text height in millimetres on the toolbar. Under 1.8 mm a plotted drawing stops being readable — put fewer feeders on a sheet, or choose a bigger sheet.</div>
     </div>
     <div data-lang="fa">
-      <h2><span class="num">۹</span>خروجی گرفتن</h2>
+      <h2><span class="num">۱۰</span>خروجی گرفتن</h2>
       <ul>
         <li><b>DXF</b> — نسخه R12 (AC1009)، همان گویشی که هر خواننده CAD از ۱۹۹۰ به بعد می‌فهمد. لایه‌ها و رنگ‌ها و نوع خط‌ها همه منتقل می‌شوند؛ خط‌چین، خط‌چین می‌ماند.</li>
         <li><b>PDF</b> — برداری، هر صفحه یک برگ.</li>
@@ -594,7 +686,7 @@
       <div class="tip">ارتفاع متن به میلی‌متر را روی نوار ابزار ببینید. زیر ۱٫۸ میلی‌متر نقشه چاپ‌شده دیگر خوانا نیست — تعداد فیدر کمتری در هر صفحه بگذارید یا کاغذ بزرگ‌تری انتخاب کنید.</div>
     </div>
     <div data-lang="tr">
-      <h2><span class="num">9</span>Dışa aktarmak</h2>
+      <h2><span class="num">10</span>Dışa aktarmak</h2>
       <ul>
         <li><b>DXF</b> — R12 (AC1009), 1990’dan beri her CAD okuyucusunun anladığı lehçe. Katmanlar, renkler ve çizgi tipleri hepsi geçer; kesikli çizgi kesikli kalır.</li>
         <li><b>PDF</b> — vektörel, sayfa başına bir yaprak.</li>
@@ -606,7 +698,7 @@
     </section>
     <section id="keys">
     <div data-lang="en">
-      <h2><span class="num">10</span>Keys</h2>
+      <h2><span class="num">11</span>Keys</h2>
       <table>
         <thead><tr><th>Key</th><th>What it does</th></tr></thead>
         <tbody>
@@ -628,7 +720,7 @@
       </table>
     </div>
     <div data-lang="fa">
-      <h2><span class="num">۱۰</span>کلیدها</h2>
+      <h2><span class="num">۱۱</span>کلیدها</h2>
       <table>
         <thead><tr><th>کلید</th><th>چه می‌کند</th></tr></thead>
         <tbody>
@@ -650,7 +742,7 @@
       </table>
     </div>
     <div data-lang="tr">
-      <h2><span class="num">10</span>Tuşlar</h2>
+      <h2><span class="num">11</span>Tuşlar</h2>
       <table>
         <thead><tr><th>Tuş</th><th>Ne yapar</th></tr></thead>
         <tbody>

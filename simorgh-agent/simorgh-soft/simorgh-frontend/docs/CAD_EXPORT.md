@@ -61,6 +61,23 @@ expects is only a function away:
   Picking is done against the geometry, not by hanging a handler on every
   element, so a 1.3-unit line is as easy to hit as a filled box.
 - **Move** — drag, or nudge with the arrow keys; both snap to the chosen step.
+- **Handles** — a picked shape shows grips. A **square** moves that point on
+  its own, so a line is shortened from the end you took hold of rather than
+  from whichever end the code fancies; the **diamond** in the middle carries
+  the whole shape. Every kind has them: a rectangle by its corners, a circle by
+  its radius, an arc by its ends, a polyline by every vertex. The magnet still
+  applies, Shift still squares the line up against its other end, and the
+  length and angle follow the cursor while a handle is in hand — the same
+  readout, in the same place, as EPLAN's. A whole drag is one undo step,
+  however far the pointer travelled.
+- **Exact numbers** — the Selection panel shows the picked shape as numbers, in
+  millimetres: start, end, length, angle for a line; centre and radius for a
+  circle; and so on. All of them can be typed, which is how a line goes from
+  about right to exactly 111.00 mm. Length and angle hold the first end and
+  swing the second, so a line can be given a size without first working out
+  where its far end would have to be. Polylines and curves show their point
+  count instead — typing thirty vertices is data entry, not editing, and the
+  handles are the way to move those.
 - **Retype** — double-click a label, or edit it in the panel.
 - **Draw** — line, polyline, rectangle, circle, ellipse, arc, text and
   dimension, each on the toolbar under one letter: `V` pick, `H` pan, `L` line,
