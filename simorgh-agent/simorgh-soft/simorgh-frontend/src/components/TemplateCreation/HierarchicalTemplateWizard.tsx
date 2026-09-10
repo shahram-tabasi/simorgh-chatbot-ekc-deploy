@@ -72,6 +72,15 @@ function scoreSimilarity(
 
 interface Props {
   tier: 'LV' | 'MV' | 'HV';
+  /**
+   * The section the template is being made in — SIVACON or CCS for LV.
+   *
+   * Decided by where it was started from: the tree makes a template from
+   * inside the section it belongs to, so there is nothing to ask here. Left
+   * out only by a caller that has no section to give, and then the step comes
+   * back rather than leaving the wizard with nowhere to go.
+   */
+  family?: string | null;
   /** All existing templates for this tier (used for suggestions). */
   existing: TemplateItem[];
   onCancel: () => void;
@@ -85,14 +94,16 @@ interface Props {
 }
 
 export const HierarchicalTemplateWizard: React.FC<Props> = ({
-  tier, existing, onCancel, onSubmit,
+  tier, family: givenFamily = null, existing, onCancel, onSubmit,
 }) => {
   // Path nodes — present iff the tier exposes that step.
   // Which side of the works this belongs to. SIVACON boards are filed under a
   // root (S8, 8PT); the CCS side is not, so that step is skipped for it and
   // the path simply starts at the group — which is what CCS paths already
   // look like where they exist.
-  const [family,  setFamily]  = useState<string | null>(null);   // SIVACON | CCS (LV only)
+  const [family,  setFamily]  = useState<string | null>(givenFamily); // SIVACON | CCS (LV only)
+  const askFamily = tier === 'LV' && !givenFamily;
+  const section = TEMPLATE_FAMILIES[tier]?.find(f => f.id === family) ?? null;
   const [root,    setRoot]    = useState<string | null>(null);   // S8 | 8PT  (LV only)
   const [group,   setGroup]   = useState<string | null>(null);   // CCS | OFF | … (LV only)
   const [switch_, setSwitch]  = useState<string | null>(null);   // SFD | HFD | FCBn  (LV/OFW only)
@@ -156,6 +167,23 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   }, [existing, path, leafKind, kw, currentA]);
 
   // Step UI helpers ───────────────────────────────────────────────────────
+  // Numbering counts the steps that are actually on screen. Which ones those
+  // are depends on the tier and on how far down the path the user is — a CCS
+  // template has no board root, an MV one has no group — so a fixed number per
+  // step would start at 2, or skip 3, depending on where you came in.
+  const visibleSteps: string[] = [
+    askFamily && 'family',
+    tier === 'LV' && family === 'SIVACON' && 'root',
+    tier === 'LV' && (family === 'CCS' || root) && 'group',
+    tier === 'LV' && group === 'OFW' && 'switch',
+    (tier === 'MV' || (tier === 'LV' && switch_ && switch_.startsWith('FCB'))) && 'feeder',
+    path.length > 0 && 'kind',
+    !!leafKind && 'params',
+    'name',
+  ].filter(Boolean) as string[];
+
+  const stepNumber = (id: string) => Math.max(1, visibleSteps.indexOf(id) + 1);
+
   const StepHeader: React.FC<{ n: number; label: string; done?: boolean; active?: boolean }> = ({ n, label, done, active }) => (
     <div className={`flex items-center gap-2 text-xs ${
       active ? 'text-blue-700 font-semibold'
@@ -176,6 +204,14 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   const PathBreadcrumb: React.FC = () => (
     <div className="flex items-center gap-1 flex-wrap text-xs text-gray-600">
       <span className="font-semibold text-gray-500">{tier}</span>
+      {section && (
+        <>
+          <ChevronRightIcon className="w-3 h-3 text-gray-400" />
+          <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">
+            {section.label}
+          </span>
+        </>
+      )}
       {path.map((p, i) => (
         <React.Fragment key={i}>
           <ChevronRightIcon className="w-3 h-3 text-gray-400" />
@@ -247,7 +283,9 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
         <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <SparklesIcon className="w-5 h-5" />
-            <h2 className="text-base font-semibold">New {tier} Template</h2>
+            <h2 className="text-base font-semibold">
+              New {tier} Template{section ? ` — ${section.label}` : ''}
+            </h2>
           </div>
           <button onClick={onCancel} className="p-1 rounded hover:bg-white/20">
             <XIcon className="w-4 h-4" />
@@ -261,10 +299,10 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-          {/* Step 1 — System (LV only) */}
-          {tier === 'LV' && (
+          {/* Step 1 — System (only when the caller had none to give) */}
+          {askFamily && (
             <div>
-              <StepHeader n={1} label="System" active={activeStep === 'family'} done={!!family} />
+              <StepHeader n={stepNumber('family')} label="System" active={activeStep === 'family'} done={!!family} />
               <div className="mt-2 flex flex-wrap gap-2">
                 {TEMPLATE_FAMILIES.LV.map(f => (
                   <Chip key={f.id} value={f.label} selected={family === f.id} onClick={() => pickFamily(f.id)} />
@@ -279,7 +317,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {/* Step 2 — Root (SIVACON boards only) */}
           {tier === 'LV' && family === 'SIVACON' && (
             <div>
-              <StepHeader n={2} label="Root" active={activeStep === 'root'} done={!!root} />
+              <StepHeader n={stepNumber('root')} label="Root" active={activeStep === 'root'} done={!!root} />
               <div className="mt-2 flex flex-wrap gap-2">
                 {LV_ROOTS.map(r => (
                   <Chip key={r} value={r} selected={root === r} onClick={() => pickRoot(r)} />
@@ -291,7 +329,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {/* Step 3 — Group (LV only) */}
           {tier === 'LV' && (family === 'CCS' || root) && (
             <div>
-              <StepHeader n={3} label="Group" active={activeStep === 'group'} done={!!group} />
+              <StepHeader n={stepNumber('group')} label="Group" active={activeStep === 'group'} done={!!group} />
               <div className="mt-2 flex flex-wrap gap-2">
                 {LV_GROUPS.map(g => (
                   <Chip key={g} value={g} selected={group === g} onClick={() => pickGroup(g)} />
@@ -303,7 +341,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {/* Step 4 — Switch (LV/OFW only) */}
           {tier === 'LV' && group === 'OFW' && (
             <div>
-              <StepHeader n={4} label="Switch" active={activeStep === 'switch'} done={!!switch_} />
+              <StepHeader n={stepNumber('switch')} label="Switch" active={activeStep === 'switch'} done={!!switch_} />
               <div className="mt-2 flex flex-wrap gap-2">
                 {LV_SWITCHES.map(s => (
                   <Chip key={s} value={s} selected={switch_ === s} onClick={() => pickSwitch(s)} />
@@ -315,7 +353,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {/* Step 5 — Feeder (MV always, LV when under FCBn) */}
           {(tier === 'MV' || (tier === 'LV' && switch_ && switch_.startsWith('FCB'))) && (
             <div>
-              <StepHeader n={tier === 'MV' ? 1 : 5} label="Feeder" active={activeStep === 'feeder'} done={!!feeder} />
+              <StepHeader n={stepNumber('feeder')} label="Feeder" active={activeStep === 'feeder'} done={!!feeder} />
               <div className="mt-2 flex flex-wrap gap-2">
                 {FEEDERS.map(f => (
                   <Chip key={f} value={f} selected={feeder === f} onClick={() => pickFeeder(f)} />
@@ -327,7 +365,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {/* Step 6 — Leaf kind */}
           {path.length > 0 && (
             <div>
-              <StepHeader n={6} label="Equipment kind" active={activeStep === 'kind'} done={!!leafKind} />
+              <StepHeader n={stepNumber('kind')} label="Equipment kind" active={activeStep === 'kind'} done={!!leafKind} />
               <div className="mt-2 flex flex-wrap gap-2">
                 {candidateLeafKinds.map(k => (
                   <Chip key={k} value={k} selected={leafKind === k} onClick={() => setLeafKind(k)} />
@@ -342,7 +380,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {/* Step 7 — Parameters */}
           {leafKind && (
             <div>
-              <StepHeader n={7} label="Parameters" active={activeStep === 'params'} done={!!(kw || currentA)} />
+              <StepHeader n={stepNumber('params')} label="Parameters" active={activeStep === 'params'} done={!!(kw || currentA)} />
               <div className="mt-2 grid grid-cols-2 gap-3">
                 <label className="text-xs">
                   <span className="text-gray-600">Rated power (kW / kVA)</span>
@@ -416,7 +454,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
 
           {/* Step 8 — Name + create */}
           <div>
-            <StepHeader n={8} label="Name" active={activeStep === 'name'} done={!!name.trim()} />
+            <StepHeader n={stepNumber('name')} label="Name" active={activeStep === 'name'} done={!!name.trim()} />
             <input
               type="text"
               value={name}

@@ -3,7 +3,7 @@ import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
 import { findTemplateUsage, UsageReport } from '../../utils/cascadeDelete';
-import { groupByFamily } from '../../utils/templateFamilies';
+import { TEMPLATE_FAMILIES, groupByFamily, hasFamilies } from '../../utils/templateFamilies';
 import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
 
 interface TemplateTreeProps {
@@ -30,6 +30,15 @@ interface ContextMenuState {
   y: number;
   nodeType: 'LV' | 'MV' | 'HV' | null;
   templateId: string | null;
+  /**
+   * Which section of the tier the menu was opened in — SIVACON or CCS for LV.
+   *
+   * A template is made from inside the section it belongs to, so by the time
+   * the wizard opens there is nothing to ask: the click said it. Null on a
+   * tier that has no sections, and on the tier node itself, where the menu
+   * offers one entry per section instead.
+   */
+  family: string | null;
 }
 
 export const TemplateTree: React.FC<TemplateTreeProps> = ({
@@ -55,11 +64,13 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     x: 0,
     y: 0,
     nodeType: null,
-    templateId: null
+    templateId: null,
+    family: null
   });
   // The hierarchical wizard replaces the old "just a name" modal — we keep
   // a separate flag so the rest of the file doesn't have to change.
-  const [wizardTier, setWizardTier] = useState<'LV' | 'MV' | 'HV' | null>(null);
+  const [wizard, setWizard] = useState<
+    { tier: 'LV' | 'MV' | 'HV'; family: string | null } | null>(null);
 
   // 🔹 بررسی امن برای templates - اضافه شده
   const safeTemplates = {
@@ -78,7 +89,12 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     setExpandedNodes(newExpanded);
   };
 
-  const handleContextMenu = (event: React.MouseEvent, nodeType: 'LV' | 'MV' | 'HV', templateId: string | null = null) => {
+  const handleContextMenu = (
+    event: React.MouseEvent,
+    nodeType: 'LV' | 'MV' | 'HV',
+    templateId: string | null = null,
+    family: string | null = null,
+  ) => {
     event.preventDefault();
     event.stopPropagation();
     setContextMenu({
@@ -86,13 +102,20 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
       x: event.clientX,
       y: event.clientY,
       nodeType,
-      templateId
+      templateId,
+      family
     });
   };
 
-  const handleCreateTemplate = () => {
-    if (contextMenu.nodeType) setWizardTier(contextMenu.nodeType);
+  const handleCreateTemplate = (family: string | null = contextMenu.family) => {
+    if (contextMenu.nodeType) setWizard({ tier: contextMenu.nodeType, family });
     setContextMenu({ ...contextMenu, visible: false });
+  };
+
+  /** Open the wizard straight in a section, from the section's own row. */
+  const createInFamily = (tier: 'LV' | 'MV' | 'HV', family: string) => {
+    setContextMenu({ ...contextMenu, visible: false });
+    setWizard({ tier, family });
   };
 
   // A template is referenced by the device rows built on it, so deleting it
@@ -147,7 +170,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           </div>
           {expandedNodes.has('LV') && (
             <ul className="pl-6 space-y-1 mt-1">
-              {safeTemplates.LV.length === 0 ? (
+              {safeTemplates.LV.length === 0 && !hasFamilies('LV') ? (
                 <li className="text-xs text-gray-400 italic p-1">
                   No templates
                 </li>
@@ -162,7 +185,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                       <div
                         className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
                         onClick={() => onTemplateSelect(template.id)}
-                        onContextMenu={event => handleContextMenu(event, 'LV', template.id)}
+                        onContextMenu={event => handleContextMenu(event, 'LV', template.id, group.family?.id ?? null)}
                       >
                         <span className="text-sm">{template.name}</span>
                         {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
@@ -183,9 +206,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                   return (
                     <li key={node}>
                       <div
-                        className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded"
+                        className="group flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded"
                         onClick={() => toggleNode(node)}
-                        onContextMenu={event => handleContextMenu(event, 'LV')}
+                        onContextMenu={event => handleContextMenu(event, 'LV', null, group.family!.id)}
                       >
                         {expandedNodes.has(node)
                           ? <ChevronDownIcon className="w-4 h-4 mr-1" />
@@ -194,9 +217,25 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                         <span className="ml-1.5 text-[10px] text-gray-400">
                           {group.family.note} · {group.templates.length}
                         </span>
+                        {/* Made from inside the section it belongs to, so the
+                            wizard has nothing to ask about which one. */}
+                        <button
+                          onClick={event => {
+                            event.stopPropagation();
+                            createInFamily('LV', group.family!.id);
+                          }}
+                          title={`New template in ${group.family.label}`}
+                          className="ml-auto p-0.5 rounded text-gray-400 opacity-0 group-hover:opacity-100 hover:text-blue-600 hover:bg-blue-50"
+                        >
+                          <PlusIcon className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                       {expandedNodes.has(node) && (
-                        <ul className="pl-5 space-y-1 mt-1">{rows}</ul>
+                        <ul className="pl-5 space-y-1 mt-1">
+                          {rows.length > 0 ? rows : (
+                            <li className="text-xs text-gray-400 italic p-1">No templates</li>
+                          )}
+                        </ul>
                       )}
                     </li>
                   );
@@ -297,13 +336,29 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
             left: contextMenu.x
           }}
         >
-          <button 
-            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center" 
-            onClick={handleCreateTemplate}
-          >
-            <PlusIcon className="w-4 h-4 mr-2" />
-            Create Template
-          </button>
+          {/* On a tier that has sections, the tier's own menu names them
+              rather than asking afterwards which one was meant. */}
+          {contextMenu.nodeType && !contextMenu.family
+            && (TEMPLATE_FAMILIES[contextMenu.nodeType] ?? []).length > 0 ? (
+            (TEMPLATE_FAMILIES[contextMenu.nodeType] ?? []).map(family => (
+              <button
+                key={family.id}
+                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                onClick={() => handleCreateTemplate(family.id)}
+              >
+                <PlusIcon className="w-4 h-4 mr-2" />
+                Create in {family.label}
+              </button>
+            ))
+          ) : (
+            <button
+              className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+              onClick={() => handleCreateTemplate()}
+            >
+              <PlusIcon className="w-4 h-4 mr-2" />
+              Create Template
+            </button>
+          )}
           {contextMenu.templateId && (
             <>
               <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center">
@@ -344,17 +399,21 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
         />
       )}
 
-      {wizardTier && (
+      {wizard && (
         <HierarchicalTemplateWizard
-          tier={wizardTier}
-          existing={safeTemplates[wizardTier]}
-          onCancel={() => setWizardTier(null)}
+          tier={wizard.tier}
+          family={wizard.family}
+          existing={safeTemplates[wizard.tier]}
+          onCancel={() => setWizard(null)}
           onSubmit={({ name, hierarchy, copyFromId }) => {
-            addTemplate(wizardTier, name, hierarchy, copyFromId);
+            addTemplate(wizard.tier, name, hierarchy, copyFromId);
             const newExpanded = new Set(expandedNodes);
-            newExpanded.add(wizardTier);
+            newExpanded.add(wizard.tier);
+            // The new template's own section is opened too, so it is on screen
+            // where it was made rather than behind a closed node.
+            if (wizard.family) newExpanded.add(`${wizard.tier}/${wizard.family}`);
             setExpandedNodes(newExpanded);
-            setWizardTier(null);
+            setWizard(null);
           }}
         />
       )}

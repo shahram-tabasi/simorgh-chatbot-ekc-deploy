@@ -59,7 +59,17 @@ export function familyOf(
   return families.find(f => rest.some(node => f.nodes.includes(node))) ?? null;
 }
 
-/** The templates of a tier, split into families with the rest kept aside. */
+/**
+ * The templates of a tier, split into its families.
+ *
+ * Every family is returned whether or not it holds anything. A section is a
+ * place, not a summary of what is in it: it is where a template is made, and a
+ * section that disappeared when it was empty would leave nowhere to make the
+ * first one.
+ *
+ * Anything the families do not claim comes back last, under no family, and
+ * only when there is something — that one is a leftover rather than a place.
+ */
 export function groupByFamily<T extends { hierarchy?: HasPath }>(
   tier: 'LV' | 'MV' | 'HV',
   templates: T[],
@@ -67,12 +77,15 @@ export function groupByFamily<T extends { hierarchy?: HasPath }>(
   const families = TEMPLATE_FAMILIES[tier] ?? [];
   if (families.length === 0) return [{ family: null, templates }];
 
-  const groups = families.map(family => ({
-    family: family as TemplateFamily | null,
+  const groups: { family: TemplateFamily | null; templates: T[] }[] = families.map(family => ({
+    family,
     templates: templates.filter(t => familyOf(tier, t.hierarchy)?.id === family.id),
   }));
-  // Anything the families do not claim is listed on its own rather than lost.
   const rest = templates.filter(t => !familyOf(tier, t.hierarchy));
   if (rest.length > 0) groups.push({ family: null, templates: rest });
-  return groups.filter(g => g.templates.length > 0);
+  return groups;
 }
+
+/** True when this tier is split into sections at all. */
+export const hasFamilies = (tier: 'LV' | 'MV' | 'HV'): boolean =>
+  (TEMPLATE_FAMILIES[tier] ?? []).length > 0;
