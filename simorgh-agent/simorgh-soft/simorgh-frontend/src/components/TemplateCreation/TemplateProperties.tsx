@@ -3,9 +3,9 @@ import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon } from 'lucide-react';
 import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
-import { SymbolGraphicEditor } from '../SimorghDraw/SymbolGraphicEditor';
-import { SymbolArtOverride } from '../../types/project';
-import { SymbolId, setProjectSymbolOverrides } from '../../utils/iecSymbols';
+import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
+import { EplanSymbolMap } from '../../utils/eplanSingleLine';
+import { setProjectSymbolOverrides } from '../../utils/iecSymbols';
 import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
 
 // Reserved keys inside template.properties used to carry per-template metadata.
@@ -483,14 +483,14 @@ const DetailRow: React.FC<{
 export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   template
 }) => {
-  const { updateTemplate, projectData, patchProjectData } = useProject();
+  const { updateTemplate, projectData, patchProjectData, isCurrentRevisionEditable } = useProject();
   const [properties, setProperties] = useState<Record<string, PropertyValue>>(
     template.properties || {}
   );
-  // Which part the schematic panel is showing, and the symbol the graphic
-  // page is open on. Both are beside the table; neither changes it.
+  // Which part the panel is showing, and whether the one graphic window is
+  // open on this template. Both sit beside the table; neither changes it.
   const [selectedPart, setSelectedPart] = useState<PartRef | null>(null);
-  const [editingSymbol, setEditingSymbol] = useState<SymbolId | null>(null);
+  const [graphicSymbols, setGraphicSymbols] = useState<EplanSymbolMap | null>(null);
   const [dialogState, setDialogState] = useState<{
     isOpen: boolean;
     propertyName: string;
@@ -608,14 +608,9 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     setSelectedPart({ ...ref, part: parts[ref.index] });
   };
 
-  /** Keep a redrawn symbol with the project, or put the library's one back. */
-  const saveSymbolArt = (symbolId: SymbolId, art: SymbolArtOverride | null) => {
-    patchProjectData(prev => {
-      const next = { ...(prev.symbolOverrides ?? {}) };
-      if (art) next[symbolId] = art; else delete next[symbolId];
-      return { symbolOverrides: next };
-    });
-  };
+  /** Keep the template's own drawing with the project. */
+  const saveTemplateGraphic = (next: Record<string, any>) =>
+    patchProjectData(() => ({ drawingEdits: next }));
   // Rows that come BEFORE the extended-spare block — used to count empty slots.
   const regularRows = [...fixedRows, ...renamableSpares];
   // The very first fixed row gets "Q" as default label when a part is added.
@@ -1088,23 +1083,27 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
       <div className="w-80 shrink-0">
         <PartSchematicPanel
+          template={template}
+          tier={template.type}
           parts={partRefs}
           selected={shownPart}
           onSelect={setSelectedPart}
           onSymbolChange={changePartSymbol}
-          onEdit={setEditingSymbol}
-          isRedrawn={id => Boolean(projectData.symbolOverrides?.[id])}
+          onOpenGraphic={setGraphicSymbols}
         />
       </div>
       </div>
 
-      {editingSymbol && (
-        <SymbolGraphicEditor
-          symbolId={editingSymbol}
-          override={projectData.symbolOverrides?.[editingSymbol]}
-          onSave={art => saveSymbolArt(editingSymbol, art)}
-          onReset={() => saveSymbolArt(editingSymbol, null)}
-          onClose={() => setEditingSymbol(null)}
+      {/* One window, for the whole template — not one per part. */}
+      {graphicSymbols && (
+        <TemplateGraphicEditor
+          template={template}
+          tier={template.type}
+          symbols={graphicSymbols}
+          savedEdits={projectData.drawingEdits}
+          canEdit={isCurrentRevisionEditable}
+          onSaveEdits={saveTemplateGraphic}
+          onClose={() => setGraphicSymbols(null)}
         />
       )}
 

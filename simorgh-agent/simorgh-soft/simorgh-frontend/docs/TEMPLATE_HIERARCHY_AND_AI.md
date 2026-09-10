@@ -309,12 +309,33 @@ opinion that agrees most of the time. It says which of the four answered:
 Only the first is new. Choosing one stores `symbolId` on the part; clearing it
 puts the automatic answer back.
 
-### The graphic page
+### The graphic: one window, the whole template
 
-**Edit** opens the symbol on the same canvas the sheets are edited on: move a
-line, retype a label, delete what the office does not draw. Saving keeps that
-drawing with the project (`ProjectData.symbolOverrides`) and every sheet using
-that symbol picks it up. The library's own symbol is never changed, and the
+The panel draws **the template**, not a part of it — the whole cell, put
+together by the rule the sheets already use:
+
+* the devices that carry power **in series** down the line, in the order a cell
+  is drawn rather than the order the template filed its slots;
+* the instruments hanging off it **in parallel**, each group starting level
+  with the transformer that feeds it, through the test block where there is
+  one;
+* the shunts — arresters, dividers — beside the line with the earth under them.
+
+It goes through the very same `splitBranch` and `drawBranch` the single line
+uses (`buildTemplateSvg`), so it is not a second opinion about how a template is
+drawn: it is what a feeder built on this template will look like.
+
+**Open** puts that cell on the same canvas the sheets are edited on — one
+window, for the template. Edits are kept with the project under
+`template#<id>` and it exports as DXF, PDF or SVG, so a template can go out as
+a typical drawing on its own. The sheets themselves still build from the parts.
+
+### Redrawing one symbol
+
+Editing a single symbol lives where the symbols do: **Simorgh Draw → Symbols**,
+where clicking a card opens it on the graphic page. Saving keeps that drawing
+with the project (`ProjectData.symbolOverrides`) and every sheet using the
+symbol picks it up. The library's own symbol is never changed, and the
 conductor's place across the symbol does not move — it is what puts the device
 on the branch.
 

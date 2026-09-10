@@ -28,9 +28,11 @@ import { drawingFromSvg, svgSize } from '../../utils/cad/fromSvg';
 import { fingerprint } from '../../utils/cad/edit';
 import { DrawingEditor, EditorSheet } from '../SimorghDraw/DrawingEditor';
 import { DxfSymbolPack } from '../SimorghDraw/DxfSymbolPack';
+import { SymbolGraphicEditor } from '../SimorghDraw/SymbolGraphicEditor';
 import { DxfSymbol, loadDxfSymbols, saveDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
 import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
+import { SymbolArtOverride } from '../../types/project';
 import { downloadText, fileSafe } from '../../utils/download';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
@@ -132,6 +134,8 @@ export const EplanixTab: React.FC = () => {
   // Bumped when a symbol is sent to the pack, so the pack is read again
   // without waiting for the parts on the sheet to change.
   const [packVersion, setPackVersion] = useState(0);
+  // The library symbol the graphic page is open on, when one is.
+  const [editingSymbol, setEditingSymbol] = useState<SymbolId | null>(null);
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
   const [showSend, setShowSend] = useState(false);
 
@@ -630,8 +634,9 @@ export const EplanixTab: React.FC = () => {
                   {Object.keys(IEC_SYMBOLS).length} single-line symbols
                 </p>
                 <p className="text-xs text-gray-500">
-                  What the drawing uses for each device. An SVG dropped into the symbol pack
-                  under one of these names replaces the symbol here, everywhere.
+                  What the drawing uses for each device. Click one to redraw it for this
+                  project. An SVG or DXF dropped into the symbol pack under one of these
+                  names replaces the symbol here, everywhere.
                   {packReplaced > 0 && (
                     <span className="text-emerald-700 font-medium">
                       {' '}{packReplaced} replaced by the pack.
@@ -660,8 +665,10 @@ export const EplanixTab: React.FC = () => {
                     const replaced = !!symbolOverride(sym.id);
                     const tall = symbolHeight(sym.id) / CELL;
                     return (
-                      <div key={sym.id}
-                           className={`border rounded p-2 bg-white ${
+                      <button key={sym.id}
+                           onClick={() => setEditingSymbol(sym.id)}
+                           title={`Open ${sym.title} on the graphic page`}
+                           className={`text-left border rounded p-2 bg-white hover:border-blue-400 hover:shadow-sm transition ${
                              replaced ? 'border-emerald-400' : 'border-gray-200'}`}>
                         <svg width="100%" height={CELL + 16} viewBox={`0 0 90 ${CELL + 16}`}>
                           <g transform={tall > 1 ? `translate(28 8) scale(${1 / tall}) translate(-28 -8)` : undefined}
@@ -670,9 +677,11 @@ export const EplanixTab: React.FC = () => {
                         <p className="text-[11px] text-gray-800 leading-tight mt-1">{sym.title}</p>
                         <p className="text-[11px] text-gray-500 leading-tight" dir="rtl">{sym.titleFa}</p>
                         {replaced && (
-                          <p className="text-[10px] text-emerald-700 leading-tight">from the pack</p>
+                          <p className="text-[10px] text-emerald-700 leading-tight">
+                            {projectData.symbolOverrides?.[sym.id] ? 'redrawn for this project' : 'from the pack'}
+                          </p>
                         )}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -681,6 +690,24 @@ export const EplanixTab: React.FC = () => {
           </div>
         </div>
         </div>
+      )}
+
+      {editingSymbol && (
+        <SymbolGraphicEditor
+          symbolId={editingSymbol}
+          override={projectData.symbolOverrides?.[editingSymbol]}
+          onSave={(art: SymbolArtOverride) => patchProjectData(prev => {
+            const next = { ...(prev.symbolOverrides ?? {}) };
+            next[editingSymbol] = art;
+            return { symbolOverrides: next };
+          })}
+          onReset={() => patchProjectData(prev => {
+            const next = { ...(prev.symbolOverrides ?? {}) };
+            delete next[editingSymbol];
+            return { symbolOverrides: next };
+          })}
+          onClose={() => setEditingSymbol(null)}
+        />
       )}
 
       {showSend && (

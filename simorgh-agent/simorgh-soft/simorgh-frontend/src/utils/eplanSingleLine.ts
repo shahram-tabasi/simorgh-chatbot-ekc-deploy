@@ -264,6 +264,18 @@ export function lookupSymbol(part: any, symbols?: EplanSymbolMap): EplanSymbolIn
   return undefined;
 }
 
+/**
+ * A template, as much of one as drawing it needs.
+ *
+ * The template screen carries its own narrower idea of a template; asking for
+ * only what is read here means neither has to be widened to match the other.
+ */
+export interface TemplateLike {
+  id?: string;
+  name?: string;
+  properties?: Record<string, any>;
+}
+
 /** Where a part's symbol was decided, so a screen can say why it drew that. */
 export type SymbolSource = 'chosen' | 'eplan' | 'description' | 'slot' | 'accessory';
 
@@ -337,6 +349,22 @@ function chainFor(
   symbols?: EplanSymbolMap,
 ): ChainItem[] {
   const template = line.templateId ? templates.get(line.templateId) : undefined;
+  return chainOfTemplate(template, order, page, symbols);
+}
+
+/**
+ * The devices a template holds, in the order a cell is drawn.
+ *
+ * Split out of `chainFor` so a template can be drawn on its own — beside the
+ * parts as they are entered — with the very same reading of it that the sheet
+ * uses. Nothing about the reading changed in the splitting.
+ */
+function chainOfTemplate(
+  template: TemplateLike | undefined,
+  order: string[],
+  page: number,
+  symbols?: EplanSymbolMap,
+): ChainItem[] {
   const parts = template ? templateParts(template) : {};
   const slots = [
     ...order.filter(p => parts[p]?.length),
@@ -1002,6 +1030,76 @@ export function buildSingleLineSvg(
   data: ProjectData, equipment: Equipment, perPage = 8, symbols?: EplanSymbolMap,
 ): string {
   return buildSingleLinePages(data, equipment, perPage, symbols).map(p => p.svg).join('\n');
+}
+
+/**
+ * One template drawn on its own — the whole of it, as a cell.
+ *
+ * The same reading the sheet gives a feeder: the devices that carry power in
+ * series down the line, in the order a cell is drawn rather than the order the
+ * template filed its slots; the instruments hanging off it in parallel, each
+ * group starting level with the transformer that feeds it; and the shunts —
+ * arresters, dividers — beside the line with the earth under them. It goes
+ * through `splitBranch` and `drawBranch`, which is to say it is not a second
+ * opinion about how a template is drawn but the same one.
+ *
+ * The stubs at the top and the bottom stand for the busbar it will hang from
+ * and whatever it will feed; on a sheet those come from the feeder around it.
+ */
+export function buildTemplateSvg(
+  template: TemplateLike | undefined,
+  tier: 'LV' | 'MV' | 'HV',
+  symbols?: EplanSymbolMap,
+): { svg: string; width: number; height: number; devices: number } {
+  const { margin } = GEOM;
+  const order = propertyOrder(tier);
+  const chain = chainOfTemplate(template, order, 1, symbols);
+  const branch = splitBranch(chain);
+
+  // Room for whatever reaches out sideways, the same way a sheet works out how
+  // wide a column has to be.
+  const reach = Math.max(16, ...[...branch.series, ...branch.instruments].map(i => symbolLeft(i.id)));
+  const branchDx = Math.max(branch.shunts.length > 0 ? 130 : 34, reach + 10);
+  const x = margin + branchDx;
+  const stub = 26;
+  const top = 34 + stub;
+
+  const drawn = drawBranch(branch, x, top);
+  const width = x + INSTR_DX + 104 + margin;
+  const bottom = Math.max(drawn.bottom, top);
+  const height = bottom + stub + 34;
+
+  const out: string[] = [];
+  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" ` +
+    `width="${width}" height="${height}" font-family="Segoe UI, Arial, sans-serif">`);
+  out.push(`<rect width="${width}" height="${height}" fill="#fff"/>`);
+
+  out.push(`<text x="${margin}" y="22" font-size="12" font-weight="700" fill="#111">${
+    esc(stripLocaleTags(template?.name) || 'Template')}</text>`);
+  out.push(`<text x="${width - margin}" y="22" font-size="9" text-anchor="end" fill="#666">${
+    esc(`${tier} · ${branch.series.length} in series · ${branch.instruments.length} instrument(s)`
+      + (branch.shunts.length ? ` · ${branch.shunts.length} to earth` : ''))}</text>`);
+
+  if (chain.length === 0) {
+    out.push(`<text x="${margin}" y="${top + 20}" font-size="11" fill="#888">` +
+      `No parts in this template yet.</text>`);
+    out.push('</svg>');
+    return { svg: out.join('\n'), width, height, devices: 0 };
+  }
+
+  // Where it hangs from, and what it feeds.
+  out.push(line(x, top - stub, x, top, 1.3));
+  out.push(`<path d="M ${x - 6} ${top - stub + 11} L ${x} ${top - stub} L ${x + 6} ${top - stub + 11} Z" fill="#111"/>`);
+  out.push(`<text x="${x + 10}" y="${top - stub + 9}" font-size="8.5" fill="#666">from the busbar</text>`);
+
+  out.push(drawn.svg);
+
+  out.push(line(x, bottom, x, bottom + stub, 1.3));
+  out.push(`<path d="M ${x - 6} ${bottom + stub - 11} L ${x} ${bottom + stub} L ${x + 6} ${bottom + stub - 11} Z" fill="#111"/>`);
+  out.push(`<text x="${x + 10}" y="${bottom + stub - 2}" font-size="8.5" fill="#666">to the load</text>`);
+
+  out.push('</svg>');
+  return { svg: out.join('\n'), width, height, devices: chain.length };
 }
 
 /** A print-ready document: every switchgear, every sheet, one page each. */
