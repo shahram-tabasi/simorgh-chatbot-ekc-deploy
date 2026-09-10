@@ -8,6 +8,7 @@ import { OutputTypesTab } from './components/OutputTypes/OutputTypesTab';
 import { ProjectSelection } from './components/ProjectSelection/ProjectSelection';
 import { SplashScreen } from './components/SplashScreen/SplashScreen';
 import { ProjectProvider, useProject } from './context/ProjectContext';
+import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
 import { Chatbot } from './components/Chatbot/Chatbot';
 import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
@@ -88,6 +89,13 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const [zoom,          setZoom]          = useState(100);
   const { projectData, saveProject, notifyRevisionLocked } = useProject();
   const desktopInstaller = useDesktopInstaller();
+  // Everything on screen that can be put away, so View can bring it back.
+  // Null outside a provider — the menu simply shows no panel section then.
+  const registry = usePanelRegistry();
+  const panels = registry?.panels ?? [];
+  const isPanelOpen = (id: string) => registry?.isOpen(id) ?? true;
+  const togglePanel = (id: string) => registry?.toggle(id);
+  const showAllPanels = () => registry?.showAll();
   const menuRef = useRef<HTMLDivElement>(null);
   // Cut / Copy / Paste act on the field the user was last in: opening the
   // menu takes the focus away, so the field is remembered as it is left.
@@ -357,6 +365,39 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 >
                   🔄 Reset View
                 </button>
+
+                {/* Panels, the way EPLAN keeps its navigators: anything that
+                    can be closed is listed here, whether it is closed or not,
+                    so putting something away can always be undone. */}
+                {panels.length > 0 && (
+                  <>
+                    <div className="border-t border-gray-600 my-1"></div>
+                    <div className="px-4 py-1 text-[11px] uppercase tracking-wide text-gray-400">
+                      Panels — پنجره‌ها
+                    </div>
+                    {panels.map(panel => (
+                      <button
+                        key={panel.id}
+                        className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                        onClick={() => togglePanel(panel.id)}
+                        title={panel.note}
+                      >
+                        <span className="inline-block w-4">{isPanelOpen(panel.id) ? '☑' : '☐'}</span>
+                        {panel.label}
+                        {panel.group && (
+                          <span className="text-xs text-gray-400 float-right">{panel.group}</span>
+                        )}
+                      </button>
+                    ))}
+                    <button
+                      className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                      onClick={() => { showAllPanels(); setActiveMenu(null); }}
+                    >
+                      <span className="inline-block w-4"></span>
+                      Show all panels
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -751,7 +792,7 @@ const MainApp: React.FC = () => {
       
       {/* Header with Revision Dropdown */}
       <div className="bg-white shadow-md border-b">
-        <div className="container mx-auto px-4">
+        <div className="w-full px-4">
           <style>{`
             @keyframes headerWordmarkReveal {
               from { opacity: 0; transform: translateX(-10px) scaleX(0.85); }
@@ -909,7 +950,7 @@ const MainApp: React.FC = () => {
       {/* Engineering workflow navigation — a distinct toolbar band (not an
           in-page stepper), same pattern as the logo header above it. */}
       <div className="bg-white border-b shadow-sm">
-        <div className="container mx-auto px-4">
+        <div className="w-full px-4">
           <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={requestTab} />
         </div>
       </div>
@@ -918,7 +959,7 @@ const MainApp: React.FC = () => {
           here. */}
       {isTpmsMastered && (
         <div className="bg-purple-50 border-b border-purple-300 px-4 py-2">
-          <div className="container mx-auto flex items-center gap-2 text-sm text-purple-900">
+          <div className="w-full flex items-center gap-2 text-sm text-purple-900">
             <span>🗄️</span>
             <span>
               Read-only — this project is read from <strong>TPMS</strong>
@@ -942,7 +983,7 @@ const MainApp: React.FC = () => {
           newer revisions are deleted. */}
       {!isTpmsMastered && !isCurrentRevisionEditable && currentRevision && (
         <div className="bg-amber-50 border-b border-amber-300 px-4 py-2">
-          <div className="container mx-auto flex items-center gap-2 text-sm text-amber-900">
+          <div className="w-full flex items-center gap-2 text-sm text-amber-900">
             <span>🔒</span>
             <span>
               <strong>REV {currentRevision.revisionNumber}</strong> is read-only
@@ -959,8 +1000,13 @@ const MainApp: React.FC = () => {
 
       {/* محتوای اصلی + پنل چت‌بات (split layout) */}
       <div className="flex flex-row flex-1 min-h-0">
+        {/* The workspace runs to the edges of the window rather than sitting in
+            a centred column. A drawing, a parts table and a device matrix all
+            want the width, and when a panel beside them is closed they should
+            get the room it gave up — a capped container would have left it as
+            grey margin instead. */}
         <div className="flex-1 min-w-0 overflow-auto">
-          <div className="container mx-auto px-4 py-4">
+          <div className="w-full px-4 py-4">
             <div className="bg-white rounded-lg shadow-md p-6">
               {tabs[activeTab].component}
             </div>
@@ -975,7 +1021,7 @@ const MainApp: React.FC = () => {
 
       {/* Footer */}
       <div className="bg-gray-800 text-white text-xs py-2">
-        <div className="container mx-auto px-4 flex justify-between items-center">
+        <div className="w-full px-4 flex justify-between items-center">
           <span>© 2025 Simorgh Software - Professional Electrical Design</span>
           <span className="flex items-center gap-3">
             {desktopInstaller.available && (
@@ -1228,7 +1274,11 @@ export function App() {
 
   return (
     <ProjectProvider initialProject={currentProject}>
-      <MainApp />
+      {/* Which panels are on screen. Outside ProjectProvider's data but inside
+          the app, because it belongs to the person rather than the project. */}
+      <PanelsProvider>
+        <MainApp />
+      </PanelsProvider>
     </ProjectProvider>
   );
 }

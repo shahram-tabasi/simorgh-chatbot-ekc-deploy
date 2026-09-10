@@ -1,3 +1,8 @@
+/* The Persian type the suite is set in. Imported before Tailwind's base so
+   preflight's own font rules can be overridden by the stack rather than the
+   other way round. */
+@import './fonts.css';
+
 /* PLEASE NOTE: THESE TAILWIND IMPORTS SHOULD NEVER BE DELETED */
 @import 'tailwindcss/base';
 @import 'tailwindcss/components';

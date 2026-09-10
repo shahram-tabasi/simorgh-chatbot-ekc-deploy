@@ -15,8 +15,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   SparklesIcon, XIcon, SendIcon, PaperclipIcon, Trash2Icon,
   ImageIcon, FileTextIcon, FileSpreadsheetIcon, FileIcon, Loader2Icon,
-  MaximizeIcon, MinimizeIcon, UserIcon, ZapIcon,
+  MaximizeIcon, MinimizeIcon, MinusIcon, UserIcon, ZapIcon,
 } from 'lucide-react';
+import { usePanel } from '../../context/PanelsContext';
 import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
@@ -181,6 +182,16 @@ interface ChatbotProps {
 
 export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => {
   const [open, setOpen]               = useState(false);
+  // Closing the rail is different from collapsing the panel: collapsed leaves
+  // the 48px launcher, closed takes the column off the screen altogether and
+  // gives its width back to the workspace. It comes back from View → Panels,
+  // which is where EPLAN keeps its navigators too.
+  const panel = usePanel({
+    id: 'simorgh-ai',
+    label: 'Simorgh AI — دستیار هوشمند',
+    group: 'Assistant',
+    note: 'The assistant column down the right-hand side',
+  });
   const [maximized, setMaximized]     = useState(false);
   const [mode, setMode]               = useState<Mode>('local');
   const [endpoint, setEndpoint]       = useState<string>(LOCAL_DEFAULT);
@@ -220,15 +231,19 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
 
   // Expose our column width via a CSS custom property so other components
   // (e.g. the Device Selection fullscreen overlay) can leave room for the
-  // chatbot instead of covering it. Closed=48px, Open=420px, Maximized=0px
-  // (the chatbot is a floating overlay in that case and z-orders above).
+  // chatbot instead of covering it. Put away=0px, Collapsed=48px, Open=420px,
+  // Maximized=0px (the chatbot is a floating overlay then and z-orders above).
+  //
+  // The put-away case matters: this effect runs whether or not the component
+  // renders anything, so without it a closed assistant would still reserve
+  // 48px of a fullscreen overlay for a column that is not on the screen.
   useEffect(() => {
-    const w = !open ? '48px' : (maximized ? '0px' : '420px');
+    const w = !panel.open ? '0px' : !open ? '48px' : (maximized ? '0px' : '420px');
     document.documentElement.style.setProperty('--simorgh-chat-w', w);
     return () => {
       document.documentElement.style.removeProperty('--simorgh-chat-w');
     };
-  }, [open, maximized]);
+  }, [panel.open, open, maximized]);
   // Agent mode = the assistant is allowed to call frontend tools that mutate
   // project state (update rows, set colours, create templates, …). When off,
   // the chatbot only displays text replies and ignores any tool_calls.
@@ -610,6 +625,11 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
     }
   };
 
+  // ── Put away: nothing at all, and the workspace has the whole width ─────
+  // Not even the rail. That is what closing means as against collapsing, and
+  // View → Panels is what remembers it exists.
+  if (!panel.open) return null;
+
   // ── Closed: slim activity-bar column with a launcher button ─────────────
   // The chatbot is embedded as part of the main application layout (a flex
   // sibling), not a floating overlay. When closed it collapses to a narrow
@@ -630,6 +650,16 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         <span className="mt-3 text-[10px] font-semibold text-indigo-700 [writing-mode:vertical-rl] rotate-180 tracking-widest">
           SIMORGH&nbsp;AI
         </span>
+        {/* Put the whole column away, not just the chat. The rail is 48px of
+            width the workspace could be using, and View → Panels brings it
+            back — so this is safe to press. */}
+        <button
+          onClick={panel.hide}
+          title="Close the assistant — View → Panels brings it back"
+          className="mt-auto mb-3 p-1.5 rounded text-indigo-400 hover:text-indigo-800 hover:bg-indigo-100"
+        >
+          <XIcon className="w-3.5 h-3.5" />
+        </button>
       </div>
     );
   }
@@ -661,8 +691,15 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
             {maximized ? <MinimizeIcon className="w-4 h-4" /> : <MaximizeIcon className="w-4 h-4" />}
           </button>
           <button
-            title="Close"
+            title="Collapse to the side rail"
             onClick={() => setOpen(false)}
+            className="p-1.5 rounded hover:bg-blue-700"
+          >
+            <MinusIcon className="w-4 h-4" />
+          </button>
+          <button
+            title="Close the assistant — View → Panels brings it back"
+            onClick={() => { setMaximized(false); panel.hide(); }}
             className="p-1.5 rounded hover:bg-blue-700"
           >
             <XIcon className="w-4 h-4" />

@@ -1,0 +1,110 @@
+/* src/fonts.css — the Persian type the suite is set in.
+ *
+ * Three faces, in the order the office asked for them:
+ *
+ *   Vazirmatn   ships with the app. SIL Open Font Licence, so it can be
+ *               redistributed, which means every machine that opens the suite
+ *               renders Persian correctly whether or not anything is installed
+ *               on it — including a customer's laptop and the print server.
+ *   IRANSansX   used when it is installed on the machine. It is a licensed
+ *               face from Fontiran and is not ours to ship, so it is reached
+ *               through local() rather than copied into the build.
+ *   Peyda       the same: used where it is installed, never redistributed.
+ *
+ * The stack is ordered so an office that has bought IRANSansX or Peyda sees
+ * its own house face, and everyone else still gets a proper Persian face
+ * rather than the browser's default, which on Windows means Tahoma and on a
+ * Linux print server often means nothing at all.
+ *
+ * Latin text is unaffected in practice: Vazirmatn carries a full Latin set
+ * drawn to match, so mixed Persian and English lines sit on one baseline
+ * instead of two.
+ */
+
+/* ── The bundled face ────────────────────────────────────────────────────── */
+
+/* One variable file covers every weight from 100 to 900, which is smaller
+ * than the three static cuts it replaces and lets the UI use 500 and 600
+ * without another download. */
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-Variable.woff2') format('woff2-variations'),
+       url('/fonts/Vazirmatn-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* The static cuts, for a browser that will not take a variable font. Listed
+ * after it so a browser that understands variations never fetches these. */
+@font-face {
+  font-family: 'Vazirmatn Static';
+  src: url('/fonts/Vazirmatn-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Vazirmatn Static';
+  src: url('/fonts/Vazirmatn-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Vazirmatn Static';
+  src: url('/fonts/Vazirmatn-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── The two licensed faces, used only where they are already installed ──── */
+
+/* Each name a Windows or macOS installation might register it under. A name
+ * that is not installed simply does not match, and the stack moves on. */
+@font-face {
+  font-family: 'IRANSansX';
+  src: local('IRANSansX'), local('IRANSansXFaNum'), local('IRANSansXV'),
+       local('IRAN Sans X'), local('IRANSansX Regular'), local('IRANSansXRegular');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Peyda';
+  src: local('Peyda'), local('PeydaWeb'), local('Peyda Regular'),
+       local('PeydaFaNum'), local('Peyda-Regular');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── The stack ───────────────────────────────────────────────────────────── */
+
+:root {
+  /* Referenced by Tailwind's `font-sans`, so every existing class picks it up
+   * without a single component having to change. */
+  --simorgh-font-fa:
+    'IRANSansX', 'Peyda', 'Vazirmatn', 'Vazirmatn Static',
+    'Segoe UI', Tahoma, 'Iranian Sans', Arial, sans-serif;
+}
+
+/* Numbers stay Latin even inside Persian text: a rating, a part number and a
+ * module position are read against a datasheet, and ۳۲ next to 32A on the
+ * page is a reading error waiting to happen. */
+html, body {
+  font-family: var(--simorgh-font-fa);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+/* Form controls do not inherit the page font on their own. */
+input, textarea, select, button, optgroup {
+  font-family: inherit;
+}
+
+/* Persian sits a shade lower and closer than Latin at the same size; this is
+ * the small correction that keeps a mixed line looking level. */
+[lang='fa'], [dir='rtl'] {
+  line-height: 1.75;
+}

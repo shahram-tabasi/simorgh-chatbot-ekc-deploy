@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon } from 'lucide-react';
 import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
+import { PanelFrame } from '../shared/PanelFrame';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { EplanSymbolMap } from '../../utils/eplanSingleLine';
 import { setProjectSymbolOverrides } from '../../utils/iecSymbols';
@@ -811,10 +812,19 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
         <p className="text-sm text-gray-500">Type: {template.type}</p>
       </div>
 
-      {/* The table is untouched; the schematic sits beside it. */}
+      {/* The table is untouched; the schematic sits beside it — and gives its
+          room back when it is closed. */}
       <div className="flex gap-4 items-start">
-      <div className="flex-1 min-w-0 border border-gray-200 rounded-md overflow-hidden">
-        <table className="w-full">
+      {/* `overflow-x-auto` rather than `overflow-hidden`, and a min-width the
+          columns actually need.
+          Nine columns of fixed width plus the part name come to about 1180px.
+          Without the minimum the table squeezed itself into whatever the
+          schematic left it — a part number reading "3RV2321-4…", a label
+          reading "Mc" — and with `overflow-hidden` the far columns could not
+          be reached at all. Now it keeps its columns and scrolls under its own
+          headings, which is what a wide table is supposed to do. */}
+      <div className="flex-1 min-w-0 border border-gray-200 rounded-md overflow-x-auto overflow-y-hidden">
+        <table className="w-full min-w-[1180px]">
           <thead>
             <tr className="bg-gray-50">
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-36">
@@ -1081,8 +1091,17 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
         </table>
       </div>
 
-      <div className="w-80 shrink-0">
+      <PanelFrame
+        id="template-graphic"
+        title="Template graphic — گرافیک تمپلیت"
+        menuLabel="Template graphic — گرافیک تمپلیت"
+        group="Create Template"
+        note="The whole cell, drawn the way a feeder built on it will be."
+        className="w-80 shrink-0 border-0 bg-transparent"
+        bodyClassName="pt-2"
+      >
         <PartSchematicPanel
+          bare
           template={template}
           tier={template.type}
           parts={partRefs}
@@ -1091,7 +1110,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           onSymbolChange={changePartSymbol}
           onOpenGraphic={setGraphicSymbols}
         />
-      </div>
+      </PanelFrame>
       </div>
 
       {/* One window, for the whole template — not one per part. */}

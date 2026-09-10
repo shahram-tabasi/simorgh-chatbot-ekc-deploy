@@ -36,6 +36,14 @@ interface Props {
   onSymbolChange: (ref: PartRef, symbolId: string | undefined) => void;
   /** Open the one graphic window, on the whole template. */
   onOpenGraphic: (symbols: EplanSymbolMap) => void;
+  /**
+   * Leave off the panel's own title bar and border.
+   *
+   * Set when something outside already draws them — the collapsible frame on
+   * the template screen. Off by default, so every existing use looks exactly
+   * as it did.
+   */
+  bare?: boolean;
 }
 
 const WHY: Record<SymbolSource, string> = {
@@ -57,7 +65,7 @@ const SymbolArt: React.FC<{ id: SymbolId; height: number }> = ({ id, height }) =
 );
 
 export const PartSchematicPanel: React.FC<Props> = ({
-  template, tier, parts, selected, onSelect, onSymbolChange, onOpenGraphic,
+  template, tier, parts, selected, onSelect, onSymbolChange, onOpenGraphic, bare,
 }) => {
   // What EPLAN says these parts are. Without it the symbol still comes out —
   // from the description, then the row — which is exactly what the drawing
@@ -96,22 +104,40 @@ export const PartSchematicPanel: React.FC<Props> = ({
   const chosen = String(selected?.part?.symbolId ?? '');
 
   return (
-    <div className="border border-gray-200 rounded-lg bg-white flex flex-col overflow-hidden">
-      <div className="px-3 py-2 border-b bg-gray-50 flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-gray-800">Template graphic</p>
-          <p className="text-[11px] text-gray-500">
-            The whole cell, drawn the way a feeder built on it will be.
-          </p>
+    <div className={bare
+      ? 'bg-white flex flex-col overflow-hidden'
+      : 'border border-gray-200 rounded-lg bg-white flex flex-col overflow-hidden'}>
+      {!bare && (
+        <div className="px-3 py-2 border-b bg-gray-50 flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-800">Template graphic</p>
+            <p className="text-[11px] text-gray-500">
+              The whole cell, drawn the way a feeder built on it will be.
+            </p>
+          </div>
+          <button
+            onClick={() => onOpenGraphic(symbols)}
+            title="Open the graphic in its own window, where it can be edited"
+            className="flex items-center gap-1 px-2 py-1.5 rounded bg-slate-700 text-white text-xs font-medium hover:bg-slate-800 shrink-0"
+          >
+            <MaximizeIcon className="w-3.5 h-3.5" /> Open
+          </button>
         </div>
-        <button
-          onClick={() => onOpenGraphic(symbols)}
-          title="Open the graphic in its own window, where it can be edited"
-          className="flex items-center gap-1 px-2 py-1.5 rounded bg-slate-700 text-white text-xs font-medium hover:bg-slate-800 shrink-0"
-        >
-          <MaximizeIcon className="w-3.5 h-3.5" /> Open
-        </button>
-      </div>
+      )}
+
+      {/* In bare mode the frame outside owns the title, but Open belongs to
+          this panel — the symbols it opens with are fetched in here. */}
+      {bare && (
+        <div className="px-3 pb-2 flex justify-end">
+          <button
+            onClick={() => onOpenGraphic(symbols)}
+            title="Open the graphic in its own window, where it can be edited"
+            className="flex items-center gap-1 px-2 py-1.5 rounded bg-slate-700 text-white text-xs font-medium hover:bg-slate-800"
+          >
+            <MaximizeIcon className="w-3.5 h-3.5" /> Open
+          </button>
+        </div>
+      )}
 
       {/* The template itself. Scaled to the panel; the window is where it is
           read properly and edited. */}
