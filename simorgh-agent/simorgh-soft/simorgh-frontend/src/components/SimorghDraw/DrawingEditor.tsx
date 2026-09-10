@@ -5,10 +5,17 @@ import {
   EyeIcon, EyeOffIcon, LockIcon, UnlockIcon, DownloadIcon, ScanSearchIcon,
   SaveIcon, TriangleAlertIcon, MinusIcon, WaypointsIcon, SquareIcon, CircleIcon,
   SplineIcon, TypeIcon, Maximize2Icon, Minimize2Icon, MagnetIcon,
+  CircleDashedIcon, RulerIcon, ScissorsIcon, ArrowRightToLineIcon,
+  CornerDownRightIcon, RotateCwIcon, FlipHorizontalIcon, FlipVerticalIcon,
+  ScalingIcon, BringToFrontIcon, SendToBackIcon,
+  AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
+  AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
+  AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
+  LanguagesIcon, CircleHelpIcon,
 } from 'lucide-react';
 import { DrawingEdits } from '../../types/project';
 import {
-  Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Shape, layerColor,
+  Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Pt, Shape, layerColor,
 } from '../../utils/cad/shapes';
 import { renderSvg } from '../../utils/cad/svg';
 import { renderDxf } from '../../utils/cad/dxf';
@@ -18,8 +25,15 @@ import {
   History, StylePatch, boundsOfAll, deleteShapes, duplicateShapes, moveShapes,
   restyleShapes, setText, withShapes,
 } from '../../utils/cad/edit';
+import {
+  AlignTo, EditResult, alignShapes, centreOf, cornerLines, distributeShapes,
+  extendLine, mirrorX, mirrorY, reorderShapes, rotation, scaling,
+  transformShapes, trimLine,
+} from '../../utils/cad/geom';
 import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
-import { DRAWS, DrawingCanvas, Tool, Viewport, fitView, viewOn } from './DrawingCanvas';
+import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang';
+import { DrawingHelp } from './DrawingHelp';
+import { DRAWS, DrawingCanvas, PICKS, Tool, Viewport, fitView, viewOn } from './DrawingCanvas';
 
 // Simorgh Draw — the drawing, open for editing.
 //
@@ -58,26 +72,49 @@ interface Props {
 const SNAPS = [0, 1, 5, 10, 25];
 
 /** What a new line is drawn with, in the words a drawing office uses. */
-const LINE_TYPES: { id: string; label: string; dash?: string }[] = [
-  { id: 'solid', label: 'solid' },
-  { id: 'dashed', label: 'dashed', dash: '6 4' },
-  { id: 'dash-dot', label: 'dash-dot', dash: '10 3 2 3' },
-  { id: 'dotted', label: 'dotted', dash: '1.5 3' },
+const LINE_TYPES: { id: string; name: 'solid' | 'dashed' | 'dashDot' | 'dotted'; dash?: string }[] = [
+  { id: 'solid', name: 'solid' },
+  { id: 'dashed', name: 'dashed', dash: '6 4' },
+  { id: 'dash-dot', name: 'dashDot', dash: '10 3 2 3' },
+  { id: 'dotted', name: 'dotted', dash: '1.5 3' },
 ];
 
 const WIDTHS = [0.5, 0.8, 1, 1.3, 1.8, 2.5, 4, 6];
 const TEXT_SIZES = [6, 8, 9, 10, 12, 14, 18, 24];
 
-/** The tools, in the order a hand reaches for them. */
-const TOOLS: { id: Tool; label: string; key: string; Icon: React.FC<{ className?: string }> }[] = [
-  { id: 'select', label: 'Select', key: 'V', Icon: MousePointer2Icon },
-  { id: 'pan', label: 'Pan — or hold Space', key: 'H', Icon: HandIcon },
-  { id: 'line', label: 'Line', key: 'L', Icon: MinusIcon },
-  { id: 'polyline', label: 'Polyline — Enter or double-click ends it', key: 'P', Icon: WaypointsIcon },
-  { id: 'rect', label: 'Rectangle', key: 'R', Icon: SquareIcon },
-  { id: 'circle', label: 'Circle — centre, then radius', key: 'C', Icon: CircleIcon },
-  { id: 'arc', label: 'Arc — centre, start, then sweep', key: 'A', Icon: SplineIcon },
-  { id: 'text', label: 'Text', key: 'T', Icon: TypeIcon },
+/**
+ * The tools, in the order a hand reaches for them.
+ *
+ * Each names the phrase that describes it rather than carrying one, so the bar
+ * reads in whichever of the three languages is chosen without the table having
+ * to know about any of them. The letters are the same in every language — they
+ * are where the finger goes, not a word.
+ */
+type ToolName = Extract<keyof Strings, Tool>;
+const TOOLS: { id: Tool; name: ToolName; key: string; Icon: React.FC<{ className?: string }> }[] = [
+  { id: 'select', name: 'select', key: 'V', Icon: MousePointer2Icon },
+  { id: 'pan', name: 'pan', key: 'H', Icon: HandIcon },
+  { id: 'line', name: 'line', key: 'L', Icon: MinusIcon },
+  { id: 'polyline', name: 'polyline', key: 'P', Icon: WaypointsIcon },
+  { id: 'rect', name: 'rect', key: 'R', Icon: SquareIcon },
+  { id: 'circle', name: 'circle', key: 'C', Icon: CircleIcon },
+  { id: 'ellipse', name: 'ellipse', key: 'E', Icon: CircleDashedIcon },
+  { id: 'arc', name: 'arc', key: 'A', Icon: SplineIcon },
+  { id: 'text', name: 'text', key: 'T', Icon: TypeIcon },
+  { id: 'dim', name: 'dim', key: 'D', Icon: RulerIcon },
+  { id: 'trim', name: 'trim', key: 'X', Icon: ScissorsIcon },
+  { id: 'extend', name: 'extend', key: 'W', Icon: ArrowRightToLineIcon },
+  { id: 'corner', name: 'corner', key: 'K', Icon: CornerDownRightIcon },
+];
+
+/** Lining up, in the order the buttons sit on the bar. */
+const ALIGNS: { to: AlignTo; name: keyof Strings; Icon: React.FC<{ className?: string }> }[] = [
+  { to: 'left', name: 'alignLeft', Icon: AlignStartVerticalIcon },
+  { to: 'centre-x', name: 'centreX', Icon: AlignCenterVerticalIcon },
+  { to: 'right', name: 'alignRight', Icon: AlignEndVerticalIcon },
+  { to: 'top', name: 'alignTop', Icon: AlignStartHorizontalIcon },
+  { to: 'centre-y', name: 'centreY', Icon: AlignCenterHorizontalIcon },
+  { to: 'bottom', name: 'alignBottom', Icon: AlignEndHorizontalIcon },
 ];
 
 export const DrawingEditor: React.FC<Props> = ({
@@ -139,6 +176,20 @@ export const DrawingEditor: React.FC<Props> = ({
   const [textSize, setTextSize] = useState(9);
   const [objectSnap, setObjectSnap] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
+  // Which language the person at the keyboard reads. Theirs, not the
+  // project's, so it is remembered in the browser.
+  const [lang, setLang] = useState<Lang>(loadLang);
+  const T = STRINGS[lang];
+  const dir = dirOf(lang);
+  const [showHelp, setShowHelp] = useState(false);
+  // The corner command takes two lines, so the first one waits here.
+  const [pendingCorner, setPendingCorner] = useState<{ index: number; at: Pt } | null>(null);
+  const [cornerRadius, setCornerRadius] = useState(0);
+  // What a command has to say when it could not do what was asked. Cleared on
+  // the next thing that happens, so it never sits there stale.
+  const [notice, setNotice] = useState<string | null>(null);
+  // Whether the canvas has something half-drawn. The two share a keyboard.
+  const [drafting, setDrafting] = useState(false);
   const frame = useRef<HTMLDivElement>(null);
   const [snap, setSnap] = useState(5);
   const [showGrid, setShowGrid] = useState(false);
@@ -146,6 +197,14 @@ export const DrawingEditor: React.FC<Props> = ({
   const [paper, setPaper] = useState<PaperChoice>(initialPaper);
   const [view, setView] = useState<Viewport>({ x: 0, y: 0, w: 1000, h: 600 });
   const [, forceRender] = useState(0);
+
+  const chooseLang = (next: Lang) => { setLang(next); saveLang(next); };
+
+  // Leaving a command tool puts down whatever it was holding.
+  useEffect(() => {
+    if (tool !== 'corner') setPendingCorner(null);
+    setNotice(null);
+  }, [tool]);
 
   /** Replace the shapes, recording the step that got us here. */
   const commit = useCallback((next: Shape[], nextSelection?: Set<number>) => {
@@ -193,30 +252,112 @@ export const DrawingEditor: React.FC<Props> = ({
     dash: LINE_TYPES.find(l => l.id === drawLine)?.dash,
   }), [drawLayer, drawWidth, drawLine]);
 
-  /** A finished shape goes on the sheet and is the thing now picked. */
-  const draw = useCallback((shape: Shape) => {
+  /**
+   * A finished piece of work goes on the sheet and is the thing now picked.
+   *
+   * A run rather than one shape, because one gesture is not always one shape:
+   * a dimension is six, and they belong together in one undo step.
+   */
+  const draw = useCallback((run: Shape[]) => {
+    if (run.length === 0) return;
     historyFor(index).push(shapes);
-    const next = [...shapes, shape];
+    const next = [...shapes, ...run];
     setEdits(e => ({ ...e, [index]: next }));
-    setSelection(new Set([next.length - 1]));
+    setSelection(new Set(run.map((_, k) => shapes.length + k)));
     touch(index);
     forceRender(n => n + 1);
   }, [index, shapes]);
 
   /** The text tool has a place; the words come from here. */
   const placeText = useCallback((at: { x: number; y: number }) => {
-    const value = window.prompt('Text');
+    const value = window.prompt(T.promptText);
     if (value == null || value.trim() === '') return;
-    draw({
+    draw([{
       t: 'text', x: at.x, y: at.y, s: value, size: textSize,
-      layer: drawLayer, color: '#111', width: 0,
-    });
-  }, [draw, textSize, drawLayer]);
+      layer: drawLayer, color: layerColor(drawLayer), width: 0,
+    }]);
+  }, [draw, textSize, drawLayer, T]);
 
   /** Change how the picked shapes are drawn, without redrawing them. */
   const restyle = (patch: StylePatch) => {
     if (selection.size === 0) return;
     commit(restyleShapes(shapes, selection, patch));
+  };
+
+  // ── The commands that change what is already there ──────────────────────
+
+  /** Put a command's result on the sheet, or say why it could not go. */
+  const applyResult = (r: EditResult) => {
+    if (!r.ok) {
+      setNotice(r.why === 'parallel' ? T.areParallel
+        : r.why === 'no-crossing' ? T.noCrossing
+        : T.needALine);
+      return;
+    }
+    setNotice(null);
+    commit(r.shapes, new Set(r.selection ?? []));
+  };
+
+  /**
+   * Trim, extend and corner, on the shape that was clicked.
+   *
+   * Corner is the one that needs two: the first click is remembered and the
+   * status bar asks for the second, which is how EPLAN asks for it too.
+   */
+  const command = (i: number, at: Pt) => {
+    const off = new Set([...hidden, ...locked]);
+    if (tool === 'trim') { applyResult(trimLine(shapes, i, at, off)); return; }
+    if (tool === 'extend') { applyResult(extendLine(shapes, i, at, off)); return; }
+    if (tool !== 'corner') return;
+    if (!pendingCorner || pendingCorner.index === i) {
+      if (shapes[i]?.t !== 'line') { setNotice(T.needALine); return; }
+      setPendingCorner({ index: i, at });
+      setNotice(null);
+      setSelection(new Set([i]));
+      return;
+    }
+    applyResult(cornerLines(shapes, pendingCorner.index, i, pendingCorner.at, at, cornerRadius));
+    setPendingCorner(null);
+  };
+
+  /** Turn, mirror or scale what is picked, about the middle of it. */
+  const transform = (make: (cx: number, cy: number) => Parameters<typeof transformShapes>[2]) => {
+    if (selection.size === 0) return;
+    const c = centreOf(shapes, selection);
+    if (!c) return;
+    commit(transformShapes(shapes, selection, make(c[0], c[1])));
+  };
+
+  const rotateBy = (deg: number) => transform((cx, cy) => rotation(cx, cy, deg));
+
+  const rotateFree = () => {
+    const answer = window.prompt(T.promptRotate, '90');
+    const deg = Number(answer);
+    if (answer == null || !Number.isFinite(deg) || deg === 0) return;
+    // A drawing office says a turn anticlockwise; sheet space counts the other
+    // way, so what is typed is negated to mean what it looks like.
+    rotateBy(-deg);
+  };
+
+  const scaleFree = () => {
+    const answer = window.prompt(T.promptScale, '2');
+    const k = Number(answer);
+    if (answer == null || !Number.isFinite(k) || k <= 0 || k === 1) return;
+    transform((cx, cy) => scaling(cx, cy, k));
+  };
+
+  const align = (to: AlignTo) => {
+    if (selection.size < 2) return;
+    commit(alignShapes(shapes, selection, to));
+  };
+  const spread = (axis: 'x' | 'y') => {
+    if (selection.size < 3) return;
+    commit(distributeShapes(shapes, selection, axis));
+  };
+  const reorder = (to: 'front' | 'back') => {
+    if (selection.size === 0) return;
+    const r = reorderShapes(shapes, selection, to);
+    commit(r.shapes, new Set(r.selection));
   };
 
   const fit = useCallback(() => {
@@ -306,20 +447,24 @@ export const DrawingEditor: React.FC<Props> = ({
       const target = e.target as HTMLElement;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
       const step = e.shiftKey ? 10 : snap || 1;
+      // Escape and Backspace belong to whatever is half-drawn: Escape drops it,
+      // Backspace takes a point back. The canvas answers for both while a
+      // draft is open, so this stays out of the way rather than depending on
+      // which of the two listeners the browser happens to reach first.
+      if (drafting && (e.key === 'Escape' || e.key === 'Backspace')) return;
       switch (e.key) {
         case 'Delete': case 'Backspace': e.preventDefault(); remove(); break;
+        case 'F1': e.preventDefault(); setShowHelp(h => !h); break;
         case 'Escape':
-          // The canvas marks the key handled when it had something half-drawn
-          // to drop, so Escape means that and nothing more.
-          if (e.defaultPrevented) break;
-          // Otherwise back out one step at a time — the selection, then the
-          // tool, then full screen. A draw tool is always still picked while
-          // something is half-drawn, so the last step cannot be reached by the
-          // same Escape that dropped a draft. The browser takes Escape itself
-          // when the window really is full screen; this answers for the
-          // window-filling fallback, where nothing else would.
-          if (selection.size > 0) setSelection(new Set());
-          else if (DRAWS.has(tool)) setTool('select');
+          // Back out one step at a time — a help panel, then a half-made
+          // corner, then the selection, then the tool, then full screen. The
+          // browser takes Escape itself when the window really is full screen;
+          // this answers for the window-filling fallback, where nothing else
+          // would.
+          if (showHelp) setShowHelp(false);
+          else if (pendingCorner) setPendingCorner(null);
+          else if (selection.size > 0) setSelection(new Set());
+          else if (DRAWS.has(tool) || PICKS.has(tool)) setTool('select');
           else if (fullscreen && !document.fullscreenElement) setFullscreen(false);
           break;
         case 'ArrowLeft':  e.preventDefault(); nudge(-step, 0); break;
@@ -413,8 +558,19 @@ export const DrawingEditor: React.FC<Props> = ({
   const edited = isEdited(index);
   const mm = (v: number) => (v * mmPerUnit).toFixed(1);
 
+  /** What to do next, for the tool that is in hand. */
+  const hint =
+    tool === 'text' ? T.hintText
+    : tool === 'polyline' ? T.hintPolyline
+    : tool === 'dim' ? T.hintDim
+    : tool === 'trim' ? T.hintTrim
+    : tool === 'extend' ? T.hintExtend
+    : tool === 'corner' ? (pendingCorner ? T.hintCornerSecond : T.hintCornerFirst)
+    : DRAWS.has(tool) ? T.hintTwoClicks
+    : T.hintIdle;
+
   if (!sheet) {
-    return <p className="p-6 text-sm text-gray-500">Nothing to draw yet.</p>;
+    return <p className="p-6 text-sm text-gray-500" dir={dir}>{T.nothingToDraw}</p>;
   }
 
   const Tool: React.FC<{
@@ -459,39 +615,50 @@ export const DrawingEditor: React.FC<Props> = ({
         )}
 
         {TOOLS.map(t => (
-          <Tool key={t.id} tag={t.id} title={`${t.label}  (${t.key})`} active={tool === t.id} on={() => setTool(t.id)}>
+          <Tool key={t.id} tag={t.id} title={`${T[t.name]}  (${t.key})`} active={tool === t.id} on={() => setTool(t.id)}>
             <t.Icon className="w-4 h-4" />
           </Tool>
         ))}
+        {/* The corner command needs a radius before it needs a second line. */}
+        {tool === 'corner' && (
+          <label className="flex items-center gap-1 text-[11px] text-gray-600" title={T.promptRadius}>
+            {T.cornerRadius}
+            <input
+              type="number" min={0} step={1} value={cornerRadius}
+              onChange={e => setCornerRadius(Math.max(0, Number(e.target.value) || 0))}
+              className="w-14 border border-gray-300 rounded px-1.5 py-1 text-sm"
+            />
+          </label>
+        )}
         <Divider />
 
-        <Tool title="Zoom in" on={() => zoom(1 / 1.3)}><ZoomInIcon className="w-4 h-4" /></Tool>
-        <Tool title="Zoom out" on={() => zoom(1.3)}><ZoomOutIcon className="w-4 h-4" /></Tool>
-        <Tool title="Fit the sheet (F)" on={fit}><MaximizeIcon className="w-4 h-4" /></Tool>
-        <Tool title="Zoom to selection" disabled={selection.size === 0} on={zoomToSelection}>
+        <Tool title={T.zoomIn} on={() => zoom(1 / 1.3)}><ZoomInIcon className="w-4 h-4" /></Tool>
+        <Tool title={T.zoomOut} on={() => zoom(1.3)}><ZoomOutIcon className="w-4 h-4" /></Tool>
+        <Tool title={T.fit} on={fit}><MaximizeIcon className="w-4 h-4" /></Tool>
+        <Tool title={T.zoomSel} disabled={selection.size === 0} on={zoomToSelection}>
           <ScanSearchIcon className="w-4 h-4" />
         </Tool>
         <Divider />
 
-        <Tool title="Undo (Ctrl+Z)" disabled={!history.canUndo} on={undo}><UndoIcon className="w-4 h-4" /></Tool>
-        <Tool title="Redo (Ctrl+Shift+Z)" disabled={!history.canRedo} on={redo}><RedoIcon className="w-4 h-4" /></Tool>
-        <Tool title="Duplicate (Ctrl+D)" disabled={selection.size === 0} on={duplicate}>
+        <Tool title={T.undo} disabled={!history.canUndo} on={undo}><UndoIcon className="w-4 h-4" /></Tool>
+        <Tool title={T.redo} disabled={!history.canRedo} on={redo}><RedoIcon className="w-4 h-4" /></Tool>
+        <Tool title={T.duplicate} disabled={selection.size === 0} on={duplicate}>
           <CopyIcon className="w-4 h-4" />
         </Tool>
-        <Tool title="Delete (Del)" disabled={selection.size === 0} on={remove}>
+        <Tool title={T.del} disabled={selection.size === 0} on={remove}>
           <Trash2Icon className="w-4 h-4" />
         </Tool>
-        <Tool title="Revert this sheet to as drawn" disabled={!edited} on={revert}>
+        <Tool title={T.revert} disabled={!edited} on={revert}>
           <RotateCcwIcon className="w-4 h-4" />
         </Tool>
         <Divider />
 
         <Tool
           title={
-            !onSaveEdits ? 'These edits cannot be kept with this project'
-            : !canEdit ? 'This revision is view-only — raise a revision to keep edits'
-            : dirty ? 'Keep these edits with the project (then save the project)'
-            : 'The project already holds these edits'
+            !onSaveEdits ? T.cannotKeep
+            : !canEdit ? T.readOnly
+            : dirty ? T.save
+            : T.savedAlready
           }
           disabled={!onSaveEdits || !canEdit || !dirty}
           on={keep}
@@ -502,32 +669,72 @@ export const DrawingEditor: React.FC<Props> = ({
           <button
             onClick={discardAll}
             className="px-2 py-1.5 rounded-md border border-gray-300 bg-white text-xs text-gray-600 hover:bg-gray-100"
-            title="Put every sheet back to as drawn, in the project too"
+            title={T.discardAllTip}
           >
-            Discard all
+            {T.discardAll}
           </button>
         )}
         <Divider />
 
-        <Tool title="Show the grid" active={showGrid} on={() => setShowGrid(g => !g)}>
+        <Tool title={T.grid} active={showGrid} on={() => setShowGrid(g => !g)}>
           <GridIcon className="w-4 h-4" />
         </Tool>
         <select
           className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
           value={snap}
           onChange={e => setSnap(Number(e.target.value))}
-          title="Snap moves and new points to this step"
+          title={T.snapTo}
         >
-          {SNAPS.map(v => <option key={v} value={v}>{v === 0 ? 'no snap' : `snap ${v}`}</option>)}
+          {SNAPS.map(v => <option key={v} value={v}>{v === 0 ? T.noSnap : `${v}`}</option>)}
         </select>
         <Tool
-          title={objectSnap
-            ? 'Catching the ends and corners of what is drawn — click to stop'
-            : 'Not catching the ends and corners of what is drawn'}
+          title={objectSnap ? T.osnapOn : T.osnapOff}
           active={objectSnap}
           on={() => setObjectSnap(v => !v)}
         >
           <MagnetIcon className="w-4 h-4" />
+        </Tool>
+
+        {/* Turning, mirroring, lining up — the commands that change what is
+            already there rather than adding to it. All of them work on
+            whatever is picked, so all of them are dark until something is. */}
+        <Divider />
+        <Tool title={T.rotateCCW} disabled={selection.size === 0} on={() => rotateBy(-90)}>
+          <RotateCcwIcon className="w-4 h-4" />
+        </Tool>
+        <Tool title={T.rotateCW} disabled={selection.size === 0} on={() => rotateBy(90)}>
+          <RotateCwIcon className="w-4 h-4" />
+        </Tool>
+        <Tool title={T.rotateFree} disabled={selection.size === 0} on={rotateFree}>
+          <span className="text-[11px] font-semibold leading-none px-0.5">∠</span>
+        </Tool>
+        <Tool title={T.mirrorH} disabled={selection.size === 0}
+              on={() => transform(cx => mirrorX(cx))}>
+          <FlipHorizontalIcon className="w-4 h-4" />
+        </Tool>
+        <Tool title={T.mirrorV} disabled={selection.size === 0}
+              on={() => transform((_, cy) => mirrorY(cy))}>
+          <FlipVerticalIcon className="w-4 h-4" />
+        </Tool>
+        <Tool title={T.scale} disabled={selection.size === 0} on={scaleFree}>
+          <ScalingIcon className="w-4 h-4" />
+        </Tool>
+        {ALIGNS.map(a => (
+          <Tool key={a.to} title={T[a.name] as string} disabled={selection.size < 2} on={() => align(a.to)}>
+            <a.Icon className="w-4 h-4" />
+          </Tool>
+        ))}
+        <Tool title={T.spreadX} disabled={selection.size < 3} on={() => spread('x')}>
+          <AlignHorizontalDistributeCenterIcon className="w-4 h-4" />
+        </Tool>
+        <Tool title={T.spreadY} disabled={selection.size < 3} on={() => spread('y')}>
+          <AlignVerticalDistributeCenterIcon className="w-4 h-4" />
+        </Tool>
+        <Tool title={T.toFront} disabled={selection.size === 0} on={() => reorder('front')}>
+          <BringToFrontIcon className="w-4 h-4" />
+        </Tool>
+        <Tool title={T.toBack} disabled={selection.size === 0} on={() => reorder('back')}>
+          <SendToBackIcon className="w-4 h-4" />
         </Tool>
 
         {/* How the next line is drawn, and how the picked ones are. Changing
@@ -538,7 +745,7 @@ export const DrawingEditor: React.FC<Props> = ({
           className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
           value={drawLayer}
           onChange={e => { setDrawLayer(e.target.value as Layer); restyle({ layer: e.target.value as Layer }); }}
-          title="The layer new geometry goes on"
+          title={T.layerOf}
         >
           {(Object.keys(LAYERS) as Layer[]).map(l => (
             <option key={l} value={l}>{l}</option>
@@ -548,7 +755,7 @@ export const DrawingEditor: React.FC<Props> = ({
           className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
           value={drawWidth}
           onChange={e => { setDrawWidth(Number(e.target.value)); restyle({ width: Number(e.target.value) }); }}
-          title="Line weight"
+          title={T.widthOf}
         >
           {WIDTHS.map(w => <option key={w} value={w}>{w.toFixed(1)}</option>)}
         </select>
@@ -559,24 +766,44 @@ export const DrawingEditor: React.FC<Props> = ({
             setDrawLine(e.target.value);
             restyle({ dash: LINE_TYPES.find(l => l.id === e.target.value)?.dash ?? '' });
           }}
-          title="Line type"
+          title={T.lineTypeOf}
         >
-          {LINE_TYPES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+          {LINE_TYPES.map(l => <option key={l.id} value={l.id}>{T[l.name]}</option>)}
         </select>
-        {(tool === 'text' || picked.some(p => p.t === 'text')) && (
+        {(tool === 'text' || tool === 'dim' || picked.some(p => p.t === 'text')) && (
           <select
             className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
             value={textSize}
             onChange={e => { setTextSize(Number(e.target.value)); restyle({ size: Number(e.target.value) }); }}
-            title="Text height, in drawing units"
+            title={T.textHeightOf}
           >
             {TEXT_SIZES.map(v => <option key={v} value={v}>{v} u</option>)}
           </select>
         )}
 
         <div className="ml-auto flex items-center gap-2">
+          {/* Which language the editor speaks. Three buttons rather than a
+              dropdown: it is the kind of choice that should be one click, and
+              a reader looking for their own script finds it by its shape. */}
+          <div className="flex items-center rounded-md border border-gray-300 overflow-hidden" title={T.help}>
+            <LanguagesIcon className="w-3.5 h-3.5 mx-1.5 text-gray-400 shrink-0" />
+            {LANGS.map(l => (
+              <button
+                key={l.id}
+                onClick={() => chooseLang(l.id)}
+                data-lang={l.id}
+                className={`px-2 py-1.5 text-[11px] font-semibold border-l border-gray-300 ${
+                  lang === l.id ? 'bg-slate-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+          <Tool title={T.help} active={showHelp} on={() => setShowHelp(h => !h)}>
+            <CircleHelpIcon className="w-4 h-4" />
+          </Tool>
           <Tool
-            title={fullscreen ? 'Leave full screen (Esc)' : 'Full screen'}
+            title={fullscreen ? T.leaveFullscreen : T.fullscreen}
             on={toggleFullscreen}
           >
             {fullscreen ? <Minimize2Icon className="w-4 h-4" /> : <Maximize2Icon className="w-4 h-4" />}
@@ -585,9 +812,9 @@ export const DrawingEditor: React.FC<Props> = ({
             className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
             value={paper}
             onChange={e => setPaper(e.target.value as PaperChoice)}
-            title="The sheet DXF and PDF are put on. 'Fit the drawing' keeps the scale and lets the sheet grow."
+            title={T.paperOf}
           >
-            <option value="auto">fit the drawing</option>
+            <option value="auto">{T.fitDrawing}</option>
             {(['A4', 'A3', 'A2', 'A1', 'A0'] as const).map(n => <option key={n} value={n}>{n}</option>)}
           </select>
           {smallest != null && (
@@ -625,7 +852,7 @@ export const DrawingEditor: React.FC<Props> = ({
 
       {/* ── Canvas and panels ──────────────────────────────────────────── */}
       <div className={fullscreen ? 'flex flex-1 min-h-0' : 'flex'} style={fullscreen ? undefined : { height: 620 }}>
-        <div className="flex-1 min-w-0 bg-slate-100">
+        <div className="flex-1 min-w-0 bg-slate-100 relative">
           <DrawingCanvas
             drawing={sheet.drawing}
             shapes={shapes}
@@ -639,24 +866,31 @@ export const DrawingEditor: React.FC<Props> = ({
             pen={pen}
             textSize={textSize}
             objectSnap={objectSnap}
+            mmPerUnit={mmPerUnit}
             onView={setView}
             onSelection={setSelection}
             onMove={(dx, dy) => nudge(dx, dy)}
             onCursor={setCursor}
             onDraw={draw}
             onPlaceText={placeText}
+            onPick={command}
+            onDrafting={setDrafting}
+            onCancelTool={() => { setPendingCorner(null); setTool('select'); }}
             onEditText={i => {
               const current = shapes[i];
               if (current.t !== 'text') return;
-              const value = window.prompt('Text', current.s);
+              const value = window.prompt(T.promptText, current.s);
               if (value !== null && value !== current.s) commit(setText(shapes, i, value));
             }}
           />
+          {showHelp && (
+            <DrawingHelp lang={lang} t={T} onClose={() => setShowHelp(false)} />
+          )}
         </div>
 
-        <aside className="w-64 shrink-0 border-l bg-white overflow-y-auto">
+        <aside className="w-64 shrink-0 border-l bg-white overflow-y-auto" dir={dir}>
           <div className="px-3 py-2 border-b">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Layers</h4>
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{T.layers}</h4>
           </div>
           <ul className="divide-y">
             {layers.map(([layer, count]) => (
@@ -666,14 +900,14 @@ export const DrawingEditor: React.FC<Props> = ({
                 <span className="text-[11px] text-gray-400 tabular-nums">{count}</span>
                 <button
                   onClick={() => toggle(hidden, layer, setHidden)}
-                  title={hidden.has(layer) ? 'Show this layer' : 'Hide this layer'}
+                  title={hidden.has(layer) ? T.showLayer : T.hideLayer}
                   className="p-0.5 text-gray-500 hover:text-gray-900"
                 >
                   {hidden.has(layer) ? <EyeOffIcon className="w-3.5 h-3.5" /> : <EyeIcon className="w-3.5 h-3.5" />}
                 </button>
                 <button
                   onClick={() => toggle(locked, layer, setLocked)}
-                  title={locked.has(layer) ? 'Unlock this layer' : 'Lock this layer'}
+                  title={locked.has(layer) ? T.unlockLayer : T.lockLayer}
                   className="p-0.5 text-gray-500 hover:text-gray-900"
                 >
                   {locked.has(layer) ? <LockIcon className="w-3.5 h-3.5" /> : <UnlockIcon className="w-3.5 h-3.5" />}
@@ -683,23 +917,88 @@ export const DrawingEditor: React.FC<Props> = ({
           </ul>
 
           <div className="px-3 py-2 border-y bg-gray-50">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Selection</h4>
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{T.selection}</h4>
           </div>
           <div className="px-3 py-2 text-sm text-gray-700 space-y-2">
             {picked.length === 0 && (
-              <p className="text-gray-400 text-[13px] leading-relaxed">
-                Click something to pick it, or drag a box around several.
-                Double-click a label to retype it.
-              </p>
+              <p className="text-gray-400 text-[13px] leading-relaxed">{T.nothingPicked}</p>
             )}
-            {picked.length === 1 && (
-              <>
-                <Row label="Type" value={picked[0].t} />
-                <Row label="Layer" value={picked[0].layer} />
+
+            {picked.length === 1 && <Row label={T.typeOf} value={picked[0].t} />}
+            {picked.length > 1 && <Row label={T.selection} value={T.pickedN(picked.length)} />}
+
+            {/* Everything about how the picked shapes are drawn, changed where
+                they were picked. A line whose weight is wrong is clicked and
+                put right here, without going back up to the bar and without
+                having to know that the bar would have done it too. */}
+            {picked.length > 0 && (
+              <div className="space-y-2 pt-1">
+                <label className="block">
+                  <span className="text-[11px] text-gray-500">{T.layerOf}</span>
+                  <select
+                    data-prop="layer"
+                    className="w-full mt-0.5 border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                    value={commonOf(picked, p => p.layer) ?? ''}
+                    onChange={e => restyle({ layer: e.target.value as Layer })}
+                  >
+                    {commonOf(picked, p => p.layer) == null && <option value="">—</option>}
+                    {(Object.keys(LAYERS) as Layer[]).map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </label>
+
+                {/* A label has no line weight to speak of, so it is not asked. */}
+                {picked.some(p => p.t !== 'text') && (
+                  <>
+                    <label className="block">
+                      <span className="text-[11px] text-gray-500">{T.widthOf}</span>
+                      <select
+                        data-prop="width"
+                        className="w-full mt-0.5 border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                        value={commonOf(picked, p => p.width ?? 1) ?? ''}
+                        onChange={e => restyle({ width: Number(e.target.value) })}
+                      >
+                        {commonOf(picked, p => p.width ?? 1) == null && <option value="">—</option>}
+                        {WIDTHS.map(w => <option key={w} value={w}>{w.toFixed(1)}</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-[11px] text-gray-500">{T.lineTypeOf}</span>
+                      <select
+                        data-prop="dash"
+                        className="w-full mt-0.5 border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                        value={commonOf(picked, p => lineTypeIdOf(p.dash)) ?? ''}
+                        onChange={e => restyle({
+                          dash: LINE_TYPES.find(l => l.id === e.target.value)?.dash ?? '',
+                        })}
+                      >
+                        {commonOf(picked, p => lineTypeIdOf(p.dash)) == null && <option value="">—</option>}
+                        {LINE_TYPES.map(l => <option key={l.id} value={l.id}>{T[l.name]}</option>)}
+                      </select>
+                    </label>
+                  </>
+                )}
+
+                {picked.some(p => p.t === 'text') && (
+                  <label className="block">
+                    <span className="text-[11px] text-gray-500">{T.textHeightOf}</span>
+                    <select
+                      data-prop="size"
+                      className="w-full mt-0.5 border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                      value={commonOf(picked.filter(p => p.t === 'text'), p => (p as { size: number }).size) ?? ''}
+                      onChange={e => restyle({ size: Number(e.target.value) })}
+                    >
+                      {commonOf(picked.filter(p => p.t === 'text'),
+                                p => (p as { size: number }).size) == null && <option value="">—</option>}
+                      {TEXT_SIZES.map(v => <option key={v} value={v}>{v} u</option>)}
+                    </select>
+                  </label>
+                )}
+
                 {onlyText ? (
                   <label className="block">
-                    <span className="text-[11px] text-gray-500">Text</span>
+                    <span className="text-[11px] text-gray-500">{T.textOf}</span>
                     <input
+                      data-prop="text"
                       className="w-full mt-0.5 border border-gray-300 rounded px-2 py-1 text-sm"
                       value={onlyText.s}
                       onChange={e => {
@@ -714,9 +1013,10 @@ export const DrawingEditor: React.FC<Props> = ({
                     />
                   </label>
                 ) : null}
-              </>
+
+                <p className="text-[11px] text-gray-400 leading-relaxed pt-0.5">{T.appliesToPicked}</p>
+              </div>
             )}
-            {picked.length > 1 && <Row label="Picked" value={`${picked.length} shapes`} />}
           </div>
         </aside>
       </div>
@@ -726,35 +1026,51 @@ export const DrawingEditor: React.FC<Props> = ({
         <span>{sheet.name}</span>
         <span>{mm(sheet.drawing.width)} × {mm(sheet.drawing.height)} mm</span>
         <span>{cursor ? `X ${mm(cursor.x)}  Y ${mm(cursor.y)} mm` : '—'}</span>
-        <span>zoom {Math.round((sheet.drawing.width / view.w) * 100)}%</span>
-        <span>{shapes.length} shapes</span>
-        {selection.size > 0 && <span className="text-blue-700">{selection.size} picked</span>}
-        {edited && <span className="text-amber-700">edited</span>}
+        <span>{T.zoomPct(Math.round((sheet.drawing.width / view.w) * 100))}</span>
+        <span>{T.shapesN(shapes.length)}</span>
+        {selection.size > 0 && <span className="text-blue-700">{T.pickedN(selection.size)}</span>}
+        {edited && <span className="text-amber-700">{T.edited}</span>}
         {dirty
-          ? <span className="text-amber-700">not kept yet</span>
-          : anySaved && <span className="text-emerald-700">kept with the project</span>}
+          ? <span className="text-amber-700">{T.notKept}</span>
+          : anySaved && <span className="text-emerald-700">{T.keptWithProject}</span>}
         {stale.length > 0 && (
           <span
             className="flex items-center gap-1 text-amber-700"
             title={`The project has changed since ${stale.join(', ')} ${stale.length === 1 ? 'was' : 'were'} edited, so these corrections were made against an older drawing. Revert the sheet to take the new one.`}
           >
             <TriangleAlertIcon className="w-3 h-3" />
-            {stale.length} sheet{stale.length === 1 ? '' : 's'} edited against an older drawing
+            {T.staleN(stale.length)}
           </span>
         )}
-        <span className="ml-auto">
-          {DRAWS.has(tool)
-            ? (tool === 'text'
-                ? 'Click where the text goes'
-                : tool === 'polyline'
-                  ? 'Click each corner · Enter or double-click ends it · Esc cancels'
-                  : 'Click, then click again · Shift squares it up · Esc cancels')
-            : 'Space pans · wheel zooms · F fits · Ctrl+Z undoes'}
-        </span>
+        {/* What a command could not do, said once and cleared by the next move. */}
+        {notice && (
+          <span className="flex items-center gap-1 text-rose-700 font-medium" dir={dir}>
+            <TriangleAlertIcon className="w-3 h-3" />
+            {notice}
+          </span>
+        )}
+        <span className="ml-auto" dir={dir}>{hint}</span>
       </div>
     </div>
   );
 };
+
+/**
+ * The one value a set of shapes agrees on, or null when they do not.
+ *
+ * A dropdown showing "1.0" over a mixed selection would be a lie that becomes
+ * true the moment anybody touches it, so a mixed set shows a dash instead and
+ * only changes what it is told to.
+ */
+function commonOf<T>(picked: Shape[], read: (s: Shape) => T): T | null {
+  if (picked.length === 0) return null;
+  const first = read(picked[0]);
+  return picked.every(p => read(p) === first) ? first : null;
+}
+
+/** Which of the four line types a dash pattern is, for the dropdown. */
+const lineTypeIdOf = (dash?: string): string =>
+  LINE_TYPES.find(l => (l.dash ?? '') === (dash ?? ''))?.id ?? 'solid';
 
 const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div className="flex justify-between gap-2">

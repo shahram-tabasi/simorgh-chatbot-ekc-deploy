@@ -1,0 +1,461 @@
+// src/components/SimorghDraw/lang.ts
+//
+// Simorgh Draw in three languages: English, Persian and Turkish.
+//
+// The office that draws these boards works in Persian, the company sells from
+// Turkey, and the customer who opens the DXF could be anywhere — so the editor
+// says what it does in whichever of the three the person at the keyboard reads.
+// The choice is remembered in the browser, because it belongs to the person and
+// not to the project.
+//
+// The toolbar keeps its left-to-right order in every language. A CAD toolbar is
+// a row of pictures, not a sentence, and every package a draughtsman here has
+// ever used runs it the same way round; only the running text — panels, hints,
+// help — turns for Persian. `LANGS[l].dir` is what says so.
+
+export type Lang = 'en' | 'fa' | 'tr';
+
+export const LANGS: { id: Lang; label: string; dir: 'ltr' | 'rtl' }[] = [
+  { id: 'en', label: 'EN', dir: 'ltr' },
+  { id: 'fa', label: 'فا', dir: 'rtl' },
+  { id: 'tr', label: 'TR', dir: 'ltr' },
+];
+
+export const dirOf = (l: Lang): 'ltr' | 'rtl' => LANGS.find(x => x.id === l)?.dir ?? 'ltr';
+
+/** Every phrase the editor shows. A key missing anywhere is a type error. */
+export interface Strings {
+  // Tools
+  select: string; pan: string; line: string; polyline: string; rect: string;
+  circle: string; ellipse: string; arc: string; text: string; dim: string;
+  trim: string; extend: string; corner: string;
+
+  // View and history
+  zoomIn: string; zoomOut: string; fit: string; zoomSel: string;
+  undo: string; redo: string; duplicate: string; del: string; revert: string;
+
+  // Keeping the work
+  save: string; savedAlready: string; cannotKeep: string; readOnly: string;
+  discardAll: string; discardAllTip: string;
+
+  // Drawing aids
+  grid: string; noSnap: string; snapTo: string;
+  osnapOn: string; osnapOff: string;
+  fullscreen: string; leaveFullscreen: string; help: string; closeHelp: string;
+
+  // Modifying
+  modify: string;
+  rotateCW: string; rotateCCW: string; rotateFree: string;
+  mirrorH: string; mirrorV: string; scale: string;
+  alignLeft: string; alignRight: string; alignTop: string; alignBottom: string;
+  centreX: string; centreY: string;
+  spreadX: string; spreadY: string;
+  toFront: string; toBack: string;
+
+  // Style
+  layerOf: string; widthOf: string; lineTypeOf: string; textHeightOf: string;
+  solid: string; dashed: string; dashDot: string; dotted: string;
+  paperOf: string; fitDrawing: string;
+
+  // Panels
+  layers: string; selection: string; typeOf: string; textOf: string;
+  pickedN: (n: number) => string;
+  nothingPicked: string;
+  showLayer: string; hideLayer: string; lockLayer: string; unlockLayer: string;
+  appliesToPicked: string;
+
+  // Status bar
+  shapesN: (n: number) => string;
+  zoomPct: (n: number) => string;
+  edited: string; notKept: string; keptWithProject: string;
+  staleN: (n: number) => string;
+  nothingToDraw: string;
+
+  // What to do now
+  hintIdle: string; hintText: string; hintPolyline: string; hintTwoClicks: string;
+  hintDim: string; hintTrim: string; hintExtend: string;
+  hintCornerFirst: string; hintCornerSecond: string;
+
+  // When a command cannot do what was asked
+  needALine: string; noCrossing: string; areParallel: string;
+
+  // Prompts
+  promptText: string; promptRotate: string; promptScale: string; promptRadius: string;
+  cornerRadius: string;
+
+  // Help
+  helpTitle: string; helpIntro: string;
+  helpDrawing: string; helpModify: string; helpKeys: string; helpTips: string;
+  helpFullGuide: string;
+  helpLines: Record<'draw' | 'modify' | 'keys' | 'tips', string[]>;
+}
+
+const EN: Strings = {
+  select: 'Select', pan: 'Pan — or hold Space', line: 'Line',
+  polyline: 'Polyline — Enter, right-click or double-click ends it',
+  rect: 'Rectangle', circle: 'Circle — centre, then radius',
+  ellipse: 'Ellipse — centre, then the two radii',
+  arc: 'Arc — centre, start, then sweep', text: 'Text',
+  dim: 'Dimension — from, to, then where the line sits',
+  trim: 'Trim — click the part of a line to cut away',
+  extend: 'Extend — click the end of a line to run it on',
+  corner: 'Corner — click two lines to bring them together',
+
+  zoomIn: 'Zoom in', zoomOut: 'Zoom out', fit: 'Fit the sheet (F)',
+  zoomSel: 'Zoom to selection',
+  undo: 'Undo (Ctrl+Z)', redo: 'Redo (Ctrl+Shift+Z)',
+  duplicate: 'Duplicate (Ctrl+D)', del: 'Delete (Del)',
+  revert: 'Revert this sheet to as drawn',
+
+  save: 'Keep these edits with the project (then save the project)',
+  savedAlready: 'The project already holds these edits',
+  cannotKeep: 'These edits cannot be kept with this project',
+  readOnly: 'This revision is view-only — raise a revision to keep edits',
+  discardAll: 'Discard all',
+  discardAllTip: 'Put every sheet back to as drawn, in the project too',
+
+  grid: 'Show the grid', noSnap: 'no snap', snapTo: 'Snap moves and new points to this step',
+  osnapOn: 'Catching the ends and corners of what is drawn — click to stop',
+  osnapOff: 'Not catching the ends and corners of what is drawn',
+  fullscreen: 'Full screen', leaveFullscreen: 'Leave full screen (Esc)',
+  help: 'How to draw with this (F1)', closeHelp: 'Close',
+
+  modify: 'Modify',
+  rotateCW: 'Turn 90° clockwise', rotateCCW: 'Turn 90° anticlockwise',
+  rotateFree: 'Turn by an angle', mirrorH: 'Mirror left to right',
+  mirrorV: 'Mirror top to bottom', scale: 'Scale by a factor',
+  alignLeft: 'Align left', alignRight: 'Align right',
+  alignTop: 'Align top', alignBottom: 'Align bottom',
+  centreX: 'Centre across', centreY: 'Centre down',
+  spreadX: 'Even out the gaps across', spreadY: 'Even out the gaps down',
+  toFront: 'Bring to front', toBack: 'Send to back',
+
+  layerOf: 'The layer new geometry goes on', widthOf: 'Line weight',
+  lineTypeOf: 'Line type', textHeightOf: 'Text height, in drawing units',
+  solid: 'solid', dashed: 'dashed', dashDot: 'dash-dot', dotted: 'dotted',
+  paperOf: "The sheet DXF and PDF are put on. 'Fit the drawing' keeps the scale and lets the sheet grow.",
+  fitDrawing: 'fit the drawing',
+
+  layers: 'Layers', selection: 'Selection', typeOf: 'Type', textOf: 'Text',
+  pickedN: n => `${n} shapes`,
+  nothingPicked: 'Click something to pick it, or drag a box around several. Double-click a label to retype it.',
+  showLayer: 'Show this layer', hideLayer: 'Hide this layer',
+  lockLayer: 'Lock this layer', unlockLayer: 'Unlock this layer',
+  appliesToPicked: 'Changing any of these redraws what is picked.',
+
+  shapesN: n => `${n} shapes`,
+  zoomPct: n => `zoom ${n}%`,
+  edited: 'edited', notKept: 'not kept yet', keptWithProject: 'kept with the project',
+  staleN: n => `${n} sheet${n === 1 ? '' : 's'} edited against an older drawing`,
+  nothingToDraw: 'Nothing to draw yet.',
+
+  hintIdle: 'Space pans · wheel zooms · F fits · Ctrl+Z undoes · F1 for help',
+  hintText: 'Click where the text goes',
+  hintPolyline: 'Click each corner · Backspace takes one back · Enter, right-click or double-click ends it · Esc cancels',
+  hintTwoClicks: 'Click, then click again · Shift squares it up · right-click or Esc cancels',
+  hintDim: 'Click what it measures from, then to, then where the line sits',
+  hintTrim: 'Click the piece of a line to cut away — it is cut at what crosses it',
+  hintExtend: 'Click the end of a line to run it on to the next thing in its way',
+  hintCornerFirst: 'Click the first line, on the side you want to keep',
+  hintCornerSecond: 'Now the second line, on the side you want to keep',
+
+  needALine: 'That works on straight lines',
+  noCrossing: 'Nothing in the way to run it on to',
+  areParallel: 'Those two are parallel — they have no corner',
+
+  promptText: 'Text', promptRotate: 'Turn by how many degrees?',
+  promptScale: 'Scale by what factor?', promptRadius: 'Corner radius, in drawing units (0 for a sharp corner)',
+  cornerRadius: 'Corner radius',
+
+  helpTitle: 'Drawing with Simorgh Draw',
+  helpIntro: 'The sheet is geometry, not a picture — everything on it can be picked, moved, restyled and cut, and DXF, PDF and SVG all come off what you see.',
+  helpDrawing: 'Drawing', helpModify: 'Changing what is there',
+  helpKeys: 'Keys', helpTips: 'Worth knowing',
+  helpFullGuide: 'Open the full guide',
+  helpLines: {
+    draw: [
+      'Pick a tool, then click where the shape starts and click again where it ends. Dragging works too — press, move, release.',
+      'A polyline takes as many clicks as you like. Backspace takes the last point back, Enter or a right-click or a double-click finishes it, Esc drops it.',
+      'An arc is three clicks: the centre, where it starts, then how far it sweeps.',
+      'A dimension is three clicks: what it measures from, what it measures to, then where the dimension line sits. The label is written in millimetres.',
+      'The magnet catches the ends, middles, centres and corners of what is already drawn, so a new line meets the drawing instead of nearly meeting it.',
+      'Holding Shift while drawing keeps a line level, upright or on 45°.',
+    ],
+    modify: [
+      'Click a shape to pick it, shift-click to add another, or drag a box around several.',
+      'With something picked, the Selection panel on the right changes its layer, its line weight, its line type and — for a label — its height and its wording.',
+      'Turn, mirror, scale, align and spread out are on the modify bar. They all work on whatever is picked.',
+      'Trim cuts a line back to whatever crosses it — click the piece you want gone.',
+      'Extend runs a line on until it meets something — click the end that should grow.',
+      'Corner brings two lines together where they would meet, cutting or extending both. Give it a radius and the corner is rounded instead.',
+    ],
+    keys: [
+      'V select · H pan · L line · P polyline · R rectangle · C circle · E ellipse · A arc · T text · D dimension',
+      'X trim · W extend · K corner',
+      'F fits the sheet · Space pans while held · the wheel zooms about the cursor',
+      'Ctrl+Z undoes · Ctrl+Shift+Z redoes · Ctrl+D duplicates · Ctrl+A picks everything · Del removes',
+      'Arrow keys nudge by the snap step, Shift+arrow by ten',
+      'Esc backs out one step: what is half-drawn, then the selection, then the tool',
+    ],
+    tips: [
+      'Edits are kept with the project when you press Save — then save the project itself.',
+      'Layers can be hidden or locked while you work; a hidden layer stays out of the SVG you export.',
+      'A dashed line stays dashed in the DXF: it goes out as a real CAD line type.',
+      'Persian and Turkish labels come out right through Print / PDF. The direct PDF button writes Latin text only.',
+      'Watch the text height in millimetres on the toolbar — under 1.8 mm a plotted drawing stops being readable.',
+    ],
+  },
+};
+
+const FA: Strings = {
+  select: 'انتخاب', pan: 'جابه‌جایی نما — یا نگه‌داشتن Space', line: 'خط',
+  polyline: 'چندخطی — با Enter، راست‌کلیک یا دابل‌کلیک تمام می‌شود',
+  rect: 'مستطیل', circle: 'دایره — مرکز، سپس شعاع',
+  ellipse: 'بیضی — مرکز، سپس دو شعاع',
+  arc: 'کمان — مرکز، شروع، سپس مقدار جاروب', text: 'متن',
+  dim: 'اندازه‌گذاری — از، تا، سپس محل خط اندازه',
+  trim: 'بریدن (Trim) — روی تکه‌ای از خط که باید حذف شود کلیک کنید',
+  extend: 'امتداد (Extend) — روی سر خط کلیک کنید تا ادامه یابد',
+  corner: 'گوشه (Corner) — روی دو خط کلیک کنید تا به هم برسند',
+
+  zoomIn: 'بزرگ‌نمایی', zoomOut: 'کوچک‌نمایی', fit: 'جا دادن کل صفحه (F)',
+  zoomSel: 'بزرگ‌نمایی روی انتخاب',
+  undo: 'واگرد (Ctrl+Z)', redo: 'ازنو (Ctrl+Shift+Z)',
+  duplicate: 'تکثیر (Ctrl+D)', del: 'حذف (Del)',
+  revert: 'بازگرداندن این صفحه به حالت اولیه',
+
+  save: 'ثبت این ویرایش‌ها در پروژه (سپس پروژه را ذخیره کنید)',
+  savedAlready: 'این ویرایش‌ها از قبل در پروژه ثبت شده‌اند',
+  cannotKeep: 'این ویرایش‌ها در این پروژه قابل ثبت نیستند',
+  readOnly: 'این ریویژن فقط‌خواندنی است — برای ثبت ویرایش، ریویژن جدید بسازید',
+  discardAll: 'انصراف از همه',
+  discardAllTip: 'بازگرداندن همه صفحه‌ها به حالت اولیه، در پروژه هم',
+
+  grid: 'نمایش شبکه', noSnap: 'بدون پرش', snapTo: 'پرش جابه‌جایی و نقاط جدید به این گام',
+  osnapOn: 'گرفتن سر و گوشه و مرکز اشیای موجود — برای خاموش‌کردن کلیک کنید',
+  osnapOff: 'سر و گوشه اشیای موجود گرفته نمی‌شود',
+  fullscreen: 'تمام‌صفحه', leaveFullscreen: 'خروج از تمام‌صفحه (Esc)',
+  help: 'راهنمای نقشه‌کشی (F1)', closeHelp: 'بستن',
+
+  modify: 'ویرایش',
+  rotateCW: 'چرخش ۹۰ درجه ساعتگرد', rotateCCW: 'چرخش ۹۰ درجه پادساعتگرد',
+  rotateFree: 'چرخش با زاویه دلخواه', mirrorH: 'قرینه چپ و راست',
+  mirrorV: 'قرینه بالا و پایین', scale: 'تغییر مقیاس',
+  alignLeft: 'تراز از چپ', alignRight: 'تراز از راست',
+  alignTop: 'تراز از بالا', alignBottom: 'تراز از پایین',
+  centreX: 'وسط‌چین افقی', centreY: 'وسط‌چین عمودی',
+  spreadX: 'یکسان‌کردن فاصله‌ها به‌صورت افقی', spreadY: 'یکسان‌کردن فاصله‌ها به‌صورت عمودی',
+  toFront: 'آوردن به جلو', toBack: 'بردن به عقب',
+
+  layerOf: 'لایه‌ای که ترسیم جدید روی آن می‌رود', widthOf: 'ضخامت خط',
+  lineTypeOf: 'نوع خط', textHeightOf: 'ارتفاع متن، به واحد نقشه',
+  solid: 'ممتد', dashed: 'خط‌چین', dashDot: 'خط‌نقطه', dotted: 'نقطه‌چین',
+  paperOf: 'کاغذی که DXF و PDF روی آن می‌نشیند. «اندازه نقشه» مقیاس را نگه می‌دارد و کاغذ را بزرگ می‌کند.',
+  fitDrawing: 'اندازه نقشه',
+
+  layers: 'لایه‌ها', selection: 'انتخاب‌شده', typeOf: 'نوع', textOf: 'متن',
+  pickedN: n => `${n} شکل`,
+  nothingPicked: 'روی چیزی کلیک کنید تا انتخاب شود، یا با کشیدن کادر چند شکل را بگیرید. برای تغییر متن، روی آن دوبار کلیک کنید.',
+  showLayer: 'نمایش این لایه', hideLayer: 'پنهان‌کردن این لایه',
+  lockLayer: 'قفل‌کردن این لایه', unlockLayer: 'بازکردن قفل این لایه',
+  appliesToPicked: 'تغییر هرکدام، روی همان چیزی که انتخاب شده اعمال می‌شود.',
+
+  shapesN: n => `${n} شکل`,
+  zoomPct: n => `بزرگ‌نمایی ٪${n}`,
+  edited: 'ویرایش‌شده', notKept: 'هنوز ثبت نشده', keptWithProject: 'در پروژه ثبت شد',
+  staleN: n => `${n} صفحه روی نقشه قدیمی‌تر ویرایش شده است`,
+  nothingToDraw: 'هنوز چیزی برای ترسیم نیست.',
+
+  hintIdle: 'Space جابه‌جا می‌کند · غلتک بزرگ‌نمایی · F جا می‌دهد · Ctrl+Z واگرد · F1 راهنما',
+  hintText: 'جایی که متن باید بنشیند کلیک کنید',
+  hintPolyline: 'روی هر گوشه کلیک کنید · Backspace یک نقطه عقب می‌رود · Enter یا راست‌کلیک یا دابل‌کلیک تمام می‌کند · Esc لغو',
+  hintTwoClicks: 'کلیک کنید، بعد دوباره کلیک کنید · Shift خط را صاف نگه می‌دارد · راست‌کلیک یا Esc لغو',
+  hintDim: 'اول مبدأ اندازه، بعد مقصد، بعد جای خط اندازه را کلیک کنید',
+  hintTrim: 'روی تکه‌ای از خط که باید برود کلیک کنید — تا محل تقاطع بریده می‌شود',
+  hintExtend: 'روی سر خط کلیک کنید تا تا اولین مانع پیش برود',
+  hintCornerFirst: 'روی خط اول، در سمتی که باید بماند، کلیک کنید',
+  hintCornerSecond: 'حالا روی خط دوم، در سمتی که باید بماند',
+
+  needALine: 'این فرمان روی خط مستقیم کار می‌کند',
+  noCrossing: 'چیزی سر راه نیست که خط به آن برسد',
+  areParallel: 'این دو موازی‌اند — گوشه‌ای ندارند',
+
+  promptText: 'متن', promptRotate: 'چند درجه بچرخد؟',
+  promptScale: 'با چه ضریبی مقیاس شود؟', promptRadius: 'شعاع گوشه، به واحد نقشه (۰ یعنی گوشه تیز)',
+  cornerRadius: 'شعاع گوشه',
+
+  helpTitle: 'نقشه‌کشی با Simorgh Draw',
+  helpIntro: 'صفحه نقشه، هندسه است نه عکس — هر چیزی روی آن انتخاب و جابه‌جا و ویرایش و بریده می‌شود، و DXF و PDF و SVG همگی از همان چیزی گرفته می‌شوند که می‌بینید.',
+  helpDrawing: 'ترسیم', helpModify: 'تغییر آنچه هست',
+  helpKeys: 'کلیدها', helpTips: 'دانستنش خوب است',
+  helpFullGuide: 'باز کردن راهنمای کامل',
+  helpLines: {
+    draw: [
+      'ابزار را انتخاب کنید، روی نقطه شروع کلیک کنید و روی نقطه پایان دوباره کلیک کنید. کشیدن هم کار می‌کند — فشار، حرکت، رها.',
+      'چندخطی هر تعداد کلیک را می‌گیرد. Backspace آخرین نقطه را برمی‌گرداند، Enter یا راست‌کلیک یا دابل‌کلیک تمامش می‌کند، Esc رهایش می‌کند.',
+      'کمان سه کلیک است: مرکز، محل شروع، سپس مقدار جاروب.',
+      'اندازه‌گذاری سه کلیک است: از کجا، تا کجا، سپس جای خط اندازه. عدد به میلی‌متر نوشته می‌شود.',
+      'آهن‌ربا سر و وسط و مرکز و گوشه اشیای موجود را می‌گیرد تا خط جدید واقعاً به نقشه برسد، نه اینکه نزدیکش بایستد.',
+      'نگه‌داشتن Shift هنگام ترسیم، خط را افقی یا عمودی یا ۴۵ درجه نگه می‌دارد.',
+    ],
+    modify: [
+      'برای انتخاب روی شکل کلیک کنید، با Shift شکل دیگری اضافه کنید، یا کادری دور چند شکل بکشید.',
+      'با انتخاب یک شکل، پنل «انتخاب‌شده» در سمت راست لایه و ضخامت و نوع خط آن — و برای متن، ارتفاع و خود نوشته — را تغییر می‌دهد.',
+      'چرخش، قرینه، مقیاس، تراز و یکسان‌کردن فاصله‌ها روی نوار ویرایش هستند و همه روی چیزی که انتخاب شده کار می‌کنند.',
+      'Trim خط را تا محل تقاطعش می‌برد — روی تکه‌ای که باید برود کلیک کنید.',
+      'Extend خط را تا اولین مانع پیش می‌برد — روی سری که باید رشد کند کلیک کنید.',
+      'Corner دو خط را به محل تلاقی می‌رساند و هر دو را می‌برد یا امتداد می‌دهد. اگر شعاع بدهید، گوشه گرد می‌شود.',
+    ],
+    keys: [
+      'V انتخاب · H جابه‌جایی · L خط · P چندخطی · R مستطیل · C دایره · E بیضی · A کمان · T متن · D اندازه',
+      'X بریدن · W امتداد · K گوشه',
+      'F کل صفحه را جا می‌دهد · Space تا وقتی نگه دارید جابه‌جا می‌کند · غلتک حول مکان‌نما بزرگ‌نمایی می‌کند',
+      'Ctrl+Z واگرد · Ctrl+Shift+Z ازنو · Ctrl+D تکثیر · Ctrl+A انتخاب همه · Del حذف',
+      'کلیدهای جهت به اندازه گام پرش جابه‌جا می‌کنند، Shift+جهت ده برابر',
+      'Esc یک پله عقب می‌رود: اول ترسیم نیمه‌کاره، بعد انتخاب، بعد ابزار',
+    ],
+    tips: [
+      'ویرایش‌ها با زدن Save در پروژه ثبت می‌شوند — بعد خود پروژه را ذخیره کنید.',
+      'لایه‌ها را می‌شود هنگام کار پنهان یا قفل کرد؛ لایه پنهان در خروجی SVG هم نمی‌آید.',
+      'خط‌چین در DXF هم خط‌چین می‌ماند: به‌صورت نوع خط واقعی CAD بیرون می‌رود.',
+      'متن فارسی و ترکی از مسیر Print / PDF درست درمی‌آید. دکمه مستقیم PDF فقط حروف لاتین را می‌نویسد.',
+      'ارتفاع متن به میلی‌متر را روی نوار ابزار ببینید — زیر ۱٫۸ میلی‌متر، نقشه چاپ‌شده خوانا نیست.',
+    ],
+  },
+};
+
+const TR: Strings = {
+  select: 'Seç', pan: 'Kaydır — ya da Space tuşunu basılı tutun', line: 'Çizgi',
+  polyline: 'Çoklu çizgi — Enter, sağ tık veya çift tık bitirir',
+  rect: 'Dikdörtgen', circle: 'Daire — merkez, sonra yarıçap',
+  ellipse: 'Elips — merkez, sonra iki yarıçap',
+  arc: 'Yay — merkez, başlangıç, sonra süpürme', text: 'Yazı',
+  dim: 'Ölçü — nereden, nereye, sonra ölçü çizgisinin yeri',
+  trim: 'Buda (Trim) — çizginin atılacak parçasına tıklayın',
+  extend: 'Uzat (Extend) — çizginin uzayacak ucuna tıklayın',
+  corner: 'Köşe (Corner) — iki çizgiye tıklayın, birleşsinler',
+
+  zoomIn: 'Yakınlaştır', zoomOut: 'Uzaklaştır', fit: 'Sayfayı sığdır (F)',
+  zoomSel: 'Seçime yakınlaş',
+  undo: 'Geri al (Ctrl+Z)', redo: 'Yinele (Ctrl+Shift+Z)',
+  duplicate: 'Çoğalt (Ctrl+D)', del: 'Sil (Del)',
+  revert: 'Bu sayfayı çizildiği hâline döndür',
+
+  save: 'Bu değişiklikleri projeye işle (sonra projeyi kaydedin)',
+  savedAlready: 'Proje bu değişiklikleri zaten tutuyor',
+  cannotKeep: 'Bu değişiklikler bu projeye işlenemez',
+  readOnly: 'Bu revizyon salt okunur — değişiklik işlemek için yeni revizyon açın',
+  discardAll: 'Hepsini geri al',
+  discardAllTip: 'Bütün sayfaları çizildikleri hâle döndür, projede de',
+
+  grid: 'Izgarayı göster', noSnap: 'kenetlenme yok',
+  snapTo: 'Taşımaları ve yeni noktaları bu adıma kenetle',
+  osnapOn: 'Çizilmiş nesnelerin uç ve köşelerini yakalıyor — durdurmak için tıklayın',
+  osnapOff: 'Çizilmiş nesnelerin uç ve köşeleri yakalanmıyor',
+  fullscreen: 'Tam ekran', leaveFullscreen: 'Tam ekrandan çık (Esc)',
+  help: 'Bununla nasıl çizilir (F1)', closeHelp: 'Kapat',
+
+  modify: 'Değiştir',
+  rotateCW: '90° saat yönünde döndür', rotateCCW: '90° saat yönünün tersine döndür',
+  rotateFree: 'Açı vererek döndür', mirrorH: 'Sağa sola aynala',
+  mirrorV: 'Yukarı aşağı aynala', scale: 'Ölçekle',
+  alignLeft: 'Sola hizala', alignRight: 'Sağa hizala',
+  alignTop: 'Üste hizala', alignBottom: 'Alta hizala',
+  centreX: 'Yatayda ortala', centreY: 'Dikeyde ortala',
+  spreadX: 'Yatay aralıkları eşitle', spreadY: 'Dikey aralıkları eşitle',
+  toFront: 'Öne getir', toBack: 'Arkaya gönder',
+
+  layerOf: 'Yeni çizimin gideceği katman', widthOf: 'Çizgi kalınlığı',
+  lineTypeOf: 'Çizgi tipi', textHeightOf: 'Yazı yüksekliği, çizim biriminde',
+  solid: 'sürekli', dashed: 'kesikli', dashDot: 'çizgi-nokta', dotted: 'noktalı',
+  paperOf: "DXF ve PDF'in oturacağı kâğıt. 'Çizime sığdır' ölçeği korur, kâğıdı büyütür.",
+  fitDrawing: 'çizime sığdır',
+
+  layers: 'Katmanlar', selection: 'Seçim', typeOf: 'Tür', textOf: 'Yazı',
+  pickedN: n => `${n} nesne`,
+  nothingPicked: 'Seçmek için bir nesneye tıklayın ya da birkaçının etrafına kutu çizin. Yazıyı değiştirmek için üstüne çift tıklayın.',
+  showLayer: 'Bu katmanı göster', hideLayer: 'Bu katmanı gizle',
+  lockLayer: 'Bu katmanı kilitle', unlockLayer: 'Bu katmanın kilidini aç',
+  appliesToPicked: 'Bunlardan birini değiştirmek, seçili olanı yeniden çizer.',
+
+  shapesN: n => `${n} nesne`,
+  zoomPct: n => `yakınlık %${n}`,
+  edited: 'değişti', notKept: 'henüz işlenmedi', keptWithProject: 'projeye işlendi',
+  staleN: n => `${n} sayfa daha eski bir çizim üzerinde değiştirilmiş`,
+  nothingToDraw: 'Henüz çizilecek bir şey yok.',
+
+  hintIdle: 'Space kaydırır · tekerlek yakınlaştırır · F sığdırır · Ctrl+Z geri alır · F1 yardım',
+  hintText: 'Yazının geleceği yere tıklayın',
+  hintPolyline: 'Her köşeye tıklayın · Backspace bir nokta geri alır · Enter, sağ tık veya çift tık bitirir · Esc iptal',
+  hintTwoClicks: 'Tıklayın, sonra tekrar tıklayın · Shift çizgiyi düzler · sağ tık veya Esc iptal',
+  hintDim: 'Önce nereden, sonra nereye, sonra ölçü çizgisinin yerine tıklayın',
+  hintTrim: 'Çizginin atılacak parçasına tıklayın — kesiştiği yere kadar budanır',
+  hintExtend: 'Çizginin ucuna tıklayın, önündeki ilk nesneye kadar uzasın',
+  hintCornerFirst: 'İlk çizgiye, kalmasını istediğiniz taraftan tıklayın',
+  hintCornerSecond: 'Şimdi ikinci çizgiye, kalmasını istediğiniz taraftan',
+
+  needALine: 'Bu komut düz çizgilerde çalışır',
+  noCrossing: 'Uzayacağı bir şey önünde yok',
+  areParallel: 'Bu ikisi paralel — köşeleri olmaz',
+
+  promptText: 'Yazı', promptRotate: 'Kaç derece dönsün?',
+  promptScale: 'Hangi katsayıyla ölçeklensin?',
+  promptRadius: 'Köşe yarıçapı, çizim biriminde (keskin köşe için 0)',
+  cornerRadius: 'Köşe yarıçapı',
+
+  helpTitle: 'Simorgh Draw ile çizim',
+  helpIntro: 'Sayfa bir resim değil, geometridir — üzerindeki her şey seçilebilir, taşınabilir, biçimi değiştirilebilir ve budanabilir; DXF, PDF ve SVG hep gördüğünüzden üretilir.',
+  helpDrawing: 'Çizmek', helpModify: 'Var olanı değiştirmek',
+  helpKeys: 'Tuşlar', helpTips: 'Bilmekte fayda var',
+  helpFullGuide: 'Tam kılavuzu aç',
+  helpLines: {
+    draw: [
+      'Bir araç seçin, şeklin başladığı yere tıklayın, bittiği yere tekrar tıklayın. Sürüklemek de olur — bas, gez, bırak.',
+      'Çoklu çizgi istediğiniz kadar tıklama alır. Backspace son noktayı geri alır; Enter, sağ tık ya da çift tık bitirir; Esc atar.',
+      'Yay üç tıklamadır: merkez, başladığı yer, sonra ne kadar süpüreceği.',
+      'Ölçü üç tıklamadır: nereden, nereye, sonra ölçü çizgisinin yeri. Değer milimetre yazılır.',
+      'Mıknatıs çizilmiş nesnelerin uçlarını, ortalarını, merkezlerini ve köşelerini yakalar; yeni çizgi çizime gerçekten değer, yaklaşmakla kalmaz.',
+      'Çizerken Shift basılıysa çizgi yatay, dikey ya da 45° kalır.',
+    ],
+    modify: [
+      'Seçmek için nesneye tıklayın, Shift ile bir tane daha ekleyin ya da birkaçının etrafına kutu çizin.',
+      'Bir nesne seçiliyken sağdaki Seçim paneli katmanını, çizgi kalınlığını, çizgi tipini — yazıysa yüksekliğini ve metnini — değiştirir.',
+      'Döndürme, aynalama, ölçekleme, hizalama ve aralık eşitleme değiştirme çubuğundadır; hepsi seçili olan üzerinde çalışır.',
+      'Trim çizgiyi kesiştiği yere kadar budar — gitmesini istediğiniz parçaya tıklayın.',
+      'Extend çizgiyi önündeki ilk nesneye kadar uzatır — uzayacak uca tıklayın.',
+      'Corner iki çizgiyi buluşacakları yerde birleştirir, gerekirse ikisini de budar ya da uzatır. Yarıçap verirseniz köşe yuvarlanır.',
+    ],
+    keys: [
+      'V seç · H kaydır · L çizgi · P çoklu çizgi · R dikdörtgen · C daire · E elips · A yay · T yazı · D ölçü',
+      'X buda · W uzat · K köşe',
+      'F sayfayı sığdırır · Space basılıyken kaydırır · tekerlek imlecin çevresinde yakınlaştırır',
+      'Ctrl+Z geri alır · Ctrl+Shift+Z yineler · Ctrl+D çoğaltır · Ctrl+A hepsini seçer · Del siler',
+      'Yön tuşları kenetlenme adımı kadar iter, Shift+yön on katı',
+      'Esc bir adım geri çıkar: önce yarım çizim, sonra seçim, sonra araç',
+    ],
+    tips: [
+      'Değişiklikler Save ile projeye işlenir — sonra projenin kendisini kaydedin.',
+      'Katmanlar çalışırken gizlenebilir ya da kilitlenebilir; gizli katman dışa aktarılan SVG’ye de girmez.',
+      'Kesikli çizgi DXF’te de kesikli kalır: gerçek bir CAD çizgi tipi olarak çıkar.',
+      'Farsça ve Türkçe yazılar Print / PDF yolundan düzgün çıkar. Doğrudan PDF düğmesi yalnızca Latin harf yazar.',
+      'Araç çubuğundaki milimetre cinsinden yazı yüksekliğine bakın — 1,8 mm altında basılmış çizim okunmaz olur.',
+    ],
+  },
+};
+
+export const STRINGS: Record<Lang, Strings> = { en: EN, fa: FA, tr: TR };
+
+const KEY = 'simorgh-draw-lang';
+
+/** The language last chosen here, or English. */
+export function loadLang(): Lang {
+  try {
+    const kept = window.localStorage.getItem(KEY);
+    if (kept === 'en' || kept === 'fa' || kept === 'tr') return kept;
+  } catch { /* a browser that will not keep anything is not an error */ }
+  return 'en';
+}
+
+export function saveLang(l: Lang): void {
+  try { window.localStorage.setItem(KEY, l); } catch { /* nothing to do */ }
+}

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Drawing, Layer, Pen, Pt, Shape } from '../../utils/cad/shapes';
+import { dimensionShapes } from '../../utils/cad/geom';
 import { shapeToNode } from '../../utils/cad/svg';
 import {
   Box, boundsOf, boundsOfAll, hitTest, nearestSnap, shapesInBox, snapPoints,
@@ -27,14 +28,29 @@ import {
 
 export interface Viewport { x: number; y: number; w: number; h: number }
 
-/** What the pointer does. The first two pick and shift the drawing; the rest add to it. */
-export type Tool = 'select' | 'pan' | 'line' | 'polyline' | 'rect' | 'circle' | 'arc' | 'text';
+/**
+ * What the pointer does.
+ *
+ * Three kinds: the two that only look at the drawing, the ones that add to it,
+ * and the ones that act on the shape they are clicked on — trim, extend and
+ * corner, which in a CAD package are commands rather than shapes.
+ */
+export type Tool =
+  | 'select' | 'pan'
+  | 'line' | 'polyline' | 'rect' | 'circle' | 'ellipse' | 'arc' | 'text' | 'dim'
+  | 'trim' | 'extend' | 'corner';
 
 /** Tools that put something new on the sheet. */
-export const DRAWS: ReadonlySet<Tool> = new Set<Tool>(['line', 'polyline', 'rect', 'circle', 'arc', 'text']);
+export const DRAWS: ReadonlySet<Tool> = new Set<Tool>(
+  ['line', 'polyline', 'rect', 'circle', 'ellipse', 'arc', 'text', 'dim']);
+
+/** Tools that operate on the shape they are clicked on. */
+export const PICKS: ReadonlySet<Tool> = new Set<Tool>(['trim', 'extend', 'corner']);
 
 /** How many points a tool needs before it has drawn something. */
-const NEEDS: Partial<Record<Tool, number>> = { line: 2, rect: 2, circle: 2, arc: 3 };
+const NEEDS: Partial<Record<Tool, number>> = {
+  line: 2, rect: 2, circle: 2, ellipse: 2, arc: 3, dim: 3,
+};
 
 interface Props {
   drawing: Drawing;
@@ -52,16 +68,33 @@ interface Props {
   textSize: number;
   /** Catch the cursor on the ends and corners of what is already drawn. */
   objectSnap: boolean;
+  /** Drawing units to millimetres — what a dimension writes its label in. */
+  mmPerUnit: number;
   onView: (v: Viewport) => void;
   onSelection: (next: Set<number>) => void;
   /** A drag that has finished: commit it, once, so undo gets one step. */
   onMove: (dx: number, dy: number) => void;
   onCursor: (p: { x: number; y: number } | null) => void;
   onEditText: (index: number) => void;
-  /** A finished shape, ready to go on the sheet. */
-  onDraw: (shape: Shape) => void;
+  /**
+   * A finished piece of work, ready to go on the sheet. An array because one
+   * gesture is not always one shape — a dimension is six.
+   */
+  onDraw: (shapes: Shape[]) => void;
   /** The text tool has a place and needs the words. */
   onPlaceText: (at: { x: number; y: number }) => void;
+  /** A command tool was used on the shape at `index`. */
+  onPick: (index: number, at: Pt) => void;
+  /**
+   * Whether something is half-drawn.
+   *
+   * The editor listens for the same keys this does — Escape and Backspace —
+   * and has to know to leave them alone while a draft is open. Asking rather
+   * than depending on which listener the browser happens to call first.
+   */
+  onDrafting?: (active: boolean) => void;
+  /** Right-click with nothing half-drawn: the command is over. */
+  onCancelTool?: () => void;
 }
 
 type Drag =
@@ -86,8 +119,9 @@ const REACT_PROP: Record<string, string> = {
 
 export const DrawingCanvas: React.FC<Props> = ({
   drawing, shapes, selection, hidden, locked, view, grid, showGrid, tool,
-  pen, textSize, objectSnap,
+  pen, textSize, objectSnap, mmPerUnit,
   onView, onSelection, onMove, onCursor, onEditText, onDraw, onPlaceText,
+  onPick, onDrafting, onCancelTool,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag>(null);
@@ -96,6 +130,9 @@ export const DrawingCanvas: React.FC<Props> = ({
   const [snapped, setSnapped] = useState<Pt | null>(null);
   const [pressed, setPressed] = useState<{ x: number; y: number } | null>(null);
   const [cursorHint, setCursorHint] = useState<{ x: number; y: number } | null>(null);
+  // What a command tool would act on if it were clicked now, so trim and
+  // corner say what they are about to do before they do it.
+  const [hover, setHover] = useState<number | null>(null);
 
   // Holding space turns any tool into the pan tool, as every CAD package does.
   useEffect(() => {
@@ -143,6 +180,9 @@ export const DrawingCanvas: React.FC<Props> = ({
     () => (objectSnap && DRAWS.has(tool) ? snapPoints(shapes, hidden) : []),
     [objectSnap, tool, shapes, hidden]);
 
+  /** The shapes a click is allowed to find. */
+  const offLimits = useMemo(() => new Set([...hidden, ...locked]), [hidden, locked]);
+
   /**
    * Where a click lands.
    *
@@ -173,27 +213,40 @@ export const DrawingCanvas: React.FC<Props> = ({
     return { point: [x, y] as Pt, onGeometry: false };
   }, [toDrawing, snaps, unitsPerPixel, grid]);
 
-  /** A draft with enough points, as the shape it stands for. */
-  const shapeOf = useCallback((tool_: Tool, pts: Pt[]): Shape | null => {
+  /**
+   * A draft with enough points, as the geometry it stands for.
+   *
+   * A run rather than one shape: most tools draw a single thing, but a
+   * dimension is a line, two extension lines, two arrowheads and a label, and
+   * they are all put down together so undo takes them all back together.
+   */
+  const shapeOf = useCallback((tool_: Tool, pts: Pt[]): Shape[] | null => {
     const [a, b, c] = pts;
     switch (tool_) {
       case 'line':
         if (!b || (a[0] === b[0] && a[1] === b[1])) return null;
-        return { t: 'line', x1: a[0], y1: a[1], x2: b[0], y2: b[1], ...pen };
+        return [{ t: 'line', x1: a[0], y1: a[1], x2: b[0], y2: b[1], ...pen }];
       case 'polyline':
         if (pts.length < 2) return null;
-        return { t: 'poly', pts: [...pts], ...pen };
+        return [{ t: 'poly', pts: [...pts], ...pen }];
       case 'rect': {
         if (!b) return null;
         const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
         if (w < 0.5 || h < 0.5) return null;
-        return { t: 'rect', x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), w, h, ...pen };
+        return [{ t: 'rect', x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), w, h, ...pen }];
       }
       case 'circle': {
         if (!b) return null;
         const r = Math.hypot(b[0] - a[0], b[1] - a[1]);
         if (r < 0.5) return null;
-        return { t: 'circle', cx: a[0], cy: a[1], r, ...pen };
+        return [{ t: 'circle', cx: a[0], cy: a[1], r, ...pen }];
+      }
+      case 'ellipse': {
+        // Centre, then a corner of the box it fits in — the two radii at once.
+        if (!b) return null;
+        const rx = Math.abs(b[0] - a[0]), ry = Math.abs(b[1] - a[1]);
+        if (rx < 0.5 || ry < 0.5) return null;
+        return [{ t: 'ellipse', cx: a[0], cy: a[1], rx, ry, ...pen }];
       }
       case 'arc': {
         // Centre, then where it starts, then how far it sweeps.
@@ -203,30 +256,54 @@ export const DrawingCanvas: React.FC<Props> = ({
         const deg = (p: Pt) => (Math.atan2(p[1] - a[1], p[0] - a[0]) * 180) / Math.PI;
         let a0 = deg(b), a1 = deg(c);
         if (a1 <= a0) a1 += 360;
-        return { t: 'arc', cx: a[0], cy: a[1], r, a0, a1, ...pen };
+        return [{ t: 'arc', cx: a[0], cy: a[1], r, a0, a1, ...pen }];
+      }
+      case 'dim': {
+        // From, to, then where the dimension line sits. Two points already
+        // draw it against the cursor, so the offset is seen while it is chosen.
+        if (!b) return null;
+        const run = dimensionShapes(a, b, c ?? b, {
+          layer: pen.layer, color: pen.color, width: pen.width,
+          textSize, mmPerUnit,
+        });
+        return run.length ? run : null;
       }
       default:
         return null;
     }
-  }, [pen]);
+  }, [pen, textSize, mmPerUnit]);
 
   /** Put the draft on the sheet, if it amounts to anything, and start again. */
   const finishDraft = useCallback((pts: Pt[], tool_: Tool) => {
-    const shape = shapeOf(tool_, pts);
-    if (shape) onDraw(shape);
+    const run = shapeOf(tool_, pts);
+    if (run && run.length) onDraw(run);
     setDraft(null);
     setPressed(null);
   }, [shapeOf, onDraw]);
 
-  // Escape drops what is half-drawn; Enter finishes an open polyline.
+  // The editor shares the keyboard with this, so it is told what is open.
+  useEffect(() => { onDrafting?.(draft !== null); }, [draft, onDrafting]);
+
+  // Escape drops what is half-drawn, Enter finishes an open polyline, and
+  // Backspace takes back the point just put down — the three keys a hand
+  // reaches for mid-line without looking away from the drawing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
-      if (e.key === 'Escape' && draft) { e.preventDefault(); setDraft(null); setPressed(null); }
-      if (e.key === 'Enter' && draft?.tool === 'polyline') {
+      if (!draft) return;
+      if (e.key === 'Escape') { e.preventDefault(); setDraft(null); setPressed(null); }
+      if (e.key === 'Enter' && draft.tool === 'polyline') {
         e.preventDefault();
         finishDraft(draft.pts, 'polyline');
+      }
+      if (e.key === 'Backspace') {
+        // One click back. Off the last point there is nothing left to draw
+        // from, so the draft goes and the tool waits for a fresh start.
+        e.preventDefault();
+        const pts = draft.pts.slice(0, -1);
+        if (pts.length === 0) { setDraft(null); setPressed(null); }
+        else setDraft({ ...draft, pts, cursor: pts[pts.length - 1] });
       }
     };
     window.addEventListener('keydown', onKey);
@@ -248,6 +325,13 @@ export const DrawingCanvas: React.FC<Props> = ({
     }
     if (e.button !== 0) return;
 
+    // Trim, extend and corner act on what they are clicked on.
+    if (PICKS.has(tool)) {
+      const hit = hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, offLimits);
+      if (hit !== null) onPick(hit, [p.x, p.y]);
+      return;
+    }
+
     if (DRAWS.has(tool)) {
       const from = draft?.pts[draft.pts.length - 1];
       const { point } = resolve(e.clientX, e.clientY, e.shiftKey, from);
@@ -262,7 +346,7 @@ export const DrawingCanvas: React.FC<Props> = ({
       return;
     }
 
-    const hit = hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, new Set([...hidden, ...locked]));
+    const hit = hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, offLimits);
     if (hit === null) {
       setDrag({ kind: 'band', startX: p.x, startY: p.y, x: p.x, y: p.y, additive: e.shiftKey });
       if (!e.shiftKey) onSelection(new Set());
@@ -290,6 +374,9 @@ export const DrawingCanvas: React.FC<Props> = ({
       p = { x: point[0], y: point[1] };
       if (draft) setDraft({ ...draft, cursor: point });
     }
+    setHover(PICKS.has(tool)
+      ? hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, offLimits)
+      : null);
     onCursor(p);
     setCursorHint(p);
     if (!drag) return;
@@ -335,7 +422,7 @@ export const DrawingCanvas: React.FC<Props> = ({
         w: Math.abs(drag.x - drag.startX), h: Math.abs(drag.y - drag.startY),
       };
       if (area.w > 2 && area.h > 2) {
-        const found = shapesInBox(shapes, area, new Set([...hidden, ...locked]));
+        const found = shapesInBox(shapes, area, offLimits);
         onSelection(drag.additive ? new Set([...selection, ...found]) : new Set(found));
       }
     }
@@ -382,19 +469,33 @@ export const DrawingCanvas: React.FC<Props> = ({
         cursor: panning ? 'grab'
           : drag?.kind === 'move' ? 'move'
           : DRAWS.has(tool) ? 'crosshair'
+          : PICKS.has(tool) ? 'cell'
           : 'default',
       }}
       fontFamily="Segoe UI, Arial, sans-serif"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerLeave={() => { onCursor(null); setSnapped(null); setCursorHint(null); }}
+      onPointerLeave={() => { onCursor(null); setSnapped(null); setCursorHint(null); setHover(null); }}
       onPointerCancel={() => onPointerUp()}
+      onContextMenu={e => {
+        // Right-click is Enter, the way it is in every CAD package: it accepts
+        // what has been drawn so far. Nothing drawn and it ends the command,
+        // which is the other half of the same habit.
+        e.preventDefault();
+        if (draft) {
+          const run = shapeOf(draft.tool, draft.pts);
+          if (run && run.length) finishDraft(draft.pts, draft.tool);
+          else { setDraft(null); setPressed(null); }
+          return;
+        }
+        onCancelTool?.();
+      }}
       onDoubleClick={e => {
         // A double click closes an open polyline, the way every CAD does.
         if (draft?.tool === 'polyline') { finishDraft(draft.pts, 'polyline'); return; }
         const p = toDrawing(e.clientX, e.clientY);
-        const hit = hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, new Set([...hidden, ...locked]));
+        const hit = hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, offLimits);
         if (hit !== null && shapes[hit].t === 'text') onEditText(hit);
       }}
     >
@@ -448,26 +549,48 @@ export const DrawingCanvas: React.FC<Props> = ({
           dashed: it follows the cursor and is not committed to. */}
       {draft && (() => {
         const pts = [...draft.pts, draft.cursor];
-        const preview = shapeOf(draft.tool, pts);
-        const node = preview ? shapeToNode(preview) : null;
-        const props: Record<string, unknown> = { pointerEvents: 'none' };
-        if (node) {
-          for (const [k, v] of Object.entries(node.attrs)) props[REACT_PROP[k] ?? k] = v;
-          props.stroke = SELECTED;
-          props.strokeWidth = Math.max(Number(node.attrs['stroke-width']) || 1, stroke);
-          props.fill = 'none';
-        }
+        const preview = shapeOf(draft.tool, pts) ?? [];
         return (
           <g pointerEvents="none">
-            {node && React.createElement(node.tag, props)}
+            {preview.map((shape, k) => {
+              const node = shapeToNode(shape);
+              if (!node) return null;
+              const props: Record<string, unknown> = { pointerEvents: 'none' };
+              for (const [attr, v] of Object.entries(node.attrs)) props[REACT_PROP[attr] ?? attr] = v;
+              props.stroke = SELECTED;
+              props.strokeWidth = Math.max(Number(node.attrs['stroke-width']) || 1, stroke);
+              // A filled arrowhead keeps its fill; everything else is an
+              // outline until it is committed to.
+              if (node.tag === 'text') props.fill = SELECTED;
+              else if (!shape.fill || shape.fill === 'none') props.fill = 'none';
+              else props.fill = SELECTED;
+              return node.tag === 'text'
+                ? <text key={k} {...props}>{node.body}</text>
+                : React.createElement(node.tag, { key: k, ...props });
+            })}
             {/* The legs already fixed, so a polyline shows what it has. */}
             {draft.pts.map((q, i) => (
-              <rect key={i} x={q[0] - stroke * 3} y={q[1] - stroke * 3}
+              <rect key={`p${i}`} x={q[0] - stroke * 3} y={q[1] - stroke * 3}
                     width={stroke * 6} height={stroke * 6}
                     fill="#fff" stroke={SELECTED} strokeWidth={stroke} />
             ))}
           </g>
         );
+      })()}
+
+      {/* What trim or corner is about to take hold of. */}
+      {hover !== null && shapes[hover] && (() => {
+        const node = shapeToNode(shapes[hover]);
+        if (!node) return null;
+        const props: Record<string, unknown> = { pointerEvents: 'none' };
+        for (const [attr, v] of Object.entries(node.attrs)) props[REACT_PROP[attr] ?? attr] = v;
+        props.stroke = '#f59e0b';
+        props.strokeWidth = Math.max(Number(node.attrs['stroke-width']) || 1, stroke * 2.5);
+        props.fill = 'none';
+        props.opacity = 0.9;
+        return node.tag === 'text'
+          ? <text {...props} fill="#f59e0b">{node.body}</text>
+          : React.createElement(node.tag, props);
       })()}
 
       {/* The cursor has caught the end or corner of something already drawn. */}

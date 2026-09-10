@@ -196,11 +196,19 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
     }
   };
 
-  // The user guide ships with the app (public/help.html), so it opens from
+  // The user guides ship with the app (public/*.html), so they open from
   // wherever the suite is mounted rather than from a hard-coded path.
-  const helpUrl = `${import.meta.env.BASE_URL}help.html`;
+  const helpBase: string = import.meta.env.BASE_URL;
+  const helpUrl = `${helpBase}help.html`;
+  // The drawing guide is its own page: it is three languages deep and belongs
+  // to Simorgh Draw rather than to the four-step workflow the other one walks.
+  const drawingGuideUrl = `${helpBase}help-drawing.html`;
   const openHelp = (hash = '') => {
     window.open(`${helpUrl}${hash}`, '_blank', 'noopener');
+    setActiveMenu(null);
+  };
+  const openDrawingGuide = () => {
+    window.open(drawingGuideUrl, '_blank', 'noopener');
     setActiveMenu(null);
   };
 
@@ -376,6 +384,12 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                   onClick={() => openHelp('#overview')}
                 >
                   📚 Tutorials
+                </button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={openDrawingGuide}
+                >
+                  📐 Simorgh Draw — راهنمای نقشه‌کشی
                 </button>
                 <button
                   className="block w-full text-left px-4 py-2 hover:bg-gray-600"

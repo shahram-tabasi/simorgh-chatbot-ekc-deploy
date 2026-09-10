@@ -87,6 +87,9 @@ export function shapeToNode(s: Shape): SvgNode | null {
       };
       if (s.bold) attrs['font-weight'] = 700;
       if (s.anchor && s.anchor !== 'start') attrs['text-anchor'] = s.anchor;
+      // `rot` is anticlockwise on the page, SVG's rotate() is clockwise, so it
+      // is negated. About the anchor, which is where the text is placed from.
+      if (s.rot) attrs.transform = `rotate(${n(-s.rot)} ${n(s.x)} ${n(s.y)})`;
       return { tag: 'text', attrs, body: s.s, title: s.title };
     }
   }

@@ -143,14 +143,17 @@ function solid(t: Tape, layer: Layer, pts: Pt[]) {
 
 function text(
   t: Tape, layer: Layer, x: number, y: number, height: number, value: string,
-  justify: 0 | 1 | 2, mode: 'escape' | 'raw',
+  justify: 0 | 1 | 2, mode: 'escape' | 'raw', rot = 0,
 ) {
   t.pair(0, 'TEXT').pair(8, layer)
     .pair(10, x).pair(20, y).pair(30, 0)
     .pair(40, height)
     .pair(1, encode(value, mode))
-    .pair(7, 'STANDARD')
-    .pair(72, justify).pair(73, 0)
+    .pair(7, 'STANDARD');
+  // Group 50 is degrees anticlockwise on the paper — the same sense as `rot`,
+  // because paper space already has y up.
+  if (rot) t.pair(50, norm(rot));
+  t.pair(72, justify).pair(73, 0)
     // With a justification other than left, readers take the second point.
     .pair(11, x).pair(21, y).pair(31, 0);
 }
@@ -219,7 +222,7 @@ function shapeToDxf(t: Tape, s: Shape, f: Frame, mode: 'escape' | 'raw') {
 
     case 'text':
       text(t, s.layer, X(s.x), Y(s.y), s.size * CAP_HEIGHT * f.s, s.s,
-        s.anchor === 'middle' ? 1 : s.anchor === 'end' ? 2 : 0, mode);
+        s.anchor === 'middle' ? 1 : s.anchor === 'end' ? 2 : 0, mode, s.rot ?? 0);
       break;
   }
 }

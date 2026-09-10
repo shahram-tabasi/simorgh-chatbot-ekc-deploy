@@ -162,6 +162,9 @@ function drawShape(doc: jsPDF, s: Shape, place: Place) {
       doc.text(winAnsiSafe(s.s), X(s.x), Y(s.y), {
         align: s.anchor === 'middle' ? 'center' : s.anchor === 'end' ? 'right' : 'left',
         baseline: 'alphabetic',
+        // jsPDF turns text anticlockwise about the point it is placed at, the
+        // same sense as `rot`.
+        ...(s.rot ? { angle: s.rot } : {}),
       });
       break;
     }

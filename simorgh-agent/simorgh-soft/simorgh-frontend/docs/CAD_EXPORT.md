@@ -62,23 +62,58 @@ expects is only a function away:
   element, so a 1.3-unit line is as easy to hit as a filled box.
 - **Move** — drag, or nudge with the arrow keys; both snap to the chosen step.
 - **Retype** — double-click a label, or edit it in the panel.
-- **Draw** — line, polyline, rectangle, circle, arc and text, each on the
-  toolbar under one letter: `V` pick, `H` pan, `L` line, `P` polyline,
-  `R` rectangle, `C` circle, `A` arc, `T` text. Two clicks make a line, or drag
-  it in one; a polyline ends on Enter or a double-click; an arc is centre,
-  start, then sweep. Escape drops what is half-drawn.
+- **Draw** — line, polyline, rectangle, circle, ellipse, arc, text and
+  dimension, each on the toolbar under one letter: `V` pick, `H` pan, `L` line,
+  `P` polyline, `R` rectangle, `C` circle, `E` ellipse, `A` arc, `T` text,
+  `D` dimension. Two clicks make a line, or drag it in one; a polyline ends on
+  Enter, a right-click or a double-click, and Backspace takes its last point
+  back; an arc is centre, start, then sweep. Escape drops what is half-drawn,
+  and a right-click with nothing half-drawn ends the command — both the way
+  every CAD package behaves.
+- **Cut and join** — `X` trim cuts a line back to whatever crosses it (click
+  the piece to lose); `W` extend runs a line on to the first thing in its way;
+  `K` corner brings two lines to where they would meet, cutting or extending
+  each as it needs. Give corner a radius and it rounds instead: the lines stop
+  at the tangent points and an arc joins them. All three refuse anything but a
+  straight line, and say so rather than doing something unexpected.
+- **Change what is there** — turn by 90° either way or by a typed angle,
+  mirror left-to-right or top-to-bottom, scale by a factor, align six ways,
+  even out the gaps across or down, and bring to front or send to back. All of
+  them work on whatever is picked, about the middle of it.
+- **Dimension** — three clicks: from, to, and where the line sits. It goes down
+  as ordinary geometry — extension lines, the dimension line, two filled
+  arrowheads and a label written in millimetres of real size — so every
+  back-end carries it without a new case, which is what R12 would demand
+  anyway. The number is measured once, when it is placed.
 - **Snap** — the magnet picks up the ends, middles, centres and corners of what
   is already there, so a new line meets the drawing rather than nearly meets it.
   Holding Shift keeps a line level, upright or on 45°. With the magnet off,
   points fall on the grid step instead.
 - **Style** — layer, line weight, line type (solid, dashed, dash-dot, dotted)
   and text height sit on their own bar. They set up what is drawn next, and
-  with something picked they restyle it, the way a CAD system does.
+  with something picked they restyle it, the way a CAD system does. The same
+  four appear in the **Selection** panel, where clicking a line and putting its
+  weight right is one gesture rather than a trip back up to the bar. A mixed
+  selection shows a dash rather than a value it does not have, and changes only
+  what it is told to.
 - **Layers** — hide or lock a class of geometry: the busbar, the tags, the data
   block. New geometry takes the colour of the layer it goes on.
 - **Full screen** — the whole window for the drawing, on the toolbar or Esc to
   leave. The Fullscreen API where the browser allows it, and a window-filling
   fallback where it does not, so the button always does something.
+- **Three languages** — English, Persian and Turkish, switched on the toolbar
+  and remembered in the browser, because the language belongs to the person and
+  not to the project. The toolbar keeps its left-to-right order in all three: a
+  CAD toolbar is a row of pictures rather than a sentence, and every package a
+  draughtsman here has used runs it the same way round. Only the running text —
+  panels, hints, help — turns for Persian.
+- **Help** — `F1`, or the `?` on the bar, opens a panel over the canvas: what
+  each tool takes, what the keys do, and what is worth knowing. Short enough to
+  read standing up, because the question a draughtsman has mid-line is "which
+  click ends this", and an answer that costs them the line is not an answer.
+  The long version is `public/help-drawing.html`, reached from Help in the
+  menu bar and from the foot of the panel — the same three languages, with the
+  trim, corner and dimension cases drawn rather than described.
 - **Undo** — a step is a whole array of shapes, shared structurally, so a
   hundred steps of a 700-shape sheet cost a hundred arrays of pointers.
 - **Export** — DXF, PDF and SVG all read the edited shapes, so what leaves is
@@ -109,6 +144,14 @@ A view-only revision cannot keep edits, and the Save button says so.
 dictionary, entities every reader since 1990 understands. Curves and ellipses
 are walked as line segments — R12 has no `ELLIPSE` and no spline — while arcs,
 circles, lines and text stay what they are.
+
+**Text rotation survives the trip.** A label turned in the editor — up the side
+of a column, along a slant dimension — carries its angle into all three
+back-ends: SVG as a `rotate()` about the anchor, DXF as group 50 on the `TEXT`
+entity, PDF as jsPDF's own angle. Sheet space measures y downwards while all
+three of those measure a label anticlockwise on the paper, so `Shape.rot` is
+defined the paper's way and `cad/geom.ts` negates it once, in the one place a
+turn is described.
 
 **Line types survive the trip.** A dashed line drawn here is a dashed line in
 the customer's CAD system: `lineTypeFor` reads the SVG dash pattern back to

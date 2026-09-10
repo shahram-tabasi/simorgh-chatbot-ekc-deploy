@@ -1,0 +1,720 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>راهنمای نقشه‌کشی — Simorgh Draw</title>
+<style>
+  :root {
+    --navy: #0f1f3d;
+    --orange: #f97316;
+    --teal: #0f766e;
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text: #1f2937;
+    --muted: #64748b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.8;
+  }
+  header {
+    background: linear-gradient(135deg, var(--navy), #1e3a6e);
+    color: #fff;
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header img { height: 52px; width: auto; border-radius: 8px; background: #fff; padding: 4px; }
+  header h1 { margin: 0; font-size: 21px; }
+  header p { margin: 4px 0 0; font-size: 13px; opacity: .85; }
+  /* The language switch. Three buttons, the same three the editor offers. */
+  .langs { margin-inline-start: auto; display: flex; gap: 6px; }
+  .langs button {
+    font: inherit; font-size: 13px; font-weight: 600;
+    padding: 6px 14px; border-radius: 999px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.35);
+    background: transparent; color: #fff;
+  }
+  .langs button[aria-pressed="true"] { background: #fff; color: var(--navy); border-color: #fff; }
+  .layout { display: flex; max-width: 1180px; margin: 0 auto; align-items: flex-start; gap: 24px; padding: 24px; }
+  nav {
+    position: sticky; top: 24px; flex: 0 0 232px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+  }
+  nav .nav-title { font-weight: 700; color: var(--navy); margin-bottom: 8px; font-size: 13px; }
+  nav a {
+    display: block; padding: 7px 10px; border-radius: 6px;
+    color: var(--text); text-decoration: none; font-size: 14px; margin-bottom: 2px;
+  }
+  nav a:hover { background: #fff7ed; color: var(--orange); }
+  main { flex: 1; min-width: 0; }
+  section {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 22px; margin-bottom: 20px;
+  }
+  section h2 {
+    margin-top: 0; display: flex; align-items: center; gap: 10px;
+    color: var(--navy); font-size: 19px;
+  }
+  section h2 .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: 999px;
+    border: 2px solid var(--orange); color: var(--orange);
+    font-weight: 700; font-size: 14px; flex-shrink: 0;
+  }
+  section h3 { color: var(--teal); font-size: 15px; margin: 18px 0 8px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-inline-start: 22px; }
+  li { margin: 5px 0; }
+  .tip, .warn {
+    border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 14px;
+  }
+  .tip { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+  .warn { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; }
+  code {
+    background: #f1f5f9; border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 6px; font-size: 13px; direction: ltr; display: inline-block;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: start; }
+  th { background: #f8fafc; color: var(--navy); }
+  td.key { width: 34%; }
+  td.key code { margin-inline-end: 4px; }
+  /* The drawn examples. One SVG per idea, so the words never carry it alone. */
+  figure { margin: 14px 0; text-align: center; }
+  figure svg { max-width: 100%; height: auto; background: #fff; border: 1px solid var(--border); border-radius: 8px; }
+  figcaption { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
+  /* Only the chosen language is shown. */
+  [data-lang] { display: none; }
+  [data-lang].on { display: block; }
+  nav [data-lang].on { display: block; }
+  @media (max-width: 900px) {
+    .layout { flex-direction: column; }
+    nav { position: static; width: 100%; flex-basis: auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <img src="favicon.jpg" alt="Simorgh" onerror="this.style.display='none'" />
+  <div>
+    <div data-lang="en"><h1>Simorgh Draw — the drawing guide</h1><p>Drawing, editing and getting a DXF out of the switchgear you have designed</p></div>
+    <div data-lang="fa"><h1>راهنمای نقشه‌کشی Simorgh Draw</h1><p>ترسیم، ویرایش و گرفتن خروجی DXF از تابلویی که طراحی کرده‌اید</p></div>
+    <div data-lang="tr"><h1>Simorgh Draw — çizim kılavuzu</h1><p>Tasarladığınız panodan çizim, düzenleme ve DXF çıktısı almak</p></div>
+  </div>
+  <div class="langs">
+    <button type="button" data-pick="en" aria-pressed="false">English</button>
+    <button type="button" data-pick="fa" aria-pressed="false">فارسی</button>
+    <button type="button" data-pick="tr" aria-pressed="false">Türkçe</button>
+  </div>
+</header>
+
+<div class="layout">
+  <nav>
+    <div data-lang="en">
+      <div class="nav-title">Contents</div>
+      <a href="#start">1. Where it opens from</a>
+      <a href="#tools">2. The tools</a>
+      <a href="#precise">3. Drawing accurately</a>
+      <a href="#trim">4. Trim, extend and corner</a>
+      <a href="#change">5. Turning, mirroring, lining up</a>
+      <a href="#style">6. Line weight, line type, layer</a>
+      <a href="#dims">7. Dimensions</a>
+      <a href="#keep">8. Keeping the work</a>
+      <a href="#out">9. Getting it out</a>
+      <a href="#keys">10. Keys</a>
+    </div>
+    <div data-lang="fa">
+      <div class="nav-title">فهرست مطالب</div>
+      <a href="#start">۱. از کجا باز می‌شود</a>
+      <a href="#tools">۲. ابزارها</a>
+      <a href="#precise">۳. ترسیم دقیق</a>
+      <a href="#trim">۴. بریدن، امتداد و گوشه</a>
+      <a href="#change">۵. چرخش، قرینه، تراز</a>
+      <a href="#style">۶. ضخامت خط، نوع خط، لایه</a>
+      <a href="#dims">۷. اندازه‌گذاری</a>
+      <a href="#keep">۸. ثبت کار</a>
+      <a href="#out">۹. خروجی گرفتن</a>
+      <a href="#keys">۱۰. کلیدها</a>
+    </div>
+    <div data-lang="tr">
+      <div class="nav-title">İçindekiler</div>
+      <a href="#start">1. Nereden açılır</a>
+      <a href="#tools">2. Araçlar</a>
+      <a href="#precise">3. Hassas çizim</a>
+      <a href="#trim">4. Budama, uzatma ve köşe</a>
+      <a href="#change">5. Döndürme, aynalama, hizalama</a>
+      <a href="#style">6. Çizgi kalınlığı, tipi, katman</a>
+      <a href="#dims">7. Ölçülendirme</a>
+      <a href="#keep">8. Yapılanı saklamak</a>
+      <a href="#out">9. Dışa aktarmak</a>
+      <a href="#keys">10. Tuşlar</a>
+    </div>
+  </nav>
+
+  <main>
+    <section id="start">
+    <div data-lang="en">
+      <h2><span class="num">1</span>Where it opens from</h2>
+      <p>Simorgh Draw is the drawing side of the suite. The editor is not a tab of its own — it opens on the drawing you are already looking at, and closing it puts you back where you were.</p>
+      <ul>
+        <li><b>Single line</b> → the <b>Edit drawing</b> button, or a double-click on the sheet. This edits the feeder diagram of the chosen switchgear, every sheet of it.</li>
+        <li><b>Symbols</b> → click any symbol card. This redraws that IEC symbol for this project only; every sheet that uses it follows.</li>
+        <li><b>Create Template</b> → the graphic window beside the parts. This edits the whole template as one drawing, laid out by the series-and-parallel rule.</li>
+      </ul>
+      <div class="tip">The language of the editor is chosen with the EN / فا / TR buttons on its own toolbar, and it is remembered on this computer. F1 opens the short help without leaving the drawing.</div>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۱</span>از کجا باز می‌شود</h2>
+      <p>Simorgh Draw بخش نقشه‌کشی نرم‌افزار است. ویرایشگر تب جداگانه ندارد — روی همان نقشه‌ای باز می‌شود که دارید نگاه می‌کنید و با بستن آن به همان‌جا برمی‌گردید.</p>
+      <ul>
+        <li><b>تک‌خطی (Single line)</b> ← دکمه <b>ویرایش نقشه</b>، یا دابل‌کلیک روی خود نقشه. این‌جا نقشه فیدرهای همان تابلوی انتخاب‌شده، همه صفحاتش، ویرایش می‌شود.</li>
+        <li><b>علائم (Symbols)</b> ← روی کارت هر سیمبل کلیک کنید. سیمبل IEC فقط برای همین پروژه دوباره ترسیم می‌شود و هر صفحه‌ای که از آن استفاده می‌کند به‌روز می‌شود.</li>
+        <li><b>ساخت تمپلیت</b> ← پنجره گرافیک کنار پارت‌ها. کل تمپلیت به‌صورت یک نقشه، چیده‌شده بر اساس قانون سری و موازی، ویرایش می‌شود.</li>
+      </ul>
+      <div class="tip">زبان ویرایشگر با دکمه‌های EN / فا / TR روی نوار ابزار خودش انتخاب می‌شود و روی همین کامپیوتر به‌خاطر می‌ماند. کلید F1 راهنمای کوتاه را بدون خارج‌شدن از نقشه باز می‌کند.</div>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">1</span>Nereden açılır</h2>
+      <p>Simorgh Draw, paketin çizim tarafıdır. Düzenleyicinin kendine ait bir sekmesi yoktur — zaten baktığınız çizimin üzerinde açılır ve kapatınca kaldığınız yere dönersiniz.</p>
+      <ul>
+        <li><b>Tek hat (Single line)</b> → <b>Edit drawing</b> düğmesi ya da sayfaya çift tıklama. Seçili panonun besleme şeması, bütün sayfalarıyla burada düzenlenir.</li>
+        <li><b>Semboller (Symbols)</b> → herhangi bir sembol kartına tıklayın. O IEC sembolü yalnızca bu proje için yeniden çizilir; onu kullanan her sayfa buna uyar.</li>
+        <li><b>Şablon oluştur</b> → parçaların yanındaki grafik penceresi. Şablonun tamamı, seri-paralel kuralına göre yerleşmiş tek bir çizim olarak düzenlenir.</li>
+      </ul>
+      <div class="tip">Düzenleyicinin dili kendi araç çubuğundaki EN / فا / TR düğmeleriyle seçilir ve bu bilgisayarda hatırlanır. F1, çizimden çıkmadan kısa yardımı açar.</div>
+    </div>
+    </section>
+    <section id="tools">
+    <div data-lang="en">
+      <h2><span class="num">2</span>The tools</h2>
+      <p>Every tool has a letter. Pick the tool, click where the shape starts, click where it ends — or press, move and release, whichever the hand prefers.</p>
+      <table>
+        <thead><tr><th>Tool</th><th>Key</th><th>What it takes</th></tr></thead>
+        <tbody>
+          <tr><td class="key">Select</td><td>V</td><td>A click, a shift-click to add, or a box dragged round several</td></tr>
+          <tr><td class="key">Pan</td><td>H</td><td>A drag — or hold Space with any tool</td></tr>
+          <tr><td class="key">Line</td><td>L</td><td>Two points</td></tr>
+          <tr><td class="key">Polyline</td><td>P</td><td>As many points as you like; Enter, right-click or double-click ends it</td></tr>
+          <tr><td class="key">Rectangle</td><td>R</td><td>Two opposite corners</td></tr>
+          <tr><td class="key">Circle</td><td>C</td><td>The centre, then a point on it</td></tr>
+          <tr><td class="key">Ellipse</td><td>E</td><td>The centre, then a corner of the box it fits</td></tr>
+          <tr><td class="key">Arc</td><td>A</td><td>The centre, where it starts, then how far it sweeps</td></tr>
+          <tr><td class="key">Text</td><td>T</td><td>One point, then the words</td></tr>
+          <tr><td class="key">Dimension</td><td>D</td><td>From, to, then where the dimension line sits</td></tr>
+          <tr><td class="key">Trim</td><td>X</td><td>A click on the piece of a line to cut away</td></tr>
+          <tr><td class="key">Extend</td><td>W</td><td>A click on the end of a line that should grow</td></tr>
+          <tr><td class="key">Corner</td><td>K</td><td>A click on each of two lines</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">Right-click is Enter: it accepts what has been drawn so far. With nothing half-drawn it ends the command and hands you back the pick tool. Backspace takes the last point back without losing the rest.</div>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۲</span>ابزارها</h2>
+      <p>هر ابزار یک حرف دارد. ابزار را انتخاب کنید، روی نقطه شروع کلیک کنید و روی نقطه پایان کلیک کنید — یا فشار دهید، حرکت کنید و رها کنید؛ هرکدام که راحت‌تر است.</p>
+      <table>
+        <thead><tr><th>ابزار</th><th>کلید</th><th>چه می‌گیرد</th></tr></thead>
+        <tbody>
+          <tr><td class="key">انتخاب</td><td>V</td><td>یک کلیک، Shift+کلیک برای افزودن، یا کادری دور چند شکل</td></tr>
+          <tr><td class="key">جابه‌جایی نما</td><td>H</td><td>کشیدن — یا نگه‌داشتن Space با هر ابزاری</td></tr>
+          <tr><td class="key">خط</td><td>L</td><td>دو نقطه</td></tr>
+          <tr><td class="key">چندخطی</td><td>P</td><td>هر تعداد نقطه؛ Enter یا راست‌کلیک یا دابل‌کلیک تمامش می‌کند</td></tr>
+          <tr><td class="key">مستطیل</td><td>R</td><td>دو گوشه روبه‌رو</td></tr>
+          <tr><td class="key">دایره</td><td>C</td><td>مرکز، سپس یک نقطه روی محیط</td></tr>
+          <tr><td class="key">بیضی</td><td>E</td><td>مرکز، سپس گوشه کادری که در آن جا می‌شود</td></tr>
+          <tr><td class="key">کمان</td><td>A</td><td>مرکز، محل شروع، سپس مقدار جاروب</td></tr>
+          <tr><td class="key">متن</td><td>T</td><td>یک نقطه، سپس خود نوشته</td></tr>
+          <tr><td class="key">اندازه</td><td>D</td><td>از، تا، سپس محل خط اندازه</td></tr>
+          <tr><td class="key">بریدن (Trim)</td><td>X</td><td>یک کلیک روی تکه‌ای از خط که باید حذف شود</td></tr>
+          <tr><td class="key">امتداد (Extend)</td><td>W</td><td>یک کلیک روی سری از خط که باید رشد کند</td></tr>
+          <tr><td class="key">گوشه (Corner)</td><td>K</td><td>یک کلیک روی هرکدام از دو خط</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">راست‌کلیک همان Enter است: هرچه تا اینجا کشیده شده را قبول می‌کند. اگر چیزی نیمه‌کاره نباشد، فرمان را تمام می‌کند و ابزار انتخاب را برمی‌گرداند. Backspace آخرین نقطه را پس می‌گیرد بدون آن‌که بقیه از بین برود.</div>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">2</span>Araçlar</h2>
+      <p>Her aracın bir harfi var. Aracı seçin, şeklin başladığı yere tıklayın, bittiği yere tıklayın — ya da basın, gezdirin, bırakın; elinize hangisi yatkınsa.</p>
+      <table>
+        <thead><tr><th>Araç</th><th>Tuş</th><th>Ne ister</th></tr></thead>
+        <tbody>
+          <tr><td class="key">Seç</td><td>V</td><td>Bir tık, eklemek için Shift+tık ya da birkaçının etrafına kutu</td></tr>
+          <tr><td class="key">Kaydır</td><td>H</td><td>Sürükleme — ya da herhangi bir araçla Space basılı</td></tr>
+          <tr><td class="key">Çizgi</td><td>L</td><td>İki nokta</td></tr>
+          <tr><td class="key">Çoklu çizgi</td><td>P</td><td>İstediğiniz kadar nokta; Enter, sağ tık ya da çift tık bitirir</td></tr>
+          <tr><td class="key">Dikdörtgen</td><td>R</td><td>Karşılıklı iki köşe</td></tr>
+          <tr><td class="key">Daire</td><td>C</td><td>Merkez, sonra üzerinde bir nokta</td></tr>
+          <tr><td class="key">Elips</td><td>E</td><td>Merkez, sonra sığdığı kutunun bir köşesi</td></tr>
+          <tr><td class="key">Yay</td><td>A</td><td>Merkez, başladığı yer, sonra ne kadar süpüreceği</td></tr>
+          <tr><td class="key">Yazı</td><td>T</td><td>Bir nokta, sonra metin</td></tr>
+          <tr><td class="key">Ölçü</td><td>D</td><td>Nereden, nereye, sonra ölçü çizgisinin yeri</td></tr>
+          <tr><td class="key">Buda (Trim)</td><td>X</td><td>Çizginin atılacak parçasına bir tık</td></tr>
+          <tr><td class="key">Uzat (Extend)</td><td>W</td><td>Çizginin uzayacak ucuna bir tık</td></tr>
+          <tr><td class="key">Köşe (Corner)</td><td>K</td><td>İki çizginin her birine bir tık</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">Sağ tık, Enter demektir: o ana kadar çizileni kabul eder. Yarım bir çizim yoksa komutu bitirir ve seçme aracını geri verir. Backspace son noktayı geri alır, gerisini bozmadan.</div>
+    </div>
+    </section>
+    <section id="precise">
+    <div data-lang="en">
+      <h2><span class="num">3</span>Drawing accurately</h2>
+      <ul>
+        <li><b>The magnet</b> catches the ends, middles, centres and corners of what is already drawn. A line that lands a pixel short of another looks right on screen and leaves a gap in the DXF that only turns up when somebody trims to it — this is what stops that.</li>
+        <li><b>Shift</b> while drawing keeps a line level, upright or on 45°.</li>
+        <li><b>The snap step</b> puts every point and every move on a grid of that size. Set it to 0 to draw anywhere.</li>
+        <li><b>The grid</b> can be shown or hidden; it never goes into an export.</li>
+      </ul>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۳</span>ترسیم دقیق</h2>
+      <ul>
+        <li><b>آهن‌ربا</b> سر و وسط و مرکز و گوشه اشیای موجود را می‌گیرد. خطی که یک پیکسل قبل از خط دیگر تمام شود روی صفحه درست به‌نظر می‌رسد ولی در DXF شکاف می‌گذارد و این شکاف فقط وقتی معلوم می‌شود که کسی بخواهد به آن Trim بزند — آهن‌ربا جلوی همین را می‌گیرد.</li>
+        <li><b>Shift</b> هنگام ترسیم، خط را افقی یا عمودی یا ۴۵ درجه نگه می‌دارد.</li>
+        <li><b>گام پرش (snap)</b> هر نقطه و هر جابه‌جایی را روی شبکه‌ای به همان اندازه می‌نشاند. برای ترسیم آزاد، آن را روی ۰ بگذارید.</li>
+        <li><b>شبکه</b> را می‌شود نشان داد یا پنهان کرد؛ هیچ‌وقت وارد خروجی نمی‌شود.</li>
+      </ul>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">3</span>Hassas çizim</h2>
+      <ul>
+        <li><b>Mıknatıs</b>, çizilmiş nesnelerin uçlarını, ortalarını, merkezlerini ve köşelerini yakalar. Bir başkasına bir piksel kala biten çizgi ekranda doğru görünür ama DXF’te boşluk bırakır; bu boşluk ancak biri oraya budama yapmak isteyince ortaya çıkar — mıknatıs bunu engeller.</li>
+        <li>Çizerken <b>Shift</b>, çizgiyi yatay, dikey ya da 45° tutar.</li>
+        <li><b>Kenetlenme adımı</b> her noktayı ve her taşımayı o boyutta bir ızgaraya oturtur. Serbest çizmek için 0 yapın.</li>
+        <li><b>Izgara</b> gösterilip gizlenebilir; dışa aktarıma asla girmez.</li>
+      </ul>
+    </div>
+    </section>
+    <section id="trim">
+    <div data-lang="en">
+      <h2><span class="num">4</span>Trim, extend and corner</h2>
+      <p><b>Trim (X)</b> cuts a line back to whatever crosses it. Click the piece you want gone: it disappears as far as the nearest crossing either side, so a wire cut out from between two rails leaves both ends where they were.</p>
+      <figure><svg viewBox="0 0 420 110" width="420" height="110" role="img">
+  <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:3;fill:none}
+         .x{stroke:#e11d48;stroke-width:3;fill:none;stroke-dasharray:5 4}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="g" x1="60" y1="20" x2="60" y2="90"/><line class="g" x1="140" y1="20" x2="140" y2="90"/>
+  <line class="a" x1="20" y1="55" x2="60" y2="55"/>
+  <line class="x" x1="60" y1="55" x2="140" y2="55"/>
+  <line class="a" x1="140" y1="55" x2="180" y2="55"/>
+  <circle cx="100" cy="55" r="4" fill="#e11d48"/>
+  <line class="g" x1="280" y1="20" x2="280" y2="90"/><line class="g" x1="360" y1="20" x2="360" y2="90"/>
+  <line class="a" x1="240" y1="55" x2="280" y2="55"/>
+  <line class="a" x1="360" y1="55" x2="400" y2="55"/>
+  <text class="t" x="212" y="59">→</text>
+</svg><figcaption>Click between the two crossings and the middle goes.</figcaption></figure>
+      <p><b>Extend (W)</b> runs a line on until it meets something. Click the end that should grow. If nothing is in its way the line is left alone rather than shot off the sheet.</p>
+      <p><b>Corner (K)</b> brings two lines together where they would meet — cutting one, extending the other, whatever each needs. Click each line <i>on the side you want to keep</i>. That is one command instead of a trim, an extend and a nudge.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#0f766e;stroke-width:3;fill:none}.d{stroke:#cbd5e1;stroke-width:2;stroke-dasharray:4 4;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="25" y1="35" x2="105" y2="35"/>
+  <line class="d" x1="105" y1="35" x2="150" y2="35"/>
+  <line class="a" x1="150" y1="75" x2="150" y2="105"/>
+  <line class="d" x1="150" y1="35" x2="150" y2="75"/>
+  <circle cx="150" cy="35" r="4" fill="none" stroke="#e11d48" stroke-width="2"/>
+  <text class="t" x="196" y="72">→</text>
+  <line class="a" x1="245" y1="35" x2="370" y2="35"/>
+  <line class="a" x1="370" y1="35" x2="370" y2="105"/>
+</svg><figcaption>Neither line reaches the corner; one click each and both do.</figcaption></figure>
+      <p>Put a <b>corner radius</b> in the box beside the tool and the corner is rounded instead: the lines stop at the tangent points and an arc joins them. Zero is a sharp corner.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#0f766e;stroke-width:3;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="25" y1="35" x2="150" y2="35"/>
+  <line class="a" x1="150" y1="35" x2="150" y2="105"/>
+  <text class="t" x="196" y="72">→</text>
+  <line class="a" x1="245" y1="35" x2="345" y2="35"/>
+  <path class="a" d="M 345 35 A 25 25 0 0 1 370 60"/>
+  <line class="a" x1="370" y1="60" x2="370" y2="105"/>
+  <text class="t" x="332" y="78">r</text>
+</svg><figcaption>The same command with a radius.</figcaption></figure>
+      <div class="warn">All three work on straight lines. Click a circle or a label with them and the status bar says so rather than doing something unexpected.</div>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۴</span>بریدن، امتداد و گوشه</h2>
+      <p><b>Trim (X)</b> خط را تا محل تقاطعش می‌برد. روی تکه‌ای که باید برود کلیک کنید: تا نزدیک‌ترین تقاطع در دو طرف حذف می‌شود، پس سیمی که از بین دو ریل بریده شود، هر دو سرش سر جایش می‌ماند.</p>
+      <figure><svg viewBox="0 0 420 110" width="420" height="110" role="img">
+  <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:3;fill:none}
+         .x{stroke:#e11d48;stroke-width:3;fill:none;stroke-dasharray:5 4}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="g" x1="60" y1="20" x2="60" y2="90"/><line class="g" x1="140" y1="20" x2="140" y2="90"/>
+  <line class="a" x1="20" y1="55" x2="60" y2="55"/>
+  <line class="x" x1="60" y1="55" x2="140" y2="55"/>
+  <line class="a" x1="140" y1="55" x2="180" y2="55"/>
+  <circle cx="100" cy="55" r="4" fill="#e11d48"/>
+  <line class="g" x1="280" y1="20" x2="280" y2="90"/><line class="g" x1="360" y1="20" x2="360" y2="90"/>
+  <line class="a" x1="240" y1="55" x2="280" y2="55"/>
+  <line class="a" x1="360" y1="55" x2="400" y2="55"/>
+  <text class="t" x="212" y="59">→</text>
+</svg><figcaption>بین دو تقاطع کلیک کنید تا وسط برود.</figcaption></figure>
+      <p><b>Extend (W)</b> خط را تا رسیدن به مانع پیش می‌برد. روی سری که باید رشد کند کلیک کنید. اگر چیزی سر راه نباشد، خط دست‌نخورده می‌ماند و از صفحه بیرون نمی‌زند.</p>
+      <p><b>Corner (K)</b> دو خط را به محل تلاقی‌شان می‌رساند — یکی را می‌برد، دیگری را امتداد می‌دهد، هرکدام هرچه لازم دارد. روی هر خط <i>در سمتی که باید بماند</i> کلیک کنید. این یک فرمان است به‌جای یک Trim و یک Extend و یک جابه‌جایی.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#0f766e;stroke-width:3;fill:none}.d{stroke:#cbd5e1;stroke-width:2;stroke-dasharray:4 4;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="25" y1="35" x2="105" y2="35"/>
+  <line class="d" x1="105" y1="35" x2="150" y2="35"/>
+  <line class="a" x1="150" y1="75" x2="150" y2="105"/>
+  <line class="d" x1="150" y1="35" x2="150" y2="75"/>
+  <circle cx="150" cy="35" r="4" fill="none" stroke="#e11d48" stroke-width="2"/>
+  <text class="t" x="196" y="72">→</text>
+  <line class="a" x1="245" y1="35" x2="370" y2="35"/>
+  <line class="a" x1="370" y1="35" x2="370" y2="105"/>
+</svg><figcaption>هیچ‌کدام از دو خط به گوشه نمی‌رسند؛ یک کلیک روی هرکدام و هر دو می‌رسند.</figcaption></figure>
+      <p>اگر در کادر کنار ابزار یک <b>شعاع گوشه</b> بگذارید، گوشه گرد می‌شود: خط‌ها در نقاط مماس می‌ایستند و یک کمان آن‌ها را به هم وصل می‌کند. صفر یعنی گوشه تیز.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#0f766e;stroke-width:3;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="25" y1="35" x2="150" y2="35"/>
+  <line class="a" x1="150" y1="35" x2="150" y2="105"/>
+  <text class="t" x="196" y="72">→</text>
+  <line class="a" x1="245" y1="35" x2="345" y2="35"/>
+  <path class="a" d="M 345 35 A 25 25 0 0 1 370 60"/>
+  <line class="a" x1="370" y1="60" x2="370" y2="105"/>
+  <text class="t" x="332" y="78">r</text>
+</svg><figcaption>همان فرمان با شعاع.</figcaption></figure>
+      <div class="warn">هر سه روی خط مستقیم کار می‌کنند. اگر با آن‌ها روی دایره یا نوشته کلیک کنید، نوار وضعیت همین را می‌گوید و کار غیرمنتظره‌ای نمی‌کند.</div>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">4</span>Budama, uzatma ve köşe</h2>
+      <p><b>Trim (X)</b> çizgiyi kesiştiği yere kadar budar. Gitmesini istediğiniz parçaya tıklayın: iki yandaki en yakın kesişime kadar yok olur; iki ray arasından kesilen bir tel, iki ucunu da yerinde bırakır.</p>
+      <figure><svg viewBox="0 0 420 110" width="420" height="110" role="img">
+  <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:3;fill:none}
+         .x{stroke:#e11d48;stroke-width:3;fill:none;stroke-dasharray:5 4}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="g" x1="60" y1="20" x2="60" y2="90"/><line class="g" x1="140" y1="20" x2="140" y2="90"/>
+  <line class="a" x1="20" y1="55" x2="60" y2="55"/>
+  <line class="x" x1="60" y1="55" x2="140" y2="55"/>
+  <line class="a" x1="140" y1="55" x2="180" y2="55"/>
+  <circle cx="100" cy="55" r="4" fill="#e11d48"/>
+  <line class="g" x1="280" y1="20" x2="280" y2="90"/><line class="g" x1="360" y1="20" x2="360" y2="90"/>
+  <line class="a" x1="240" y1="55" x2="280" y2="55"/>
+  <line class="a" x1="360" y1="55" x2="400" y2="55"/>
+  <text class="t" x="212" y="59">→</text>
+</svg><figcaption>İki kesişim arasına tıklayın, ortası gitsin.</figcaption></figure>
+      <p><b>Extend (W)</b> çizgiyi bir şeye değene kadar uzatır. Uzayacak uca tıklayın. Önünde bir şey yoksa çizgi olduğu gibi bırakılır, sayfadan fırlatılmaz.</p>
+      <p><b>Corner (K)</b> iki çizgiyi buluşacakları yerde birleştirir — birini budar, ötekini uzatır, her biri neye ihtiyaç duyuyorsa. Her çizgiye <i>kalmasını istediğiniz taraftan</i> tıklayın. Bu, bir budama, bir uzatma ve bir itmenin yerine geçen tek komuttur.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#0f766e;stroke-width:3;fill:none}.d{stroke:#cbd5e1;stroke-width:2;stroke-dasharray:4 4;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="25" y1="35" x2="105" y2="35"/>
+  <line class="d" x1="105" y1="35" x2="150" y2="35"/>
+  <line class="a" x1="150" y1="75" x2="150" y2="105"/>
+  <line class="d" x1="150" y1="35" x2="150" y2="75"/>
+  <circle cx="150" cy="35" r="4" fill="none" stroke="#e11d48" stroke-width="2"/>
+  <text class="t" x="196" y="72">→</text>
+  <line class="a" x1="245" y1="35" x2="370" y2="35"/>
+  <line class="a" x1="370" y1="35" x2="370" y2="105"/>
+</svg><figcaption>İki çizgi de köşeye ulaşmıyor; her birine bir tık, ikisi de ulaşıyor.</figcaption></figure>
+      <p>Aracın yanındaki kutuya bir <b>köşe yarıçapı</b> yazarsanız köşe yuvarlanır: çizgiler teğet noktalarında durur, bir yay onları birleştirir. Sıfır, keskin köşe demektir.</p>
+      <figure><svg viewBox="0 0 420 120" width="420" height="120" role="img">
+  <style>.a{stroke:#0f766e;stroke-width:3;fill:none}
+         .t{font:11px "Segoe UI",Arial;fill:#64748b}</style>
+  <line class="a" x1="25" y1="35" x2="150" y2="35"/>
+  <line class="a" x1="150" y1="35" x2="150" y2="105"/>
+  <text class="t" x="196" y="72">→</text>
+  <line class="a" x1="245" y1="35" x2="345" y2="35"/>
+  <path class="a" d="M 345 35 A 25 25 0 0 1 370 60"/>
+  <line class="a" x1="370" y1="60" x2="370" y2="105"/>
+  <text class="t" x="332" y="78">r</text>
+</svg><figcaption>Aynı komut, yarıçapla.</figcaption></figure>
+      <div class="warn">Üçü de düz çizgilerde çalışır. Bir daireye ya da yazıya tıklarsanız durum çubuğu bunu söyler, beklenmedik bir şey yapmaz.</div>
+    </div>
+    </section>
+    <section id="change">
+    <div data-lang="en">
+      <h2><span class="num">5</span>Turning, mirroring, lining up</h2>
+      <p>The second row of the toolbar changes what is already there. Everything on it works on whatever is picked, and stays dark until something is.</p>
+      <ul>
+        <li><b>Turn</b> 90° either way, or by any angle you type. A label turns with it and still reads the right way up in the DXF and the PDF.</li>
+        <li><b>Mirror</b> left-to-right or top-to-bottom, about the middle of what is picked. An arc keeps its sweep; a label keeps its side.</li>
+        <li><b>Scale</b> by a factor. Radii, line weights and text heights all follow.</li>
+        <li><b>Align</b> six ways — left, centre, right, top, middle, bottom — against the edge of what the picked shapes cover together.</li>
+        <li><b>Even out the gaps</b> across or down: the two outermost stay put and the rest are spread between them. This is what a row of feeder blocks wants.</li>
+        <li><b>Bring to front / send to back</b> changes the drawing order, which is what decides overlaps.</li>
+      </ul>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۵</span>چرخش، قرینه، تراز</h2>
+      <p>ردیف دوم نوار ابزار، آنچه را که هست تغییر می‌دهد. همه دکمه‌های آن روی چیزی که انتخاب شده کار می‌کنند و تا وقتی چیزی انتخاب نشده خاموش‌اند.</p>
+      <ul>
+        <li><b>چرخش</b> ۹۰ درجه به هر طرف، یا با هر زاویه‌ای که تایپ کنید. نوشته هم با آن می‌چرخد و در DXF و PDF هم درست خوانده می‌شود.</li>
+        <li><b>قرینه</b> چپ‌وراست یا بالا‌وپایین، حول وسط چیزی که انتخاب شده. کمان جهت جاروبش را نگه می‌دارد و نوشته سمتش را.</li>
+        <li><b>مقیاس</b> با یک ضریب. شعاع‌ها و ضخامت خط و ارتفاع متن همه با آن می‌روند.</li>
+        <li><b>تراز</b> به شش حالت — چپ، وسط، راست، بالا، میانه، پایین — نسبت به لبه محدوده‌ای که اشکال انتخاب‌شده روی‌هم می‌گیرند.</li>
+        <li><b>یکسان‌کردن فاصله‌ها</b> افقی یا عمودی: دو تای بیرونی سر جایشان می‌مانند و بقیه بینشان پخش می‌شوند. این همان چیزی است که یک ردیف بلوک فیدر لازم دارد.</li>
+        <li><b>آوردن به جلو / بردن به عقب</b> ترتیب ترسیم را عوض می‌کند، و ترتیب ترسیم است که تعیین می‌کند چه چیزی روی چه چیزی بیفتد.</li>
+      </ul>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">5</span>Döndürme, aynalama, hizalama</h2>
+      <p>Araç çubuğunun ikinci satırı, var olanı değiştirir. Üzerindeki her şey seçili olan üzerinde çalışır ve bir şey seçilene kadar sönük durur.</p>
+      <ul>
+        <li><b>Döndür</b>: iki yöne de 90°, ya da yazdığınız herhangi bir açıyla. Yazı da onunla döner ve DXF ile PDF’te de doğru okunur.</li>
+        <li><b>Aynala</b>: sağa sola ya da yukarı aşağı, seçilenin ortasına göre. Yay süpürme yönünü, yazı tarafını korur.</li>
+        <li><b>Ölçekle</b>: bir katsayıyla. Yarıçaplar, çizgi kalınlıkları ve yazı yükseklikleri hep birlikte gider.</li>
+        <li><b>Hizala</b>: altı yönde — sol, orta, sağ, üst, orta, alt — seçili nesnelerin birlikte kapladığı alanın kenarına göre.</li>
+        <li><b>Aralıkları eşitle</b>: yatay ya da dikey. En dıştaki ikisi yerinde kalır, gerisi aralarına yayılır. Bir sıra besleme bloğunun istediği tam da budur.</li>
+        <li><b>Öne getir / arkaya gönder</b> çizim sırasını değiştirir; üst üste binmeyi belirleyen de o sıradır.</li>
+      </ul>
+    </div>
+    </section>
+    <section id="style">
+    <div data-lang="en">
+      <h2><span class="num">6</span>Line weight, line type, layer</h2>
+      <p>Click a shape and the <b>Selection</b> panel on the right shows what it is drawn with — its layer, its line weight, its line type and, for a label, its height and its wording. Change any of them there and the picked shapes are redrawn.</p>
+      <p>The same four controls sit on the toolbar. There they set up what is drawn <i>next</i> — and if something is picked at the time, they restyle that too, which is the shortest path from "that should be dashed" to it being dashed.</p>
+      <div class="warn">A shape that is picked stays picked after it is drawn. So if you draw a line and then change the line type, you are changing <i>that</i> line, not setting up the next one. Press Esc first to let go.</div>
+      <p>Layers can be hidden or locked while you work — the busbar, the tags, the data block. A hidden layer stays out of the SVG you export. New geometry takes the colour of the layer it goes on, and in CAD the colour comes from the layer anyway.</p>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۶</span>ضخامت خط، نوع خط، لایه</h2>
+      <p>روی یک شکل کلیک کنید تا پنل <b>انتخاب‌شده</b> در سمت راست نشان دهد با چه چیزی ترسیم شده — لایه، ضخامت خط، نوع خط و برای نوشته، ارتفاع و خود متن. هرکدام را همان‌جا عوض کنید، همان چیزی که انتخاب شده دوباره ترسیم می‌شود.</p>
+      <p>همین چهار کنترل روی نوار ابزار هم هستند. آن‌جا تعیین می‌کنند که ترسیم <i>بعدی</i> چگونه باشد — و اگر همان موقع چیزی انتخاب شده باشد، آن را هم تغییر می‌دهند؛ کوتاه‌ترین راه از «این باید خط‌چین باشد» تا خط‌چین‌شدنش.</p>
+      <div class="warn">شکلی که ترسیم می‌شود، انتخاب‌شده می‌ماند. پس اگر خطی بکشید و بعد نوع خط را عوض کنید، دارید <i>همان</i> خط را عوض می‌کنید، نه خط بعدی را. اول Esc بزنید تا انتخاب برداشته شود.</div>
+      <p>لایه‌ها را می‌شود هنگام کار پنهان یا قفل کرد — شینه، تگ‌ها، بلوک داده. لایه پنهان در خروجی SVG هم نمی‌آید. ترسیم جدید رنگ لایه‌ای را می‌گیرد که روی آن می‌رود، و در CAD هم رنگ به‌هرحال از لایه گرفته می‌شود.</p>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">6</span>Çizgi kalınlığı, tipi, katman</h2>
+      <p>Bir nesneye tıklayın; sağdaki <b>Seçim</b> paneli onun neyle çizildiğini gösterir — katmanı, çizgi kalınlığı, çizgi tipi ve yazıysa yüksekliği ile metni. Herhangi birini orada değiştirin, seçili olan yeniden çizilir.</p>
+      <p>Aynı dört denetim araç çubuğunda da var. Orada <i>bir sonraki</i> çizimin nasıl olacağını belirler — o sırada bir şey seçiliyse onu da yeniden biçimlendirir; “şu kesikli olmalı”dan kesikli olmasına giden en kısa yol budur.</p>
+      <div class="warn">Çizilen nesne seçili kalır. Yani bir çizgi çizip sonra çizgi tipini değiştirirseniz, <i>o</i> çizgiyi değiştiriyorsunuz, bir sonrakini ayarlamıyorsunuz. Önce Esc’e basıp bırakın.</div>
+      <p>Katmanlar çalışırken gizlenebilir ya da kilitlenebilir — bara, etiketler, veri bloğu. Gizli katman dışa aktarılan SVG’ye girmez. Yeni çizim, gittiği katmanın rengini alır; CAD’de renk zaten katmandan gelir.</p>
+    </div>
+    </section>
+    <section id="dims">
+    <div data-lang="en">
+      <h2><span class="num">7</span>Dimensions</h2>
+      <p>The dimension tool (D) takes three clicks: what it measures from, what it measures to, then where the dimension line sits. The label is written in <b>millimetres of real size</b>, worked out from the drawing scale.</p>
+      <figure><svg viewBox="0 0 420 130" width="420" height="130" role="img">
+  <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:1.6;fill:none}
+         .t{font:12px "Segoe UI",Arial;fill:#0f766e}</style>
+  <rect class="g" x="90" y="55" width="200" height="55"/>
+  <line class="a" x1="90" y1="50" x2="90" y2="26"/>
+  <line class="a" x1="290" y1="50" x2="290" y2="26"/>
+  <line class="a" x1="90" y1="32" x2="290" y2="32"/>
+  <polygon points="90,32 102,28 102,36" fill="#0f766e"/>
+  <polygon points="290,32 278,28 278,36" fill="#0f766e"/>
+  <text class="t" x="190" y="26" text-anchor="middle">800</text>
+</svg><figcaption>Extension lines, arrowheads and the measurement.</figcaption></figure>
+      <p>It goes down as ordinary geometry — two extension lines, the dimension line, two filled arrowheads and the label — so every format carries it without needing to know what a dimension is. The number is measured once, when you place it: move the geometry afterwards and the number does not follow, so re-measure rather than trusting an old one.</p>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۷</span>اندازه‌گذاری</h2>
+      <p>ابزار اندازه (D) سه کلیک می‌گیرد: از کجا، تا کجا، و بعد جای خط اندازه. عدد به <b>میلی‌متر اندازه واقعی</b> نوشته می‌شود، محاسبه‌شده از مقیاس نقشه.</p>
+      <figure><svg viewBox="0 0 420 130" width="420" height="130" role="img">
+  <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:1.6;fill:none}
+         .t{font:12px "Segoe UI",Arial;fill:#0f766e}</style>
+  <rect class="g" x="90" y="55" width="200" height="55"/>
+  <line class="a" x1="90" y1="50" x2="90" y2="26"/>
+  <line class="a" x1="290" y1="50" x2="290" y2="26"/>
+  <line class="a" x1="90" y1="32" x2="290" y2="32"/>
+  <polygon points="90,32 102,28 102,36" fill="#0f766e"/>
+  <polygon points="290,32 278,28 278,36" fill="#0f766e"/>
+  <text class="t" x="190" y="26" text-anchor="middle">800</text>
+</svg><figcaption>خطوط رابط، سرپیکان‌ها و خود عدد.</figcaption></figure>
+      <p>به‌صورت هندسه معمولی ثبت می‌شود — دو خط رابط، خط اندازه، دو سرپیکان توپر و نوشته — پس هر فرمتی آن را می‌برد بدون آن‌که لازم باشد بداند «اندازه» چیست. عدد فقط یک‌بار، موقع گذاشتن، اندازه گرفته می‌شود: اگر بعداً هندسه را جابه‌جا کنید عدد دنبالش نمی‌آید، پس دوباره اندازه بگیرید و به عدد قدیمی اعتماد نکنید.</p>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">7</span>Ölçülendirme</h2>
+      <p>Ölçü aracı (D) üç tık ister: nereden, nereye, sonra ölçü çizgisinin yeri. Değer, çizim ölçeğinden hesaplanarak <b>gerçek boyutun milimetresi</b> olarak yazılır.</p>
+      <figure><svg viewBox="0 0 420 130" width="420" height="130" role="img">
+  <style>.g{stroke:#94a3b8;stroke-width:2;fill:none}.a{stroke:#0f766e;stroke-width:1.6;fill:none}
+         .t{font:12px "Segoe UI",Arial;fill:#0f766e}</style>
+  <rect class="g" x="90" y="55" width="200" height="55"/>
+  <line class="a" x1="90" y1="50" x2="90" y2="26"/>
+  <line class="a" x1="290" y1="50" x2="290" y2="26"/>
+  <line class="a" x1="90" y1="32" x2="290" y2="32"/>
+  <polygon points="90,32 102,28 102,36" fill="#0f766e"/>
+  <polygon points="290,32 278,28 278,36" fill="#0f766e"/>
+  <text class="t" x="190" y="26" text-anchor="middle">800</text>
+</svg><figcaption>Uzatma çizgileri, ok uçları ve ölçü değeri.</figcaption></figure>
+      <p>Sıradan geometri olarak yazılır — iki uzatma çizgisi, ölçü çizgisi, iki dolu ok ucu ve etiket — böylece her format onu, ölçünün ne olduğunu bilmesine gerek kalmadan taşır. Değer yalnızca yerleştirirken bir kez ölçülür: sonradan geometriyi taşırsanız değer peşinden gelmez, o yüzden eskisine güvenmek yerine yeniden ölçün.</p>
+    </div>
+    </section>
+    <section id="keep">
+    <div data-lang="en">
+      <h2><span class="num">8</span>Keeping the work</h2>
+      <ul>
+        <li><b>Save</b> (the disk) hands the edits to the project. Then save the project itself, the ordinary way.</li>
+        <li><b>Revert</b> puts the sheet on screen back to as drawn. <b>Discard all</b> does it for every sheet, in the project too.</li>
+        <li>A view-only revision cannot keep edits, and the Save button says so. Raise a revision first.</li>
+        <li>Each sheet remembers what it looked like when it was edited. If the project changes underneath it, the status bar says which sheets were edited against an older drawing — revert those to take the new one.</li>
+      </ul>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۸</span>ثبت کار</h2>
+      <ul>
+        <li><b>Save</b> (آیکون دیسک) ویرایش‌ها را به پروژه می‌سپارد. بعد خود پروژه را به روش معمول ذخیره کنید.</li>
+        <li><b>Revert</b> صفحه روی صفحه‌نمایش را به حالت اولیه برمی‌گرداند. <b>انصراف از همه</b> این کار را برای همه صفحات، در پروژه هم، انجام می‌دهد.</li>
+        <li>ریویژن فقط‌خواندنی نمی‌تواند ویرایش را نگه دارد و دکمه Save همین را می‌گوید. اول ریویژن جدید بسازید.</li>
+        <li>هر صفحه به‌خاطر می‌سپارد که موقع ویرایش چه شکلی بوده. اگر پروژه زیرش عوض شود، نوار وضعیت می‌گوید کدام صفحات روی نقشه قدیمی‌تر ویرایش شده‌اند — آن‌ها را Revert کنید تا نقشه تازه را بگیرند.</li>
+      </ul>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">8</span>Yapılanı saklamak</h2>
+      <ul>
+        <li><b>Save</b> (disk simgesi) değişiklikleri projeye teslim eder. Sonra projenin kendisini her zamanki gibi kaydedin.</li>
+        <li><b>Revert</b> ekrandaki sayfayı çizildiği hâle döndürür. <b>Hepsini geri al</b> bunu bütün sayfalar için, projede de yapar.</li>
+        <li>Salt okunur bir revizyon değişiklik tutamaz, Save düğmesi bunu söyler. Önce yeni revizyon açın.</li>
+        <li>Her sayfa, düzenlendiği andaki hâlini hatırlar. Proje altından değişirse durum çubuğu hangi sayfaların daha eski bir çizim üzerinde düzenlendiğini söyler — yenisini almaları için onları geri alın.</li>
+      </ul>
+    </div>
+    </section>
+    <section id="out">
+    <div data-lang="en">
+      <h2><span class="num">9</span>Getting it out</h2>
+      <ul>
+        <li><b>DXF</b> — R12 (AC1009), the dialect every CAD reader since 1990 understands. Layers, colours and line types all come across; a dashed line stays a dashed line.</li>
+        <li><b>PDF</b> — vector, one page per sheet.</li>
+        <li><b>SVG</b> — the sheet as it is on screen, hidden layers left out.</li>
+      </ul>
+      <div class="warn">The direct PDF button writes Latin text only. For Persian or Turkish labels use <b>Print / PDF</b> on the single-line view instead — that route goes through the browser and comes out right.</div>
+      <div class="tip">Watch the text height in millimetres on the toolbar. Under 1.8 mm a plotted drawing stops being readable — put fewer feeders on a sheet, or choose a bigger sheet.</div>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۹</span>خروجی گرفتن</h2>
+      <ul>
+        <li><b>DXF</b> — نسخه R12 (AC1009)، همان گویشی که هر خواننده CAD از ۱۹۹۰ به بعد می‌فهمد. لایه‌ها و رنگ‌ها و نوع خط‌ها همه منتقل می‌شوند؛ خط‌چین، خط‌چین می‌ماند.</li>
+        <li><b>PDF</b> — برداری، هر صفحه یک برگ.</li>
+        <li><b>SVG</b> — همان چیزی که روی صفحه است، بدون لایه‌های پنهان.</li>
+      </ul>
+      <div class="warn">دکمه مستقیم PDF فقط حروف لاتین را می‌نویسد. برای نوشته‌های فارسی یا ترکی به‌جای آن از <b>Print / PDF</b> در نمای تک‌خطی استفاده کنید — آن مسیر از خود مرورگر می‌گذرد و درست درمی‌آید.</div>
+      <div class="tip">ارتفاع متن به میلی‌متر را روی نوار ابزار ببینید. زیر ۱٫۸ میلی‌متر نقشه چاپ‌شده دیگر خوانا نیست — تعداد فیدر کمتری در هر صفحه بگذارید یا کاغذ بزرگ‌تری انتخاب کنید.</div>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">9</span>Dışa aktarmak</h2>
+      <ul>
+        <li><b>DXF</b> — R12 (AC1009), 1990’dan beri her CAD okuyucusunun anladığı lehçe. Katmanlar, renkler ve çizgi tipleri hepsi geçer; kesikli çizgi kesikli kalır.</li>
+        <li><b>PDF</b> — vektörel, sayfa başına bir yaprak.</li>
+        <li><b>SVG</b> — ekrandaki hâliyle sayfa, gizli katmanlar hariç.</li>
+      </ul>
+      <div class="warn">Doğrudan PDF düğmesi yalnızca Latin harf yazar. Farsça ya da Türkçe etiketler için tek hat görünümündeki <b>Print / PDF</b> yolunu kullanın — o yol tarayıcıdan geçer ve düzgün çıkar.</div>
+      <div class="tip">Araç çubuğundaki milimetre cinsinden yazı yüksekliğine bakın. 1,8 mm altında basılmış çizim okunmaz olur — sayfaya daha az besleme koyun ya da daha büyük kâğıt seçin.</div>
+    </div>
+    </section>
+    <section id="keys">
+    <div data-lang="en">
+      <h2><span class="num">10</span>Keys</h2>
+      <table>
+        <thead><tr><th>Key</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td class="key"><code>V</code> <code>H</code> <code>L</code> <code>P</code> <code>R</code> <code>C</code> <code>E</code> <code>A</code> <code>T</code> <code>D</code></td><td>Pick, pan, line, polyline, rectangle, circle, ellipse, arc, text, dimension</td></tr>
+          <tr><td class="key"><code>X</code> <code>W</code> <code>K</code></td><td>Trim, extend, corner</td></tr>
+          <tr><td class="key"><code>F</code></td><td>Fit the sheet</td></tr>
+          <tr><td class="key"><code>Space</code></td><td>Pan while held, whatever tool is in hand</td></tr>
+          <tr><td class="key"><code>Shift</code></td><td>While drawing: level, upright or 45°. While picking: add to the selection</td></tr>
+          <tr><td class="key"><code>Enter</code> / right-click / double-click</td><td>Finish an open polyline</td></tr>
+          <tr><td class="key"><code>Backspace</code></td><td>Take back the last point of what is being drawn</td></tr>
+          <tr><td class="key"><code>Esc</code></td><td>Back out one step: the half-drawn shape, then the selection, then the tool</td></tr>
+          <tr><td class="key"><code>Ctrl+Z</code> / <code>Ctrl+Shift+Z</code></td><td>Undo / redo</td></tr>
+          <tr><td class="key"><code>Ctrl+D</code></td><td>Duplicate what is picked</td></tr>
+          <tr><td class="key"><code>Ctrl+A</code></td><td>Pick everything that is not hidden or locked</td></tr>
+          <tr><td class="key"><code>Del</code></td><td>Remove what is picked</td></tr>
+          <tr><td class="key"><code>←</code> <code>↑</code> <code>→</code> <code>↓</code></td><td>Nudge by the snap step; with Shift, by ten</td></tr>
+          <tr><td class="key"><code>F1</code></td><td>The short help, over the drawing</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div data-lang="fa">
+      <h2><span class="num">۱۰</span>کلیدها</h2>
+      <table>
+        <thead><tr><th>کلید</th><th>چه می‌کند</th></tr></thead>
+        <tbody>
+          <tr><td class="key"><code>V</code> <code>H</code> <code>L</code> <code>P</code> <code>R</code> <code>C</code> <code>E</code> <code>A</code> <code>T</code> <code>D</code></td><td>انتخاب، جابه‌جایی، خط، چندخطی، مستطیل، دایره، بیضی، کمان، متن، اندازه</td></tr>
+          <tr><td class="key"><code>X</code> <code>W</code> <code>K</code></td><td>بریدن، امتداد، گوشه</td></tr>
+          <tr><td class="key"><code>F</code></td><td>جا دادن کل صفحه</td></tr>
+          <tr><td class="key"><code>Space</code></td><td>تا وقتی نگه دارید نما را جابه‌جا می‌کند، با هر ابزاری</td></tr>
+          <tr><td class="key"><code>Shift</code></td><td>هنگام ترسیم: افقی، عمودی یا ۴۵ درجه. هنگام انتخاب: افزودن به انتخاب</td></tr>
+          <tr><td class="key"><code>Enter</code> / راست‌کلیک / دابل‌کلیک</td><td>تمام‌کردن چندخطی باز</td></tr>
+          <tr><td class="key"><code>Backspace</code></td><td>پس‌گرفتن آخرین نقطه چیزی که در حال ترسیم است</td></tr>
+          <tr><td class="key"><code>Esc</code></td><td>یک پله عقب: ترسیم نیمه‌کاره، بعد انتخاب، بعد ابزار</td></tr>
+          <tr><td class="key"><code>Ctrl+Z</code> / <code>Ctrl+Shift+Z</code></td><td>واگرد / ازنو</td></tr>
+          <tr><td class="key"><code>Ctrl+D</code></td><td>تکثیر چیزی که انتخاب شده</td></tr>
+          <tr><td class="key"><code>Ctrl+A</code></td><td>انتخاب هرچه پنهان و قفل نیست</td></tr>
+          <tr><td class="key"><code>Del</code></td><td>حذف چیزی که انتخاب شده</td></tr>
+          <tr><td class="key"><code>←</code> <code>↑</code> <code>→</code> <code>↓</code></td><td>جابه‌جایی به اندازه گام پرش؛ با Shift ده برابر</td></tr>
+          <tr><td class="key"><code>F1</code></td><td>راهنمای کوتاه، روی خود نقشه</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div data-lang="tr">
+      <h2><span class="num">10</span>Tuşlar</h2>
+      <table>
+        <thead><tr><th>Tuş</th><th>Ne yapar</th></tr></thead>
+        <tbody>
+          <tr><td class="key"><code>V</code> <code>H</code> <code>L</code> <code>P</code> <code>R</code> <code>C</code> <code>E</code> <code>A</code> <code>T</code> <code>D</code></td><td>Seç, kaydır, çizgi, çoklu çizgi, dikdörtgen, daire, elips, yay, yazı, ölçü</td></tr>
+          <tr><td class="key"><code>X</code> <code>W</code> <code>K</code></td><td>Buda, uzat, köşe</td></tr>
+          <tr><td class="key"><code>F</code></td><td>Sayfayı sığdır</td></tr>
+          <tr><td class="key"><code>Space</code></td><td>Basılıyken kaydırır, elde hangi araç olursa olsun</td></tr>
+          <tr><td class="key"><code>Shift</code></td><td>Çizerken: yatay, dikey ya da 45°. Seçerken: seçime ekler</td></tr>
+          <tr><td class="key"><code>Enter</code> / sağ tık / çift tık</td><td>Açık çoklu çizgiyi bitirir</td></tr>
+          <tr><td class="key"><code>Backspace</code></td><td>Çizilmekte olanın son noktasını geri alır</td></tr>
+          <tr><td class="key"><code>Esc</code></td><td>Bir adım geri: yarım çizim, sonra seçim, sonra araç</td></tr>
+          <tr><td class="key"><code>Ctrl+Z</code> / <code>Ctrl+Shift+Z</code></td><td>Geri al / yinele</td></tr>
+          <tr><td class="key"><code>Ctrl+D</code></td><td>Seçili olanı çoğaltır</td></tr>
+          <tr><td class="key"><code>Ctrl+A</code></td><td>Gizli ve kilitli olmayan her şeyi seçer</td></tr>
+          <tr><td class="key"><code>Del</code></td><td>Seçili olanı siler</td></tr>
+          <tr><td class="key"><code>←</code> <code>↑</code> <code>→</code> <code>↓</code></td><td>Kenetlenme adımı kadar iter; Shift ile on katı</td></tr>
+          <tr><td class="key"><code>F1</code></td><td>Kısa yardım, çizimin üzerinde</td></tr>
+        </tbody>
+      </table>
+    </div>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <div data-lang="en">© Simorgh Electrical Design Software — Simorgh Draw</div>
+  <div data-lang="fa">© نرم‌افزار طراحی برق سیمرغ — Simorgh Draw</div>
+  <div data-lang="tr">© Simorgh Electrical Design Software — Simorgh Draw</div>
+</footer>
+
+<script>
+// The page carries all three languages and shows one. The choice is shared
+// with the editor — the same key in the same browser — so opening the guide
+// from a Persian editor lands on the Persian guide.
+(function () {
+  var KEY = 'simorgh-draw-lang';
+  var DIRS = { en: 'ltr', fa: 'rtl', tr: 'ltr' };
+  function show(lang) {
+    if (!DIRS[lang]) lang = 'en';
+    document.documentElement.lang = lang;
+    document.documentElement.dir = DIRS[lang];
+    var blocks = document.querySelectorAll('[data-lang]');
+    for (var i = 0; i < blocks.length; i++) {
+      blocks[i].classList.toggle('on', blocks[i].getAttribute('data-lang') === lang);
+    }
+    var buttons = document.querySelectorAll('[data-pick]');
+    for (var j = 0; j < buttons.length; j++) {
+      buttons[j].setAttribute('aria-pressed',
+        buttons[j].getAttribute('data-pick') === lang ? 'true' : 'false');
+    }
+    try { window.localStorage.setItem(KEY, lang); } catch (e) { /* nothing to do */ }
+  }
+  var buttons = document.querySelectorAll('[data-pick]');
+  for (var k = 0; k < buttons.length; k++) {
+    buttons[k].addEventListener('click', function () {
+      show(this.getAttribute('data-pick'));
+    });
+  }
+  // The address can ask for one (#fa), otherwise whatever was last chosen.
+  var asked = (location.hash || '').replace('#', '');
+  var kept = null;
+  try { kept = window.localStorage.getItem(KEY); } catch (e) { /* fine */ }
+  show(DIRS[asked] ? asked : (kept || 'fa'));
+})();
+</script>
+</body>
+</html>

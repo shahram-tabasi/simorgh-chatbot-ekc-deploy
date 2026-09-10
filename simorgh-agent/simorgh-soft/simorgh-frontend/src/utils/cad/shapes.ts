@@ -106,8 +106,13 @@ export type Shape =
   /** Quadratic Bézier — CAD gets it flattened, SVG gets the curve. */
   | ({ t: 'curve'; x1: number; y1: number; cx: number; cy: number; x2: number; y2: number } & Pen)
   | ({ t: 'poly'; pts: Pt[]; close?: boolean } & Pen)
+  /**
+   * `rot` turns the text about its own anchor, degrees anticlockwise on the
+   * page — the way both DXF and a drawing office measure it, so a label written
+   * up the side of a column is 90 in all three back-ends.
+   */
   | ({ t: 'text'; x: number; y: number; s: string; size: number; anchor?: Anchor;
-       bold?: boolean; title?: string } & Pen);
+       bold?: boolean; title?: string; rot?: number } & Pen);
 
 /**
  * A sheet: its size in drawing units and the geometry on it.
