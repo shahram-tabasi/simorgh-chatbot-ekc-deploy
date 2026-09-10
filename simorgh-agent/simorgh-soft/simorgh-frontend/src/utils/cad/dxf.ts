@@ -83,6 +83,27 @@ function encode(s: string, mode: 'escape' | 'raw'): string {
 
 const norm = (deg: number) => ((deg % 360) + 360) % 360;
 
+/**
+ * Which CAD line type draws an SVG dash pattern.
+ *
+ * A drawing office asks for four: solid, dashed, dash-dot and dotted. SVG says
+ * them as a run of lengths, so they are read back by shape rather than matched
+ * against the exact numbers the editor happens to write — a dashed line that
+ * came in from someone else's DXF or SVG still leaves as a dashed line.
+ * Undefined means the entity takes its layer's line type, which is what an
+ * unstyled shape should do.
+ */
+export function lineTypeFor(dash?: string): string | undefined {
+  if (!dash) return undefined;
+  const run = dash.split(/[\s,]+/).map(Number).filter(n => Number.isFinite(n) && n >= 0);
+  if (run.length < 2 || run.every(n => n === 0)) return undefined;
+  // A dot is a dash with no length to speak of against the gap after it.
+  if (run[0] <= 2 && run[0] * 1.5 <= run[1]) return 'DOT';
+  // Long, gap, short, gap — the centre line of a drawing.
+  if (run.length >= 4 && run[2] < run[0] / 2) return 'DASHDOT';
+  return 'DASHED';
+}
+
 /** Sheet space (y down, pixels) → paper space (y up, millimetres). */
 interface Frame { s: number; ox: number; oy: number; height: number }
 const px = (f: Frame, x: number) => f.ox + x * f.s;
@@ -90,19 +111,22 @@ const py = (f: Frame, y: number) => f.oy + (f.height - y) * f.s;
 
 // ── Entities ────────────────────────────────────────────────────────────────
 
-function line(t: Tape, layer: Layer, x1: number, y1: number, x2: number, y2: number) {
-  t.pair(0, 'LINE').pair(8, layer)
-    .pair(10, x1).pair(20, y1).pair(30, 0)
+function line(
+  t: Tape, layer: Layer, x1: number, y1: number, x2: number, y2: number, lt?: string,
+) {
+  t.pair(0, 'LINE').pair(8, layer);
+  if (lt) t.pair(6, lt);
+  t.pair(10, x1).pair(20, y1).pair(30, 0)
     .pair(11, x2).pair(21, y2).pair(31, 0);
 }
 
-function polyline(t: Tape, layer: Layer, pts: Pt[], close: boolean) {
+function polyline(t: Tape, layer: Layer, pts: Pt[], close: boolean, lt?: string) {
   for (let i = 1; i < pts.length; i++) {
-    line(t, layer, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+    line(t, layer, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], lt);
   }
   if (close && pts.length > 2) {
     const a = pts[pts.length - 1], b = pts[0];
-    line(t, layer, a[0], a[1], b[0], b[1]);
+    line(t, layer, a[0], a[1], b[0], b[1], lt);
   }
 }
 
@@ -134,22 +158,25 @@ function text(
 function shapeToDxf(t: Tape, s: Shape, f: Frame, mode: 'escape' | 'raw') {
   const X = (v: number) => px(f, v);
   const Y = (v: number) => py(f, v);
+  // A shape drawn dashed says so on itself; everything else takes its layer's.
+  const lt = lineTypeFor(s.dash);
 
   switch (s.t) {
     case 'line':
-      line(t, s.layer, X(s.x1), Y(s.y1), X(s.x2), Y(s.y2));
+      line(t, s.layer, X(s.x1), Y(s.y1), X(s.x2), Y(s.y2), lt);
       break;
 
     case 'rect':
       polyline(t, s.layer, [
         [X(s.x), Y(s.y)], [X(s.x + s.w), Y(s.y)],
         [X(s.x + s.w), Y(s.y + s.h)], [X(s.x), Y(s.y + s.h)],
-      ], true);
+      ], true, lt);
       break;
 
     case 'circle':
-      t.pair(0, 'CIRCLE').pair(8, s.layer)
-        .pair(10, X(s.cx)).pair(20, Y(s.cy)).pair(30, 0)
+      t.pair(0, 'CIRCLE').pair(8, s.layer);
+      if (lt) t.pair(6, lt);
+      t.pair(10, X(s.cx)).pair(20, Y(s.cy)).pair(30, 0)
         .pair(40, s.r * f.s);
       break;
 
@@ -162,15 +189,16 @@ function shapeToDxf(t: Tape, s: Shape, f: Frame, mode: 'escape' | 'raw') {
         const a = (i / STEPS) * Math.PI * 2;
         pts.push([X(s.cx + s.rx * Math.cos(a)), Y(s.cy + s.ry * Math.sin(a))]);
       }
-      polyline(t, s.layer, pts, true);
+      polyline(t, s.layer, pts, true, lt);
       break;
     }
 
     case 'arc':
       // Sheet angles run clockwise once y is flipped; DXF arcs run the other
       // way, so the ends swap and both are negated.
-      t.pair(0, 'ARC').pair(8, s.layer)
-        .pair(10, X(s.cx)).pair(20, Y(s.cy)).pair(30, 0)
+      t.pair(0, 'ARC').pair(8, s.layer);
+      if (lt) t.pair(6, lt);
+      t.pair(10, X(s.cx)).pair(20, Y(s.cy)).pair(30, 0)
         .pair(40, s.r * f.s)
         .pair(50, norm(-s.a1)).pair(51, norm(-s.a0));
       break;
@@ -178,14 +206,14 @@ function shapeToDxf(t: Tape, s: Shape, f: Frame, mode: 'escape' | 'raw') {
     case 'curve':
       polyline(t, s.layer,
         flattenCurve(s.x1, s.y1, s.cx, s.cy, s.x2, s.y2).map(p => [X(p[0]), Y(p[1])] as Pt),
-        false);
+        false, lt);
       break;
 
     case 'poly': {
       const pts = s.pts.map(p => [X(p[0]), Y(p[1])] as Pt);
       const filled = s.fill && s.fill !== 'none';
       if (filled && (pts.length === 3 || pts.length === 4)) solid(t, s.layer, pts);
-      else polyline(t, s.layer, pts, s.close ?? Boolean(filled));
+      else polyline(t, s.layer, pts, s.close ?? Boolean(filled), lt);
       break;
     }
 
@@ -201,11 +229,18 @@ function shapeToDxf(t: Tape, s: Shape, f: Frame, mode: 'escape' | 'raw') {
 function tables(t: Tape, layers: Layer[]) {
   t.pair(0, 'SECTION').pair(2, 'TABLES');
 
-  t.pair(0, 'TABLE').pair(2, 'LTYPE').pair(70, 2);
+  // The four a drawing office draws with. They are always defined, whether or
+  // not this sheet uses them, so a line restyled in the CAD system afterwards
+  // has something to be restyled to. Lengths are millimetres of paper.
+  t.pair(0, 'TABLE').pair(2, 'LTYPE').pair(70, 4);
   t.pair(0, 'LTYPE').pair(2, 'CONTINUOUS').pair(70, 0).pair(3, 'Solid line')
     .pair(72, 65).pair(73, 0).pair(40, 0);
   t.pair(0, 'LTYPE').pair(2, 'DASHED').pair(70, 0).pair(3, 'Dashed __ __ __')
     .pair(72, 65).pair(73, 2).pair(40, 6).pair(49, 4).pair(49, -2);
+  t.pair(0, 'LTYPE').pair(2, 'DASHDOT').pair(70, 0).pair(3, 'Dash dot __ . __ . __')
+    .pair(72, 65).pair(73, 4).pair(40, 10).pair(49, 6).pair(49, -2).pair(49, 0).pair(49, -2);
+  t.pair(0, 'LTYPE').pair(2, 'DOT').pair(70, 0).pair(3, 'Dotted . . . . . . . .')
+    .pair(72, 65).pair(73, 2).pair(40, 2).pair(49, 0).pair(49, -2);
   t.pair(0, 'ENDTAB');
 
   t.pair(0, 'TABLE').pair(2, 'LAYER').pair(70, layers.length + 1);

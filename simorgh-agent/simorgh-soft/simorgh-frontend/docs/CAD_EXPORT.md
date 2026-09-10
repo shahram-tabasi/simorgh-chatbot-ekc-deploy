@@ -47,16 +47,38 @@ board of twelve feeders over two sheets and an MV board of four cells.
 
 ## The editor
 
-The Edit tab opens the sheet on a canvas. Because the sheet is geometry rather
-than a string, everything a drawing office expects is only a function away:
+Editing starts from the drawing, not from a tab of its own. On the single line,
+**Edit drawing — ویرایش نقشه** — or a double-click on the sheet — opens that
+switchgear's sheets in a window over the page they belong to, and closing it
+puts you back where you were. The same editor opens on one library symbol from
+a card in **Symbols**, and on a whole template from the template page, so the
+tool is the same wherever a drawing is looked at.
+
+Because the sheet is geometry rather than a string, everything a drawing office
+expects is only a function away:
 
 - **Pick** — click a shape, shift-click to add, or drag a band round several.
   Picking is done against the geometry, not by hanging a handler on every
   element, so a 1.3-unit line is as easy to hit as a filled box.
 - **Move** — drag, or nudge with the arrow keys; both snap to the chosen step.
 - **Retype** — double-click a label, or edit it in the panel.
+- **Draw** — line, polyline, rectangle, circle, arc and text, each on the
+  toolbar under one letter: `V` pick, `H` pan, `L` line, `P` polyline,
+  `R` rectangle, `C` circle, `A` arc, `T` text. Two clicks make a line, or drag
+  it in one; a polyline ends on Enter or a double-click; an arc is centre,
+  start, then sweep. Escape drops what is half-drawn.
+- **Snap** — the magnet picks up the ends, middles, centres and corners of what
+  is already there, so a new line meets the drawing rather than nearly meets it.
+  Holding Shift keeps a line level, upright or on 45°. With the magnet off,
+  points fall on the grid step instead.
+- **Style** — layer, line weight, line type (solid, dashed, dash-dot, dotted)
+  and text height sit on their own bar. They set up what is drawn next, and
+  with something picked they restyle it, the way a CAD system does.
 - **Layers** — hide or lock a class of geometry: the busbar, the tags, the data
-  block.
+  block. New geometry takes the colour of the layer it goes on.
+- **Full screen** — the whole window for the drawing, on the toolbar or Esc to
+  leave. The Fullscreen API where the browser allows it, and a window-filling
+  fallback where it does not, so the button always does something.
 - **Undo** — a step is a whole array of shapes, shared structurally, so a
   hundred steps of a 700-shape sheet cost a hundred arrays of pointers.
 - **Export** — DXF, PDF and SVG all read the edited shapes, so what leaves is
@@ -87,6 +109,15 @@ A view-only revision cannot keep edits, and the Save button says so.
 dictionary, entities every reader since 1990 understands. Curves and ellipses
 are walked as line segments — R12 has no `ELLIPSE` and no spline — while arcs,
 circles, lines and text stay what they are.
+
+**Line types survive the trip.** A dashed line drawn here is a dashed line in
+the customer's CAD system: `lineTypeFor` reads the SVG dash pattern back to
+`DASHED`, `DASHDOT` or `DOT`, and the entity carries that name. It is read by
+the shape of the pattern rather than by matching exact numbers, so geometry that
+arrived from someone else's DXF or SVG keeps its line type as well. All four are
+written into the `LTYPE` table whether or not the sheet uses them, so a line
+restyled in the CAD system afterwards has something to be restyled to. A shape
+with no dash says nothing and takes its layer's line type, as before.
 
 **Layers.** `BUS`, `WIRE`, `SYMBOL`, `TAG`, `TEXT`, `TABLE`, `PANEL`, `SLOT`,
 `FREE`, `FRAME`, `TITLE`, `LOAD`. A shape's layer comes from a `data-layer`

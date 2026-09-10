@@ -178,6 +178,80 @@ export function shapesInBox(
   return out;
 }
 
+/**
+ * The points a new line should land on exactly.
+ *
+ * The ends of things, their corners and their centres — what a draughtsman
+ * means when the cursor is "near enough". Without it a line drawn to the end of
+ * another lands a pixel short, the drawing looks right and the DXF has a gap in
+ * it that only shows up when somebody tries to trim to it.
+ */
+export function snapPoints(shapes: Shape[], skip?: ReadonlySet<string>): Pt[] {
+  const out: Pt[] = [];
+  for (const s of shapes) {
+    if (skip?.has(s.layer)) continue;
+    switch (s.t) {
+      case 'line':
+        out.push([s.x1, s.y1], [s.x2, s.y2],
+          [(s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2]);
+        break;
+      case 'rect':
+        out.push([s.x, s.y], [s.x + s.w, s.y], [s.x + s.w, s.y + s.h], [s.x, s.y + s.h],
+          [s.x + s.w / 2, s.y + s.h / 2]);
+        break;
+      case 'circle':  out.push([s.cx, s.cy]); break;
+      case 'ellipse': out.push([s.cx, s.cy]); break;
+      case 'arc':
+        out.push([s.cx, s.cy],
+          onArc(s.cx, s.cy, s.r, s.a0), onArc(s.cx, s.cy, s.r, s.a1));
+        break;
+      case 'curve':   out.push([s.x1, s.y1], [s.x2, s.y2]); break;
+      case 'poly':    out.push(...s.pts); break;
+      case 'text':    out.push([s.x, s.y]); break;
+    }
+  }
+  return out;
+}
+
+/** The snap point within `tolerance` of (x, y), or null when none is. */
+export function nearestSnap(points: Pt[], x: number, y: number, tolerance: number): Pt | null {
+  let best: Pt | null = null;
+  let bestDistance = tolerance;
+  for (const p of points) {
+    const d = Math.hypot(p[0] - x, p[1] - y);
+    if (d <= bestDistance) { best = p; bestDistance = d; }
+  }
+  return best;
+}
+
+/** What can be changed about how a shape is drawn, without redrawing it. */
+export interface StylePatch {
+  layer?: Shape['layer'];
+  color?: string;
+  width?: number;
+  /** '' clears the dash back to a solid line. */
+  dash?: string;
+  /** Text only. */
+  size?: number;
+}
+
+/** A copy of the shapes with `indices` restyled. */
+export function restyleShapes(
+  shapes: Shape[], indices: Iterable<number>, patch: StylePatch,
+): Shape[] {
+  const set = new Set(indices);
+  return shapes.map((s, i) => {
+    if (!set.has(i)) return s;
+    const next: Shape = { ...s };
+    if (patch.layer !== undefined) next.layer = patch.layer;
+    if (patch.color !== undefined) next.color = patch.color;
+    if (patch.width !== undefined) next.width = patch.width;
+    if (patch.dash !== undefined) next.dash = patch.dash || undefined;
+    if (patch.size !== undefined && next.t === 'text') next.size = patch.size;
+    return next;
+  });
+}
+
 /** A copy of the shapes with `indices` moved. */
 export function moveShapes(shapes: Shape[], indices: Iterable<number>, dx: number, dy: number): Shape[] {
   const set = new Set(indices);

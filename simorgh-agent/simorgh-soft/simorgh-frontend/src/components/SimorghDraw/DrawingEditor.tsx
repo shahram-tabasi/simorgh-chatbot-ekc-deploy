@@ -3,19 +3,23 @@ import {
   ZoomInIcon, ZoomOutIcon, MaximizeIcon, MousePointer2Icon, HandIcon,
   UndoIcon, RedoIcon, CopyIcon, Trash2Icon, GridIcon, RotateCcwIcon,
   EyeIcon, EyeOffIcon, LockIcon, UnlockIcon, DownloadIcon, ScanSearchIcon,
-  SaveIcon, TriangleAlertIcon,
+  SaveIcon, TriangleAlertIcon, MinusIcon, WaypointsIcon, SquareIcon, CircleIcon,
+  SplineIcon, TypeIcon, Maximize2Icon, Minimize2Icon, MagnetIcon,
 } from 'lucide-react';
 import { DrawingEdits } from '../../types/project';
-import { Drawing, Layer, LAYER_NOTES, Shape, layerColor } from '../../utils/cad/shapes';
+import {
+  Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Shape, layerColor,
+} from '../../utils/cad/shapes';
 import { renderSvg } from '../../utils/cad/svg';
 import { renderDxf } from '../../utils/cad/dxf';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
 import { renderPdf } from '../../utils/cad/pdf';
 import {
-  History, boundsOfAll, deleteShapes, duplicateShapes, moveShapes, setText, withShapes,
+  History, StylePatch, boundsOfAll, deleteShapes, duplicateShapes, moveShapes,
+  restyleShapes, setText, withShapes,
 } from '../../utils/cad/edit';
 import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
-import { DrawingCanvas, Viewport, fitView, viewOn } from './DrawingCanvas';
+import { DRAWS, DrawingCanvas, Tool, Viewport, fitView, viewOn } from './DrawingCanvas';
 
 // Simorgh Draw — the drawing, open for editing.
 //
@@ -52,6 +56,29 @@ interface Props {
 }
 
 const SNAPS = [0, 1, 5, 10, 25];
+
+/** What a new line is drawn with, in the words a drawing office uses. */
+const LINE_TYPES: { id: string; label: string; dash?: string }[] = [
+  { id: 'solid', label: 'solid' },
+  { id: 'dashed', label: 'dashed', dash: '6 4' },
+  { id: 'dash-dot', label: 'dash-dot', dash: '10 3 2 3' },
+  { id: 'dotted', label: 'dotted', dash: '1.5 3' },
+];
+
+const WIDTHS = [0.5, 0.8, 1, 1.3, 1.8, 2.5, 4, 6];
+const TEXT_SIZES = [6, 8, 9, 10, 12, 14, 18, 24];
+
+/** The tools, in the order a hand reaches for them. */
+const TOOLS: { id: Tool; label: string; key: string; Icon: React.FC<{ className?: string }> }[] = [
+  { id: 'select', label: 'Select', key: 'V', Icon: MousePointer2Icon },
+  { id: 'pan', label: 'Pan — or hold Space', key: 'H', Icon: HandIcon },
+  { id: 'line', label: 'Line', key: 'L', Icon: MinusIcon },
+  { id: 'polyline', label: 'Polyline — Enter or double-click ends it', key: 'P', Icon: WaypointsIcon },
+  { id: 'rect', label: 'Rectangle', key: 'R', Icon: SquareIcon },
+  { id: 'circle', label: 'Circle — centre, then radius', key: 'C', Icon: CircleIcon },
+  { id: 'arc', label: 'Arc — centre, start, then sweep', key: 'A', Icon: SplineIcon },
+  { id: 'text', label: 'Text', key: 'T', Icon: TypeIcon },
+];
 
 export const DrawingEditor: React.FC<Props> = ({
   sheets, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
@@ -103,7 +130,16 @@ export const DrawingEditor: React.FC<Props> = ({
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const [hidden, setHidden] = useState<Set<Layer>>(new Set());
   const [locked, setLocked] = useState<Set<Layer>>(new Set());
-  const [tool, setTool] = useState<'select' | 'pan'>('select');
+  const [tool, setTool] = useState<Tool>('select');
+  // How new geometry is drawn. A drawing office thinks in layer, weight and
+  // line type, so that is what the bar offers.
+  const [drawLayer, setDrawLayer] = useState<Layer>('SYMBOL');
+  const [drawWidth, setDrawWidth] = useState(1);
+  const [drawLine, setDrawLine] = useState('solid');
+  const [textSize, setTextSize] = useState(9);
+  const [objectSnap, setObjectSnap] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
+  const frame = useRef<HTMLDivElement>(null);
   const [snap, setSnap] = useState(5);
   const [showGrid, setShowGrid] = useState(false);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
@@ -119,6 +155,69 @@ export const DrawingEditor: React.FC<Props> = ({
     touch(index);
     forceRender(n => n + 1);
   }, [index, shapes]);
+
+  /**
+   * Full screen, and a way back.
+   *
+   * The browser's own full screen is asked for first — it gives the whole
+   * display, which is what a drawing wants. Where it is refused (an iframe
+   * without the permission, a browser that will not) the panel still fills the
+   * window, so the button always does something.
+   */
+  const toggleFullscreen = useCallback(() => {
+    const el = frame.current;
+    if (!fullscreen) {
+      setFullscreen(true);
+      el?.requestFullscreen?.().catch(() => { /* the window will have to do */ });
+    } else {
+      setFullscreen(false);
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    }
+  }, [fullscreen]);
+
+  // Esc leaves the browser's full screen without telling React, so follow it.
+  useEffect(() => {
+    const onChange = () => {
+      if (!document.fullscreenElement) setFullscreen(false);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const pen: Pen = useMemo(() => ({
+    layer: drawLayer,
+    // The layer's own colour, so what is drawn on TAG looks like the tags
+    // already on the sheet. CAD takes the colour from the layer regardless.
+    color: layerColor(drawLayer),
+    width: drawWidth,
+    dash: LINE_TYPES.find(l => l.id === drawLine)?.dash,
+  }), [drawLayer, drawWidth, drawLine]);
+
+  /** A finished shape goes on the sheet and is the thing now picked. */
+  const draw = useCallback((shape: Shape) => {
+    historyFor(index).push(shapes);
+    const next = [...shapes, shape];
+    setEdits(e => ({ ...e, [index]: next }));
+    setSelection(new Set([next.length - 1]));
+    touch(index);
+    forceRender(n => n + 1);
+  }, [index, shapes]);
+
+  /** The text tool has a place; the words come from here. */
+  const placeText = useCallback((at: { x: number; y: number }) => {
+    const value = window.prompt('Text');
+    if (value == null || value.trim() === '') return;
+    draw({
+      t: 'text', x: at.x, y: at.y, s: value, size: textSize,
+      layer: drawLayer, color: '#111', width: 0,
+    });
+  }, [draw, textSize, drawLayer]);
+
+  /** Change how the picked shapes are drawn, without redrawing them. */
+  const restyle = (patch: StylePatch) => {
+    if (selection.size === 0) return;
+    commit(restyleShapes(shapes, selection, patch));
+  };
 
   const fit = useCallback(() => {
     if (sheet) setView(fitView(sheet.drawing));
@@ -209,12 +308,33 @@ export const DrawingEditor: React.FC<Props> = ({
       const step = e.shiftKey ? 10 : snap || 1;
       switch (e.key) {
         case 'Delete': case 'Backspace': e.preventDefault(); remove(); break;
-        case 'Escape': setSelection(new Set()); break;
+        case 'Escape':
+          // The canvas marks the key handled when it had something half-drawn
+          // to drop, so Escape means that and nothing more.
+          if (e.defaultPrevented) break;
+          // Otherwise back out one step at a time — the selection, then the
+          // tool, then full screen. A draw tool is always still picked while
+          // something is half-drawn, so the last step cannot be reached by the
+          // same Escape that dropped a draft. The browser takes Escape itself
+          // when the window really is full screen; this answers for the
+          // window-filling fallback, where nothing else would.
+          if (selection.size > 0) setSelection(new Set());
+          else if (DRAWS.has(tool)) setTool('select');
+          else if (fullscreen && !document.fullscreenElement) setFullscreen(false);
+          break;
         case 'ArrowLeft':  e.preventDefault(); nudge(-step, 0); break;
         case 'ArrowRight': e.preventDefault(); nudge(step, 0); break;
         case 'ArrowUp':    e.preventDefault(); nudge(0, -step); break;
         case 'ArrowDown':  e.preventDefault(); nudge(0, step); break;
         case 'f': case 'F': fit(); break;
+        default: {
+          // A bare letter picks a tool. With a modifier it is a command, so
+          // Ctrl+A stays select-all rather than becoming the arc tool.
+          if (e.ctrlKey || e.metaKey || e.altKey) break;
+          const wanted = TOOLS.find(t => t.key.toLowerCase() === e.key.toLowerCase());
+          if (wanted) { e.preventDefault(); setTool(wanted.id); }
+          break;
+        }
         case 'z': case 'Z':
           if (e.ctrlKey || e.metaKey) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
           break;
@@ -298,10 +418,13 @@ export const DrawingEditor: React.FC<Props> = ({
   }
 
   const Tool: React.FC<{
-    on?: () => void; active?: boolean; disabled?: boolean; title: string; children: React.ReactNode;
-  }> = ({ on, active, disabled, title, children }) => (
+    on?: () => void; active?: boolean; disabled?: boolean; title: string;
+    // The tool's own name on the button, so the drawing tools can be reached
+    // by what they are rather than by where they sit on the bar.
+    tag?: string; children: React.ReactNode;
+  }> = ({ on, active, disabled, title, tag, children }) => (
     <button
-      onClick={on} disabled={disabled} title={title}
+      onClick={on} disabled={disabled} title={title} data-tool={tag}
       className={`p-1.5 rounded-md border text-sm transition-colors disabled:opacity-30 disabled:cursor-default ${
         active ? 'bg-slate-700 border-slate-700 text-white'
                : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100'}`}
@@ -313,7 +436,11 @@ export const DrawingEditor: React.FC<Props> = ({
   const Divider = () => <span className="w-px h-6 bg-gray-300 mx-1" />;
 
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden bg-white select-none">
+    <div
+      ref={frame}
+      className={`border border-gray-200 rounded-lg overflow-hidden bg-white select-none ${
+        fullscreen ? 'fixed inset-0 z-[300] rounded-none flex flex-col' : ''}`}
+    >
       {/* ── Toolbar ────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-1 flex-wrap px-3 py-2 bg-gray-50 border-b">
         {sheets.length > 1 && (
@@ -331,12 +458,11 @@ export const DrawingEditor: React.FC<Props> = ({
           </>
         )}
 
-        <Tool title="Select (Esc clears)" active={tool === 'select'} on={() => setTool('select')}>
-          <MousePointer2Icon className="w-4 h-4" />
-        </Tool>
-        <Tool title="Pan (or hold Space)" active={tool === 'pan'} on={() => setTool('pan')}>
-          <HandIcon className="w-4 h-4" />
-        </Tool>
+        {TOOLS.map(t => (
+          <Tool key={t.id} tag={t.id} title={`${t.label}  (${t.key})`} active={tool === t.id} on={() => setTool(t.id)}>
+            <t.Icon className="w-4 h-4" />
+          </Tool>
+        ))}
         <Divider />
 
         <Tool title="Zoom in" on={() => zoom(1 / 1.3)}><ZoomInIcon className="w-4 h-4" /></Tool>
@@ -390,12 +516,71 @@ export const DrawingEditor: React.FC<Props> = ({
           className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
           value={snap}
           onChange={e => setSnap(Number(e.target.value))}
-          title="Snap moves to this step"
+          title="Snap moves and new points to this step"
         >
           {SNAPS.map(v => <option key={v} value={v}>{v === 0 ? 'no snap' : `snap ${v}`}</option>)}
         </select>
+        <Tool
+          title={objectSnap
+            ? 'Catching the ends and corners of what is drawn — click to stop'
+            : 'Not catching the ends and corners of what is drawn'}
+          active={objectSnap}
+          on={() => setObjectSnap(v => !v)}
+        >
+          <MagnetIcon className="w-4 h-4" />
+        </Tool>
+
+        {/* How the next line is drawn, and how the picked ones are. Changing
+            it with something selected restyles that, which is the shortest
+            path from "that should be dashed" to it being dashed. */}
+        <Divider />
+        <select
+          className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+          value={drawLayer}
+          onChange={e => { setDrawLayer(e.target.value as Layer); restyle({ layer: e.target.value as Layer }); }}
+          title="The layer new geometry goes on"
+        >
+          {(Object.keys(LAYERS) as Layer[]).map(l => (
+            <option key={l} value={l}>{l}</option>
+          ))}
+        </select>
+        <select
+          className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+          value={drawWidth}
+          onChange={e => { setDrawWidth(Number(e.target.value)); restyle({ width: Number(e.target.value) }); }}
+          title="Line weight"
+        >
+          {WIDTHS.map(w => <option key={w} value={w}>{w.toFixed(1)}</option>)}
+        </select>
+        <select
+          className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+          value={drawLine}
+          onChange={e => {
+            setDrawLine(e.target.value);
+            restyle({ dash: LINE_TYPES.find(l => l.id === e.target.value)?.dash ?? '' });
+          }}
+          title="Line type"
+        >
+          {LINE_TYPES.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+        </select>
+        {(tool === 'text' || picked.some(p => p.t === 'text')) && (
+          <select
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+            value={textSize}
+            onChange={e => { setTextSize(Number(e.target.value)); restyle({ size: Number(e.target.value) }); }}
+            title="Text height, in drawing units"
+          >
+            {TEXT_SIZES.map(v => <option key={v} value={v}>{v} u</option>)}
+          </select>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
+          <Tool
+            title={fullscreen ? 'Leave full screen (Esc)' : 'Full screen'}
+            on={toggleFullscreen}
+          >
+            {fullscreen ? <Minimize2Icon className="w-4 h-4" /> : <Maximize2Icon className="w-4 h-4" />}
+          </Tool>
           <select
             className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
             value={paper}
@@ -439,7 +624,7 @@ export const DrawingEditor: React.FC<Props> = ({
       </div>
 
       {/* ── Canvas and panels ──────────────────────────────────────────── */}
-      <div className="flex" style={{ height: 620 }}>
+      <div className={fullscreen ? 'flex flex-1 min-h-0' : 'flex'} style={fullscreen ? undefined : { height: 620 }}>
         <div className="flex-1 min-w-0 bg-slate-100">
           <DrawingCanvas
             drawing={sheet.drawing}
@@ -451,10 +636,15 @@ export const DrawingEditor: React.FC<Props> = ({
             grid={snap}
             showGrid={showGrid}
             tool={tool}
+            pen={pen}
+            textSize={textSize}
+            objectSnap={objectSnap}
             onView={setView}
             onSelection={setSelection}
             onMove={(dx, dy) => nudge(dx, dy)}
             onCursor={setCursor}
+            onDraw={draw}
+            onPlaceText={placeText}
             onEditText={i => {
               const current = shapes[i];
               if (current.t !== 'text') return;
@@ -552,7 +742,15 @@ export const DrawingEditor: React.FC<Props> = ({
             {stale.length} sheet{stale.length === 1 ? '' : 's'} edited against an older drawing
           </span>
         )}
-        <span className="ml-auto">Space pans · wheel zooms · F fits · Ctrl+Z undoes</span>
+        <span className="ml-auto">
+          {DRAWS.has(tool)
+            ? (tool === 'text'
+                ? 'Click where the text goes'
+                : tool === 'polyline'
+                  ? 'Click each corner · Enter or double-click ends it · Esc cancels'
+                  : 'Click, then click again · Shift squares it up · Esc cancels')
+            : 'Space pans · wheel zooms · F fits · Ctrl+Z undoes'}
+        </span>
       </div>
     </div>
   );

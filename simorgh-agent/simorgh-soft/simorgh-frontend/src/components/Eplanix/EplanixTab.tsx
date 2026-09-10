@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
-import { DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, SendIcon } from 'lucide-react';
+import {
+  DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, SendIcon, PencilRulerIcon,
+} from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { SendToEplanDialog } from './SendToEplanDialog';
 import { ProjectData, Equipment } from '../../types/project';
@@ -26,7 +28,8 @@ import {
 import { sheetsToDxf } from '../../utils/cad/sheetDxf';
 import { drawingFromSvg, svgSize } from '../../utils/cad/fromSvg';
 import { fingerprint } from '../../utils/cad/edit';
-import { DrawingEditor, EditorSheet } from '../SimorghDraw/DrawingEditor';
+import { EditorSheet } from '../SimorghDraw/DrawingEditor';
+import { SheetEditorWindow } from '../SimorghDraw/SheetEditorWindow';
 import { DxfSymbolPack } from '../SimorghDraw/DxfSymbolPack';
 import { SymbolGraphicEditor } from '../SimorghDraw/SymbolGraphicEditor';
 import { DxfSymbol, loadDxfSymbols, saveDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
@@ -43,7 +46,7 @@ import {
 // items. Each one is previewed here before it is downloaded or printed, so
 // what leaves the app has been looked at first.
 
-type View = 'single-line' | 'editor' | 'layout' | 'mechanical' | 'symbols';
+type View = 'single-line' | 'layout' | 'mechanical' | 'symbols';
 
 /**
  * The single line as CAD, one file per switchgear — the output for a customer
@@ -116,6 +119,9 @@ function exportMechanicalExcel(data: ProjectData, equipments: Equipment[]) {
 export const EplanixTab: React.FC = () => {
   const { projectData, currentRevision, patchProjectData, isCurrentRevisionEditable } = useProject();
   const [view, setView] = useState<View>('single-line');
+  // The drawing editor is a window over the single line, not a tab of its own:
+  // you look at the sheet, then open it for editing where it already is.
+  const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<string>('');   // equipment id, '' = all
   const [perPage, setPerPage] = useState(8);
   const [sheet, setSheet] = useState(0);
@@ -279,10 +285,10 @@ export const EplanixTab: React.FC = () => {
   }, [paper, pages]);
 
   // The drawn sheets read back as geometry, which is what the editor edits and
-  // what DXF and PDF are written from. Only built when that tab is open — the
-  // parse is quick, but there is no reason to do it while nobody is editing.
+  // what DXF and PDF are written from. Only built while the window is open —
+  // the parse is quick, but there is no reason to do it while nobody is editing.
   const editorSheets = useMemo<EditorSheet[]>(
-    () => (view === 'editor' && preview
+    () => (editing && preview
       ? pages.map(page => ({
           name: `Sheet ${page.page} of ${page.of}`,
           drawing: drawingFromSvg(page.svg, `${preview.name} ${page.page}/${page.of}`),
@@ -293,7 +299,7 @@ export const EplanixTab: React.FC = () => {
           drawnAs: fingerprint(page.svg),
         }))
       : []),
-    [view, pages, preview, perPage]);
+    [editing, pages, preview, perPage]);
 
   const layout = useMemo(
     () => (preview ? buildPanelLayout(projectData, preview) : null),
@@ -367,9 +373,8 @@ export const EplanixTab: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-5 gap-3 mb-5">
+      <div className="grid grid-cols-4 gap-3 mb-5">
         <Tab id="single-line" label="Single line — تک‌خطی" note="Busbar, feeders, devices, data blocks" />
-        <Tab id="editor" label="Edit — ویرایش نقشه" note="Move, retype, layers, DXF / PDF / SVG" />
         <Tab id="layout" label="Layout — جانمایی" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical — اقلام مکانیکال" note="Enclosure, busbars, compartments" />
         <Tab id="symbols" label="Symbols — علائم" note="The IEC single-line library" />
@@ -400,6 +405,18 @@ export const EplanixTab: React.FC = () => {
                 {/* Two to a sheet is what an A4 holds and stays readable. */}
                 {[2, 3, 4, 6, 8, 10, 12].map(n => <option key={n} value={n}>{n} feeders / sheet</option>)}
               </select>
+              {/* Editing starts from the sheet itself. */}
+              <button
+                onClick={() => setEditing(true)}
+                disabled={!preview}
+                title={preview
+                  ? 'Open this single line in Simorgh Draw — move, retype, draw lines and text, and write DXF / PDF / SVG'
+                  : 'Add feeder lines in Device Selection first'}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40"
+              >
+                <PencilRulerIcon className="w-4 h-4" />
+                Edit drawing — ویرایش نقشه
+              </button>
               <Btn
                 onClick={() => openPrintable(
                   buildSingleLineHtml(projectData, chosenWithLines, perPage, symbols), 'single-line diagram')}
@@ -447,7 +464,11 @@ export const EplanixTab: React.FC = () => {
 
           {current ? (
             <>
-              <div className="p-3 overflow-x-auto bg-white">
+              <div
+                className="p-3 overflow-x-auto bg-white cursor-pointer"
+                onDoubleClick={() => setEditing(true)}
+                title="Double-click to edit this drawing — برای ویرایش نقشه دوبار کلیک کنید"
+              >
                 <div dangerouslySetInnerHTML={{ __html: current.svg }} />
               </div>
               {pages.length > 1 && (
@@ -478,29 +499,28 @@ export const EplanixTab: React.FC = () => {
         </div>
       )}
 
-      {/* ── Edit ──────────────────────────────────────────────────────── */}
-      {view === 'editor' && (
-        editorSheets.length > 0 ? (
-          <DrawingEditor
+      {/* ── The drawing editor, opened from the single line ─────────── */}
+      {editing && (
+        editorSheets.length > 0 && preview ? (
+          <SheetEditorWindow
+            title={`ویرایش نقشه — ${preview.name}`}
+            note={`Single line · ${pages.length} sheet(s) at ${perPage} feeders each · move, retype, draw, and write DXF / PDF / SVG`}
             sheets={editorSheets}
-            fileBase={`${projectData.projectName || 'project'}_${preview?.name ?? ''}`}
+            fileBase={`${projectData.projectName || 'project'}_${preview.name}`}
             paper={paper}
             savedEdits={projectData.drawingEdits}
             canEdit={isCurrentRevisionEditable}
             onSaveEdits={next => patchProjectData(() => ({ drawingEdits: next }))}
             titleBlock={[
-              preview?.name || 'SWITCHGEAR',
+              preview.name || 'SWITCHGEAR',
               [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]
                 .filter(Boolean).join('   ·   '),
-              `Single line diagram · ${preview?.type ?? ''}`,
+              `Single line diagram · ${preview.type ?? ''}`,
               new Date().toLocaleDateString(),
             ].filter(Boolean)}
+            onClose={() => setEditing(false)}
           />
-        ) : (
-          <p className="p-6 text-sm text-gray-500 border border-gray-200 rounded-lg">
-            Nothing to edit yet — add feeder lines in Device Selection, or import a switchgear from TPMS.
-          </p>
-        )
+        ) : null
       )}
 
       {/* ── Layout ────────────────────────────────────────────────────── */}

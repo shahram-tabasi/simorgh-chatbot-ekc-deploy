@@ -85,7 +85,11 @@ export interface Pen {
   width?: number;
   /** SVG fill. `renderDxf` fills triangles and quads, and outlines the rest. */
   fill?: string;
-  /** SVG stroke-dasharray. In CAD, use the FREE layer for dashed geometry. */
+  /**
+   * SVG stroke-dasharray. `renderDxf` reads the pattern back and gives the
+   * entity a CAD line type — DASHED, DASHDOT or DOT — so a dashed line stays
+   * dashed in the customer's CAD system too.
+   */
   dash?: string;
 }
 
