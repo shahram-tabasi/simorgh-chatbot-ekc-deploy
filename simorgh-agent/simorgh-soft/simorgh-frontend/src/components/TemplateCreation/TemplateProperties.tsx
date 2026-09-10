@@ -2,6 +2,11 @@
 import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon } from 'lucide-react';
+import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
+import { SymbolGraphicEditor } from '../SimorghDraw/SymbolGraphicEditor';
+import { SymbolArtOverride } from '../../types/project';
+import { SymbolId, setProjectSymbolOverrides } from '../../utils/iecSymbols';
+import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
 
 // Reserved keys inside template.properties used to carry per-template metadata.
 // These keys are NOT real property rows; the renderer skips them.
@@ -27,6 +32,12 @@ interface PartInfo {
   quantity: number;
   priority: number;
   fullData?: any;
+  /**
+   * The symbol this part is drawn with, when somebody said so outright.
+   * Absent means the drawing works it out — from EPLAN, the description, then
+   * the row — which is what it always did.
+   */
+  symbolId?: string;
 }
 
 interface TemplatePropertiesProps {
@@ -472,10 +483,14 @@ const DetailRow: React.FC<{
 export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   template
 }) => {
-  const { updateTemplate } = useProject();
+  const { updateTemplate, projectData, patchProjectData } = useProject();
   const [properties, setProperties] = useState<Record<string, PropertyValue>>(
     template.properties || {}
   );
+  // Which part the schematic panel is showing, and the symbol the graphic
+  // page is open on. Both are beside the table; neither changes it.
+  const [selectedPart, setSelectedPart] = useState<PartRef | null>(null);
+  const [editingSymbol, setEditingSymbol] = useState<SymbolId | null>(null);
   const [dialogState, setDialogState] = useState<{
     isOpen: boolean;
     propertyName: string;
@@ -491,6 +506,13 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   useEffect(() => {
     setProperties(template.properties || {});
   }, [template]);
+
+  // The symbols this project draws its own way, so the previews here are the
+  // drawings the sheets will use. Its own layer in the library, above the
+  // symbol pack, so the drawing tab setting the pack cannot throw it away.
+  useEffect(() => {
+    setProjectSymbolOverrides(toSymbolOverrides(projectData.symbolOverrides));
+  }, [projectData.symbolOverrides]);
 
   // ── LV property layout (per spec) ──────────────────────────────────────────
   // All LV rows are now renamable (user can edit all property names)
@@ -557,6 +579,43 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     case 'HV': fixedRows = hvProperties; break;
   }
   const propertiesToShow = [...fixedRows, ...renamableSpares, ...extendedSpares];
+
+  // Every part of this template, in the order the sheet would draw them —
+  // read from the same `properties` the table renders, so the two never differ.
+  const partRefs: PartRef[] = propertiesToShow.flatMap(property =>
+    (properties[property]?.parts ?? []).map((part, index) => ({ slot: property, index, part })));
+
+  const sameRef = (a: PartRef | null, b: PartRef | null) =>
+    Boolean(a && b && a.slot === b.slot && a.index === b.index);
+
+  // The panel follows the table: a part that has gone stops being the one on
+  // show, and the first part of a fresh template is picked so the panel is
+  // never blank when there is something to see.
+  const shownPart = partRefs.find(ref => sameRef(ref, selectedPart)) ?? partRefs[0] ?? null;
+
+  /** Pin a symbol to a part, or clear it and let the drawing work it out. */
+  const changePartSymbol = (ref: PartRef, symbolId: string | undefined) => {
+    const row = properties[ref.slot];
+    if (!row?.parts?.[ref.index]) return;
+    const parts = row.parts.map((part, i) => {
+      if (i !== ref.index) return part;
+      const { symbolId: _was, ...rest } = part;
+      return symbolId ? { ...rest, symbolId } : rest;
+    });
+    const next = { ...properties, [ref.slot]: { ...row, parts } };
+    setProperties(next);
+    updateTemplate(template.id, next as any);
+    setSelectedPart({ ...ref, part: parts[ref.index] });
+  };
+
+  /** Keep a redrawn symbol with the project, or put the library's one back. */
+  const saveSymbolArt = (symbolId: SymbolId, art: SymbolArtOverride | null) => {
+    patchProjectData(prev => {
+      const next = { ...(prev.symbolOverrides ?? {}) };
+      if (art) next[symbolId] = art; else delete next[symbolId];
+      return { symbolOverrides: next };
+    });
+  };
   // Rows that come BEFORE the extended-spare block — used to count empty slots.
   const regularRows = [...fixedRows, ...renamableSpares];
   // The very first fixed row gets "Q" as default label when a part is added.
@@ -699,6 +758,13 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
     setProperties(updatedProperties);
     updateTemplate(template.id, updatedProperties as any);
+    // Show the part that was just entered, which is the whole point of the
+    // panel beside the table: put a part in, see what it draws.
+    setSelectedPart({
+      slot: propertyName,
+      index: partIndex !== null ? partIndex : updatedParts.length - 1,
+      part: updatedParts[partIndex !== null ? partIndex : updatedParts.length - 1],
+    });
   };
 
   const handleRemovePart = (propertyName: string, partIndex: number) => {
@@ -750,7 +816,9 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
         <p className="text-sm text-gray-500">Type: {template.type}</p>
       </div>
 
-      <div className="border border-gray-200 rounded-md overflow-hidden">
+      {/* The table is untouched; the schematic sits beside it. */}
+      <div className="flex gap-4 items-start">
+      <div className="flex-1 min-w-0 border border-gray-200 rounded-md overflow-hidden">
         <table className="w-full">
           <thead>
             <tr className="bg-gray-50">
@@ -1017,6 +1085,28 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           </tbody>
         </table>
       </div>
+
+      <div className="w-80 shrink-0">
+        <PartSchematicPanel
+          parts={partRefs}
+          selected={shownPart}
+          onSelect={setSelectedPart}
+          onSymbolChange={changePartSymbol}
+          onEdit={setEditingSymbol}
+          isRedrawn={id => Boolean(projectData.symbolOverrides?.[id])}
+        />
+      </div>
+      </div>
+
+      {editingSymbol && (
+        <SymbolGraphicEditor
+          symbolId={editingSymbol}
+          override={projectData.symbolOverrides?.[editingSymbol]}
+          onSave={art => saveSymbolArt(editingSymbol, art)}
+          onReset={() => saveSymbolArt(editingSymbol, null)}
+          onClose={() => setEditingSymbol(null)}
+        />
+      )}
 
       <PartSelectionDialog
         isOpen={dialogState.isOpen}

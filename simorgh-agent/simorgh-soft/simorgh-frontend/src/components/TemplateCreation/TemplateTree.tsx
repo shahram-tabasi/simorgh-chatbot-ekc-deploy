@@ -3,6 +3,7 @@ import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
 import { findTemplateUsage, UsageReport } from '../../utils/cascadeDelete';
+import { groupByFamily } from '../../utils/templateFamilies';
 import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
 
 interface TemplateTreeProps {
@@ -47,7 +48,8 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     id: string; name: string; usage: UsageReport;
   } | null>(null);
   
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['LV', 'MV', 'HV']));
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
+    new Set(['LV', 'MV', 'HV', 'LV/SIVACON', 'LV/CCS']));
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -150,25 +152,55 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                   No templates
                 </li>
               ) : (
-                safeTemplates.LV.map((template: Template) => (
-                  <li key={template.id}>
-                    <div
-                      className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
-                      onClick={() => onTemplateSelect(template.id)}
-                      onContextMenu={event => handleContextMenu(event, 'LV', template.id)}
-                    >
-                      <span className="text-sm">{template.name}</span>
-                      {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
-                        <span className="text-[10px] text-gray-500 truncate">
-                          {template.hierarchy.path.join(' / ')}
-                          {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
-                          {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
-                          {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
+                // The office reads the top of an LV path as two different
+                // things — the SIVACON boards and the CCS side — so they are
+                // listed apart. A template the families do not claim is not
+                // hidden: it is listed on its own, where it always was.
+                groupByFamily('LV', safeTemplates.LV as Template[]).map(group => {
+                  const rows = group.templates.map((template: Template) => (
+                    <li key={template.id}>
+                      <div
+                        className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
+                        onClick={() => onTemplateSelect(template.id)}
+                        onContextMenu={event => handleContextMenu(event, 'LV', template.id)}
+                      >
+                        <span className="text-sm">{template.name}</span>
+                        {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
+                          <span className="text-[10px] text-gray-500 truncate">
+                            {template.hierarchy.path.join(' / ')}
+                            {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
+                            {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
+                            {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  ));
+
+                  if (!group.family) return <React.Fragment key="LV/rest">{rows}</React.Fragment>;
+
+                  const node = `LV/${group.family.id}`;
+                  return (
+                    <li key={node}>
+                      <div
+                        className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded"
+                        onClick={() => toggleNode(node)}
+                        onContextMenu={event => handleContextMenu(event, 'LV')}
+                      >
+                        {expandedNodes.has(node)
+                          ? <ChevronDownIcon className="w-4 h-4 mr-1" />
+                          : <ChevronRightIcon className="w-4 h-4 mr-1" />}
+                        <span className="text-sm font-medium">{group.family.label}</span>
+                        <span className="ml-1.5 text-[10px] text-gray-400">
+                          {group.family.note} · {group.templates.length}
                         </span>
+                      </div>
+                      {expandedNodes.has(node) && (
+                        <ul className="pl-5 space-y-1 mt-1">{rows}</ul>
                       )}
-                    </div>
-                  </li>
-                ))
+                    </li>
+                  );
+                })
               )}
             </ul>
           )}

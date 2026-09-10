@@ -13,7 +13,8 @@ import {
 } from '../../utils/eplanSingleLine';
 import {
   IEC_SYMBOLS, SYMBOL_GROUPS, CELL, SymbolId, SymbolOverride,
-  setSymbolOverrides, symbolOverride, symbolHeight, drawIecSymbol,
+  setSymbolOverrides, setProjectSymbolOverrides, symbolOverride, symbolHeight,
+  drawIecSymbol,
 } from '../../utils/iecSymbols';
 
 // The library's own ids, to match a file in the pack against by name.
@@ -29,6 +30,7 @@ import { DrawingEditor, EditorSheet } from '../SimorghDraw/DrawingEditor';
 import { DxfSymbolPack } from '../SimorghDraw/DxfSymbolPack';
 import { DxfSymbol, loadDxfSymbols, saveDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
+import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
 import { downloadText, fileSafe } from '../../utils/download';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
@@ -244,6 +246,14 @@ export const EplanixTab: React.FC = () => {
     setSymbolVersion(v => v + 1);
     saveDxfSymbols(dxfSymbols);
   }, [packOverrides, dxfSymbols]);
+
+  // Symbols this project draws its own way, redrawn on the graphic page in the
+  // template tab. Its own layer above the pack, so neither screen's symbols
+  // depend on which of the two was opened last.
+  useEffect(() => {
+    setProjectSymbolOverrides(toSymbolOverrides(projectData.symbolOverrides));
+    setSymbolVersion(v => v + 1);
+  }, [projectData.symbolOverrides]);
 
   const withLines = equipments.filter(e => (e.devices ?? []).length > 0);
   const chosen = selected ? equipments.filter(e => e.id === selected) : equipments;

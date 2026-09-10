@@ -264,3 +264,59 @@ The backend that the chatbot is pointed at must:
 Any LLM with function-calling support (Claude, GPT-4 family, local
 models via tool-use prompts) can produce this shape — the choice stays
 flexible.
+
+---
+
+## The two LV systems, and the schematic beside the parts
+
+Two things were added to this screen. Nothing was taken off it: every row,
+column, dialog and rule described above works exactly as it did.
+
+### SIVACON and CCS
+
+LV templates are filed under a path, and the office reads the top of that path
+as two different things — the SIVACON boards (8PT, S8) and the CCS side (OFW,
+marshaling and the rest). The tree now lists them apart, and the wizard asks
+which system first: pick SIVACON and it asks for the board root as it always
+did; pick CCS and that step is skipped, because the CCS side has no board root
+and its paths start at the group.
+
+Which family a template belongs to is **worked out from the path it already
+carries** (`utils/templateFamilies.ts`) — nothing is written into a template and
+no existing one moves. `8PT / CCS` stays where it is, under SIVACON: it is the
+CCS group of a SIVACON board, not the CCS side of the works. A template whose
+path matches no family is not hidden either; it is listed on its own, where it
+always was.
+
+MV and HV have no families yet. That is one empty list in the same table, not a
+special case anywhere, so giving them families later is adding rows to it.
+
+### The schematic, as the parts go in
+
+Beside the parts table there is now a panel showing what the single line will
+draw for the part you are on. Add a part and it appears there; click through the
+list and each symbol follows.
+
+What decides the symbol is `symbolForPart` in `eplanSingleLine.ts` — **the same
+function the single line uses**, so the preview is the drawing, not a second
+opinion that agrees most of the time. It says which of the four answered:
+
+1. a symbol chosen by hand on this part
+2. what EPLAN's parts database says the part is
+3. whether it reads as an accessory of the device above it
+4. the part's own description, then the row it was filed under
+
+Only the first is new. Choosing one stores `symbolId` on the part; clearing it
+puts the automatic answer back.
+
+### The graphic page
+
+**Edit** opens the symbol on the same canvas the sheets are edited on: move a
+line, retype a label, delete what the office does not draw. Saving keeps that
+drawing with the project (`ProjectData.symbolOverrides`) and every sheet using
+that symbol picks it up. The library's own symbol is never changed, and the
+conductor's place across the symbol does not move — it is what puts the device
+on the branch.
+
+Project drawings are their own layer in the library, above the symbol pack, so
+the template tab and the drawing tab cannot throw each other's symbols away.

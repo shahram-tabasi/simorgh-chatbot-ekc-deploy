@@ -157,6 +157,27 @@ export interface ProjectData {
   tpmsSync?: TpmsSyncState;
   /** Sheets edited in Simorgh Draw — see DrawingEdits. */
   drawingEdits?: DrawingEdits;
+  /** Symbols redrawn for this project — see SymbolArtOverride. */
+  symbolOverrides?: Record<string, SymbolArtOverride>;
+}
+
+// ── Redrawn symbols ──────────────────────────────────────────────────────────
+// A symbol edited on the graphic page is kept with the project, so the office's
+// own drawing of a device travels with the job rather than with the machine it
+// was drawn on. It takes the place of the library's symbol everywhere that
+// symbol is used, exactly as a file in the symbol pack does — the difference
+// is only where it lives and how far it reaches.
+
+export interface SymbolArtOverride {
+  /** The geometry, as markup with no `<svg>` around it. */
+  art: string;
+  /** The box it is placed by, and where its conductor runs inside that box. */
+  width: number;
+  height: number;
+  pinX: number;
+  /** How many cells down the branch it takes. */
+  cells: number;
+  editedAt: string;
 }
 
 // ── Edited sheets ────────────────────────────────────────────────────────────

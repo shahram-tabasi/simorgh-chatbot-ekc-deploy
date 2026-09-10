@@ -636,14 +636,31 @@ export interface SymbolOverride {
 
 let OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
 
+/**
+ * Symbols this project draws its own way, redrawn on the graphic page.
+ *
+ * Kept apart from the pack's rather than merged into it, for two reasons. It
+ * wins: a drawing made for this job is the most particular thing anybody has
+ * said about how the device is drawn. And the screens that set the two layers
+ * are different screens — the template tab knows the project, the drawing tab
+ * knows the pack — so keeping them separate is what stops whichever loaded
+ * last from throwing the other away.
+ */
+let PROJECT_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+
 /** Hand the library the pack's own symbols. Passing {} goes back to these. */
 export function setSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
   OVERRIDES = map ?? {};
 }
 
-/** What the library will draw for an id, when the pack has replaced it. */
+/** Hand the library the project's own drawings. Passing {} clears them. */
+export function setProjectSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
+  PROJECT_OVERRIDES = map ?? {};
+}
+
+/** What the library will draw for an id, when something has replaced it. */
 export function symbolOverride(id: string): SymbolOverride | undefined {
-  return OVERRIDES[id as SymbolId];
+  return PROJECT_OVERRIDES[id as SymbolId] ?? OVERRIDES[id as SymbolId];
 }
 
 /**

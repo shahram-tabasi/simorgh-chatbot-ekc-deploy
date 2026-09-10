@@ -20,8 +20,8 @@ import {
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
 } from './tierEquipmentMatrix';
 import {
-  CELL, SymbolId, drawIecSymbol, symbolRight, symbolLeft, symbolHeight, overrideBox,
-  buildSymbolCatalogueSvg,
+  CELL, SymbolId, drawIecSymbol, symbolRight, symbolLeft, symbolHeight,
+  overrideBox, buildSymbolCatalogueSvg, IEC_SYMBOLS
 } from './iecSymbols';
 
 export const EPLAN_HEADERS = [
@@ -264,6 +264,47 @@ export function lookupSymbol(part: any, symbols?: EplanSymbolMap): EplanSymbolIn
   return undefined;
 }
 
+/** Where a part's symbol was decided, so a screen can say why it drew that. */
+export type SymbolSource = 'chosen' | 'eplan' | 'description' | 'slot' | 'accessory';
+
+/**
+ * Which symbol a part is drawn with, and what decided it.
+ *
+ * The order was always: what EPLAN says the part is, then whether it reads as
+ * an accessory of the device above it, then the part's own description, then
+ * the slot it was filed under. A symbol picked by hand in the template now
+ * comes before all of that — someone who has chosen is not guessing.
+ *
+ * The single line and the template screen both go through here, so the symbol
+ * previewed beside a part is the symbol the drawing puts on the line.
+ */
+export function symbolForPart(
+  part: any,
+  slot: string,
+  symbols?: EplanSymbolMap,
+): { id: SymbolId; from: SymbolSource; eplan?: EplanSymbolInfo } {
+  const eplan = lookupSymbol(part, symbols);
+  const chosen = String(part?.symbolId ?? '').trim();
+  if (chosen && IEC_SYMBOLS[chosen as SymbolId]) {
+    return { id: chosen as SymbolId, from: 'chosen', eplan };
+  }
+
+  const fromFunction = kindFromFunction(eplan?.functionDefinition);
+  if (fromFunction) return { id: fromFunction, from: 'eplan', eplan };
+
+  const described = partDescription(part);
+  // The accessory test comes before the description: "auxiliary switch for
+  // circuit breaker" is an accessory of the breaker, not a second breaker.
+  if (ACCESSORY.test(`${eplan?.functionDefinition ?? ''} ${described}`)) {
+    return { id: 'accessory', from: 'accessory', eplan };
+  }
+
+  const fromDescription = kindFromFunction(described);
+  if (fromDescription) return { id: fromDescription, from: 'description', eplan };
+
+  return { id: SLOT_SYMBOL[slot] ?? 'accessory', from: 'slot', eplan };
+}
+
 const esc = (s: string) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -310,15 +351,7 @@ function chainFor(
     // The device of this slot is its first part; anything after it is an
     // accessory of that device, not a device of its own.
     const primary = inSlot[0];
-    const eplan = lookupSymbol(primary, symbols);
-    const fromFunction = kindFromFunction(eplan?.functionDefinition);
-    const described = partDescription(primary);
-    // The accessory test comes before the description: "auxiliary switch for
-    // circuit breaker" is an accessory of the breaker, not a second breaker.
-    const isAccessory = !fromFunction &&
-      ACCESSORY.test(`${eplan?.functionDefinition ?? ''} ${described}`);
-    const id: SymbolId = fromFunction ??
-      (isAccessory ? 'accessory' : (kindFromFunction(described) ?? SLOT_SYMBOL[slot] ?? 'accessory'));
+    const { id, eplan } = symbolForPart(primary, slot, symbols);
 
     const label = stripLocaleTags(primary?.label) || SLOT_LETTER[slot] || 'A';
     counters[label] = (counters[label] ?? 0) + 1;
