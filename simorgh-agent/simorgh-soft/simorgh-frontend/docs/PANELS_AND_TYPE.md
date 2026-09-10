@@ -74,6 +74,23 @@ Create Template swaps `w-3/4` for `w-full`. A closed panel leaves no track
 behind it, which is the difference between the workspace gaining the width and
 the workspace gaining a gap.
 
+### Which way it folds
+
+A panel stacked above or below its neighbours **rolls up**, keeping its title
+bar. A panel *beside* them — a tree down the left, a schematic down the right —
+**folds sideways** to a 36px rail with its name written up it. `side="left"` or
+`side="right"` is what says so.
+
+The distinction is not decoration. Folding a docked panel upwards would leave a
+full-width title bar sitting on nothing and give the table beside it no width at
+all — the one thing folding was supposed to buy.
+
+For the width to actually come back, the parent's track has to be able to
+shrink: Device Selection's side columns are `auto` and the panels carry their
+own width, so the track follows the panel down to 36px and vanishes when it
+closes. Create Template's properties are `flex-1`, which fills whatever the
+tree leaves — three quarters, a rail, or nothing.
+
 ### The workspace
 
 The content band runs to the edges of the window rather than sitting in a

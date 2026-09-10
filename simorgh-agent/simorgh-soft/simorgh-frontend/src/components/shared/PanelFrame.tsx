@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { ChevronDownIcon, ChevronRightIcon, XIcon } from 'lucide-react';
+import {
+  ChevronDownIcon, ChevronRightIcon, ChevronLeftIcon, XIcon,
+} from 'lucide-react';
 import { usePanel } from '../../context/PanelsContext';
 
 // The chrome round a panel that can be rolled up or put away.
@@ -7,15 +9,22 @@ import { usePanel } from '../../context/PanelsContext';
 // Two different things, deliberately kept apart, because a drawing office means
 // two different things by them:
 //
-//   Collapse — roll the body up and leave the title bar. The panel is still
-//              there and still holds its place; you have just stopped looking
-//              at it. Local to the panel, so it costs nothing to try.
+//   Collapse — fold the body away and leave a handle. The panel is still there
+//              and still holds its place; you have just stopped looking at it.
+//              Local to the panel, so it costs nothing to try.
 //   Close    — take it off the screen entirely and give its room to whatever
 //              was sharing the row. It comes back from View → Panels, which is
 //              where EPLAN keeps its navigators too.
 //
 // Closing is never destructive: a panel is a view of something the project
 // already holds, so what is in it is exactly where it was when it reopens.
+//
+// **Which way it folds** depends on where it sits. A panel stacked above or
+// below its neighbours rolls up, keeping its title bar. A panel *beside* them —
+// a tree down the left, a schematic down the right — folds sideways to a narrow
+// rail with its name written up it, because folding such a panel upwards would
+// leave a full-width title bar sitting on nothing and give the table beside it
+// no width at all. `side` is what says so.
 
 interface Props {
   /** Stable across sessions — it is the key the open/closed state is kept under. */
@@ -29,16 +38,28 @@ interface Props {
   group?: string;
   /** Buttons of the panel's own, to the left of collapse and close. */
   actions?: React.ReactNode;
-  /** Rolled up to begin with. */
+  /**
+   * Which edge of its row the panel is docked to.
+   *
+   * Set it and the panel folds sideways to a rail against that edge instead of
+   * rolling up. Leave it off for a panel that spans its row.
+   */
+  side?: 'left' | 'right';
+  /** Folded away to begin with. */
   initiallyCollapsed?: boolean;
   className?: string;
-  /** Extra classes for the body, e.g. a height or an overflow rule. */
+  /**
+   * Extra classes for the body, e.g. a height or an overflow rule.
+   *
+   * Also the width the panel returns to: a docked panel's own `className`
+   * carries its width, and the rail replaces it while folded.
+   */
   bodyClassName?: string;
   children: React.ReactNode;
 }
 
 export const PanelFrame: React.FC<Props> = ({
-  id, title, note, menuLabel, group, actions,
+  id, title, note, menuLabel, group, actions, side,
   initiallyCollapsed = false, className = '', bodyClassName = '', children,
 }) => {
   const panel = usePanel({ id, label: menuLabel ?? title, group, note });
@@ -48,6 +69,49 @@ export const PanelFrame: React.FC<Props> = ({
   // the row beside it gets the whole width back. View → Panels is what knows
   // it exists, and it has known since the first time this ran.
   if (!panel.open) return null;
+
+  // ── Folded sideways: a rail with the name up it ─────────────────────────
+  //
+  // The whole rail is the way back, not just the chevron — it is a 36px target
+  // and there is only one thing it can mean.
+  if (side && collapsed) {
+    return (
+      <section
+        data-panel={id}
+        data-panel-rail={id}
+        className="w-9 shrink-0 self-stretch border border-gray-200 rounded-md bg-gray-50 flex flex-col items-center py-2 gap-2"
+      >
+        <button
+          onClick={() => setCollapsed(false)}
+          data-panel-collapse={id}
+          title={`Expand ${title}`}
+          aria-expanded={false}
+          className="flex-1 w-full flex flex-col items-center gap-2 text-gray-500 hover:text-gray-900 hover:bg-gray-200 rounded"
+        >
+          {side === 'left'
+            ? <ChevronRightIcon className="w-4 h-4 shrink-0" />
+            : <ChevronLeftIcon className="w-4 h-4 shrink-0" />}
+          <span className="text-[11px] font-medium tracking-wide whitespace-nowrap [writing-mode:vertical-rl] rotate-180">
+            {title}
+          </span>
+        </button>
+        <button
+          onClick={panel.hide}
+          title="Close this panel — View → Panels brings it back"
+          data-panel-close={id}
+          className="p-1 rounded text-gray-400 hover:text-gray-900 hover:bg-gray-200 shrink-0"
+        >
+          <XIcon className="w-3.5 h-3.5" />
+        </button>
+      </section>
+    );
+  }
+
+  // Which way the header chevron points: back towards the edge the panel is
+  // docked to, because that is where it is about to go.
+  const FoldIcon = !side ? ChevronDownIcon
+    : side === 'left' ? ChevronLeftIcon
+    : ChevronRightIcon;
 
   return (
     <section
@@ -62,10 +126,10 @@ export const PanelFrame: React.FC<Props> = ({
           data-panel-collapse={id}
           className="mt-0.5 p-0.5 rounded text-gray-500 hover:text-gray-900 hover:bg-gray-200 shrink-0"
         >
-          {collapsed ? <ChevronRightIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
+          {collapsed ? <ChevronRightIcon className="w-4 h-4" /> : <FoldIcon className="w-4 h-4" />}
         </button>
 
-        {/* The whole heading is the collapse control, the way a tree node is. */}
+        {/* The whole heading is the fold control, the way a tree node is. */}
         <button
           onClick={() => setCollapsed(c => !c)}
           className="min-w-0 flex-1 text-left"

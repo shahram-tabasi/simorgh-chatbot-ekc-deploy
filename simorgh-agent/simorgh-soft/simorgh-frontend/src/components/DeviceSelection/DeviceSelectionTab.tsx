@@ -2160,10 +2160,14 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
     id: 'ds-equipment-tree', label: 'Equipment Tree', group: 'Device Selection',
     note: 'The switchgears of this project, by voltage level',
   });
+  // `auto` rather than a fixed width: the panel carries its own width now, so
+  // the track follows it down to 36px when it is folded to a rail and
+  // disappears altogether when it is closed. A fixed track would have left the
+  // rail sitting in a 220px hole.
   const columns = [
-    templatesPanel.open ? '220px' : null,
+    templatesPanel.open ? 'auto' : null,
     'minmax(0,1fr)',
-    treePanel.open ? '260px' : null,
+    treePanel.open ? 'auto' : null,
   ].filter(Boolean).join(' ');
 
   // Left panel templates section with right-click support
@@ -2173,6 +2177,8 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
       title="Templates"
       group="Device Selection"
       note="The templates a device row can be dropped onto"
+      side="left"
+      className="w-[220px]"
     >
       <div className="p-2 max-h-96 overflow-y-auto">
         {(['LV', 'MV', 'HV'] as const).map(type => (
@@ -2306,6 +2312,8 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
           title="Equipment Tree"
           group="Device Selection"
           note="The switchgears of this project, by voltage level"
+          side="right"
+          className="w-[260px]"
         >
           <EquipmentTree
             onImportFromTpms={onImportFromTpms}

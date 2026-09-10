@@ -225,6 +225,27 @@ browser, stays the exact route for a drawing that carries them.
 has no R12 equivalent. Its cell is marked with a dashed box rather than dropped,
 so the drawing says something is there.
 
+## The parts table
+
+Not a drawing, but the same problem: nine columns, so a part number reads
+`3RV2321-4…` and a description not at all.
+
+`PartCell` gives each cell two ways out, both of which a spreadsheet has and
+neither of which costs the table any width. **Hover** puts the whole value in a
+tooltip — enough to *read* a cell. **Click** opens a 420px box over it, headed
+with the column's name, with room for several lines where the value is long.
+
+Every keystroke in the box goes straight into the row, exactly as typing in the
+cell always did. Nothing is staged, so closing is not a decision: Enter, Escape
+and a click anywhere else all just close it.
+
+The box is drawn through a **portal to `document.body`**. The table scrolls
+sideways inside a box that clips what overflows it, and a panel positioned
+inside that box gets its head cut off — which is what happened the first time.
+A portal escapes every clipping ancestor there is. The cost is that the position
+is measured rather than inherited, so a scroll closes the box instead of
+dragging it away from the cell it belongs to.
+
 ## Bringing in your own schematics
 
 `utils/cad/readDxf.ts` reads a DXF back into geometry — the other direction

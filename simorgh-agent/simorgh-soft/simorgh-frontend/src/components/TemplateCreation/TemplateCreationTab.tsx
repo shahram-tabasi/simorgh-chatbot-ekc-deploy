@@ -3,7 +3,6 @@ import { Keyboard, X, RotateCcw } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { TemplateTree } from './TemplateTree';
 import { PanelFrame } from '../shared/PanelFrame';
-import { usePanel } from '../../context/PanelsContext';
 import { TemplateProperties } from './TemplateProperties';
 
 interface TemplateCreationTabProps {
@@ -262,13 +261,6 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
 
   const selectedTemplateData = getSelectedTemplateData();
 
-  // Whether the tree is on screen, so the properties beside it can take the
-  // room when it is not. The panel registers itself; this only reads it.
-  const treePanel = usePanel({
-    id: 'project-templates', label: 'Project Templates', group: 'Create Template',
-    note: 'LV, MV and HV, and the sections under them',
-  });
-
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -284,6 +276,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
           title="Project Templates"
           group="Create Template"
           note="LV, MV and HV, and the sections under them"
+          side="left"
           className="w-1/4 border-0 border-r border-gray-200 rounded-none"
           bodyClassName="overflow-y-auto"
         >
@@ -294,7 +287,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
             selectedTemplateId={selectedTemplate}
           />
         </PanelFrame>
-        <div className={`${treePanel.open ? 'w-3/4' : 'w-full'} p-4 overflow-y-auto`}>
+        <div className="flex-1 min-w-0 p-4 overflow-y-auto">
           {selectedTemplateData ? (
             <TemplateProperties template={selectedTemplateData} />
           ) : (

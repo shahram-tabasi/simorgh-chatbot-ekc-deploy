@@ -4,6 +4,7 @@ import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon } from 'lucide-react';
 import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
 import { PanelFrame } from '../shared/PanelFrame';
+import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { EplanSymbolMap } from '../../utils/eplanSingleLine';
 import { setProjectSymbolOverrides } from '../../utils/iecSymbols';
@@ -976,11 +977,11 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                         {/* Part number + replace button */}
                         <td className="px-4 py-2 border-b">
                           <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm bg-gray-100"
+                            <PartCell
+                              label="Part"
                               value={part.partNumber}
-                              readOnly
+                              source="From the EPLAN parts database — use Replace to change it"
+                              className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm bg-gray-100"
                             />
                             <button
                               onClick={() => handleOpenPartDialog(property, part, partIndex)}
@@ -993,71 +994,67 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                         </td>
                         {/* RATING column — shows Designation3 of the selected part */}
                         <td className="px-4 py-2 border-b">
-                          <input
-                            type="text"
-                            className="w-full border border-gray-200 rounded px-2 py-1 text-sm bg-amber-50 text-amber-900"
+                          <PartCell
+                            label="Rating"
                             value={part.fullData?.Designation3 || ''}
-                            readOnly
-                            title="Rating (Designation 3)"
+                            source="Designation 3, from the EPLAN parts database"
+                            className="w-full border border-gray-200 rounded px-2 py-1 text-sm bg-amber-50 text-amber-900"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">
-                          <input
-                            type="text"
-                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                          <PartCell
+                            label="Label"
                             value={part.label}
-                            onChange={(e) =>
-                              handleUpdatePart(property, partIndex, 'label', e.target.value)
-                            }
+                            onChange={v => handleUpdatePart(property, partIndex, 'label', v)}
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">
-                          <input
+                          <PartCell
+                            label="Qty"
                             type="number"
+                            min={1}
+                            value={String(part.quantity)}
+                            onChange={v => handleUpdatePart(property, partIndex, 'quantity', parseInt(v, 10) || 1)}
                             className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                            value={part.quantity}
-                            onChange={(e) =>
-                              handleUpdatePart(property, partIndex, 'quantity', parseInt(e.target.value) || 1)
-                            }
-                            min="1"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">
-                          <input
+                          <PartCell
+                            label="Priority"
                             type="number"
+                            min={1}
+                            value={String(part.priority)}
+                            onChange={v => handleUpdatePart(property, partIndex, 'priority', parseInt(v, 10) || 1)}
                             className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                            value={part.priority}
-                            onChange={(e) =>
-                              handleUpdatePart(property, partIndex, 'priority', parseInt(e.target.value) || 1)
-                            }
-                            min="1"
                           />
                         </td>
                         {/* Eplanix column: OrderNumber or Designation3 */}
                         <td className="px-4 py-2 border-b">
-                          <input
-                            type="text"
-                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-blue-50"
+                          <PartCell
+                            label="Order No."
+                            source="Order Number, or Designation 3 where there is none"
                             value={
-                              (part.fullData?.OrderNumber && 
-                               part.fullData.OrderNumber !== '-' && 
-                               part.fullData.OrderNumber !== '_' && 
-                               part.fullData.OrderNumber.trim() !== '') 
-                                ? part.fullData.OrderNumber 
+                              (part.fullData?.OrderNumber &&
+                               part.fullData.OrderNumber !== '-' &&
+                               part.fullData.OrderNumber !== '_' &&
+                               part.fullData.OrderNumber.trim() !== '')
+                                ? part.fullData.OrderNumber
                                 : (part.fullData?.Designation3 || '')
                             }
-                            readOnly
-                            title="Order No. (Order Number or Designation 3)"
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-blue-50"
                           />
                         </td>
                         {/* Description column from SQL Server */}
                         <td className="px-4 py-2 border-b">
-                          <input
-                            type="text"
-                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-gray-50"
+                          {/* The longest value in the row by far, so its panel
+                              gets several lines rather than one. */}
+                          <PartCell
+                            label="Description"
+                            multiline
+                            source="From the EPLAN parts database"
                             value={part.fullData?.Description || ''}
-                            readOnly
-                            title="Description from SQL Server"
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-gray-50"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">
@@ -1097,6 +1094,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
         menuLabel="Template graphic"
         group="Create Template"
         note="The whole cell, drawn the way a feeder built on it will be."
+        side="right"
         className="w-80 shrink-0 border-0 bg-transparent"
         bodyClassName="pt-2"
       >
