@@ -11,7 +11,8 @@ import {
   AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
-  LanguagesIcon, CircleHelpIcon,
+  LanguagesIcon, CircleHelpIcon, LibraryBigIcon, GroupIcon, UngroupIcon,
+  SunIcon, MoonIcon,
 } from 'lucide-react';
 import { DrawingEdits } from '../../types/project';
 import {
@@ -27,12 +28,15 @@ import {
 } from '../../utils/cad/edit';
 import {
   AlignTo, EditResult, alignShapes, centreOf, cornerLines, distributeShapes,
-  extendLine, lineFrom, lineMetrics, mirrorX, mirrorY, moveGrip, norm360,
-  reorderShapes, rotation, scaling, transformShapes, trimLine,
+  blocksOf, extendLine, groupShapes, lineFrom, lineMetrics, mirrorX, mirrorY,
+  moveGrip, norm360, placeAsBlock, reorderShapes, rotation, scaling,
+  transformShapes, trimLine, ungroupShapes,
 } from '../../utils/cad/geom';
 import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
 import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang';
 import { DrawingHelp } from './DrawingHelp';
+import { SymbolLibrary } from './SymbolLibrary';
+import { ThemeId, loadTheme, saveTheme } from './theme';
 import { DRAWS, DrawingCanvas, PICKS, Tool, Viewport, fitView, viewOn } from './DrawingCanvas';
 
 // Simorgh Draw — the drawing, open for editing.
@@ -182,6 +186,11 @@ export const DrawingEditor: React.FC<Props> = ({
   const T = STRINGS[lang];
   const dir = dirOf(lang);
   const [showHelp, setShowHelp] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  // Light or dark, remembered on this machine. A viewing preference only: every
+  // export comes out of the same geometry in the same colours either way.
+  const [themeId, setThemeId] = useState<ThemeId>(loadTheme);
+  const chooseTheme = (next: ThemeId) => { setThemeId(next); saveTheme(next); };
   // The corner command takes two lines, so the first one waits here.
   const [pendingCorner, setPendingCorner] = useState<{ index: number; at: Pt } | null>(null);
   const [cornerRadius, setCornerRadius] = useState(0);
@@ -360,6 +369,45 @@ export const DrawingEditor: React.FC<Props> = ({
     commit(shapes.map((s, k) => (k === i ? next : s)), new Set([i]));
   };
 
+  // ── Blocks ───────────────────────────────────────────────────────────────
+
+  /** The picked shapes made into one block. */
+  const group = () => {
+    if (selection.size < 2) { setNotice(T.needTwoToGroup); return; }
+    const r = groupShapes(shapes, selection, 'GROUP');
+    setNotice(null);
+    commit(r.shapes, new Set(r.selection));
+  };
+
+  /** Whatever blocks the picked shapes belong to, taken apart. */
+  const ungroup = () => {
+    if (selection.size === 0) return;
+    const r = ungroupShapes(shapes, selection);
+    if (r.shapes === shapes) { setNotice(T.nothingToUngroup); return; }
+    setNotice(null);
+    commit(r.shapes, new Set(r.selection));
+  };
+
+  /**
+   * A symbol from the library, placed as one block in the middle of the view.
+   *
+   * The middle rather than the origin: the sheet is bigger than the window, and
+   * something dropped at 0,0 on an A0 lands somewhere nobody is looking.
+   */
+  const importSymbol = (run: Shape[], name: string) => {
+    if (run.length === 0) return;
+    const at: Pt = [view.x + view.w / 2, view.y + view.h / 2];
+    const placed = placeAsBlock(run, at, name);
+    setShowLibrary(false);
+    setNotice(T.libPlaced(name));
+    historyFor(index).push(shapes);
+    const next = [...shapes, ...placed];
+    setEdits(e => ({ ...e, [index]: next }));
+    setSelection(new Set(placed.map((_, k) => shapes.length + k)));
+    touch(index);
+    forceRender(n => n + 1);
+  };
+
   const align = (to: AlignTo) => {
     if (selection.size < 2) return;
     commit(alignShapes(shapes, selection, to));
@@ -503,6 +551,13 @@ export const DrawingEditor: React.FC<Props> = ({
         case 'd': case 'D':
           if (e.ctrlKey || e.metaKey) { e.preventDefault(); duplicate(); }
           break;
+        case 'g': case 'G':
+          // The pair every drawing package binds to this key.
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            e.shiftKey ? ungroup() : group();
+          }
+          break;
         case 'a': case 'A':
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
@@ -559,6 +614,8 @@ export const DrawingEditor: React.FC<Props> = ({
   }, [shapes, sheet, paper, mmPerUnit]);
 
   const picked = [...selection].map(i => shapes[i]).filter(Boolean);
+  /** Which blocks the picked shapes belong to, for the panel and the status bar. */
+  const pickedBlocks = blocksOf(picked);
   const onlyText = picked.length === 1 && picked[0].t === 'text'
     ? (picked[0] as Extract<Shape, { t: 'text' }>) : null;
   const anySaved = sheets.some(sheet => Boolean(savedEdits?.[sheet.key]));
@@ -570,6 +627,7 @@ export const DrawingEditor: React.FC<Props> = ({
     return Boolean(current) && current !== sheets[i]?.drawing.shapes;
   };
   const edited = isEdited(index);
+  const sheetBlocks = useMemo(() => blocksOf(shapes).length, [shapes]);
   const mm = (v: number) => (v * mmPerUnit).toFixed(1);
 
   /** What to do next, for the tool that is in hand. */
@@ -590,27 +648,71 @@ export const DrawingEditor: React.FC<Props> = ({
     return <p className="p-6 text-sm text-gray-500" dir={dir}>{T.nothingToDraw}</p>;
   }
 
+  /**
+   * A toolbar button, and the tooltip that explains it.
+   *
+   * Office, AutoCAD and EPLAN all do the same thing here and for the same
+   * reason: a row of thirty pictures is unreadable until each one says what it
+   * is. So the tooltip is two parts — the command's **name**, then a line on
+   * what it actually does, and the shortcut where there is one.
+   *
+   * It is drawn rather than left to the browser's `title`, because a native
+   * tooltip cannot show two lines and takes a second to appear, which is a
+   * second too long when the question is "which of these is trim".
+   */
   const Tool: React.FC<{
     on?: () => void; active?: boolean; disabled?: boolean; title: string;
+    /** The letter that does the same thing, shown on its own line. */
+    keyHint?: string;
     // The tool's own name on the button, so the drawing tools can be reached
     // by what they are rather than by where they sit on the bar.
     tag?: string; children: React.ReactNode;
-  }> = ({ on, active, disabled, title, tag, children }) => (
-    <button
-      onClick={on} disabled={disabled} title={title} data-tool={tag}
-      className={`p-1.5 rounded-md border text-sm transition-colors disabled:opacity-30 disabled:cursor-default ${
-        active ? 'bg-slate-700 border-slate-700 text-white'
-               : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100'}`}
-    >
-      {children}
-    </button>
-  );
+  }> = ({ on, active, disabled, title, keyHint, tag, children }) => {
+    // The phrases are written as "Name — what it does"; the dash is the split.
+    const [name, ...rest] = title.split(' — ');
+    const detail = rest.join(' — ');
+    return (
+      <span className="relative group/tip inline-flex">
+        <button
+          onClick={on} disabled={disabled} data-tool={tag}
+          // Kept for the browser, and for anything reading the page aloud.
+          title={title}
+          aria-label={title}
+          className={`p-1.5 rounded-md border text-sm transition-colors disabled:opacity-30 disabled:cursor-default ${
+            active ? 'bg-slate-700 border-slate-700 text-white'
+                   : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100'}`}
+        >
+          {children}
+        </button>
+        {!disabled && (
+          <span
+            role="tooltip"
+            data-tip={tag ?? name}
+            className="pointer-events-none absolute top-full start-0 mt-1.5 z-[120] hidden group-hover/tip:block w-max max-w-[280px] rounded-md bg-slate-800 text-white shadow-lg px-2.5 py-1.5"
+          >
+            <span className="block text-[12px] font-semibold leading-tight">
+              {name}
+              {keyHint && (
+                <kbd className="ms-1.5 px-1 py-px rounded bg-white/20 text-[10px] font-mono">
+                  {keyHint}
+                </kbd>
+              )}
+            </span>
+            {detail && (
+              <span className="block text-[11px] text-slate-300 leading-snug mt-0.5">{detail}</span>
+            )}
+          </span>
+        )}
+      </span>
+    );
+  };
 
   const Divider = () => <span className="w-px h-6 bg-gray-300 mx-1" />;
 
   return (
     <div
       ref={frame}
+      data-sd-theme={themeId}
       className={`border border-gray-200 rounded-lg overflow-hidden bg-white select-none ${
         fullscreen ? 'fixed inset-0 z-[300] rounded-none flex flex-col' : ''}`}
     >
@@ -632,7 +734,7 @@ export const DrawingEditor: React.FC<Props> = ({
         )}
 
         {TOOLS.map(t => (
-          <Tool key={t.id} tag={t.id} title={`${T[t.name]}  (${t.key})`} active={tool === t.id} on={() => setTool(t.id)}>
+          <Tool key={t.id} tag={t.id} title={T[t.name]} keyHint={t.key} active={tool === t.id} on={() => setTool(t.id)}>
             <t.Icon className="w-4 h-4" />
           </Tool>
         ))}
@@ -754,6 +856,20 @@ export const DrawingEditor: React.FC<Props> = ({
           <SendToBackIcon className="w-4 h-4" />
         </Tool>
 
+        {/* A symbol is one thing, so it comes in as one and can be made into
+            one. The library sits next to the commands that act on blocks. */}
+        <Divider />
+        <Tool tag="library" title={T.openLibrary} on={() => setShowLibrary(true)}>
+          <LibraryBigIcon className="w-4 h-4" />
+        </Tool>
+        <Tool tag="group" title={T.group} keyHint="Ctrl+G" disabled={selection.size < 2} on={group}>
+          <GroupIcon className="w-4 h-4" />
+        </Tool>
+        <Tool tag="ungroup" title={T.ungroup} keyHint="Ctrl+Shift+G"
+              disabled={selection.size === 0} on={ungroup}>
+          <UngroupIcon className="w-4 h-4" />
+        </Tool>
+
         {/* How the next line is drawn, and how the picked ones are. Changing
             it with something selected restyles that, which is the shortest
             path from "that should be dashed" to it being dashed. */}
@@ -816,7 +932,16 @@ export const DrawingEditor: React.FC<Props> = ({
               </button>
             ))}
           </div>
-          <Tool title={T.help} active={showHelp} on={() => setShowHelp(h => !h)}>
+          {/* Light or dark. A sheet is looked at for hours; every CAD package
+              on a draughtsman's desk offers this and for the same reason. */}
+          <Tool
+            tag="theme"
+            title={themeId === 'dark' ? T.themeLight : T.themeDark}
+            on={() => chooseTheme(themeId === 'dark' ? 'light' : 'dark')}
+          >
+            {themeId === 'dark' ? <SunIcon className="w-4 h-4" /> : <MoonIcon className="w-4 h-4" />}
+          </Tool>
+          <Tool tag="help" title={T.help} active={showHelp} on={() => setShowHelp(h => !h)}>
             <CircleHelpIcon className="w-4 h-4" />
           </Tool>
           <Tool
@@ -884,6 +1009,7 @@ export const DrawingEditor: React.FC<Props> = ({
             textSize={textSize}
             objectSnap={objectSnap}
             mmPerUnit={mmPerUnit}
+            theme={themeId}
             onView={setView}
             onSelection={setSelection}
             onMove={(dx, dy) => nudge(dx, dy)}
@@ -903,6 +1029,15 @@ export const DrawingEditor: React.FC<Props> = ({
           />
           {showHelp && (
             <DrawingHelp lang={lang} t={T} onClose={() => setShowHelp(false)} />
+          )}
+          {showLibrary && (
+            <SymbolLibrary
+              t={T}
+              lang={lang}
+              theme={themeId}
+              onImport={importSymbol}
+              onClose={() => setShowLibrary(false)}
+            />
           )}
         </div>
 
@@ -958,6 +1093,18 @@ export const DrawingEditor: React.FC<Props> = ({
               />
             )}
             {picked.length > 1 && <Row label={T.selection} value={T.pickedN(picked.length)} />}
+
+            {/* A block is why several shapes came up from one click, so the
+                panel says so rather than leaving it to be worked out. */}
+            {pickedBlocks.length > 0 && (
+              <>
+                <Row
+                  label={T.blocksN(pickedBlocks.length)}
+                  value={pickedBlocks.map(b => b.name).join(', ')}
+                />
+                <p className="text-[11px] text-gray-400 leading-relaxed">{T.inBlock}</p>
+              </>
+            )}
 
             {/* Everything about how the picked shapes are drawn, changed where
                 they were picked. A line whose weight is wrong is clicked and
@@ -1060,6 +1207,7 @@ export const DrawingEditor: React.FC<Props> = ({
         <span>{cursor ? `X ${mm(cursor.x)}  Y ${mm(cursor.y)} mm` : '—'}</span>
         <span>{T.zoomPct(Math.round((sheet.drawing.width / view.w) * 100))}</span>
         <span>{T.shapesN(shapes.length)}</span>
+        {sheetBlocks > 0 && <span>{T.blocksN(sheetBlocks)}</span>}
         {selection.size > 0 && <span className="text-blue-700">{T.pickedN(selection.size)}</span>}
         {edited && <span className="text-amber-700">{T.edited}</span>}
         {dirty

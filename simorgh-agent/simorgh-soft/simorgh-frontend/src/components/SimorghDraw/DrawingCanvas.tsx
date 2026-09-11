@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Drawing, Layer, Pen, Pt, Shape } from '../../utils/cad/shapes';
-import { Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip } from '../../utils/cad/geom';
+import {
+  Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip, withWholeBlocks,
+} from '../../utils/cad/geom';
+import { THEMES, Theme, ThemeId, shownIn } from './theme';
 import { shapeToNode } from '../../utils/cad/svg';
 import {
   Box, boundsOf, boundsOfAll, hitTest, nearestSnap, shapesInBox, snapPoints,
@@ -70,6 +73,11 @@ interface Props {
   objectSnap: boolean;
   /** Drawing units to millimetres — what a dimension writes its label in. */
   mmPerUnit: number;
+  /**
+   * Light or dark. A viewing preference only — every export is drawn from the
+   * same geometry in the same colours whichever is on.
+   */
+  theme?: ThemeId;
   onView: (v: Viewport) => void;
   onSelection: (next: Set<number>) => void;
   /** A drag that has finished: commit it, once, so undo gets one step. */
@@ -142,7 +150,6 @@ function otherEndOf(s: Shape | undefined, grip: string): Pt | undefined {
   }
 }
 
-const SELECTED = '#2563eb';
 
 // SVG spells its attributes with hyphens; React wants the camel-cased prop.
 const REACT_PROP: Record<string, string> = {
@@ -155,10 +162,12 @@ const REACT_PROP: Record<string, string> = {
 
 export const DrawingCanvas: React.FC<Props> = ({
   drawing, shapes, selection, hidden, locked, view, grid, showGrid, tool,
-  pen, textSize, objectSnap, mmPerUnit,
+  pen, textSize, objectSnap, mmPerUnit, theme: themeId = 'light',
   onView, onSelection, onMove, onCursor, onEditText, onDraw, onPlaceText,
   onPick, onGrip, onDrafting, onCancelTool,
 }) => {
+  const theme: Theme = THEMES[themeId] ?? THEMES.light;
+  const SELECTED = theme.selected;
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag>(null);
   const [space, setSpace] = useState(false);
@@ -431,13 +440,18 @@ export const DrawingCanvas: React.FC<Props> = ({
       return;
     }
 
+    // A symbol from the library is one thing: clicking a line of it takes the
+    // whole block, which is what the eye picked and what the hand expects.
+    const whole = withWholeBlocks(shapes, [hit]);
     const next = new Set(selection);
     if (e.shiftKey) {
-      if (next.has(hit)) next.delete(hit); else next.add(hit);
+      // Shift over any part of a block adds or drops the block entire.
+      if (next.has(hit)) whole.forEach(i => next.delete(i));
+      else whole.forEach(i => next.add(i));
       onSelection(next);
       return;
     }
-    if (!next.has(hit)) onSelection(new Set([hit]));
+    if (!next.has(hit)) onSelection(whole);
     setDrag({ kind: 'move', startX: p.x, startY: p.y, dx: 0, dy: 0 });
   };
 
@@ -524,8 +538,8 @@ export const DrawingCanvas: React.FC<Props> = ({
         w: Math.abs(drag.x - drag.startX), h: Math.abs(drag.y - drag.startY),
       };
       if (area.w > 2 && area.h > 2) {
-        const found = shapesInBox(shapes, area, offLimits);
-        onSelection(drag.additive ? new Set([...selection, ...found]) : new Set(found));
+        const found = withWholeBlocks(shapes, shapesInBox(shapes, area, offLimits));
+        onSelection(drag.additive ? new Set([...selection, ...found]) : found);
       }
     }
     setDrag(null);
@@ -611,7 +625,7 @@ export const DrawingCanvas: React.FC<Props> = ({
       viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
       className="w-full h-full select-none touch-none"
       style={{
-        background: '#fff',
+        background: theme.surround,
         cursor: panning ? 'grab'
           : drag?.kind === 'grip' ? 'crosshair'
           : drag?.kind === 'move' ? 'move'
@@ -648,12 +662,13 @@ export const DrawingCanvas: React.FC<Props> = ({
     >
       <defs>
         <pattern id="sd-grid" width={grid || 10} height={grid || 10} patternUnits="userSpaceOnUse">
-          <path d={`M ${grid || 10} 0 L 0 0 0 ${grid || 10}`} fill="none" stroke="#e5e7eb" strokeWidth={stroke} />
+          <path d={`M ${grid || 10} 0 L 0 0 0 ${grid || 10}`} fill="none" stroke={theme.grid} strokeWidth={stroke} />
         </pattern>
       </defs>
 
       {/* The paper, then the grid over it — both behind everything drawn. */}
-      <rect x={0} y={0} width={drawing.width} height={drawing.height} fill="#fff" stroke="#cbd5e1" strokeWidth={stroke} />
+      <rect x={0} y={0} width={drawing.width} height={drawing.height}
+            fill={theme.paper} stroke={theme.edge} strokeWidth={stroke} />
       {showGrid && <rect x={0} y={0} width={drawing.width} height={drawing.height} fill="url(#sd-grid)" />}
 
       <g pointerEvents="none">
@@ -664,6 +679,12 @@ export const DrawingCanvas: React.FC<Props> = ({
           const picked = selection.has(i);
           const shift = picked && moving ? `translate(${moving.dx} ${moving.dy})` : undefined;
           const attrs: Record<string, string | number> = { ...node.attrs };
+          // Colour 7 behaviour: near-black is shown in the theme's ink, and a
+          // layer colour — a blue tag, a red busbar — is left as it is.
+          if (typeof attrs.stroke === 'string') attrs.stroke = shownIn(theme, attrs.stroke);
+          if (node.tag === 'text' && typeof attrs.fill === 'string') {
+            attrs.fill = shownIn(theme, attrs.fill);
+          }
           if (picked) {
             attrs.stroke = SELECTED;
             if (node.tag === 'text') attrs.fill = SELECTED;
@@ -719,7 +740,7 @@ export const DrawingCanvas: React.FC<Props> = ({
             {draft.pts.map((q, i) => (
               <rect key={`p${i}`} x={q[0] - stroke * 3} y={q[1] - stroke * 3}
                     width={stroke * 6} height={stroke * 6}
-                    fill="#fff" stroke={SELECTED} strokeWidth={stroke} />
+                    fill={theme.paper} stroke={SELECTED} strokeWidth={stroke} />
             ))}
           </g>
         );
@@ -731,12 +752,12 @@ export const DrawingCanvas: React.FC<Props> = ({
         if (!node) return null;
         const props: Record<string, unknown> = { pointerEvents: 'none' };
         for (const [attr, v] of Object.entries(node.attrs)) props[REACT_PROP[attr] ?? attr] = v;
-        props.stroke = '#f59e0b';
+        props.stroke = theme.accent;
         props.strokeWidth = Math.max(Number(node.attrs['stroke-width']) || 1, stroke * 2.5);
         props.fill = 'none';
         props.opacity = 0.9;
         return node.tag === 'text'
-          ? <text {...props} fill="#f59e0b">{node.body}</text>
+          ? <text {...props} fill={theme.accent}>{node.body}</text>
           : React.createElement(node.tag, props);
       })()}
 
@@ -766,14 +787,17 @@ export const DrawingCanvas: React.FC<Props> = ({
             // can land on without aiming, and what every CAD package uses.
             const r = stroke * 5;
             const [x, y] = grip.at;
-            const fill = grip.kind === 'whole' ? '#fff' : SELECTED;
+            const fill = grip.kind === 'whole' ? theme.paper : SELECTED;
+            // Named on the element, so a handle can be reached by which point
+            // of which shape it is rather than by where it happens to land.
+            const id = `${index}.${grip.id}`;
             return grip.kind === 'whole'
-              ? <polygon key={`${index}.${grip.id}.${k}`}
+              ? <polygon key={`${id}.${k}`} data-grip={id} data-grip-kind={grip.kind}
                          points={`${x},${y - r} ${x + r},${y} ${x},${y + r} ${x - r},${y}`}
                          fill={fill} stroke={SELECTED} strokeWidth={stroke} />
-              : <rect key={`${index}.${grip.id}.${k}`}
+              : <rect key={`${id}.${k}`} data-grip={id} data-grip-kind={grip.kind}
                       x={x - r} y={y - r} width={r * 2} height={r * 2}
-                      fill={fill} stroke="#fff" strokeWidth={stroke * 0.8} />;
+                      fill={fill} stroke={theme.paper} strokeWidth={stroke * 0.8} />;
           })}
         </g>
       )}
@@ -783,7 +807,7 @@ export const DrawingCanvas: React.FC<Props> = ({
         <g pointerEvents="none">
           <rect x={snapped[0] - stroke * 5} y={snapped[1] - stroke * 5}
                 width={stroke * 10} height={stroke * 10}
-                fill="none" stroke="#f59e0b" strokeWidth={stroke * 1.5} />
+                fill="none" stroke={theme.accent} strokeWidth={stroke * 1.5} />
         </g>
       )}
 
@@ -810,8 +834,9 @@ export const DrawingCanvas: React.FC<Props> = ({
         return (
           <g pointerEvents="none">
             <rect x={x} y={y} width={w} height={size + pad * 2}
-                  fill="#fffbeb" stroke="#94a3b8" strokeWidth={stroke} />
-            <text x={x + pad} y={y + pad + size * 0.8} fontSize={size} fill="#1f2937">
+                  fill={theme.id === 'dark' ? '#1f2937' : '#fffbeb'}
+                  stroke={theme.edge} strokeWidth={stroke} />
+            <text x={x + pad} y={y + pad + size * 0.8} fontSize={size} fill={theme.ink}>
               {readout}
             </text>
           </g>

@@ -855,3 +855,99 @@ export function lineFrom(
   const a = -angleDeg * DEG;
   return { ...s, x2: s.x1 + Math.cos(a) * length, y2: s.y1 + Math.sin(a) * length };
 }
+
+// ── Blocks ──────────────────────────────────────────────────────────────────
+//
+// A symbol from the library arrives as a dozen lines and arcs that are one
+// *thing*. Picking one line of a contactor is never what anybody meant, so the
+// shapes carry a `block` id and the editor treats them as one: picked together,
+// moved together, deleted together.
+//
+// Two copies of the same symbol share a `blockName` and have different `block`
+// ids — which is exactly the distinction a CAD system draws between a block
+// definition and an insert of it.
+
+/** A short id, unique enough for one drawing. */
+export function newBlockId(): string {
+  return `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** The picked shapes made into one block. */
+export function groupShapes(
+  shapes: Shape[], indices: Iterable<number>, name = 'GROUP',
+): { shapes: Shape[]; selection: number[] } {
+  const set = new Set([...indices].filter(i => shapes[i]));
+  if (set.size < 2) return { shapes, selection: [...set] };
+  const block = newBlockId();
+  return {
+    shapes: shapes.map((s, i) => (set.has(i) ? { ...s, block, blockName: name } : s)),
+    selection: [...set],
+  };
+}
+
+/** The picked shapes taken out of whatever blocks they were in. */
+export function ungroupShapes(
+  shapes: Shape[], indices: Iterable<number>,
+): { shapes: Shape[]; selection: number[] } {
+  // Every shape of a touched block comes apart, not just the ones picked: a
+  // block half in and half out of a block is not a thing.
+  const blocks = new Set(
+    [...indices].map(i => shapes[i]?.block).filter((b): b is string => Boolean(b)));
+  if (blocks.size === 0) return { shapes, selection: [...indices] };
+  const out: number[] = [];
+  const next = shapes.map((s, i) => {
+    if (!s.block || !blocks.has(s.block)) return s;
+    out.push(i);
+    const { block, blockName, ...rest } = s;
+    return rest as Shape;
+  });
+  return { shapes: next, selection: out };
+}
+
+/**
+ * A selection widened to whole blocks.
+ *
+ * Run on every pick, so clicking one line of a symbol takes the symbol. A shape
+ * in no block is only itself.
+ */
+export function withWholeBlocks(shapes: Shape[], indices: Iterable<number>): Set<number> {
+  const picked = new Set(indices);
+  const blocks = new Set(
+    [...picked].map(i => shapes[i]?.block).filter((b): b is string => Boolean(b)));
+  if (blocks.size === 0) return picked;
+  shapes.forEach((s, i) => { if (s.block && blocks.has(s.block)) picked.add(i); });
+  return picked;
+}
+
+/** Every block on the sheet, with what it is called and how big it is. */
+export function blocksOf(shapes: Shape[]): { id: string; name: string; count: number }[] {
+  const seen = new Map<string, { id: string; name: string; count: number }>();
+  for (const s of shapes) {
+    if (!s.block) continue;
+    const had = seen.get(s.block);
+    if (had) had.count += 1;
+    else seen.set(s.block, { id: s.block, name: s.blockName ?? 'GROUP', count: 1 });
+  }
+  return [...seen.values()];
+}
+
+/**
+ * A run of shapes placed at a point, as one block.
+ *
+ * What importing a symbol comes down to: take the geometry, move it so its
+ * top-left sits where it was dropped, and tag the lot.
+ */
+export function placeAsBlock(
+  run: Shape[], at: Pt, name: string, scale = 1,
+): Shape[] {
+  if (run.length === 0) return [];
+  const b = boundsOfAll(run);
+  const block = newBlockId();
+  const sized = scale === 1 || !b
+    ? run
+    : run.map(s => mapShape(s, scaling(b.x, b.y, scale)));
+  const box = boundsOfAll(sized);
+  const dx = box ? at[0] - box.x : 0;
+  const dy = box ? at[1] - box.y : 0;
+  return sized.map(s => ({ ...mapShape(s, translation(dx, dy)), block, blockName: name }));
+}

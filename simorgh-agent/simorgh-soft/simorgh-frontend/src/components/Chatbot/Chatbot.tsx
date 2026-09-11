@@ -13,11 +13,23 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  SparklesIcon, XIcon, SendIcon, PaperclipIcon, Trash2Icon,
+  XIcon, SendIcon, PaperclipIcon, Trash2Icon,
   ImageIcon, FileTextIcon, FileSpreadsheetIcon, FileIcon, Loader2Icon,
   MaximizeIcon, MinimizeIcon, MinusIcon, UserIcon, ZapIcon,
 } from 'lucide-react';
 import { usePanel } from '../../context/PanelsContext';
+import logoMark from '../../assets/logo-mark.png';
+
+/**
+ * The suite's own bird, wherever the assistant needs a face.
+ *
+ * It used to be a generic sparkle. The assistant is part of this product, not a
+ * bolt-on, and it should look like it — the same mark the splash screen and the
+ * header wear.
+ */
+const SimorghMark: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
+  <img src={logoMark} alt="" aria-hidden className={`${className} object-contain select-none`} />
+);
 import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
@@ -645,7 +657,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
           title="Open Simorgh AI Assistant"
           className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white shadow-lg flex items-center justify-center transition-transform hover:scale-110 ring-2 ring-white"
         >
-          <SparklesIcon className="w-5 h-5" />
+          <SimorghMark className="w-6 h-6" />
         </button>
         <span className="mt-3 text-[10px] font-semibold text-indigo-700 [writing-mode:vertical-rl] rotate-180 tracking-widest">
           SIMORGH&nbsp;AI
@@ -676,7 +688,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       {/* Title bar */}
       <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white px-4 py-2 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-2">
-          <SparklesIcon className="w-4 h-4" />
+          <SimorghMark className="w-5 h-5" />
           <span className="text-sm font-semibold">Simorgh AI Assistant</span>
           <span className="text-[10px] bg-blue-800 px-2 py-0.5 rounded-full uppercase">
             {mode}
@@ -797,7 +809,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
             <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
               m.role === 'user' ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-700'
             }`}>
-              {m.role === 'user' ? <UserIcon className="w-3.5 h-3.5" /> : <SparklesIcon className="w-3.5 h-3.5" />}
+              {m.role === 'user' ? <UserIcon className="w-3.5 h-3.5" /> : <SimorghMark className="w-4 h-4" />}
             </div>
             <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm break-words ${
               m.role === 'user'

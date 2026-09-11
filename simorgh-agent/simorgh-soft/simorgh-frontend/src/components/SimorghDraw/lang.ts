@@ -67,6 +67,19 @@ export interface Strings {
   pointsN: (n: number) => string;
   dragGrips: string;
 
+  // Blocks, and the library they come from
+  group: string; ungroup: string; blocksN: (n: number) => string;
+  inBlock: string; needTwoToGroup: string; nothingToUngroup: string;
+  openLibrary: string;
+  libTitle: string; libNote: string; libSearch: string; libNoneFound: string;
+  libFromFile: string; libFromFileNote: string; libImport: string;
+  libAsBlock: string; libPickOne: string; libDoubleClick: string;
+  libNothingIn: (name: string) => string;
+  libPlaced: (name: string) => string;
+
+  // Light or dark
+  themeLight: string; themeDark: string;
+
   // Panels
   layers: string; selection: string; typeOf: string; textOf: string;
   pickedN: (n: number) => string;
@@ -154,6 +167,28 @@ const EN: Strings = {
   atX: 'X', atY: 'Y', rotationOf: 'Rotation',
   pointsN: n => `${n} points`,
   dragGrips: 'Drag a square handle to move that end on its own; the diamond carries the whole shape. Hold Shift to keep it level, upright or on 45°.',
+
+  group: 'Group into a block (Ctrl+G)',
+  ungroup: 'Break the block apart (Ctrl+Shift+G)',
+  blocksN: n => `${n} block${n === 1 ? '' : 's'}`,
+  inBlock: 'In a block — picking one part takes the whole of it',
+  needTwoToGroup: 'Pick two or more shapes to group them',
+  nothingToUngroup: 'Nothing picked is in a block',
+  openLibrary: 'Symbol library — place a symbol, or bring one in from a file',
+  libTitle: 'Symbol library',
+  libNote: 'Place a symbol on the sheet, or bring one in from this computer. Everything arrives as one block.',
+  libSearch: 'Search symbols…',
+  libNoneFound: 'Nothing matches that.',
+  libFromFile: 'From a file',
+  libFromFileNote: 'Read a DXF or SVG off this computer and place it',
+  libImport: 'Place on the sheet',
+  libAsBlock: 'It arrives as one block, in the middle of the view. Drag it where it belongs; break it apart from the toolbar if you need the pieces.',
+  libPickOne: 'Pick a symbol to see it larger and place it. Double-click one to place it straight away.',
+  libDoubleClick: 'double-click to place',
+  libNothingIn: name => `There is no geometry in ${name}`,
+  libPlaced: name => `${name} placed as a block — drag it where it belongs`,
+
+  themeLight: 'Light', themeDark: 'Dark',
 
   layers: 'Layers', selection: 'Selection', typeOf: 'Type', textOf: 'Text',
   pickedN: n => `${n} shapes`,
@@ -282,6 +317,28 @@ const FA: Strings = {
   pointsN: n => `${n} نقطه`,
   dragGrips: 'دستگیره مربعی را بکشید تا فقط همان سر جابه‌جا شود؛ لوزی کل شکل را می‌برد. با نگه‌داشتن Shift خط افقی یا عمودی یا ۴۵ درجه می‌ماند.',
 
+  group: 'گروه‌کردن در یک بلاک (Ctrl+G)',
+  ungroup: 'شکستن بلاک (Ctrl+Shift+G)',
+  blocksN: n => `${n} بلاک`,
+  inBlock: 'داخل یک بلاک — با انتخاب یک جزء، کل آن انتخاب می‌شود',
+  needTwoToGroup: 'برای گروه‌کردن، دو شکل یا بیشتر انتخاب کنید',
+  nothingToUngroup: 'چیزی که انتخاب شده در بلاکی نیست',
+  openLibrary: 'کتابخانه علائم — یک سیمبل بگذارید، یا از فایل بیاورید',
+  libTitle: 'کتابخانه علائم',
+  libNote: 'یک سیمبل روی صفحه بگذارید، یا از همین کامپیوتر بیاورید. همه به‌صورت یک بلاک وارد می‌شوند.',
+  libSearch: 'جستجوی سیمبل…',
+  libNoneFound: 'چیزی با این عبارت پیدا نشد.',
+  libFromFile: 'از فایل',
+  libFromFileNote: 'یک DXF یا SVG از این کامپیوتر بخوان و بگذار',
+  libImport: 'گذاشتن روی صفحه',
+  libAsBlock: 'به‌صورت یک بلاک، وسط نما گذاشته می‌شود. آن را به جای خودش بکشید؛ اگر اجزایش را لازم داشتید از نوار ابزار بشکنیدش.',
+  libPickOne: 'یک سیمبل را انتخاب کنید تا بزرگ‌تر ببینید و بگذارید. با دابل‌کلیک مستقیم گذاشته می‌شود.',
+  libDoubleClick: 'دابل‌کلیک برای گذاشتن',
+  libNothingIn: name => `در ${name} هندسه‌ای نیست`,
+  libPlaced: name => `${name} به‌صورت بلاک گذاشته شد — آن را به جای خودش بکشید`,
+
+  themeLight: 'روشن', themeDark: 'تیره',
+
   layers: 'لایه‌ها', selection: 'انتخاب‌شده', typeOf: 'نوع', textOf: 'متن',
   pickedN: n => `${n} شکل`,
   nothingPicked: 'روی چیزی کلیک کنید تا انتخاب شود، یا با کشیدن کادر چند شکل را بگیرید. برای تغییر متن، روی آن دوبار کلیک کنید.',
@@ -409,6 +466,28 @@ const TR: Strings = {
   atX: 'X', atY: 'Y', rotationOf: 'Dönüş',
   pointsN: n => `${n} nokta`,
   dragGrips: 'Kare tutamağı sürükleyin, yalnızca o uç gitsin; baklava tutamak nesnenin tamamını taşır. Shift basılıyken yatay, dikey ya da 45° kalır.',
+
+  group: 'Blok hâline getir (Ctrl+G)',
+  ungroup: 'Bloğu parçala (Ctrl+Shift+G)',
+  blocksN: n => `${n} blok`,
+  inBlock: 'Bir blokta — bir parçasını seçmek tamamını seçer',
+  needTwoToGroup: 'Gruplamak için iki ya da daha fazla nesne seçin',
+  nothingToUngroup: 'Seçili olanların hiçbiri blokta değil',
+  openLibrary: 'Sembol kitaplığı — bir sembol yerleştirin ya da dosyadan getirin',
+  libTitle: 'Sembol kitaplığı',
+  libNote: 'Sayfaya bir sembol yerleştirin ya da bu bilgisayardan getirin. Hepsi tek blok olarak gelir.',
+  libSearch: 'Sembol ara…',
+  libNoneFound: 'Buna uyan bir şey yok.',
+  libFromFile: 'Dosyadan',
+  libFromFileNote: 'Bu bilgisayardan bir DXF ya da SVG okuyup yerleştir',
+  libImport: 'Sayfaya yerleştir',
+  libAsBlock: 'Görünümün ortasına tek blok olarak gelir. Yerine sürükleyin; parçaları lazımsa araç çubuğundan parçalayın.',
+  libPickOne: 'Büyük görmek ve yerleştirmek için bir sembol seçin. Çift tıklarsanız doğrudan yerleşir.',
+  libDoubleClick: 'yerleştirmek için çift tık',
+  libNothingIn: name => `${name} içinde geometri yok`,
+  libPlaced: name => `${name} blok olarak yerleşti — yerine sürükleyin`,
+
+  themeLight: 'Açık', themeDark: 'Koyu',
 
   layers: 'Katmanlar', selection: 'Seçim', typeOf: 'Tür', textOf: 'Yazı',
   pickedN: n => `${n} nesne`,

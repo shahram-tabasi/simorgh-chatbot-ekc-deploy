@@ -225,6 +225,62 @@ browser, stays the exact route for a drawing that carries them.
 has no R12 equivalent. Its cell is marked with a dashed box rather than dropped,
 so the drawing says something is there.
 
+## Blocks
+
+A symbol from the library arrives as a dozen lines and arcs that are one
+*thing*. Picking one line of a contactor is never what anybody meant, so shapes
+carry a `block` id and the editor treats them as one: picked together, moved
+together, deleted together. Clicking any part of a block takes the block, and so
+does a rubber band that catches any part of it.
+
+`blockName` is what it is called; `block` is which copy it is. Two contactors
+share a name and differ in id — exactly the distinction CAD draws between a
+block definition and an insert of it.
+
+**It goes out as a real block.** `renderDxf` writes each one as a DXF `BLOCK`
+definition with an `INSERT` where it sits, so the customer's CAD sees one object
+too and can pick, copy and count it there. The geometry sits in the definition
+already in paper coordinates with the insert at the origin: R12 has no better
+way of saying "this run of entities is one object" without re-deriving a local
+origin for every block, and a block based at the origin behaves correctly in
+every reader. Block names are folded to the short upper-case alphabet R12 takes,
+because a name that breaks those rules is not rejected loudly — it is quietly
+dropped by some readers and kept by others, which is worse.
+
+**Ctrl+G** groups what is picked; **Ctrl+Shift+G** breaks it apart. Ungrouping
+takes the *whole* block apart, not only the shapes that happened to be picked —
+a block half in and half out of a block is not a thing.
+
+## The symbol library
+
+One list, three sources: the **IEC** library the single line itself is drawn
+from, so a symbol added by hand matches the ones the software placed; the
+office's own **DXF pack**, already loaded in the browser; and **a file** off the
+person's own machine, DXF or SVG, read and placed without being kept anywhere.
+
+Whatever the source, what lands is one block, in the middle of the current view
+— the middle rather than the origin, because the sheet is bigger than the window
+and something dropped at 0,0 on an A0 lands where nobody is looking.
+
+## Light and dark
+
+`theme.ts`. Two rules keep it honest.
+
+**It is a viewing preference, not a property of the drawing.** DXF, PDF and SVG
+come out of the same geometry in the same colours whichever theme is on. What
+leaves the app never depends on how somebody likes to look at it.
+
+**Dark does not repaint the geometry, it flips the near-blacks.** A CAD system
+shows colour 7 as white on black and black on white and leaves every other
+colour alone — a red busbar is red on both. Anything else and a layer's colour
+stops meaning what the layer list says it means.
+
+The chrome round the canvas is a single CSS block keyed off `data-sd-theme` on
+the editor's own root (`drawing.css`), rather than a `dark:` variant on each of
+several hundred classes. It is scoped to the editor on purpose: the rest of the
+suite stays light behind a dark drawing window, which is what a person expects
+when they darken a drawing and not an application.
+
 ## The parts table
 
 Not a drawing, but the same problem: nine columns, so a part number reads

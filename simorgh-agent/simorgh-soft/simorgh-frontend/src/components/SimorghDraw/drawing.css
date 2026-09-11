@@ -1,0 +1,101 @@
+/* src/components/SimorghDraw/drawing.css
+ *
+ * The dark theme for Simorgh Draw's chrome — its toolbars, panels and status
+ * bar. The canvas paints itself from `theme.ts`; this is everything round it.
+ *
+ * It is done as one block keyed off `[data-sd-theme="dark"]` on the editor root
+ * rather than as a `dark:` variant on every className, for two reasons. There
+ * are several hundred utility classes in the editor and editing each one would
+ * be a large diff for a small idea. And the theme belongs to *this* editor, not
+ * to the page: the rest of the suite stays light behind an editor in dark mode,
+ * which is what a person expects when they darken a drawing window and not the
+ * application.
+ *
+ * Everything here is a colour. No sizes, no layout — if a rule in this file
+ * moves something, it is the wrong rule.
+ */
+
+[data-sd-theme='dark'] {
+  --sd-bg: #0f172a;
+  --sd-bar: #1e293b;
+  --sd-panel: #111827;
+  --sd-line: #334155;
+  --sd-text: #e2e8f0;
+  --sd-dim: #94a3b8;
+  --sd-hover: #334155;
+
+  background-color: var(--sd-bg);
+  color: var(--sd-text);
+  border-color: var(--sd-line);
+}
+
+/* Surfaces: the toolbar band, the side panel, the status bar. Matched on the
+ * light classes they already carry, so no component had to change. */
+[data-sd-theme='dark'] .bg-gray-50,
+[data-sd-theme='dark'] .bg-white {
+  background-color: var(--sd-bar);
+}
+[data-sd-theme='dark'] aside.bg-white,
+[data-sd-theme='dark'] .bg-slate-100 {
+  background-color: var(--sd-panel);
+}
+
+/* Every border in the editor, whatever shade it asked for. */
+[data-sd-theme='dark'] .border,
+[data-sd-theme='dark'] .border-b,
+[data-sd-theme='dark'] .border-t,
+[data-sd-theme='dark'] .border-l,
+[data-sd-theme='dark'] .border-r,
+[data-sd-theme='dark'] .border-y,
+[data-sd-theme='dark'] .divide-y > * + * {
+  border-color: var(--sd-line);
+}
+
+/* Text. The greys are what the panels are written in; the named colours —
+ * amber for a warning, emerald for saved, rose for a refusal — are signals and
+ * are left alone, only lifted enough to read on a dark ground. */
+[data-sd-theme='dark'] .text-gray-800,
+[data-sd-theme='dark'] .text-gray-700,
+[data-sd-theme='dark'] .text-slate-800 {
+  color: var(--sd-text);
+}
+[data-sd-theme='dark'] .text-gray-600,
+[data-sd-theme='dark'] .text-gray-500,
+[data-sd-theme='dark'] .text-gray-400,
+[data-sd-theme='dark'] .text-slate-500 {
+  color: var(--sd-dim);
+}
+[data-sd-theme='dark'] .text-blue-700 { color: #93c5fd; }
+[data-sd-theme='dark'] .text-amber-700 { color: #fcd34d; }
+[data-sd-theme='dark'] .text-emerald-700 { color: #6ee7b7; }
+[data-sd-theme='dark'] .text-rose-700 { color: #fda4af; }
+
+/* Controls: the selects and number boxes on the bars and in the panel. */
+[data-sd-theme='dark'] select,
+[data-sd-theme='dark'] input,
+[data-sd-theme='dark'] textarea {
+  background-color: #0b1220;
+  border-color: var(--sd-line);
+  color: var(--sd-text);
+}
+[data-sd-theme='dark'] select option {
+  background-color: #0b1220;
+  color: var(--sd-text);
+}
+
+/* Buttons keep their shape and lose their white plate. A button that is *on* —
+ * the picked tool — already paints itself dark and is left alone. */
+[data-sd-theme='dark'] button.bg-white {
+  background-color: var(--sd-bar);
+  border-color: var(--sd-line);
+  color: var(--sd-text);
+}
+[data-sd-theme='dark'] button.hover\:bg-gray-100:hover,
+[data-sd-theme='dark'] button.hover\:bg-gray-200:hover,
+[data-sd-theme='dark'] li.hover\:bg-gray-50:hover {
+  background-color: var(--sd-hover);
+}
+
+/* The help panel over the canvas, and the shade behind it. */
+[data-sd-theme='dark'] .bg-slate-50 { background-color: var(--sd-bar); }
+[data-sd-theme='dark'] .shadow-2xl { box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.8); }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx-js-style';
-import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon } from 'lucide-react';
+import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon, RefreshCwIcon } from 'lucide-react';
 import { PanelFrame } from '../shared/PanelFrame';
 import { usePanel } from '../../context/PanelsContext';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
@@ -868,18 +868,91 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     setRows([...rows, newRow]);
   };
 
-  const handleImportExcel = () => {
+  /**
+   * The Excel this table was last filled from, so it can be read again.
+   *
+   * Where the browser supports the File System Access API — Chrome and Edge,
+   * which is what this office runs — picking a file hands back a *handle*, and
+   * a handle can be re-read later. That is what makes Update possible at all:
+   * the person edits the same spreadsheet in Excel, saves it, presses Update,
+   * and the table catches up without going through the file picker again.
+   *
+   * Everywhere else the handle is absent and Update falls back to asking for
+   * the file, which is honest about what the browser will and will not do.
+   */
+  const [excelFile, setExcelFile] = useState<{
+    name: string;
+    /** Present only where the browser can re-read without asking again. */
+    handle?: FileSystemFileHandle;
+    file?: File;
+  } | null>(null);
+  const [excelReadAt, setExcelReadAt] = useState<Date | null>(null);
+  const [excelNote, setExcelNote] = useState<string | null>(null);
+
+  const handleImportExcel = async () => {
     if (!selectedEquipment) {
       alert('Please select an equipment first!');
       return;
     }
+    // Ask for a handle first: it costs the same click and buys Update.
+    const picker = (window as unknown as {
+      showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]>;
+    }).showOpenFilePicker;
+    if (picker) {
+      try {
+        const [handle] = await picker({
+          multiple: false,
+          types: [{
+            description: 'Excel or CSV',
+            accept: {
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+              'application/vnd.ms-excel': ['.xls'],
+              'text/csv': ['.csv'],
+            },
+          }],
+        });
+        if (!handle) return;
+        const file = await handle.getFile();
+        setExcelFile({ name: file.name, handle });
+        setExcelNote(null);
+        importExcelFile(file);
+        return;
+      } catch (err) {
+        // The person closed the picker — not an error, and not a reason to
+        // open a second one behind it.
+        if ((err as DOMException)?.name === 'AbortError') return;
+      }
+    }
     fileInputRef.current?.click();
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  /** Read the same spreadsheet again, after it has been edited in Excel. */
+  const handleUpdateExcel = async () => {
+    if (!excelFile) return;
+    if (excelFile.handle) {
+      try {
+        const file = await excelFile.handle.getFile();
+        setExcelNote(null);
+        importExcelFile(file, true);
+        return;
+      } catch {
+        setExcelNote('Could not read the file again — it may have been moved or renamed.');
+        return;
+      }
+    }
+    // No handle: this browser cannot re-open a path on its own, so it has to
+    // be pointed at the file again. Said plainly rather than failing quietly.
+    setExcelNote('This browser cannot re-read the file on its own — choose it again.');
+    fileInputRef.current?.click();
+  };
 
+  /**
+   * Read one Excel or CSV file into the table.
+   *
+   * Import and Update both come through here, so a re-read cannot drift from
+   * the first read — the same columns, the same rules, the same result.
+   */
+  const importExcelFile = (file: File, quiet = false) => {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
@@ -959,7 +1032,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
         // Replace all rows with imported data (starting from row 1)
         setRows(importedRows);
-        alert(`Imported ${importedRows.length} row(s) — existing rows replaced.\n\nAssign templates via right-click on the Template cell or drag-and-drop.`);
+        setExcelReadAt(new Date());
+        if (quiet) {
+          // An Update says how many rows came back and nothing else: it is a
+          // button pressed on purpose, not a surprise.
+          setExcelNote(`Updated from ${file.name} — ${importedRows.length} row(s)`);
+        } else {
+          alert(`Imported ${importedRows.length} row(s) — existing rows replaced.\n\nAssign templates via right-click on the Template cell or drag-and-drop.`);
+        }
       } catch (error) {
         console.error('Import error:', error);
         alert('Error importing file. Please make sure it is a valid Excel (.xlsx/.xls) or CSV file with columns: Bus Section, Feeder No, Wiring Type, Rating Power, FLC (A)');
@@ -967,10 +1047,16 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     };
 
     reader.readAsArrayBuffer(file);
+  };
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Picked through the plain input, so there is no handle to re-read with.
+    setExcelFile({ name: file.name, file });
+    setExcelNote(null);
+    importExcelFile(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   // Excel export mirrors handleFileUpload's expected headers exactly, so a
@@ -1047,6 +1133,29 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             <UploadIcon className="w-4 h-4 inline mr-1" />
             Import Excel
           </button>
+          {/* Shown only once something has been imported: a button that reads
+              the same file again, for when the spreadsheet has been edited in
+              Excel and saved back to the same place. */}
+          {excelNote && (
+            <span className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+              {excelNote}
+            </span>
+          )}
+          {excelFile && (
+            <button
+              data-update-excel
+              className="px-3 py-1 bg-emerald-700 text-white rounded text-sm hover:bg-emerald-800"
+              onClick={handleUpdateExcel}
+              title={`Read ${excelFile.name} again${
+                excelReadAt ? ` — last read at ${excelReadAt.toLocaleTimeString()}` : ''
+              }. Edit the spreadsheet in Excel, save it, then press this.`}
+            >
+              <RefreshCwIcon className="w-4 h-4 inline mr-1" />
+              Update from {excelFile.name.length > 22
+                ? `${excelFile.name.slice(0, 20)}…`
+                : excelFile.name}
+            </button>
+          )}
           <button
             className="px-3 py-1 bg-teal-600 text-white rounded text-sm hover:bg-teal-700"
             onClick={handleExportExcel}

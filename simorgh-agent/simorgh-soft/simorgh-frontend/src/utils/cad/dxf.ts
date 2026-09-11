@@ -104,6 +104,18 @@ export function lineTypeFor(dash?: string): string | undefined {
   return 'DASHED';
 }
 
+/**
+ * A name a DXF table will accept.
+ *
+ * R12 block names are upper case, no spaces, and a short alphabet. A name that
+ * breaks those rules is not rejected loudly — it is quietly dropped by some
+ * readers and kept by others, which is worse.
+ */
+function dxfName(raw: string): string {
+  const cleaned = String(raw).toUpperCase().replace(/[^A-Z0-9_$-]+/g, '_').slice(0, 24);
+  return /^[A-Z0-9]/.test(cleaned) ? cleaned : `B_${cleaned}`;
+}
+
 /** Sheet space (y down, pixels) → paper space (y up, millimetres). */
 interface Frame { s: number; ox: number; oy: number; height: number }
 const px = (f: Frame, x: number) => f.ox + x * f.s;
@@ -315,12 +327,51 @@ export function renderDxf(d: Drawing, options: DxfOptions = {}): string {
   const used = d.usedLayers();
   tables(t, frame && !used.includes('FRAME') ? [...used, 'FRAME'] : used);
 
-  // R12 readers expect the section even when nothing defines a block.
-  t.pair(0, 'SECTION').pair(2, 'BLOCKS').pair(0, 'ENDSEC');
+  // ── Blocks ──────────────────────────────────────────────────────────────
+  //
+  // A symbol brought in from the library is one thing on this sheet, and it
+  // should be one thing in the customer's CAD too. Each block becomes a real
+  // BLOCK definition with an INSERT where it sits, so it can be picked, copied
+  // and counted there the way it can be here.
+  //
+  // The geometry goes into the definition already in paper coordinates and the
+  // INSERT sits at the origin. R12 has no better way of saying "this run of
+  // entities is one object" without re-deriving a local origin for every
+  // block, and a block whose base point is the origin behaves correctly in
+  // every reader — it just cannot be re-inserted somewhere else by hand.
+  const blocks = new Map<string, Shape[]>();
+  const loose: Shape[] = [];
+  for (const s of d.shapes) {
+    if (!s.block) { loose.push(s); continue; }
+    const had = blocks.get(s.block);
+    if (had) had.push(s); else blocks.set(s.block, [s]);
+  }
+
+  // A name each reader will take, and a distinct one per insert.
+  const blockNames = new Map<string, string>();
+  let n = 0;
+  for (const [id, run] of blocks) {
+    const base = dxfName(run[0].blockName ?? 'BLOCK');
+    blockNames.set(id, `${base}_${++n}`);
+  }
+
+  t.pair(0, 'SECTION').pair(2, 'BLOCKS');
+  for (const [id, run] of blocks) {
+    const name = blockNames.get(id)!;
+    t.pair(0, 'BLOCK').pair(8, run[0].layer).pair(2, name).pair(70, 0)
+      .pair(10, 0).pair(20, 0).pair(30, 0).pair(3, name);
+    for (const s of run) shapeToDxf(t, s, f, unicode);
+    t.pair(0, 'ENDBLK').pair(8, run[0].layer);
+  }
+  t.pair(0, 'ENDSEC');
 
   t.pair(0, 'SECTION').pair(2, 'ENTITIES');
   if (frame) drawFrame(t, paper, titleBlock, unicode);
-  for (const s of d.shapes) shapeToDxf(t, s, f, unicode);
+  for (const s of loose) shapeToDxf(t, s, f, unicode);
+  for (const [id, run] of blocks) {
+    t.pair(0, 'INSERT').pair(8, run[0].layer).pair(2, blockNames.get(id)!)
+      .pair(10, 0).pair(20, 0).pair(30, 0);
+  }
   t.pair(0, 'ENDSEC');
 
   t.pair(0, 'EOF');

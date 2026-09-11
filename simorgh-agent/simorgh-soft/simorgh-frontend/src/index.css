@@ -3,6 +3,10 @@
    other way round. */
 @import './fonts.css';
 
+/* Simorgh Draw's dark theme. Scoped to the editor by an attribute on its own
+   root, so the rest of the suite stays light behind it. */
+@import './components/SimorghDraw/drawing.css';
+
 /* PLEASE NOTE: THESE TAILWIND IMPORTS SHOULD NEVER BE DELETED */
 @import 'tailwindcss/base';
 @import 'tailwindcss/components';

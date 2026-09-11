@@ -91,6 +91,22 @@ export interface Pen {
    * dashed in the customer's CAD system too.
    */
   dash?: string;
+  /**
+   * The block this shape belongs to, if any.
+   *
+   * A symbol brought in from the library arrives as a dozen lines and arcs that
+   * are one *thing* — a contactor, a CT — and picking one line of it is never
+   * what anybody meant. Shapes sharing a `block` are picked, moved and deleted
+   * together, and go out as a real DXF BLOCK so the customer's CAD sees one
+   * object too.
+   *
+   * The value is an id, not a name: `blockName` is what it is called. Two
+   * copies of the same symbol carry the same name and different ids, which is
+   * exactly what a CAD INSERT is.
+   */
+  block?: string;
+  /** What the block is called, for the DXF block table and the layer list. */
+  blockName?: string;
 }
 
 export type Pt = [number, number];
