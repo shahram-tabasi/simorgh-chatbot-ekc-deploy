@@ -61,7 +61,12 @@ services:
       simorgh-soft-mongo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ || exit 1"]
+      # /api/health, not /  — the static root is served by this container's
+      # own nginx directly and answers even when the Node backend behind it
+      # (proxied at /api/) has died, which is exactly the failure mode this
+      # is meant to catch: a dead Node process otherwise leaves the whole
+      # API 502ing while Docker still reports the container healthy.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
