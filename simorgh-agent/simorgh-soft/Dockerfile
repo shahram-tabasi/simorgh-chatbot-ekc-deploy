@@ -5,14 +5,12 @@
 
 # Stage 1: Build the React frontend
 FROM node:20-alpine AS frontend-build
-# ---- Air-gapped registry proxies (override at build with --build-arg) ----
-ARG PIP_INDEX_URL=https://pypi.org/simple/
-ARG PIP_TRUSTED_HOST=
+# Internal npm mirror (see NPM_REGISTRY in the top-level .env.example) —
+# override at build with --build-arg, or via soft-app.yml's build.args,
+# which passes it through automatically. No pip/apt anywhere in this
+# image, it's a pure Node app, so there's nothing else to mirror here.
 ARG NPM_REGISTRY=https://registry.npmjs.org/
-ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
-    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    npm_config_registry=${NPM_REGISTRY}
+ENV npm_config_registry=${NPM_REGISTRY}
 
 WORKDIR /app
 COPY simorgh-frontend/package*.json ./
@@ -31,6 +29,10 @@ RUN npm run build
 
 # Stage 2: Install backend dependencies
 FROM node:20-alpine AS backend-build
+# This stage never had the registry ARG at all — it always hit the public
+# registry regardless of what stage 1 (or --build-arg) was told, silently.
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ENV npm_config_registry=${NPM_REGISTRY}
 WORKDIR /app
 COPY simorgh-backend/package*.json ./
 RUN npm ci --omit=dev
