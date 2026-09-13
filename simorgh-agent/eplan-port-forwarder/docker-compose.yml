@@ -1,0 +1,33 @@
+# Standalone compose file — run THIS on the EPLAN machine (the Windows box
+# with Eplanix + EPLAN installed), via the Docker Desktop already there.
+# It is not part of the main stack's `docker-compose.yml` and is never
+# started from the Linux server: eplan-bridge-service lives there and talks
+# to this forwarder over the LAN, not the other way round.
+#
+#   cd eplan-port-forwarder
+#   docker compose up -d
+#
+# Then set EPLAN_HOST on eplan-bridge-service (in the main stack, on the
+# other server) to this machine's LAN IP — see ../eplan-bridge-service and
+# ../docs/EPLAN_SEND.md.
+services:
+  eplan-port-forwarder:
+    build: .
+    image: eplan-port-forwarder:local
+    container_name: eplan-port-forwarder
+    restart: unless-stopped
+    environment:
+      # Docker Desktop's DNS name for the Windows host — "127.0.0.1" inside
+      # this container is the container's own loopback, not the host's,
+      # and AsyncTcpServer is bound to the host's loopback. Leave this as
+      # host.docker.internal unless you run forwarder.py directly on
+      # Windows instead of in this container (then use 127.0.0.1).
+      - TARGET_HOST=host.docker.internal
+      - PORT_MIN=${EPLAN_PORT_MIN:-12000}
+      - PORT_MAX=${EPLAN_PORT_MAX:-12100}
+    ports:
+      # Published on every interface of this machine so the bridge, on the
+      # other server, can reach it — restrict this with the Windows
+      # Firewall to that server's address, the pool is an unauthenticated
+      # raw relay onto AsyncTcpServer.
+      - "${EPLAN_PORT_MIN:-12000}-${EPLAN_PORT_MAX:-12100}:${EPLAN_PORT_MIN:-12000}-${EPLAN_PORT_MAX:-12100}"

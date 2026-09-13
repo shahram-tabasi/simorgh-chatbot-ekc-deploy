@@ -2,59 +2,55 @@
 
 The Eplanix tab already produces three things off the project: the single
 line, the panel layout and the mechanical items. **Send to EPLAN** is the
-fourth: the same feeder lines, handed to the EPLAN drawing server over the
-network instead of downloaded as a file.
-
-## The address
-
-The EPLAN machine is one IP and one port, and they live in the **backend's**
-environment — `simorgh-backend/.env` when it runs on its own, and for the
-deployed stack `simorgh-agent/.env`, which `compose/soft-app.yml` passes into
-the container:
-
-```
-EPLAN_API_HOST=192.168.1.39
-EPLAN_API_PORT=8000
-EPLAN_API_PATH=/draw          # the endpoint that takes the records
-EPLAN_API_TIMEOUT_MS=120000   # how long a drawing job may take
-```
-
-Changing them is an edit and `docker compose up -d simorgh-soft` — never a
-frontend rebuild. That is the whole reason the address is read from the
-server at runtime instead of being compiled in: the app asks
-`GET /api/eplan/target` when the dialog opens.
-
-`simorgh-frontend/.env` carries `VITE_EPLAN_API_HOST` / `VITE_EPLAN_API_PORT`
-as an override, and they are **empty on purpose**. Vite bakes anything put
-there into the bundle, so filling them in pins the address to whatever was
-true at build time. Use them only for a locally built bundle that has to
-point somewhere else.
-
-The dialog shows whichever address is in force and lets it be changed for a
-single send — useful for trying a second machine without touching a file.
-**Test** opens a TCP connection to it and says whether anything is listening.
+fourth: the same feeder lines, handed to EPLAN over the network instead of
+downloaded as a file — following the exact pattern the `eplanix` repo's own
+MVC app uses to talk to its EPLAN add-in, without changing anything in that
+repo.
 
 ## The path a send takes
 
 ```
-Eplanix tab  →  POST /api/eplan/send  →  http://<EPLAN_API_HOST>:<EPLAN_API_PORT><EPLAN_API_PATH>
- (browser)        (this app's backend)              (the EPLAN drawing server)
+Eplanix tab          this app's backend        eplan-bridge-service      eplan-port-forwarder        AsyncTcpServer
+ (browser)      →      (simorgh-backend)    →   (this stack, Linux)   →  (EPLAN machine, Windows) →  (127.0.0.1:<port>,
+                  POST /api/eplan/send          POST /draw               TCP :12000-12100 (LAN)       same machine)
 ```
 
-The browser never talks to the EPLAN machine directly: the backend forwards
-the request. That keeps the address out of the JavaScript bundle and keeps
-the EPLAN host off the browser's cross-origin path.
+Four hops, for one reason: the EPLAN listener Eplanix's add-in starts —
+`AsyncTcpServer`, in `StartAction.epladdin.app1` — binds `127.0.0.1` only:
 
-The body the backend posts on is what the bridge service already expects:
-
-```json
-{ "project_name": "…", "username": "…", "port": 8000, "eplan_data": [ … ] }
+```csharp
+public AsyncTcpServer(string ip = "127.0.0.1", int port = 12000)
 ```
+
+That's correct for Eplanix's own MVC app, which runs on the same Windows
+box as EPLAN. Simorgh Design Suite doesn't — it runs on a different server
+— so nothing here ever opens that socket directly. Two hops make it
+reachable anyway, without touching the `eplanix` repo or opening that
+socket to the network:
+
+- **`eplan-bridge-service`** (`simorgh-agent/eplan-bridge-service`) speaks
+  EPLAN's own wire protocol — a 4-byte length-prefixed JSON array, exactly
+  what `EplanixController.SendToEplanServerAsync` sends — over HTTP, so
+  nothing else in this stack has to hold a raw socket. It also picks a port
+  from the pool automatically (12000–12100, the same range Eplanix's own
+  `TcpPortResolverService` hands out from), so a send never has to know or
+  guess one.
+- **`eplan-port-forwarder`** (`simorgh-agent/eplan-port-forwarder`) is a
+  plain byte-for-byte TCP relay deployed *on the EPLAN machine itself*, via
+  the Docker Desktop already there. It's the only thing that actually needs
+  to run where EPLAN does — it forwards the whole port pool from that
+  machine's real network interface to its own loopback, which is what lets
+  `eplan-bridge-service` (on a different server) reach a socket that only
+  ever binds loopback.
+
+See `../eplan-port-forwarder/README.md` for why this beats the two more
+obvious fixes (binding `AsyncTcpServer` to `0.0.0.0`, or a generic reverse
+proxy) and exactly how to deploy it.
 
 ## What is sent
 
 One `EplanData` record per feeder line — the exact shape of
-`SharedLibrary.Models.EplanData` on the EPLAN side, all 177 fields, built by
+`SharedLibrary.Models.EplanData` on the EPLAN side, built by
 `src/utils/eplanDataExport.ts`. Project, switchboard, busbar, wire and
 drawing values repeat on every record; the feeder values differ.
 
@@ -77,3 +73,35 @@ Before anything is sent, the dialog reports how many switchgears and how
 many records are going, and can show the first record in full (and copy the
 whole payload) — so what leaves the app has been looked at first, the same
 rule the rest of the Eplanix tab follows.
+
+## Configuration
+
+This app's backend (`simorgh-backend/.env.example`):
+
+```
+EPLAN_BRIDGE_URL=http://eplan-bridge:8026   # the compose service name — works as-is in this stack
+EPLAN_BRIDGE_API_KEY=                       # only if the bridge was deployed with one set
+EPLAN_BRIDGE_TIMEOUT_MS=120000
+```
+
+`eplan-bridge-service` itself (`simorgh-agent/compose/svc-eplan-bridge.yml`):
+
+```
+EPLAN_HOST=<eplan-port-forwarder's LAN IP>   # NOT EPLAN's own IP — see below
+EPLAN_PORT_MIN=12000
+EPLAN_PORT_MAX=12100
+EPLAN_BRIDGE_API_KEY=                        # set this once /draw is reachable from another server
+```
+
+`EPLAN_HOST` here is the address of `eplan-port-forwarder`
+(`simorgh-agent/eplan-port-forwarder`), not the EPLAN machine's address
+used as if it spoke this protocol directly — nothing on that machine
+listens on its real interface without the forwarder running. In the common
+case the forwarder runs on the EPLAN machine itself, so this is just that
+machine's LAN IP.
+
+There is nothing left to configure on the frontend — `VITE_EPLAN_API_HOST` /
+`VITE_EPLAN_API_PORT` were removed along with the idea of picking a target
+per send. Which EPLAN instance a send lands on is entirely
+`eplan-bridge-service`'s concern, the same way an interactive Eplanix user
+never sees a port picker either.

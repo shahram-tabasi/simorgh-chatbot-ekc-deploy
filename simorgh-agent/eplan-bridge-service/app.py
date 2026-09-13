@@ -1,17 +1,41 @@
 """
 EPLAN Drawing REST Bridge Service
 ====================================
-REST API bridge to the EPLAN TCP server (AsyncTcpServer on port 12000+).
-Wraps the legacy TCP protocol with a modern HTTP interface so the agent
-can trigger EPLAN drawing generation.
+REST API bridge to the EPLAN TCP server (AsyncTcpServer on the Eplanix
+add-in — see eplanix/StartAction.epladdin.app1/TcpServer/AsyncTcpServer.cs).
+Wraps the legacy length-prefixed TCP protocol with a modern HTTP interface
+so this stack's services (and Simorgh's "Send to EPLAN") can trigger EPLAN
+drawing generation without any of them holding a raw socket themselves.
 
-The actual EPLAN server runs on the Windows machine (EPLANIX server).
-This bridge runs alongside and converts HTTP requests to TCP.
+Two-hop reachability
+---------------------
+AsyncTcpServer binds `127.0.0.1` only (see its C# constructor) — Eplanix's
+own MVC app gets away with this because it runs on the *same* Windows box as
+EPLAN. This bridge does not: it runs in this repo's Linux docker-compose
+stack, on a different machine than EPLAN. So `EPLAN_HOST` here can never be
+"the EPLAN machine's IP" directly — nothing is listening on that machine's
+real interface, only on its loopback.
+
+The second hop that makes this reachable is `eplan-port-forwarder` (see
+../eplan-port-forwarder), a small byte-for-byte TCP relay deployed on the
+EPLAN machine itself (via Docker Desktop, which is already used there) that
+listens on the machine's real interface for the whole EPLAN port pool and
+forwards each connection to that same port on `127.0.0.1`. Point `EPLAN_HOST`
+at *that* relay's LAN address, not at EPLAN's own IP as if it spoke this
+protocol directly — the forwarder is what makes the two the same thing.
+
+This is deliberately not "bind AsyncTcpServer to 0.0.0.0" (that needs a code
+change in the Eplanix repo, and would put an unauthenticated raw socket
+straight on the network) and not a generic reverse proxy (the pool is a
+range of 101 ports handed out dynamically — a single static upstream can't
+follow that). A plain port-range relay, restricted by firewall to this
+bridge's own address, keeps AsyncTcpServer exactly as Eplanix ships it.
 
 Endpoints:
-  POST /draw              - Send EplanData to generate drawings
+  POST /draw              - Send EplanData to generate drawings (auto-picks
+                             a port from the pool when none is given)
   GET  /job/{job_id}      - Check job status
-  POST /port/resolve      - Get available EPLAN port
+  POST /port/resolve      - Get an available EPLAN port
   GET  /health            - Health check
   /mcp                    - MCP Streamable HTTP endpoint
 """
@@ -25,20 +49,46 @@ import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from mcp.server.fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="EPLAN Bridge Service", version="1.0.0")
+app = FastAPI(title="EPLAN Bridge Service", version="1.1.0")
 
+# Where the *forwarder* on the EPLAN machine listens — see the module
+# docstring. Not EPLAN's own IP unless something there also does that
+# forwarding (it doesn't, out of the box).
 EPLAN_HOST = os.getenv("EPLAN_HOST", "127.0.0.1")
 EPLAN_DEFAULT_PORT = int(os.getenv("EPLAN_DEFAULT_PORT", "12000"))
+# The same pool Eplanix's own TcpPortResolverService hands out from
+# (12000-12100) — this bridge only *reuses* an instance already listening
+# in it, it never starts a new EPLAN.exe itself (that stays Eplanix's job:
+# launching one correctly needs the same context the MVC app already runs
+# in). If nothing in the pool answers, an operator needs to open the
+# Eplanix web app once so it starts an instance.
+EPLAN_PORT_MIN = int(os.getenv("EPLAN_PORT_MIN", str(EPLAN_DEFAULT_PORT)))
+EPLAN_PORT_MAX = int(os.getenv("EPLAN_PORT_MAX", "12100"))
 TCP_TIMEOUT = int(os.getenv("TCP_TIMEOUT", "120"))
+# Optional shared secret. Empty means "no auth" — fine while this only ever
+# takes traffic from inside the compose network, but set it once /draw is
+# reachable from another server (e.g. simorgh-backend across the LAN) and
+# firewall this port to the callers that need it.
+API_KEY = os.getenv("EPLAN_BRIDGE_API_KEY", "")
 
 _jobs: Dict[str, Dict] = {}
+# Ports this bridge currently believes are mid-request, so two concurrent
+# /draw calls that both omit `port` don't pick the same busy instance when
+# another one in the pool is free.
+_busy_ports: set = set()
+_busy_lock = asyncio.Lock()
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None)):
+    if API_KEY and x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key")
 
 
 class EplanDrawRequest(BaseModel):
@@ -46,7 +96,9 @@ class EplanDrawRequest(BaseModel):
     eplan_data: List[Dict[str, Any]] = Field(
         ..., description="List of EplanData objects to send to EPLAN server"
     )
-    port: int = Field(EPLAN_DEFAULT_PORT, description="EPLAN TCP server port")
+    port: Optional[int] = Field(
+        None, description="EPLAN TCP server port; omit to auto-pick one from the pool"
+    )
     username: str = Field("agent")
 
 
@@ -64,6 +116,46 @@ class ServerResponse(BaseModel):
     content: Optional[str] = None
     timestamp: Optional[str] = None
     error: Optional[str] = None
+
+
+async def _port_answers(host: str, port: int, timeout: float = 1.0) -> bool:
+    """A bare TCP connect — enough to say an EPLAN instance (by way of the
+    forwarder) is listening on this port, without sending it anything."""
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
+        return True
+    except Exception:
+        return False
+
+
+async def _resolve_and_reserve_port(host: str) -> int:
+    """The port a /draw with no explicit `port` uses: the first one in the
+    pool that answers and isn't already busy with another request here.
+    Mirrors the reuse half of Eplanix's own TcpPortResolverService — the
+    half this bridge can actually do without launching EPLAN.exe itself."""
+    async with _busy_lock:
+        for port in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1):
+            if port in _busy_ports:
+                continue
+            if await _port_answers(host, port):
+                _busy_ports.add(port)
+                return port
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"No EPLAN instance is currently reachable on {host}:"
+            f"{EPLAN_PORT_MIN}-{EPLAN_PORT_MAX}. Open the Eplanix web app once "
+            "so it starts one, or check that eplan-port-forwarder is running "
+            "on the EPLAN machine and this bridge's EPLAN_HOST points at it."
+        ),
+    )
+
+
+async def _release_port(port: int) -> None:
+    async with _busy_lock:
+        _busy_ports.discard(port)
 
 
 async def _send_to_eplan(host: str, port: int, data: List[Dict]) -> Dict:
@@ -113,42 +205,43 @@ async def _send_to_eplan(host: str, port: int, data: List[Dict]) -> Dict:
 
 @app.get("/health")
 async def health():
-    # Try to connect to default EPLAN port
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(EPLAN_HOST, EPLAN_DEFAULT_PORT),
-            timeout=3,
-        )
-        writer.close()
-        await writer.wait_closed()
-        eplan_status = "reachable"
-    except Exception:
-        eplan_status = "unreachable"
+    # A quick signal, not a full resolve: whether *anything* in the pool
+    # currently answers, without reserving it.
+    eplan_status = "unreachable"
+    for port in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1):
+        if await _port_answers(EPLAN_HOST, port, timeout=0.5):
+            eplan_status = "reachable"
+            break
 
     return {
         "status": "healthy",
         "service": "eplan-bridge",
         "eplan_server": eplan_status,
         "eplan_host": EPLAN_HOST,
-        "eplan_port": EPLAN_DEFAULT_PORT,
+        "eplan_port_pool": f"{EPLAN_PORT_MIN}-{EPLAN_PORT_MAX}",
     }
 
 
-@app.post("/draw", response_model=DrawResponse)
+@app.post("/draw", response_model=DrawResponse, dependencies=[Depends(require_api_key)])
 async def trigger_drawing(req: EplanDrawRequest):
     """Send EplanData to the EPLAN server to generate drawings."""
     job_id = str(uuid.uuid4())
+    port = req.port
+    reserved_here = False
+    if port is None:
+        port = await _resolve_and_reserve_port(EPLAN_HOST)
+        reserved_here = True
 
     _jobs[job_id] = {
         "job_id": job_id,
         "project_name": req.project_name,
         "status": "sending",
         "started_at": datetime.utcnow().isoformat(),
-        "port": req.port,
+        "port": port,
     }
 
     try:
-        result = await _send_to_eplan(EPLAN_HOST, req.port, req.eplan_data)
+        result = await _send_to_eplan(EPLAN_HOST, port, req.eplan_data)
 
         if result["status"] == "ok":
             _jobs[job_id]["status"] = "completed"
@@ -174,6 +267,9 @@ async def trigger_drawing(req: EplanDrawRequest):
         _jobs[job_id]["status"] = "failed"
         _jobs[job_id]["error"] = str(e)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if reserved_here:
+            await _release_port(port)
 
 
 @app.get("/job/{job_id}")
@@ -184,27 +280,18 @@ async def get_job_status(job_id: str):
     return _jobs[job_id]
 
 
-@app.post("/port/resolve")
+@app.post("/port/resolve", dependencies=[Depends(require_api_key)])
 async def resolve_port(req: PortResolveRequest):
-    """
-    Find an available EPLAN port.
-    Scans ports 12000-12100 for a responsive EPLAN server.
-    """
-    for port in range(12000, 12101):
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(EPLAN_HOST, port),
-                timeout=1,
-            )
-            writer.close()
-            await writer.wait_closed()
+    """Report an EPLAN port that currently answers, without reserving it —
+    what the Simorgh dialog's "Test" button calls to say whether a draw
+    would have anywhere to go right now."""
+    for port in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1):
+        if await _port_answers(EPLAN_HOST, port):
             return {"port": port, "status": "available", "host": EPLAN_HOST}
-        except Exception:
-            continue
 
     raise HTTPException(
         status_code=503,
-        detail="No EPLAN server available on ports 12000-12100",
+        detail=f"No EPLAN server available on ports {EPLAN_PORT_MIN}-{EPLAN_PORT_MAX}",
     )
 
 
@@ -216,10 +303,15 @@ mcp = FastMCP("eplan-bridge", instructions="EPLAN TCP-to-REST bridge for drawing
 
 @mcp.tool()
 async def eplan_draw(project_name: str, eplan_data: str,
-                     port: int = 12000, username: str = "agent") -> str:
-    """Send EplanData to EPLAN server to generate drawings. eplan_data: JSON string of EplanData list."""
+                     port: Optional[int] = None, username: str = "agent") -> str:
+    """Send EplanData to EPLAN server to generate drawings. eplan_data: JSON
+    string of EplanData list. Omit port to auto-pick one from the pool."""
+    reserved_here = False
     try:
         data_list = json.loads(eplan_data) if isinstance(eplan_data, str) else eplan_data
+        if port is None:
+            port = await _resolve_and_reserve_port(EPLAN_HOST)
+            reserved_here = True
         job_id = str(uuid.uuid4())
         _jobs[job_id] = {
             "job_id": job_id, "project_name": project_name,
@@ -235,23 +327,22 @@ async def eplan_draw(project_name: str, eplan_data: str,
             _jobs[job_id]["status"] = "failed"
             _jobs[job_id]["error"] = result.get("error", "Unknown")
             return json.dumps({"job_id": job_id, "status": "failed", "error": result.get("error", "EPLAN server error")})
+    except HTTPException as e:
+        return json.dumps({"error": e.detail})
     except Exception as e:
         return json.dumps({"error": str(e)})
+    finally:
+        if reserved_here:
+            await _release_port(port)
 
 
 @mcp.tool()
 async def eplan_resolve_port(username: str = "agent") -> str:
-    """Find an available EPLAN server port by scanning 12000-12100."""
-    for port in range(12000, 12101):
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(EPLAN_HOST, port), timeout=1)
-            writer.close()
-            await writer.wait_closed()
-            return json.dumps({"port": port, "status": "available", "host": EPLAN_HOST})
-        except Exception:
-            continue
-    return json.dumps({"error": "No EPLAN server available on ports 12000-12100"})
+    """Find an available EPLAN server port in the pool, without reserving it."""
+    for p in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1):
+        if await _port_answers(EPLAN_HOST, p):
+            return json.dumps({"port": p, "status": "available", "host": EPLAN_HOST})
+    return json.dumps({"error": f"No EPLAN server available on ports {EPLAN_PORT_MIN}-{EPLAN_PORT_MAX}"})
 
 
 # FastMCP's streamable_http_app exposes route /mcp internally. Mount at

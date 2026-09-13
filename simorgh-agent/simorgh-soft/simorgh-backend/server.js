@@ -270,7 +270,7 @@ registerTpmsImportRoutes(app, connectToMySql);
 // database, plus the folder of symbols exported from EPLAN itself.
 registerEplanSymbolRoutes(app, connectToSqlServer, process.env.EPLAN_SYMBOL_DIR);
 
-// EPLAN drawing server — address in .env (EPLAN_API_HOST / EPLAN_API_PORT).
+// EPLAN — forwards to eplan-bridge-service; address in .env (EPLAN_BRIDGE_URL).
 registerEplanRoutes(app);
 
 app.get('/api/health', async (req, res) => {

@@ -1,6 +1,16 @@
 # =============================================================================
 # EPLAN-BRIDGE - TCP-to-REST bridge to EPLAN electrical design software
 # Port 8026. EPLAN runs on a Windows host, this service relays requests over TCP.
+#
+# EPLAN_HOST here is NOT the EPLAN machine's address used as if it spoke
+# this protocol directly — AsyncTcpServer on that machine binds 127.0.0.1
+# only, so nothing listens on its real interface. Point EPLAN_HOST at
+# eplan-port-forwarder instead (../eplan-port-forwarder), a small relay
+# deployed on the EPLAN machine itself via the Docker Desktop already
+# there, that forwards the whole port pool from its real interface to its
+# own loopback. The 127.0.0.1 default below only works when this bridge
+# happens to run on the same machine as EPLAN, which is not this stack's
+# deployment — see ../docs/EPLAN_SEND.md.
 # =============================================================================
 services:
   eplan-bridge:
@@ -15,6 +25,9 @@ services:
       - PYTHONUNBUFFERED=1
       - EPLAN_HOST=${EPLAN_HOST:-127.0.0.1}
       - EPLAN_DEFAULT_PORT=${EPLAN_DEFAULT_PORT:-12000}
+      - EPLAN_PORT_MIN=${EPLAN_PORT_MIN:-12000}
+      - EPLAN_PORT_MAX=${EPLAN_PORT_MAX:-12100}
+      - EPLAN_BRIDGE_API_KEY=${EPLAN_BRIDGE_API_KEY:-}
       - TCP_TIMEOUT=${EPLAN_TCP_TIMEOUT:-120}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8026/health || exit 1"]

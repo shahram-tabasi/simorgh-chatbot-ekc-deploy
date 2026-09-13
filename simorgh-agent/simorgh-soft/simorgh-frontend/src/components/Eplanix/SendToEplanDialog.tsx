@@ -2,17 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { SendIcon, XIcon, PlugZapIcon, CheckCircle2Icon, AlertTriangleIcon, CopyIcon } from 'lucide-react';
 import { ProjectData, Equipment, Revision } from '../../types/project';
 import { buildEplanData, EplanData } from '../../utils/eplanDataExport';
-import { eplanApi } from '../../services/eplanApi';
+import { eplanApi, EplanTarget } from '../../services/eplanApi';
 
-// "Send to EPLAN": the project's feeder lines as EplanData records, posted to
-// the EPLAN drawing server.
-//
-// The address is one IP and one port. It comes from .env
-// (VITE_EPLAN_API_HOST / VITE_EPLAN_API_PORT in the frontend, or
-// EPLAN_API_HOST / EPLAN_API_PORT on the backend when those are left empty),
-// and the two fields here start from it — so a one-off send to another
-// machine does not need a rebuild. What goes over the wire is shown before
-// it is sent: the record count, and the first record in full.
+// "Send to EPLAN": the project's feeder lines as EplanData records, posted
+// through this app's backend to eplan-bridge-service, which holds the
+// actual TCP connection to EPLAN's listener and picks a port from the pool
+// — the same thing Eplanix's own TcpPortResolverService does for its own
+// users, just reached from a different server. There is nothing to address
+// here: the bridge's location is an ops setting (EPLAN_BRIDGE_URL on this
+// app's backend), not something a single send should override.
 
 interface Props {
   projectData: ProjectData;
@@ -22,33 +20,20 @@ interface Props {
   onClose: () => void;
 }
 
-const envHost = String(import.meta.env.VITE_EPLAN_API_HOST || '').trim();
-const envPort = String(import.meta.env.VITE_EPLAN_API_PORT || '').trim();
-
 export const SendToEplanDialog: React.FC<Props> = ({
   projectData, equipments, currentRevision, feedersPerPage, onClose,
 }) => {
-  const [host, setHost] = useState(envHost);
-  const [port, setPort] = useState(envPort);
-  const [source, setSource] = useState<'env' | 'server'>(envHost && envPort ? 'env' : 'server');
+  const [target, setTarget] = useState<EplanTarget | null>(null);
   const [probe, setProbe] = useState<{ state: 'idle' | 'testing' | 'up' | 'down'; note?: string }>({ state: 'idle' });
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [showPayload, setShowPayload] = useState(false);
 
-  // Nothing set in the frontend .env? Then the backend's own address is the
-  // one that will be used — show it rather than an empty pair of fields.
   useEffect(() => {
-    if (envHost && envPort) return;
     let cancelled = false;
     eplanApi.getTarget()
-      .then(target => {
-        if (cancelled) return;
-        setHost(h => h || target.host);
-        setPort(p => p || String(target.port));
-        setSource('server');
-      })
-      .catch(() => { /* the fields stay editable and empty */ });
+      .then(t => { if (!cancelled) setTarget(t); })
+      .catch(() => { /* shown as "not configured" below */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -61,18 +46,16 @@ export const SendToEplanDialog: React.FC<Props> = ({
     [projectData, equipments, currentRevision, feedersPerPage]);
 
   const withLines = equipments.filter(eq => (eq.devices ?? []).length > 0);
-  const portNumber = Number(port);
-  const addressOk = !!host.trim() && Number.isFinite(portNumber) && portNumber > 0;
-  const canSend = addressOk && records.length > 0 && !sending;
+  const canSend = records.length > 0 && !sending;
 
   const handleTest = async () => {
     setProbe({ state: 'testing' });
     setResult(null);
     try {
-      const answer = await eplanApi.ping({ host: host.trim(), port: portNumber });
+      const answer = await eplanApi.ping(projectData.planner);
       setProbe(answer.reachable
-        ? { state: 'up', note: `${answer.target} answered` }
-        : { state: 'down', note: answer.error || `${answer.target} did not answer` });
+        ? { state: 'up', note: answer.target ? `EPLAN is up on ${answer.target}` : 'An EPLAN instance is available' }
+        : { state: 'down', note: answer.error || 'No EPLAN instance is available right now' });
     } catch (err) {
       setProbe({ state: 'down', note: (err as Error).message });
     }
@@ -85,12 +68,11 @@ export const SendToEplanDialog: React.FC<Props> = ({
       const answer = await eplanApi.send({
         projectName: projectData.projectName,
         data: records,
-        host: host.trim(),
-        port: portNumber,
+        userName: projectData.planner,
       });
       setResult(answer.success
         ? { ok: true, text: answer.message || `${records.length} record(s) sent.` }
-        : { ok: false, text: answer.error || 'The EPLAN server did not accept the records.' });
+        : { ok: false, text: answer.error || 'The EPLAN bridge did not accept the records.' });
     } catch (err) {
       setResult({ ok: false, text: (err as Error).message });
     } finally {
@@ -124,39 +106,25 @@ export const SendToEplanDialog: React.FC<Props> = ({
           {/* ── Where it goes ── */}
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Target</p>
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <label className="block text-xs text-gray-500 mb-1">IP address</label>
-                <input
-                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-400"
-                  value={host}
-                  onChange={e => setHost(e.target.value)}
-                  placeholder="192.168.1.39"
-                />
-              </div>
-              <div className="w-28">
-                <label className="block text-xs text-gray-500 mb-1">Port</label>
-                <input
-                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-400"
-                  value={port}
-                  onChange={e => setPort(e.target.value.replace(/[^\d]/g, ''))}
-                  placeholder="8000"
-                />
+            <div className="flex items-center justify-between gap-3 border border-gray-200 rounded-lg px-3 py-2">
+              <div className="text-sm min-w-0">
+                <p className="text-gray-800 truncate">
+                  {target ? target.url : 'Reading the configured EPLAN bridge…'}
+                </p>
+                <p className="text-xs text-gray-500">
+                  Which EPLAN instance a send lands on is picked by the bridge itself — set once for this
+                  deployment, not per send.
+                </p>
               </div>
               <button
-                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded text-sm hover:bg-gray-50 disabled:opacity-40"
+                className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded text-sm hover:bg-gray-50 disabled:opacity-40"
                 onClick={handleTest}
-                disabled={!addressOk || probe.state === 'testing'}
+                disabled={probe.state === 'testing'}
               >
                 <PlugZapIcon className="w-4 h-4" />
                 {probe.state === 'testing' ? 'Testing…' : 'Test'}
               </button>
             </div>
-            <p className="text-xs text-gray-500 mt-2">
-              {source === 'env'
-                ? 'From .env — VITE_EPLAN_API_HOST / VITE_EPLAN_API_PORT. Editing here changes this send only.'
-                : 'From the server\'s .env — EPLAN_API_HOST / EPLAN_API_PORT. Editing here changes this send only.'}
-            </p>
             {probe.state === 'up' && (
               <p className="text-xs text-emerald-700 mt-1 flex items-center gap-1">
                 <CheckCircle2Icon className="w-3.5 h-3.5" /> {probe.note}
@@ -231,7 +199,7 @@ export const SendToEplanDialog: React.FC<Props> = ({
           <span className="text-xs text-gray-500">
             {records.length === 0
               ? 'Nothing to send — the switchgears have no feeder lines yet.'
-              : `POST http://${host || '…'}:${port || '…'} · ${records.length} record(s)`}
+              : `${records.length} record(s) via ${target ? target.url : 'the EPLAN bridge'}`}
           </span>
           <div className="flex gap-2">
             <button className="px-4 py-2 border rounded text-sm hover:bg-gray-100" onClick={onClose}>
