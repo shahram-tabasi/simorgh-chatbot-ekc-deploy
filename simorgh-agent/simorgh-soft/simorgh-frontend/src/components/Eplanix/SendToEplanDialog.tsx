@@ -83,7 +83,9 @@ export const SendToEplanDialog: React.FC<Props> = ({
   const preview = JSON.stringify(records.slice(0, 1), null, 2);
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    // Above the drawing editor's z-[210] (SheetEditorWindow) — this dialog can
+    // be opened from the editor's own "Send to EPLAN" button, on top of it.
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[220]">
       <div className="bg-white rounded-lg shadow-2xl w-[720px] max-h-[90vh] flex flex-col">
 
         <div className="flex items-center justify-between px-6 py-4 border-b">

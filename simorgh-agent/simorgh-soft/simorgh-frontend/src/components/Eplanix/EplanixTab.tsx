@@ -144,6 +144,10 @@ export const EplanixTab: React.FC = () => {
   const [editingSymbol, setEditingSymbol] = useState<SymbolId | null>(null);
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
   const [showSend, setShowSend] = useState(false);
+  // 'selection' — the header button: every switchgear currently chosen.
+  // 'preview' — the button inside the drawing editor: just the one switchgear
+  // being edited, since that is the drawing the user is actually looking at.
+  const [sendScope, setSendScope] = useState<'selection' | 'preview'>('selection');
 
   const equipments = projectData.equipments ?? [];
 
@@ -360,7 +364,7 @@ export const EplanixTab: React.FC = () => {
           {/* The same feeder lines, sent to the EPLAN drawing server instead
               of downloaded. The address is in .env — see the dialog. */}
           <button
-            onClick={() => setShowSend(true)}
+            onClick={() => { setSendScope('selection'); setShowSend(true); }}
             disabled={chosenWithLines.length === 0}
             title={chosenWithLines.length === 0
               ? 'Add feeder lines in Device Selection first'
@@ -511,6 +515,19 @@ export const EplanixTab: React.FC = () => {
             savedEdits={projectData.drawingEdits}
             canEdit={isCurrentRevisionEditable}
             onSaveEdits={next => patchProjectData(() => ({ drawingEdits: next }))}
+            headerActions={
+              <button
+                onClick={() => { setSendScope('preview'); setShowSend(true); }}
+                disabled={(preview.devices ?? []).length === 0}
+                title={(preview.devices ?? []).length === 0
+                  ? 'Add feeder lines in Device Selection first'
+                  : `Send ${preview.name} to the EPLAN drawing server`}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap bg-emerald-700 text-white hover:bg-emerald-600 disabled:opacity-40"
+              >
+                <SendIcon className="w-4 h-4" />
+                Send to EPLAN
+              </button>
+            }
             titleBlock={[
               preview.name || 'SWITCHGEAR',
               [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]
@@ -732,7 +749,7 @@ export const EplanixTab: React.FC = () => {
       {showSend && (
         <SendToEplanDialog
           projectData={projectData}
-          equipments={chosenWithLines}
+          equipments={sendScope === 'preview' && preview ? [preview] : chosenWithLines}
           currentRevision={currentRevision}
           feedersPerPage={perPage}
           onClose={() => setShowSend(false)}
