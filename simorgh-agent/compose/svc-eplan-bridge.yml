@@ -30,7 +30,9 @@ services:
       - EPLAN_BRIDGE_API_KEY=${EPLAN_BRIDGE_API_KEY:-}
       - TCP_TIMEOUT=${EPLAN_TCP_TIMEOUT:-120}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8026/health || exit 1"]
+      # stdlib, not wget — the image installs nothing from apt (see its
+      # Dockerfile), so nothing here can depend on a package manager.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8026/health', timeout=3)"]
       interval: 30s
       timeout: 10s
       retries: 3
