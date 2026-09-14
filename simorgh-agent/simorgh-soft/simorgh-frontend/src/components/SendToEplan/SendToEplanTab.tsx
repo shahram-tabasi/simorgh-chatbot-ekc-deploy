@@ -1,0 +1,612 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import * as XLSX from 'xlsx-js-style';
+import {
+  SendIcon, PlugZapIcon, CheckCircle2Icon, AlertTriangleIcon, ZapIcon, DatabaseIcon, LayersIcon,
+  ClipboardIcon, DownloadIcon, ListChecksIcon, SaveIcon, UploadIcon,
+} from 'lucide-react';
+import { useProject } from '../../context/ProjectContext';
+import { buildEplanData, EplanData, EplanDataOptions } from '../../utils/eplanDataExport';
+import { eplanApi, EplanTarget } from '../../services/eplanApi';
+import { plotframeFieldsApi, PlotframeDrawingType } from '../../services/plotframeFieldsApi';
+import { MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows } from '../../utils/mechanicalItems';
+import { downloadText, fileSafe } from '../../utils/download';
+
+// The "Send to EPLAN" tab — pulled out of Simorgh Draw so sending a project
+// to EPLAN is its own place, not tucked inside the drawing preview. Mirrors
+// Eplanix's own ProjectData screen (Project → GenerationType → its
+// configuration options → Generate Switchboard) and its Mechanical screen
+// (Project/Scope/Revision → Load/Export), just reached over this app's own
+// eplan-bridge API instead of Eplanix's direct TCP connection, and in one
+// project at a time — the project already open here — rather than a
+// project/scope/revision picker of its own.
+
+type Mode = 'project' | 'mechanical';
+type GenerationType = 'sld' | 'old' | 'sldold';
+
+const EXHAUST_OPTIONS = ['No Exhaust', 'Left Exhust', 'Right Exhaust', 'up Exhaust', 'Other'];
+
+// Field index → a guidance label (freeform text underneath — "the labels are
+// guidance only", per Eplanix's own ProjectData screen). Only 1-9 have a
+// known label from the reference screen; every other index still gets a
+// field, just a generic one.
+const FIELD_1_9_LABELS: Record<number, string> = {
+  1: 'Date', 2: 'Drawing revision', 3: 'Document status', 4: 'Tech. Expert',
+  5: 'Project Resp.', 6: 'Tech. Manager', 7: 'Auth. Expert', 8: 'spare', 9: 'spare',
+};
+const SUBSET_STARTS = [1, 11, 21, 31, 41]; // "User supplementary fields N - N+8"
+const OPTIONS_INDEXES = Array.from({ length: 21 }, (_, i) => 50 + i); // 50-70
+const IDENTITY_FIELDS: { index: number; label: string; placeholder: string }[] = [
+  { index: 91, label: 'Origin (Device name)', placeholder: 'e.g. B.B.1 Switchgear, 36KV, 2000A, 25KA/3S, EK3' },
+  { index: 92, label: 'Replacement of (Internal document no.)', placeholder: '' },
+  { index: 93, label: 'Replaced by (Customer document no.)', placeholder: '' },
+  { index: 94, label: 'Macro: Version', placeholder: '00' },
+];
+
+export const SendToEplanTab: React.FC = () => {
+  const { projectData, currentRevision, revisions } = useProject();
+  const equipments = projectData.equipments ?? [];
+  const withLines = equipments.filter(e => (e.devices ?? []).length > 0);
+
+  const [equipmentId, setEquipmentId] = useState('');
+  const equipment = equipments.find(e => e.id === equipmentId) || null;
+
+  const [mode, setMode] = useState<Mode>('project');
+
+  // ── Plotframe ──
+  const [plotframeFileName, setPlotframeFileName] = useState('');
+  const [suppType, setSuppType] = useState<PlotframeDrawingType>('SLD');
+  const [suppSubsetStart, setSuppSubsetStart] = useState(1);
+  const [suppShowOptions, setSuppShowOptions] = useState(false);
+  const [sldFields, setSldFields] = useState<Record<string, string>>({});
+  const [oldFields, setOldFields] = useState<Record<string, string>>({});
+  const [suppStatus, setSuppStatus] = useState('');
+
+  const projectKey = projectData._id || '';
+  useEffect(() => {
+    if (!projectKey || !equipmentId) { setSldFields({}); setOldFields({}); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [sld, old] = await Promise.all([
+          plotframeFieldsApi.get(projectKey, equipmentId, 'SLD'),
+          plotframeFieldsApi.get(projectKey, equipmentId, 'OLD'),
+        ]);
+        if (!cancelled) { setSldFields(sld); setOldFields(old); }
+      } catch {
+        // Saved values are a convenience — a project with none yet just
+        // starts blank rather than blocking the tab.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectKey, equipmentId]);
+
+  const activeFields = suppType === 'SLD' ? sldFields : oldFields;
+  const setActiveFields = suppType === 'SLD' ? setSldFields : setOldFields;
+
+  const saveSupplementaryFields = async () => {
+    if (!projectKey || !equipmentId) return;
+    setSuppStatus('Saving…');
+    try {
+      await plotframeFieldsApi.save(projectKey, equipmentId, suppType, activeFields);
+      setSuppStatus('Saved.');
+    } catch (err) {
+      setSuppStatus((err as Error).message);
+    }
+  };
+
+  // ── Drawing options ──
+  const [generationType, setGenerationType] = useState<GenerationType | null>(null);
+  const [isSingleCompartment, setIsSingleCompartment] = useState(false);
+  const [feedersPerPage, setFeedersPerPage] = useState(6);
+  const [feederDistance, setFeederDistance] = useState(0);
+  const [revName, setRevName] = useState('');
+  const [exhaustType, setExhaustType] = useState('');
+  const [reverseFromLineNumber, setReverseFromLineNumber] = useState('');
+  const [lvCompartmentHeightOld, setLvCompartmentHeightOld] = useState('70');
+  const [lvCompartmentHeightSldOld, setLvCompartmentHeightSldOld] = useState('70');
+  const [buffelType, setBuffelType] = useState('.1s');
+
+  // ── Update / markup ──
+  const [updateExisting, setUpdateExisting] = useState(false);
+  const [markupChanged, setMarkupChanged] = useState(false);
+  const [markupRevisionId, setMarkupRevisionId] = useState('');
+
+  // ── Send ──
+  const [target, setTarget] = useState<EplanTarget | null>(null);
+  const [probe, setProbe] = useState<{ state: 'idle' | 'testing' | 'up' | 'down'; note?: string }>({ state: 'idle' });
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    eplanApi.getTarget().then(t => { if (!cancelled) setTarget(t); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const options: EplanDataOptions = useMemo(() => ({
+    revision: currentRevision?.revisionNumber,
+    revisionName: currentRevision?.revisionName,
+    feedersPerPage,
+    generationType: generationType || 'sld',
+    isSingleCompartment,
+    feederDistance,
+    revName,
+    plotframeFileName,
+    exhaustType,
+    reverseFromLineNumber,
+    lvCompartmentHeightOld,
+    lvCompartmentHeightSldOld,
+    buffelType,
+    updateExisting,
+    markupChanged,
+    sldPageUserSupplementaryFields: Object.keys(sldFields).length > 0 ? sldFields : null,
+    oldPageUserSupplementaryFields: Object.keys(oldFields).length > 0 ? oldFields : null,
+  }), [
+    currentRevision, feedersPerPage, generationType, isSingleCompartment, feederDistance, revName,
+    plotframeFileName, exhaustType, reverseFromLineNumber, lvCompartmentHeightOld, lvCompartmentHeightSldOld,
+    buffelType, updateExisting, markupChanged, sldFields, oldFields,
+  ]);
+
+  const records: EplanData[] = useMemo(
+    () => (equipment ? buildEplanData(projectData, [equipment], options) : []),
+    [projectData, equipment, options]);
+
+  const canSend = !!equipment && !!generationType && records.length > 0 && !sending;
+
+  const handleTest = async () => {
+    setProbe({ state: 'testing' });
+    try {
+      const answer = await eplanApi.ping(projectData.planner);
+      setProbe(answer.reachable
+        ? { state: 'up', note: answer.target ? `EPLAN is up on ${answer.target}` : 'An EPLAN instance is available' }
+        : { state: 'down', note: answer.error || 'No EPLAN instance is available right now' });
+    } catch (err) {
+      setProbe({ state: 'down', note: (err as Error).message });
+    }
+  };
+
+  const handleSend = async () => {
+    setSending(true);
+    setResult(null);
+    try {
+      const answer = await eplanApi.send({
+        projectName: projectData.projectName,
+        data: records,
+        userName: projectData.planner,
+      });
+      setResult(answer.success
+        ? { ok: true, text: answer.message || `${records.length} record(s) sent.` }
+        : { ok: false, text: answer.error || 'The EPLAN bridge did not accept the records.' });
+    } catch (err) {
+      setResult({ ok: false, text: (err as Error).message });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const downloadErrorLog = () => {
+    if (!result) return;
+    const log = {
+      when: new Date().toISOString(),
+      project: projectData.projectName,
+      revision: currentRevision?.revisionNumber,
+      switchgear: equipment?.name,
+      target: target?.url,
+      generationType,
+      error: result.text,
+      records: records.length,
+      firstRecord: records[0] ?? null,
+    };
+    downloadText(
+      `${fileSafe(projectData.projectName)}_${fileSafe(equipment?.name || 'send')}_eplan_error.json`,
+      JSON.stringify(log, null, 2), 'application/json');
+  };
+
+  // ── Mechanical (matches Eplanix's own Mechanical screen: pick a
+  // switchgear, load the items, export — no TCP send involved) ──
+  const mechanical = useMemo(
+    () => (equipment ? buildMechanicalItems(projectData, equipment) : []),
+    [projectData, equipment]);
+
+  const exportMechanicalExcel = () => {
+    if (!equipment) return;
+    const rows = buildMechanicalRows(projectData, [equipment]);
+    if (rows.length === 0) {
+      alert('Nothing to export yet — this switchgear has no panel specification in Device Library.');
+      return;
+    }
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([MECHANICAL_HEADERS, ...rows]);
+    ws['!cols'] = [{ wch: 16 }, { wch: 14 }, { wch: 26 }, { wch: 34 }, { wch: 6 }, { wch: 10 }, { wch: 46 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Mechanical items');
+    XLSX.writeFile(wb, `${projectData.projectName || 'project'}_${equipment.name}_Mechanical_items.xlsx`);
+  };
+
+  // ── UI bits ──
+  const ModeCard: React.FC<{ id: Mode; icon: React.ReactNode; title: string; note: string }> = ({ id, icon, title, note }) => (
+    <button
+      onClick={() => setMode(id)}
+      className={`flex-1 text-left border-2 rounded-lg p-4 transition ${
+        mode === id ? 'border-emerald-600 bg-emerald-50' : 'border-gray-200 bg-white hover:border-gray-300'
+      }`}
+    >
+      <div className="flex items-center gap-2 mb-1">{icon}<span className="font-semibold text-gray-800">{title}</span></div>
+      <p className="text-xs text-gray-500">{note}</p>
+    </button>
+  );
+
+  // Tailwind only picks up class names that appear literally in source, so
+  // the active-state classes are a fixed lookup rather than built from a
+  // `color` prop at runtime.
+  const GEN_CARD_ACTIVE_CLASS: Record<GenerationType, string> = {
+    sld: 'border-blue-500 bg-blue-50',
+    old: 'border-amber-500 bg-amber-50',
+    sldold: 'border-emerald-500 bg-emerald-50',
+  };
+
+  const GenCard: React.FC<{ id: GenerationType; icon: React.ReactNode; title: string; note: string }> = ({
+    id, icon, title, note,
+  }) => (
+    <button
+      onClick={() => setGenerationType(id)}
+      className={`flex-1 text-center border-2 rounded-lg p-4 transition ${
+        generationType === id ? GEN_CARD_ACTIVE_CLASS[id] : 'border-gray-200 bg-white hover:border-gray-300'
+      }`}
+    >
+      <div className="flex justify-center mb-1.5">{icon}</div>
+      <p className="font-semibold text-sm text-gray-800">{title}</p>
+      <p className="text-xs text-gray-500">{note}</p>
+    </button>
+  );
+
+  const Field: React.FC<{ label: string; children: React.ReactNode; hint?: string }> = ({ label, children, hint }) => (
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+      {children}
+      {hint && <p className="text-[11px] text-gray-400 mt-1">{hint}</p>}
+    </div>
+  );
+
+  const RadioPair: React.FC<{
+    value: string; onChange: (v: string) => void; options: { value: string; label: string }[];
+  }> = ({ value, onChange, options: opts }) => (
+    <div className="flex gap-2">
+      {opts.map(o => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={`px-3 py-1.5 rounded border text-sm ${
+            value === o.value ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  const inputCls = 'w-full border border-gray-300 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:border-blue-400';
+
+  return (
+    <div>
+      <div className="mb-5">
+        <h2 className="text-xl font-bold text-gray-800">Send to EPLAN</h2>
+        <p className="text-sm text-gray-500 mt-0.5">
+          {projectData.projectName}{currentRevision ? ` — REV ${currentRevision.revisionNumber}` : ''} — pick one
+          switchgear, then Project (single line / outline drawings) or Mechanical (items list).
+        </p>
+      </div>
+
+      {/* ── Switchgear (required, one at a time) ── */}
+      <div className="border border-gray-200 rounded-lg p-4 mb-5 bg-gray-50">
+        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Switchgear</label>
+        <select
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full max-w-md focus:outline-none focus:border-blue-400"
+          value={equipmentId}
+          onChange={e => setEquipmentId(e.target.value)}
+        >
+          <option value="">— Select a switchgear —</option>
+          {equipments.map(eq => (
+            <option key={eq.id} value={eq.id}>
+              {eq.name} — {eq.type} ({(eq.devices ?? []).length} feeders)
+            </option>
+          ))}
+        </select>
+        {withLines.length === 0 && (
+          <p className="text-xs text-amber-700 mt-2">No switchgear has feeder lines yet — add them in Device Selection first.</p>
+        )}
+      </div>
+
+      {!equipmentId ? (
+        <p className="text-sm text-gray-500 px-1">Select a switchgear above to continue.</p>
+      ) : (
+        <>
+          {/* ── Project vs Mechanical ── */}
+          <div className="flex gap-3 mb-5">
+            <ModeCard id="project" icon={<ZapIcon className="w-4 h-4 text-emerald-700" />} title="Project"
+              note="Single line and/or outline drawings, sent to EPLAN" />
+            <ModeCard id="mechanical" icon={<ClipboardIcon className="w-4 h-4 text-amber-700" />} title="Mechanical"
+              note="Mechanical items list — Load and Export only, nothing is sent to EPLAN" />
+          </div>
+
+          {mode === 'mechanical' && (
+            <div className="border border-gray-200 rounded-lg">
+              <div className="px-4 py-3 bg-gray-50 border-b flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-sm text-gray-800">{mechanical.length} item(s) — {equipment?.name}</p>
+                  <p className="text-xs text-gray-500">Counted from the panel specification and the feeders.</p>
+                </div>
+                <button
+                  onClick={exportMechanicalExcel}
+                  disabled={mechanical.length === 0}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm bg-amber-700 text-white hover:bg-amber-800 disabled:opacity-40"
+                >
+                  <DownloadIcon className="w-4 h-4" /> Export Mechanical Excel
+                </button>
+              </div>
+              {mechanical.length === 0 && (
+                <p className="p-6 text-sm text-gray-500">
+                  Nothing to list yet — this switchgear needs a panel specification in Device Library.
+                </p>
+              )}
+            </div>
+          )}
+
+          {mode === 'project' && (
+            <div className="space-y-5">
+              {/* ── Plotframe ── */}
+              <div className="border border-gray-200 rounded-lg p-4">
+                <Field label="Upload Plotframe Macro (.ema)"
+                  hint="Captured as a filename reference on the send payload — the file itself still needs to reach the EPLAN machine by whatever means the office already uses for macros; this tab does not transfer its bytes yet.">
+                  <label className="flex items-center gap-2 border border-gray-300 rounded px-3 py-2 text-sm cursor-pointer hover:bg-gray-50 w-fit">
+                    <UploadIcon className="w-4 h-4 text-gray-500" />
+                    <span className="text-gray-700">{plotframeFileName || 'Choose file…'}</span>
+                    <input type="file" accept=".ema" className="hidden"
+                      onChange={e => setPlotframeFileName(e.target.files?.[0]?.name || '')} />
+                  </label>
+                </Field>
+
+                <div className="mt-4 border border-gray-200 rounded-lg p-3 bg-gray-50">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                      <ListChecksIcon className="w-4 h-4 text-gray-500" /> Plotframe User supplementary fields
+                    </span>
+                    <span className="text-xs text-gray-400">{suppStatus}</span>
+                  </div>
+                  <div className="flex gap-1.5 mb-2">
+                    {(['SLD', 'OLD'] as const).map(t => (
+                      <button key={t} onClick={() => setSuppType(t)}
+                        className={`px-3 py-1 rounded text-xs font-medium ${
+                          suppType === t ? 'bg-blue-600 text-white' : 'bg-white border border-gray-300 text-gray-600'
+                        }`}>
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-gray-500 mb-3">
+                    The labels are guidance only — replace each one with the actual value for this plotframe. Values
+                    are kept separately per switchgear and per drawing type ({suppType} here).
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                    {IDENTITY_FIELDS.map(f => (
+                      <Field key={f.index} label={f.label}>
+                        <input className={inputCls} placeholder={f.placeholder}
+                          value={activeFields[String(f.index)] || ''}
+                          onChange={e => setActiveFields(prev => ({ ...prev, [String(f.index)]: e.target.value }))} />
+                      </Field>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-gray-600">
+                      User supplementary fields {suppSubsetStart} - {suppSubsetStart + 8}
+                    </span>
+                    <div className="flex gap-1">
+                      <button className="px-2 py-0.5 border rounded text-xs hover:bg-gray-100"
+                        disabled={SUBSET_STARTS.indexOf(suppSubsetStart) <= 0}
+                        onClick={() => setSuppSubsetStart(SUBSET_STARTS[Math.max(0, SUBSET_STARTS.indexOf(suppSubsetStart) - 1)])}>
+                        −
+                      </button>
+                      <button className="px-2 py-0.5 border rounded text-xs hover:bg-gray-100"
+                        disabled={SUBSET_STARTS.indexOf(suppSubsetStart) >= SUBSET_STARTS.length - 1}
+                        onClick={() => setSuppSubsetStart(SUBSET_STARTS[Math.min(SUBSET_STARTS.length - 1, SUBSET_STARTS.indexOf(suppSubsetStart) + 1)])}>
+                        +
+                      </button>
+                      <button className="px-2 py-0.5 border rounded text-xs text-blue-700 hover:bg-blue-50"
+                        onClick={() => setSuppShowOptions(v => !v)}>
+                        {suppShowOptions ? 'Hide Options' : 'Options (50-70)'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {Array.from({ length: 9 }, (_, i) => suppSubsetStart + i).map(idx => (
+                      <Field key={idx} label={`${idx} — ${FIELD_1_9_LABELS[idx] || `Field ${idx}`}`}>
+                        <input className={inputCls}
+                          value={activeFields[String(idx)] || ''}
+                          onChange={e => setActiveFields(prev => ({ ...prev, [String(idx)]: e.target.value }))} />
+                      </Field>
+                    ))}
+                  </div>
+
+                  {suppShowOptions && (
+                    <div className="mt-3 pt-3 border-t">
+                      <p className="text-xs font-medium text-gray-600 mb-2">Options — fields 50 & 60-70</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {OPTIONS_INDEXES.map(idx => (
+                          <Field key={idx} label={`${idx}`}>
+                            <input className={inputCls}
+                              value={activeFields[String(idx)] || ''}
+                              onChange={e => setActiveFields(prev => ({ ...prev, [String(idx)]: e.target.value }))} />
+                          </Field>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-3 text-right">
+                    <button onClick={saveSupplementaryFields}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-emerald-700 text-white hover:bg-emerald-800 ml-auto">
+                      <SaveIcon className="w-3.5 h-3.5" /> Save {suppType} supplementary fields
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Drawing Options ── */}
+              <div className="border border-gray-200 rounded-lg p-4">
+                <p className="text-sm font-semibold text-gray-700 mb-3">Drawing Options</p>
+                <div className="flex gap-3 mb-4">
+                  <GenCard id="sld" icon={<ZapIcon className="w-5 h-5 text-blue-600" />} title="Generate SLD"
+                    note="Single Line Diagram" />
+                  <GenCard id="old" icon={<DatabaseIcon className="w-5 h-5 text-amber-600" />} title="Generate OLD"
+                    note="Outline Drawing" />
+                  <GenCard id="sldold" icon={<LayersIcon className="w-5 h-5 text-emerald-600" />} title="Generate SLD & OLD"
+                    note="Both Diagrams" />
+                </div>
+
+                {generationType && (
+                  <div className="border-l-4 border-blue-400 bg-blue-50/40 rounded p-4 space-y-3">
+                    <label className="flex items-center gap-2 text-sm text-gray-700">
+                      <input type="checkbox" checked={isSingleCompartment}
+                        onChange={e => setIsSingleCompartment(e.target.checked)} />
+                      Side Plotframe
+                    </label>
+
+                    {(generationType === 'sld' || generationType === 'sldold') && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <Field label={`Number of feeders per page (max 6${generationType === 'sld' ? ' — only for SLD' : ''})`}>
+                          <select className={inputCls} value={feedersPerPage} onChange={e => setFeedersPerPage(Number(e.target.value))}>
+                            {[1, 2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n} feeder{n > 1 ? 's' : ''}</option>)}
+                          </select>
+                        </Field>
+                        <Field label={`Distance between feeders (mm${generationType === 'sld' ? ' — only for SLD' : ''})`}>
+                          <input type="number" className={inputCls} value={feederDistance}
+                            onChange={e => setFeederDistance(Number(e.target.value))} />
+                        </Field>
+                      </div>
+                    )}
+
+                    {(generationType === 'old' || generationType === 'sldold') && (
+                      <>
+                        <Field label="Exhaust Type">
+                          <select className={inputCls} value={exhaustType} onChange={e => setExhaustType(e.target.value)}>
+                            <option value="">-- Select Exhaust Type --</option>
+                            {EXHAUST_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </Field>
+                        <Field label="Reverse From Line Number (OLD placement)"
+                          hint="If set, lines before this number are placed normally, and lines from this number to the end are placed in reverse order.">
+                          <input className={inputCls} placeholder="e.g. L7 (optional — leave empty for normal order)"
+                            value={reverseFromLineNumber} onChange={e => setReverseFromLineNumber(e.target.value)} />
+                        </Field>
+                        <Field label="LV Compartment Height (AIS-SIMOPRIME-WORLD)">
+                          <RadioPair
+                            value={generationType === 'old' ? lvCompartmentHeightOld : lvCompartmentHeightSldOld}
+                            onChange={v => (generationType === 'old' ? setLvCompartmentHeightOld(v) : setLvCompartmentHeightSldOld(v))}
+                            options={[{ value: '70', label: '70 cm' }, { value: '100', label: '100 cm' }]}
+                          />
+                        </Field>
+                        <Field label="Buffel (AIS-SIMOPRIME-WORLD)">
+                          <RadioPair value={buffelType} onChange={setBuffelType}
+                            options={[{ value: '.1s', label: '.1s' }, { value: '1s', label: '1s' }]} />
+                        </Field>
+                      </>
+                    )}
+
+                    <Field label="Internal Revision Number">
+                      <input className={inputCls} placeholder="Enter revision number" value={revName}
+                        onChange={e => setRevName(e.target.value)} />
+                    </Field>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Update / markup ── */}
+              <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                <p className="text-sm font-semibold text-gray-700">If this project already exists on EPLAN</p>
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input type="checkbox" className="mt-0.5" checked={updateExisting}
+                    onChange={e => setUpdateExisting(e.target.checked)} />
+                  <span>
+                    <span className="font-medium">Update existing project</span> — refresh the table header and part
+                    properties on the project already on EPLAN, instead of creating a new one.
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input type="checkbox" className="mt-0.5" checked={markupChanged}
+                    onChange={e => setMarkupChanged(e.target.checked)} />
+                  <span>
+                    <span className="font-medium">Markup changes</span> — tell EPLAN this send carries changes versus
+                    a previous revision, comparing against:
+                  </span>
+                </label>
+                {markupChanged && (
+                  <select className={`${inputCls} max-w-xs ml-6`} value={markupRevisionId}
+                    onChange={e => setMarkupRevisionId(e.target.value)}>
+                    <option value="">— Select a revision to compare against —</option>
+                    {revisions.filter(r => r._id !== currentRevision?._id).map(r => (
+                      <option key={r._id} value={r._id}>REV {r.revisionNumber} — {r.revisionName}</option>
+                    ))}
+                  </select>
+                )}
+                <p className="text-[11px] text-gray-400">
+                  Neither box checked, on a project that already exists, asks EPLAN to recreate it from scratch —
+                  same as leaving both unchecked in Eplanix's own dialog.
+                </p>
+              </div>
+
+              {/* ── Target + send ── */}
+              <div className="border border-gray-200 rounded-lg p-4">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div className="text-sm min-w-0">
+                    <p className="text-gray-800 truncate">{target ? target.url : 'Reading the configured EPLAN bridge…'}</p>
+                    <p className="text-xs text-gray-500">{records.length} record(s) for {equipment?.name}</p>
+                  </div>
+                  <button
+                    className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded text-sm hover:bg-gray-50 disabled:opacity-40"
+                    onClick={handleTest} disabled={probe.state === 'testing'}
+                  >
+                    <PlugZapIcon className="w-4 h-4" /> {probe.state === 'testing' ? 'Testing…' : 'Test'}
+                  </button>
+                </div>
+                {probe.state === 'up' && (
+                  <p className="text-xs text-emerald-700 mb-2 flex items-center gap-1"><CheckCircle2Icon className="w-3.5 h-3.5" /> {probe.note}</p>
+                )}
+                {probe.state === 'down' && (
+                  <p className="text-xs text-red-600 mb-2 flex items-center gap-1"><AlertTriangleIcon className="w-3.5 h-3.5" /> {probe.note}</p>
+                )}
+
+                {result && (
+                  <div className={`rounded-lg px-3 py-2 text-sm mb-3 flex items-center justify-between gap-3 ${
+                    result.ok ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'
+                  }`}>
+                    <span>{result.text}</span>
+                    {!result.ok && (
+                      <button onClick={downloadErrorLog}
+                        className="shrink-0 flex items-center gap-1 text-xs underline hover:no-underline">
+                        <DownloadIcon className="w-3.5 h-3.5" /> Download error log
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {!generationType && <p className="text-xs text-amber-700 mb-2">Choose Generate SLD / OLD / SLD &amp; OLD above first.</p>}
+
+                <div className="text-center">
+                  <button
+                    onClick={handleSend}
+                    disabled={!canSend}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg shadow-sm font-medium text-sm bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
+                  >
+                    <SendIcon className="w-4 h-4" /> {sending ? 'Sending…' : 'Generate Switchboard'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};

@@ -16,6 +16,7 @@ import { registerTpmsImportRoutes } from './tpmsImport.js';
 import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 import { registerEplanRoutes } from './eplanSend.js';
 import { registerDocumentRoutes } from './documents.js';
+import { registerPlotframeFieldRoutes } from './plotframeFields.js';
 import { extractPdfText } from './pdfText.js';
 import {
   buildSystemPrompt, extractToolEnvelope, callLocalModel,
@@ -289,6 +290,7 @@ registerEplanRoutes(app);
 // below), so `db` isn't assigned yet at this exact line — only by the time
 // a request actually arrives.
 registerDocumentRoutes(app, () => db);
+registerPlotframeFieldRoutes(app, () => db);
 
 app.get('/api/health', async (req, res) => {
   try {

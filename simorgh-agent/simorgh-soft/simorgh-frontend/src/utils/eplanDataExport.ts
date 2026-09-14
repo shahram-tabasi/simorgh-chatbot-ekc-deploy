@@ -134,6 +134,26 @@ export interface EplanDataOptions {
   feedersPerPage?: number;
   /** Refresh an existing EPLAN project instead of creating a new one. */
   updateExisting?: boolean;
+
+  // ── Send to EPLAN tab — Drawing Options, mirroring Eplanix's own
+  // ProjectData screen (GenerationType / *Section fields on ProjectFormViewModel).
+  /** 'sld' | 'old' | 'sldold' — which drawing(s) the add-in produces. */
+  generationType?: 'sld' | 'old' | 'sldold';
+  isSingleCompartment?: boolean;
+  feederDistance?: number;
+  revName?: string;
+  plotframeFileName?: string;
+  exhaustType?: string;
+  reverseFromLineNumber?: string;
+  lvCompartmentHeightOld?: string;
+  lvCompartmentHeightSldOld?: string;
+  buffelType?: string;
+  /** Compare against a previous revision and flag every changed feeder. */
+  markupChanged?: boolean;
+  /** Plotframe "User supplementary field" values, index (1-94, as a string
+   *  key) → value, kept separately per drawing type. */
+  sldPageUserSupplementaryFields?: Record<string, string> | null;
+  oldPageUserSupplementaryFields?: Record<string, string> | null;
 }
 
 /**
@@ -271,11 +291,11 @@ export function buildEplanDataForEquipment(
     PLC_Input_Output:   [tech?.wireColor?.plcInput, tech?.wireColor?.plcOutput].filter(Boolean).join(' / '),
 
     // ── drawing option ──
-    IsSingleCompartment: false,
+    IsSingleCompartment: !!options.isSingleCompartment,
     FeedersPerPage: options.feedersPerPage && options.feedersPerPage > 0 ? options.feedersPerPage : 6,
-    FeederDistance: 0,
-    RevName: text(options.revisionName),
-    PlotframeFileName: '',
+    FeederDistance: options.feederDistance ?? 0,
+    RevName: text(options.revName) || text(options.revisionName),
+    PlotframeFileName: text(options.plotframeFileName),
 
     // ── optional props — the app has no extra project/panel fields yet ──
     AdditionalProjectField1Key: '', AdditionalProjectField1Value: '',
@@ -287,22 +307,27 @@ export function buildEplanDataForEquipment(
 
     // ── outline data — the outline drawing is not generated from here yet ──
     HV_Door: '', DxfOpening: '', DxfLvDoor: '', DxfBaffle: '',
-    PlaneType: '', CbType: '', IsGenrateOLD: false, SldType: text(equipment.type),
+    PlaneType: '', CbType: '',
+    IsGenrateOLD: options.generationType === 'old' || options.generationType === 'sldold',
+    SldType: text(equipment.type),
     PanelWidth: text(spec.width), CabelBox: false, PanelCableSize: '',
     LEO: false, LEC: false, LQ: false, IEB: false, ICO: false, QC1: false, QC2: false,
-    DevTotalWidth: '', ExhaustType: '', GenerationType: 'SLD', TotalWidth: 0,
-    CBType: '', ExhaustLinePosition: '', ReverseFromLineNumber: '',
+    DevTotalWidth: '', ExhaustType: text(options.exhaustType), GenerationType: options.generationType || 'sld',
+    TotalWidth: 0,
+    CBType: '', ExhaustLinePosition: '', ReverseFromLineNumber: text(options.reverseFromLineNumber),
     VentilationType: '', HasDampingR: false, CtCurrent: 0, Cblabel: '',
     PanelAccess: text(spec.switchgearAccess),
-    LvCompartmentHeightOld: '', LvCompartmentHeightSldOld: '', BuffelType: '',
+    LvCompartmentHeightOld: text(options.lvCompartmentHeightOld),
+    LvCompartmentHeightSldOld: text(options.lvCompartmentHeightSldOld),
+    BuffelType: text(options.buffelType),
 
     // ── update / markup ──
     UpdateExisting: !!options.updateExisting,
-    MarkupChanged: false,
+    MarkupChanged: !!options.markupChanged,
     WiringTypeChanged: false,
 
-    SldPageUserSupplementaryFields: null,
-    OldPageUserSupplementaryFields: null,
+    SldPageUserSupplementaryFields: options.sldPageUserSupplementaryFields ?? null,
+    OldPageUserSupplementaryFields: options.oldPageUserSupplementaryFields ?? null,
   };
 
   return lines.map((line: DeviceTableRow, index: number): EplanData => {

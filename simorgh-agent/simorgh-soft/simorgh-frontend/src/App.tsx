@@ -16,6 +16,7 @@ import { FeederDuplicateModal } from './components/DeviceSelection/FeederDuplica
 import { TpmsImportModal } from './components/TpmsImport/TpmsImportModal';
 import { EplanixTab } from './components/Eplanix/EplanixTab';
 import { DocumentsTab } from './components/Documents/DocumentsTab';
+import { SendToEplanTab } from './components/SendToEplan/SendToEplanTab';
 import { findFeederDuplicates, DuplicateGroup } from './utils/feederDuplicates';
 import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
@@ -781,6 +782,11 @@ const MainApp: React.FC = () => {
       id: 5,
       title: `Documents`,
       component: <DocumentsTab />
+    },
+    {
+      id: 6,
+      title: `Send to EPLAN`,
+      component: <SendToEplanTab />
     }
   ];
 

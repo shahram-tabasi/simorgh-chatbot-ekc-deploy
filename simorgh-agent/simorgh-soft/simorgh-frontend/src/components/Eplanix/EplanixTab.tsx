@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import {
-  DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, SendIcon, PencilRulerIcon,
+  DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, PencilRulerIcon,
 } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
-import { SendToEplanDialog } from './SendToEplanDialog';
 import { ProjectData, Equipment } from '../../types/project';
 import { sheetName } from '../../utils/bpmsExport';
 import { eplanSymbolService } from '../../services/projectService';
@@ -143,11 +142,6 @@ export const EplanixTab: React.FC = () => {
   // The library symbol the graphic page is open on, when one is.
   const [editingSymbol, setEditingSymbol] = useState<SymbolId | null>(null);
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
-  const [showSend, setShowSend] = useState(false);
-  // 'selection' — the header button: every switchgear currently chosen.
-  // 'preview' — the button inside the drawing editor: just the one switchgear
-  // being edited, since that is the drawing the user is actually looking at.
-  const [sendScope, setSendScope] = useState<'selection' | 'preview'>('selection');
 
   const equipments = projectData.equipments ?? [];
 
@@ -361,19 +355,6 @@ export const EplanixTab: React.FC = () => {
               <option key={eq.id} value={eq.id}>{eq.name} — {eq.type}</option>
             ))}
           </select>
-          {/* The same feeder lines, sent to the EPLAN drawing server instead
-              of downloaded. The address is in .env — see the dialog. */}
-          <button
-            onClick={() => { setSendScope('selection'); setShowSend(true); }}
-            disabled={chosenWithLines.length === 0}
-            title={chosenWithLines.length === 0
-              ? 'Add feeder lines in Device Selection first'
-              : 'Send these switchgears to the EPLAN drawing server'}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40"
-          >
-            <SendIcon className="w-4 h-4" />
-            Send to EPLAN
-          </button>
         </div>
       </div>
 
@@ -515,19 +496,6 @@ export const EplanixTab: React.FC = () => {
             savedEdits={projectData.drawingEdits}
             canEdit={isCurrentRevisionEditable}
             onSaveEdits={next => patchProjectData(() => ({ drawingEdits: next }))}
-            headerActions={
-              <button
-                onClick={() => { setSendScope('preview'); setShowSend(true); }}
-                disabled={(preview.devices ?? []).length === 0}
-                title={(preview.devices ?? []).length === 0
-                  ? 'Add feeder lines in Device Selection first'
-                  : `Send ${preview.name} to the EPLAN drawing server`}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap bg-emerald-700 text-white hover:bg-emerald-600 disabled:opacity-40"
-              >
-                <SendIcon className="w-4 h-4" />
-                Send to EPLAN
-              </button>
-            }
             titleBlock={[
               preview.name || 'SWITCHGEAR',
               [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]
@@ -743,16 +711,6 @@ export const EplanixTab: React.FC = () => {
             return { symbolOverrides: next };
           })}
           onClose={() => setEditingSymbol(null)}
-        />
-      )}
-
-      {showSend && (
-        <SendToEplanDialog
-          projectData={projectData}
-          equipments={sendScope === 'preview' && preview ? [preview] : chosenWithLines}
-          currentRevision={currentRevision}
-          feedersPerPage={perPage}
-          onClose={() => setShowSend(false)}
         />
       )}
 

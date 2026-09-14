@@ -415,11 +415,12 @@ const TAB_NAMES: Record<string, number> = {
   // The tab was called Eplanix until it was named; both still resolve.
   'eplanix':            4, 'single-line': 4, 'single line': 4, 'layout': 4,
   'documents':          5, 'document': 5, 'docs': 5,
+  'send to eplan':      6, 'send-to-eplan': 6, 'send_to_eplan': 6, 'eplan': 6,
 };
 
 const set_active_tab: ChatTool = {
   name: 'set_active_tab',
-  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output" or "draw" (case-insensitive; spaces/hyphens/underscores are OK).',
+  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output", "draw", "documents" or "eplan" (case-insensitive; spaces/hyphens/underscores are OK).',
   args: {
     tab: { type: 'string', description: 'project | template | devices | output | draw', required: true },
   },
