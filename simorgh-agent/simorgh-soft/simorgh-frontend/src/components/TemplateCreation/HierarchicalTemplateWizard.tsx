@@ -89,6 +89,7 @@ interface Props {
   onSubmit: (args: {
     name: string;
     hierarchy: TemplateHierarchy;
+    useSimorghDraw: boolean;
     copyFromId?: string;
   }) => void;
 }
@@ -112,6 +113,9 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   const [kw, setKw] = useState('');
   const [currentA, setCurrentA] = useState('');
   const [name, setName] = useState('');
+  // Either way the equipment draws — this only decides whether the extra
+  // per-equipment questions (a separate, later piece of work) get asked.
+  const [useSimorghDraw, setUseSimorghDraw] = useState<boolean | null>(null);
 
   // Build the path array as the user descends.
   const path = useMemo(() => {
@@ -128,7 +132,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   }, [tier, root, group, switch_, feeder]);
 
   // Which step are we on? The first step missing a value is the active one.
-  const activeStep: 'family' | 'root' | 'group' | 'switch' | 'feeder' | 'kind' | 'params' | 'name' = (() => {
+  const activeStep: 'family' | 'root' | 'group' | 'switch' | 'feeder' | 'kind' | 'params' | 'simorghDraw' | 'name' = (() => {
     if (tier === 'LV') {
       if (!family) return 'family';
       if (family === 'SIVACON' && !root) return 'root';
@@ -140,6 +144,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     if (tier === 'MV' && !feeder) return 'feeder';
     if (!leafKind) return 'kind';
     if (!kw && !currentA) return 'params';
+    if (useSimorghDraw === null) return 'simorghDraw';
     return 'name';
   })();
 
@@ -179,6 +184,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     (tier === 'MV' || (tier === 'LV' && switch_ && switch_.startsWith('FCB'))) && 'feeder',
     path.length > 0 && 'kind',
     !!leafKind && 'params',
+    'simorghDraw',
     'name',
   ].filter(Boolean) as string[];
 
@@ -250,7 +256,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   const pickSwitch = (s: string) => { setSwitch(s); setFeeder(null); setLeafKind(null); };
   const pickFeeder = (f: string) => { setFeeder(f); setLeafKind(null); };
 
-  const canCreate = name.trim().length > 0 && (
+  const canCreate = name.trim().length > 0 && useSimorghDraw !== null && (
     tier === 'MV'
       ? !!feeder
       // SIVACON is filed under its board root; the CCS side starts at the group.
@@ -269,6 +275,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           currentA: currentA || undefined,
         },
       },
+      useSimorghDraw: !!useSimorghDraw,
       copyFromId,
     });
   };
@@ -451,6 +458,22 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               </ul>
             </div>
           )}
+
+          {/* Simorgh Draw — either way the equipment draws; this only gates
+              whether the extra per-equipment questions (separate, later)
+              get asked for whatever gets built on this template. */}
+          <div>
+            <StepHeader
+              n={stepNumber('simorghDraw')}
+              label="Use Simorgh Draw?"
+              active={activeStep === 'simorghDraw'}
+              done={useSimorghDraw !== null}
+            />
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Chip value="Yes" selected={useSimorghDraw === true} onClick={() => setUseSimorghDraw(true)} />
+              <Chip value="No" selected={useSimorghDraw === false} onClick={() => setUseSimorghDraw(false)} />
+            </div>
+          </div>
 
           {/* Step 8 — Name + create */}
           <div>

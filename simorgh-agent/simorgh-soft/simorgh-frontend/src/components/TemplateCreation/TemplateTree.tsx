@@ -409,8 +409,8 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           family={wizard.family}
           existing={safeTemplates[wizard.tier]}
           onCancel={() => setWizard(null)}
-          onSubmit={({ name, hierarchy, copyFromId }) => {
-            addTemplate(wizard.tier, name, hierarchy, copyFromId);
+          onSubmit={({ name, hierarchy, useSimorghDraw, copyFromId }) => {
+            addTemplate(wizard.tier, name, hierarchy, copyFromId, useSimorghDraw);
             const newExpanded = new Set(expandedNodes);
             newExpanded.add(wizard.tier);
             // The new template's own section is opened too, so it is on screen

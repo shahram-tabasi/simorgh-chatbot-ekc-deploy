@@ -266,6 +266,11 @@ export interface TemplateItem {
   /** 'tpms' when this template was built from a TPMS draft. */
   source?: 'tpms';
   tpmsScopeId?: number;
+  /** Answered at template creation: should Simorgh Draw be used for this
+   *  template's equipment? Either way the equipment draws — this only gates
+   *  whether the extra per-equipment questions (a separate, later piece)
+   *  are asked. */
+  useSimorghDraw?: boolean;
 }
 
 export interface DeviceItem {

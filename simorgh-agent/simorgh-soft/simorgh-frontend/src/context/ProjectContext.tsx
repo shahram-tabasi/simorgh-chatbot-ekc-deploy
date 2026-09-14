@@ -13,7 +13,7 @@ interface ProjectContextType {
    *  stale copy, and the last one would throw the others away. */
   patchProjectData: (updater: (prev: ProjectData) => Partial<ProjectData>) => void;
   saveProject: () => Promise<void>;
-  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string) => void;
+  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   deleteTemplate: (templateId: string) => void;
   addDevice: (device: Partial<DeviceItem>) => void;
@@ -310,6 +310,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     name: string,
     hierarchy?: TemplateHierarchy,
     copyFromId?: string,
+    useSimorghDraw?: boolean,
   ) => {
     if (!guardEdit()) return;
     setProjectData(prev => {
@@ -327,6 +328,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         type,
         properties: baseProps,
         ...(hierarchy ? { hierarchy } : {}),
+        ...(useSimorghDraw !== undefined ? { useSimorghDraw } : {}),
       };
       return {
         ...prev,
