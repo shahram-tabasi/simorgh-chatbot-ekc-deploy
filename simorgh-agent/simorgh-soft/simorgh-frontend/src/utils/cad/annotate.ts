@@ -12,7 +12,7 @@
 // more wire does not renumber the drawing.
 
 import { Layer, Pt, Shape } from './shapes';
-import { Device, Net, devices, nets } from './schematic';
+import { Net, devices, nets } from './schematic';
 
 export interface NumberOptions {
   /** Text height for the labels, in drawing units. */

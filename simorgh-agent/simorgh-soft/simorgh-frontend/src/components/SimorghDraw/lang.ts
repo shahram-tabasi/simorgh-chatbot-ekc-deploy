@@ -58,6 +58,11 @@ export interface Strings {
   xlsxImport: string; xlsxImportTip: string;
   xlsxUpdate: string; xlsxUpdateTip: string;
   xlsxEmpty: string; xlsxUnreadable: string; xlsxGone: string;
+  wireNumber: string; wireNumberTip: string; wireNumbered: string;
+  wireAllNumbered: string; wireNoneFound: string;
+  tagDevices: string; tagDevicesTip: string; tagged: string; tagAllTagged: string;
+  checks: string; checksTip: string; checksClean: string;
+  xrefs: string; xrefOn: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
 
@@ -128,6 +133,20 @@ const EN: Strings = {
   xlsxEmpty: 'That spreadsheet has no rows to draw.',
   xlsxUnreadable: 'Could not read that file — it should be .xlsx, .xls or .csv.',
   xlsxGone: 'Could not read the file again — it may have been moved or renamed.',
+  wireNumber: 'Number wires',
+  wireNumberTip: 'Give every net a number and write it on the wire. Wires already numbered are left alone.',
+  wireNumbered: '{n} wire(s) numbered.',
+  wireAllNumbered: 'Every wire already carries a number.',
+  wireNoneFound: 'No wires to number on this sheet.',
+  tagDevices: 'Designate',
+  tagDevicesTip: 'Give every undesignated symbol an IEC designation, carrying on from the highest already used.',
+  tagged: '{n} device(s) designated.',
+  tagAllTagged: 'Every device already carries a designation.',
+  checks: 'Checks',
+  checksTip: 'Look over the sheet: open wire ends, repeated designations, crossings with no junction dot.',
+  checksClean: 'Nothing to report on this sheet.',
+  xrefs: 'Across sheets',
+  xrefOn: 'on',
   rect: 'Rectangle', circle: 'Circle — centre, then radius',
   ellipse: 'Ellipse — centre, then the two radii',
   arc: 'Arc — centre, start, then sweep', text: 'Text',
@@ -285,6 +304,20 @@ const FA: Strings = {
   xlsxEmpty: 'این فایل اکسل سطری برای رسم ندارد.',
   xlsxUnreadable: 'فایل خوانده نشد — باید .xlsx یا .xls یا .csv باشد.',
   xlsxGone: 'فایل دوباره خوانده نشد — شاید جابه‌جا یا تغییر نام داده شده باشد.',
+  wireNumber: 'شماره‌گذاری سیم',
+  wireNumberTip: 'به هر شبکه یک شماره می‌دهد و روی سیم می‌نویسد. سیم‌هایی که از قبل شماره دارند دست‌نخورده می‌مانند.',
+  wireNumbered: '{n} سیم شماره‌گذاری شد.',
+  wireAllNumbered: 'همهٔ سیم‌ها از قبل شماره دارند.',
+  wireNoneFound: 'سیمی برای شماره‌گذاری در این شیت نیست.',
+  tagDevices: 'نام‌گذاری',
+  tagDevicesTip: 'به هر سمبل بدون نام، نام استاندارد IEC می‌دهد و از بالاترین شمارهٔ موجود ادامه می‌دهد.',
+  tagged: '{n} دستگاه نام‌گذاری شد.',
+  tagAllTagged: 'همهٔ دستگاه‌ها از قبل نام دارند.',
+  checks: 'بررسی',
+  checksTip: 'شیت را بررسی می‌کند: سر سیم آزاد، نام تکراری، تقاطع بدون نقطهٔ اتصال.',
+  checksClean: 'در این شیت موردی برای گزارش نیست.',
+  xrefs: 'در شیت‌های دیگر',
+  xrefOn: 'در',
   rect: 'مستطیل', circle: 'دایره — مرکز، سپس شعاع',
   ellipse: 'بیضی — مرکز، سپس دو شعاع',
   arc: 'کمان — مرکز، شروع، سپس مقدار جاروب', text: 'متن',
@@ -442,6 +475,20 @@ const TR: Strings = {
   xlsxEmpty: 'Bu tabloda çizilecek satır yok.',
   xlsxUnreadable: 'Dosya okunamadı — .xlsx, .xls veya .csv olmalı.',
   xlsxGone: 'Dosya yeniden okunamadı — taşınmış veya adı değişmiş olabilir.',
+  wireNumber: 'Kablo numarala',
+  wireNumberTip: 'Her şebekeye numara verir ve kabloya yazar. Zaten numaralı olanlara dokunulmaz.',
+  wireNumbered: '{n} kablo numaralandı.',
+  wireAllNumbered: 'Tüm kablolar zaten numaralı.',
+  wireNoneFound: 'Bu sayfada numaralanacak kablo yok.',
+  tagDevices: 'Etiketle',
+  tagDevicesTip: 'Etiketsiz her sembole IEC etiketi verir, kullanılan en yüksek numaradan devam eder.',
+  tagged: '{n} cihaz etiketlendi.',
+  tagAllTagged: 'Tüm cihazlar zaten etiketli.',
+  checks: 'Kontroller',
+  checksTip: 'Sayfayı gözden geçirir: açık kablo uçları, tekrarlanan etiketler, noktasız kesişmeler.',
+  checksClean: 'Bu sayfada bildirilecek bir şey yok.',
+  xrefs: 'Diğer sayfalarda',
+  xrefOn: 'sayfa',
   rect: 'Dikdörtgen', circle: 'Daire — merkez, sonra yarıçap',
   ellipse: 'Elips — merkez, sonra iki yarıçap',
   arc: 'Yay — merkez, başlangıç, sonra süpürme', text: 'Yazı',

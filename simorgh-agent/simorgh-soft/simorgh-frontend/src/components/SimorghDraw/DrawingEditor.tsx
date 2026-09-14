@@ -1,6 +1,8 @@
 import * as XLSX from 'xlsx-js-style';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { tableShapes, replaceTable, tableOrigin, tableIdOf } from '../../utils/cad/table';
+import { checkSheet, Message } from '../../utils/cad/schematic';
+import { numberWires, autoTagDevices, crossReferences } from '../../utils/cad/annotate';
 import {
   ZoomInIcon, ZoomOutIcon, MaximizeIcon, MousePointer2Icon, HandIcon,
   UndoIcon, RedoIcon, CopyIcon, Trash2Icon, GridIcon, RotateCcwIcon,
@@ -10,6 +12,7 @@ import {
   CircleDashedIcon, RulerIcon, ScissorsIcon, ArrowRightToLineIcon,
   CornerDownRightIcon, RotateCwIcon, FlipHorizontalIcon, FlipVerticalIcon,
   ScalingIcon, BringToFrontIcon, SendToBackIcon, TableIcon, RefreshCwIcon,
+  HashIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon,
   AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
@@ -328,6 +331,59 @@ export const DrawingEditor: React.FC<Props> = ({
   const liveTables = useMemo(
     () => Object.values(tables).filter(t => shapes.some(s => tableIdOf(s) === t.id)),
     [tables, shapes]);
+
+  // ── Checks, numbering and designations ───────────────────────────────────
+  //
+  // The panel follows EPLAN's message management, because that is the shape
+  // the office already knows: a run of checks leaves a list you work through,
+  // not a popup you dismiss. Clicking a message selects what it is about and
+  // takes the view there, which is the whole reason to have the list rather
+  // than a count.
+  const [messages, setMessages] = useState<Message[] | null>(null);
+  const [showChecks, setShowChecks] = useState(false);
+
+  const runChecks = useCallback(() => {
+    setMessages(checkSheet(shapes));
+    setShowChecks(true);
+  }, [shapes]);
+
+  // Re-run on every edit once the panel is open, so the list is never stale
+  // enough to send someone to a wire they have already fixed.
+  useEffect(() => {
+    if (showChecks) setMessages(checkSheet(shapes));
+  }, [shapes, showChecks]);
+
+  /** Select what a message is about, and look at it. */
+  const goToMessage = useCallback((m: Message) => {
+    const valid = m.shapes.filter(i => i >= 0 && i < shapes.length);
+    if (valid.length === 0) return;
+    setSelection(new Set(valid));
+    if (m.at) {
+      setView(v => ({ ...v, x: m.at![0] - v.w / 2, y: m.at![1] - v.h / 2 }));
+    }
+  }, [shapes]);
+
+  const doNumberWires = useCallback((overwrite: boolean) => {
+    const r = numberWires(shapes, { textSize, overwrite });
+    if (r.numbered === 0) { setNotice(overwrite ? T.wireNoneFound : T.wireAllNumbered); return; }
+    commit(r.shapes);
+    setNotice(T.wireNumbered.replace('{n}', String(r.numbered)));
+  }, [shapes, textSize, commit, T]);
+
+  const doTagDevices = useCallback(() => {
+    const r = autoTagDevices(shapes, { textSize });
+    if (r.tagged === 0) { setNotice(T.tagAllTagged); return; }
+    commit(r.shapes);
+    setNotice(T.tagged.replace('{n}', String(r.tagged)));
+  }, [shapes, textSize, commit, T]);
+
+  /** Devices that appear on more than one sheet — a coil and its contacts. */
+  const xrefs = useMemo(
+    () => crossReferences(sheets.map((sh, i) => ({
+      name: sh.name,
+      shapes: edits[i] ?? sh.drawing.shapes,
+    }))),
+    [sheets, edits]);
 
   /**
    * Full screen, and a way back.
@@ -1095,6 +1151,32 @@ export const DrawingEditor: React.FC<Props> = ({
             <DownloadIcon className="w-4 h-4" /> SVG
           </button>
           <button
+            onClick={() => doNumberWires(false)}
+            title={T.wireNumberTip}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
+          >
+            <HashIcon className="w-4 h-4" /> {T.wireNumber}
+          </button>
+          <button
+            onClick={doTagDevices}
+            title={T.tagDevicesTip}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
+          >
+            <TagIcon className="w-4 h-4" /> {T.tagDevices}
+          </button>
+          <button
+            onClick={runChecks}
+            title={T.checksTip}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium ${
+              messages && messages.some(m => m.cls === 'error')
+                ? 'bg-red-700 text-white hover:bg-red-800'
+                : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <ShieldCheckIcon className="w-4 h-4" /> {T.checks}
+            {messages && messages.length > 0 && ` (${messages.length})`}
+          </button>
+          <button
             onClick={importXlsx}
             title={T.xlsxImportTip}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
@@ -1171,6 +1253,68 @@ export const DrawingEditor: React.FC<Props> = ({
           {showHelp && (
             <DrawingHelp lang={lang} t={T} onClose={() => setShowHelp(false)} />
           )}
+          {showChecks && (
+            <div className="absolute top-2 right-2 z-30 w-[22rem] max-h-[70%] flex flex-col rounded-lg border border-gray-300 bg-white shadow-xl">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">{T.checks}</p>
+                  <p className="text-[11px] text-gray-500">
+                    {messages?.length
+                      ? `${messages.filter(m => m.cls === 'error').length} · ${messages.filter(m => m.cls === 'warning').length} · ${messages.filter(m => m.cls === 'note').length}`
+                      : T.checksClean}
+                  </p>
+                </div>
+                <button className="p-1 rounded hover:bg-gray-100" onClick={() => setShowChecks(false)}>
+                  <XIcon className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="overflow-y-auto">
+                {messages?.length === 0 && (
+                  <p className="px-3 py-4 text-xs text-gray-500">{T.checksClean}</p>
+                )}
+                {messages?.map((m, k) => (
+                  <button
+                    key={`${m.code}-${k}`}
+                    onClick={() => goToMessage(m)}
+                    className="w-full text-left px-3 py-2 border-b border-gray-100 hover:bg-gray-50"
+                  >
+                    <span className="flex items-start gap-2">
+                      <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${
+                        m.cls === 'error' ? 'bg-red-600'
+                        : m.cls === 'warning' ? 'bg-amber-500' : 'bg-blue-500'
+                      }`} />
+                      <span className="min-w-0">
+                        <span className="block text-xs text-gray-800">{m.text}</span>
+                        <span className="block text-[10px] text-gray-400 mt-0.5">
+                          {m.category} · {m.code}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                ))}
+
+                {/* Across sheets a repeated designation is not a fault — it is
+                    how a coil finds its contacts — so it is listed apart from
+                    the messages rather than among them. */}
+                {xrefs.length > 0 && (
+                  <div className="border-t border-gray-200">
+                    <p className="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                      <LinkIcon className="w-3 h-3 inline mr-1" />{T.xrefs}
+                    </p>
+                    {xrefs.map(x => (
+                      <p key={x.tag} className="px-3 py-1.5 text-xs text-gray-700 border-b border-gray-100">
+                        <span className="font-mono font-medium">{x.tag}</span>
+                        <span className="text-gray-400"> — {T.xrefOn} </span>
+                        {x.places.map(p => p.sheet).join(', ')}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {showLibrary && (
             <SymbolLibrary
               t={T}
