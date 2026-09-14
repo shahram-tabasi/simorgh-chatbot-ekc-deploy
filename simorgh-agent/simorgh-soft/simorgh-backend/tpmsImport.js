@@ -558,6 +558,21 @@ export const SQL = {
     ORDER BY revision`,
 };
 
+const TPMS_QUERY_TIMEOUT_MS = Number(process.env.TPMS_QUERY_TIMEOUT_MS || 60000);
+
+// mysql2's pool has no default query timeout (see mysqlConfig in server.js),
+// so a stuck TPMS query would otherwise hold one of the 10 pool connections
+// indefinitely, starving every other request. Wrapping execute/query here —
+// rather than editing each call site below — puts a bound on every one of
+// them at once.
+function withQueryTimeout(pool) {
+  const wrapSql = sql => (typeof sql === 'string' ? { sql, timeout: TPMS_QUERY_TIMEOUT_MS } : sql);
+  return {
+    execute: (sql, params) => pool.execute(wrapSql(sql), params),
+    query: (sql, params) => pool.query(wrapSql(sql), params),
+  };
+}
+
 // Registers the TPMS routes. `getPool` returns the shared mysql2 pool.
 export function registerTpmsImportRoutes(app, getPool) {
   // The three pickers. They used to query table and column names that don't
@@ -566,7 +581,7 @@ export function registerTpmsImportRoutes(app, getPool) {
   const listRoute = (path, sql, paramFrom) => {
     app.get(path, async (req, res) => {
       try {
-        const pool = await getPool();
+        const pool = withQueryTimeout(await getPool());
         const params = paramFrom ? [paramFrom(req)] : [];
         const [rows] = await pool.execute(sql, params);
         res.json({ success: true, count: rows.length, items: rows, projects: rows, scopes: rows, revisions: rows });
@@ -592,7 +607,7 @@ export function registerTpmsImportRoutes(app, getPool) {
     }
     try {
       const started = Date.now();
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const many = async (sql, params) => (await pool.execute(sql, params))[0];
 
@@ -663,7 +678,7 @@ export function registerTpmsImportRoutes(app, getPool) {
       return res.status(400).json({ success: false, error: 'projectId and scopeId are required' });
     }
     try {
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const [panelRow, projectIdentityRow] = await Promise.all([
         one(SQL.panel, [projectId, scopeId]),
@@ -704,7 +719,7 @@ export function registerTpmsImportRoutes(app, getPool) {
       try { return await fn(); } finally { timings[name] = Date.now() - t; }
     };
     try {
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const projectRow = await time('project', async () =>
         (await pool.execute(SQL.project, [projectId]))[0][0] || null);
       if (!projectRow) return res.status(404).json({ success: false, error: 'No such project in TPMS' });
@@ -755,7 +770,7 @@ export function registerTpmsImportRoutes(app, getPool) {
       return res.status(400).json({ success: false, error: 'scopeId must be a number' });
     }
     try {
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const started = Date.now();
       const [joinedRows] = scopeId != null
         ? await pool.query(SQL.lines, [projectId, scopeId, revision])
@@ -795,7 +810,7 @@ export function registerTpmsImportRoutes(app, getPool) {
     }
 
     try {
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const many = async (sql, params) => (await pool.execute(sql, params))[0];
 

@@ -119,7 +119,8 @@ const mysqlConfig = {
   password: process.env.MYSQL_PASSWORD || 'HoJETA',
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  connectTimeout: 30000,
 };
 
 let mysqlPool;
@@ -129,10 +130,19 @@ async function connectToMySql() {
   try {
     if (!mysqlPool) {
       console.log("🔄 Connecting to MySQL (TPMS)...");
-      mysqlPool = mysql.createPool(mysqlConfig);
+      const pool = mysql.createPool(mysqlConfig);
+      // Without this, a fatal out-of-band pool error (TPMS host reset, a
+      // MySQL restart) is an unhandled 'error' event — Node crashes the
+      // whole process, not just the TPMS request in flight. Same fix as
+      // sqlPool's handler above.
+      pool.on('error', (err) => {
+        console.error('❌ MySQL Pool error:', err.message);
+        mysqlPool = null;
+      });
       // Test connection
-      const connection = await mysqlPool.getConnection();
+      const connection = await pool.getConnection();
       connection.release();
+      mysqlPool = pool;
       console.log("✅ Connected to MySQL (TPMS) successfully!");
     }
     return mysqlPool;
@@ -1529,6 +1539,20 @@ app.get('/api/revisions/compare/export', async (req, res) => {
     console.error('Error exporting comparison:', error);
     res.status(500).json({ error: 'Failed to export comparison' });
   }
+});
+
+// ============================================
+// Process-level safety net
+// ============================================
+// Any unhandled error anywhere else in the app (not just the DB pools above,
+// which now handle their own) would otherwise crash the whole process and
+// take down every in-flight request/connection, not just the one that
+// failed. Log and keep serving instead.
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ Unhandled rejection:', reason);
 });
 
 // ============================================
