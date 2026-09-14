@@ -16,6 +16,7 @@
     "dotenv": "^16.3.1",
     "exceljs": "^4.4.0",
     "express": "^4.22.1",
+    "mammoth": "^1.8.0",
     "mongodb": "^6.3.0",
     "mssql": "^10.0.2",
     "multer": "^2.1.1",

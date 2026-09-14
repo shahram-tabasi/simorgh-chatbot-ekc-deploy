@@ -414,6 +414,7 @@ const TAB_NAMES: Record<string, number> = {
   'simorgh draw':       4, 'simorgh-draw': 4, 'draw': 4, 'cad': 4,
   // The tab was called Eplanix until it was named; both still resolve.
   'eplanix':            4, 'single-line': 4, 'single line': 4, 'layout': 4,
+  'documents':          5, 'document': 5, 'docs': 5,
 };
 
 const set_active_tab: ChatTool = {
@@ -820,6 +821,63 @@ const propose_changes: ChatTool = {
 };
 
 // ──────────────────────────────────────────────────────────────────────────
+// Documents — the AI reads what's uploaded in the Documents tab directly,
+// rather than needing the file re-attached to the conversation. Both tools
+// hit the same backend store the tab itself uses (documents.js), so a file
+// uploaded there is available here immediately, no re-upload.
+// ──────────────────────────────────────────────────────────────────────────
+const DOCUMENTS_API_BASE = `${(import.meta as any).env?.VITE_API_URL || ''}/api/documents`;
+
+const list_project_documents: ChatTool = {
+  name: 'list_project_documents',
+  description: 'List the files uploaded to this project\'s Documents tab — filename, category and id for each. Call read_project_document with an id to get its text.',
+  args: {
+    category: { type: 'string', description: 'Filter to one category: SPEC | SLD-OLD | Site Layout | Logic | Load List | Io List | Data sheet | Cover | Other. Omit for all.', required: false },
+  },
+  execute: async ({ category }, ctx) => {
+    const projectId = ctx.projectData._id;
+    if (!projectId) return { ok: false, summary: 'This project has not been saved yet, so it has no documents.' };
+    try {
+      const r = await fetch(`${DOCUMENTS_API_BASE}?projectId=${encodeURIComponent(projectId)}`);
+      const body = await r.json();
+      if (!r.ok) return { ok: false, summary: body.error || 'Could not read the document list.' };
+      let docs = body.documents as any[];
+      if (category) docs = docs.filter(d => String(d.category).toLowerCase() === String(category).toLowerCase());
+      return {
+        ok: true,
+        summary: `${docs.length} document(s)${category ? ` in ${category}` : ''}.`,
+        data: docs.map(d => ({ id: d._id, filename: d.filename, category: d.category, uploadedAt: d.uploadedAt })),
+      };
+    } catch (err) {
+      return { ok: false, summary: `Could not reach the document store: ${(err as Error).message}` };
+    }
+  },
+};
+
+const read_project_document: ChatTool = {
+  name: 'read_project_document',
+  description: 'Read the extracted text of one uploaded document (PDF, Word, or Excel — images have no text). Get the id from list_project_documents first.',
+  args: {
+    id: { type: 'string', description: 'Document id, from list_project_documents.', required: true },
+  },
+  execute: async ({ id }) => {
+    if (!id) return { ok: false, summary: 'id is required.' };
+    try {
+      const r = await fetch(`${DOCUMENTS_API_BASE}/${encodeURIComponent(String(id))}`);
+      const body = await r.json();
+      if (!r.ok) return { ok: false, summary: body.error || 'Could not read that document.' };
+      const text = body.extractedText || '';
+      if (!text) {
+        return { ok: true, summary: `"${body.filename}" has no extracted text (an image, or a format this can't read).`, data: { filename: body.filename } };
+      }
+      return { ok: true, summary: `Text of "${body.filename}" (${text.length} chars).`, data: { filename: body.filename, text } };
+    } catch (err) {
+      return { ok: false, summary: `Could not reach the document store: ${(err as Error).message}` };
+    }
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
 // Registry
 // ──────────────────────────────────────────────────────────────────────────
 const TOOLS: ChatTool[] = [
@@ -839,6 +897,8 @@ const TOOLS: ChatTool[] = [
   set_cell_color, set_row_color, apply_excel,
   // Document-driven workflows (staged proposal awaiting user approval)
   propose_changes,
+  // Documents tab
+  list_project_documents, read_project_document,
 ];
 
 export const CHAT_TOOLS: Record<string, ChatTool> = Object.fromEntries(
@@ -851,6 +911,7 @@ export const CHAT_TOOLS: Record<string, ChatTool> = Object.fromEntries(
 export const READ_ONLY_TOOLS = new Set([
   'list_equipments', 'list_rows', 'search_templates', 'find_similar_templates',
   'set_active_tab', 'select_equipment', 'propose_changes',
+  'list_project_documents', 'read_project_document',
 ]);
 
 export function isMutatingTool(name: string): boolean {

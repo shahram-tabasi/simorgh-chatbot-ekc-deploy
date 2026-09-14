@@ -6,7 +6,6 @@ import dotenv from 'dotenv';
 import sql from 'mssql';
 import mysql from 'mysql2/promise';
 import multer from 'multer';
-import { PDFParse } from 'pdf-parse';
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
 import fs from 'fs';
@@ -16,6 +15,8 @@ import { registerDesktopRoutes } from './desktopDownload.js';
 import { registerTpmsImportRoutes } from './tpmsImport.js';
 import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 import { registerEplanRoutes } from './eplanSend.js';
+import { registerDocumentRoutes } from './documents.js';
+import { extractPdfText } from './pdfText.js';
 import {
   buildSystemPrompt, extractToolEnvelope, callLocalModel,
   DEFAULT_LOCAL_MODEL_URL, DEFAULT_LOCAL_MODEL_NAME,
@@ -272,6 +273,12 @@ registerEplanSymbolRoutes(app, connectToSqlServer, process.env.EPLAN_SYMBOL_DIR)
 
 // EPLAN — forwards to eplan-bridge-service; address in .env (EPLAN_BRIDGE_URL).
 registerEplanRoutes(app);
+
+// Project documents — the Documents tab. A getter, not `db` itself: this
+// registration runs before connectToDatabase() resolves (see startServer
+// below), so `db` isn't assigned yet at this exact line — only by the time
+// a request actually arrives.
+registerDocumentRoutes(app, () => db);
 
 app.get('/api/health', async (req, res) => {
   try {
@@ -948,28 +955,6 @@ const chatUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024, files: 10 },
 });
-
-// Extract text from a PDF buffer. Returns { text, pageCount } or null on
-// failure. Truncates very long PDFs so we don't blow the model context.
-async function extractPdfText(buffer, filename) {
-  try {
-    const parser = new PDFParse({ data: new Uint8Array(buffer) });
-    const result = await parser.getText();
-    await parser.destroy();
-    const fullText = (result?.text || '').trim();
-    const MAX_CHARS = Number(process.env.PDF_TEXT_MAX_CHARS || 25000);
-    const truncated = fullText.length > MAX_CHARS;
-    return {
-      text:      truncated ? fullText.slice(0, MAX_CHARS) + '\n…[truncated]…' : fullText,
-      truncated,
-      fullLength: fullText.length,
-      pageCount: result?.pages?.length ?? null,
-    };
-  } catch (err) {
-    console.error(`PDF parse error for ${filename}:`, err.message);
-    return null;
-  }
-}
 
 // LOCAL endpoint — forwards prompts to the local model cluster (the VLM on
 // 192.168.1.61 by default, OpenAI-compatible HTTP). Returns
