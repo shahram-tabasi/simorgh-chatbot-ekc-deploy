@@ -19,10 +19,13 @@
 // with its device rows, and the templates behind them. Read-only throughout —
 // nothing here writes to TPMS.
 
+import { deadline, MYSQL_PING_TIMEOUT_MS } from './dbTimeout.js';
+
 // Equipment slot → template property, in the order the Create Template screen
 // lays them out. Slots 1‑17 line up with Simorgh's LV list exactly; slots 18
 // (F.C/soft starter) and 19 (surge arrester) have no LV property of their own,
 // so they land in the two spare rows LV has beyond MV's five.
+
 export const LV_SLOT_PROPERTIES = {
   1: 'CB ORDER',
   2: 'ACCESSORY',
@@ -565,12 +568,58 @@ const TPMS_QUERY_TIMEOUT_MS = Number(process.env.TPMS_QUERY_TIMEOUT_MS || 60000)
 // indefinitely, starving every other request. Wrapping execute/query here —
 // rather than editing each call site below — puts a bound on every one of
 // them at once.
+//
+// The timeout alone still leaves the caller waiting the full minute for a
+// failure that is knowable in milliseconds. A pooled socket to TPMS can be
+// dead on arrival — dropped in transit while idle, with nothing on either end
+// told about it (see the keepalive note on mysqlConfig in server.js) — and
+// mysql2 will happily hand it over, at which point the query goes nowhere and
+// the request burns the whole TPMS_QUERY_TIMEOUT_MS before 500ing. Every
+// retry draws another socket from the same pool and does the same thing.
+//
+// So check the connection is alive before trusting it with a query. On a
+// healthy LAN connection the ping is a sub-millisecond round-trip; on a dead
+// one it fails in MYSQL_PING_TIMEOUT_MS and the socket is destroyed rather
+// than released, which takes it out of the pool for good and lets the next
+// attempt dial a fresh one. That turns a hard 500 into a recovery the caller
+// never sees.
+async function liveConnection(pool, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    // Outside the try on purpose: a getConnection() failure means the host
+    // itself is unreachable, which retrying here would only slow down.
+    const conn = await pool.getConnection();
+    try {
+      await deadline(conn.ping(), MYSQL_PING_TIMEOUT_MS, 'TPMS ping');
+      return conn;
+    } catch (err) {
+      lastErr = err;
+      try { conn.destroy(); } catch { /* already gone */ }
+      console.warn(`⚠️ TPMS: discarded a dead pooled connection (${err.message})`);
+    }
+  }
+  throw lastErr ?? new Error('no usable TPMS connection');
+}
+
 function withQueryTimeout(pool) {
   const wrapSql = sql => (typeof sql === 'string' ? { sql, timeout: TPMS_QUERY_TIMEOUT_MS } : sql);
-  return {
-    execute: (sql, params) => pool.execute(wrapSql(sql), params),
-    query: (sql, params) => pool.query(wrapSql(sql), params),
+  const run = method => async (sql, params) => {
+    const conn = await liveConnection(pool);
+    let fatal = false;
+    try {
+      return await conn[method](wrapSql(sql), params);
+    } catch (err) {
+      // A query timeout is fatal in mysql2's eyes — it cannot cancel the
+      // statement server-side, so the socket is left out of step with the
+      // protocol and must not be reused.
+      fatal = Boolean(err && err.fatal);
+      throw err;
+    } finally {
+      if (fatal) { try { conn.destroy(); } catch { /* already gone */ } }
+      else conn.release();
+    }
   };
+  return { execute: run('execute'), query: run('query') };
 }
 
 // Registers the TPMS routes. `getPool` returns the shared mysql2 pool.

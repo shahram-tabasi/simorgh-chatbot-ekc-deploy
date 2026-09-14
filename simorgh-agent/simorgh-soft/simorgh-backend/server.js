@@ -13,6 +13,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerDesktopRoutes } from './desktopDownload.js';
 import { registerTpmsImportRoutes } from './tpmsImport.js';
+import { deadline, MYSQL_PING_TIMEOUT_MS } from './dbTimeout.js';
 import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 import { registerEplanRoutes } from './eplanSend.js';
 import { registerDocumentRoutes } from './documents.js';
@@ -122,6 +123,21 @@ const mysqlConfig = {
   connectionLimit: 10,
   queueLimit: 0,
   connectTimeout: 30000,
+  // The TPMS host is on another subnet, reached from inside the container
+  // network, so an idle pooled socket can be dropped in transit by a firewall
+  // or NAT table without either end being told. mysql2 then hands that dead
+  // socket to the next request, which writes its query into a black hole and
+  // only gives up on the query timeout — every TPMS call failing after
+  // exactly TPMS_QUERY_TIMEOUT_MS while the pool still believes it is
+  // connected. Keepalive probes start after 10s of quiet and hold the flow
+  // open; mysql2's own default delay is the OS one (2 hours on Linux), which
+  // is far longer than the idle timeout of anything in the path.
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  // And retire sockets that went quiet anyway, rather than letting them sit
+  // in the pool until a request trips over them.
+  maxIdle: 4,
+  idleTimeout: 60000,
 };
 
 let mysqlPool;
@@ -307,15 +323,29 @@ app.get('/api/health', async (req, res) => {
       }
     }
 
-    // Check MySQL connection status
+    // Check MySQL connection status.
+    //
+    // ping(), not getConnection() alone: taking a connection out of the pool
+    // touches no network at all when an idle one is waiting, so a socket the
+    // firewall dropped hours ago still reported 'connected' here while every
+    // TPMS route 500'd on the query timeout. A ping is an actual round-trip,
+    // so it can tell the difference — under a deadline, because the whole
+    // point is that a dead socket answers nothing, and this endpoint is what
+    // the container healthcheck calls: it has to fail fast, not hang.
     let mysqlStatus = 'disconnected';
     if (mysqlPool) {
+      let conn = null;
       try {
-        const conn = await mysqlPool.getConnection();
-        conn.release();
+        conn = await deadline(mysqlPool.getConnection(), MYSQL_PING_TIMEOUT_MS, 'MySQL getConnection');
+        await deadline(conn.ping(), MYSQL_PING_TIMEOUT_MS, 'MySQL ping');
         mysqlStatus = 'connected';
+        conn.release();
+        conn = null;
       } catch (err) {
         mysqlStatus = 'error';
+        // Destroy rather than release: a socket that will not answer a ping
+        // must not go back in the pool for the next request to trip over.
+        if (conn) { try { conn.destroy(); } catch { /* already gone */ } }
       }
     }
 
