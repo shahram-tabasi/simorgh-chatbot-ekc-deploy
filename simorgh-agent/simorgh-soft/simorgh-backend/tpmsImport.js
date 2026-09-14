@@ -142,6 +142,13 @@ export function buildLines(joinedRows) {
       priority: Number(row.priority) || 0,
       ecode: str(row.Ecode),
       scode: str(row.SCODE),
+      // BRAND_DES is "برند" in the view's own schema comments — the maker of
+      // the part, as against SCODE, which is "کد سازنده", the maker's code for
+      // it. They are different fields and the template needs both: the code is
+      // the order number, the brand is the manufacturer. This was never
+      // fetched, so the manufacturer arrived empty and a brand name read as
+      // though it were the order.
+      brand: str(row.BRAND_DES),
       secDes: str(row.SEC_DES),
       engDes: str(row.ENG_DES),
       shrDes: str(row.SHR_DES),
@@ -462,7 +469,7 @@ export const SQL = {
            d.cable_size, d.cb_rating, d.contactor_rating, d.overLoad_rating,
            d.module_type, d.templateName, d.ordering,
            e.equipment, e.label, e.SCODE, e.SEC_DES, e.ENG_DES, e.SHR_DES,
-           e.priority, e.QTY, e.Ecode,
+           e.priority, e.QTY, e.Ecode, e.BRAND_DES,
            t.lable AS tlabel
     FROM View_draft d
     LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID
@@ -488,7 +495,7 @@ export const SQL = {
            d.cable_size, d.cb_rating, d.contactor_rating, d.overLoad_rating,
            d.module_type, d.templateName, d.ordering,
            e.equipment, e.label, e.SCODE, e.SEC_DES, e.ENG_DES, e.SHR_DES,
-           e.priority, e.QTY, e.Ecode,
+           e.priority, e.QTY, e.Ecode, e.BRAND_DES,
            t.lable AS tlabel
     FROM View_draft d
     LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID

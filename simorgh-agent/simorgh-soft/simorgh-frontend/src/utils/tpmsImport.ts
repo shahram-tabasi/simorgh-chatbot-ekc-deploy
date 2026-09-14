@@ -24,7 +24,10 @@ export interface TpmsPart {
   quantity: number;
   priority: number;
   ecode: string;
+  /** The maker's code for the part — the order number. */
   scode: string;
+  /** The maker itself, from the view's BRAND_DES ("برند"). */
+  brand: string;
   secDes: string;
   engDes: string;
   shrDes: string;
@@ -118,7 +121,11 @@ function toTemplatePart(part: TpmsPart) {
       Designation2: part.engDes,
       Designation3: part.shrDes,
       TypeNumber: part.ecode,
-      Manufacturer: '',
+      // The part's maker, from the view's BRAND_DES ("برند"). This was hard
+      // coded empty, which put the manufacturer nowhere and left it reading as
+      // part of the order instead — CB ORDER showing a brand rather than the
+      // order number it is supposed to carry.
+      Manufacturer: part.brand || '',
       __tpms: { ecode: part.ecode, scode: part.scode, slot: part.slot },
     },
   };
