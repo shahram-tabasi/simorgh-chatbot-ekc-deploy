@@ -79,6 +79,11 @@ TCP_TIMEOUT = int(os.getenv("TCP_TIMEOUT", "120"))
 # whole pool at once would be quicker still, but 101 simultaneous connects to
 # one host looks like a port scan; a batch keeps it to a couple of rounds.
 PROBE_CONCURRENCY = int(os.getenv("EPLAN_PROBE_CONCURRENCY", "64"))
+# How long to wait, after a pool port accepts, to see whether it closes again.
+# A relay with nothing behind it closes within a round-trip; AsyncTcpServer
+# stays silent waiting for a length prefix. Long enough to tell those apart on
+# a LAN, short enough that it is paid once per scan, not per port.
+RELAY_EOF_TIMEOUT = float(os.getenv("EPLAN_RELAY_EOF_TIMEOUT", "0.3"))
 # Optional shared secret. Empty means "no auth" — fine while this only ever
 # takes traffic from inside the compose network, but set it once /draw is
 # reachable from another server (e.g. simorgh-backend across the LAN) and
@@ -126,15 +131,41 @@ class ServerResponse(BaseModel):
 
 
 async def _port_answers(host: str, port: int, timeout: float = 1.0) -> bool:
-    """A bare TCP connect — enough to say an EPLAN instance (by way of the
-    forwarder) is listening on this port, without sending it anything."""
+    """Whether an EPLAN instance is really listening on this port.
+
+    A bare TCP connect is not enough once a port relay is in the path, and
+    there always is one: both eplan-port-forwarder and the netsh portproxy
+    alternative accept the connection first and only then dial 127.0.0.1. So
+    a pool port with no EPLAN behind it still completes the handshake, and
+    only afterwards closes. Judged on the connect alone, all 101 pool ports
+    look available, and a /draw with no explicit port is handed the lowest of
+    them rather than the one EPLAN is actually on — it would fail at send
+    time, on a port the bridge had just called available.
+
+    AsyncTcpServer does the opposite: it accepts and then waits for our
+    length prefix, sending nothing of its own (see HandleClientAsync). That
+    is what tells the two apart — an immediate EOF is a relay with nothing
+    behind it, silence is a real listener.
+    """
+    writer = None
     try:
-        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
-        writer.close()
-        await writer.wait_closed()
-        return True
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+        try:
+            first = await asyncio.wait_for(reader.read(1), timeout=RELAY_EOF_TIMEOUT)
+        except asyncio.TimeoutError:
+            return True          # held open, nothing sent — AsyncTcpServer
+        return bool(first)       # b"" is EOF: a relay that could not connect
     except Exception:
         return False
+    finally:
+        if writer is not None:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
 
 
 async def _scan_pool(host: str, ports: List[int], timeout: float = 1.0) -> List[int]:
