@@ -10,6 +10,8 @@ import { SplashScreen } from './components/SplashScreen/SplashScreen';
 import { ProjectProvider, useProject } from './context/ProjectContext';
 import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
+import { useTheme } from './useTheme';
+import { SunIcon, MoonIcon } from 'lucide-react';
 import { Chatbot } from './components/Chatbot/Chatbot';
 import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
 import { FeederDuplicateModal } from './components/DeviceSelection/FeederDuplicateModal';
@@ -518,6 +520,7 @@ const AboutDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
 
 // کامپوننت اصلی اپ
 const MainApp: React.FC = () => {
+  const { theme, toggle: toggleTheme } = useTheme();
   const [activeTab,               setActiveTab]               = useState(0);
   const [navigatingToTemplateId,  setNavigatingToTemplateId]  = useState<string | null>(null);
   // Controls which sub-tab ProjectDefinitionTab opens on
@@ -848,6 +851,16 @@ const MainApp: React.FC = () => {
               <div className="header-suite-beam h-[2px] w-full mt-1 rounded-full" />
             </div>
             <div className="ml-auto flex items-center space-x-4">
+              <button
+                onClick={toggleTheme}
+                title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+                aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+                className="p-2 rounded border border-gray-300 hover:bg-gray-100 transition-colors"
+              >
+                {theme === 'dark'
+                  ? <SunIcon className="w-4 h-4 text-amber-500" />
+                  : <MoonIcon className="w-4 h-4 text-gray-600" />}
+              </button>
               {/* Project Name */}
               <div className="text-sm text-gray-700">
                 <span className="font-medium">Project:</span> {projectData.projectName}

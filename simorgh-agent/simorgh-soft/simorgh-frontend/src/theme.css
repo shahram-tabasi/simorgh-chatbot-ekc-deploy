@@ -1,0 +1,197 @@
+/* Dark theme.
+ *
+ * The app was written entirely in light Tailwind utilities — bg-white,
+ * text-gray-500, border-gray-300 and so on, 1464 of them across 79 files. The
+ * usual way to add a dark mode is a `dark:` variant beside every one of those,
+ * which is 1464 edits and a standing obligation on every new line of markup.
+ *
+ * Instead the utilities themselves are redefined under [data-theme="dark"].
+ * There are only about thirty-five distinct neutral classes in all that code,
+ * and twelve of them account for most of it, so flipping the palette is a
+ * page of CSS rather than a sweep through every component — and markup written
+ * from here on inherits it without anyone having to remember.
+ *
+ * Two rules kept this readable:
+ *
+ *   Neutrals invert, accents do not. bg-blue-600 is legible on either ground,
+ *   so it is left alone; only the greys and the pale accent *tints* (bg-*-50,
+ *   bg-*-100, the near-white surfaces) are remapped.
+ *
+ *   text-white is never touched. It nearly always sits on a saturated button
+ *   (bg-red-600 text-white), where it is still correct in the dark.
+ *
+ * !important throughout: these compete with Tailwind's own single-class rules
+ * at equal specificity, and load order between the two is not worth relying on.
+ */
+
+:root {
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  /* Surfaces, lightest-sitting-on-darkest. */
+  --s-base:    #0f172a;  /* the page itself */
+  --s-raised:  #1e293b;  /* cards, panels, anything that was bg-white */
+  --s-sunken:  #172033;  /* strips that were bg-gray-50 */
+  --s-hover:   #334155;  /* bg-gray-100, hover states */
+  --s-strong:  #475569;
+
+  /* Text, strongest first. */
+  --t-strong:  #f1f5f9;
+  --t-body:    #e2e8f0;
+  --t-muted:   #a9b6c8;
+  --t-faint:   #8395ab;
+
+  --line:      #334155;
+  --line-soft: #263449;
+
+  color-scheme: dark;
+}
+
+[data-theme="dark"] body,
+[data-theme="dark"] #root {
+  background-color: var(--s-base);
+  color: var(--t-body);
+}
+
+/* ── Surfaces ─────────────────────────────────────────────────────────── */
+[data-theme="dark"] .bg-white      { background-color: var(--s-raised) !important; }
+[data-theme="dark"] .bg-gray-50,
+[data-theme="dark"] .bg-slate-50   { background-color: var(--s-sunken) !important; }
+[data-theme="dark"] .bg-gray-100,
+[data-theme="dark"] .bg-slate-100  { background-color: var(--s-hover)  !important; }
+[data-theme="dark"] .bg-gray-200   { background-color: var(--s-strong) !important; }
+[data-theme="dark"] .bg-gray-300   { background-color: #56657a !important; }
+
+/* Already-dark utilities need to stay distinguishable from the new ground. */
+[data-theme="dark"] .bg-gray-600,
+[data-theme="dark"] .bg-slate-600  { background-color: #475569 !important; }
+[data-theme="dark"] .bg-gray-700,
+[data-theme="dark"] .bg-slate-700  { background-color: #3b4a60 !important; }
+[data-theme="dark"] .bg-gray-800,
+[data-theme="dark"] .bg-slate-800  { background-color: #2a3648 !important; }
+
+[data-theme="dark"] .hover\:bg-gray-50:hover,
+[data-theme="dark"] .hover\:bg-slate-50:hover  { background-color: var(--s-hover) !important; }
+[data-theme="dark"] .hover\:bg-gray-100:hover,
+[data-theme="dark"] .hover\:bg-slate-100:hover { background-color: var(--s-strong) !important; }
+[data-theme="dark"] .hover\:bg-gray-200:hover  { background-color: #56657a !important; }
+
+/* ── Text ─────────────────────────────────────────────────────────────── */
+[data-theme="dark"] .text-gray-900,
+[data-theme="dark"] .text-slate-900 { color: var(--t-strong) !important; }
+[data-theme="dark"] .text-gray-800,
+[data-theme="dark"] .text-slate-800,
+[data-theme="dark"] .text-gray-700,
+[data-theme="dark"] .text-slate-700 { color: var(--t-body) !important; }
+[data-theme="dark"] .text-gray-600,
+[data-theme="dark"] .text-slate-600,
+[data-theme="dark"] .text-gray-500,
+[data-theme="dark"] .text-slate-500 { color: var(--t-muted) !important; }
+[data-theme="dark"] .text-gray-400,
+[data-theme="dark"] .text-slate-400 { color: var(--t-faint) !important; }
+/* These were already light-on-dark; leave them light. */
+[data-theme="dark"] .text-gray-300,
+[data-theme="dark"] .text-slate-300,
+[data-theme="dark"] .text-gray-200,
+[data-theme="dark"] .text-slate-200 { color: var(--t-body) !important; }
+
+/* ── Lines ────────────────────────────────────────────────────────────── */
+[data-theme="dark"] .border-gray-50,
+[data-theme="dark"] .border-gray-100,
+[data-theme="dark"] .border-slate-100 { border-color: var(--line-soft) !important; }
+[data-theme="dark"] .border-gray-200,
+[data-theme="dark"] .border-slate-200,
+[data-theme="dark"] .border-gray-300,
+[data-theme="dark"] .border-slate-300,
+[data-theme="dark"] .border-gray-400   { border-color: var(--line) !important; }
+[data-theme="dark"] .divide-gray-100 > * + *,
+[data-theme="dark"] .divide-gray-200 > * + * { border-color: var(--line) !important; }
+
+/* ── Pale accent tints ────────────────────────────────────────────────────
+ * bg-emerald-50 and friends are near-white: on a dark ground they glare and
+ * swallow the dark text sitting on them. Each becomes a low-alpha wash of its
+ * own hue instead, so a success panel still reads green and a warning amber,
+ * and the -700/-800 text on them is lifted to a shade that carries. */
+[data-theme="dark"] .bg-blue-50    { background-color: rgba(59,130,246,.14) !important; }
+[data-theme="dark"] .bg-blue-100   { background-color: rgba(59,130,246,.22) !important; }
+[data-theme="dark"] .bg-emerald-50 { background-color: rgba(16,185,129,.14) !important; }
+[data-theme="dark"] .bg-emerald-100{ background-color: rgba(16,185,129,.22) !important; }
+[data-theme="dark"] .bg-green-50   { background-color: rgba(34,197,94,.14) !important; }
+[data-theme="dark"] .bg-green-100  { background-color: rgba(34,197,94,.22) !important; }
+[data-theme="dark"] .bg-red-50     { background-color: rgba(239,68,68,.14) !important; }
+[data-theme="dark"] .bg-red-100    { background-color: rgba(239,68,68,.22) !important; }
+[data-theme="dark"] .bg-amber-50   { background-color: rgba(245,158,11,.14) !important; }
+[data-theme="dark"] .bg-amber-100  { background-color: rgba(245,158,11,.22) !important; }
+[data-theme="dark"] .bg-yellow-50  { background-color: rgba(234,179,8,.14) !important; }
+[data-theme="dark"] .bg-yellow-100 { background-color: rgba(234,179,8,.22) !important; }
+[data-theme="dark"] .bg-orange-50  { background-color: rgba(249,115,22,.14) !important; }
+[data-theme="dark"] .bg-orange-100 { background-color: rgba(249,115,22,.22) !important; }
+[data-theme="dark"] .bg-purple-50  { background-color: rgba(168,85,247,.14) !important; }
+[data-theme="dark"] .bg-purple-100 { background-color: rgba(168,85,247,.22) !important; }
+[data-theme="dark"] .bg-indigo-50  { background-color: rgba(99,102,241,.14) !important; }
+[data-theme="dark"] .bg-indigo-100 { background-color: rgba(99,102,241,.22) !important; }
+[data-theme="dark"] .bg-teal-50    { background-color: rgba(20,184,166,.14) !important; }
+[data-theme="dark"] .bg-sky-50     { background-color: rgba(14,165,233,.14) !important; }
+[data-theme="dark"] .bg-sky-100    { background-color: rgba(14,165,233,.22) !important; }
+[data-theme="dark"] .bg-pink-50    { background-color: rgba(236,72,153,.14) !important; }
+[data-theme="dark"] .bg-rose-50    { background-color: rgba(244,63,94,.14) !important; }
+
+[data-theme="dark"] .text-blue-900,   [data-theme="dark"] .text-blue-800,
+[data-theme="dark"] .text-blue-700    { color: #93c5fd !important; }
+[data-theme="dark"] .text-emerald-900,[data-theme="dark"] .text-emerald-800,
+[data-theme="dark"] .text-emerald-700 { color: #6ee7b7 !important; }
+[data-theme="dark"] .text-green-900,  [data-theme="dark"] .text-green-800,
+[data-theme="dark"] .text-green-700   { color: #86efac !important; }
+[data-theme="dark"] .text-red-900,    [data-theme="dark"] .text-red-800,
+[data-theme="dark"] .text-red-700     { color: #fca5a5 !important; }
+[data-theme="dark"] .text-amber-900,  [data-theme="dark"] .text-amber-800,
+[data-theme="dark"] .text-amber-700   { color: #fcd34d !important; }
+[data-theme="dark"] .text-orange-900, [data-theme="dark"] .text-orange-800,
+[data-theme="dark"] .text-orange-700  { color: #fdba74 !important; }
+[data-theme="dark"] .text-purple-900, [data-theme="dark"] .text-purple-800,
+[data-theme="dark"] .text-purple-700  { color: #d8b4fe !important; }
+[data-theme="dark"] .text-indigo-800, [data-theme="dark"] .text-indigo-700 { color: #a5b4fc !important; }
+[data-theme="dark"] .text-teal-800,   [data-theme="dark"] .text-teal-700   { color: #5eead4 !important; }
+
+[data-theme="dark"] .border-blue-200    { border-color: rgba(59,130,246,.45) !important; }
+[data-theme="dark"] .border-emerald-200 { border-color: rgba(16,185,129,.45) !important; }
+[data-theme="dark"] .border-green-200   { border-color: rgba(34,197,94,.45) !important; }
+[data-theme="dark"] .border-red-200     { border-color: rgba(239,68,68,.45) !important; }
+[data-theme="dark"] .border-amber-200   { border-color: rgba(245,158,11,.45) !important; }
+[data-theme="dark"] .border-orange-200  { border-color: rgba(249,115,22,.45) !important; }
+[data-theme="dark"] .border-purple-200,
+[data-theme="dark"] .border-purple-100  { border-color: rgba(168,85,247,.45) !important; }
+[data-theme="dark"] .border-indigo-200  { border-color: rgba(99,102,241,.45) !important; }
+
+/* ── Form controls ────────────────────────────────────────────────────────
+ * Inputs are the one place a blanket utility remap is not enough: an input
+ * with no bg utility on it defaults to white from the user agent, not from
+ * anything Tailwind emitted, so there is no class to redefine. */
+[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background-color: var(--s-sunken);
+  color: var(--t-body);
+  border-color: var(--line);
+}
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder { color: var(--t-faint); }
+[data-theme="dark"] option { background-color: var(--s-raised); color: var(--t-body); }
+
+/* Tables lean on bg-white for sticky headers and striping. */
+[data-theme="dark"] th, [data-theme="dark"] td { border-color: var(--line); }
+
+/* Scrollbars, so the chrome does not stay bright inside a dark panel. */
+[data-theme="dark"] ::-webkit-scrollbar { background-color: var(--s-base); }
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background-color: var(--s-strong);
+  border-radius: 6px;
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background-color: #5b6b82; }
+
+/* Shadows read as glows on a dark ground; deepen them instead. */
+[data-theme="dark"] .shadow,
+[data-theme="dark"] .shadow-md,
+[data-theme="dark"] .shadow-lg,
+[data-theme="dark"] .shadow-xl { box-shadow: 0 4px 14px rgba(0,0,0,.45) !important; }
