@@ -13,12 +13,14 @@ import {
   CircleDashedIcon, RulerIcon, ScissorsIcon, ArrowRightToLineIcon,
   CornerDownRightIcon, RotateCwIcon, FlipHorizontalIcon, FlipVerticalIcon,
   ScalingIcon, BringToFrontIcon, SendToBackIcon, TableIcon, RefreshCwIcon,
-  HashIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, SparklesIcon, PaletteIcon,
+  HashIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, PaletteIcon,
   AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
   LanguagesIcon, CircleHelpIcon, LibraryBigIcon, GroupIcon, UngroupIcon,
-  SunIcon, MoonIcon, CableIcon, FrameIcon } from 'lucide-react';
+  SunIcon, MoonIcon, CableIcon, FrameIcon,
+  PanelLeftIcon, PanelRightIcon, PictureInPicture2Icon } from 'lucide-react';
+import logoMark from '../../assets/logo-mark.png';
 import { DrawingEdits } from '../../types/project';
 import {
   Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Pt, Shape, layerColor,
@@ -275,6 +277,125 @@ const RibbonPanel: React.FC<{ name: string; children: React.ReactNode }> = ({ na
  */
 const Stack: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="grid grid-flow-col grid-rows-2 gap-1">{children}</div>
+);
+
+/**
+ * Where the model's panel sits.
+ *
+ * Floating is where it started and is the wrong default for a panel you use
+ * while drawing: it covers the sheet, which is the one thing you need to see
+ * to judge what it drew. Docking it to a side gives it a column of its own,
+ * the way every CAD package parks its panels, and the choice is remembered
+ * because it is a preference about a desk, not about a drawing.
+ */
+export type Dock = 'left' | 'right' | 'float';
+
+const DOCK_KEY = 'simorgh-draw-ask-dock';
+
+const loadDock = (): Dock => {
+  try {
+    const kept = window.localStorage.getItem(DOCK_KEY);
+    if (kept === 'left' || kept === 'right' || kept === 'float') return kept;
+  } catch { /* a browser that keeps nothing is not an error */ }
+  return 'right';
+};
+
+const saveDock = (d: Dock) => {
+  try { window.localStorage.setItem(DOCK_KEY, d); } catch { /* nothing to do */ }
+};
+
+/**
+ * The model's panel: what to draw, and what came back when it could not.
+ *
+ * Module-level, not declared inside the editor, because it holds a textarea.
+ * A component declared inside a render is a new component type every keystroke,
+ * React throws the old one away and builds a new one, and the cursor goes with
+ * it — which is the bug this editor has already been bitten by once.
+ */
+const AskPanel: React.FC<{
+  t: Strings;
+  text: string;
+  onText: (v: string) => void;
+  asking: boolean;
+  onGo: () => void;
+  onClose: () => void;
+  dock: Dock;
+  onDock: (d: Dock) => void;
+  /** What the model actually said, when what it said could not be drawn. */
+  raw: { error: string; text: string; model: string } | null;
+  onDragStart?: (e: React.MouseEvent) => void;
+}> = ({ t, text, onText, asking, onGo, onClose, dock, onDock, raw, onDragStart }) => (
+  <>
+    <div
+      className={`flex items-center justify-between px-3 py-2 border-b border-gray-200 ${
+        dock === 'float' ? 'cursor-move' : ''}`}
+      onMouseDown={dock === 'float' ? onDragStart : undefined}
+    >
+      <p className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+        <img src={logoMark} alt="" aria-hidden data-theme-invert className="w-4 h-4 object-contain" />
+        {t.ask}
+      </p>
+      <span className="flex items-center gap-0.5">
+        {/* Left, right, or loose. Three buttons rather than a drag-to-the-edge
+            gesture: the gesture is charming until the one time it does not
+            catch, and then the panel is somewhere you did not put it. */}
+        <button
+          className={`p-1 rounded hover:bg-gray-100 ${dock === 'left' ? 'bg-gray-200' : ''}`}
+          title={t.dockLeft} aria-label={t.dockLeft} onClick={() => onDock('left')}
+        >
+          <PanelLeftIcon className="w-3.5 h-3.5" />
+        </button>
+        <button
+          className={`p-1 rounded hover:bg-gray-100 ${dock === 'float' ? 'bg-gray-200' : ''}`}
+          title={t.undock} aria-label={t.undock} onClick={() => onDock('float')}
+        >
+          <PictureInPicture2Icon className="w-3.5 h-3.5" />
+        </button>
+        <button
+          className={`p-1 rounded hover:bg-gray-100 ${dock === 'right' ? 'bg-gray-200' : ''}`}
+          title={t.dockRight} aria-label={t.dockRight} onClick={() => onDock('right')}
+        >
+          <PanelRightIcon className="w-3.5 h-3.5" />
+        </button>
+        <button className="p-1 rounded hover:bg-gray-100 ms-1" title={t.closeHelp} onClick={onClose}>
+          <XIcon className="w-4 h-4" />
+        </button>
+      </span>
+    </div>
+    <div className="p-3 overflow-y-auto">
+      <textarea
+        value={text}
+        onChange={e => onText(e.target.value)}
+        rows={3}
+        placeholder={t.askPlaceholder}
+        className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-violet-400"
+      />
+      <p className="text-[11px] text-gray-500 mt-1.5">{t.askNote}</p>
+      <div className="flex justify-end mt-2">
+        <button
+          onClick={onGo}
+          disabled={asking || text.trim().length < 3}
+          className="px-3 py-1.5 rounded bg-violet-700 text-white text-sm font-medium hover:bg-violet-800 disabled:opacity-40"
+        >
+          {asking ? t.askWorking : t.askGo}
+        </button>
+      </div>
+      {/* What it said, when what it said was not a drawing. Without this the
+          failure is a dead end: the only question worth answering is what the
+          model actually wrote, and nothing but its own words answers it. */}
+      {raw && (
+        <div className="mt-3 rounded border border-amber-300 bg-amber-50">
+          <p className="px-2 py-1.5 text-[11px] font-medium text-amber-800 border-b border-amber-200">
+            {raw.error}
+            {raw.model && <span className="font-normal text-amber-700"> · {raw.model}</span>}
+          </p>
+          <pre className="px-2 py-1.5 text-[10px] leading-snug text-gray-700 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+            {raw.text || t.askSaidNothing}
+          </pre>
+        </div>
+      )}
+    </div>
+  </>
 );
 
 export const DrawingEditor: React.FC<Props> = ({
@@ -677,6 +798,13 @@ export const DrawingEditor: React.FC<Props> = ({
   // which is the point. It is a first draft to correct, not an answer.
   const [askOpen, setAskOpen] = useState(false);
   const [ribbon, setRibbon] = useState<RibbonTab>('home');
+  const [askDock, setAskDock] = useState<Dock>(loadDock);
+  const chooseDock = (d: Dock) => { setAskDock(d); saveDock(d); };
+  // Where a floating panel has been dragged to, in pixels from the canvas's
+  // top-left. Null until somebody moves it, so it opens where it always did.
+  const [askAt, setAskAt] = useState<{ x: number; y: number } | null>(null);
+  // What the model said when what it said could not be drawn.
+  const [askRaw, setAskRaw] = useState<{ error: string; text: string; model: string } | null>(null);
   const [askText, setAskText] = useState('');
   const [asking, setAsking] = useState(false);
 
@@ -699,8 +827,17 @@ export const DrawingEditor: React.FC<Props> = ({
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !body.success) {
         setNotice(body.error || T.askFailed);
+        // Keep the panel open and show what the model wrote. "It did not
+        // answer with drawable JSON" on its own leaves nowhere to go next.
+        setAskRaw({
+          error: body.error || T.askFailed,
+          text: typeof body.raw === 'string' ? body.raw
+            : Array.isArray(body.dropped) ? body.dropped.join('\n') : '',
+          model: typeof body.model === 'string' ? body.model : '',
+        });
         return;
       }
+      setAskRaw(null);
       draw(body.shapes as Shape[]);
       setAskOpen(false);
       setAskText('');
@@ -716,6 +853,36 @@ export const DrawingEditor: React.FC<Props> = ({
     }
   }, [askText, sheet, textSize, draw, T]);
 
+
+  /**
+   * Dragging the floating panel by its title bar.
+   *
+   * Pointer events on the window rather than on the panel, so the drag
+   * survives the cursor outrunning it — a panel that drops the moment the
+   * mouse leaves it is worse than one that cannot be moved at all.
+   */
+  const dragAsk = useCallback((e: React.MouseEvent) => {
+    const canvas = e.currentTarget.parentElement?.parentElement;
+    const box = canvas?.getBoundingClientRect();
+    if (!box) return;
+    const panel = (e.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
+    const grab = { x: e.clientX - panel.left, y: e.clientY - panel.top };
+    e.preventDefault();
+    const move = (ev: MouseEvent) => {
+      setAskAt({
+        // Kept on the canvas: a panel dragged off the edge is a panel that
+        // cannot be dragged back.
+        x: Math.max(0, Math.min(box.width - 80, ev.clientX - box.left - grab.x)),
+        y: Math.max(0, Math.min(box.height - 32, ev.clientY - box.top - grab.y)),
+      });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }, []);
 
   /** The text tool has a place; the words come from here. */
   const placeText = useCallback((at: { x: number; y: number }) => {
@@ -1159,7 +1326,11 @@ export const DrawingEditor: React.FC<Props> = ({
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-white ${
                 askOpen ? 'bg-violet-900' : 'bg-violet-700 hover:bg-violet-800'}`}
             >
-              <SparklesIcon className="w-4 h-4" /> {T.ask}
+              {/* Our own mark, not a generic sparkle. Every product on the
+                  market puts the same star on its AI button; this one is the
+                  bird off the splash screen, and it is ours. */}
+              <img src={logoMark} alt="" aria-hidden className="w-4 h-4 object-contain" />
+              {T.ask}
             </button>
             <Tool title={T.undo} keyHint="Ctrl+Z" disabled={!history.canUndo} on={undo}>
               <UndoIcon className="w-4 h-4" />
@@ -1635,6 +1806,17 @@ export const DrawingEditor: React.FC<Props> = ({
 
       {/* ── Canvas and panels ──────────────────────────────────────────── */}
       <div className={fullscreen ? 'flex flex-1 min-h-0' : 'flex'} style={fullscreen ? undefined : { height: 620 }}>
+        {/* Docked left: a column of its own, so it takes room from the canvas
+            instead of covering the sheet it is drawing on. */}
+        {askOpen && askDock === 'left' && (
+          <aside className="w-[22rem] shrink-0 flex flex-col border-e border-gray-200 bg-white">
+            <AskPanel
+              t={T} text={askText} onText={setAskText} asking={asking}
+              onGo={askToDraw} onClose={() => setAskOpen(false)}
+              dock={askDock} onDock={chooseDock} raw={askRaw}
+            />
+          </aside>
+        )}
         <div className="flex-1 min-w-0 bg-slate-100 relative">
           <DrawingCanvas
             drawing={sheet.drawing}
@@ -1671,35 +1853,21 @@ export const DrawingEditor: React.FC<Props> = ({
           {showHelp && (
             <DrawingHelp lang={lang} t={T} onClose={() => setShowHelp(false)} />
           )}
-          {askOpen && (
-            <div className="absolute top-2 left-2 z-30 w-[24rem] rounded-lg border border-violet-300 bg-white shadow-xl">
-              <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">
-                <p className="text-sm font-semibold text-gray-800">
-                  <SparklesIcon className="w-4 h-4 inline mr-1 text-violet-600" />{T.ask}
-                </p>
-                <button className="p-1 rounded hover:bg-gray-100" onClick={() => setAskOpen(false)}>
-                  <XIcon className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="p-3">
-                <textarea
-                  value={askText}
-                  onChange={e => setAskText(e.target.value)}
-                  rows={3}
-                  placeholder={T.askPlaceholder}
-                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-violet-400"
-                />
-                <p className="text-[11px] text-gray-500 mt-1.5">{T.askNote}</p>
-                <div className="flex justify-end mt-2">
-                  <button
-                    onClick={askToDraw}
-                    disabled={asking || askText.trim().length < 3}
-                    className="px-3 py-1.5 rounded bg-violet-700 text-white text-sm font-medium hover:bg-violet-800 disabled:opacity-40"
-                  >
-                    {asking ? T.askWorking : T.askGo}
-                  </button>
-                </div>
-              </div>
+          {/* The model's panel, floating. Docked, it is not here at all —
+              it is a column beside the canvas, further down. */}
+          {askOpen && askDock === 'float' && (
+            <div
+              className="absolute z-30 w-[24rem] rounded-lg border border-violet-300 bg-white shadow-xl"
+              style={askAt
+                ? { left: askAt.x, top: askAt.y }
+                : { left: 8, top: 8 }}
+            >
+              <AskPanel
+                t={T} text={askText} onText={setAskText} asking={asking}
+                onGo={askToDraw} onClose={() => setAskOpen(false)}
+                dock={askDock} onDock={chooseDock} raw={askRaw}
+                onDragStart={dragAsk}
+              />
             </div>
           )}
 
@@ -1775,6 +1943,18 @@ export const DrawingEditor: React.FC<Props> = ({
             />
           )}
         </div>
+
+        {/* Docked right: between the sheet and the layer list, which is where
+            a second panel goes on every CAD desk this office has used. */}
+        {askOpen && askDock === 'right' && (
+          <aside className="w-[22rem] shrink-0 flex flex-col border-s border-gray-200 bg-white">
+            <AskPanel
+              t={T} text={askText} onText={setAskText} asking={asking}
+              onGo={askToDraw} onClose={() => setAskOpen(false)}
+              dock={askDock} onDock={chooseDock} raw={askRaw}
+            />
+          </aside>
+        )}
 
         <aside className="w-64 shrink-0 border-l bg-white overflow-y-auto" dir={dir}>
           <div className="px-3 py-2 border-b">

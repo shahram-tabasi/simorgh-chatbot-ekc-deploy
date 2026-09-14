@@ -13,6 +13,8 @@
 // silently "fixed" line in a schematic is worse than a missing one, because
 // nobody looks at it again.
 
+import { stripReasoning } from './chatModel.js';
+
 /** The layers a generated drawing may use, and what each is for. */
 const LAYERS = {
   SYMBOL: 'device symbols',
@@ -170,29 +172,123 @@ function validateShapes(raw, bounds) {
   return { shapes, dropped };
 }
 
-/** Pull the JSON object out of whatever the model actually said. */
+/**
+ * Pull the drawing out of whatever the model actually said.
+ *
+ * "Answer with JSON only" is a request, not a guarantee. What comes back is
+ * routinely JSON wrapped in prose, JSON in a ```fence, JSON after a block of
+ * reasoning the server forgot to strip, or — most often on a long schematic —
+ * JSON that simply stops mid-shape because the answer hit its token limit.
+ *
+ * Each of those is a different repair and they are tried in order of how
+ * certain they are. Note what is *not* repaired: a shape. Closing a bracket
+ * the model ran out of room for recovers shapes it did finish; inventing a
+ * coordinate it never wrote would put a line in a schematic that nobody drew.
+ * The first is reading, the second is making things up.
+ */
 function parseAnswer(text) {
   if (typeof text !== 'string') return null;
-  const direct = tryParse(text);
+  const clean = stripReasoning(text);
+
+  // 1. It did as it was asked.
+  const direct = tryParse(clean) || tryParse(text);
   if (direct) return direct;
-  // Models fence their JSON, or add a sentence before it, however they are
-  // asked not to. Taking the outermost braces costs nothing and saves a
-  // retry.
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start >= 0 && end > start) return tryParse(text.slice(start, end + 1));
+
+  // 2. It fenced it. Every fence, not just the first — a model that explains
+  //    itself in one block and answers in the next is common.
+  for (const m of clean.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    const parsed = tryParse(m[1]);
+    if (parsed) return parsed;
+  }
+
+  // 3. It buried it. Scan from each opening brace or bracket to its match and
+  //    take the first block that is actually a drawing — not merely the first
+  //    that is valid JSON, which on a narrated answer is a small object the
+  //    model wrote about itself.
+  for (const found of balanced(clean)) {
+    const parsed = tryParse(found);
+    if (parsed && Array.isArray(parsed.shapes) && parsed.shapes.length > 0) return parsed;
+  }
+
+  // 4. It ran out of room. Close what is open and drop the half-written tail.
+  const mended = mendTruncated(clean);
+  if (mended) {
+    const parsed = tryParse(mended);
+    if (parsed) return parsed;
+  }
+
   return null;
 }
 
+/** One candidate as the answer object, or null if it is not one. */
 function tryParse(s) {
   try {
-    const v = JSON.parse(s);
+    const v = JSON.parse(String(s).trim());
     if (!v || typeof v !== 'object') return null;
     // A bare array is the wrapper dropped, which small models do often enough
     // to be worth taking. Nothing is skipped by accepting it — every element
     // still goes through validateShapes one field at a time.
     return Array.isArray(v) ? { shapes: v } : v;
   } catch { return null; }
+}
+
+/** Every balanced {...} or [...] block in the text, outermost first. */
+function* balanced(text) {
+  for (let i = 0; i < text.length; i++) {
+    const open = text[i];
+    if (open !== '{' && open !== '[') continue;
+    const close = open === '{' ? '}' : ']';
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j++) {
+      const c = text[j];
+      if (escaped) { escaped = false; continue; }
+      if (c === '\\') { escaped = true; continue; }
+      if (c === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === open) depth++;
+      else if (c === close && --depth === 0) { yield text.slice(i, j + 1); i = j; break; }
+    }
+  }
+}
+
+/**
+ * An answer that stopped mid-sentence, closed off.
+ *
+ * Walks the text tracking string state and bracket depth, cuts back to the
+ * last point where a complete value had just been written, and closes
+ * whatever is still open. A drawing that lost its final shape is still a
+ * drawing; the alternative is losing all forty of them to the one that was
+ * half-written when the model hit its limit.
+ */
+function mendTruncated(text) {
+  const start = text.search(/[[{]/);
+  if (start < 0) return null;
+  const stack = [];
+  let inString = false;
+  let escaped = false;
+  let safe = -1;
+  // What was still open at that point — not what is open at the end. The
+  // half-written shape the model stopped inside opened a brace of its own, and
+  // closing that one would keep the very fragment being cut away.
+  let safeStack = null;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (escaped) { escaped = false; continue; }
+    if (c === '\\') { escaped = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{' || c === '[') stack.push(c === '{' ? '}' : ']');
+    else if (c === '}' || c === ']') {
+      if (stack.pop() !== c) return null;      // not truncation, just broken
+      safe = i;                                 // a value just finished here
+      safeStack = [...stack];
+    }
+  }
+  if (stack.length === 0 || safe < start || !safeStack || safeStack.length === 0) return null;
+  // Cut back past any comma or key left dangling after the last whole value.
+  return text.slice(start, safe + 1).replace(/,\s*$/, '') + safeStack.reverse().join('');
 }
 
 export function registerDrawAssistRoutes(app, callLocalModel) {
@@ -213,14 +309,24 @@ export function registerDrawAssistRoutes(app, callLocalModel) {
         system: systemPrompt(bounds),
         user: prompt.trim().slice(0, 2000),
         abortMs: Number(process.env.DRAW_ASSIST_TIMEOUT_MS) || 120000,
+        // A schematic is a long answer. At the chat default it stops partway
+        // through, and a drawing cut off mid-shape used to come back as
+        // nothing at all — see `mendTruncated`, which now salvages what did
+        // arrive, but the honest fix is to leave room for the whole thing.
+        maxTokens: Number(process.env.DRAW_ASSIST_MAX_TOKENS) || 8192,
       });
       const text = typeof answer === 'string' ? answer : answer?.content ?? answer?.text ?? '';
       const parsed = parseAnswer(text);
       if (!parsed) {
+        // What it *did* say goes back with the refusal. Without it the failure
+        // is a dead end — the one question worth answering here is "what did
+        // the model actually write", and only the model's own words answer it.
         return res.status(502).json({
           success: false,
           error: 'The model did not answer with drawable JSON.',
-          raw: String(text).slice(0, 400),
+          raw: String(text).slice(0, 1200),
+          model: answer?.model || '',
+          transport: answer?.transport || '',
         });
       }
 
@@ -230,6 +336,9 @@ export function registerDrawAssistRoutes(app, callLocalModel) {
           success: false,
           error: 'Nothing in that answer could be drawn.',
           dropped: dropped.slice(0, 10),
+          raw: String(text).slice(0, 1200),
+          model: answer?.model || '',
+          transport: answer?.transport || '',
         });
       }
       return res.json({

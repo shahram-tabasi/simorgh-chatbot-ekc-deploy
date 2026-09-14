@@ -3,9 +3,13 @@
 // The families a tier's templates fall into, above the path they already carry.
 //
 // LV templates are filed under a path — S8 / FCB1 / OUTGOING — and the office
-// reads the top of that path as two different things: OFW (SFD, HFD, the FCB
-// switches, MODULLAR, FCB-CAP) and FIX (CCS, OFF, Marshaling, Swing). This
+// reads the top of that path as two different things: OFW (motor, feeder, the
+// FCB switches, MODULLAR, FCB-CAP) and FIX (CCS, OFF, Marshaling, Swing). This
 // says which is which so the tree can show them apart.
+//
+// SFD and HFD are still listed under OFW although the wizard no longer offers
+// them: templates filed under one before the level was folded away are still
+// OFW templates and must still land in that section.
 //
 // Both families now start with a root (S8 or 8PT), so that alone can't tell
 // them apart — familyOf()'s own fallback (matching ANY node in the path, not
@@ -32,7 +36,7 @@ export interface TemplateFamily {
 
 export const TEMPLATE_FAMILIES: Record<'LV' | 'MV' | 'HV', TemplateFamily[]> = {
   LV: [
-    { id: 'OFW', label: 'OFW', note: 'SFD, HFD, FCB1-3, MODULLAR, FCB-CAP', nodes: ['SFD', 'HFD', 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] },
+    { id: 'OFW', label: 'OFW', note: 'Motor, Feeder, FCB1-3, MODULLAR, FCB-CAP', nodes: ['MOTOR', 'FEEDER', 'SFD', 'HFD', 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] },
     { id: 'FIX', label: 'FIX', note: 'CCS, OFF, Marshaling, Swing', nodes: ['CCS', 'OFF', 'MARSHALING', 'SWING'] },
   ],
   // MV and HV have no families yet. An empty list is not a special case
@@ -41,6 +45,29 @@ export const TEMPLATE_FAMILIES: Record<'LV' | 'MV' | 'HV', TemplateFamily[]> = {
   MV: [],
   HV: [],
 };
+
+/**
+ * Levels that no longer exist, and are folded out of any path that has one.
+ *
+ * SFD and HFD were switch nodes with exactly one question under them — motor
+ * or feeder — and nothing else. Two levels to say one thing, and the office
+ * asked for the level to go and the answer to move up into its place. The
+ * wizard no longer offers them; this is what keeps the templates already filed
+ * under one from showing a level that is not there any more.
+ *
+ * Folded on read rather than rewritten on disk. A stored path is what somebody
+ * chose at the time and rewriting every project's templates to match a change
+ * in how the tree is drawn is a much bigger promise than the change deserves.
+ */
+const FOLDED_NODES = ['SFD', 'HFD'];
+
+/** A path with the folded levels taken out. */
+export function foldedPath(path?: readonly string[]): string[] {
+  const kept = (path ?? []).filter(node => !FOLDED_NODES.includes(String(node ?? '').toUpperCase()));
+  // A path that was *only* a folded node keeps it: better a level nobody wants
+  // than a template filed nowhere at all.
+  return kept.length > 0 ? kept : [...(path ?? [])];
+}
 
 /** Which family a template's path puts it in, or null when none does. */
 export function familyOf(

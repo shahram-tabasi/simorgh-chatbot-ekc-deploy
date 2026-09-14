@@ -306,7 +306,7 @@ async function resolveModelName(chatUrl, headers, preferred, force = false) {
 // Call the local LLM. Three transports are supported (see paths A/B/C below).
 // `history` is the prior turns (alternating user/assistant) without the
 // system message — we prepend system here and append the new user turn.
-export async function callLocalModel({ system, user, history, model, abortMs }) {
+export async function callLocalModel({ system, user, history, model, abortMs, maxTokens }) {
   const gatewayUrl = process.env.LLM_GATEWAY_URL;
   const aiSvcBase  = process.env.AI_SERVICE_URL;            // bespoke /generate service
   // The assistant runs on the VLM (Qwen2.5-VL) served OpenAI-compatibly on
@@ -373,7 +373,7 @@ export async function callLocalModel({ system, user, history, model, abortMs }) 
         system_prompt: system,
         user_prompt:   userPrompt,
         thinking_level: process.env.LOCAL_MODEL_REASONING || 'low',
-        max_tokens:    Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
+        max_tokens:    maxTokens || Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
         stream: false,
         use_tools: false,
       };
@@ -396,7 +396,7 @@ export async function callLocalModel({ system, user, history, model, abortMs }) 
         model: name,
         messages,
         temperature: 0.1,
-        max_tokens: Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
+        max_tokens: maxTokens || Number(process.env.LOCAL_MODEL_MAX_TOKENS || 4096),
         response_format: { type: 'json_object' },
       };
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });

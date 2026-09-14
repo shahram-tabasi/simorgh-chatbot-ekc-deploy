@@ -65,6 +65,7 @@ export interface Strings {
   xrefs: string; xrefOn: string;
   colourOfPicked: string; colourOfNew: string; colourClear: string; colourClearShort: string;
   ask: string; askTip: string; askPlaceholder: string; askNote: string;
+  askSaidNothing: string; dockLeft: string; dockRight: string; undock: string;
   askGo: string; askWorking: string; askDrew: string; askDrewSome: string; askFailed: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
@@ -167,6 +168,10 @@ const EN: Strings = {
   askTip: 'Describe a circuit and the local model drafts it onto this sheet',
   askPlaceholder: 'e.g. a motor starter: isolator, fuses, contactor, overload, motor — wired down the page',
   askNote: 'A first draft to correct, not an answer. It arrives as one undo step, so it can be taken straight back off.',
+  askSaidNothing: 'It sent nothing back.',
+  dockLeft: 'Dock on the left',
+  dockRight: 'Dock on the right',
+  undock: 'Float it — drag it by its title bar',
   askGo: 'Draw',
   askWorking: 'Drawing…',
   askDrew: '{n} shape(s) drawn.',
@@ -361,6 +366,10 @@ const FA: Strings = {
   askTip: 'مدار را توصیف کنید تا مدل محلی پیش‌نویس آن را روی این شیت بکشد',
   askPlaceholder: 'مثلاً: راه‌انداز موتور — کلید جداکننده، فیوز، کنتاکتور، بی‌متال، موتور، سیم‌کشی از بالا به پایین',
   askNote: 'یک پیش‌نویس برای اصلاح است، نه پاسخ نهایی. در یک مرحلهٔ undo برداشته می‌شود.',
+  askSaidNothing: 'چیزی برنگرداند.',
+  dockLeft: 'چسباندن به چپ',
+  dockRight: 'چسباندن به راست',
+  undock: 'شناور — از نوار عنوانش بکشید',
   askGo: 'بکش',
   askWorking: 'در حال کشیدن…',
   askDrew: '{n} شکل کشیده شد.',
@@ -555,6 +564,10 @@ const TR: Strings = {
   askTip: 'Bir devre tarif edin, yerel model bu sayfaya taslağını çizsin',
   askPlaceholder: 'örn. motor yol vericisi: şalter, sigorta, kontaktör, termik, motor — yukarıdan aşağıya',
   askNote: 'Düzeltilecek bir taslak, kesin cevap değil. Tek geri alma adımıyla kaldırılır.',
+  askSaidNothing: 'Hiçbir şey döndürmedi.',
+  dockLeft: 'Sola yerleştir',
+  dockRight: 'Sağa yerleştir',
+  undock: 'Serbest bırak — başlığından sürükleyin',
   askGo: 'Çiz',
   askWorking: 'Çiziliyor…',
   askDrew: '{n} şekil çizildi.',

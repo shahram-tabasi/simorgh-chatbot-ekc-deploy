@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { foldedPath } from '../../utils/templateFamilies';
 import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
@@ -198,7 +199,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                         <span className="text-sm">{template.name}</span>
                         {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
                           <span className="text-[10px] text-gray-500 truncate">
-                            {template.hierarchy.path.join(' / ')}
+                            {foldedPath(template.hierarchy.path).join(' / ')}
                             {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
                             {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
                             {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
@@ -280,7 +281,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                       <span className="text-sm">{template.name}</span>
                       {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
                         <span className="text-[10px] text-gray-500 truncate">
-                          {template.hierarchy.path.join(' / ')}
+                          {foldedPath(template.hierarchy.path).join(' / ')}
                           {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
                           {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
                           {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
@@ -321,7 +322,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                       <span className="text-sm">{template.name}</span>
                       {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
                         <span className="text-[10px] text-gray-500 truncate">
-                          {template.hierarchy.path.join(' / ')}
+                          {foldedPath(template.hierarchy.path).join(' / ')}
                           {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
                           {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
                           {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}

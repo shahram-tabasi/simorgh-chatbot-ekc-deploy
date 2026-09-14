@@ -7,12 +7,12 @@
 // LV taxonomy (top → leaf):
 //   family    : OFW | FIX
 //   root      : S8 | 8PT   (both families — same options either way)
-//   OFW  switch  : SFD | HFD | FCB1 | FCB2 | FCB3 | MODULLAR | FCB-CAP
+//   OFW  switch  : MOTOR | FEEDER | FCB1 | FCB2 | FCB3 | MODULLAR | FCB-CAP
 //   OFW  feeder  : (only under FCB1/2/3) INCOMING | OUTGOING | COUPLING
 //   FIX  group   : CCS | OFF | MARSHALING | SWING
 //   FIX  feeder  : (all but MARSHALING) INCOMING | COUPLING | METERING |
 //                  RISER | MET&RISER | OUTGOING
-//   leafKind  : SFD/HFD → motor | feeder
+//   leafKind  : OFW MOTOR/FEEDER → answered by the switch step itself
 //               OFW FCB Outgoing → motor | transformer
 //               FIX Outgoing → motor | transformer | capacitor
 //               everything else under LV → none (nothing further to ask)
@@ -38,10 +38,19 @@ import { XIcon, ChevronRightIcon, SparklesIcon, CheckIcon } from 'lucide-react';
 import {
   TemplateItem, TemplateHierarchy, TemplateLeafKind,
 } from '../../types/project';
-import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
+import { TEMPLATE_FAMILIES, foldedPath } from '../../utils/templateFamilies';
 
 const LV_ROOTS       = ['S8', '8PT'] as const;
-const LV_OFW_SWITCHES = ['SFD', 'HFD', 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] as const;
+// SFD and HFD used to head this list, and each of them asked exactly one
+// further question — motor or feeder — with nothing else underneath. Two
+// levels to say one thing. They are gone, and the question that was under them
+// has moved up into their place: MOTOR and FEEDER are picked here directly.
+const LV_OFW_PROMOTED = ['MOTOR', 'FEEDER'] as const;
+const LV_OFW_SWITCHES = [...LV_OFW_PROMOTED, 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] as const;
+
+/** The leaf kind a promoted switch node already answers, if it is one. */
+const promotedKind = (node: string | null): TemplateLeafKind | null =>
+  node === 'MOTOR' ? 'motor' : node === 'FEEDER' ? 'feeder' : null;
 // Of the OFW switches, only these three get an Incoming/Outgoing/Coupling
 // sub-step — MODULLAR and FCB-CAP already say what they are.
 const LV_OFW_FEEDER_SWITCHES = ['FCB1', 'FCB2', 'FCB3'];
@@ -81,7 +90,12 @@ function allowedLeafKinds(
   }
   if (tier === 'LV') {
     if (ctx.family === 'OFW') {
-      if (ctx.switchNode === 'SFD' || ctx.switchNode === 'HFD') return ['motor', 'feeder'];
+      // MOTOR and FEEDER are the answer, not the question — picking one is
+      // what used to be the step after SFD or HFD, so there is nothing left
+      // to ask. (SFD and HFD themselves can no longer be reached; templates
+      // filed under one before the fold keep working, they just cannot be
+      // made any more.)
+      if (promotedKind(ctx.switchNode)) return [];
       if (ctx.switchNode && LV_OFW_FEEDER_SWITCHES.includes(ctx.switchNode)) {
         return ctx.feeder === 'OUTGOING' ? ['motor', 'transformer'] : [];
       }
@@ -218,13 +232,20 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
       path, leafKind: leafKind || undefined,
       params: { kw: kw || undefined, currentA: currentA || undefined },
     };
+    // A template filed before the fold said "motor" in its leaf kind and "SFD"
+    // in its path. Folding the path alone would leave it one step short of the
+    // new S8 / MOTOR and drop the entire old library out of the suggestions,
+    // so where the step is a promoted one the leaf kind answers for it.
+    const promoted = promotedKind(path[path.length - 1] ?? null);
+    const stem = promoted ? path.slice(0, -1) : path;
     return existing
+      .filter(t => promoted ? t.hierarchy?.leafKind === promoted : true)
       .filter(t => {
-        const p = t.hierarchy?.path;
-        if (!p) return false;
+        if (!t.hierarchy?.path) return false;
+        const p = foldedPath(t.hierarchy.path);
         // Match path PREFIX so partial matches still show up as you drill in.
-        if (p.length < path.length) return false;
-        return path.every((step, i) => String(p[i]).toLowerCase() === step.toLowerCase());
+        if (p.length < stem.length) return false;
+        return stem.every((step, i) => String(p[i]).toLowerCase() === step.toLowerCase());
       })
       .map(t => ({ template: t, score: scoreSimilarity(t, draft) }))
       .sort((a, b) => b.score - a.score)
@@ -315,7 +336,16 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     setRoot(r);
     setSwitch(null); setGroup(null); setFeeder(null); setLeafKind(null);
   };
-  const pickSwitch = (s: string) => { setSwitch(s); setFeeder(null); setLeafKind(null); };
+  // Picking MOTOR or FEEDER here *is* the leaf kind — the step it replaced is
+  // the one that used to ask for it — so it is recorded as one. Everything
+  // downstream that ranks or describes a template by its leaf kind goes on
+  // working, which is the whole point of folding the level rather than
+  // dropping what it was for.
+  const pickSwitch = (s: string) => {
+    setSwitch(s);
+    setFeeder(null);
+    setLeafKind(promotedKind(s));
+  };
   const pickGroup  = (g: string) => { setGroup(g); setFeeder(null); setLeafKind(null); };
   const pickFeeder = (f: string) => { setFeeder(f); setLeafKind(null); };
   const pickCellType = (c: string) => { setCellType(c); setCellSub(null); setLeafKind(null); };

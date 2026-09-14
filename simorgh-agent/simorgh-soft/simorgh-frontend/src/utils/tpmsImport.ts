@@ -16,6 +16,7 @@
 import {
   ProjectData, DeviceLibraryItem, Equipment, DeviceTableRow, TemplateItem,
 } from '../types/project';
+import { codeCase } from './deviceCodes';
 
 export interface TpmsPart {
   slot: number;
@@ -108,8 +109,30 @@ export interface TpmsImportResult {
 // One part as Create Template stores it. `fullData` mirrors an EPLAN record so
 // the part reads the same everywhere — the exports and the template screen both
 // go through getEplanixValue/formatPartEntry.
-function toTemplatePart(part: TpmsPart) {
-  const brand = (part.brand || '').trim();
+/**
+ * A TPMS column heading, split into what the row is and who makes it.
+ *
+ * "VCB OR VC/FUSE (SIEMENS/SIBA)" → name "VCB OR VC/FUSE", brand "SIEMENS/SIBA"
+ * "(KRIES)"                       → name "",               brand "KRIES"
+ * "ACCESSORY"                     → name "ACCESSORY",      brand ""
+ *
+ * Only a trailing bracket counts, and only when it holds something that reads
+ * as a maker rather than a rating: "CT RATING (5A)" is a column called
+ * "CT RATING (5A)" and stripping it would be losing information, not tidying.
+ */
+export function splitColumnName(raw: string): { name: string; brand: string } {
+  const whole = String(raw ?? '').trim();
+  const m = /^(.*?)\(([^()]*)\)\s*$/.exec(whole);
+  if (!m) return { name: whole, brand: '' };
+  const inside = m[2].trim();
+  // A maker is letters. Anything with a digit in it is a rating, a size or a
+  // count, and belongs to the column's name.
+  if (!inside || /\d/.test(inside)) return { name: whole, brand: '' };
+  return { name: m[1].trim(), brand: inside };
+}
+
+function toTemplatePart(part: TpmsPart, columnBrand = '') {
+  const brand = (part.brand || '').trim() || columnBrand.trim();
   const code = (part.code || '').trim();
   // For a good many TPMS parts the only thing recorded is the maker. The
   // EPLAN label that formatScode prefers is then a brand name — "Siemens",
@@ -243,11 +266,28 @@ export function buildTpmsImport(
     const tierTemplates = [...(templates[tier] ?? [])];
 
     // Names TPMS gives the part columns for this project ride along as the
-    // template's display names, exactly as they appear in Eplanix's headers.
+    // template's display names — but only the part of them that is a name.
+    //
+    // TPMS writes the maker into the column heading in brackets, so a project
+    // arrives with columns called "VCB OR VC/FUSE (SIEMENS/SIBA)" and, more
+    // often, just "(SIEMENS/SIBA)" with the row's real name left implied. Taken
+    // at face value that heading *replaced* the row: the panel showed a row
+    // headed "(SIEMENS/SIBA)" with "Siemens" underneath it, so the maker was
+    // written twice and what the row was for was written nowhere.
+    //
+    // So the bracket comes off. What is left renames the row when it says
+    // something; when nothing is left, the row keeps the name it already has.
+    // The maker inside the bracket is not thrown away — it is the fallback for
+    // parts that arrived without a brand of their own, which is where a maker
+    // belongs.
     const displayNames: Record<string, string> = {};
-    for (const [slot, name] of Object.entries(payload.columnNames ?? {})) {
+    const slotBrands: Record<string, string> = {};
+    for (const [slot, raw] of Object.entries(payload.columnNames ?? {})) {
       const property = payload.slotProperties[slot];
-      if (property && name) displayNames[property] = name;
+      if (!property || !raw) continue;
+      const { name, brand } = splitColumnName(raw);
+      if (name && name !== property) displayNames[property] = name;
+      if (brand) slotBrands[slot] = brand;
     }
 
     // A template is "from TPMS" when it carries the marker, or (for imports
@@ -278,7 +318,10 @@ export function buildTpmsImport(
         const properties: Record<string, any> = {};
         for (const [slot, parts] of Object.entries(line.parts)) {
           const property = payload.slotProperties[slot] || `SLOT ${slot}`;
-          properties[property] = { parts: parts.map(toTemplatePart) };
+          // The maker off the column heading stands in for a part that has
+          // none of its own — that is what the heading was telling us, and it
+          // is the one place the information is any use.
+          properties[property] = { parts: parts.map(p => toTemplatePart(p, slotBrands[slot])) };
           summary.parts += parts.length;
         }
         if (Object.keys(displayNames).length > 0) properties.__displayNames = displayNames;
@@ -321,7 +364,7 @@ export function buildTpmsImport(
         templateId: template.id,
         templateName: template.name,
         busSection: line.busSection,
-        feederNo: line.feederNo,
+        feederNo: codeCase(line.feederNo),
         wiringType: line.wiringType,
         ratingPower: line.ratingPower,
         flc: line.flc,
@@ -329,7 +372,7 @@ export function buildTpmsImport(
         description: line.description,
         moduleNo: line.moduleNo,
         size: line.size,
-        sfdHfd: line.sfdHfd,
+        sfdHfd: codeCase(line.sfdHfd),
         cableSize: line.cableSize,
         equipmentId: '',
       });

@@ -7,6 +7,7 @@ import { usePanel } from '../../context/PanelsContext';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
 import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';
 import { useProject } from '../../context/ProjectContext';
+import { withCodeCaseAll } from '../../utils/deviceCodes';
 import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/simarisImport';
 
 // ===== PROPS INTERFACES =====
@@ -519,7 +520,15 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const { isCurrentRevisionEditable, notifyRevisionLocked } = useProject();
   const setRows: React.Dispatch<React.SetStateAction<DeviceTableRow[]>> = value => {
     if (!isCurrentRevisionEditable) { notifyRevisionLocked(); return; }
-    setRowsRaw(value);
+    // FEEDER NO. and SFD/HFD are codes, and every write to the table comes
+    // through here — typing, pasting, importing, the chatbot. Folding them to
+    // one spelling at this one point is what stops "F 12", "f12" and "F12"
+    // from being three feeders to the single line and one to the take-off.
+    setRowsRaw(prev => withCodeCaseAll(
+      typeof value === 'function'
+        ? (value as (p: DeviceTableRow[]) => DeviceTableRow[])(prev)
+        : value,
+    ));
   };
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [lastSelectedIdx, setLastSelectedIdx] = useState<number>(-1);
@@ -572,7 +581,9 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       prevEquipmentIdRef.current = selectedEquipment?.id || null;
       // Loading rows for a newly selected equipment is not a user edit —
       // bypass the read-only gate so viewing an old revision still works.
-      const loaded = selectedEquipment?.devices || [];
+      // Folded on the way in as well, so a project saved before this rule
+      // existed reads the same as one saved after it.
+      const loaded = withCodeCaseAll(selectedEquipment?.devices || []);
       loadedRowsRef.current = loaded;
       setRowsRaw(loaded);
       setSelectedRows(new Set());
