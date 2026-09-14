@@ -323,7 +323,7 @@ const find_similar_templates: ChatTool = {
   args: {
     type:      { type: 'string',  description: 'LV | MV | HV',                            required: true },
     path:      { type: 'array',   description: 'Path nodes from top to leaf.',            required: true },
-    leafKind:  { type: 'string',  description: 'motor | transformer | lighting | other',  required: false },
+    leafKind:  { type: 'string',  description: 'motor | transformer | capacitor | feeder | other',  required: false },
     kw:        { type: 'string',  description: 'Rated kW or kVA (text).',                 required: false },
     currentA:  { type: 'string',  description: 'Full-load current (A).',                  required: false },
     limit:     { type: 'number',  description: 'Max results, default 5.',                 required: false },
@@ -372,7 +372,7 @@ const create_template: ChatTool = {
     type:      { type: 'string', description: 'LV | MV | HV',                                  required: true },
     name:      { type: 'string', description: 'Display name.',                                  required: true },
     path:      { type: 'array',  description: 'Hierarchical path (top → leaf).',                required: true },
-    leafKind:  { type: 'string', description: 'motor | transformer | lighting | other',         required: false },
+    leafKind:  { type: 'string', description: 'motor | transformer | capacitor | feeder | other',         required: false },
     kw:        { type: 'string', description: 'Rated power (kW / kVA).',                        required: false },
     currentA:  { type: 'string', description: 'Full-load current (A).',                         required: false },
   },

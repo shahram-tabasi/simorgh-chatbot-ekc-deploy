@@ -38,7 +38,7 @@ interface ContextMenuState {
   nodeType: 'LV' | 'MV' | 'HV' | null;
   templateId: string | null;
   /**
-   * Which section of the tier the menu was opened in — SIVACON or CCS for LV.
+   * Which section of the tier the menu was opened in — OFW or FIX for LV.
    *
    * A template is made from inside the section it belongs to, so by the time
    * the wizard opens there is nothing to ask: the click said it. Null on a
@@ -66,7 +66,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   } | null>(null);
   
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
-    new Set(['LV', 'MV', 'HV', 'LV/SIVACON', 'LV/CCS']));
+    new Set(['LV', 'MV', 'HV', 'LV/OFW', 'LV/FIX']));
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -183,9 +183,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                   No templates
                 </li>
               ) : (
-                // The office reads the top of an LV path as two different
-                // things — the SIVACON boards and the CCS side — so they are
-                // listed apart. A template the families do not claim is not
+                // The office reads an LV path as two different things — OFW
+                // and FIX — so they are listed apart. A template the families
+                // do not claim is not
                 // hidden: it is listed on its own, where it always was.
                 groupByFamily('LV', safeTemplates.LV as Template[]).map(group => {
                   const rows = group.templates.map((template: Template) => (

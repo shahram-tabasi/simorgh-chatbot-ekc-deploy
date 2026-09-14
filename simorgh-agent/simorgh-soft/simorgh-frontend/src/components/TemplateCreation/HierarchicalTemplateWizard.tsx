@@ -5,22 +5,33 @@
 // create a brand-new template at the chosen leaf.
 //
 // LV taxonomy (top → leaf):
-//   family    : SIVACON (8PT, S8) | CCS (OFW, marshaling, …)
-//   root      : S8 | 8PT   (SIVACON only — the CCS side has no board root)
-//   group     : CCS | OFF | OFW | MARSHALING | SWING
-//   switch    : (only under OFW) SFD | HFD | FCB1 | FCB2 | FCB3
-//   feeder    : (only under FCB*) INCOMING | COUPLING | METERING | RISER | MET&RISER | OUTGOING
-//   leafKind  : motor | transformer (FCB outgoing) | lighting (SFD/HFD)
+//   family    : OFW | FIX
+//   root      : S8 | 8PT   (both families — same options either way)
+//   OFW  switch  : SFD | HFD | FCB1 | FCB2 | FCB3 | MODULLAR | FCB-CAP
+//   OFW  feeder  : (only under FCB1/2/3) INCOMING | OUTGOING | COUPLING
+//   FIX  group   : CCS | OFF | MARSHALING | SWING
+//   FIX  feeder  : (all but MARSHALING) INCOMING | COUPLING | METERING |
+//                  RISER | MET&RISER | OUTGOING
+//   leafKind  : SFD/HFD → motor | feeder
+//               OFW FCB Outgoing → motor | transformer
+//               FIX Outgoing → motor | transformer | capacitor
+//               everything else under LV → none (nothing further to ask)
 //   params    : kW + currentA
 //
 // MV taxonomy:
-//   feeder    : INCOMING | COUPLING | METERING | RISER | MET&RISER | OUTGOING
-//   leafKind  : motor | transformer
+//   cellType  : Feeder Truck | Incoming VT Cell | Disconnector Link |
+//               Coupling Truck | Riser Connection | Metering Riser
+//               Connection | Metering | Dummy | Support Instead of CT
+//   cellSub   : (Feeder Truck) Circuit Breaker | Contactor Fuse Combination
+//               (Disconnector Link) With Fuse | Without Fuse
+//   leafKind  : (Feeder Truck → Circuit Breaker only) motor | transformer |
+//               capacitor — Contactor Fuse Combination is fixed to motor,
+//               with no chip step shown for it; everything else has none.
 //   params    : kW + currentA
 //
 // The wizard never blocks creation — if a step doesn't apply for the tier
-// or branch (e.g. MV has no S8/8PT root), it's skipped. Suggested templates
-// are scored by leafKind match + |Δkw| + |Δcurrent|.
+// or branch (e.g. MV has no root), it's skipped. Suggested templates are
+// scored by leafKind match + |Δkw| + |Δcurrent|.
 
 import React, { useMemo, useState } from 'react';
 import { XIcon, ChevronRightIcon, SparklesIcon, CheckIcon } from 'lucide-react';
@@ -29,30 +40,59 @@ import {
 } from '../../types/project';
 import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
 
-const LV_ROOTS    = ['S8', '8PT'] as const;
-const LV_GROUPS   = ['CCS', 'OFF', 'OFW', 'MARSHALING', 'SWING'] as const;
-const LV_SWITCHES = ['SFD', 'HFD', 'FCB1', 'FCB2', 'FCB3'] as const;
-const FEEDERS     = ['INCOMING', 'COUPLING', 'METERING', 'RISER', 'MET&RISER', 'OUTGOING'] as const;
+const LV_ROOTS       = ['S8', '8PT'] as const;
+const LV_OFW_SWITCHES = ['SFD', 'HFD', 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] as const;
+// Of the OFW switches, only these three get an Incoming/Outgoing/Coupling
+// sub-step — MODULLAR and FCB-CAP already say what they are.
+const LV_OFW_FEEDER_SWITCHES = ['FCB1', 'FCB2', 'FCB3'];
+const LV_FIX_GROUPS  = ['CCS', 'OFF', 'MARSHALING', 'SWING'] as const;
+const LV_FCB_FEEDERS = ['INCOMING', 'OUTGOING', 'COUPLING'] as const;
+const LV_FIX_FEEDERS = ['INCOMING', 'COUPLING', 'METERING', 'RISER', 'MET&RISER', 'OUTGOING'] as const;
 
-// Which leaf kinds are valid for a given (tier, switch, feeder) tuple.
+const MV_CELL_TYPES = [
+  'Feeder Truck', 'Incoming VT Cell', 'Disconnector Link', 'Coupling Truck',
+  'Riser Connection', 'Metering Riser Connection', 'Metering', 'Dummy',
+  'Support Instead of CT',
+] as const;
+const MV_FEEDER_TRUCK_SUB = ['Circuit Breaker', 'Contactor Fuse Combination'] as const;
+const MV_DISCONNECTOR_SUB = ['With Fuse', 'Without Fuse'] as const;
+
+const needsCellSub = (cellType: string | null) =>
+  cellType === 'Feeder Truck' || cellType === 'Disconnector Link';
+const cellSubOptions = (cellType: string | null): readonly string[] =>
+  cellType === 'Feeder Truck' ? MV_FEEDER_TRUCK_SUB
+  : cellType === 'Disconnector Link' ? MV_DISCONNECTOR_SUB
+  : [];
+
+// Which leaf kinds are valid for the path drilled into so far — empty means
+// nothing further to ask, the path is already complete on its own.
 function allowedLeafKinds(
   tier: 'LV' | 'MV' | 'HV',
-  switchNode: string | null,
-  feeder: string | null,
+  ctx: {
+    family: string | null; switchNode: string | null; group: string | null;
+    feeder: string | null; cellType: string | null; cellSub: string | null;
+  },
 ): TemplateLeafKind[] {
   if (tier === 'MV') {
-    return feeder === 'OUTGOING' ? ['motor', 'transformer'] : ['other'];
+    if (ctx.cellType === 'Feeder Truck' && ctx.cellSub === 'Circuit Breaker') {
+      return ['motor', 'transformer', 'capacitor'];
+    }
+    return [];
   }
   if (tier === 'LV') {
-    if (switchNode && switchNode.startsWith('FCB')) {
-      return feeder === 'OUTGOING' ? ['motor', 'transformer'] : ['other'];
+    if (ctx.family === 'OFW') {
+      if (ctx.switchNode === 'SFD' || ctx.switchNode === 'HFD') return ['motor', 'feeder'];
+      if (ctx.switchNode && LV_OFW_FEEDER_SWITCHES.includes(ctx.switchNode)) {
+        return ctx.feeder === 'OUTGOING' ? ['motor', 'transformer'] : [];
+      }
+      return []; // MODULLAR, FCB-CAP
     }
-    if (switchNode === 'SFD' || switchNode === 'HFD') {
-      return ['motor', 'lighting'];
+    if (ctx.family === 'FIX') {
+      if (ctx.group === 'MARSHALING') return [];
+      return ctx.feeder === 'OUTGOING' ? ['motor', 'transformer', 'capacitor'] : [];
     }
-    return ['other'];
   }
-  return ['other'];
+  return [];
 }
 
 function scoreSimilarity(
@@ -73,7 +113,7 @@ function scoreSimilarity(
 interface Props {
   tier: 'LV' | 'MV' | 'HV';
   /**
-   * The section the template is being made in — SIVACON or CCS for LV.
+   * The section the template is being made in — OFW or FIX for LV.
    *
    * Decided by where it was started from: the tree makes a template from
    * inside the section it belongs to, so there is nothing to ask here. Left
@@ -98,17 +138,15 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   tier, family: givenFamily = null, existing, onCancel, onSubmit,
 }) => {
   // Path nodes — present iff the tier exposes that step.
-  // Which side of the works this belongs to. SIVACON boards are filed under a
-  // root (S8, 8PT); the CCS side is not, so that step is skipped for it and
-  // the path simply starts at the group — which is what CCS paths already
-  // look like where they exist.
-  const [family,  setFamily]  = useState<string | null>(givenFamily); // SIVACON | CCS (LV only)
+  const [family,  setFamily]  = useState<string | null>(givenFamily); // OFW | FIX (LV only)
   const askFamily = tier === 'LV' && !givenFamily;
   const section = TEMPLATE_FAMILIES[tier]?.find(f => f.id === family) ?? null;
-  const [root,    setRoot]    = useState<string | null>(null);   // S8 | 8PT  (LV only)
-  const [group,   setGroup]   = useState<string | null>(null);   // CCS | OFF | … (LV only)
-  const [switch_, setSwitch]  = useState<string | null>(null);   // SFD | HFD | FCBn  (LV/OFW only)
-  const [feeder,  setFeeder]  = useState<string | null>(null);   // INCOMING | …  (MV + LV/FCB*)
+  const [root,    setRoot]    = useState<string | null>(null);   // S8 | 8PT (LV only, both families)
+  const [switch_, setSwitch]  = useState<string | null>(null);   // OFW only
+  const [group,   setGroup]   = useState<string | null>(null);   // FIX only
+  const [feeder,  setFeeder]  = useState<string | null>(null);   // OFW/FCBn or FIX non-Marshaling
+  const [cellType, setCellType] = useState<string | null>(null); // MV only
+  const [cellSub,  setCellSub]  = useState<string | null>(null); // MV only
   const [leafKind, setLeafKind] = useState<TemplateLeafKind | null>(null);
   const [kw, setKw] = useState('');
   const [currentA, setCurrentA] = useState('');
@@ -117,38 +155,60 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   // per-equipment questions (a separate, later piece of work) get asked.
   const [useSimorghDraw, setUseSimorghDraw] = useState<boolean | null>(null);
 
+  const feederApplies = tier === 'LV' && (
+    (family === 'OFW' && !!switch_ && LV_OFW_FEEDER_SWITCHES.includes(switch_)) ||
+    (family === 'FIX' && !!group && group !== 'MARSHALING')
+  );
+  const feederOptions: readonly string[] = family === 'OFW' ? LV_FCB_FEEDERS : LV_FIX_FEEDERS;
+
   // Build the path array as the user descends.
   const path = useMemo(() => {
     const p: string[] = [];
     if (tier === 'LV') {
-      if (root)   p.push(root);
-      if (group)  p.push(group);
-      if (switch_)p.push(switch_);
+      if (root) p.push(root);
+      if (family === 'OFW') {
+        if (switch_) p.push(switch_);
+      } else if (family === 'FIX') {
+        if (group) p.push(group);
+      }
       if (feeder) p.push(feeder);
     } else if (tier === 'MV') {
-      if (feeder) p.push(feeder);
+      if (cellType) p.push(cellType);
+      if (cellSub) p.push(cellSub);
     }
     return p;
-  }, [tier, root, group, switch_, feeder]);
+  }, [tier, root, family, switch_, group, feeder, cellType, cellSub]);
+
+  const candidateLeafKinds = allowedLeafKinds(tier, { family, switchNode: switch_, group, feeder, cellType, cellSub });
+
+  // True once every structural step this branch requires has an answer —
+  // independent of leafKind, which may legitimately be "nothing to ask".
+  const structuralPathComplete = tier === 'MV'
+    ? !!cellType && (!needsCellSub(cellType) || !!cellSub)
+    : !!root
+      && (family === 'OFW' ? !!switch_ : family === 'FIX' ? !!group : false)
+      && (!feederApplies || !!feeder);
 
   // Which step are we on? The first step missing a value is the active one.
-  const activeStep: 'family' | 'root' | 'group' | 'switch' | 'feeder' | 'kind' | 'params' | 'simorghDraw' | 'name' = (() => {
+  type Step = 'family' | 'root' | 'switch' | 'group' | 'feeder'
+    | 'cellType' | 'cellSub' | 'kind' | 'params' | 'simorghDraw' | 'name';
+  const activeStep: Step = (() => {
     if (tier === 'LV') {
       if (!family) return 'family';
-      if (family === 'SIVACON' && !root) return 'root';
-      if (!group)  return 'group';
-      if (group === 'OFW' && !switch_) return 'switch';
-      // feeders only apply under FCBn switches and (per spec) FCB1/2/3 chain
-      if (switch_ && switch_.startsWith('FCB') && !feeder) return 'feeder';
+      if (!root) return 'root';
+      if (family === 'OFW' && !switch_) return 'switch';
+      if (family === 'FIX' && !group) return 'group';
+      if (feederApplies && !feeder) return 'feeder';
     }
-    if (tier === 'MV' && !feeder) return 'feeder';
-    if (!leafKind) return 'kind';
+    if (tier === 'MV') {
+      if (!cellType) return 'cellType';
+      if (needsCellSub(cellType) && !cellSub) return 'cellSub';
+    }
+    if (candidateLeafKinds.length > 0 && !leafKind) return 'kind';
     if (!kw && !currentA) return 'params';
     if (useSimorghDraw === null) return 'simorghDraw';
     return 'name';
   })();
-
-  const candidateLeafKinds = allowedLeafKinds(tier, switch_, feeder);
 
   // Score & rank suggestions at the current path so the user sees real
   // proposals refine as they go deeper.
@@ -173,17 +233,17 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
 
   // Step UI helpers ───────────────────────────────────────────────────────
   // Numbering counts the steps that are actually on screen. Which ones those
-  // are depends on the tier and on how far down the path the user is — a CCS
-  // template has no board root, an MV one has no group — so a fixed number per
-  // step would start at 2, or skip 3, depending on where you came in.
+  // are depends on the tier and on how far down the path the user is.
   const visibleSteps: string[] = [
     askFamily && 'family',
-    tier === 'LV' && family === 'SIVACON' && 'root',
-    tier === 'LV' && (family === 'CCS' || root) && 'group',
-    tier === 'LV' && group === 'OFW' && 'switch',
-    (tier === 'MV' || (tier === 'LV' && switch_ && switch_.startsWith('FCB'))) && 'feeder',
-    path.length > 0 && 'kind',
-    !!leafKind && 'params',
+    tier === 'LV' && 'root',
+    tier === 'LV' && family === 'OFW' && 'switch',
+    tier === 'LV' && family === 'FIX' && 'group',
+    feederApplies && 'feeder',
+    tier === 'MV' && 'cellType',
+    tier === 'MV' && needsCellSub(cellType) && 'cellSub',
+    candidateLeafKinds.length > 0 && 'kind',
+    structuralPathComplete && 'params',
     'simorghDraw',
     'name',
   ].filter(Boolean) as string[];
@@ -249,19 +309,23 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   // Reset deeper choices when an ancestor step is changed.
   const pickFamily = (f: string) => {
     setFamily(f);
-    setRoot(null); setGroup(null); setSwitch(null); setFeeder(null); setLeafKind(null);
+    setRoot(null); setSwitch(null); setGroup(null); setFeeder(null); setLeafKind(null);
   };
-  const pickRoot = (r: string) => { setRoot(r); setGroup(null); setSwitch(null); setFeeder(null); setLeafKind(null); };
-  const pickGroup = (g: string) => { setGroup(g); setSwitch(null); setFeeder(null); setLeafKind(null); };
+  const pickRoot = (r: string) => {
+    setRoot(r);
+    setSwitch(null); setGroup(null); setFeeder(null); setLeafKind(null);
+  };
   const pickSwitch = (s: string) => { setSwitch(s); setFeeder(null); setLeafKind(null); };
+  const pickGroup  = (g: string) => { setGroup(g); setFeeder(null); setLeafKind(null); };
   const pickFeeder = (f: string) => { setFeeder(f); setLeafKind(null); };
+  const pickCellType = (c: string) => { setCellType(c); setCellSub(null); setLeafKind(null); };
+  const pickCellSub = (s: string) => {
+    setCellSub(s);
+    // Contactor Fuse Combination is fixed to motor — no chip step for it.
+    setLeafKind(cellType === 'Feeder Truck' && s === 'Contactor Fuse Combination' ? 'motor' : null);
+  };
 
-  const canCreate = name.trim().length > 0 && useSimorghDraw !== null && (
-    tier === 'MV'
-      ? !!feeder
-      // SIVACON is filed under its board root; the CCS side starts at the group.
-      : (!!group && (family !== 'SIVACON' || !!root))
-  );
+  const canCreate = name.trim().length > 0 && useSimorghDraw !== null && structuralPathComplete;
 
   const handleCreate = (copyFromId?: string) => {
     if (!canCreate) return;
@@ -306,7 +370,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-          {/* Step 1 — System (only when the caller had none to give) */}
+          {/* Step — System (only when the caller had none to give) */}
           {askFamily && (
             <div>
               <StepHeader n={stepNumber('family')} label="System" active={activeStep === 'family'} done={!!family} />
@@ -321,8 +385,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Step 2 — Root (SIVACON boards only) */}
-          {tier === 'LV' && family === 'SIVACON' && (
+          {/* Step — Root (both LV families) */}
+          {tier === 'LV' && (family === 'OFW' || family === 'FIX') && (
             <div>
               <StepHeader n={stepNumber('root')} label="Root" active={activeStep === 'root'} done={!!root} />
               <div className="mt-2 flex flex-wrap gap-2">
@@ -333,44 +397,71 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Step 3 — Group (LV only) */}
-          {tier === 'LV' && (family === 'CCS' || root) && (
-            <div>
-              <StepHeader n={stepNumber('group')} label="Group" active={activeStep === 'group'} done={!!group} />
-              <div className="mt-2 flex flex-wrap gap-2">
-                {LV_GROUPS.map(g => (
-                  <Chip key={g} value={g} selected={group === g} onClick={() => pickGroup(g)} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Step 4 — Switch (LV/OFW only) */}
-          {tier === 'LV' && group === 'OFW' && (
+          {/* Step — Switch (OFW only) */}
+          {tier === 'LV' && family === 'OFW' && !!root && (
             <div>
               <StepHeader n={stepNumber('switch')} label="Switch" active={activeStep === 'switch'} done={!!switch_} />
               <div className="mt-2 flex flex-wrap gap-2">
-                {LV_SWITCHES.map(s => (
+                {LV_OFW_SWITCHES.map(s => (
                   <Chip key={s} value={s} selected={switch_ === s} onClick={() => pickSwitch(s)} />
                 ))}
               </div>
             </div>
           )}
 
-          {/* Step 5 — Feeder (MV always, LV when under FCBn) */}
-          {(tier === 'MV' || (tier === 'LV' && switch_ && switch_.startsWith('FCB'))) && (
+          {/* Step — Group (FIX only) */}
+          {tier === 'LV' && family === 'FIX' && !!root && (
+            <div>
+              <StepHeader n={stepNumber('group')} label="Group" active={activeStep === 'group'} done={!!group} />
+              <div className="mt-2 flex flex-wrap gap-2">
+                {LV_FIX_GROUPS.map(g => (
+                  <Chip key={g} value={g} selected={group === g} onClick={() => pickGroup(g)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Step — Feeder (OFW/FCBn or FIX non-Marshaling) */}
+          {feederApplies && (
             <div>
               <StepHeader n={stepNumber('feeder')} label="Feeder" active={activeStep === 'feeder'} done={!!feeder} />
               <div className="mt-2 flex flex-wrap gap-2">
-                {FEEDERS.map(f => (
+                {feederOptions.map(f => (
                   <Chip key={f} value={f} selected={feeder === f} onClick={() => pickFeeder(f)} />
                 ))}
               </div>
             </div>
           )}
 
-          {/* Step 6 — Leaf kind */}
-          {path.length > 0 && (
+          {/* Step — Cell type (MV) */}
+          {tier === 'MV' && (
+            <div>
+              <StepHeader n={stepNumber('cellType')} label="Cell Type" active={activeStep === 'cellType'} done={!!cellType} />
+              <div className="mt-2 flex flex-wrap gap-2">
+                {MV_CELL_TYPES.map(c => (
+                  <Chip key={c} value={c} selected={cellType === c} onClick={() => pickCellType(c)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Step — Cell sub-type (Feeder Truck / Disconnector Link) */}
+          {tier === 'MV' && needsCellSub(cellType) && (
+            <div>
+              <StepHeader n={stepNumber('cellSub')} label={cellType === 'Feeder Truck' ? 'Feeder Truck type' : 'Disconnector Link'} active={activeStep === 'cellSub'} done={!!cellSub} />
+              <div className="mt-2 flex flex-wrap gap-2">
+                {cellSubOptions(cellType).map(s => (
+                  <Chip key={s} value={s} selected={cellSub === s} onClick={() => pickCellSub(s)} />
+                ))}
+              </div>
+              {cellType === 'Feeder Truck' && cellSub === 'Contactor Fuse Combination' && (
+                <p className="mt-1 text-[10px] text-gray-400 italic">Fixed to motor — nothing further to choose.</p>
+              )}
+            </div>
+          )}
+
+          {/* Step — Leaf kind (only when the branch actually has one) */}
+          {candidateLeafKinds.length > 0 && (
             <div>
               <StepHeader n={stepNumber('kind')} label="Equipment kind" active={activeStep === 'kind'} done={!!leafKind} />
               <div className="mt-2 flex flex-wrap gap-2">
@@ -384,8 +475,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Step 7 — Parameters */}
-          {leafKind && (
+          {/* Step — Parameters */}
+          {structuralPathComplete && (
             <div>
               <StepHeader n={stepNumber('params')} label="Parameters" active={activeStep === 'params'} done={!!(kw || currentA)} />
               <div className="mt-2 grid grid-cols-2 gap-3">
@@ -413,7 +504,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Step 7 — Suggestions (live as path narrows) */}
+          {/* Suggestions (live as path narrows) */}
           {suggestions.length > 0 && (
             <div className="rounded border border-amber-200 bg-amber-50/60">
               <div className="px-3 py-2 border-b border-amber-200 flex items-center gap-2">
@@ -448,8 +539,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
                         handleCreate(s.template.id);
                       }}
                       className="px-3 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700"
-                      disabled={!leafKind}
-                      title={leafKind ? 'Clone this template into a new one' : 'Pick an equipment kind first'}
+                      disabled={candidateLeafKinds.length > 0 && !leafKind}
+                      title={candidateLeafKinds.length === 0 || leafKind ? 'Clone this template into a new one' : 'Pick an equipment kind first'}
                     >
                       Use as base
                     </button>
@@ -475,7 +566,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Step 8 — Name + create */}
+          {/* Step — Name + create */}
           <div>
             <StepHeader n={stepNumber('name')} label="Name" active={activeStep === 'name'} done={!!name.trim()} />
             <input

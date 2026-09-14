@@ -2,10 +2,15 @@
 //
 // The families a tier's templates fall into, above the path they already carry.
 //
-// LV templates are filed under a path — S8 / OFW / FCB1 / OUTGOING — and the
-// office reads the top of that path as two different things: the SIVACON
-// switchgear systems (S8 and 8PT) and the CCS side (OFW, marshaling and the
-// rest). This says which is which so the tree can show them apart.
+// LV templates are filed under a path — S8 / FCB1 / OUTGOING — and the office
+// reads the top of that path as two different things: OFW (SFD, HFD, the FCB
+// switches, MODULLAR, FCB-CAP) and FIX (CCS, OFF, Marshaling, Swing). This
+// says which is which so the tree can show them apart.
+//
+// Both families now start with a root (S8 or 8PT), so that alone can't tell
+// them apart — familyOf()'s own fallback (matching ANY node in the path, not
+// just the first) is what actually does the work here: neither family lists
+// S8/8PT, so the head-node check always falls through to it.
 //
 // It is worked out from the path a template already has; nothing is written and
 // no existing template moves. A template whose path matches no family is not
@@ -20,18 +25,15 @@ export interface TemplateFamily {
   label: string;
   /** What the office calls it, for the line under the label. */
   note: string;
-  /**
-   * The path nodes that put a template in this family. The first node of a
-   * path decides; a family listed earlier wins, so `8PT / CCS` is SIVACON —
-   * the CCS group of a SIVACON board, not the CCS side of the works.
-   */
+  /** The path nodes that put a template in this family — see the note above
+   *  on why neither list includes S8/8PT. */
   nodes: string[];
 }
 
 export const TEMPLATE_FAMILIES: Record<'LV' | 'MV' | 'HV', TemplateFamily[]> = {
   LV: [
-    { id: 'SIVACON', label: 'SIVACON', note: '8PT and S8', nodes: ['8PT', 'S8'] },
-    { id: 'CCS', label: 'CCS', note: 'OFW, marshaling and the rest', nodes: ['OFW', 'MARSHALING', 'OFF', 'SWING', 'CCS'] },
+    { id: 'OFW', label: 'OFW', note: 'SFD, HFD, FCB1-3, MODULLAR, FCB-CAP', nodes: ['SFD', 'HFD', 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] },
+    { id: 'FIX', label: 'FIX', note: 'CCS, OFF, Marshaling, Swing', nodes: ['CCS', 'OFF', 'MARSHALING', 'SWING'] },
   ],
   // MV and HV have no families yet. An empty list is not a special case
   // anywhere — those tiers simply list their templates the way they always

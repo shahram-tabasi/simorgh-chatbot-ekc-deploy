@@ -233,18 +233,19 @@ export interface TpmsSyncState {
 // authoring them. This metadata lets the chatbot (and a forthcoming browser
 // UI) propose similar templates that already exist at the same path.
 //
-// LV path example:
-//   ['S8', 'OFW', 'FCB1', 'OUTGOING']  ← top → leaf
-//   ['8PT', 'CCS']
-//   ['S8', 'OFW', 'SFD']
+// LV path example (root always first, OFW and FIX both carry one):
+//   ['S8', 'FCB1', 'OUTGOING']   ← top → leaf, OFW family
+//   ['8PT', 'CCS']               ← FIX family
+//   ['S8', 'SFD']                ← OFW family
 //
-// MV path is simpler:
-//   ['INCOMING'] | ['COUPLING'] | ['METERING'] | ['RISER'] | ['MET&RISER'] | ['OUTGOING']
+// MV path is a cell type, plus a sub-type for the two that have one:
+//   ['Feeder Truck', 'Circuit Breaker'] | ['Feeder Truck', 'Contactor Fuse Combination']
+//   ['Disconnector Link', 'With Fuse'] | ['Incoming VT Cell'] | ['Metering'] | …
 //
 // `leafKind` describes what equipment family this template is for, so the
 // suggestion engine can short-list templates with matching power/current.
 
-export type TemplateLeafKind = 'motor' | 'transformer' | 'lighting' | 'other';
+export type TemplateLeafKind = 'motor' | 'transformer' | 'capacitor' | 'feeder' | 'other';
 
 export interface TemplateHierarchy {
   path: string[];                  // top → leaf nodes
