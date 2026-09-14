@@ -89,6 +89,11 @@ export function stripLocaleTags(raw: any): string {
 export function getEplanixValue(fullData: any): string {
   const order = stripLocaleTags(fullData?.OrderNumber);
   if (order && order !== '-' && order !== '_') return order;
+  // A part imported from TPMS can carry nothing but its maker: no order
+  // number exists to show. The manufacturer is what that part is, and is
+  // more use here than the description that used to fall out instead.
+  const manufacturer = stripLocaleTags(fullData?.Manufacturer);
+  if (manufacturer) return manufacturer;
   return stripLocaleTags(fullData?.Designation3);
 }
 

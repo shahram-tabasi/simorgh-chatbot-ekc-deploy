@@ -109,14 +109,27 @@ export interface TpmsImportResult {
 // the part reads the same everywhere — the exports and the template screen both
 // go through getEplanixValue/formatPartEntry.
 function toTemplatePart(part: TpmsPart) {
+  const brand = (part.brand || '').trim();
+  const code = (part.code || '').trim();
+  // For a good many TPMS parts the only thing recorded is the maker. The
+  // EPLAN label that formatScode prefers is then a brand name — "Siemens",
+  // "Kries", "Pfiffner" — and it was arriving as the part's order number, so
+  // a column headed (SIEMENS/SIBA) read "Siemens" where a type should be.
+  //
+  // A brand is not an order number and must not read as one. When the code
+  // TPMS gives is the brand, it is kept as the manufacturer and the order is
+  // left empty; when TPMS has a real code it is untouched, so nothing that
+  // does carry an order number loses it.
+  const codeIsBrand = Boolean(brand) && code.toLowerCase() === brand.toLowerCase();
+  const orderNumber = codeIsBrand ? '' : code;
   return {
-    partNumber: part.code,
+    partNumber: orderNumber,
     label: part.label,
     quantity: part.quantity > 0 ? part.quantity : 1,
     priority: part.priority || 1,
     fullData: {
-      PartNumber: part.code,
-      OrderNumber: part.code,
+      PartNumber: orderNumber,
+      OrderNumber: orderNumber,
       Designation1: part.secDes,
       Designation2: part.engDes,
       Designation3: part.shrDes,
@@ -125,7 +138,7 @@ function toTemplatePart(part: TpmsPart) {
       // coded empty, which put the manufacturer nowhere and left it reading as
       // part of the order instead — CB ORDER showing a brand rather than the
       // order number it is supposed to carry.
-      Manufacturer: part.brand || '',
+      Manufacturer: brand || code,
       __tpms: { ecode: part.ecode, scode: part.scode, slot: part.slot },
     },
   };
