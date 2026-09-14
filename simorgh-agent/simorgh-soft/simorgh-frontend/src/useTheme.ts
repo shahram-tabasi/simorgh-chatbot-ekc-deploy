@@ -30,31 +30,53 @@ function stored(): Theme | null {
  * the first paint (see index.html) and so portalled nodes — modals render into
  * document.body, outside the app tree — are covered by the same rule.
  */
+// One theme for the whole app, however many components ask for it.
+//
+// The header button and View > Theme both call this hook. With plain useState
+// each would hold its own copy: clicking one would leave the other's tick in
+// the wrong place until something else re-rendered it. So the value lives in
+// this module and every instance subscribes, which is also why the theme is
+// written to <html> rather than being handed down a provider — nothing here
+// needs to be wrapped for it to work.
+let current: Theme = stored() ?? systemTheme();
+const listeners = new Set<(t: Theme) => void>();
+
+function apply(next: Theme) {
+  current = next;
+  document.documentElement.setAttribute('data-theme', next);
+  try {
+    localStorage.setItem(STORAGE_KEY, next);
+  } catch {
+    // Not being able to remember the choice is no reason to refuse it.
+  }
+  listeners.forEach(fn => fn(next));
+}
+
+// Follow the system only while no explicit choice has been made. Registered
+// once for the module, not once per component.
+if (typeof window !== 'undefined' && window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)')
+    .addEventListener('change', e => {
+      if (!stored()) apply(e.matches ? 'dark' : 'light');
+    });
+}
+
 export function useTheme(): { theme: Theme; toggle: () => void; setTheme: (t: Theme) => void } {
-  const [theme, setThemeState] = useState<Theme>(() => stored() ?? systemTheme());
+  const [theme, setThemeState] = useState<Theme>(current);
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    try {
-      localStorage.setItem(STORAGE_KEY, theme);
-    } catch {
-      // Not being able to remember the choice is not a reason to refuse it.
+    listeners.add(setThemeState);
+    // The attribute is already set before the first paint by the script in
+    // index.html; this keeps them in step if anything reset it since.
+    if (document.documentElement.getAttribute('data-theme') !== current) {
+      document.documentElement.setAttribute('data-theme', current);
     }
-  }, [theme]);
-
-  // Follow the system only while no explicit choice has been made.
-  useEffect(() => {
-    const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
-    if (!mq) return;
-    const onChange = (e: MediaQueryListEvent) => {
-      if (!stored()) setThemeState(e.matches ? 'dark' : 'light');
-    };
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
+    setThemeState(current);
+    return () => { listeners.delete(setThemeState); };
   }, []);
 
-  const setTheme = useCallback((t: Theme) => setThemeState(t), []);
-  const toggle = useCallback(() => setThemeState(t => (t === 'dark' ? 'light' : 'dark')), []);
+  const setTheme = useCallback((t: Theme) => apply(t), []);
+  const toggle = useCallback(() => apply(current === 'dark' ? 'light' : 'dark'), []);
 
   return { theme, toggle, setTheme };
 }

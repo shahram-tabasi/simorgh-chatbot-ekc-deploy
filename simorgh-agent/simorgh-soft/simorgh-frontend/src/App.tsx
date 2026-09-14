@@ -87,6 +87,7 @@ interface MenuBarProps {
   isCurrentRevisionEditable?: boolean;
 }
 const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, onImportFromTpms, currentRevision, isCurrentRevisionEditable }) => {
+  const { theme, setTheme } = useTheme();
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout,     setShowAbout]     = useState(false);
@@ -351,6 +352,20 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
           {activeMenu === 'view' && (
             <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
               <div className="py-1">
+                <div className="px-4 py-1 text-[11px] uppercase tracking-wider text-gray-400">Theme</div>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => { setTheme('light'); setActiveMenu(null); }}
+                >
+                  ☀️ Light {theme === 'light' && <span className="float-right">✓</span>}
+                </button>
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => { setTheme('dark'); setActiveMenu(null); }}
+                >
+                  🌙 Dark {theme === 'dark' && <span className="float-right">✓</span>}
+                </button>
+                <div className="my-1 border-t border-gray-600" />
                 <button
                   className="block w-full text-left px-4 py-2 hover:bg-gray-600"
                   onClick={() => setZoom(z => Math.min(200, z + 10))}

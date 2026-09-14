@@ -26,6 +26,13 @@
 
 :root {
   color-scheme: light;
+
+  /* The step circles in the tab bar. Their colours are drawn by SVG and
+     inline style, which no utility remap can reach, so they are read from
+     here instead — one place, both themes. */
+  --step-fill:   #ffffff;
+  --step-idle:   #1d4ed8;
+  --step-active: #f97316;
 }
 
 [data-theme="dark"] {
@@ -44,6 +51,13 @@
 
   --line:      #334155;
   --line-soft: #263449;
+
+  /* A white disc glares on this ground and blue-700 disappears into it, so
+     the fill becomes the raised surface and both inks are lifted until they
+     carry on a dark page. */
+  --step-fill:   #1e293b;
+  --step-idle:   #7dabf8;
+  --step-active: #fb923c;
 
   color-scheme: dark;
 }
