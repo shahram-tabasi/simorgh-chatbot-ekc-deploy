@@ -1,3 +1,15 @@
 node_modules/
 __pycache__/
 *.pyc
+
+# Real configuration, never the repo's: simorgh-agent/.env carries the
+# database passwords, the registry credentials and EPLAN_BRIDGE_API_KEY. It
+# was one `git add .` away from being committed. Copy .env.example instead.
+#
+# This does not untrack the two frontend .env files already in the repo —
+# git ignores .gitignore for files it is already tracking — and those hold
+# only VITE_* vars, which are compiled into the bundle and public anyway.
+.env
+
+# Runtime data, written by the running app rather than by anyone editing it.
+uploads/
