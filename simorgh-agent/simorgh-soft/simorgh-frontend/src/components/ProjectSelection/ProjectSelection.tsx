@@ -354,7 +354,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       <div className="relative bg-white rounded-2xl shadow-2xl w-[600px] max-w-full flex flex-col my-auto">
         {/* Header */}
         <div className="flex items-center gap-4 px-6 py-5 border-b border-gray-100">
-          <img src={logoMark} alt="Simorgh" className="h-20 w-auto" />
+          <img src={logoMark} alt="Simorgh" data-theme-invert className="h-20 w-auto" />
           <div className="h-14 w-px bg-gray-200" />
           <div>
             <div className="text-2xl font-extrabold tracking-tight text-blue-900 leading-none">Simorgh</div>

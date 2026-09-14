@@ -71,11 +71,32 @@
 [data-theme="dark"] .bg-gray-800,
 [data-theme="dark"] .bg-slate-800  { background-color: #2a3648 !important; }
 
+/* Hover and disabled states need the same treatment as the base class, and
+ * are easy to miss because they only show under the cursor: hover:bg-white on
+ * a Cancel button left it turning pure white beneath light text, so the label
+ * vanished exactly when you were about to click it. */
+[data-theme="dark"] .hover\:bg-white:hover      { background-color: var(--s-hover) !important; }
 [data-theme="dark"] .hover\:bg-gray-50:hover,
 [data-theme="dark"] .hover\:bg-slate-50:hover  { background-color: var(--s-hover) !important; }
 [data-theme="dark"] .hover\:bg-gray-100:hover,
 [data-theme="dark"] .hover\:bg-slate-100:hover { background-color: var(--s-strong) !important; }
-[data-theme="dark"] .hover\:bg-gray-200:hover  { background-color: #56657a !important; }
+[data-theme="dark"] .hover\:bg-gray-200:hover,
+[data-theme="dark"] .hover\:bg-slate-200:hover { background-color: #56657a !important; }
+[data-theme="dark"] .hover\:bg-gray-600:hover  { background-color: #56657a !important; }
+[data-theme="dark"] .hover\:bg-gray-700:hover,
+[data-theme="dark"] .hover\:bg-slate-800:hover { background-color: #475569 !important; }
+[data-theme="dark"] .hover\:border-gray-300:hover { border-color: var(--s-strong) !important; }
+
+[data-theme="dark"] .hover\:text-gray-900:hover,
+[data-theme="dark"] .hover\:text-gray-700:hover { color: var(--t-strong) !important; }
+[data-theme="dark"] .group:hover .group-hover\:text-gray-400 { color: var(--t-muted) !important; }
+
+/* Disabled greys go the other way in the dark: gray-400 as a background is
+ * lighter than the surface, so a disabled button would stand out more than an
+ * enabled one. */
+[data-theme="dark"] .disabled\:bg-gray-400:disabled { background-color: #3f4b5e !important; }
+[data-theme="dark"] .disabled\:bg-gray-100:disabled { background-color: var(--s-sunken) !important; }
+[data-theme="dark"] .disabled\:text-gray-400:disabled { color: #6b7a90 !important; }
 
 /* ── Text ─────────────────────────────────────────────────────────────── */
 [data-theme="dark"] .text-gray-900,
@@ -195,3 +216,11 @@
 [data-theme="dark"] .shadow-md,
 [data-theme="dark"] .shadow-lg,
 [data-theme="dark"] .shadow-xl { box-shadow: 0 4px 14px rgba(0,0,0,.45) !important; }
+
+/* ── Logo ─────────────────────────────────────────────────────────────────
+ * The mark is dark ink on transparency, drawn for a white header, so on a
+ * dark ground it disappears. Lightening it keeps one asset rather than
+ * shipping a second file that then has to be kept in step with the first. */
+[data-theme="dark"] img[data-theme-invert] {
+  filter: brightness(0) invert(1) opacity(.92);
+}

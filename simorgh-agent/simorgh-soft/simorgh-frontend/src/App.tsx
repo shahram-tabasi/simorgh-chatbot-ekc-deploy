@@ -491,7 +491,7 @@ const AboutDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
       onClick={e => e.stopPropagation()}
     >
       <div className="flex items-center gap-3 px-6 py-5 bg-slate-800 text-white">
-        <img src={logoMark} alt="" className="w-10 h-10 rounded" />
+        <img src={logoMark} alt="" data-theme-invert className="w-10 h-10 rounded" />
         <div>
           <h3 className="font-semibold text-lg leading-tight">Simorgh Design Suite</h3>
           <p className="text-xs text-slate-300">Electrical switchgear design &amp; documentation</p>
@@ -843,7 +843,7 @@ const MainApp: React.FC = () => {
           <div className="flex items-center py-3">
             {/* Transparent, cropped logo mark — no white plate, so the bird
                 itself is what you see and it reads noticeably larger. */}
-            <img src={logoMark} alt="Simorgh logo" className="h-16 w-auto object-contain" />
+            <img src={logoMark} alt="Simorgh logo" data-theme-invert className="h-16 w-auto object-contain" />
             <div className="mx-4 h-12 w-px bg-gray-300 self-center" />
             <div className="header-wordmark">
               <div className="text-xl font-extrabold tracking-tight text-blue-900 leading-none">Simorgh</div>
