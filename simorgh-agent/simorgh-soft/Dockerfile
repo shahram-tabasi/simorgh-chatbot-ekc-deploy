@@ -25,6 +25,14 @@ FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS frontend-buil
 # image, it's a pure Node app, so there's nothing else to mirror here.
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 ENV npm_config_registry=${NPM_REGISTRY}
+# npm ci had no retry tuning at all — a mid-download ECONNRESET on a large
+# package (pdfjs-dist, several MB with its fonts/cmaps) just failed the
+# build outright. Same fix as pip's --timeout/--retries below: try harder
+# before giving up, since the mirror itself is the flaky part, not the
+# package.
+ENV npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_mintimeout=20000 \
+    npm_config_fetch_retry_maxtimeout=120000
 
 WORKDIR /app
 COPY simorgh-frontend/package*.json ./
@@ -47,6 +55,9 @@ FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS backend-build
 # registry regardless of what stage 1 (or --build-arg) was told, silently.
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 ENV npm_config_registry=${NPM_REGISTRY}
+ENV npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_mintimeout=20000 \
+    npm_config_fetch_retry_maxtimeout=120000
 WORKDIR /app
 COPY simorgh-backend/package*.json ./
 RUN npm ci --omit=dev
