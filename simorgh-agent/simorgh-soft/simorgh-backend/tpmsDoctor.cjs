@@ -72,12 +72,15 @@ function tcpProbe(host, port, ms = 10000) {
 
 function localMtus() {
   try {
-    return fs.readdirSync('/sys/class/net')
-      .filter(n => n !== 'lo')
-      .map(n => { try { return `${n}=${fs.readFileSync(`/sys/class/net/${n}/mtu`, 'utf8').trim()}`; } catch { return null; } })
-      .filter(Boolean).join('  ');
-  } catch { return 'unavailable'; }
+    const ifs = fs.readdirSync('/sys/class/net').filter(n => n !== 'lo').sort()
+      .map(n => { try { return { n, mtu: Number(fs.readFileSync(`/sys/class/net/${n}/mtu`, 'utf8').trim()) }; } catch { return null; } })
+      .filter(Boolean);
+    // eth0 is the bridge to app_net — the one whose MSS the server sees.
+    const primary = ifs.find(i => i.n === 'eth0') || ifs[0];
+    return { text: ifs.map(i => `${i.n}=${i.mtu}`).join('  '), primary: primary?.mtu || 1500, name: primary?.n || 'eth0' };
+  } catch { return { text: 'unavailable', primary: 1500, name: 'eth0' }; }
 }
+const MTU = localMtus();
 
 /** A query timeout is fatal in mysql2 — the socket is out of step with the
  *  protocol and every later probe on it would fail for the wrong reason. So
@@ -114,7 +117,7 @@ async function probe(box, label, sql, { ms = PROBE_MS, show, quiet } = {}) {
   console.log(`\n=== TPMS doctor ===`);
   console.log(`target      : ${cfg.user}@${cfg.host}:${cfg.port}/${cfg.database}`);
   console.log(`app timeout : ${APP_TIMEOUT}ms   probe timeout: ${PROBE_MS}ms`);
-  console.log(`local MTU   : ${localMtus()}\n`);
+  console.log(`local MTU   : ${MTU.text}\n`);
 
   const tcp = await tcpProbe(cfg.host, cfg.port);
   console.log(tcp.ok ? `[1] TCP connect            ok (${tcp.ms}ms)`
@@ -126,59 +129,107 @@ async function probe(box, label, sql, { ms = PROBE_MS, show, quiet } = {}) {
   try { await box.get(); console.log(`[2] MySQL handshake        ok (${Date.now() - t0}ms)`); }
   catch (e) { console.log(`[2] MySQL handshake        FAILED — ${e.code || ''} ${e.message}\n`); process.exit(1); }
 
-  // ---- the decisive test ---------------------------------------------------
-  // One row, one column, of a size we choose. Nothing to do with the view, the
-  // schema, indexes or sorting: purely "how many bytes can come back".
-  console.log(`[3] how many bytes can the server send us?`);
-  const sizes = [256, 512, 1024, 1300, 1400, 1460, 1500, 2000, 4096, 16384, 65536, 262144];
+  // ---- inbound: how many bytes can reach us? -----------------------------
+  // One row, one column, of a size we choose. Nothing to do with the view,
+  // indexes or sorting: purely "how many bytes can come back".
+  //
+  // For SELECT REPEAT('x', n) the server writes about n + 84 bytes (column
+  // count, column definition, the row itself, EOF). The first TCP segment of
+  // that is full-size, so the reply fails as soon as n + 84 exceeds the MSS
+  // the path can actually carry — which makes the cutoff a direct measure of
+  // the path MTU, give or take the 40 bytes of TCP/IP header.
+  const PAYLOAD_OVERHEAD = 84, TCPIP = 40;
+  const ask = (n, ms = 5000) => probe(box, `payload ${n}`, `SELECT REPEAT('x', ${n}) AS p`, { ms, quiet: true });
+
+  console.log(`[3] inbound — how many bytes can the server send us?`);
   let lastOk = 0, firstBad = null;
-  for (const n of sizes) {
-    const r = await probe(box, `payload ${n} bytes`, `SELECT REPEAT('x', ${n}) AS p`, { ms: 6000, quiet: true });
+  for (const n of [256, 512, 1024, 1300, 1400, 1460, 1500, 2000, 8192, 65536]) {
+    const r = await ask(n);
     console.log(`    ${String(n).padStart(7)} bytes   ${r.ok ? `ok   ${String(r.took).padStart(5)}ms` : `FAIL ${String(r.took ?? 0).padStart(5)}ms  never arrived`}`);
-    if (r.ok) lastOk = n; else { firstBad ??= n; break; }
+    if (r.ok) lastOk = n; else { firstBad = n; break; }
+  }
+
+  // Narrow the boundary, so the MTU to configure is a measurement rather than
+  // a guess. Stops at 8 bytes: finer than that buys nothing.
+  if (firstBad) {
+    console.log(`    narrowing between ${lastOk} and ${firstBad}…`);
+    let lo = lastOk, hi = firstBad;
+    while (hi - lo > 8) {
+      const mid = Math.floor((lo + hi) / 2);
+      const r = await ask(mid);
+      console.log(`    ${String(mid).padStart(7)} bytes   ${r.ok ? 'ok' : 'FAIL'}`);
+      if (r.ok) lo = mid; else hi = mid;
+    }
+    lastOk = lo; firstBad = hi;
+  }
+
+  // ---- outbound: can we send large packets? -------------------------------
+  // A big statement with a tiny reply. If this succeeds while the inbound test
+  // fails, only one direction is broken, which narrows down which device.
+  console.log(`[4] outbound — can we send the server large packets?`);
+  let outboundOk = true;
+  for (const n of [2000, 8192, 65536]) {
+    const r = await probe(box, `send ${n}`, `SELECT LENGTH('${'x'.repeat(n)}') AS n`, { ms: 5000, quiet: true });
+    console.log(`    ${String(n).padStart(7)} bytes   ${r.ok ? `ok   ${String(r.took).padStart(5)}ms` : `FAIL ${String(r.took ?? 0).padStart(5)}ms  never delivered`}`);
+    if (!r.ok) { outboundOk = false; break; }
   }
 
   // ---- correlate with the real thing --------------------------------------
-  console.log(`[4] the real query, by size`);
-  const rowResults = [];
+  console.log(`[5] the real query, by size`);
+  let lastGoodRows = 0;
   for (const lim of [1, 10, 50, 100, 500, 1756]) {
     const r = await probe(box, `LIMIT ${lim}`, `${AS_CSHARP} LIMIT ${lim}`, { ms: 6000, quiet: true });
     console.log(`    ${String(lim).padStart(7)} rows    ${r.ok ? `ok   ${String(r.took).padStart(5)}ms` : `FAIL ${String(r.took ?? 0).padStart(5)}ms  never arrived`}`);
-    rowResults.push({ lim, ...r });
-    if (!r.ok) break;
+    if (r.ok) lastGoodRows = lim; else break;
   }
   const app = await probe(box, 'app shape as shipped', AS_APP, { ms: Math.min(APP_TIMEOUT, 15000) });
 
   // ---- verdict -------------------------------------------------------------
   console.log(`\n=== verdict ===`);
   if (firstBad && lastOk) {
-    console.log(`Replies up to ${lastOk} bytes arrive; ${firstBad} bytes never does. The server is`);
-    console.log(`not slow — it answers a small question instantly and a large one not at all.`);
+    const mss  = lastOk + PAYLOAD_OVERHEAD;      // largest reply that got through
+    const pmtu = mss + TCPIP;                    // ...as an IP packet
+    const safe = Math.max(1280, Math.floor(pmtu / 20) * 20 - 20);
+    console.log(`Replies of ${lastOk} bytes arrive in milliseconds; ${firstBad} bytes never arrive at all.`);
+    console.log(`The server is not slow — it answers a small question instantly and a large`);
+    console.log(`one not at all. Nothing about the view, the sort or the row count matters;`);
+    console.log(`only the size of the answer does.`);
     console.log(``);
-    console.log(`That is a path-MTU black hole between this container and ${cfg.host}:`);
-    console.log(`something in the path takes a smaller MTU than the ${localMtus()} above, and the`);
-    console.log(`ICMP that would tell TCP to shrink its segments is being dropped, so every`);
-    console.log(`full-size segment is retransmitted forever. Small results fit in one segment`);
-    console.log(`and get through; the ${rowResults.find(r => !r.ok)?.lim ?? 'full'}-row result does not.`);
+    console.log(`That is a path-MTU black hole between this container and ${cfg.host}. This`);
+    console.log(`container advertises an MSS of ${MTU.primary - TCPIP} (${MTU.name} MTU ${MTU.primary}), so the server sends`);
+    console.log(`full-size segments; something in the path cannot carry them and drops them,`);
+    console.log(`and the ICMP "fragmentation needed" that would tell TCP to send less is being`);
+    console.log(`dropped too, so it retransmits the same oversized segment until the client`);
+    console.log(`gives up. Largest reply that survives: ~${mss} bytes of TCP payload, so the real`);
+    console.log(`path MTU is about ${pmtu} bytes.`);
     console.log(``);
-    console.log(`Fix it in the network, not the query. Lower the MTU on the Docker network`);
-    console.log(`that simorgh-soft is on (app_net) to just under the cutoff, e.g.`);
+    console.log(`It is NOT an IP block or a MySQL limit: the handshake, SELECT 1, COUNT(*) and`);
+    console.log(`${lastGoodRows} rows of the real query all succeed on this same connection. A block`);
+    console.log(`would refuse the connection; max_allowed_packet would return an error, not`);
+    console.log(`silence. ${outboundOk ? 'Large packets we send arrive fine, so only the\n   server-to-container direction is affected.' : 'Large packets we send do not arrive\n   either, so both directions are affected.'}`);
+    console.log(``);
+    console.log(`Fix it in the network, not the query. On app_net in simorgh-agent/compose:`);
     console.log(``);
     console.log(`  networks:`);
     console.log(`    app_net:`);
+    console.log(`      name: simorgh_app_net`);
+    console.log(`      driver: bridge`);
     console.log(`      driver_opts:`);
-    console.log(`        com.docker.network.driver.mtu: "${Math.max(576, lastOk <= 1400 ? 1400 : 1450)}"`);
+    console.log(`        com.docker.network.driver.mtu: "${safe}"`);
     console.log(``);
-    console.log(`Recreating the network is required for that to take effect. The durable fix`);
-    console.log(`is to stop dropping ICMP type 3 code 4 on the path, or to clamp MSS to PMTU`);
-    console.log(`on the host's forwarding rules.`);
+    console.log(`A lower MTU makes this container advertise a smaller MSS in its SYN, which is`);
+    console.log(`what stops the server sending segments the path cannot carry. The network has`);
+    console.log(`to be recreated for it to take effect (docker compose down && up -d), since`);
+    console.log(`driver options are fixed when the network is created.`);
+    console.log(``);
+    console.log(`The durable fix belongs to whoever owns the path: stop dropping ICMP type 3`);
+    console.log(`code 4, or clamp MSS to PMTU on the device in between.`);
   } else if (app.ok) {
-    console.log(`Everything completed, including the app's own query (${app.took}ms). Whatever`);
-    console.log(`was wrong is not reproducing right now — re-run this while the picker fails.`);
+    console.log(`Everything completed, the app's own query included (${app.took}ms). Whatever was`);
+    console.log(`wrong is not reproducing right now — re-run this while the picker fails.`);
   } else {
-    console.log(`Payload size is not the variable: replies of every size above arrived, yet the`);
-    console.log(`real query still did not. Look again at the thread state and at whether the`);
-    console.log(`failure tracks row count rather than bytes.`);
+    console.log(`Replies of every size arrived, yet the real query did not, so payload size is`);
+    console.log(`not the variable after all. Re-check the server-side thread state.`);
   }
   console.log('');
   await box.reset();
