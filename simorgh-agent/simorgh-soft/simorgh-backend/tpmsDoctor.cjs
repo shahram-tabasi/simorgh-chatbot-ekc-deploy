@@ -2,29 +2,27 @@
 /**
  * tpmsDoctor — why is /api/tpms/* timing out?
  *
- * A "Query inactivity timeout" tells you the query never answered, but not
- * why. There are three quite different causes and they need different fixes:
+ * A "Query inactivity timeout" only says the query never answered. This opens
+ * its own fresh connection (so the app's pool is out of the picture) and walks
+ * a ladder of probes, from "can we reach the host" up to the exact statement
+ * /api/tpms/projects runs, timing each one and asking MySQL what the thread is
+ * doing while it waits. Where the ladder stops, and what the server says the
+ * thread's state is, names the cause:
  *
- *   1. the socket is dead        — the network path drops idle flows
- *   2. the server is blocked     — the query waits on a lock
- *   3. the view is genuinely slow — it really does take longer than the timeout
+ *   stops at [1]/[2]        network or credentials
+ *   everything fast         the app's pooled socket was the problem, not the DB
+ *   COUNT(*) slow           the view itself is expensive to materialise
+ *   only ORDER BY slow      the sort is the cost — drop it, sort in Node
+ *   "Waiting for table
+ *    metadata lock"         something else is holding the base tables
  *
- * This opens its own fresh connection, so it sees none of the app's pooled
- * sockets. Read it against the app's behaviour:
+ * CommonJS (.cjs) on purpose: the backend is ESM and this runs as a one-off.
  *
- *   app fails, doctor passes quickly  → (1), stale pooled socket
- *   both hang, other queries fine     → (2), check the blocked-thread list
- *   both slow by the same amount      → (3), the view needs work or more time
- *
- * CommonJS (.cjs) on purpose: the backend is ESM, and this has to run as a
- * one-off inside the container without tripping over that.
- *
- * Run:  docker compose cp <this file> simorgh-soft:/tmp/tpmsDoctor.cjs
+ * Run:  docker compose cp simorgh-soft/simorgh-backend/tpmsDoctor.cjs \
+ *         simorgh-soft:/tmp/tpmsDoctor.cjs
  *       docker compose exec simorgh-soft node /tmp/tpmsDoctor.cjs
  */
 const net = require('net');
-
-// Resolved from /app, not from wherever this file was dropped.
 const mysql = require('/app/node_modules/mysql2/promise');
 
 const cfg = {
@@ -36,103 +34,173 @@ const cfg = {
   connectTimeout: 15000,
 };
 
-// Character for character what /api/tpms/projects runs.
-const PROJECT_LIST = `
+const APP_TIMEOUT  = Number(process.env.TPMS_QUERY_TIMEOUT_MS || 60000);
+// Each probe is bounded so a hang costs one probe, not the whole run.
+const PROBE_MS     = Number(process.env.DOCTOR_PROBE_MS || 30000);
+
+const VIEW = 'View_Project_Main';
+
+// What Eplanix's C# effectively sends: three columns, no sort.
+const AS_CSHARP = `SELECT IDProjectMain, OENUM, Project_Name FROM ${VIEW}`;
+// What /api/tpms/projects sends today.
+const AS_APP = `
   SELECT IDProjectMain AS value,
          COALESCE(OENUM, '') AS code,
          COALESCE(Project_Name, '') AS name,
          CONCAT(COALESCE(OENUM, ''), ' ', COALESCE(Project_Name, '')) AS text
-  FROM View_Project_Main
+  FROM ${VIEW}
   ORDER BY Project_Name`;
+// The same minus the sort, to price the ORDER BY on its own.
+const AS_APP_NO_SORT = AS_APP.replace(/\s*ORDER BY Project_Name\s*$/, '');
 
-const APP_TIMEOUT = Number(process.env.TPMS_QUERY_TIMEOUT_MS || 60000);
-const since = t => `${Date.now() - t}ms`;
-
-/** Can we even open a TCP socket? Separates "network" from "MySQL". */
 function tcpProbe(host, port, ms = 10000) {
   return new Promise(resolve => {
-    const started = Date.now();
+    const t = Date.now();
     const sock = new net.Socket();
-    const done = outcome => {
-      sock.destroy();
-      resolve({ ...outcome, ms: Date.now() - started });
-    };
+    const done = o => { sock.destroy(); resolve({ ...o, ms: Date.now() - t }); };
     sock.setTimeout(ms);
     sock.once('connect', () => done({ ok: true }));
-    sock.once('timeout', () => done({ ok: false, why: 'no SYN-ACK (silently dropped — firewall or wrong route)' }));
-    sock.once('error', e => done({ ok: false, why: `${e.code || e.message}` }));
+    sock.once('timeout', () => done({ ok: false, why: 'no SYN-ACK (silently dropped)' }));
+    sock.once('error', e => done({ ok: false, why: e.code || e.message }));
     sock.connect(port, host);
   });
 }
 
+/** Poll SHOW PROCESSLIST on a second connection and report our thread's state
+ *  as it changes — "Creating sort index", "Sending data", "Waiting for table
+ *  metadata lock" are each a different diagnosis. Best-effort: needs PROCESS. */
+function watchThread(watchConn, threadId, into) {
+  let last = null;
+  const timer = setInterval(() => {
+    watchConn.query({ sql: 'SHOW PROCESSLIST', timeout: 5000 }).then(([rows]) => {
+      const me = rows.find(r => Number(r.Id) === Number(threadId));
+      if (!me) return;
+      const state = String(me.State || '-');
+      if (state !== last) {
+        last = state;
+        // Collected, not printed: this probe's result line is not written yet,
+        // and interleaving the two makes the output unreadable once piped.
+        into.push(`         ├─ ${String(me.Time).padStart(3)}s  ${state}`);
+      }
+    }).catch(() => { /* best effort */ });
+  }, 2000);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+async function probe(conn, watchConn, threadId, label, sql, { ms = PROBE_MS, show } = {}) {
+  const seen = [];
+  const stop = watchConn && threadId ? watchThread(watchConn, threadId, seen) : () => {};
+  const t = Date.now();
+  try {
+    const [rows] = await conn.query({ sql, timeout: ms });
+    stop();
+    const took = Date.now() - t;
+    const n = Array.isArray(rows) ? rows.length : 0;
+    console.log(`    ${label.padEnd(32)}ok    ${String(took).padStart(6)}ms  ${n} row(s)`);
+    seen.forEach(l => console.log(l));
+    if (show) show(rows);
+    return { ok: true, took, rows };
+  } catch (e) {
+    stop();
+    const took = Date.now() - t;
+    console.log(`    ${label.padEnd(32)}FAIL  ${String(took).padStart(6)}ms  ${e.code || ''} ${e.message}`);
+    seen.forEach(l => console.log(l));
+    return { ok: false, took };
+  }
+}
+
 (async () => {
   console.log(`\n=== TPMS doctor ===`);
-  console.log(`target : ${cfg.user}@${cfg.host}:${cfg.port}/${cfg.database}`);
-  console.log(`app gives up after TPMS_QUERY_TIMEOUT_MS=${APP_TIMEOUT}ms\n`);
+  console.log(`target        : ${cfg.user}@${cfg.host}:${cfg.port}/${cfg.database}`);
+  console.log(`app timeout   : TPMS_QUERY_TIMEOUT_MS=${APP_TIMEOUT}ms`);
+  console.log(`probe timeout : ${PROBE_MS}ms each\n`);
 
   const tcp = await tcpProbe(cfg.host, cfg.port);
-  console.log(tcp.ok
-    ? `[1] TCP connect            ok (${tcp.ms})`
-    : `[1] TCP connect            FAILED after ${tcp.ms} — ${tcp.why}`);
+  console.log(tcp.ok ? `[1] TCP connect            ok (${tcp.ms}ms)`
+                     : `[1] TCP connect            FAILED after ${tcp.ms}ms — ${tcp.why}`);
   if (!tcp.ok) {
-    console.log(`\n→ The container cannot reach the TPMS host. This is a network/firewall`);
-    console.log(`  problem, not an application one. Nothing in the backend can fix it.`);
+    console.log(`\n→ The container cannot reach the TPMS host: network/firewall, not the app.\n`);
     process.exit(1);
   }
 
-  let conn;
+  let conn, watchConn;
   let t = Date.now();
   try {
     conn = await mysql.createConnection(cfg);
-    console.log(`[2] MySQL handshake        ok (${since(t)})`);
+    console.log(`[2] MySQL handshake        ok (${Date.now() - t}ms)`);
   } catch (e) {
-    console.log(`[2] MySQL handshake        FAILED after ${since(t)} — ${e.code || ''} ${e.message}`);
-    console.log(`\n→ TCP works but MySQL refused the login. Check MYSQL_USER / MYSQL_PASSWORD`);
-    console.log(`  and that the account is allowed to connect from this container's IP.`);
+    console.log(`[2] MySQL handshake        FAILED after ${Date.now() - t}ms — ${e.code || ''} ${e.message}`);
+    console.log(`\n→ TCP works, login does not. Check MYSQL_USER / MYSQL_PASSWORD and that the`);
+    console.log(`  account may connect from this container's address.\n`);
     process.exit(1);
   }
 
-  t = Date.now();
-  await conn.query({ sql: 'SELECT 1', timeout: 15000 });
-  console.log(`[3] SELECT 1               ok (${since(t)})`);
-
-  // Anything already stuck server-side? Needs PROCESS privilege; not fatal.
+  // Second connection purely to observe the first one's thread.
+  let threadId = null;
   try {
-    const [threads] = await conn.query({ sql: 'SHOW FULL PROCESSLIST', timeout: 15000 });
-    const stuck = threads.filter(p => p.Command === 'Query' && Number(p.Time) > 5);
-    console.log(`[4] server threads         ${threads.length} total, ${stuck.length} running a query >5s`);
-    for (const p of stuck.slice(0, 8)) {
-      console.log(`      #${p.Id}  ${p.Time}s  ${p.State || '-'}  ${String(p.Info || '').replace(/\s+/g, ' ').slice(0, 100)}`);
-    }
-    if (stuck.length) {
-      console.log(`    → queries piling up like this is cause (2): something is holding a lock.`);
-    }
-  } catch (e) {
-    console.log(`[4] server threads         skipped (${e.code || e.message})`);
-  }
+    const [[row]] = await conn.query('SELECT CONNECTION_ID() AS id');
+    threadId = row.id;
+    watchConn = await mysql.createConnection(cfg);
+  } catch { /* observation is optional */ }
 
-  // The real thing. Given room to finish so we learn how long it actually takes.
-  t = Date.now();
-  try {
-    const [rows] = await conn.query({ sql: PROJECT_LIST, timeout: Math.max(APP_TIMEOUT * 3, 180000) });
-    const took = Date.now() - t;
-    console.log(`[5] View_Project_Main      ${rows.length} rows in ${took}ms`);
-    if (took > APP_TIMEOUT) {
-      console.log(`\n→ Cause (3): the view is slower than the app's ${APP_TIMEOUT}ms budget on a`);
-      console.log(`  healthy connection. Raise TPMS_QUERY_TIMEOUT_MS, or drop the ORDER BY`);
-      console.log(`  (the C# does not sort) and sort the few hundred rows in Node instead.`);
-    } else {
-      console.log(`\n→ The query is fine (${took}ms) on a connection opened just now, yet the`);
-      console.log(`  app times out at ${APP_TIMEOUT}ms. That is cause (1): the app is being`);
-      console.log(`  handed a pooled socket that died while idle. The keepalive +`);
-      console.log(`  ping-before-use change on this branch is the fix.`);
-    }
-  } catch (e) {
-    console.log(`[5] View_Project_Main      FAILED after ${since(t)} — ${e.code || ''} ${e.message}`);
-    console.log(`\n→ It fails on a brand-new connection too, so this is not the pool. Look at`);
-    console.log(`  the thread list above, and at whether the view's base tables are locked.`);
-  }
+  console.log(`[3] the view`);
+  await probe(conn, null, null, 'SHOW CREATE VIEW', `SHOW CREATE VIEW ${VIEW}`, {
+    ms: 10000,
+    show: rows => {
+      const def = rows?.[0]?.['Create View'] || '';
+      const body = def.replace(/^.*?\bAS\b\s*/is, '').replace(/\s+/g, ' ');
+      const joins = (body.match(/\bjoin\b/gi) || []).length;
+      const subq  = (body.match(/\bselect\b/gi) || []).length - 1;
+      const algo  = /ALGORITHM\s*=\s*(\w+)/i.exec(def)?.[1] || 'UNDEFINED';
+      console.log(`         algorithm=${algo}  joins=${joins}  subselects=${subq}  length=${body.length} chars`);
+      console.log(`         ${body.slice(0, 600)}${body.length > 600 ? ' …' : ''}`);
+    },
+  });
 
-  await conn.end();
+  console.log(`[4] timing ladder`);
+  const count  = await probe(conn, watchConn, threadId, 'COUNT(*) over the view', `SELECT COUNT(*) AS n FROM ${VIEW}`, {
+    show: rows => console.log(`         ${rows[0].n} rows in the view`),
+  });
+  const one    = await probe(conn, watchConn, threadId, 'first row only (LIMIT 1)', `${AS_CSHARP} LIMIT 1`);
+  const csharp = await probe(conn, watchConn, threadId, "C# shape (no ORDER BY)", AS_CSHARP);
+  const nosort = await probe(conn, watchConn, threadId, 'app shape, no ORDER BY', AS_APP_NO_SORT);
+  const app    = await probe(conn, watchConn, threadId, 'app shape as shipped', AS_APP, { ms: Math.max(PROBE_MS, APP_TIMEOUT + 5000) });
+
+  console.log(`[5] plan`);
+  await probe(conn, null, null, 'EXPLAIN app shape', `EXPLAIN ${AS_APP}`, {
+    ms: 10000,
+    show: rows => rows.forEach(r =>
+      console.log(`         ${String(r.select_type || '').padEnd(12)} ${String(r.table || '').padEnd(24)} ` +
+                  `type=${String(r.type || '-').padEnd(8)} rows=${String(r.rows ?? '-').padStart(8)} ${r.Extra || ''}`)),
+  });
+
+  // ---- verdict -------------------------------------------------------------
+  console.log(`\n=== verdict ===`);
+  if (app.ok && app.took < 1000) {
+    console.log(`The query is fast (${app.took}ms) on a connection opened just now. The DB is`);
+    console.log(`not the problem — the app was being handed a bad pooled socket.`);
+  } else if (!count.ok || count.took > 5000) {
+    console.log(`Materialising the view is itself slow (COUNT(*) ${count.ok ? count.took + 'ms' : 'did not finish'}).`);
+    console.log(`No rewrite of the SELECT will help much: the cost is inside ${VIEW}.`);
+    console.log(`Look at the EXPLAIN above for the base table with the largest "rows" and no`);
+    console.log(`index (type=ALL), and at the thread states printed during the ladder.`);
+  } else if (app.ok && nosort.ok && app.took > nosort.took * 2) {
+    console.log(`The view is fine; the ORDER BY is the cost (${nosort.took}ms → ${app.took}ms).`);
+    console.log(`The C# does not sort at all. Drop ORDER BY Project_Name from SQL.projectList`);
+    console.log(`and sort the ${count.rows?.[0]?.n ?? 'few hundred'} rows in Node instead.`);
+  } else if (csharp.ok && !app.ok) {
+    console.log(`The C# shape completes (${csharp.took}ms) but the app's does not. The extra`);
+    console.log(`COALESCE/CONCAT/ORDER BY is what tips it over. Select the plain columns and`);
+    console.log(`build "text" in Node.`);
+  } else {
+    console.log(`Nothing completed within ${PROBE_MS}ms. Check the thread states printed above:`);
+    console.log(`"Waiting for table metadata lock" means something else holds the base tables;`);
+    console.log(`"Sending data"/"Copying to tmp table" means the view is genuinely this slow.`);
+  }
   console.log('');
+
+  await conn.end().catch(() => {});
+  await watchConn?.end().catch(() => {});
+  process.exit(0);
 })().catch(e => { console.error('doctor failed:', e); process.exit(1); });
