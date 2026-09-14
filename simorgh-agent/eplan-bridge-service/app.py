@@ -242,25 +242,46 @@ async def _send_to_eplan(host: str, port: int, data: List[Dict]) -> Dict:
         writer.write(length_prefix + json_bytes)
         await writer.drain()
 
-        # Receive response: 4-byte length + payload
-        length_data = await asyncio.wait_for(reader.readexactly(4), timeout=TCP_TIMEOUT)
-        response_length = struct.unpack("<I", length_data)[0]
-
-        response_data = b""
-        while len(response_data) < response_length:
-            chunk = await asyncio.wait_for(
-                reader.read(min(4096, response_length - len(response_data))),
-                timeout=TCP_TIMEOUT,
-            )
-            if not chunk:
-                break
-            response_data += chunk
+        # Receive the response. The protocol is asymmetric: the REQUEST is
+        # length-prefixed (HandleClientAsync reads a 4-byte prefix before the
+        # payload), the RESPONSE is not. The server serializes its
+        # ServerResponse, writes those bytes straight onto the socket and
+        # closes — and Eplanix's own client reads it with a single unframed
+        # ReadAsync (SendToEplanServerAsync), no prefix anywhere.
+        #
+        # Reading 4 bytes as a length here ate the first four characters of
+        # that JSON — b'{"Co' — read them back as a 1.74 GB little-endian
+        # length, waited for the close, and then tried to parse what was left,
+        # b'ntent":...'. That is a JSON document starting at 'n', which fails
+        # at character 0 and reached the user as "Expecting value: line 1
+        # column 1 (char 0)" — long after EPLAN had already done the work.
+        #
+        # read() with no size reads to EOF, which is exactly the frame here:
+        # the server closes in its finally block once the reply is written.
+        response_data = await asyncio.wait_for(reader.read(), timeout=TCP_TIMEOUT)
 
         writer.close()
         await writer.wait_closed()
 
-        # Parse response
-        response_json = json.loads(response_data.decode("utf-8"))
+        if not response_data.strip():
+            return {
+                "status": "error",
+                "error": "EPLAN closed the connection without sending a response.",
+            }
+
+        try:
+            response_json = json.loads(response_data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            # Worth quoting: the drawing may well have been generated, and
+            # what failed is only reading the confirmation.
+            return {
+                "status": "error",
+                "error": (
+                    f"EPLAN's reply was not JSON ({exc}). "
+                    f"First bytes: {response_data[:200]!r}"
+                ),
+            }
+
         return {"status": "ok", "response": response_json}
 
     except asyncio.TimeoutError:
