@@ -7,6 +7,7 @@ import { usePanel } from '../../context/PanelsContext';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
 import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';
 import { useProject } from '../../context/ProjectContext';
+import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/simarisImport';
 
 // ===== PROPS INTERFACES =====
 interface DeviceTableProps {
@@ -889,6 +890,73 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const [excelReadAt, setExcelReadAt] = useState<Date | null>(null);
   const [excelNote, setExcelNote] = useState<string | null>(null);
 
+  // ── SIMARIS feeder list → MODULE NO. ──────────────────────────────────────
+  //
+  // Nothing is written until the report below has been looked at: the whole
+  // point of the report is that a mismatch here is usually a data problem
+  // worth fixing at the source, not something to paper over silently.
+  const [simarisReport, setSimarisReport] = useState<
+    { fileName: string; match: SimarisMatch; sections: number; total: number } | null
+  >(null);
+  const simarisInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportSimaris = () => {
+    if (!selectedEquipment) {
+      alert('Please select an equipment first!');
+      return;
+    }
+    simarisInputRef.current?.click();
+  };
+
+  const readSimarisFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = event => {
+      try {
+        const data = new Uint8Array(event.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        // header:1 gives raw rows, which is what the parser wants: a SIMARIS
+        // file has a title block above its header row, and more than one
+        // header when it holds more than one switchboard, so there is no
+        // single header for sheet_to_json to key on.
+        const grid = XLSX.utils.sheet_to_json<string[]>(sheet, {
+          header: 1, defval: '', raw: false, blankrows: true,
+        });
+        const parsed = parseSimarisRows(grid as string[][]);
+        if (parsed.feeders.length === 0) {
+          alert(
+            'No feeders found in that file.\n\n' +
+            'A SIMARIS feeder list needs the columns "Feeder name", "Cubicle name" ' +
+            'and "Location". Rows without a feeder name (SPACE, empty compartments) ' +
+            'are skipped on purpose.'
+          );
+          return;
+        }
+        setSimarisReport({
+          fileName: file.name,
+          match: matchSimarisToRows(parsed, rows),
+          sections: parsed.sections,
+          total: parsed.feeders.length,
+        });
+      } catch (error) {
+        console.error('SIMARIS import error:', error);
+        alert('Could not read that file. It should be the SIMARIS feeder-list export (.xlsx or .csv).');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  /** Apply only the rows the report listed as updates. */
+  const applySimaris = () => {
+    if (!simarisReport) return;
+    const byId = new Map(simarisReport.match.updates.map(u => [u.rowId, u.moduleNo]));
+    setRows(rows.map(r => (byId.has(r.id) ? { ...r, moduleNo: byId.get(r.id)! } : r)));
+    setExcelNote(
+      `MODULE NO. filled from ${simarisReport.fileName} — ${simarisReport.match.updates.length} row(s)`
+    );
+    setSimarisReport(null);
+  };
+
   const handleImportExcel = async () => {
     if (!selectedEquipment) {
       alert('Please select an equipment first!');
@@ -1103,6 +1171,154 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         style={{ display: 'none' }}
         onChange={handleFileUpload}
       />
+      <input
+        ref={simarisInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        style={{ display: 'none' }}
+        onChange={e => {
+          const file = e.target.files?.[0];
+          // Cleared so choosing the same file twice still fires onChange.
+          e.target.value = '';
+          if (file) readSimarisFile(file);
+        }}
+      />
+
+      {/* ── SIMARIS import report ────────────────────────────────────────────
+          Shown before anything is written. A feeder in the table but not in
+          the SIMARIS file needs no correction and is listed only so the count
+          adds up; the two duplicate cases do need one, because a feeder that
+          appears twice has no single cubicle to take MODULE NO. from, and
+          nothing is written for those rows either way. */}
+      {simarisReport && (() => {
+        const m = simarisReport.match;
+        const blocking = m.duplicateInSimaris.length > 0 || m.duplicateInTable.length > 0;
+        const Row: React.FC<{ tone: string; title: string; body: React.ReactNode }> = ({ tone, title, body }) => (
+          <div className={`rounded border px-3 py-2 text-sm ${tone}`}>
+            <p className="font-medium mb-0.5">{title}</p>
+            <div className="text-xs leading-relaxed">{body}</div>
+          </div>
+        );
+        return createPortal(
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[10000] p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+              <div className="flex items-center justify-between px-4 py-3 border-b">
+                <div>
+                  <h3 className="font-semibold text-gray-800">Import from SIMARIS</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {simarisReport.fileName} — {simarisReport.total} feeder(s)
+                    {simarisReport.sections > 1 && ` across ${simarisReport.sections} switchboards`}
+                  </p>
+                </div>
+                <button className="p-1 hover:bg-gray-100 rounded" onClick={() => setSimarisReport(null)}>
+                  <XIcon className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-2 overflow-y-auto">
+                <Row tone="bg-emerald-50 border-emerald-200 text-emerald-900"
+                  title={`${m.updates.length} row(s) will get a MODULE NO.`}
+                  body={m.updates.length === 0
+                    ? 'Nothing to write.'
+                    : (
+                      <table className="w-full">
+                        <tbody>
+                          {m.updates.slice(0, 12).map(u => (
+                            <tr key={u.rowId}>
+                              <td className="pr-3 font-mono">{u.feederNo}</td>
+                              <td className="pr-2 text-emerald-700/60">{u.previous || '—'} →</td>
+                              <td className="font-mono font-medium">{u.moduleNo}</td>
+                            </tr>
+                          ))}
+                          {m.updates.length > 12 && (
+                            <tr><td colSpan={3} className="pt-1 text-emerald-700/70">
+                              …and {m.updates.length - 12} more
+                            </td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    )} />
+
+                {m.unchanged > 0 && (
+                  <Row tone="bg-slate-50 border-slate-200 text-slate-700"
+                    title={`${m.unchanged} row(s) already correct`}
+                    body="MODULE NO. already holds the value SIMARIS gives. Left as they are." />
+                )}
+
+                {m.duplicateInTable.length > 0 && (
+                  <Row tone="bg-red-50 border-red-200 text-red-800"
+                    title={`${m.duplicateInTable.length} FEEDER NO. repeated in the table`}
+                    body={<>
+                      <span className="font-mono">{m.duplicateInTable.join(', ')}</span>
+                      <p className="mt-1">Each appears on more than one row, so there is no single
+                      row to put MODULE NO. on. Make them unique and import again — nothing is
+                      written for these.</p>
+                    </>} />
+                )}
+
+                {m.duplicateInSimaris.length > 0 && (
+                  <Row tone="bg-red-50 border-red-200 text-red-800"
+                    title={`${m.duplicateInSimaris.length} feeder(s) repeated inside the SIMARIS file`}
+                    body={<>
+                      <span className="font-mono">{m.duplicateInSimaris.join(', ')}</span>
+                      <p className="mt-1">The same feeder is listed twice with different cubicles.
+                      Correct the export and import again.</p>
+                    </>} />
+                )}
+
+                {m.onlyInSimaris.length > 0 && (
+                  <Row tone="bg-amber-50 border-amber-200 text-amber-900"
+                    title={`${m.onlyInSimaris.length} feeder(s) in SIMARIS with no row here`}
+                    body={<>
+                      <span className="font-mono">
+                        {m.onlyInSimaris.slice(0, 20).map(f => f.feederNo).join(', ')}
+                        {m.onlyInSimaris.length > 20 && ` …+${m.onlyInSimaris.length - 20}`}
+                      </span>
+                      <p className="mt-1">No FEEDER NO. in this table matches them, so they have
+                      nowhere to go. Usually the switchboard selected here is not the one the file
+                      was exported for.</p>
+                    </>} />
+                )}
+
+                {m.onlyInTable.length > 0 && (
+                  <Row tone="bg-slate-50 border-slate-200 text-slate-600"
+                    title={`${m.onlyInTable.length} row(s) not in the SIMARIS file`}
+                    body={<>
+                      <span className="font-mono">
+                        {m.onlyInTable.slice(0, 20).join(', ')}
+                        {m.onlyInTable.length > 20 && ` …+${m.onlyInTable.length - 20}`}
+                      </span>
+                      <p className="mt-1">Left untouched — this is not an error, SIMARIS simply has
+                      nothing to say about them.</p>
+                    </>} />
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 px-4 py-3 border-t bg-gray-50">
+                <span className="text-xs text-gray-500">
+                  {blocking
+                    ? 'Duplicates are skipped; everything else can still be applied.'
+                    : 'Only MODULE NO. is changed. No other column is touched.'}
+                </span>
+                <span className="flex gap-2">
+                  <button className="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-100"
+                    onClick={() => setSimarisReport(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="px-3 py-1.5 text-sm rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-40"
+                    disabled={m.updates.length === 0}
+                    onClick={applySimaris}
+                  >
+                    Apply to {m.updates.length} row(s)
+                  </button>
+                </span>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        );
+      })()}
 
       <div className="mb-4 flex justify-between items-center">
         <div>
@@ -1138,7 +1354,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               Behaviour to be specified; this just gets the button in place. */}
           <button
             className="px-3 py-1 bg-orange-600 text-white rounded text-sm hover:bg-orange-700"
-            onClick={() => alert('Import from SIMARIS — coming soon.')}
+            onClick={handleImportSimaris}
             title="Import a SIMARIS Excel export to pull MODULE NO. from"
           >
             <DownloadIcon className="w-4 h-4 inline mr-1" />
