@@ -40,6 +40,13 @@ interface PartInfo {
    * the row — which is what it always did.
    */
   symbolId?: string;
+  /** SIM-TABLE, typed by hand instead of the usual Order Number / Designation 3. */
+  simTableOverride?: string;
+  /** Manufacturer, typed by hand instead of read from the part. Dropped
+   *  whenever the part itself is replaced — handlePartSelect always builds a
+   *  fresh PartInfo, so a new part starts without this and falls back to its
+   *  own Manufacturer field. */
+  manufacturerOverride?: string;
 }
 
 interface TemplatePropertiesProps {
@@ -391,9 +398,9 @@ const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
                   <DetailRow label="Manufacturer" value={selectedPart.Manufacturer} highlight />
                   <DetailRow label="Supplier" value={selectedPart.Supplier} />
                   
-                  {/* Eplanix section with Order Number */}
+                  {/* SIM-TABLE section with Order Number */}
                   <div className="mt-4 border-t pt-3">
-                    <div className="text-sm font-semibold text-gray-700 mb-2">Order No.</div>
+                    <div className="text-sm font-semibold text-gray-700 mb-2">SIM-TABLE</div>
                     <DetailRow label="Order Number" value={selectedPart.OrderNumber} />
                     {/* Show Designation 3 if OrderNumber is empty, "-", or "_" */}
                     {(!selectedPart.OrderNumber || 
@@ -651,6 +658,31 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   const [renamingRow, setRenamingRow] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
 
+  // ── Manufacturer: read from the part(s), typed by hand when the pencil is
+  // clicked. One value per property row — editing it sets the same override
+  // on every part under that property, which is what the aggregate label
+  // already shows joined with " / ". Replacing a part drops its override
+  // (handlePartSelect always builds a fresh PartInfo), which is the point:
+  // a new part's own manufacturer wins over a stale manual edit.
+  const [editingManufacturer, setEditingManufacturer] = useState<string | null>(null);
+  const [manufacturerDraft, setManufacturerDraft] = useState('');
+
+  const commitManufacturer = (propertyName: string, value: string) => {
+    const currentProperty = properties[propertyName];
+    if (currentProperty) {
+      const trimmed = value.trim();
+      const updatedParts = currentProperty.parts.map(p => ({
+        ...p,
+        manufacturerOverride: trimmed || undefined,
+      }));
+      const updatedProperties = { ...properties, [propertyName]: { parts: updatedParts } };
+      setProperties(updatedProperties);
+      updateTemplate(template.id, updatedProperties);
+    }
+    setEditingManufacturer(null);
+    setManufacturerDraft('');
+  };
+
   const writeMetadata = (
     nextDisplayNames: Record<string, string>,
     nextLocked: string[]
@@ -847,7 +879,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                 Priority
               </th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-32">
-                Order No.
+                SIM-TABLE
               </th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-40">
                 Description
@@ -862,12 +894,15 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               const propertyValue = properties[property] || { parts: [] };
               const parts = propertyValue.parts || [];
 
-              // Distinct manufacturers under property name, joined with "/"
+              // Distinct manufacturers under property name, joined with "/" —
+              // a manual override on a part wins over its own Manufacturer
+              // field, until that part is replaced.
               const manufacturers = Array.from(new Set(
-                parts.map(p => p.fullData?.Manufacturer)
+                parts.map(p => p.manufacturerOverride ?? p.fullData?.Manufacturer)
                      .filter((m: any): m is string => Boolean(m && String(m).trim()))
               ));
               const manufacturerLabel = manufacturers.join(' / ');
+              const hasManufacturerOverride = parts.some(p => p.manufacturerOverride !== undefined);
 
               const displayLabel = getDisplayName(property);
               // For LV and MV, all rows are renamable (including fixed rows)
@@ -927,9 +962,41 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                       )}
                     </div>
                   )}
-                  {manufacturerLabel && (
-                    <div className="text-[10px] font-normal text-gray-500 mt-0.5">
-                      {manufacturerLabel}
+                  {editingManufacturer === property ? (
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="Manufacturer…"
+                        className="flex-1 border border-gray-300 rounded px-1.5 py-0.5 text-[10px]"
+                        value={manufacturerDraft}
+                        onChange={(e) => setManufacturerDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitManufacturer(property, manufacturerDraft);
+                          if (e.key === 'Escape') { setEditingManufacturer(null); setManufacturerDraft(''); }
+                        }}
+                      />
+                      <button
+                        title="Save"
+                        className="text-green-600 hover:text-green-800"
+                        onClick={() => commitManufacturer(property, manufacturerDraft)}
+                      ><CheckIcon className="w-3.5 h-3.5" /></button>
+                      <button
+                        title="Cancel"
+                        className="text-gray-500 hover:text-gray-700"
+                        onClick={() => { setEditingManufacturer(null); setManufacturerDraft(''); }}
+                      ><XIcon className="w-3.5 h-3.5" /></button>
+                    </div>
+                  ) : (parts.length > 0) && (
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className={`text-[10px] font-normal ${hasManufacturerOverride ? 'text-blue-600' : 'text-gray-500'}`}>
+                        {manufacturerLabel || '—'}
+                      </span>
+                      <button
+                        title="Edit manufacturer"
+                        className="text-gray-400 hover:text-blue-600"
+                        onClick={() => { setEditingManufacturer(property); setManufacturerDraft(manufacturerLabel); }}
+                      ><Edit2Icon className="w-3 h-3" /></button>
                     </div>
                   )}
                 </div>
@@ -1029,18 +1096,23 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                             className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
                           />
                         </td>
-                        {/* Eplanix column: OrderNumber or Designation3 */}
+                        {/* SIM-TABLE: OrderNumber or Designation3, editable —
+                            a manual edit sticks until this part is replaced
+                            (handlePartSelect always builds a fresh PartInfo,
+                            which starts without simTableOverride). */}
                         <td className="px-4 py-2 border-b">
                           <PartCell
-                            label="Order No."
-                            source="Order Number, or Designation 3 where there is none"
+                            label="SIM-TABLE"
+                            onChange={v => handleUpdatePart(property, partIndex, 'simTableOverride', v)}
                             value={
-                              (part.fullData?.OrderNumber &&
-                               part.fullData.OrderNumber !== '-' &&
-                               part.fullData.OrderNumber !== '_' &&
-                               part.fullData.OrderNumber.trim() !== '')
-                                ? part.fullData.OrderNumber
-                                : (part.fullData?.Designation3 || '')
+                              part.simTableOverride !== undefined
+                                ? part.simTableOverride
+                                : (part.fullData?.OrderNumber &&
+                                   part.fullData.OrderNumber !== '-' &&
+                                   part.fullData.OrderNumber !== '_' &&
+                                   part.fullData.OrderNumber.trim() !== '')
+                                  ? part.fullData.OrderNumber
+                                  : (part.fullData?.Designation3 || '')
                             }
                             className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-blue-50"
                           />
