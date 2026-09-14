@@ -12,7 +12,7 @@ import {
   CircleDashedIcon, RulerIcon, ScissorsIcon, ArrowRightToLineIcon,
   CornerDownRightIcon, RotateCwIcon, FlipHorizontalIcon, FlipVerticalIcon,
   ScalingIcon, BringToFrontIcon, SendToBackIcon, TableIcon, RefreshCwIcon,
-  HashIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, SparklesIcon,
+  HashIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, SparklesIcon, PaletteIcon,
   AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
@@ -182,6 +182,9 @@ export const DrawingEditor: React.FC<Props> = ({
   const [drawLayer, setDrawLayer] = useState<Layer>('SYMBOL');
   const [drawWidth, setDrawWidth] = useState(1);
   const [drawLine, setDrawLine] = useState('solid');
+  // Empty means "whatever the layer says", which is the CAD default and what
+  // everything drawn so far has used.
+  const [drawColor, setDrawColor] = useState('#111827');
   const [textSize, setTextSize] = useState(9);
   const [objectSnap, setObjectSnap] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
@@ -1111,6 +1114,36 @@ export const DrawingEditor: React.FC<Props> = ({
         >
           {LINE_TYPES.map(l => <option key={l.id} value={l.id}>{T[l.name]}</option>)}
         </select>
+        {/* Colour. CAD takes an entity's colour from its layer, so this is an
+            SVG and PDF matter only and the DXF is unaffected — which is why it
+            sits here as a plain swatch rather than anywhere near the layer
+            controls. With something picked it recolours that; with nothing
+            picked it sets what is drawn next, the same way the width and line
+            type boxes beside it already behave. */}
+        <label
+          className="flex items-center gap-1 border border-gray-300 rounded px-1.5 py-1 bg-white cursor-pointer"
+          title={selection.size > 0 ? T.colourOfPicked : T.colourOfNew}
+        >
+          <PaletteIcon className="w-3.5 h-3.5 text-gray-500" />
+          <input
+            type="color"
+            className="w-6 h-5 border-0 bg-transparent p-0 cursor-pointer"
+            value={drawColor}
+            onChange={e => {
+              setDrawColor(e.target.value);
+              if (selection.size > 0) restyle({ color: e.target.value });
+            }}
+          />
+        </label>
+        {selection.size > 0 && (
+          <button
+            onClick={() => restyle({ color: '' })}
+            title={T.colourClear}
+            className="px-2 py-1.5 rounded border border-gray-300 bg-white text-xs text-gray-600 hover:bg-gray-100"
+          >
+            {T.colourClearShort}
+          </button>
+        )}
         {(tool === 'text' || tool === 'dim' || picked.some(p => p.t === 'text')) && (
           <select
             className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"

@@ -63,6 +63,7 @@ export interface Strings {
   tagDevices: string; tagDevicesTip: string; tagged: string; tagAllTagged: string;
   checks: string; checksTip: string; checksClean: string;
   xrefs: string; xrefOn: string;
+  colourOfPicked: string; colourOfNew: string; colourClear: string; colourClearShort: string;
   ask: string; askTip: string; askPlaceholder: string; askNote: string;
   askGo: string; askWorking: string; askDrew: string; askDrewSome: string; askFailed: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
@@ -149,6 +150,10 @@ const EN: Strings = {
   checksClean: 'Nothing to report on this sheet.',
   xrefs: 'Across sheets',
   xrefOn: 'on',
+  colourOfPicked: 'Colour of what is picked (SVG and PDF only — CAD takes colour from the layer)',
+  colourOfNew: 'Colour of what is drawn next',
+  colourClear: 'Back to the layer colour',
+  colourClearShort: 'Layer',
   ask: 'Draw for me',
   askTip: 'Describe a circuit and the local model drafts it onto this sheet',
   askPlaceholder: 'e.g. a motor starter: isolator, fuses, contactor, overload, motor — wired down the page',
@@ -329,6 +334,10 @@ const FA: Strings = {
   checksClean: 'در این شیت موردی برای گزارش نیست.',
   xrefs: 'در شیت‌های دیگر',
   xrefOn: 'در',
+  colourOfPicked: 'رنگ موارد انتخاب‌شده (فقط SVG و PDF — در CAD رنگ از لایه می‌آید)',
+  colourOfNew: 'رنگ چیزی که بعد کشیده می‌شود',
+  colourClear: 'بازگشت به رنگ لایه',
+  colourClearShort: 'لایه',
   ask: 'برایم بکش',
   askTip: 'مدار را توصیف کنید تا مدل محلی پیش‌نویس آن را روی این شیت بکشد',
   askPlaceholder: 'مثلاً: راه‌انداز موتور — کلید جداکننده، فیوز، کنتاکتور، بی‌متال، موتور، سیم‌کشی از بالا به پایین',
@@ -509,6 +518,10 @@ const TR: Strings = {
   checksClean: 'Bu sayfada bildirilecek bir şey yok.',
   xrefs: 'Diğer sayfalarda',
   xrefOn: 'sayfa',
+  colourOfPicked: 'Seçilenlerin rengi (yalnızca SVG ve PDF — CAD rengi katmandan alır)',
+  colourOfNew: 'Sonra çizilecek olanın rengi',
+  colourClear: 'Katman rengine dön',
+  colourClearShort: 'Katman',
   ask: 'Benim için çiz',
   askTip: 'Bir devre tarif edin, yerel model bu sayfaya taslağını çizsin',
   askPlaceholder: 'örn. motor yol vericisi: şalter, sigorta, kontaktör, termik, motor — yukarıdan aşağıya',

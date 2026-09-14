@@ -244,6 +244,13 @@ export const DrawingCanvas: React.FC<Props> = ({
     for (const i of selection) {
       const s = shapes[i];
       if (!s || offLimits.has(s.layer)) continue;
+      // A block is one object, so its pieces get no handles of their own.
+      // They used to: every line of a group carried its own grips, and
+      // grabbing one dragged that line out on its own — the group held
+      // together right up until you tried to move it, which is the worst
+      // moment to find out. Ungroup to edit the pieces; until then the body
+      // drag moves the whole thing.
+      if (s.block) continue;
       for (const grip of gripsOf(s)) out.push({ index: i, grip });
     }
     return out;
@@ -399,6 +406,11 @@ export const DrawingCanvas: React.FC<Props> = ({
 
   const panning = tool === 'pan' || space;
 
+  // Shift has always added to a selection here; Ctrl (and Cmd) is what most
+  // people reach for, and reaching for it used to throw the selection away.
+  const adds = (e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) =>
+    e.shiftKey || e.ctrlKey || e.metaKey;
+
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     // Without this the browser starts selecting the text of the panels either
     // side as soon as a rubber band leaves the canvas.
@@ -436,15 +448,15 @@ export const DrawingCanvas: React.FC<Props> = ({
     // A grip is taken before the shape it sits on: it is smaller, it is on
     // top, and it is what the pointer was aiming at.
     const held = gripAt(p.x, p.y);
-    if (held && !e.shiftKey) {
+    if (held && !adds(e)) {
       setDrag({ kind: 'grip', index: held.index, grip: held.grip.id, at: held.grip.at });
       return;
     }
 
     const hit = hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, offLimits);
     if (hit === null) {
-      setDrag({ kind: 'band', startX: p.x, startY: p.y, x: p.x, y: p.y, additive: e.shiftKey });
-      if (!e.shiftKey) onSelection(new Set());
+      setDrag({ kind: 'band', startX: p.x, startY: p.y, x: p.x, y: p.y, additive: adds(e) });
+      if (!adds(e)) onSelection(new Set());
       return;
     }
 
@@ -452,8 +464,8 @@ export const DrawingCanvas: React.FC<Props> = ({
     // whole block, which is what the eye picked and what the hand expects.
     const whole = withWholeBlocks(shapes, [hit]);
     const next = new Set(selection);
-    if (e.shiftKey) {
-      // Shift over any part of a block adds or drops the block entire.
+    if (adds(e)) {
+      // Shift or Ctrl over any part of a block adds or drops the block entire.
       if (next.has(hit)) whole.forEach(i => next.delete(i));
       else whole.forEach(i => next.add(i));
       onSelection(next);
