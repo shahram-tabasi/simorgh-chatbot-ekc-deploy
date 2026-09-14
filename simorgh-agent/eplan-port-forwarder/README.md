@@ -58,10 +58,20 @@ number on `127.0.0.1`. No parsing, no state — just a relay.
 
 ## Deploy it (on the EPLAN machine, via Docker Desktop)
 
+These files live in this repo, which is checked out on the Linux server —
+not on the EPLAN machine. Clone it there first (or copy this one directory
+across), then run from inside it:
+
 ```
-cd eplan-port-forwarder
+git clone <this repo> C:\simorgh
+cd C:\simorgh\simorgh-agent\eplan-port-forwarder
 docker compose up -d
 ```
+
+`docker compose up` builds from `python:3.11-slim`, so that machine needs to
+be able to pull from Docker Hub. If it cannot, or you would rather not put a
+container on that box at all, use the Windows port proxy below instead — it
+needs no files and no image.
 
 That's it — `TARGET_HOST` defaults to `host.docker.internal` (Docker
 Desktop's name for the Windows host it runs on), which is what
@@ -72,6 +82,45 @@ would just fail to reach anything. (Running `forwarder.py` directly on
 Windows instead of in a container is the one case where `127.0.0.1` is
 right, because then the loopback really is the host's.)
 
+## Or: Windows' own port proxy, with no files at all
+
+Windows ships a TCP port forwarder (`netsh interface portproxy`) that does
+the same byte-for-byte relay this container does. On the EPLAN machine it is
+the shortest path to a working bridge: nothing to clone, no image to pull,
+and the rules live in the registry so they survive a reboot on their own.
+
+In an **elevated** PowerShell:
+
+```powershell
+# portproxy is implemented by the IP Helper service
+Set-Service iphlpsvc -StartupType Automatic
+Start-Service iphlpsvc
+
+# one rule per port in the pool: real interface -> the loopback
+# AsyncTcpServer binds
+12000..12100 | ForEach-Object {
+  netsh interface portproxy add v4tov4 `
+    listenaddress=0.0.0.0 listenport=$_ `
+    connectaddress=127.0.0.1 connectport=$_ | Out-Null
+}
+
+netsh interface portproxy show v4tov4   # expect 101 rules
+```
+
+To undo it:
+
+```powershell
+12000..12100 | ForEach-Object {
+  netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=$_ | Out-Null
+}
+```
+
+The trade-off against the container: this is machine configuration rather
+than something in version control, so it has to be reapplied by hand if the
+box is rebuilt. Everything else about it is the same — a raw TCP relay that
+never looks at what it carries, which is why the firewall rule below matters
+just as much here.
+
 ## Firewall it
 
 This relay carries no authentication of its own — it can't, it doesn't
@@ -79,6 +128,19 @@ look at what it's carrying. Restrict the published ports (12000–12100 by
 default) with the Windows Firewall to the one address that should ever use
 them: the machine running `eplan-bridge-service`. Nothing else needs to
 reach this port range.
+
+Container traffic is source-NAT'd to its host, so the address to allow is
+the Linux server's own LAN address (`hostname -I` there), not a container
+address. In an elevated PowerShell on the EPLAN machine:
+
+```powershell
+New-NetFirewallRule -DisplayName "EPLAN TCP pool -> Simorgh bridge" `
+  -Direction Inbound -Protocol TCP -LocalPort 12000-12100 `
+  -RemoteAddress <the Linux server's LAN IP> -Action Allow
+```
+
+Check it took effect with `netstat -ano | findstr "12000"` — a listening
+socket on `0.0.0.0:12000` means the relay (either kind) is up.
 
 ## Point the bridge at it
 
