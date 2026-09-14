@@ -54,6 +54,7 @@ export interface Strings {
 
   // Style
   layerOf: string; widthOf: string; lineTypeOf: string; textHeightOf: string;
+  connect: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
 
@@ -116,6 +117,7 @@ export interface Strings {
 const EN: Strings = {
   select: 'Select', pan: 'Pan — or hold Space', line: 'Line',
   polyline: 'Polyline — Enter, right-click or double-click ends it',
+  connect: 'Connect — two points, wired square on the WIRE layer, with a dot where it taps an existing run',
   rect: 'Rectangle', circle: 'Circle — centre, then radius',
   ellipse: 'Ellipse — centre, then the two radii',
   arc: 'Arc — centre, start, then sweep', text: 'Text',
@@ -265,6 +267,7 @@ const EN: Strings = {
 const FA: Strings = {
   select: 'انتخاب', pan: 'جابه‌جایی نما — یا نگه‌داشتن Space', line: 'خط',
   polyline: 'چندخطی — با Enter، راست‌کلیک یا دابل‌کلیک تمام می‌شود',
+  connect: 'اتصال — دو نقطه، سیم گوشه‌دار روی لایهٔ WIRE، با نقطهٔ اتصال هرجا به سیم موجود بخورد',
   rect: 'مستطیل', circle: 'دایره — مرکز، سپس شعاع',
   ellipse: 'بیضی — مرکز، سپس دو شعاع',
   arc: 'کمان — مرکز، شروع، سپس مقدار جاروب', text: 'متن',
@@ -414,6 +417,7 @@ const FA: Strings = {
 const TR: Strings = {
   select: 'Seç', pan: 'Kaydır — ya da Space tuşunu basılı tutun', line: 'Çizgi',
   polyline: 'Çoklu çizgi — Enter, sağ tık veya çift tık bitirir',
+  connect: 'Bağlantı — iki nokta, WIRE katmanında dik kablo, mevcut hatta değdiği yere nokta',
   rect: 'Dikdörtgen', circle: 'Daire — merkez, sonra yarıçap',
   ellipse: 'Elips — merkez, sonra iki yarıçap',
   arc: 'Yay — merkez, başlangıç, sonra süpürme', text: 'Yazı',

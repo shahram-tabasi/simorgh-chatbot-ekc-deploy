@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { connectionRun } from '../../utils/cad/connect';
 import { Drawing, Layer, Pen, Pt, Shape } from '../../utils/cad/shapes';
 import {
   Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip, withWholeBlocks,
@@ -40,19 +41,19 @@ export interface Viewport { x: number; y: number; w: number; h: number }
  */
 export type Tool =
   | 'select' | 'pan'
-  | 'line' | 'polyline' | 'rect' | 'circle' | 'ellipse' | 'arc' | 'text' | 'dim'
+  | 'line' | 'polyline' | 'connect' | 'rect' | 'circle' | 'ellipse' | 'arc' | 'text' | 'dim'
   | 'trim' | 'extend' | 'corner';
 
 /** Tools that put something new on the sheet. */
 export const DRAWS: ReadonlySet<Tool> = new Set<Tool>(
-  ['line', 'polyline', 'rect', 'circle', 'ellipse', 'arc', 'text', 'dim']);
+  ['line', 'polyline', 'connect', 'rect', 'circle', 'ellipse', 'arc', 'text', 'dim']);
 
 /** Tools that operate on the shape they are clicked on. */
 export const PICKS: ReadonlySet<Tool> = new Set<Tool>(['trim', 'extend', 'corner']);
 
 /** How many points a tool needs before it has drawn something. */
 const NEEDS: Partial<Record<Tool, number>> = {
-  line: 2, rect: 2, circle: 2, ellipse: 2, arc: 3, dim: 3,
+  line: 2, connect: 2, rect: 2, circle: 2, ellipse: 2, arc: 3, dim: 3,
 };
 
 interface Props {
@@ -308,6 +309,13 @@ export const DrawingCanvas: React.FC<Props> = ({
       case 'polyline':
         if (pts.length < 2) return null;
         return [{ t: 'poly', pts: [...pts], ...pen }];
+      case 'connect':
+        if (!b) return null;
+        // Always on WIRE, whatever the layer box says: a connection is a
+        // connection, and having half of them land on SYMBOL because the bar
+        // was left somewhere else is the sort of thing nobody notices until
+        // the DXF is open at the customer's.
+        return connectionRun(a, b, { ...pen, layer: 'WIRE' }, shapes);
       case 'rect': {
         if (!b) return null;
         const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);

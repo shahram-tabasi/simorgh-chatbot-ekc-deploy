@@ -12,8 +12,7 @@ import {
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
   LanguagesIcon, CircleHelpIcon, LibraryBigIcon, GroupIcon, UngroupIcon,
-  SunIcon, MoonIcon,
-} from 'lucide-react';
+  SunIcon, MoonIcon, CableIcon } from 'lucide-react';
 import { DrawingEdits } from '../../types/project';
 import {
   Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Pt, Shape, layerColor,
@@ -100,6 +99,7 @@ const TOOLS: { id: Tool; name: ToolName; key: string; Icon: React.FC<{ className
   { id: 'pan', name: 'pan', key: 'H', Icon: HandIcon },
   { id: 'line', name: 'line', key: 'L', Icon: MinusIcon },
   { id: 'polyline', name: 'polyline', key: 'P', Icon: WaypointsIcon },
+  { id: 'connect', name: 'connect', key: 'N', Icon: CableIcon },
   { id: 'rect', name: 'rect', key: 'R', Icon: SquareIcon },
   { id: 'circle', name: 'circle', key: 'C', Icon: CircleIcon },
   { id: 'ellipse', name: 'ellipse', key: 'E', Icon: CircleDashedIcon },
