@@ -17,6 +17,7 @@
 // scaled, flipped, and centred on the smallest ISO sheet it fits.
 import { Drawing, LAYERS, Layer, Pt, Shape, flattenCurve, translateShape } from './shapes';
 import { MARGIN, Paper, PaperChoice, fitToNamedPaper, titleBlockBox } from './paper';
+import { hasHeader } from './header';
 
 // DXF text height is the cap height; SVG font-size is the em.
 const CAP_HEIGHT = 0.72;    // DXF text height is cap height; SVG font-size is the em
@@ -366,7 +367,9 @@ export function renderDxf(d: Drawing, options: DxfOptions = {}): string {
   t.pair(0, 'ENDSEC');
 
   t.pair(0, 'SECTION').pair(2, 'ENTITIES');
-  if (frame) drawFrame(t, paper, titleBlock, unicode);
+  // A sheet that carries its own header carries its own frame with it, and a
+  // second one round the outside would be a second frame, not a tidier one.
+  if (frame && !hasHeader(d.shapes)) drawFrame(t, paper, titleBlock, unicode);
   for (const s of loose) shapeToDxf(t, s, f, unicode);
   for (const [id, run] of blocks) {
     t.pair(0, 'INSERT').pair(8, run[0].layer).pair(2, blockNames.get(id)!)

@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tableShapes, replaceTable, tableOrigin, tableIdOf } from '../../utils/cad/table';
 import { checkSheet, Message } from '../../utils/cad/schematic';
 import { numberWires, autoTagDevices, crossReferences } from '../../utils/cad/annotate';
+import { HeaderFields, drawingAreas, hasHeader, sheetHeader, stripHeader } from '../../utils/cad/header';
 import {
   ZoomInIcon, ZoomOutIcon, MaximizeIcon, MousePointer2Icon, HandIcon,
   UndoIcon, RedoIcon, CopyIcon, Trash2Icon, GridIcon, RotateCcwIcon,
@@ -17,7 +18,7 @@ import {
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
   LanguagesIcon, CircleHelpIcon, LibraryBigIcon, GroupIcon, UngroupIcon,
-  SunIcon, MoonIcon, CableIcon } from 'lucide-react';
+  SunIcon, MoonIcon, CableIcon, FrameIcon } from 'lucide-react';
 import { DrawingEdits } from '../../types/project';
 import {
   Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Pt, Shape, layerColor,
@@ -34,7 +35,7 @@ import {
   AlignTo, EditResult, alignShapes, centreOf, cornerLines, distributeShapes,
   blocksOf, extendLine, groupShapes, lineFrom, lineMetrics, mirrorX, mirrorY,
   moveGrip, norm360, placeAsBlock, reorderShapes, rotation, scaling,
-  transformShapes, trimLine, ungroupShapes,
+  transformShapes, translation, trimLine, ungroupShapes,
 } from '../../utils/cad/geom';
 import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
 import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang';
@@ -529,6 +530,83 @@ export const DrawingEditor: React.FC<Props> = ({
     commit(r.shapes);
     setNotice(T.tagged.replace('{n}', String(r.tagged)));
   }, [shapes, textSize, commit, T]);
+
+  /**
+   * The frame, the zone grid and the title block, on or off.
+   *
+   * It goes on as ordinary geometry rather than as something the exporter adds
+   * at the last moment, which is what the old frame was. The difference shows
+   * up the moment anybody wants to use it: this one is on the screen while you
+   * draw, so you can see what the title block is about to cover; it comes out
+   * in the DXF as lines the customer can edit; and every cell in it is a text
+   * shape, so an empty DRAWN box is filled in by double-clicking it and
+   * typing a name, not by editing our source.
+   *
+   * Pressing it again takes it off, because a frame you cannot remove is a
+   * frame you will end up with two of.
+   */
+  const headerOn = useMemo(() => hasHeader(shapes), [shapes]);
+  const doHeader = useCallback(() => {
+    if (headerOn) { commit(stripHeader(shapes)); setNotice(null); return; }
+
+    const { width: W, height: H } = sheet.drawing;
+    const fields: HeaderFields = {
+      title: sheet.name,
+      // The lines the project already hands the exporter for its title block.
+      // First is the job, second whatever the job calls this document.
+      project: titleBlock[0] ?? '',
+      number: titleBlock[1] ?? '',
+      sheet: sheets.length > 1 ? `${index + 1} / ${sheets.length}` : '1 / 1',
+      size: paper === 'auto' ? '' : paper,
+      // A circuit diagram is not to scale and saying so is the honest entry;
+      // a layout drawing that is to scale can have this retyped.
+      scale: 'NTS',
+      date: new Date().toISOString().slice(0, 10),
+    };
+    // The sheet's own scale, so the frame plots at the millimetres a drawing
+    // standard names rather than at a size that only looks about right.
+    const style = { mmPerUnit };
+    const frameShapes = sheetHeader(W, H, fields, style);
+    if (frameShapes.length === 0) { setNotice(T.headerTooSmall); return; }
+
+    // The drawing has to end up inside the frame, and on a generated sheet it
+    // never does on its own: these sheets are drawn to fill the paper, so a
+    // title block dropped into the corner lands on the last feeder every time.
+    // Rather than leave someone to find that out at the plotter, the drawing is
+    // fitted into the larger of the two rectangles the title block leaves —
+    // one step of undo if it is not wanted.
+    const content = stripHeader(shapes);
+    const box = boundsOfAll(content);
+    const areas = drawingAreas(W, H, fields, style);
+    let fitted = content;
+    let percent = 100;
+    if (box && areas.length > 0 && box.w > 0 && box.h > 0) {
+      const outside = box.x < areas[0].x || box.y < areas[0].y
+        || !areas.some(a => box.x >= a.x && box.y >= a.y
+                         && box.x + box.w <= a.x + a.w && box.y + box.h <= a.y + a.h);
+      if (outside) {
+        // Never blown up, only brought in: a drawing enlarged to fill its frame
+        // is a drawing whose line weights and text no longer mean what they did.
+        const best = areas
+          .map(a => ({ a, k: Math.min(1, a.w / box.w, a.h / box.h) }))
+          .sort((p, q) => q.k - p.k)[0];
+        const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+        const every = content.map((_, i) => i);
+        const scaled = transformShapes(content, every, scaling(cx, cy, best.k));
+        const after = boundsOfAll(scaled)!;
+        fitted = transformShapes(scaled, every, translation(
+          best.a.x + best.a.w / 2 - (after.x + after.w / 2),
+          best.a.y + best.a.h / 2 - (after.y + after.h / 2),
+        ));
+        percent = Math.round(best.k * 100);
+      }
+    }
+
+    // The frame goes in front of the rest so it draws underneath: a frame over
+    // the geometry is a frame that hides a wire.
+    commit([...frameShapes, ...fitted]);
+    setNotice(percent < 100 ? T.headerFitted.replace('{n}', String(percent)) : null);
+  }, [headerOn, shapes, sheet, sheets.length, index, titleBlock, paper, mmPerUnit, commit, T]);
 
   /** Devices that appear on more than one sheet — a coil and its contacts. */
   const xrefs = useMemo(
@@ -1375,6 +1453,18 @@ export const DrawingEditor: React.FC<Props> = ({
           {ribbon === 'out' && (
             <>
               <RibbonPanel name={T.panSheet}>
+                {/* The frame and the title block. On the sheet, not bolted on
+                    by the exporter — so what is on the screen while you draw
+                    is what comes out of the plotter. */}
+                <Tool
+                  tag="header"
+                  label
+                  title={`${T.header} — ${headerOn ? T.headerOff : T.headerTip}`}
+                  active={headerOn}
+                  on={doHeader}
+                >
+                  <FrameIcon className="w-5 h-5" />
+                </Tool>
                 <select
                   className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
                   value={paper}

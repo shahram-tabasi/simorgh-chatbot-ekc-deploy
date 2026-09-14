@@ -68,6 +68,8 @@ export interface Strings {
   askGo: string; askWorking: string; askDrew: string; askDrewSome: string; askFailed: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
+  header: string; headerTip: string; headerOff: string; headerTooSmall: string;
+  headerFitted: string;
 
   // The ribbon — its tabs, and the caption under each group of commands
   tabHome: string; tabElectrical: string; tabOutput: string; tabView: string;
@@ -212,6 +214,11 @@ const EN: Strings = {
   solid: 'solid', dashed: 'dashed', dashDot: 'dash-dot', dotted: 'dotted',
   paperOf: "The sheet DXF and PDF are put on. 'Fit the drawing' keeps the scale and lets the sheet grow.",
   fitDrawing: 'fit the drawing',
+  header: 'Header',
+  headerTip: 'Frame, zone grid and title block, put on the sheet as real geometry: it draws, plots and exports like the rest of it, and any cell can be retyped',
+  headerOff: 'On the sheet. Press again to take the frame, the zone grid and the title block off.',
+  headerTooSmall: 'This sheet is too small to carry a frame.',
+  headerFitted: 'The drawing was brought down to {n}% to sit inside the frame. Undo if you would rather move it yourself.',
   tabHome: 'Home', tabElectrical: 'Electrical', tabOutput: 'Output', tabView: 'View',
   panDraw: 'Draw', panModify: 'Modify', panArrange: 'Arrange', panProps: 'Properties',
   panBlock: 'Block', panAnnotate: 'Annotate', panCheck: 'Check', panTable: 'Table',
@@ -401,6 +408,11 @@ const FA: Strings = {
   solid: 'ممتد', dashed: 'خط‌چین', dashDot: 'خط‌نقطه', dotted: 'نقطه‌چین',
   paperOf: 'کاغذی که DXF و PDF روی آن می‌نشیند. «اندازه نقشه» مقیاس را نگه می‌دارد و کاغذ را بزرگ می‌کند.',
   fitDrawing: 'اندازه نقشه',
+  header: 'هدر',
+  headerTip: 'کادر، شبکهٔ ناحیه‌بندی و جدول عنوان، به‌صورت هندسهٔ واقعی روی شیت: مثل بقیهٔ نقشه رسم و چاپ و خروجی می‌شود و هر خانه‌اش قابل بازنویسی است',
+  headerOff: 'روی شیت هست. دوباره بزنید تا کادر، ناحیه‌بندی و جدول عنوان برداشته شود.',
+  headerTooSmall: 'این شیت برای کادر گرفتن کوچک است.',
+  headerFitted: 'نقشه به {n}٪ کوچک شد تا داخل کادر جا بگیرد. اگر می‌خواهید خودتان جابه‌جا کنید، undo بزنید.',
   tabHome: 'خانه', tabElectrical: 'برق', tabOutput: 'خروجی', tabView: 'نما',
   panDraw: 'رسم', panModify: 'ویرایش', panArrange: 'چیدمان', panProps: 'ویژگی‌ها',
   panBlock: 'بلوک', panAnnotate: 'شماره‌گذاری', panCheck: 'بازبینی', panTable: 'جدول',
@@ -591,6 +603,11 @@ const TR: Strings = {
   solid: 'sürekli', dashed: 'kesikli', dashDot: 'çizgi-nokta', dotted: 'noktalı',
   paperOf: "DXF ve PDF'in oturacağı kâğıt. 'Çizime sığdır' ölçeği korur, kâğıdı büyütür.",
   fitDrawing: 'çizime sığdır',
+  header: 'Başlık',
+  headerTip: 'Çerçeve, bölge ızgarası ve başlık kartuşu, sayfaya gerçek geometri olarak: gerisi gibi çizilir, basılır, dışa aktarılır ve her hücresi yeniden yazılabilir',
+  headerOff: 'Sayfada. Çerçeveyi, bölge ızgarasını ve kartuşu kaldırmak için tekrar basın.',
+  headerTooSmall: 'Bu sayfa bir çerçeve taşıyacak kadar büyük değil.',
+  headerFitted: 'Çizim, çerçevenin içine sığması için %{n} oranına küçültüldü. Kendiniz taşımak isterseniz geri alın.',
   tabHome: 'Giriş', tabElectrical: 'Elektrik', tabOutput: 'Çıktı', tabView: 'Görünüm',
   panDraw: 'Çiz', panModify: 'Değiştir', panArrange: 'Diz', panProps: 'Özellikler',
   panBlock: 'Blok', panAnnotate: 'Etiketle', panCheck: 'Denetle', panTable: 'Tablo',

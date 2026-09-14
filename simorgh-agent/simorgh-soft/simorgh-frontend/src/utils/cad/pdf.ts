@@ -13,6 +13,7 @@ import { jsPDF } from 'jspdf';
 import { Drawing, Shape, flattenCurve } from './shapes';
 import { onArc } from './svg';
 import { MARGIN, Paper, PaperChoice, fitToNamedPaper, titleBlockBox } from './paper';
+import { hasHeader } from './header';
 
 export interface PdfOptions {
   /** Millimetres per drawing unit. 0.5 puts a 1600-unit sheet on an A1. */
@@ -215,7 +216,8 @@ export function renderPdf(sheets: Drawing[], options: PdfOptions = {}): Blob {
     if (index === 0) doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format });
     else doc!.addPage(format, 'landscape');
 
-    if (frame) drawFrame(doc!, paper, titleBlock);
+    // As in the DXF: a sheet with its own header does not want a second frame.
+    if (frame && !hasHeader(sheet.shapes)) drawFrame(doc!, paper, titleBlock);
     const place: Place = { s: scale, ox, oy };
     for (const s of sheet.shapes) drawShape(doc!, s, place);
   });
