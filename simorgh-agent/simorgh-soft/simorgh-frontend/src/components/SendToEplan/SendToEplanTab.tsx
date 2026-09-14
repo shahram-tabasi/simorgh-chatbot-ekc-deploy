@@ -42,6 +42,83 @@ const IDENTITY_FIELDS: { index: number; label: string; placeholder: string }[] =
   { index: 94, label: 'Macro: Version', placeholder: '00' },
 ];
 
+// ── UI bits ──
+//
+// Defined at module scope, NOT inside SendToEplanTab. A component declared in
+// the body of another is a brand-new function identity on every render, so
+// React cannot match it against the previous tree: it unmounts the old node
+// and mounts a fresh one each time. For a <Field> wrapping an <input> that
+// meant the input was destroyed and rebuilt on every keystroke, taking focus
+// with it — you had to click back into the box to type each character.
+const inputCls =
+  'w-full border border-gray-300 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:border-blue-400';
+
+const ModeCard: React.FC<{
+  id: Mode; icon: React.ReactNode; title: string; note: string;
+  mode: Mode; onSelect: (m: Mode) => void;
+}> = ({ id, icon, title, note, mode, onSelect }) => (
+  <button
+    onClick={() => onSelect(id)}
+    className={`flex-1 text-left border-2 rounded-lg p-4 transition ${
+      mode === id ? 'border-emerald-600 bg-emerald-50' : 'border-gray-200 bg-white hover:border-gray-300'
+    }`}
+  >
+    <div className="flex items-center gap-2 mb-1">{icon}<span className="font-semibold text-gray-800">{title}</span></div>
+    <p className="text-xs text-gray-500">{note}</p>
+  </button>
+);
+
+// Tailwind only picks up class names that appear literally in source, so the
+// active-state classes are a fixed lookup rather than built from a `color`
+// prop at runtime.
+const GEN_CARD_ACTIVE_CLASS: Record<GenerationType, string> = {
+  sld: 'border-blue-500 bg-blue-50',
+  old: 'border-amber-500 bg-amber-50',
+  sldold: 'border-emerald-500 bg-emerald-50',
+};
+
+const GenCard: React.FC<{
+  id: GenerationType; icon: React.ReactNode; title: string; note: string;
+  generationType: GenerationType | null; onSelect: (g: GenerationType) => void;
+}> = ({ id, icon, title, note, generationType, onSelect }) => (
+  <button
+    onClick={() => onSelect(id)}
+    className={`flex-1 text-center border-2 rounded-lg p-4 transition ${
+      generationType === id ? GEN_CARD_ACTIVE_CLASS[id] : 'border-gray-200 bg-white hover:border-gray-300'
+    }`}
+  >
+    <div className="flex justify-center mb-1.5">{icon}</div>
+    <p className="font-semibold text-sm text-gray-800">{title}</p>
+    <p className="text-xs text-gray-500">{note}</p>
+  </button>
+);
+
+const Field: React.FC<{ label: string; children: React.ReactNode; hint?: string }> = ({ label, children, hint }) => (
+  <div>
+    <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+    {children}
+    {hint && <p className="text-[11px] text-gray-400 mt-1">{hint}</p>}
+  </div>
+);
+
+const RadioPair: React.FC<{
+  value: string; onChange: (v: string) => void; options: { value: string; label: string }[];
+}> = ({ value, onChange, options: opts }) => (
+  <div className="flex gap-2">
+    {opts.map(o => (
+      <button
+        key={o.value}
+        onClick={() => onChange(o.value)}
+        className={`px-3 py-1.5 rounded border text-sm ${
+          value === o.value ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+        }`}
+      >
+        {o.label}
+      </button>
+    ))}
+  </div>
+);
+
 export const SendToEplanTab: React.FC = () => {
   const { projectData, currentRevision, revisions } = useProject();
   const equipments = projectData.equipments ?? [];
@@ -224,70 +301,6 @@ export const SendToEplanTab: React.FC = () => {
     XLSX.writeFile(wb, `${projectData.projectName || 'project'}_${equipment.name}_Mechanical_items.xlsx`);
   };
 
-  // ── UI bits ──
-  const ModeCard: React.FC<{ id: Mode; icon: React.ReactNode; title: string; note: string }> = ({ id, icon, title, note }) => (
-    <button
-      onClick={() => setMode(id)}
-      className={`flex-1 text-left border-2 rounded-lg p-4 transition ${
-        mode === id ? 'border-emerald-600 bg-emerald-50' : 'border-gray-200 bg-white hover:border-gray-300'
-      }`}
-    >
-      <div className="flex items-center gap-2 mb-1">{icon}<span className="font-semibold text-gray-800">{title}</span></div>
-      <p className="text-xs text-gray-500">{note}</p>
-    </button>
-  );
-
-  // Tailwind only picks up class names that appear literally in source, so
-  // the active-state classes are a fixed lookup rather than built from a
-  // `color` prop at runtime.
-  const GEN_CARD_ACTIVE_CLASS: Record<GenerationType, string> = {
-    sld: 'border-blue-500 bg-blue-50',
-    old: 'border-amber-500 bg-amber-50',
-    sldold: 'border-emerald-500 bg-emerald-50',
-  };
-
-  const GenCard: React.FC<{ id: GenerationType; icon: React.ReactNode; title: string; note: string }> = ({
-    id, icon, title, note,
-  }) => (
-    <button
-      onClick={() => setGenerationType(id)}
-      className={`flex-1 text-center border-2 rounded-lg p-4 transition ${
-        generationType === id ? GEN_CARD_ACTIVE_CLASS[id] : 'border-gray-200 bg-white hover:border-gray-300'
-      }`}
-    >
-      <div className="flex justify-center mb-1.5">{icon}</div>
-      <p className="font-semibold text-sm text-gray-800">{title}</p>
-      <p className="text-xs text-gray-500">{note}</p>
-    </button>
-  );
-
-  const Field: React.FC<{ label: string; children: React.ReactNode; hint?: string }> = ({ label, children, hint }) => (
-    <div>
-      <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
-      {children}
-      {hint && <p className="text-[11px] text-gray-400 mt-1">{hint}</p>}
-    </div>
-  );
-
-  const RadioPair: React.FC<{
-    value: string; onChange: (v: string) => void; options: { value: string; label: string }[];
-  }> = ({ value, onChange, options: opts }) => (
-    <div className="flex gap-2">
-      {opts.map(o => (
-        <button
-          key={o.value}
-          onClick={() => onChange(o.value)}
-          className={`px-3 py-1.5 rounded border text-sm ${
-            value === o.value ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-
-  const inputCls = 'w-full border border-gray-300 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:border-blue-400';
 
   return (
     <div>
@@ -325,9 +338,9 @@ export const SendToEplanTab: React.FC = () => {
         <>
           {/* ── Project vs Mechanical ── */}
           <div className="flex gap-3 mb-5">
-            <ModeCard id="project" icon={<ZapIcon className="w-4 h-4 text-emerald-700" />} title="Project"
+            <ModeCard mode={mode} onSelect={setMode} id="project" icon={<ZapIcon className="w-4 h-4 text-emerald-700" />} title="Project"
               note="Single line and/or outline drawings, sent to EPLAN" />
-            <ModeCard id="mechanical" icon={<ClipboardIcon className="w-4 h-4 text-amber-700" />} title="Mechanical"
+            <ModeCard mode={mode} onSelect={setMode} id="mechanical" icon={<ClipboardIcon className="w-4 h-4 text-amber-700" />} title="Mechanical"
               note="Mechanical items list — Load and Export only, nothing is sent to EPLAN" />
           </div>
 
@@ -459,11 +472,11 @@ export const SendToEplanTab: React.FC = () => {
               <div className="border border-gray-200 rounded-lg p-4">
                 <p className="text-sm font-semibold text-gray-700 mb-3">Drawing Options</p>
                 <div className="flex gap-3 mb-4">
-                  <GenCard id="sld" icon={<ZapIcon className="w-5 h-5 text-blue-600" />} title="Generate SLD"
+                  <GenCard generationType={generationType} onSelect={setGenerationType} id="sld" icon={<ZapIcon className="w-5 h-5 text-blue-600" />} title="Generate SLD"
                     note="Single Line Diagram" />
-                  <GenCard id="old" icon={<DatabaseIcon className="w-5 h-5 text-amber-600" />} title="Generate OLD"
+                  <GenCard generationType={generationType} onSelect={setGenerationType} id="old" icon={<DatabaseIcon className="w-5 h-5 text-amber-600" />} title="Generate OLD"
                     note="Outline Drawing" />
-                  <GenCard id="sldold" icon={<LayersIcon className="w-5 h-5 text-emerald-600" />} title="Generate SLD & OLD"
+                  <GenCard generationType={generationType} onSelect={setGenerationType} id="sldold" icon={<LayersIcon className="w-5 h-5 text-emerald-600" />} title="Generate SLD & OLD"
                     note="Both Diagrams" />
                 </div>
 
@@ -640,7 +653,7 @@ export const SendToEplanTab: React.FC = () => {
                     disabled={!canSend}
                     className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg shadow-sm font-medium text-sm bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
                   >
-                    <SendIcon className="w-4 h-4" /> {sending ? 'Sending…' : 'Generate Switchboard'}
+                    <SendIcon className="w-4 h-4" /> {sending ? 'Sending…' : 'Create Project'}
                   </button>
                 </div>
               </div>

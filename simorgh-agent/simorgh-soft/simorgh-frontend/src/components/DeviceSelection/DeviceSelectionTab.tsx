@@ -1130,7 +1130,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             onClick={handleImportExcel}
             title="Import from Excel (.xlsx, .xls, .csv). Template column will NOT be imported."
           >
-            <UploadIcon className="w-4 h-4 inline mr-1" />
+            <DownloadIcon className="w-4 h-4 inline mr-1" />
             Import Excel
           </button>
           {/* Stub for now — reads a SIMARIS export (a different sheet layout
@@ -1141,7 +1141,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             onClick={() => alert('Import from SIMARIS — coming soon.')}
             title="Import a SIMARIS Excel export to pull MODULE NO. from"
           >
-            <UploadIcon className="w-4 h-4 inline mr-1" />
+            <DownloadIcon className="w-4 h-4 inline mr-1" />
             Import from SIMARIS
           </button>
           {/* Shown only once something has been imported: a button that reads
@@ -1172,7 +1172,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             onClick={handleExportExcel}
             title="Export the current device rows to Excel, with the same headers Import Excel expects. Template column is excluded — it can only be assigned inside the software."
           >
-            <DownloadIcon className="w-4 h-4 inline mr-1" />
+            <UploadIcon className="w-4 h-4 inline mr-1" />
             Export Excel
           </button>
           <button
