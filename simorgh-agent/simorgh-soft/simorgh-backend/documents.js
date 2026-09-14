@@ -10,7 +10,6 @@
 import { GridFSBucket, ObjectId } from 'mongodb';
 import multer from 'multer';
 import ExcelJS from 'exceljs';
-import mammoth from 'mammoth';
 import { extractPdfText } from './pdfText.js';
 
 export const DOCUMENT_CATEGORIES = [
@@ -26,22 +25,21 @@ const upload = multer({
 const TEXT_MAX_CHARS = Number(process.env.DOCUMENT_TEXT_MAX_CHARS || 25000);
 const clip = text => (text.length > TEXT_MAX_CHARS ? `${text.slice(0, TEXT_MAX_CHARS)}\n…[truncated]…` : text);
 
-const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /** Best-effort plain text for the AI to read — empty for anything (images,
- *  legacy .doc/.xls, a corrupt file) this can't pull text out of. Never
- *  throws: a document that can't be read still gets stored, just without
+ *  Word documents, legacy .doc/.xls, a corrupt file) this can't pull text
+ *  out of. Word is skipped rather than half-supported: extracting .docx
+ *  text needs a real zip+XML reader (mammoth), which isn't a dependency
+ *  here — Word files still upload, store, download and take comments fine,
+ *  they just aren't text-searchable by the chatbot yet. Never throws: a
+ *  document that can't be read still gets stored, just without
  *  extractedText. */
 async function extractText(buffer, mimeType, filename) {
   try {
     if (mimeType === 'application/pdf') {
       const parsed = await extractPdfText(buffer, filename);
       return parsed?.text || '';
-    }
-    if (mimeType === DOCX_MIME) {
-      const result = await mammoth.extractRawText({ buffer });
-      return clip((result.value || '').trim());
     }
     if (mimeType === XLSX_MIME) {
       const wb = new ExcelJS.Workbook();

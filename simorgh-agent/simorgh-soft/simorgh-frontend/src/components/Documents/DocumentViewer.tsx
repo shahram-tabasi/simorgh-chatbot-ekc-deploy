@@ -1,25 +1,25 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
+import React, { useRef, useState } from 'react';
 import {
-  XIcon, DownloadIcon, ChevronLeftIcon, ChevronRightIcon, MessageSquareIcon,
-  TrashIcon, HighlighterIcon,
+  XIcon, DownloadIcon, MessageSquareIcon, TrashIcon, HighlighterIcon,
 } from 'lucide-react';
 import { DocumentComment, DocumentHighlight, ProjectDocument, documentsApi } from '../../services/documentsApi';
 
-// Vite-idiomatic worker URL — resolved at build time, served alongside the
-// bundle rather than fetched from a CDN (this app has no outside network
-// access it can rely on, per the rest of the deploy story).
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
-
-// Opens one uploaded document: renders it (PDF pages via PDF.js onto a
-// canvas, images directly, everything else as a download-only notice), and
-// carries comments and highlights on it. A highlight is a click-drag
-// rectangle stored as percentages of the page/image box, so it survives a
-// different zoom or window size without redoing the math; a comment is
-// either general (about the document as a whole) or pinned to one
-// highlight via highlightId. Every add saves immediately — there is no
-// separate "Save" step to forget.
+// Opens one uploaded document and carries comments (and, for images, click-
+// drag highlights) on it.
+//
+// PDFs preview via the browser's own built-in PDF viewer (<embed>) rather
+// than a PDF.js canvas render — that would need pdfjs-dist, a large package
+// (several MB of fonts/cmaps) this deploy's npm mirror has proven unable to
+// fetch reliably even with retries. The trade-off: PDFs get comments but
+// not position-anchored highlights, same as Word and Excel below — only
+// images, which need no library at all (just mouse-event percentages over
+// an <img>), keep drag-to-highlight.
+//
+// A highlight is a click-drag rectangle stored as percentages of the image
+// box, so it survives a different zoom or window size without redoing the
+// math. A comment is either general (about the document as a whole) or
+// pinned to one highlight via highlightId. Every add saves immediately —
+// there is no separate "Save" step to forget.
 
 const HIGHLIGHT_COLOR = '#fbbf24'; // amber-400, ~40% opacity applied inline
 
@@ -36,20 +36,18 @@ const isImage = (mime: string) => mime.startsWith('image/');
 export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChanged, currentUser }) => {
   const [comments, setComments] = useState<DocumentComment[]>(doc.comments || []);
   const [highlights, setHighlights] = useState<DocumentHighlight[]>(doc.highlights || []);
-  const [page, setPage] = useState(1);
-  const [numPages, setNumPages] = useState(1);
   const [newComment, setNewComment] = useState('');
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>(null);
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [draftComment, setDraftComment] = useState('');
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
-  const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
 
   const fileUrl = documentsApi.fileUrl(doc._id);
   const author = currentUser || 'unknown';
+  const canHighlight = isImage(doc.mimeType);
+  const canPreview = isPdf(doc.mimeType) || isImage(doc.mimeType);
 
   const persist = async (next: { comments?: DocumentComment[]; highlights?: DocumentHighlight[] }) => {
     try {
@@ -61,37 +59,7 @@ export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChan
     }
   };
 
-  // ── PDF loading + page render ────────────────────────────────────────────
-  useEffect(() => {
-    if (!isPdf(doc.mimeType)) return;
-    let cancelled = false;
-    pdfjsLib.getDocument(fileUrl).promise.then(pdf => {
-      if (cancelled) return;
-      pdfDocRef.current = pdf;
-      setNumPages(pdf.numPages);
-    }).catch(err => console.error('PDF load failed:', err));
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc._id]);
-
-  useEffect(() => {
-    if (!isPdf(doc.mimeType) || !pdfDocRef.current) return;
-    let cancelled = false;
-    pdfDocRef.current.getPage(page).then(async pageProxy => {
-      if (cancelled) return;
-      const viewport = pageProxy.getViewport({ scale: 1.4 });
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      await pageProxy.render({ canvasContext: ctx, viewport }).promise;
-    }).catch(err => console.error('Page render failed:', err));
-    return () => { cancelled = true; };
-  }, [page, numPages, doc.mimeType]);
-
-  // ── Drag-to-highlight, in percentages of the overlay box ────────────────
+  // ── Drag-to-highlight (images only), in percentages of the overlay box ──
   const pct = (clientX: number, clientY: number) => {
     const box = overlayRef.current?.getBoundingClientRect();
     if (!box) return { x: 0, y: 0 };
@@ -102,6 +70,7 @@ export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChan
   };
 
   const onMouseDown = (e: React.MouseEvent) => {
+    if (!canHighlight) return;
     if (activeHighlightId) setActiveHighlightId(null);
     const p = pct(e.clientX, e.clientY);
     dragStart.current = p;
@@ -124,7 +93,6 @@ export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChan
     if (!draft) return;
     const highlight: DocumentHighlight = {
       id: `hl-${Date.now()}`,
-      page: isPdf(doc.mimeType) ? page : undefined,
       xPct: draft.x, yPct: draft.y, wPct: draft.w, hPct: draft.h,
       color: HIGHLIGHT_COLOR,
       author,
@@ -176,12 +144,6 @@ export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChan
     await persist({ comments: nextComments });
   };
 
-  const visibleHighlights = useMemo(
-    () => highlights.filter(h => !isPdf(doc.mimeType) || h.page === page),
-    [highlights, page, doc.mimeType]);
-
-  const canAnnotate = isPdf(doc.mimeType) || isImage(doc.mimeType);
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[210]" onClick={onClose}>
       <div
@@ -211,27 +173,18 @@ export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChan
           {/* ── Viewer ── */}
           <div className="flex-1 overflow-auto bg-gray-100 p-4">
             {isPdf(doc.mimeType) && (
+              <embed src={fileUrl} type="application/pdf" className="w-full h-full border border-gray-300 shadow bg-white" />
+            )}
+
+            {isImage(doc.mimeType) && (
               <>
-                <div className="flex items-center justify-center gap-3 mb-3 text-sm">
-                  <button
-                    className="p-1 rounded hover:bg-gray-200 disabled:opacity-30"
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                    disabled={page <= 1}
-                  ><ChevronLeftIcon className="w-4 h-4" /></button>
-                  <span>Page {page} of {numPages}</span>
-                  <button
-                    className="p-1 rounded hover:bg-gray-200 disabled:opacity-30"
-                    onClick={() => setPage(p => Math.min(numPages, p + 1))}
-                    disabled={page >= numPages}
-                  ><ChevronRightIcon className="w-4 h-4" /></button>
-                  <span className="text-xs text-gray-400 flex items-center gap-1 ml-3">
-                    <HighlighterIcon className="w-3.5 h-3.5" /> Drag on the page to highlight
-                  </span>
-                </div>
+                <p className="text-xs text-gray-400 flex items-center gap-1 justify-center mb-2">
+                  <HighlighterIcon className="w-3.5 h-3.5" /> Drag on the image to highlight
+                </p>
                 <div className="flex justify-center">
                   <div ref={overlayRef} className="relative inline-block" onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}>
-                    <canvas ref={canvasRef} className="border border-gray-300 shadow bg-white" />
-                    {visibleHighlights.map(h => (
+                    <img src={fileUrl} alt={doc.filename} className="max-w-full border border-gray-300 shadow bg-white" draggable={false} />
+                    {highlights.map(h => (
                       <div
                         key={h.id}
                         onClick={e => { e.stopPropagation(); setActiveHighlightId(h.id); }}
@@ -258,37 +211,7 @@ export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChan
               </>
             )}
 
-            {isImage(doc.mimeType) && (
-              <div className="flex justify-center">
-                <div ref={overlayRef} className="relative inline-block" onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}>
-                  <img src={fileUrl} alt={doc.filename} className="max-w-full border border-gray-300 shadow bg-white" draggable={false} />
-                  {visibleHighlights.map(h => (
-                    <div
-                      key={h.id}
-                      onClick={e => { e.stopPropagation(); setActiveHighlightId(h.id); }}
-                      style={{
-                        position: 'absolute', left: `${h.xPct}%`, top: `${h.yPct}%`,
-                        width: `${h.wPct}%`, height: `${h.hPct}%`,
-                        background: h.color, opacity: activeHighlightId === h.id ? 0.55 : 0.35,
-                        border: activeHighlightId === h.id ? '2px solid #d97706' : '1px solid #d97706',
-                        cursor: 'pointer',
-                      }}
-                      title={comments.find(c => c.highlightId === h.id)?.text || 'Highlight'}
-                    />
-                  ))}
-                  {draft && (
-                    <div style={{
-                      position: 'absolute', left: `${draft.x}%`, top: `${draft.y}%`,
-                      width: `${draft.w}%`, height: `${draft.h}%`,
-                      background: HIGHLIGHT_COLOR, opacity: 0.4, border: '1px dashed #d97706',
-                      pointerEvents: 'none',
-                    }} />
-                  )}
-                </div>
-              </div>
-            )}
-
-            {!canAnnotate && (
+            {!canPreview && (
               <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
                 <p className="text-sm mb-2">No inline preview for this file type.</p>
                 <a href={fileUrl} target="_blank" rel="noreferrer" download={doc.filename} className="text-blue-600 hover:underline text-sm">
