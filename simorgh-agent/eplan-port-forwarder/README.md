@@ -115,6 +115,33 @@ To undo it:
 }
 ```
 
+### Does it survive a reboot?
+
+Yes, both halves. `netsh ... portproxy add` writes the rules to the registry
+(`HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp`) and
+`New-NetFirewallRule` creates a permanent rule — neither needs re-entering.
+Setting `iphlpsvc` to start automatically is what makes that true in practice:
+portproxy is implemented by IP Helper, so without it the rules are still in
+the registry after a restart but nothing is listening. Binding to `0.0.0.0`
+rather than a specific address also avoids the usual portproxy-after-reboot
+failure, where IP Helper starts before that address exists.
+
+What does *not* survive a reboot is the EPLAN instance. `AsyncTcpServer` is
+started by the Eplanix app, so the forwarding comes back with nothing behind
+it until someone opens that app once. After a restart, check in this order:
+
+```powershell
+# is anything listening behind the proxy?
+Get-NetTCPConnection -State Listen |
+  Where-Object { $_.LocalPort -ge 12000 -and $_.LocalPort -le 12100 }
+
+# are the rules still there? (expect 101)
+(netsh interface portproxy show v4tov4 | Select-String "1200|1201|1202").Count
+```
+
+Rules present but nothing listening means it is the EPLAN instance, not the
+plumbing — which is what the bridge reports as `eplan_server: "unreachable"`.
+
 The trade-off against the container: this is machine configuration rather
 than something in version control, so it has to be reapplied by hand if the
 box is rebuilt. Everything else about it is the same — a raw TCP relay that
