@@ -1,4 +1,6 @@
+import * as XLSX from 'xlsx-js-style';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { tableShapes, replaceTable, tableOrigin, tableIdOf } from '../../utils/cad/table';
 import {
   ZoomInIcon, ZoomOutIcon, MaximizeIcon, MousePointer2Icon, HandIcon,
   UndoIcon, RedoIcon, CopyIcon, Trash2Icon, GridIcon, RotateCcwIcon,
@@ -7,7 +9,7 @@ import {
   SplineIcon, TypeIcon, Maximize2Icon, Minimize2Icon, MagnetIcon,
   CircleDashedIcon, RulerIcon, ScissorsIcon, ArrowRightToLineIcon,
   CornerDownRightIcon, RotateCwIcon, FlipHorizontalIcon, FlipVerticalIcon,
-  ScalingIcon, BringToFrontIcon, SendToBackIcon,
+  ScalingIcon, BringToFrontIcon, SendToBackIcon, TableIcon, RefreshCwIcon,
   AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
@@ -197,6 +199,7 @@ export const DrawingEditor: React.FC<Props> = ({
   // What a command has to say when it could not do what was asked. Cleared on
   // the next thing that happens, so it never sits there stale.
   const [notice, setNotice] = useState<string | null>(null);
+
   // Whether the canvas has something half-drawn. The two share a keyboard.
   const [drafting, setDrafting] = useState(false);
   const frame = useRef<HTMLDivElement>(null);
@@ -223,6 +226,108 @@ export const DrawingEditor: React.FC<Props> = ({
     touch(index);
     forceRender(n => n + 1);
   }, [index, shapes]);
+
+  // ── Imported spreadsheets ────────────────────────────────────────────────
+  //
+  // One entry per table on the current sheet. The handle is what makes Update
+  // possible: with it the same file can be read again after someone has edited
+  // it in Excel, without them having to find it a second time. Browsers that
+  // do not offer the File System Access API simply get no Update button rather
+  // than a button that cannot work.
+  const [tables, setTables] = useState<Record<string, {
+    id: string; name: string; handle?: FileSystemFileHandle; at: Pt; readAt: Date;
+  }>>({});
+  const xlsxInput = useRef<HTMLInputElement>(null);
+  // Set just before falling back to the plain file input, so its change
+  // handler knows which table is being placed and where.
+  const pendingImport = useRef<{ id: string; at: Pt } | null>(null);
+
+  /** Rows out of a spreadsheet, as plain strings. */
+  const readRows = (file: File): Promise<string[][]> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('unreadable'));
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(new Uint8Array(e.target?.result as ArrayBuffer), { type: 'array' });
+          const sheetOne = wb.Sheets[wb.SheetNames[0]];
+          // header:1 keeps it a grid: a drawing wants the rows as they are,
+          // not keyed by a header row it has no use for.
+          resolve((XLSX.utils.sheet_to_json(sheetOne, {
+            header: 1, defval: '', raw: false, blankrows: false,
+          }) as unknown[][]).map(r => (r ?? []).map(c => String(c ?? ''))));
+        } catch (err) { reject(err as Error); }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+  /** Draw a file's rows as a table, at `at`, under `id`. */
+  const placeTable = useCallback(async (
+    file: File, id: string, at: Pt, handle?: FileSystemFileHandle, replacing = false,
+  ) => {
+    let rows: string[][];
+    try { rows = await readRows(file); }
+    catch { setNotice(T.xlsxUnreadable); return; }
+    if (rows.length === 0) { setNotice(T.xlsxEmpty); return; }
+
+    const next = tableShapes(rows, at, { textSize, width: drawWidth, header: true }, id);
+    if (next.length === 0) { setNotice(T.xlsxEmpty); return; }
+    commit(replacing ? replaceTable(shapes, id, next) : [...shapes, ...next]);
+    setTables(t => ({ ...t, [id]: { id, name: file.name, handle, at, readAt: new Date() } }));
+    setNotice(null);
+  }, [shapes, commit, textSize, drawWidth, T]);
+
+  /** Import: pick a spreadsheet and put it on the sheet. */
+  const importXlsx = useCallback(async () => {
+    const id = `t${Date.now().toString(36)}`;
+    // Top-left of what is on screen, inset a little, so it lands where the
+    // person is looking rather than at the sheet origin they may be nowhere near.
+    const at: Pt = [view.x + view.w * 0.08, view.y + view.h * 0.08];
+    const picker = (window as unknown as {
+      showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]>;
+    }).showOpenFilePicker;
+    if (picker) {
+      try {
+        const [handle] = await picker({
+          multiple: false,
+          types: [{ description: 'Excel or CSV', accept: {
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+            'application/vnd.ms-excel': ['.xls'],
+            'text/csv': ['.csv'],
+          } }],
+        });
+        if (!handle) return;
+        await placeTable(await handle.getFile(), id, at, handle);
+        return;
+      } catch (err) {
+        // The picker being closed is not an error, and not a reason to open a
+        // second one behind it.
+        if ((err as DOMException)?.name === 'AbortError') return;
+      }
+    }
+    pendingImport.current = { id, at };
+    xlsxInput.current?.click();
+  }, [view, placeTable]);
+
+
+  /** Update: read the same file again, and redraw that table where it sits. */
+  const updateXlsx = useCallback(async (id: string) => {
+    const entry = tables[id];
+    if (!entry?.handle) return;
+    try {
+      const file = await entry.handle.getFile();
+      // Where it is now, not where it was first dropped — it may well have
+      // been moved since, and Update should not move it back.
+      await placeTable(file, id, tableOrigin(shapes, id) ?? entry.at, entry.handle, true);
+    } catch {
+      setNotice(T.xlsxGone);
+    }
+  }, [tables, shapes, placeTable, T]);
+
+  // A table deleted from the sheet should stop offering an Update button.
+  const liveTables = useMemo(
+    () => Object.values(tables).filter(t => shapes.some(s => tableIdOf(s) === t.id)),
+    [tables, shapes]);
 
   /**
    * Full screen, and a way back.
@@ -989,6 +1094,42 @@ export const DrawingEditor: React.FC<Props> = ({
           >
             <DownloadIcon className="w-4 h-4" /> SVG
           </button>
+          <button
+            onClick={importXlsx}
+            title={T.xlsxImportTip}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
+          >
+            <TableIcon className="w-4 h-4" /> {T.xlsxImport}
+          </button>
+          {/* One Update per imported table, named after its file: with several
+              on a sheet, "Update" on its own would not say which. Only shown
+              where the browser handed back a handle — without one the file
+              cannot be re-read and the button would be a lie. */}
+          {liveTables.filter(t => t.handle).map(t => (
+            <button
+              key={t.id}
+              onClick={() => updateXlsx(t.id)}
+              title={`${T.xlsxUpdateTip} — ${t.name}`}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-emerald-700 text-white text-sm font-medium hover:bg-emerald-800"
+            >
+              <RefreshCwIcon className="w-4 h-4" />
+              {T.xlsxUpdate}: {t.name.length > 18 ? `${t.name.slice(0, 16)}…` : t.name}
+            </button>
+          ))}
+          <input
+            ref={xlsxInput}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const file = e.target.files?.[0];
+              // Cleared so choosing the same file twice still fires onChange.
+              e.target.value = '';
+              const pending = pendingImport.current;
+              pendingImport.current = null;
+              if (file && pending) placeTable(file, pending.id, pending.at);
+            }}
+          />
         </div>
       </div>
 

@@ -55,6 +55,9 @@ export interface Strings {
   // Style
   layerOf: string; widthOf: string; lineTypeOf: string; textHeightOf: string;
   connect: string;
+  xlsxImport: string; xlsxImportTip: string;
+  xlsxUpdate: string; xlsxUpdateTip: string;
+  xlsxEmpty: string; xlsxUnreadable: string; xlsxGone: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
 
@@ -118,6 +121,13 @@ const EN: Strings = {
   select: 'Select', pan: 'Pan — or hold Space', line: 'Line',
   polyline: 'Polyline — Enter, right-click or double-click ends it',
   connect: 'Connect — two points, wired square on the WIRE layer, with a dot where it taps an existing run',
+  xlsxImport: 'Excel',
+  xlsxImportTip: 'Draw a spreadsheet on the sheet as a table, on the TABLE layer',
+  xlsxUpdate: 'Update',
+  xlsxUpdateTip: 'Read the same file again and redraw this table where it sits',
+  xlsxEmpty: 'That spreadsheet has no rows to draw.',
+  xlsxUnreadable: 'Could not read that file — it should be .xlsx, .xls or .csv.',
+  xlsxGone: 'Could not read the file again — it may have been moved or renamed.',
   rect: 'Rectangle', circle: 'Circle — centre, then radius',
   ellipse: 'Ellipse — centre, then the two radii',
   arc: 'Arc — centre, start, then sweep', text: 'Text',
@@ -268,6 +278,13 @@ const FA: Strings = {
   select: 'انتخاب', pan: 'جابه‌جایی نما — یا نگه‌داشتن Space', line: 'خط',
   polyline: 'چندخطی — با Enter، راست‌کلیک یا دابل‌کلیک تمام می‌شود',
   connect: 'اتصال — دو نقطه، سیم گوشه‌دار روی لایهٔ WIRE، با نقطهٔ اتصال هرجا به سیم موجود بخورد',
+  xlsxImport: 'اکسل',
+  xlsxImportTip: 'اکسل را به‌صورت جدول روی نقشه و روی لایهٔ TABLE رسم می‌کند',
+  xlsxUpdate: 'به‌روزرسانی',
+  xlsxUpdateTip: 'همان فایل را دوباره می‌خواند و این جدول را در جای خودش بازرسم می‌کند',
+  xlsxEmpty: 'این فایل اکسل سطری برای رسم ندارد.',
+  xlsxUnreadable: 'فایل خوانده نشد — باید .xlsx یا .xls یا .csv باشد.',
+  xlsxGone: 'فایل دوباره خوانده نشد — شاید جابه‌جا یا تغییر نام داده شده باشد.',
   rect: 'مستطیل', circle: 'دایره — مرکز، سپس شعاع',
   ellipse: 'بیضی — مرکز، سپس دو شعاع',
   arc: 'کمان — مرکز، شروع، سپس مقدار جاروب', text: 'متن',
@@ -418,6 +435,13 @@ const TR: Strings = {
   select: 'Seç', pan: 'Kaydır — ya da Space tuşunu basılı tutun', line: 'Çizgi',
   polyline: 'Çoklu çizgi — Enter, sağ tık veya çift tık bitirir',
   connect: 'Bağlantı — iki nokta, WIRE katmanında dik kablo, mevcut hatta değdiği yere nokta',
+  xlsxImport: 'Excel',
+  xlsxImportTip: 'Tabloyu TABLE katmanında çizim üzerine tablo olarak çizer',
+  xlsxUpdate: 'Güncelle',
+  xlsxUpdateTip: 'Aynı dosyayı yeniden okur ve bu tabloyu yerinde yeniden çizer',
+  xlsxEmpty: 'Bu tabloda çizilecek satır yok.',
+  xlsxUnreadable: 'Dosya okunamadı — .xlsx, .xls veya .csv olmalı.',
+  xlsxGone: 'Dosya yeniden okunamadı — taşınmış veya adı değişmiş olabilir.',
   rect: 'Dikdörtgen', circle: 'Daire — merkez, sonra yarıçap',
   ellipse: 'Elips — merkez, sonra iki yarıçap',
   arc: 'Yay — merkez, başlangıç, sonra süpürme', text: 'Yazı',
