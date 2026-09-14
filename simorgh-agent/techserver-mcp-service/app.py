@@ -33,14 +33,18 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 import uuid
+import zipfile
 from typing import Any, Optional
 
 import httpx
 import redis as redis_lib
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 from mcp.server.fastmcp import FastMCP
+from starlette.background import BackgroundTask
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("techserver-mcp")
@@ -82,6 +86,19 @@ EXCLUDE_EXTS = {
 # Max file size to fetch through read_artifact (bytes). Guards against a
 # stray huge file slipping past the extension filter.
 MAX_ARTIFACT_BYTES = int(os.getenv("TECHSERVER_MAX_ARTIFACT_BYTES", str(40 * 1024 * 1024)))
+
+# The EPLAN drawing outputs are a deliberate exception to everything above.
+# EXCLUDE_DIRS/EXCLUDE_EXTS keep Drawing/ and .elk/.edb out of the RAG side of
+# this service — they are CAD blobs with no text worth indexing, and pulling
+# one into doc-processor would be pointless and slow. That is an indexing
+# policy, not a security boundary, and the two endpoints below are the one
+# place it does not apply: they exist precisely to hand a user the drawing
+# EPLAN just produced for them. They never touch doc-processor.
+#
+# A whole .edb is far larger than a document, so it gets its own ceiling and
+# its own timeout rather than borrowing the artifact ones.
+EPLAN_ZIP_MAX_BYTES = int(os.getenv("EPLAN_ZIP_MAX_BYTES", str(1024 * 1024 * 1024)))
+EPLAN_GET_TIMEOUT = float(os.getenv("EPLAN_GET_TIMEOUT", "900"))
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +613,174 @@ async def artifact(oenum: str = Query(...), path: str = Query(...)) -> dict:
 async def fetch(oenum: str = Query(...), query: str = "",
                 top_n: int = 3) -> dict:
     return await fetch_files_impl(oenum, query=query, top_n=top_n)
+
+
+# ---------------------------------------------------------------------------
+# EPLAN drawing output (Simorgh "Send to EPLAN" — download the result)
+# ---------------------------------------------------------------------------
+# When the Eplanix add-in finishes a drawing it writes the project under the
+# OE share and exports a PDF beside it (ProjectService.ProcessDataAsync ->
+# PageBuilder.ExportProjectToPdf), then answers with the project path, e.g.
+#
+#   $(MD_Projects)\OE12112\Drawing\MV\Single line\Auto-<scope>\Rev6-Draft\Rev<name>\ASLD.elk
+#
+# $(MD_Projects) is the techserver root, so everything after the OE segment is
+# a path inside that project's share — which is what `path` is here. An EPLAN
+# project on disk is the .elk file plus a sibling .edb directory of the same
+# stem; the PDF is the same stem with .pdf.
+
+
+def _eplan_rel(path: str) -> str:
+    """Normalise a caller-supplied in-share path to an .elk, or refuse it.
+
+    The path arrives from the browser by way of two services, so it is treated
+    as input rather than as something EPLAN said: anything that could climb out
+    of the share is rejected outright, and the .elk suffix is required so these
+    endpoints cannot be turned into a general file-read for the Drawing tree
+    that the RAG side deliberately excludes.
+    """
+    norm = (path or "").strip().lstrip("/\\").replace("\\", "/")
+    norm = re.sub(r"/+", "/", norm)
+    if not norm:
+        raise HTTPException(status_code=400, detail="path is required")
+    if any(seg in ("..", ".") for seg in norm.split("/")):
+        raise HTTPException(status_code=400, detail=f"path must not be relative: {path!r}")
+    if not norm.lower().endswith(".elk"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"path must be the .elk project file, got {norm!r}",
+        )
+    return norm
+
+
+async def _smb_get(share: str, remote: str, local: str) -> tuple[int, str, str]:
+    """One file, share-relative remote path, backslash-separated for smbclient."""
+    return await _smb(
+        [f"//{TECHSERVER_HOST}/{share}", "-c",
+         f'get "{remote.replace("/", chr(92))}" "{local}"'],
+        EPLAN_GET_TIMEOUT,
+    )
+
+
+async def _smb_get_dir(share: str, remote_dir: str, local_dir: str) -> None:
+    """Everything under one directory, recursively.
+
+    `prompt OFF` stops mget asking per file (there is no tty to answer), and
+    `recurse ON` is what makes it descend rather than fetching the top level
+    only. lcd/cd first so the mask stays a bare `*` — the paths here contain
+    spaces ("Single line", "Auto-<scope>") and quoting a mask through both the
+    shell and smbclient's own parser is where that breaks.
+    """
+    os.makedirs(local_dir, exist_ok=True)
+    script = (
+        f'prompt OFF; recurse ON; lcd "{local_dir}"; '
+        f'cd "{remote_dir.replace("/", chr(92))}"; mget *'
+    )
+    await _smb([f"//{TECHSERVER_HOST}/{share}", "-c", script], EPLAN_GET_TIMEOUT)
+
+
+def _dir_size(root: str) -> int:
+    total = 0
+    for base, _dirs, files in os.walk(root):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(base, f))
+            except OSError:
+                pass
+    return total
+
+
+@app.get("/eplan/pdf")
+async def eplan_pdf(oenum: str = Query(...), path: str = Query(...)):
+    """The PDF EPLAN exported beside the project, streamed back as a file."""
+    rel = _eplan_rel(path)
+    pdf_rel = rel[: -len(".elk")] + ".pdf"
+    share = await _resolve_share(oenum)
+
+    tmpdir = tempfile.mkdtemp(prefix="eplanpdf_")
+    local = os.path.join(tmpdir, os.path.basename(pdf_rel))
+    cleanup = BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True)
+    try:
+        rc, out, err = await _smb_get(share, pdf_rel, local)
+        if not os.path.exists(local) or os.path.getsize(local) == 0:
+            blob = err or out
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            if "NT_STATUS_OBJECT_NAME_NOT_FOUND" in blob or "NT_STATUS_NO_SUCH_FILE" in blob:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(f"no PDF beside the project yet: {pdf_rel}. EPLAN writes it "
+                            "at the end of a run, so a drawing still in progress has none."),
+                )
+            raise HTTPException(status_code=502, detail=f"smbclient get failed: {blob[:200]}")
+    except HTTPException:
+        raise
+    except Exception:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+    return FileResponse(
+        local,
+        media_type="application/pdf",
+        filename=os.path.basename(pdf_rel),
+        background=cleanup,
+    )
+
+
+@app.get("/eplan/zip")
+async def eplan_zip(oenum: str = Query(...), path: str = Query(...)):
+    """The whole EPLAN project — the .elk and its .edb directory — as one zip."""
+    rel = _eplan_rel(path)
+    stem = rel[: -len(".elk")]
+    edb_rel = stem + ".edb"
+    name = os.path.basename(stem)
+    share = await _resolve_share(oenum)
+
+    tmpdir = tempfile.mkdtemp(prefix="eplanzip_")
+    staged = os.path.join(tmpdir, "project")
+    os.makedirs(staged, exist_ok=True)
+    cleanup = BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True)
+    try:
+        elk_local = os.path.join(staged, f"{name}.elk")
+        rc, out, err = await _smb_get(share, rel, elk_local)
+        if not os.path.exists(elk_local):
+            blob = err or out
+            if "NT_STATUS_OBJECT_NAME_NOT_FOUND" in blob or "NT_STATUS_NO_SUCH_FILE" in blob:
+                raise HTTPException(status_code=404, detail=f"project not found: {rel}")
+            raise HTTPException(status_code=502, detail=f"smbclient get failed: {blob[:200]}")
+
+        # The .edb may legitimately be absent (a project saved without one);
+        # that is a thinner zip, not an error.
+        await _smb_get_dir(share, edb_rel, os.path.join(staged, f"{name}.edb"))
+
+        size = _dir_size(staged)
+        if size > EPLAN_ZIP_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(f"project is {size} bytes, over EPLAN_ZIP_MAX_BYTES "
+                        f"({EPLAN_ZIP_MAX_BYTES}). Raise that or copy it off the share directly."),
+            )
+
+        archive = os.path.join(tmpdir, f"{name}.zip")
+        # ZIP_DEFLATED, not ZIP_STORED: an .edb is mostly small XML-ish files
+        # that compress well, and this crosses the LAN to the browser twice.
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+            for base, _dirs, files in os.walk(staged):
+                for f in files:
+                    full = os.path.join(base, f)
+                    z.write(full, os.path.relpath(full, staged))
+    except HTTPException:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+    except Exception:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename=f"{name}.zip",
+        background=cleanup,
+    )
 
 
 # ---------------------------------------------------------------------------

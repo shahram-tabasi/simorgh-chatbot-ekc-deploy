@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { buildEplanData, EplanData, EplanDataOptions } from '../../utils/eplanDataExport';
-import { eplanApi, EplanTarget } from '../../services/eplanApi';
+import { eplanApi, EplanTarget, EplanProject } from '../../services/eplanApi';
 import { plotframeFieldsApi, PlotframeDrawingType } from '../../services/plotframeFieldsApi';
 import { MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows } from '../../utils/mechanicalItems';
 import { downloadText, fileSafe } from '../../utils/download';
@@ -115,7 +115,7 @@ export const SendToEplanTab: React.FC = () => {
   const [target, setTarget] = useState<EplanTarget | null>(null);
   const [probe, setProbe] = useState<{ state: 'idle' | 'testing' | 'up' | 'down'; note?: string }>({ state: 'idle' });
   const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; text: string; projects?: EplanProject[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,7 +175,9 @@ export const SendToEplanTab: React.FC = () => {
         userName: projectData.planner,
       });
       setResult(answer.success
-        ? { ok: true, text: answer.message || `${records.length} record(s) sent.` }
+        ? { ok: true,
+            text: answer.message || `${records.length} record(s) sent.`,
+            projects: answer.projects }
         : { ok: false, text: answer.error || 'The EPLAN bridge did not accept the records.' });
     } catch (err) {
       setResult({ ok: false, text: (err as Error).message });
@@ -588,6 +590,45 @@ export const SendToEplanTab: React.FC = () => {
                         <DownloadIcon className="w-3.5 h-3.5" /> Download error log
                       </button>
                     )}
+                  </div>
+                )}
+
+                {/* What EPLAN produced. Plain links, not fetch(): a project
+                    archive runs to hundreds of megabytes, and letting the
+                    browser stream it to disk gives the normal download UI and
+                    keeps it out of this tab's memory. A send that generated
+                    both SLD and OLD lists each separately. */}
+                {result?.ok && result.projects && result.projects.length > 0 && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 mb-3">
+                    <p className="text-xs font-medium text-slate-600 mb-2">
+                      Ready on the techserver
+                    </p>
+                    <div className="space-y-2">
+                      {result.projects.map(project => (
+                        <div key={`${project.type}-${project.path}`}
+                          className="flex items-center justify-between gap-3 flex-wrap">
+                          <span className="text-sm text-slate-700">
+                            {project.displayName}
+                            <span className="text-xs text-slate-400 ml-2">
+                              {project.oenum} / {project.fileName}
+                            </span>
+                          </span>
+                          <span className="flex items-center gap-2 shrink-0">
+                            <a href={eplanApi.downloadUrl(project, 'pdf')}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-100">
+                              <DownloadIcon className="w-3.5 h-3.5" /> PDF
+                            </a>
+                            <a href={eplanApi.downloadUrl(project, 'zip')}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-100">
+                              <DownloadIcon className="w-3.5 h-3.5" /> Project (.zip)
+                            </a>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-2">
+                      The archive is the .elk and its .edb folder, zipped on the way through — it can take a while.
+                    </p>
                   </div>
                 )}
 

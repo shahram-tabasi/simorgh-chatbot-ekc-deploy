@@ -118,6 +118,13 @@ class DrawResponse(BaseModel):
     job_id: str
     status: str
     message: str
+    # The raw Content string from EPLAN's ServerResponse: the project path(s)
+    # it just wrote, prefixed "sld", "old" or "sldold" (two paths joined by
+    # "&*"). Eplanix's own FinishJob view parses exactly this to build its
+    # download links, and callers here need the same thing to offer any — it
+    # was only ever interpolated into `message`, which is prose, not an
+    # address. Absent when the send failed.
+    project_path: Optional[str] = None
 
 
 class PortResolveRequest(BaseModel):
@@ -338,10 +345,12 @@ async def trigger_drawing(req: EplanDrawRequest):
             _jobs[job_id]["response"] = result["response"]
             _jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
 
+            content = result["response"].get("Content")
             return DrawResponse(
                 job_id=job_id,
                 status="completed",
-                message=f"Drawing generated. Output: {result['response'].get('Content', 'N/A')}",
+                message=f"Drawing generated. Output: {content or 'N/A'}",
+                project_path=content,
             )
         else:
             _jobs[job_id]["status"] = "failed"

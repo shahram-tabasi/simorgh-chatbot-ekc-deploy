@@ -18,6 +18,18 @@ export interface EplanTarget {
   authenticated: boolean;
 }
 
+/** One project EPLAN wrote, ready to be downloaded. */
+export interface EplanProject {
+  /** 'sld' (single line) or 'old' (outline) — a send can produce both. */
+  type: 'sld' | 'old';
+  displayName: string;
+  /** The OE share it landed on, e.g. "OE12112". */
+  oenum: string;
+  /** Path to the .elk inside that share. */
+  path: string;
+  fileName: string;
+}
+
 export interface EplanSendResult {
   success: boolean;
   status?: string;
@@ -25,6 +37,9 @@ export interface EplanSendResult {
   message?: string;
   records?: number;
   error?: string;
+  /** What EPLAN produced. Empty when the send failed, or when EPLAN
+   *  answered with a path this app could not make sense of. */
+  projects?: EplanProject[];
 }
 
 export const eplanApi = {
@@ -61,5 +76,17 @@ export const eplanApi = {
       return { success: false, error: body.error || `EPLAN bridge refused the request (${response.status})` };
     }
     return body;
+  },
+
+  /** A download URL for one of the files EPLAN produced.
+   *
+   *  Given to the browser as a plain link rather than fetched here: these are
+   *  large (a project archive runs to hundreds of megabytes), and letting the
+   *  browser stream one to disk keeps it out of this tab's memory entirely
+   *  and gives the user the normal download UI, progress and all.
+   */
+  downloadUrl(project: EplanProject, kind: 'pdf' | 'zip'): string {
+    const query = new URLSearchParams({ oenum: project.oenum, path: project.path });
+    return `${API_BASE_URL}/eplan/${kind}?${query.toString()}`;
   },
 };
