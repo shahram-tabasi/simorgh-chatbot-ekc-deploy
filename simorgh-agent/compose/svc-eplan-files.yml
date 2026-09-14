@@ -1,0 +1,50 @@
+# =============================================================================
+# EPLAN-FILES - the drawings EPLAN produced, off the techserver share.
+# Port 8056. Read-only: it opens files, it never writes to the share.
+#
+# Separate from techserver-mcp on purpose, though both read the same host.
+# techserver-mcp reaches it with the smbclient CLI, which is an apt package,
+# and apt cannot reach Debian's mirrors from this network — so that image
+# cannot currently be rebuilt at all. This one takes its SMB client from pip
+# instead (see its Dockerfile), which is the package path that does work here.
+# It needs no share enumeration, which is the one thing the CLI was required
+# for: the share name arrives inside the path EPLAN itself wrote.
+# =============================================================================
+services:
+  eplan-files:
+    build:
+      context: ../eplan-files-service
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple/}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+    image: simorgh-eplan-files:local
+    container_name: eplan-files
+    expose:
+      - "8056"
+    networks:
+      - app_net
+    environment:
+      - PYTHONUNBUFFERED=1
+      # The same techserver credentials techserver-mcp uses — one account for
+      # the stack, configured once in .env.
+      - TECHSERVER_HOST=${TECHSERVER_HOST:-192.168.1.3}
+      - TECHSERVER_USER=${TECHSERVER_USER:-EKC\tech}
+      - TECHSERVER_PASSWORD=${TECHSERVER_PASSWORD:-}
+      - EPLAN_ZIP_MAX_BYTES=${EPLAN_ZIP_MAX_BYTES:-1073741824}
+      - EPLAN_SMB_TIMEOUT=${EPLAN_SMB_TIMEOUT:-60}
+      - EPLAN_FILES_API_KEY=${EPLAN_FILES_API_KEY:-}
+    healthcheck:
+      # stdlib, not wget — this image installs no OS packages, so there is no
+      # package manager here and nothing that could depend on one.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8056/health', timeout=3)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  app_net:
+    name: simorgh_app_net
+    driver: bridge

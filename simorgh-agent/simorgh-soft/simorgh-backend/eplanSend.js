@@ -20,7 +20,7 @@
 // the bridge itself reaches EPLAN across servers (eplan-port-forwarder).
 
 const DEFAULT_BRIDGE_URL = 'http://eplan-bridge:8026';
-const DEFAULT_TECHSERVER_MCP_URL = 'http://techserver-mcp:8053';
+const DEFAULT_EPLAN_FILES_URL = 'http://eplan-files:8056';
 
 // Where EPLAN says it put the drawing.
 //
@@ -71,9 +71,10 @@ function parseEplanProjects(raw) {
 }
 
 
-function techserverConfig() {
+function filesConfig() {
   return {
-    url: String(process.env.TECHSERVER_MCP_URL || DEFAULT_TECHSERVER_MCP_URL).replace(/\/$/, ''),
+    url: String(process.env.EPLAN_FILES_URL || DEFAULT_EPLAN_FILES_URL).replace(/\/$/, ''),
+    apiKey: process.env.EPLAN_FILES_API_KEY || '',
     timeoutMs: Number(process.env.EPLAN_DOWNLOAD_TIMEOUT_MS) || 900000,
   };
 }
@@ -201,9 +202,8 @@ export function registerEplanRoutes(app) {
   // ── Downloading what EPLAN produced ──────────────────────────────────────
   //
   // The drawings land on the techserver SMB share, which this backend has no
-  // credentials for and no SMB client in. techserver-mcp already holds both —
-  // it reads that same host for the RAG side — so the bytes are streamed
-  // through from there rather than duplicating any of it here.
+  // credentials for and no SMB client in, so the bytes are streamed through
+  // eplan-files rather than either being duplicated here.
   //
   // Streamed, not buffered: an EPLAN project zip is routinely hundreds of
   // megabytes, and reading one into memory to hand it on would be the largest
@@ -218,14 +218,17 @@ export function registerEplanRoutes(app) {
         });
       }
 
-      const { url, timeoutMs } = techserverConfig();
+      const { url, apiKey, timeoutMs } = filesConfig();
       const target = `${url}${endpoint}?oenum=${encodeURIComponent(oenum)}`
                    + `&path=${encodeURIComponent(projectPath)}`;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const upstream = await fetch(target, { signal: controller.signal });
+        const upstream = await fetch(target, {
+          signal: controller.signal,
+          headers: apiKey ? { 'X-API-Key': apiKey } : {},
+        });
 
         if (!upstream.ok) {
           const detail = await upstream.text().catch(() => '');

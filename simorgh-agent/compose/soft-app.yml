@@ -48,11 +48,12 @@ services:
       - EPLAN_BRIDGE_API_KEY=${EPLAN_BRIDGE_API_KEY:-}
       - EPLAN_BRIDGE_TIMEOUT_MS=${EPLAN_BRIDGE_TIMEOUT_MS:-120000}
       # Downloading what EPLAN produced. The drawings live on the techserver
-      # SMB share; techserver-mcp already has the credentials and the SMB
-      # client for it, so this backend streams through that rather than
-      # holding either itself. Generous timeout: a project archive is often
-      # hundreds of megabytes, fetched over SMB and then zipped.
-      - TECHSERVER_MCP_URL=${TECHSERVER_MCP_URL:-http://techserver-mcp:8053}
+      # SMB share, which this backend has no credentials for and no SMB client
+      # in, so it streams through eplan-files rather than holding either.
+      # Generous timeout: a project archive is often hundreds of megabytes,
+      # fetched over SMB and then zipped.
+      - EPLAN_FILES_URL=${EPLAN_FILES_URL:-http://eplan-files:8056}
+      - EPLAN_FILES_API_KEY=${EPLAN_FILES_API_KEY:-}
       - EPLAN_DOWNLOAD_TIMEOUT_MS=${EPLAN_DOWNLOAD_TIMEOUT_MS:-900000}
     volumes:
       # Windows installer drop folder — the app offers whatever .exe is in here,
