@@ -72,6 +72,13 @@ EPLAN_DEFAULT_PORT = int(os.getenv("EPLAN_DEFAULT_PORT", "12000"))
 EPLAN_PORT_MIN = int(os.getenv("EPLAN_PORT_MIN", str(EPLAN_DEFAULT_PORT)))
 EPLAN_PORT_MAX = int(os.getenv("EPLAN_PORT_MAX", "12100"))
 TCP_TIMEOUT = int(os.getenv("TCP_TIMEOUT", "120"))
+# How many pool ports to probe at once. The pool is 101 ports and a probe
+# against a host that DROPS packets (rather than refusing them) burns its
+# whole timeout, so probing one at a time costs pool x timeout — 101 seconds
+# for the default pool, which is far past any caller's patience. Probing the
+# whole pool at once would be quicker still, but 101 simultaneous connects to
+# one host looks like a port scan; a batch keeps it to a couple of rounds.
+PROBE_CONCURRENCY = int(os.getenv("EPLAN_PROBE_CONCURRENCY", "64"))
 # Optional shared secret. Empty means "no auth" — fine while this only ever
 # takes traffic from inside the compose network, but set it once /draw is
 # reachable from another server (e.g. simorgh-backend across the LAN) and
@@ -130,27 +137,57 @@ async def _port_answers(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+async def _scan_pool(host: str, ports: List[int], timeout: float = 1.0) -> List[int]:
+    """Which of `ports` answer, in pool order, probed concurrently.
+
+    Sequentially this cost len(ports) x timeout, because a probe only returns
+    early when the far end actively refuses — and the case someone is actually
+    waiting on is the one where it does not: nothing deployed on the EPLAN
+    machine, or a firewall dropping the pool, so every probe runs to its full
+    timeout. That turned "nothing is listening" into a 101-second hang that
+    every caller gave up on first, reporting a bridge timeout instead of the
+    real answer. Concurrently it costs one timeout per batch.
+    """
+    sem = asyncio.Semaphore(max(1, PROBE_CONCURRENCY))
+
+    async def probe(port: int) -> bool:
+        async with sem:
+            return await _port_answers(host, port, timeout=timeout)
+
+    answered = await asyncio.gather(*(probe(p) for p in ports))
+    return [p for p, ok in zip(ports, answered) if ok]
+
+
+def _nothing_listening_detail(host: str) -> str:
+    return (
+        f"No EPLAN instance is currently reachable on {host}:"
+        f"{EPLAN_PORT_MIN}-{EPLAN_PORT_MAX}. Either no EPLAN is running (open the "
+        "Eplanix web app once so it starts one), or eplan-port-forwarder is not "
+        f"running on the EPLAN machine — nothing binds {host}'s real interface "
+        "without it, AsyncTcpServer listens on that machine's loopback only."
+    )
+
+
 async def _resolve_and_reserve_port(host: str) -> int:
     """The port a /draw with no explicit `port` uses: the first one in the
     pool that answers and isn't already busy with another request here.
     Mirrors the reuse half of Eplanix's own TcpPortResolverService — the
     half this bridge can actually do without launching EPLAN.exe itself."""
     async with _busy_lock:
-        for port in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1):
-            if port in _busy_ports:
-                continue
-            if await _port_answers(host, port):
+        candidates = [p for p in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1)
+                      if p not in _busy_ports]
+
+    # Probed outside the lock: it is a second of network time, and holding the
+    # lock across it would serialise every concurrent /draw behind one scan.
+    answering = await _scan_pool(host, candidates)
+
+    async with _busy_lock:
+        for port in answering:
+            if port not in _busy_ports:
                 _busy_ports.add(port)
                 return port
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            f"No EPLAN instance is currently reachable on {host}:"
-            f"{EPLAN_PORT_MIN}-{EPLAN_PORT_MAX}. Open the Eplanix web app once "
-            "so it starts one, or check that eplan-port-forwarder is running "
-            "on the EPLAN machine and this bridge's EPLAN_HOST points at it."
-        ),
-    )
+
+    raise HTTPException(status_code=503, detail=_nothing_listening_detail(host))
 
 
 async def _release_port(port: int) -> None:
@@ -207,11 +244,12 @@ async def _send_to_eplan(host: str, port: int, data: List[Dict]) -> Dict:
 async def health():
     # A quick signal, not a full resolve: whether *anything* in the pool
     # currently answers, without reserving it.
-    eplan_status = "unreachable"
-    for port in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1):
-        if await _port_answers(EPLAN_HOST, port, timeout=0.5):
-            eplan_status = "reachable"
-            break
+    # Concurrent, and short: this is what the container healthcheck calls, and
+    # it gave up at 10s while a sequential scan of a dropping host took 50.
+    reachable = await _scan_pool(
+        EPLAN_HOST, list(range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1)), timeout=0.5
+    )
+    eplan_status = "reachable" if reachable else "unreachable"
 
     return {
         "status": "healthy",
@@ -285,14 +323,13 @@ async def resolve_port(req: PortResolveRequest):
     """Report an EPLAN port that currently answers, without reserving it —
     what the Simorgh dialog's "Test" button calls to say whether a draw
     would have anywhere to go right now."""
-    for port in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1):
-        if await _port_answers(EPLAN_HOST, port):
-            return {"port": port, "status": "available", "host": EPLAN_HOST}
-
-    raise HTTPException(
-        status_code=503,
-        detail=f"No EPLAN server available on ports {EPLAN_PORT_MIN}-{EPLAN_PORT_MAX}",
+    answering = await _scan_pool(
+        EPLAN_HOST, list(range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1))
     )
+    if answering:
+        return {"port": answering[0], "status": "available", "host": EPLAN_HOST}
+
+    raise HTTPException(status_code=503, detail=_nothing_listening_detail(EPLAN_HOST))
 
 
 # =============================================================================
@@ -339,10 +376,12 @@ async def eplan_draw(project_name: str, eplan_data: str,
 @mcp.tool()
 async def eplan_resolve_port(username: str = "agent") -> str:
     """Find an available EPLAN server port in the pool, without reserving it."""
-    for p in range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1):
-        if await _port_answers(EPLAN_HOST, p):
-            return json.dumps({"port": p, "status": "available", "host": EPLAN_HOST})
-    return json.dumps({"error": f"No EPLAN server available on ports {EPLAN_PORT_MIN}-{EPLAN_PORT_MAX}"})
+    answering = await _scan_pool(
+        EPLAN_HOST, list(range(EPLAN_PORT_MIN, EPLAN_PORT_MAX + 1))
+    )
+    if answering:
+        return json.dumps({"port": answering[0], "status": "available", "host": EPLAN_HOST})
+    return json.dumps({"error": _nothing_listening_detail(EPLAN_HOST)})
 
 
 # FastMCP's streamable_http_app exposes route /mcp internally. Mount at
