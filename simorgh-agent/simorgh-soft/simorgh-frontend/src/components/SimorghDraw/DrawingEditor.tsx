@@ -12,7 +12,7 @@ import {
   CircleDashedIcon, RulerIcon, ScissorsIcon, ArrowRightToLineIcon,
   CornerDownRightIcon, RotateCwIcon, FlipHorizontalIcon, FlipVerticalIcon,
   ScalingIcon, BringToFrontIcon, SendToBackIcon, TableIcon, RefreshCwIcon,
-  HashIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon,
+  HashIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, SparklesIcon,
   AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
@@ -437,6 +437,53 @@ export const DrawingEditor: React.FC<Props> = ({
     touch(index);
     forceRender(n => n + 1);
   }, [index, shapes]);
+
+  // ── Drawing by description ───────────────────────────────────────────────
+  //
+  // The local model writes shapes; the backend validates every one of them
+  // before any reaches here. What comes back goes on through draw(), so it is
+  // one undo step and can be thrown away like anything else drawn by hand —
+  // which is the point. It is a first draft to correct, not an answer.
+  const [askOpen, setAskOpen] = useState(false);
+  const [askText, setAskText] = useState('');
+  const [asking, setAsking] = useState(false);
+
+  const askToDraw = useCallback(async () => {
+    const prompt = askText.trim();
+    if (prompt.length < 3 || !sheet) return;
+    setAsking(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${(import.meta as { env?: Record<string, string> }).env?.VITE_API_URL || ''}/api/draw/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          width: sheet.drawing.width,
+          height: sheet.drawing.height,
+          textSize,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success) {
+        setNotice(body.error || T.askFailed);
+        return;
+      }
+      draw(body.shapes as Shape[]);
+      setAskOpen(false);
+      setAskText('');
+      // How much was thrown away matters as much as what arrived: a draft
+      // that lost half its shapes is one to look over rather than build on.
+      setNotice(body.droppedCount
+        ? T.askDrewSome.replace('{n}', String(body.shapes.length)).replace('{d}', String(body.droppedCount))
+        : T.askDrew.replace('{n}', String(body.shapes.length)));
+    } catch (err) {
+      setNotice(`${T.askFailed} ${(err as Error).message}`);
+    } finally {
+      setAsking(false);
+    }
+  }, [askText, sheet, textSize, draw, T]);
+
 
   /** The text tool has a place; the words come from here. */
   const placeText = useCallback((at: { x: number; y: number }) => {
@@ -1151,6 +1198,13 @@ export const DrawingEditor: React.FC<Props> = ({
             <DownloadIcon className="w-4 h-4" /> SVG
           </button>
           <button
+            onClick={() => setAskOpen(o => !o)}
+            title={T.askTip}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-violet-700 text-white text-sm font-medium hover:bg-violet-800"
+          >
+            <SparklesIcon className="w-4 h-4" /> {T.ask}
+          </button>
+          <button
             onClick={() => doNumberWires(false)}
             title={T.wireNumberTip}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
@@ -1253,6 +1307,38 @@ export const DrawingEditor: React.FC<Props> = ({
           {showHelp && (
             <DrawingHelp lang={lang} t={T} onClose={() => setShowHelp(false)} />
           )}
+          {askOpen && (
+            <div className="absolute top-2 left-2 z-30 w-[24rem] rounded-lg border border-violet-300 bg-white shadow-xl">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">
+                <p className="text-sm font-semibold text-gray-800">
+                  <SparklesIcon className="w-4 h-4 inline mr-1 text-violet-600" />{T.ask}
+                </p>
+                <button className="p-1 rounded hover:bg-gray-100" onClick={() => setAskOpen(false)}>
+                  <XIcon className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-3">
+                <textarea
+                  value={askText}
+                  onChange={e => setAskText(e.target.value)}
+                  rows={3}
+                  placeholder={T.askPlaceholder}
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-violet-400"
+                />
+                <p className="text-[11px] text-gray-500 mt-1.5">{T.askNote}</p>
+                <div className="flex justify-end mt-2">
+                  <button
+                    onClick={askToDraw}
+                    disabled={asking || askText.trim().length < 3}
+                    className="px-3 py-1.5 rounded bg-violet-700 text-white text-sm font-medium hover:bg-violet-800 disabled:opacity-40"
+                  >
+                    {asking ? T.askWorking : T.askGo}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {showChecks && (
             <div className="absolute top-2 right-2 z-30 w-[22rem] max-h-[70%] flex flex-col rounded-lg border border-gray-300 bg-white shadow-xl">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">

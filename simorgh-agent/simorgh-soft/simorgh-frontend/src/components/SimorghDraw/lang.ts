@@ -63,6 +63,8 @@ export interface Strings {
   tagDevices: string; tagDevicesTip: string; tagged: string; tagAllTagged: string;
   checks: string; checksTip: string; checksClean: string;
   xrefs: string; xrefOn: string;
+  ask: string; askTip: string; askPlaceholder: string; askNote: string;
+  askGo: string; askWorking: string; askDrew: string; askDrewSome: string; askFailed: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
 
@@ -147,6 +149,15 @@ const EN: Strings = {
   checksClean: 'Nothing to report on this sheet.',
   xrefs: 'Across sheets',
   xrefOn: 'on',
+  ask: 'Draw for me',
+  askTip: 'Describe a circuit and the local model drafts it onto this sheet',
+  askPlaceholder: 'e.g. a motor starter: isolator, fuses, contactor, overload, motor — wired down the page',
+  askNote: 'A first draft to correct, not an answer. It arrives as one undo step, so it can be taken straight back off.',
+  askGo: 'Draw',
+  askWorking: 'Drawing…',
+  askDrew: '{n} shape(s) drawn.',
+  askDrewSome: '{n} shape(s) drawn — {d} were dropped as unusable, so look it over.',
+  askFailed: 'The model could not draw that.',
   rect: 'Rectangle', circle: 'Circle — centre, then radius',
   ellipse: 'Ellipse — centre, then the two radii',
   arc: 'Arc — centre, start, then sweep', text: 'Text',
@@ -318,6 +329,15 @@ const FA: Strings = {
   checksClean: 'در این شیت موردی برای گزارش نیست.',
   xrefs: 'در شیت‌های دیگر',
   xrefOn: 'در',
+  ask: 'برایم بکش',
+  askTip: 'مدار را توصیف کنید تا مدل محلی پیش‌نویس آن را روی این شیت بکشد',
+  askPlaceholder: 'مثلاً: راه‌انداز موتور — کلید جداکننده، فیوز، کنتاکتور، بی‌متال، موتور، سیم‌کشی از بالا به پایین',
+  askNote: 'یک پیش‌نویس برای اصلاح است، نه پاسخ نهایی. در یک مرحلهٔ undo برداشته می‌شود.',
+  askGo: 'بکش',
+  askWorking: 'در حال کشیدن…',
+  askDrew: '{n} شکل کشیده شد.',
+  askDrewSome: '{n} شکل کشیده شد — {d} مورد غیرقابل‌استفاده حذف شد، بازبینی کنید.',
+  askFailed: 'مدل نتوانست این را بکشد.',
   rect: 'مستطیل', circle: 'دایره — مرکز، سپس شعاع',
   ellipse: 'بیضی — مرکز، سپس دو شعاع',
   arc: 'کمان — مرکز، شروع، سپس مقدار جاروب', text: 'متن',
@@ -489,6 +509,15 @@ const TR: Strings = {
   checksClean: 'Bu sayfada bildirilecek bir şey yok.',
   xrefs: 'Diğer sayfalarda',
   xrefOn: 'sayfa',
+  ask: 'Benim için çiz',
+  askTip: 'Bir devre tarif edin, yerel model bu sayfaya taslağını çizsin',
+  askPlaceholder: 'örn. motor yol vericisi: şalter, sigorta, kontaktör, termik, motor — yukarıdan aşağıya',
+  askNote: 'Düzeltilecek bir taslak, kesin cevap değil. Tek geri alma adımıyla kaldırılır.',
+  askGo: 'Çiz',
+  askWorking: 'Çiziliyor…',
+  askDrew: '{n} şekil çizildi.',
+  askDrewSome: '{n} şekil çizildi — {d} tanesi kullanılamaz olduğu için atıldı, gözden geçirin.',
+  askFailed: 'Model bunu çizemedi.',
   rect: 'Dikdörtgen', circle: 'Daire — merkez, sonra yarıçap',
   ellipse: 'Elips — merkez, sonra iki yarıçap',
   arc: 'Yay — merkez, başlangıç, sonra süpürme', text: 'Yazı',

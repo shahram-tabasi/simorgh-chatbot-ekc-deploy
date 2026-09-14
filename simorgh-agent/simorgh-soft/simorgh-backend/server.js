@@ -16,6 +16,7 @@ import { registerTpmsImportRoutes } from './tpmsImport.js';
 import { deadline, MYSQL_PING_TIMEOUT_MS } from './dbTimeout.js';
 import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 import { registerEplanRoutes } from './eplanSend.js';
+import { registerDrawAssistRoutes } from './drawAssist.js';
 import { registerDocumentRoutes } from './documents.js';
 import { registerPlotframeFieldRoutes } from './plotframeFields.js';
 import { extractPdfText } from './pdfText.js';
@@ -300,6 +301,11 @@ registerEplanSymbolRoutes(app, connectToSqlServer, process.env.EPLAN_SYMBOL_DIR)
 
 // EPLAN — forwards to eplan-bridge-service; address in .env (EPLAN_BRIDGE_URL).
 registerEplanRoutes(app);
+
+// Simorgh Draw's assistant: the local model writes shapes, this validates them
+// before any of it reaches a sheet. Same model the chat uses — one endpoint to
+// configure, not two.
+registerDrawAssistRoutes(app, callLocalModel);
 
 // Project documents — the Documents tab. A getter, not `db` itself: this
 // registration runs before connectToDatabase() resolves (see startServer
