@@ -1133,6 +1133,17 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             <UploadIcon className="w-4 h-4 inline mr-1" />
             Import Excel
           </button>
+          {/* Stub for now — reads a SIMARIS export (a different sheet layout
+              than the app's own Import Excel above) to pull MODULE NO. from.
+              Behaviour to be specified; this just gets the button in place. */}
+          <button
+            className="px-3 py-1 bg-orange-600 text-white rounded text-sm hover:bg-orange-700"
+            onClick={() => alert('Import from SIMARIS — coming soon.')}
+            title="Import a SIMARIS Excel export to pull MODULE NO. from"
+          >
+            <UploadIcon className="w-4 h-4 inline mr-1" />
+            Import from SIMARIS
+          </button>
           {/* Shown only once something has been imported: a button that reads
               the same file again, for when the spreadsheet has been edited in
               Excel and saved back to the same place. */}
