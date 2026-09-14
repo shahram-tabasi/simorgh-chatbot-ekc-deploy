@@ -336,25 +336,35 @@ app.get('/', (req, res) => {
 });
 
 // ============================================
-// TPMS MySQL API - Project List (READ-ONLY)
-// Based on C# ViewProjectMains query
+// TPMS MySQL API - Project pickers (READ-ONLY)
+// Based on Eplanix's ProjectData / GetScopes / GetRevisions
 // ============================================
-
-/**
- * GET /api/tpms/projects - Get project list from TPMS MySQL database
- * Returns: [{ value: IdprojectMain, text: Oenum + ProjectName }]
- * Equivalent to C#: _tpmsContext.ViewProjectMains.Select(p => new SelectListItem { Value = p.IdprojectMain.ToString(), Text = p.Oenum + p.ProjectName })
- */
-
-/**
- * GET /api/tpms/scopes/:projectId - Get scopes for a project
- * For future implementation when needed
- */
-
-/**
- * GET /api/tpms/revisions/:scopeId - Get revisions for a scope
- * For future implementation when needed
- */
+//
+// All three routes exist. They live in tpmsImport.js and are registered above
+// by registerTpmsImportRoutes(app, connectToMySql) — they are not repeated
+// here, because Express matches in registration order and a second copy at
+// this point in the file would be dead code the first one always shadows.
+//
+//   GET /api/tpms/projects            -> SQL.projectList   (tpmsImport.js)
+//   GET /api/tpms/scopes/:projectId   -> SQL.scopeList
+//   GET /api/tpms/revisions/:scopeId  -> SQL.revisionList
+//
+// Each answers { success, count, items: [{ value, text }] }. The project list
+// also carries `code` (OENUM) and `name` on their own, because the picker
+// shows them as two columns; the C# joins the same two fields early instead,
+// into one SelectListItem text (Oenum + ProjectName).
+//
+// The queries are the reads the C# makes, against the same MySQL views:
+// View_Project_Main for the projects, and View_draft for the scopes
+// (Tablo_ID/scopeName) and revisions of one.
+//
+// One part of C# GetScopes has no equivalent here, deliberately: the check
+// that the caller holds write access to \\techserver\OE<nnn> before the
+// scopes are handed over. It reads a Windows ACL and matches it against
+// EKC\<User.Identity.Name>, and this backend has no authentication at all —
+// there is no user to check, so the gate would be a no-op dressed as a
+// control. If this API is ever reachable from outside the internal network,
+// it needs to come back with a real identity behind it.
 
 // ============================================
 // ADDED: SQL Parts API with Manufacturer Filter
