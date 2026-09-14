@@ -69,6 +69,13 @@ export interface Strings {
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
 
+  // The ribbon — its tabs, and the caption under each group of commands
+  tabHome: string; tabElectrical: string; tabOutput: string; tabView: string;
+  panDraw: string; panModify: string; panArrange: string; panProps: string;
+  panBlock: string; panAnnotate: string; panCheck: string; panTable: string;
+  panSheet: string; panExport: string; panKeep: string;
+  panZoom: string; panAids: string; panApp: string;
+
   // Geometry, in the panel where it can be typed
   geometry: string; inMm: string;
   lengthOf: string; angleOf: string; radiusOf: string;
@@ -205,6 +212,11 @@ const EN: Strings = {
   solid: 'solid', dashed: 'dashed', dashDot: 'dash-dot', dotted: 'dotted',
   paperOf: "The sheet DXF and PDF are put on. 'Fit the drawing' keeps the scale and lets the sheet grow.",
   fitDrawing: 'fit the drawing',
+  tabHome: 'Home', tabElectrical: 'Electrical', tabOutput: 'Output', tabView: 'View',
+  panDraw: 'Draw', panModify: 'Modify', panArrange: 'Arrange', panProps: 'Properties',
+  panBlock: 'Block', panAnnotate: 'Annotate', panCheck: 'Check', panTable: 'Table',
+  panSheet: 'Sheet', panExport: 'Export', panKeep: 'Keep',
+  panZoom: 'Zoom', panAids: 'Aids', panApp: 'App',
 
   geometry: 'Geometry', inMm: 'millimetres',
   lengthOf: 'Length', angleOf: 'Angle', radiusOf: 'Radius',
@@ -389,6 +401,11 @@ const FA: Strings = {
   solid: 'ممتد', dashed: 'خط‌چین', dashDot: 'خط‌نقطه', dotted: 'نقطه‌چین',
   paperOf: 'کاغذی که DXF و PDF روی آن می‌نشیند. «اندازه نقشه» مقیاس را نگه می‌دارد و کاغذ را بزرگ می‌کند.',
   fitDrawing: 'اندازه نقشه',
+  tabHome: 'خانه', tabElectrical: 'برق', tabOutput: 'خروجی', tabView: 'نما',
+  panDraw: 'رسم', panModify: 'ویرایش', panArrange: 'چیدمان', panProps: 'ویژگی‌ها',
+  panBlock: 'بلوک', panAnnotate: 'شماره‌گذاری', panCheck: 'بازبینی', panTable: 'جدول',
+  panSheet: 'برگه', panExport: 'خروجی گرفتن', panKeep: 'نگهداری',
+  panZoom: 'بزرگ‌نمایی', panAids: 'کمک‌ها', panApp: 'برنامه',
 
   geometry: 'هندسه', inMm: 'میلی‌متر',
   lengthOf: 'طول', angleOf: 'زاویه', radiusOf: 'شعاع',
@@ -574,6 +591,11 @@ const TR: Strings = {
   solid: 'sürekli', dashed: 'kesikli', dashDot: 'çizgi-nokta', dotted: 'noktalı',
   paperOf: "DXF ve PDF'in oturacağı kâğıt. 'Çizime sığdır' ölçeği korur, kâğıdı büyütür.",
   fitDrawing: 'çizime sığdır',
+  tabHome: 'Giriş', tabElectrical: 'Elektrik', tabOutput: 'Çıktı', tabView: 'Görünüm',
+  panDraw: 'Çiz', panModify: 'Değiştir', panArrange: 'Diz', panProps: 'Özellikler',
+  panBlock: 'Blok', panAnnotate: 'Etiketle', panCheck: 'Denetle', panTable: 'Tablo',
+  panSheet: 'Sayfa', panExport: 'Dışa aktar', panKeep: 'Sakla',
+  panZoom: 'Yakınlaştır', panAids: 'Yardımcılar', panApp: 'Uygulama',
 
   geometry: 'Geometri', inMm: 'milimetre',
   lengthOf: 'Uzunluk', angleOf: 'Açı', radiusOf: 'Yarıçap',

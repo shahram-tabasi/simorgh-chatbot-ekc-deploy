@@ -40,12 +40,20 @@
   background-color: var(--sd-panel);
 }
 
+/* The strip the ribbon's tabs sit on. A shade behind the ribbon itself, so the
+ * open tab reads as continuous with its panels the way it does in daylight. */
+[data-sd-theme='dark'] .bg-gray-100 {
+  background-color: var(--sd-bg);
+}
+
 /* Every border in the editor, whatever shade it asked for. */
 [data-sd-theme='dark'] .border,
 [data-sd-theme='dark'] .border-b,
 [data-sd-theme='dark'] .border-t,
 [data-sd-theme='dark'] .border-l,
 [data-sd-theme='dark'] .border-r,
+[data-sd-theme='dark'] .border-s,
+[data-sd-theme='dark'] .border-e,
 [data-sd-theme='dark'] .border-y,
 [data-sd-theme='dark'] .divide-y > * + * {
   border-color: var(--sd-line);

@@ -91,30 +91,49 @@ const WIDTHS = [0.5, 0.8, 1, 1.3, 1.8, 2.5, 4, 6];
 const TEXT_SIZES = [6, 8, 9, 10, 12, 14, 18, 24];
 
 /**
- * The tools, in the order a hand reaches for them.
+ * The tools, split the way the ribbon groups them.
  *
  * Each names the phrase that describes it rather than carrying one, so the bar
  * reads in whichever of the three languages is chosen without the table having
  * to know about any of them. The letters are the same in every language — they
  * are where the finger goes, not a word.
+ *
+ * The split is by how often a hand reaches for it, not by what it is: the four
+ * in `DRAW_BIG` are most of a day's work on an electrical sheet and get their
+ * names on the button; the rest are known by their picture once and after that
+ * by where they sit.
  */
 type ToolName = Extract<keyof Strings, Tool>;
-const TOOLS: { id: Tool; name: ToolName; key: string; Icon: React.FC<{ className?: string }> }[] = [
+type ToolRow = { id: Tool; name: ToolName; key: string; Icon: React.FC<{ className?: string }> };
+
+const DRAW_BIG: ToolRow[] = [
   { id: 'select', name: 'select', key: 'V', Icon: MousePointer2Icon },
-  { id: 'pan', name: 'pan', key: 'H', Icon: HandIcon },
   { id: 'line', name: 'line', key: 'L', Icon: MinusIcon },
-  { id: 'polyline', name: 'polyline', key: 'P', Icon: WaypointsIcon },
   { id: 'connect', name: 'connect', key: 'N', Icon: CableIcon },
+  { id: 'text', name: 'text', key: 'T', Icon: TypeIcon },
+];
+
+const DRAW_SMALL: ToolRow[] = [
+  { id: 'polyline', name: 'polyline', key: 'P', Icon: WaypointsIcon },
+  { id: 'dim', name: 'dim', key: 'D', Icon: RulerIcon },
   { id: 'rect', name: 'rect', key: 'R', Icon: SquareIcon },
   { id: 'circle', name: 'circle', key: 'C', Icon: CircleIcon },
   { id: 'ellipse', name: 'ellipse', key: 'E', Icon: CircleDashedIcon },
   { id: 'arc', name: 'arc', key: 'A', Icon: SplineIcon },
-  { id: 'text', name: 'text', key: 'T', Icon: TypeIcon },
-  { id: 'dim', name: 'dim', key: 'D', Icon: RulerIcon },
+];
+
+/** The ones that change a line that is already there. */
+const EDIT_TOOLS: ToolRow[] = [
   { id: 'trim', name: 'trim', key: 'X', Icon: ScissorsIcon },
   { id: 'extend', name: 'extend', key: 'W', Icon: ArrowRightToLineIcon },
   { id: 'corner', name: 'corner', key: 'K', Icon: CornerDownRightIcon },
 ];
+
+/** Panning sits with the zooms, because that is the same question. */
+const PAN: ToolRow = { id: 'pan', name: 'pan', key: 'H', Icon: HandIcon };
+
+/** All of them, for the keyboard: a letter reaches a tool from any tab. */
+const TOOLS: ToolRow[] = [...DRAW_BIG, ...DRAW_SMALL, ...EDIT_TOOLS, PAN];
 
 /** Lining up, in the order the buttons sit on the bar. */
 const ALIGNS: { to: AlignTo; name: keyof Strings; Icon: React.FC<{ className?: string }> }[] = [
@@ -125,6 +144,137 @@ const ALIGNS: { to: AlignTo; name: keyof Strings; Icon: React.FC<{ className?: s
   { to: 'centre-y', name: 'centreY', Icon: AlignCenterHorizontalIcon },
   { to: 'bottom', name: 'alignBottom', Icon: AlignEndHorizontalIcon },
 ];
+
+/**
+ * The ribbon's tabs.
+ *
+ * Four, and deliberately not more. This draws switchboards, not buildings, so
+ * the hatch patterns, the 3-D and the sheet-set manager a general CAD package
+ * carries have nothing to do here. What is left divides cleanly: **Home** is
+ * the geometry, **Electrical** is what makes it a wiring diagram rather than a
+ * picture of one, **Output** is what leaves the building, **View** is how the
+ * screen looks. Save, undo, the sheet list and the model sit above the tabs,
+ * because those are wanted whichever tab is open.
+ */
+type RibbonTab = 'home' | 'elec' | 'out' | 'view';
+const TABS: { id: RibbonTab; name: 'tabHome' | 'tabElectrical' | 'tabOutput' | 'tabView' }[] = [
+  { id: 'home', name: 'tabHome' },
+  { id: 'elec', name: 'tabElectrical' },
+  { id: 'out', name: 'tabOutput' },
+  { id: 'view', name: 'tabView' },
+];
+
+/**
+ * What a button is painted in.
+ *
+ * `plain` is nearly everything; the colours are reserved for the four commands
+ * that produce something — a file, or a draft from the model — because a
+ * command with a consequence should not look like one that toggles a grid.
+ */
+const TONES = {
+  plain: 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100',
+  ai: 'bg-violet-700 border-violet-700 text-white hover:bg-violet-800',
+  dxf: 'bg-teal-700 border-teal-700 text-white hover:bg-teal-800',
+  pdf: 'bg-rose-700 border-rose-700 text-white hover:bg-rose-800',
+  live: 'bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800',
+  alarm: 'bg-red-700 border-red-700 text-white hover:bg-red-800',
+};
+
+/**
+ * A toolbar button, and the tooltip that explains it.
+ *
+ * Office, AutoCAD and EPLAN all do the same thing here and for the same
+ * reason: a row of thirty pictures is unreadable until each one says what it
+ * is. So the tooltip is two parts — the command's **name**, then a line on
+ * what it actually does, and the shortcut where there is one.
+ *
+ * It is drawn rather than left to the browser's `title`, because a native
+ * tooltip cannot show two lines and takes a second to appear, which is a
+ * second too long when the question is "which of these is trim".
+ *
+ * Give it a `label` and it grows into the tall form a ribbon uses for the
+ * handful of commands in each group that get reached for by name.
+ *
+ * It lives out here rather than inside the editor so that React keeps the same
+ * component across renders. Declared inside, every keystroke would hand React
+ * a brand-new component type, it would throw the old buttons away and build
+ * new ones, and anything with a cursor in it would lose the cursor.
+ */
+const ToolBtn: React.FC<{
+  on?: () => void; active?: boolean; disabled?: boolean; title: string;
+  /** The letter that does the same thing, shown on its own line. */
+  keyHint?: string;
+  // The tool's own name on the button, so the drawing tools can be reached
+  // by what they are rather than by where they sit on the bar.
+  tag?: string;
+  /** Put the command's name under its picture, ribbon-style. */
+  label?: boolean;
+  tone?: keyof typeof TONES;
+  children: React.ReactNode;
+}> = ({ on, active, disabled, title, keyHint, tag, label, tone = 'plain', children }) => {
+  // The phrases are written as "Name — what it does"; the dash is the split.
+  const [name, ...rest] = title.split(' — ');
+  const detail = rest.join(' — ');
+  return (
+    <span className="relative group/tip inline-flex">
+      <button
+        onClick={on} disabled={disabled} data-tool={tag}
+        // Kept for the browser, and for anything reading the page aloud.
+        title={title}
+        aria-label={title}
+        className={`rounded-md border text-sm transition-colors disabled:opacity-30 disabled:cursor-default ${
+          label ? 'flex flex-col items-center gap-1 w-[62px] px-1 py-1.5' : 'p-1.5'
+        } ${active ? 'bg-slate-700 border-slate-700 text-white' : TONES[tone]}`}
+      >
+        {children}
+        {label && <span className="text-[10px] leading-tight text-center">{name}</span>}
+      </button>
+      {!disabled && (
+        <span
+          role="tooltip"
+          data-tip={tag ?? name}
+          className="pointer-events-none absolute top-full start-0 mt-1.5 z-[120] hidden group-hover/tip:block w-max max-w-[280px] rounded-md bg-slate-800 text-white shadow-lg px-2.5 py-1.5"
+        >
+          <span className="block text-[12px] font-semibold leading-tight">
+            {name}
+            {keyHint && (
+              <kbd className="ms-1.5 px-1 py-px rounded bg-white/20 text-[10px] font-mono">
+                {keyHint}
+              </kbd>
+            )}
+          </span>
+          {detail && (
+            <span className="block text-[11px] text-slate-300 leading-snug mt-0.5">{detail}</span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+};
+
+/**
+ * One group of commands, under the caption that says what they are for.
+ *
+ * The caption is the whole point. It is what turns a wall of pictures into
+ * "those four are about wires", and it is why a ribbon stays readable at sixty
+ * commands where a single long row stopped being readable at fifteen.
+ */
+const RibbonPanel: React.FC<{ name: string; children: React.ReactNode }> = ({ name, children }) => (
+  <div className="flex shrink-0 flex-col border-e border-gray-200 px-2 last:border-e-0">
+    <div className="flex flex-1 items-start gap-1 py-1">{children}</div>
+    <div className="pt-0.5 pb-1 text-center text-[10px] leading-none text-gray-400">{name}</div>
+  </div>
+);
+
+/**
+ * The small commands of a group, stacked two deep.
+ *
+ * Column-major, so a pair reads top-then-bottom the way the eye scans a
+ * ribbon, and so a group of eight is four columns wide rather than eight.
+ */
+const Stack: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="grid grid-flow-col grid-rows-2 gap-1">{children}</div>
+);
 
 export const DrawingEditor: React.FC<Props> = ({
   sheets, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
@@ -448,6 +598,7 @@ export const DrawingEditor: React.FC<Props> = ({
   // one undo step and can be thrown away like anything else drawn by hand —
   // which is the point. It is a first draft to correct, not an answer.
   const [askOpen, setAskOpen] = useState(false);
+  const [ribbon, setRibbon] = useState<RibbonTab>('home');
   const [askText, setAskText] = useState('');
   const [asking, setAsking] = useState(false);
 
@@ -859,66 +1010,9 @@ export const DrawingEditor: React.FC<Props> = ({
     return <p className="p-6 text-sm text-gray-500" dir={dir}>{T.nothingToDraw}</p>;
   }
 
-  /**
-   * A toolbar button, and the tooltip that explains it.
-   *
-   * Office, AutoCAD and EPLAN all do the same thing here and for the same
-   * reason: a row of thirty pictures is unreadable until each one says what it
-   * is. So the tooltip is two parts — the command's **name**, then a line on
-   * what it actually does, and the shortcut where there is one.
-   *
-   * It is drawn rather than left to the browser's `title`, because a native
-   * tooltip cannot show two lines and takes a second to appear, which is a
-   * second too long when the question is "which of these is trim".
-   */
-  const Tool: React.FC<{
-    on?: () => void; active?: boolean; disabled?: boolean; title: string;
-    /** The letter that does the same thing, shown on its own line. */
-    keyHint?: string;
-    // The tool's own name on the button, so the drawing tools can be reached
-    // by what they are rather than by where they sit on the bar.
-    tag?: string; children: React.ReactNode;
-  }> = ({ on, active, disabled, title, keyHint, tag, children }) => {
-    // The phrases are written as "Name — what it does"; the dash is the split.
-    const [name, ...rest] = title.split(' — ');
-    const detail = rest.join(' — ');
-    return (
-      <span className="relative group/tip inline-flex">
-        <button
-          onClick={on} disabled={disabled} data-tool={tag}
-          // Kept for the browser, and for anything reading the page aloud.
-          title={title}
-          aria-label={title}
-          className={`p-1.5 rounded-md border text-sm transition-colors disabled:opacity-30 disabled:cursor-default ${
-            active ? 'bg-slate-700 border-slate-700 text-white'
-                   : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100'}`}
-        >
-          {children}
-        </button>
-        {!disabled && (
-          <span
-            role="tooltip"
-            data-tip={tag ?? name}
-            className="pointer-events-none absolute top-full start-0 mt-1.5 z-[120] hidden group-hover/tip:block w-max max-w-[280px] rounded-md bg-slate-800 text-white shadow-lg px-2.5 py-1.5"
-          >
-            <span className="block text-[12px] font-semibold leading-tight">
-              {name}
-              {keyHint && (
-                <kbd className="ms-1.5 px-1 py-px rounded bg-white/20 text-[10px] font-mono">
-                  {keyHint}
-                </kbd>
-              )}
-            </span>
-            {detail && (
-              <span className="block text-[11px] text-slate-300 leading-snug mt-0.5">{detail}</span>
-            )}
-          </span>
-        )}
-      </span>
-    );
-  };
-
-  const Divider = () => <span className="w-px h-6 bg-gray-300 mx-1" />;
+  // The bar's buttons are defined outside this component so that React keeps
+  // the same ones from render to render instead of rebuilding the whole bar.
+  const Tool = ToolBtn;
 
   return (
     <div
@@ -927,379 +1021,526 @@ export const DrawingEditor: React.FC<Props> = ({
       className={`border border-gray-200 rounded-lg overflow-hidden bg-white select-none ${
         fullscreen ? 'fixed inset-0 z-[300] rounded-none flex flex-col' : ''}`}
     >
-      {/* ── Toolbar ────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-1 flex-wrap px-3 py-2 bg-gray-50 border-b">
-        {sheets.length > 1 && (
-          <>
-            <select
-              className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-              value={index}
-              onChange={e => setIndex(Number(e.target.value))}
-            >
-              {sheets.map((s, i) => (
-                <option key={i} value={i}>{s.name}{isEdited(i) ? ' •' : ''}</option>
-              ))}
-            </select>
-            <Divider />
-          </>
-        )}
+      {/* ── Ribbon ─────────────────────────────────────────────────────── */}
+      {/*
+        The commands, grouped under captions rather than run out as one long
+        row of pictures.
 
-        {TOOLS.map(t => (
-          <Tool key={t.id} tag={t.id} title={T[t.name]} keyHint={t.key} active={tool === t.id} on={() => setTool(t.id)}>
-            <t.Icon className="w-4 h-4" />
-          </Tool>
-        ))}
-        {/* The corner command needs a radius before it needs a second line. */}
-        {tool === 'corner' && (
-          <label className="flex items-center gap-1 text-[11px] text-gray-600" title={T.promptRadius}>
-            {T.cornerRadius}
-            <input
-              type="number" min={0} step={1} value={cornerRadius}
-              onChange={e => setCornerRadius(Math.max(0, Number(e.target.value) || 0))}
-              className="w-14 border border-gray-300 rounded px-1.5 py-1 text-sm"
-            />
-          </label>
-        )}
-        <Divider />
+        The row was fine at fifteen commands and stopped being fine at sixty.
+        It wrapped to three lines, and the group on the end — the one carrying
+        the model, the wire numbers and the rule checks — was a single flex
+        child that could not wrap at all, so on a narrower window it ran off
+        the edge and the overflow rule cut it off. That is where the AI button
+        had been hiding. Both complaints are the same fault, and a ribbon
+        answers both: every command sits under a caption that says what it is
+        for, the panels wrap instead of running off the end, and what is not on
+        the open tab is one click away instead of off the screen.
 
-        <Tool title={T.zoomIn} on={() => zoom(1 / 1.3)}><ZoomInIcon className="w-4 h-4" /></Tool>
-        <Tool title={T.zoomOut} on={() => zoom(1.3)}><ZoomOutIcon className="w-4 h-4" /></Tool>
-        <Tool title={T.fit} on={fit}><MaximizeIcon className="w-4 h-4" /></Tool>
-        <Tool title={T.zoomSel} disabled={selection.size === 0} on={zoomToSelection}>
-          <ScanSearchIcon className="w-4 h-4" />
-        </Tool>
-        <Divider />
-
-        <Tool title={T.undo} disabled={!history.canUndo} on={undo}><UndoIcon className="w-4 h-4" /></Tool>
-        <Tool title={T.redo} disabled={!history.canRedo} on={redo}><RedoIcon className="w-4 h-4" /></Tool>
-        <Tool title={T.duplicate} disabled={selection.size === 0} on={duplicate}>
-          <CopyIcon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.del} disabled={selection.size === 0} on={remove}>
-          <Trash2Icon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.revert} disabled={!edited} on={revert}>
-          <RotateCcwIcon className="w-4 h-4" />
-        </Tool>
-        <Divider />
-
-        <Tool
-          title={
-            !onSaveEdits ? T.cannotKeep
-            : !canEdit ? T.readOnly
-            : dirty ? T.save
-            : T.savedAlready
-          }
-          disabled={!onSaveEdits || !canEdit || !dirty}
-          on={keep}
-        >
-          <SaveIcon className="w-4 h-4" />
-        </Tool>
-        {onSaveEdits && canEdit && (anySaved || dirty) && (
-          <button
-            onClick={discardAll}
-            className="px-2 py-1.5 rounded-md border border-gray-300 bg-white text-xs text-gray-600 hover:bg-gray-100"
-            title={T.discardAllTip}
-          >
-            {T.discardAll}
-          </button>
-        )}
-        <Divider />
-
-        <Tool title={T.grid} active={showGrid} on={() => setShowGrid(g => !g)}>
-          <GridIcon className="w-4 h-4" />
-        </Tool>
-        <select
-          className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-          value={snap}
-          onChange={e => setSnap(Number(e.target.value))}
-          title={T.snapTo}
-        >
-          {SNAPS.map(v => <option key={v} value={v}>{v === 0 ? T.noSnap : `${v}`}</option>)}
-        </select>
-        <Tool
-          title={objectSnap ? T.osnapOn : T.osnapOff}
-          active={objectSnap}
-          on={() => setObjectSnap(v => !v)}
-        >
-          <MagnetIcon className="w-4 h-4" />
-        </Tool>
-
-        {/* Turning, mirroring, lining up — the commands that change what is
-            already there rather than adding to it. All of them work on
-            whatever is picked, so all of them are dark until something is. */}
-        <Divider />
-        <Tool title={T.rotateCCW} disabled={selection.size === 0} on={() => rotateBy(-90)}>
-          <RotateCcwIcon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.rotateCW} disabled={selection.size === 0} on={() => rotateBy(90)}>
-          <RotateCwIcon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.rotateFree} disabled={selection.size === 0} on={rotateFree}>
-          <span className="text-[11px] font-semibold leading-none px-0.5">∠</span>
-        </Tool>
-        <Tool title={T.mirrorH} disabled={selection.size === 0}
-              on={() => transform(cx => mirrorX(cx))}>
-          <FlipHorizontalIcon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.mirrorV} disabled={selection.size === 0}
-              on={() => transform((_, cy) => mirrorY(cy))}>
-          <FlipVerticalIcon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.scale} disabled={selection.size === 0} on={scaleFree}>
-          <ScalingIcon className="w-4 h-4" />
-        </Tool>
-        {ALIGNS.map(a => (
-          <Tool key={a.to} title={T[a.name] as string} disabled={selection.size < 2} on={() => align(a.to)}>
-            <a.Icon className="w-4 h-4" />
-          </Tool>
-        ))}
-        <Tool title={T.spreadX} disabled={selection.size < 3} on={() => spread('x')}>
-          <AlignHorizontalDistributeCenterIcon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.spreadY} disabled={selection.size < 3} on={() => spread('y')}>
-          <AlignVerticalDistributeCenterIcon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.toFront} disabled={selection.size === 0} on={() => reorder('front')}>
-          <BringToFrontIcon className="w-4 h-4" />
-        </Tool>
-        <Tool title={T.toBack} disabled={selection.size === 0} on={() => reorder('back')}>
-          <SendToBackIcon className="w-4 h-4" />
-        </Tool>
-
-        {/* A symbol is one thing, so it comes in as one and can be made into
-            one. The library sits next to the commands that act on blocks. */}
-        <Divider />
-        <Tool tag="library" title={T.openLibrary} on={() => setShowLibrary(true)}>
-          <LibraryBigIcon className="w-4 h-4" />
-        </Tool>
-        <Tool tag="group" title={T.group} keyHint="Ctrl+G" disabled={selection.size < 2} on={group}>
-          <GroupIcon className="w-4 h-4" />
-        </Tool>
-        <Tool tag="ungroup" title={T.ungroup} keyHint="Ctrl+Shift+G"
-              disabled={selection.size === 0} on={ungroup}>
-          <UngroupIcon className="w-4 h-4" />
-        </Tool>
-
-        {/* How the next line is drawn, and how the picked ones are. Changing
-            it with something selected restyles that, which is the shortest
-            path from "that should be dashed" to it being dashed. */}
-        <Divider />
-        <select
-          className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-          value={drawLayer}
-          onChange={e => { setDrawLayer(e.target.value as Layer); restyle({ layer: e.target.value as Layer }); }}
-          title={T.layerOf}
-        >
-          {(Object.keys(LAYERS) as Layer[]).map(l => (
-            <option key={l} value={l}>{l}</option>
-          ))}
-        </select>
-        <select
-          className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-          value={drawWidth}
-          onChange={e => { setDrawWidth(Number(e.target.value)); restyle({ width: Number(e.target.value) }); }}
-          title={T.widthOf}
-        >
-          {WIDTHS.map(w => <option key={w} value={w}>{w.toFixed(1)}</option>)}
-        </select>
-        <select
-          className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-          value={drawLine}
-          onChange={e => {
-            setDrawLine(e.target.value);
-            restyle({ dash: LINE_TYPES.find(l => l.id === e.target.value)?.dash ?? '' });
-          }}
-          title={T.lineTypeOf}
-        >
-          {LINE_TYPES.map(l => <option key={l.id} value={l.id}>{T[l.name]}</option>)}
-        </select>
-        {/* Colour. CAD takes an entity's colour from its layer, so this is an
-            SVG and PDF matter only and the DXF is unaffected — which is why it
-            sits here as a plain swatch rather than anywhere near the layer
-            controls. With something picked it recolours that; with nothing
-            picked it sets what is drawn next, the same way the width and line
-            type boxes beside it already behave. */}
-        <label
-          className="flex items-center gap-1 border border-gray-300 rounded px-1.5 py-1 bg-white cursor-pointer"
-          title={selection.size > 0 ? T.colourOfPicked : T.colourOfNew}
-        >
-          <PaletteIcon className="w-3.5 h-3.5 text-gray-500" />
-          <input
-            type="color"
-            className="w-6 h-5 border-0 bg-transparent p-0 cursor-pointer"
-            value={drawColor}
-            onChange={e => {
-              setDrawColor(e.target.value);
-              if (selection.size > 0) restyle({ color: e.target.value });
-            }}
-          />
-        </label>
-        {selection.size > 0 && (
-          <button
-            onClick={() => restyle({ color: '' })}
-            title={T.colourClear}
-            className="px-2 py-1.5 rounded border border-gray-300 bg-white text-xs text-gray-600 hover:bg-gray-100"
-          >
-            {T.colourClearShort}
-          </button>
-        )}
-        {(tool === 'text' || tool === 'dim' || picked.some(p => p.t === 'text')) && (
-          <select
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-            value={textSize}
-            onChange={e => { setTextSize(Number(e.target.value)); restyle({ size: Number(e.target.value) }); }}
-            title={T.textHeightOf}
-          >
-            {TEXT_SIZES.map(v => <option key={v} value={v}>{v} u</option>)}
-          </select>
-        )}
-
-        <div className="ml-auto flex items-center gap-2">
-          {/* Which language the editor speaks. Three buttons rather than a
-              dropdown: it is the kind of choice that should be one click, and
-              a reader looking for their own script finds it by its shape. */}
-          <div className="flex items-center rounded-md border border-gray-300 overflow-hidden" title={T.help}>
-            <LanguagesIcon className="w-3.5 h-3.5 mx-1.5 text-gray-400 shrink-0" />
-            {LANGS.map(l => (
-              <button
-                key={l.id}
-                onClick={() => chooseLang(l.id)}
-                data-lang={l.id}
-                className={`px-2 py-1.5 text-[11px] font-semibold border-l border-gray-300 ${
-                  lang === l.id ? 'bg-slate-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
-              >
-                {l.label}
-              </button>
-            ))}
-          </div>
-          {/* Light or dark. A sheet is looked at for hours; every CAD package
-              on a draughtsman's desk offers this and for the same reason. */}
-          <Tool
-            tag="theme"
-            title={themeId === 'dark' ? T.themeLight : T.themeDark}
-            on={() => chooseTheme(themeId === 'dark' ? 'light' : 'dark')}
-          >
-            {themeId === 'dark' ? <SunIcon className="w-4 h-4" /> : <MoonIcon className="w-4 h-4" />}
-          </Tool>
-          <Tool tag="help" title={T.help} active={showHelp} on={() => setShowHelp(h => !h)}>
-            <CircleHelpIcon className="w-4 h-4" />
-          </Tool>
-          <Tool
-            title={fullscreen ? T.leaveFullscreen : T.fullscreen}
-            on={toggleFullscreen}
-          >
-            {fullscreen ? <Minimize2Icon className="w-4 h-4" /> : <Maximize2Icon className="w-4 h-4" />}
-          </Tool>
-          <select
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
-            value={paper}
-            onChange={e => setPaper(e.target.value as PaperChoice)}
-            title={T.paperOf}
-          >
-            <option value="auto">{T.fitDrawing}</option>
-            {(['A4', 'A3', 'A2', 'A1', 'A0'] as const).map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
-          {smallest != null && (
-            <span
-              className={`text-[11px] tabular-nums ${
-                smallest < LEGIBLE_MM ? 'text-amber-700 font-medium' : 'text-gray-500'}`}
-              title={smallest < LEGIBLE_MM
-                ? `The smallest label plots at ${smallest.toFixed(2)} mm, under the ${LEGIBLE_MM} mm a drawing stays readable at. Fewer feeders to a sheet, or a bigger sheet.`
-                : `The smallest label plots at ${smallest.toFixed(2)} mm.`}
-            >
-              text {smallest.toFixed(1)} mm
-            </span>
-          )}
-          <button
-            onClick={exportDxf}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-teal-700 text-white text-sm font-medium hover:bg-teal-800"
-          >
-            <DownloadIcon className="w-4 h-4" /> DXF
-          </button>
-          <button
-            onClick={exportPdf}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-rose-700 text-white text-sm font-medium hover:bg-rose-800"
-            title="Vector PDF, one page per sheet. Latin text only — use Print / PDF for Persian."
-          >
-            <DownloadIcon className="w-4 h-4" /> PDF
-          </button>
-          <button
-            onClick={exportSvg}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
-          >
-            <DownloadIcon className="w-4 h-4" /> SVG
-          </button>
-          <button
-            onClick={() => setAskOpen(o => !o)}
-            title={T.askTip}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-violet-700 text-white text-sm font-medium hover:bg-violet-800"
-          >
-            <SparklesIcon className="w-4 h-4" /> {T.ask}
-          </button>
-          <button
-            onClick={() => doNumberWires(false)}
-            title={T.wireNumberTip}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
-          >
-            <HashIcon className="w-4 h-4" /> {T.wireNumber}
-          </button>
-          <button
-            onClick={doTagDevices}
-            title={T.tagDevicesTip}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
-          >
-            <TagIcon className="w-4 h-4" /> {T.tagDevices}
-          </button>
-          <button
-            onClick={runChecks}
-            title={T.checksTip}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium ${
-              messages && messages.some(m => m.cls === 'error')
-                ? 'bg-red-700 text-white hover:bg-red-800'
-                : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            <ShieldCheckIcon className="w-4 h-4" /> {T.checks}
-            {messages && messages.length > 0 && ` (${messages.length})`}
-          </button>
-          <button
-            onClick={importXlsx}
-            title={T.xlsxImportTip}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
-          >
-            <TableIcon className="w-4 h-4" /> {T.xlsxImport}
-          </button>
-          {/* One Update per imported table, named after its file: with several
-              on a sheet, "Update" on its own would not say which. Only shown
-              where the browser handed back a handle — without one the file
-              cannot be re-read and the button would be a lie. */}
-          {liveTables.filter(t => t.handle).map(t => (
+        Four tabs and no more. This draws switchboards, not buildings, so the
+        hatches, the 3-D and the sheet-set manager a general CAD package
+        carries have no business here.
+      */}
+      <div className="bg-gray-100 border-b">
+        {/* The tabs, and the few commands that stay put behind them: which
+            sheet, the model, undo, save, the way out of full screen. Wanted on
+            every tab, so they belong to none of them. */}
+        <div className="flex items-end gap-1 px-2 pt-1">
+          {TABS.map(t => (
             <button
               key={t.id}
-              onClick={() => updateXlsx(t.id)}
-              title={`${T.xlsxUpdateTip} — ${t.name}`}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-emerald-700 text-white text-sm font-medium hover:bg-emerald-800"
+              data-ribbon={t.id}
+              onClick={() => setRibbon(t.id)}
+              className={`rounded-t-md border border-b-0 px-3.5 py-1 text-[12px] font-medium transition-colors ${
+                ribbon === t.id
+                  ? 'bg-white border-gray-200 text-slate-800'
+                  : 'border-transparent text-gray-500 hover:bg-gray-200 hover:text-slate-700'}`}
             >
-              <RefreshCwIcon className="w-4 h-4" />
-              {T.xlsxUpdate}: {t.name.length > 18 ? `${t.name.slice(0, 16)}…` : t.name}
+              {T[t.name]}
             </button>
           ))}
-          <input
-            ref={xlsxInput}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            style={{ display: 'none' }}
-            onChange={e => {
-              const file = e.target.files?.[0];
-              // Cleared so choosing the same file twice still fires onChange.
-              e.target.value = '';
-              const pending = pendingImport.current;
-              pendingImport.current = null;
-              if (file && pending) placeTable(file, pending.id, pending.at);
-            }}
-          />
+
+          <div className="ms-auto flex items-center gap-1 pb-1">
+            {sheets.length > 1 && (
+              <select
+                className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                value={index}
+                onChange={e => setIndex(Number(e.target.value))}
+              >
+                {sheets.map((s, i) => (
+                  <option key={i} value={i}>{s.name}{isEdited(i) ? ' •' : ''}</option>
+                ))}
+              </select>
+            )}
+            {/* The model. Up here, beside undo, because asking it for a draft
+                is not a mode you switch into — it is something you reach for
+                in the middle of whatever tab you are already on. */}
+            <button
+              onClick={() => setAskOpen(o => !o)}
+              title={T.askTip}
+              data-tool="ask"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-white ${
+                askOpen ? 'bg-violet-900' : 'bg-violet-700 hover:bg-violet-800'}`}
+            >
+              <SparklesIcon className="w-4 h-4" /> {T.ask}
+            </button>
+            <Tool title={T.undo} keyHint="Ctrl+Z" disabled={!history.canUndo} on={undo}>
+              <UndoIcon className="w-4 h-4" />
+            </Tool>
+            <Tool title={T.redo} keyHint="Ctrl+Y" disabled={!history.canRedo} on={redo}>
+              <RedoIcon className="w-4 h-4" />
+            </Tool>
+            <Tool
+              title={
+                !onSaveEdits ? T.cannotKeep
+                : !canEdit ? T.readOnly
+                : dirty ? T.save
+                : T.savedAlready
+              }
+              disabled={!onSaveEdits || !canEdit || !dirty}
+              on={keep}
+            >
+              <SaveIcon className="w-4 h-4" />
+            </Tool>
+            <Tool
+              tag="fullscreen"
+              title={fullscreen ? T.leaveFullscreen : T.fullscreen}
+              on={toggleFullscreen}
+            >
+              {fullscreen ? <Minimize2Icon className="w-4 h-4" /> : <Maximize2Icon className="w-4 h-4" />}
+            </Tool>
+          </div>
         </div>
+
+        {/* The open tab's panels. They wrap rather than run off the end, which
+            is the whole of the complaint the old bar earned: at every width,
+            full screen or not, every command on the tab is on the screen. It
+            is wrap and not a scrollbar on purpose — an `overflow` here would
+            clip the tooltips, and the tooltips are what make a row of pictures
+            readable in the first place. */}
+        <div className="flex flex-wrap items-stretch bg-white px-1">
+          {ribbon === 'home' && (
+            <>
+              <RibbonPanel name={T.panDraw}>
+                {DRAW_BIG.map(t => (
+                  <Tool key={t.id} tag={t.id} label title={T[t.name]} keyHint={t.key}
+                        active={tool === t.id} on={() => setTool(t.id)}>
+                    <t.Icon className="w-5 h-5" />
+                  </Tool>
+                ))}
+                <Stack>
+                  {DRAW_SMALL.map(t => (
+                    <Tool key={t.id} tag={t.id} title={T[t.name]} keyHint={t.key}
+                          active={tool === t.id} on={() => setTool(t.id)}>
+                      <t.Icon className="w-4 h-4" />
+                    </Tool>
+                  ))}
+                </Stack>
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panModify}>
+                <Tool label title={T.duplicate} keyHint="Ctrl+D" disabled={selection.size === 0} on={duplicate}>
+                  <CopyIcon className="w-5 h-5" />
+                </Tool>
+                <Tool label title={T.del} keyHint="Del" disabled={selection.size === 0} on={remove}>
+                  <Trash2Icon className="w-5 h-5" />
+                </Tool>
+                <Stack>
+                  {EDIT_TOOLS.map(t => (
+                    <Tool key={t.id} tag={t.id} title={T[t.name]} keyHint={t.key}
+                          active={tool === t.id} on={() => setTool(t.id)}>
+                      <t.Icon className="w-4 h-4" />
+                    </Tool>
+                  ))}
+                  <Tool title={T.rotateCCW} disabled={selection.size === 0} on={() => rotateBy(-90)}>
+                    <RotateCcwIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool title={T.rotateCW} disabled={selection.size === 0} on={() => rotateBy(90)}>
+                    <RotateCwIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool title={T.rotateFree} disabled={selection.size === 0} on={rotateFree}>
+                    <span className="text-[11px] font-semibold leading-none px-0.5">∠</span>
+                  </Tool>
+                  <Tool title={T.scale} disabled={selection.size === 0} on={scaleFree}>
+                    <ScalingIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool title={T.mirrorH} disabled={selection.size === 0}
+                        on={() => transform(cx => mirrorX(cx))}>
+                    <FlipHorizontalIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool title={T.mirrorV} disabled={selection.size === 0}
+                        on={() => transform((_, cy) => mirrorY(cy))}>
+                    <FlipVerticalIcon className="w-4 h-4" />
+                  </Tool>
+                </Stack>
+                {/* The corner command wants a radius before it wants a second
+                    line, so the box appears with the command and not before. */}
+                {tool === 'corner' && (
+                  <label className="flex flex-col gap-0.5 text-[10px] text-gray-500 ps-1"
+                         title={T.promptRadius}>
+                    {T.cornerRadius}
+                    <input
+                      type="number" min={0} step={1} value={cornerRadius}
+                      onChange={e => setCornerRadius(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-16 border border-gray-300 rounded px-1.5 py-1 text-sm"
+                    />
+                  </label>
+                )}
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panArrange}>
+                <Stack>
+                  {ALIGNS.map(a => (
+                    <Tool key={a.to} title={T[a.name] as string} disabled={selection.size < 2}
+                          on={() => align(a.to)}>
+                      <a.Icon className="w-4 h-4" />
+                    </Tool>
+                  ))}
+                  <Tool title={T.spreadX} disabled={selection.size < 3} on={() => spread('x')}>
+                    <AlignHorizontalDistributeCenterIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool title={T.spreadY} disabled={selection.size < 3} on={() => spread('y')}>
+                    <AlignVerticalDistributeCenterIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool title={T.toFront} disabled={selection.size === 0} on={() => reorder('front')}>
+                    <BringToFrontIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool title={T.toBack} disabled={selection.size === 0} on={() => reorder('back')}>
+                    <SendToBackIcon className="w-4 h-4" />
+                  </Tool>
+                </Stack>
+              </RibbonPanel>
+
+              {/* How the next line is drawn, and how the picked ones are.
+                  Changing one with something selected restyles that, which is
+                  the shortest path from "that should be dashed" to it being
+                  dashed. */}
+              <RibbonPanel name={T.panProps}>
+                <div className="grid grid-cols-2 gap-1">
+                  <select
+                    className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                    value={drawLayer}
+                    onChange={e => { setDrawLayer(e.target.value as Layer); restyle({ layer: e.target.value as Layer }); }}
+                    title={T.layerOf}
+                  >
+                    {(Object.keys(LAYERS) as Layer[]).map(l => (
+                      <option key={l} value={l}>{l}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                    value={drawLine}
+                    onChange={e => {
+                      setDrawLine(e.target.value);
+                      restyle({ dash: LINE_TYPES.find(l => l.id === e.target.value)?.dash ?? '' });
+                    }}
+                    title={T.lineTypeOf}
+                  >
+                    {LINE_TYPES.map(l => <option key={l.id} value={l.id}>{T[l.name]}</option>)}
+                  </select>
+                  <select
+                    className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                    value={drawWidth}
+                    onChange={e => { setDrawWidth(Number(e.target.value)); restyle({ width: Number(e.target.value) }); }}
+                    title={T.widthOf}
+                  >
+                    {WIDTHS.map(w => <option key={w} value={w}>{w.toFixed(1)}</option>)}
+                  </select>
+                  <div className="flex items-center gap-1">
+                    {/* Colour. CAD takes an entity's colour from its layer, so
+                        this is an SVG and PDF matter only and the DXF is
+                        unaffected — which is why it is a plain swatch and not
+                        anywhere near the layer box. With something picked it
+                        recolours that; with nothing picked it sets what is
+                        drawn next, the way the boxes beside it already do. */}
+                    <label
+                      className="flex items-center gap-1 border border-gray-300 rounded px-1.5 py-1 bg-white cursor-pointer"
+                      title={selection.size > 0 ? T.colourOfPicked : T.colourOfNew}
+                    >
+                      <PaletteIcon className="w-3.5 h-3.5 text-gray-500" />
+                      <input
+                        type="color"
+                        className="w-6 h-5 border-0 bg-transparent p-0 cursor-pointer"
+                        value={drawColor}
+                        onChange={e => {
+                          setDrawColor(e.target.value);
+                          if (selection.size > 0) restyle({ color: e.target.value });
+                        }}
+                      />
+                    </label>
+                    {selection.size > 0 && (
+                      <button
+                        onClick={() => restyle({ color: '' })}
+                        title={T.colourClear}
+                        className="px-2 py-1 rounded border border-gray-300 bg-white text-xs text-gray-600 hover:bg-gray-100"
+                      >
+                        {T.colourClearShort}
+                      </button>
+                    )}
+                  </div>
+                  {(tool === 'text' || tool === 'dim' || picked.some(p => p.t === 'text')) && (
+                    <select
+                      className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                      value={textSize}
+                      onChange={e => { setTextSize(Number(e.target.value)); restyle({ size: Number(e.target.value) }); }}
+                      title={T.textHeightOf}
+                    >
+                      {TEXT_SIZES.map(v => <option key={v} value={v}>{v} u</option>)}
+                    </select>
+                  )}
+                </div>
+              </RibbonPanel>
+
+              {/* A symbol is one thing, so it comes in as one and can be made
+                  into one. The library sits with the commands that act on
+                  blocks. */}
+              <RibbonPanel name={T.panBlock}>
+                <Tool tag="library" label title={T.openLibrary} on={() => setShowLibrary(true)}>
+                  <LibraryBigIcon className="w-5 h-5" />
+                </Tool>
+                <Stack>
+                  <Tool tag="group" title={T.group} keyHint="Ctrl+G"
+                        disabled={selection.size < 2} on={group}>
+                    <GroupIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool tag="ungroup" title={T.ungroup} keyHint="Ctrl+Shift+G"
+                        disabled={selection.size === 0} on={ungroup}>
+                    <UngroupIcon className="w-4 h-4" />
+                  </Tool>
+                </Stack>
+              </RibbonPanel>
+            </>
+          )}
+
+          {ribbon === 'elec' && (
+            <>
+              {/* What makes it a wiring diagram rather than a picture of one.
+                  These read the geometry back — which lines share a node, which
+                  symbol has no designation — so they belong together and away
+                  from the commands that simply add shapes. */}
+              <RibbonPanel name={T.panAnnotate}>
+                <Tool label title={`${T.wireNumber} — ${T.wireNumberTip}`} on={() => doNumberWires(false)}>
+                  <HashIcon className="w-5 h-5" />
+                </Tool>
+                <Tool label title={`${T.tagDevices} — ${T.tagDevicesTip}`} on={doTagDevices}>
+                  <TagIcon className="w-5 h-5" />
+                </Tool>
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panCheck}>
+                <Tool
+                  label
+                  title={`${T.checks}${messages && messages.length ? ` (${messages.length})` : ''} — ${T.checksTip}`}
+                  tone={messages && messages.some(m => m.cls === 'error') ? 'alarm' : 'plain'}
+                  on={runChecks}
+                >
+                  <ShieldCheckIcon className="w-5 h-5" />
+                </Tool>
+                {xrefs.length > 0 && (
+                  <span className="flex items-center gap-1 px-1 text-[11px] text-gray-500"
+                        title={T.xrefs}>
+                    <LinkIcon className="w-3.5 h-3.5" />{xrefs.length}
+                  </span>
+                )}
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panTable}>
+                <Tool label title={`${T.xlsxImport} — ${T.xlsxImportTip}`} on={importXlsx}>
+                  <TableIcon className="w-5 h-5" />
+                </Tool>
+                {/* One Update per imported table, named after its file: with
+                    several on a sheet, "Update" on its own would not say which.
+                    Only shown where the browser handed back a handle — without
+                    one the file cannot be re-read and the button would lie. */}
+                {liveTables.filter(t => t.handle).map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => updateXlsx(t.id)}
+                    title={`${T.xlsxUpdateTip} — ${t.name}`}
+                    className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-emerald-700 text-white text-sm font-medium hover:bg-emerald-800"
+                  >
+                    <RefreshCwIcon className="w-4 h-4" />
+                    {T.xlsxUpdate}: {t.name.length > 18 ? `${t.name.slice(0, 16)}…` : t.name}
+                  </button>
+                ))}
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panBlock}>
+                <Tool tag="library" label title={T.openLibrary} on={() => setShowLibrary(true)}>
+                  <LibraryBigIcon className="w-5 h-5" />
+                </Tool>
+              </RibbonPanel>
+            </>
+          )}
+
+          {ribbon === 'out' && (
+            <>
+              <RibbonPanel name={T.panSheet}>
+                <select
+                  className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                  value={paper}
+                  onChange={e => setPaper(e.target.value as PaperChoice)}
+                  title={T.paperOf}
+                >
+                  <option value="auto">{T.fitDrawing}</option>
+                  {(['A4', 'A3', 'A2', 'A1', 'A0'] as const).map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                {smallest != null && (
+                  <span
+                    className={`self-center text-[11px] tabular-nums ${
+                      smallest < LEGIBLE_MM ? 'text-amber-700 font-medium' : 'text-gray-500'}`}
+                    title={smallest < LEGIBLE_MM
+                      ? `The smallest label plots at ${smallest.toFixed(2)} mm, under the ${LEGIBLE_MM} mm a drawing stays readable at. Fewer feeders to a sheet, or a bigger sheet.`
+                      : `The smallest label plots at ${smallest.toFixed(2)} mm.`}
+                  >
+                    text {smallest.toFixed(1)} mm
+                  </span>
+                )}
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panExport}>
+                <button
+                  onClick={exportDxf}
+                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-teal-700 text-white text-sm font-medium hover:bg-teal-800"
+                >
+                  <DownloadIcon className="w-4 h-4" /> DXF
+                </button>
+                <button
+                  onClick={exportPdf}
+                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-rose-700 text-white text-sm font-medium hover:bg-rose-800"
+                  title="Vector PDF, one page per sheet. Latin text only — use Print / PDF for Persian."
+                >
+                  <DownloadIcon className="w-4 h-4" /> PDF
+                </button>
+                <button
+                  onClick={exportSvg}
+                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-100"
+                >
+                  <DownloadIcon className="w-4 h-4" /> SVG
+                </button>
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panKeep}>
+                <Tool
+                  label
+                  title={
+                    !onSaveEdits ? T.cannotKeep
+                    : !canEdit ? T.readOnly
+                    : dirty ? T.save
+                    : T.savedAlready
+                  }
+                  disabled={!onSaveEdits || !canEdit || !dirty}
+                  on={keep}
+                >
+                  <SaveIcon className="w-5 h-5" />
+                </Tool>
+                <Tool label title={T.revert} disabled={!edited} on={revert}>
+                  <RotateCcwIcon className="w-5 h-5" />
+                </Tool>
+                {onSaveEdits && canEdit && (anySaved || dirty) && (
+                  <button
+                    onClick={discardAll}
+                    className="self-start px-2 py-1.5 rounded-md border border-gray-300 bg-white text-xs text-gray-600 hover:bg-gray-100"
+                    title={T.discardAllTip}
+                  >
+                    {T.discardAll}
+                  </button>
+                )}
+              </RibbonPanel>
+            </>
+          )}
+
+          {ribbon === 'view' && (
+            <>
+              <RibbonPanel name={T.panZoom}>
+                <Tool label title={T.fit} on={fit}><MaximizeIcon className="w-5 h-5" /></Tool>
+                <Stack>
+                  <Tool title={T.zoomIn} on={() => zoom(1 / 1.3)}><ZoomInIcon className="w-4 h-4" /></Tool>
+                  <Tool title={T.zoomOut} on={() => zoom(1.3)}><ZoomOutIcon className="w-4 h-4" /></Tool>
+                  <Tool title={T.zoomSel} disabled={selection.size === 0} on={zoomToSelection}>
+                    <ScanSearchIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool tag="pan" title={T.pan} keyHint="H" active={tool === 'pan'}
+                        on={() => setTool('pan')}>
+                    <HandIcon className="w-4 h-4" />
+                  </Tool>
+                </Stack>
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panAids}>
+                <Tool label title={T.grid} active={showGrid} on={() => setShowGrid(g => !g)}>
+                  <GridIcon className="w-5 h-5" />
+                </Tool>
+                <Tool
+                  label
+                  title={objectSnap ? T.osnapOn : T.osnapOff}
+                  active={objectSnap}
+                  on={() => setObjectSnap(v => !v)}
+                >
+                  <MagnetIcon className="w-5 h-5" />
+                </Tool>
+                <select
+                  className="self-start border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                  value={snap}
+                  onChange={e => setSnap(Number(e.target.value))}
+                  title={T.snapTo}
+                >
+                  {SNAPS.map(v => <option key={v} value={v}>{v === 0 ? T.noSnap : `${v}`}</option>)}
+                </select>
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panApp}>
+                {/* Light or dark. A sheet is looked at for hours; every CAD
+                    package on a draughtsman's desk offers this, for that
+                    reason and not for fashion. */}
+                <Tool
+                  tag="theme"
+                  label
+                  title={themeId === 'dark' ? T.themeLight : T.themeDark}
+                  on={() => chooseTheme(themeId === 'dark' ? 'light' : 'dark')}
+                >
+                  {themeId === 'dark' ? <SunIcon className="w-5 h-5" /> : <MoonIcon className="w-5 h-5" />}
+                </Tool>
+                <Tool tag="help" label title={T.help} keyHint="F1" active={showHelp}
+                      on={() => setShowHelp(h => !h)}>
+                  <CircleHelpIcon className="w-5 h-5" />
+                </Tool>
+                {/* Which language the editor speaks. Three buttons rather than
+                    a dropdown: it is the kind of choice that should be one
+                    click, and a reader looking for their own script finds it
+                    by its shape. */}
+                <div className="self-start flex items-center rounded-md border border-gray-300 overflow-hidden">
+                  <LanguagesIcon className="w-3.5 h-3.5 mx-1.5 text-gray-400 shrink-0" />
+                  {LANGS.map(l => (
+                    <button
+                      key={l.id}
+                      onClick={() => chooseLang(l.id)}
+                      data-lang={l.id}
+                      className={`px-2 py-1.5 text-[11px] font-semibold border-l border-gray-300 ${
+                        lang === l.id ? 'bg-slate-700 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
+                    >
+                      {l.label}
+                    </button>
+                  ))}
+                </div>
+              </RibbonPanel>
+            </>
+          )}
+        </div>
+
+        <input
+          ref={xlsxInput}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          style={{ display: 'none' }}
+          onChange={e => {
+            const file = e.target.files?.[0];
+            // Cleared so choosing the same file twice still fires onChange.
+            e.target.value = '';
+            const pending = pendingImport.current;
+            pendingImport.current = null;
+            if (file && pending) placeTable(file, pending.id, pending.at);
+          }}
+        />
       </div>
 
       {/* ── Canvas and panels ──────────────────────────────────────────── */}
