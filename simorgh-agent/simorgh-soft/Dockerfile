@@ -47,7 +47,20 @@ COPY simorgh-frontend/ ./
 #   internal nginx, which proxies /api/ to the Express backend on :3001).
 ENV VITE_BASE_PATH=/simorgh-design-suite/
 ENV VITE_API_URL=/simorgh-design-suite
-RUN npm run build
+# The vite that `npm ci` just installed, run directly — not through `npx`.
+#
+# `npm run build` runs `npx vite build`, and npx's contract is "find it or
+# fetch it". That second half has no business in a container build: every
+# package this step needs is already in /app/node_modules, so the only thing
+# a registry lookup here can do is fail. It did — the internal npm mirror
+# refused connections between `npm ci` and this line, npx went looking for
+# vite on the network instead of at its feet, and seventeen minutes of build
+# died on a package that was already installed.
+#
+# Called this way the step cannot reach the network at all: vite is either in
+# node_modules or the build stops with a clear reason, which is the honest
+# pair of outcomes.
+RUN ./node_modules/.bin/vite build
 
 # Stage 2: Install backend dependencies
 FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS backend-build
