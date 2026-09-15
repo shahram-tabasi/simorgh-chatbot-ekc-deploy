@@ -5,7 +5,6 @@ services:
   frontend:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-frontend:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../frontend
     container_name: frontend
     expose:
       - "80"

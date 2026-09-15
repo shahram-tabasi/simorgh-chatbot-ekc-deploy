@@ -9,7 +9,6 @@ services:
   chat-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-chat-service:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../chat-service
     container_name: chat-service
     expose:
       - "8034"

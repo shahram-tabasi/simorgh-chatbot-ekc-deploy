@@ -5,14 +5,6 @@
 # =============================================================================
 services:
   simorgh-soft:
-    build:
-      context: ../simorgh-soft
-      dockerfile: Dockerfile
-      # Without this, both npm stages fall back to the ARG's own default
-      # (public registry.npmjs.org) regardless of NPM_REGISTRY in .env —
-      # which is what silently caused build failures/partial installs here.
-      args:
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-soft:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: simorgh-soft

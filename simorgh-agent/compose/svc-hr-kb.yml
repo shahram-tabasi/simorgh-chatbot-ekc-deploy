@@ -10,7 +10,6 @@ services:
   hr-kb-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-hr-kb-service:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../hr-kb-service
     container_name: hr-kb-service
     expose:
       - "8041"

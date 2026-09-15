@@ -17,11 +17,6 @@ services:
   tei:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-tei:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build:
-      context: ../tei
-      dockerfile: Dockerfile
-      args:
-        EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
     container_name: tei
     expose:
       - "80"

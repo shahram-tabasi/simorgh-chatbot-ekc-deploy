@@ -25,7 +25,6 @@ services:
   admin-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-admin-service:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../admin-service
     container_name: admin-service
     expose:
       - "8039"

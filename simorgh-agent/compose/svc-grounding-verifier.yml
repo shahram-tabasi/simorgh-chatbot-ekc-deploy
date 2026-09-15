@@ -16,7 +16,6 @@ services:
   grounding-verifier:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-grounding-verifier:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../grounding-verifier
     container_name: grounding-verifier
     expose:
       - "8055"

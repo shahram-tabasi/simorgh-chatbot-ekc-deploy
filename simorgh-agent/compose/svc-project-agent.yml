@@ -8,7 +8,6 @@ services:
   project-agent-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-project-agent-service:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../project-agent-service
     container_name: project-agent-service
     expose:
       - "8035"

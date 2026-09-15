@@ -5,9 +5,6 @@
 # =============================================================================
 services:
   gitlab-mcp:
-    build:
-      context: ..
-      dockerfile: gitlab-mcp-service/Dockerfile
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-gitlab-mcp:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: gitlab-mcp

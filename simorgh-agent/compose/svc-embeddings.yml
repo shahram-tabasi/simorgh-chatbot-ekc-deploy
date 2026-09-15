@@ -7,7 +7,6 @@ services:
   embeddings-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-embeddings-service:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../embeddings-service
     container_name: embeddings-service
     expose:
       - "8031"

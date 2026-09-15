@@ -14,7 +14,6 @@
 # =============================================================================
 services:
   eplan-bridge:
-    build: ../eplan-bridge-service
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-eplan-bridge:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: eplan-bridge

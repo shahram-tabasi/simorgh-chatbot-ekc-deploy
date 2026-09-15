@@ -8,7 +8,6 @@ services:
   specification-agent-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-specification-agent-service:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../specification-agent-service
     container_name: specification-agent-service
     expose:
       - "8036"

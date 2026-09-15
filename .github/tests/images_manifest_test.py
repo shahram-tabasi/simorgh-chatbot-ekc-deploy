@@ -129,6 +129,33 @@ for i in images:
         interpreter.append('%s (base %s)' % (i['image'], froms[-1] if froms else '?'))
 ok('no RUN calls python on a base image that has none', interpreter, [])
 
+
+# ── The split itself: the default stack must not be able to build ───────────
+#
+# When a service names both an image and a build context, a failed pull falls
+# through to building it. That is not theoretical — an expired registry login
+# on the deploy host did not fail, it started a twenty-minute build of the
+# image it could not download. The build instructions therefore live only in
+# docker-compose.build.yml, and this is what keeps them there.
+import glob
+
+stray = []
+for f in sorted(glob.glob(os.path.join(ROOT, 'simorgh-agent/compose/*.yml'))):
+    for n, line in enumerate(open(f, encoding='utf-8'), 1):
+        if re.match(r'^\s+build:', line):
+            stray.append('%s:%d' % (os.path.relpath(f, ROOT), n))
+ok('no service file carries a build section', stray, [])
+
+override = os.path.join(ROOT, 'simorgh-agent/docker-compose.build.yml')
+text = open(override, encoding='utf-8').read()
+ok('the build override still carries them',
+   len(re.findall(r'^\s+build:', text, re.M)) > 0, True)
+
+# They moved up one directory when they moved file, so a path that still
+# climbs out of simorgh-agent/ is one that was not adjusted.
+climbing = re.findall(r'^\s+(?:build|context):\s*(\.\.\S*)\s*$', text, re.M)
+ok('no build path still points outside simorgh-agent', climbing, [])
+
 print()
 print('ALL PASS' if not failures else '%d FAILED' % len(failures))
 sys.exit(1 if failures else 0)

@@ -5,9 +5,6 @@
 # =============================================================================
 services:
   context-search:
-    build:
-      context: ..
-      dockerfile: context-search-service/Dockerfile
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-context-search:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: context-search

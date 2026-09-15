@@ -23,7 +23,6 @@ services:
   stt-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-stt-service:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../stt-service
     container_name: stt-service
     expose:
       - "8001"

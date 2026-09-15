@@ -18,11 +18,6 @@ services:
   whisper-server:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-whisper:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build:
-      context: ../whisper
-      dockerfile: Dockerfile
-      args:
-        WHISPER_MODEL: MohammadGholizadeh/whisper-large-v3-persian-common-voice-17
     container_name: whisper-server
     expose:
       - "8001"             # legacy STT port — see alias below

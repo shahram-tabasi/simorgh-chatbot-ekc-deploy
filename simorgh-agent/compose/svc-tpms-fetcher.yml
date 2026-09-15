@@ -4,7 +4,6 @@
 # =============================================================================
 services:
   tpms-fetcher:
-    build: ../tpms-fetcher-service
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-tpms-fetcher:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: tpms-fetcher

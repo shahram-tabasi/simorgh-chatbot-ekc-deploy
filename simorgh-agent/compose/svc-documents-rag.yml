@@ -7,7 +7,6 @@ services:
   documents-rag-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-documents-rag-service:${IMAGE_TAG:-latest}
     pull_policy: ${IMAGE_PULL_POLICY:-missing}
-    build: ../documents-rag-service
     container_name: documents-rag-service
     expose:
       - "8033"
