@@ -68,16 +68,24 @@ COPY simorgh-frontend/package*.json ./
 # So npm's exit code is not evidence here, and the only thing that counts as
 # proof is the tree itself resolving. That check runs after every attempt.
 #
-# The two things that provoke the crash are both present on this build host: a
-# mirror slow enough to take eleven minutes over one install, which means
-# sockets aborting late, and a heap that a dependency tree this size can
-# exhaust. `--maxsockets 3` keeps fewer connections in flight to abort;
-# NODE_OPTIONS gives it room. Neither is a guarantee, which is why it tries
-# again — with the cache cleared, and finally with `npm install`, whose
-# resolution is more forgiving than `npm ci`'s.
+# What provokes the crash is the file descriptor limit. This daemon gives a
+# container 1024, and extracting 462 packages wants far more open at once, so
+# the extraction hits EMFILE — and npm's handling of that is the very path this
+# bug lives on. It fits every symptom: directories get made, because a mkdir is
+# cheap, and files do not, because each one needs a descriptor. It fails the
+# same on Alpine and on Debian, because the limit comes from the daemon and not
+# from the image. And it fails against both registries, because the registry
+# was never the problem.
+#
+# So the limit is raised first, and printed either way. `--maxsockets 3` and
+# NODE_OPTIONS stay: fewer sockets is fewer descriptors, and the heap headroom
+# costs nothing. The retries stay too — they are what catches an install that
+# lies about succeeding, whatever the reason.
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
 RUN set -eu; \
+    ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || ulimit -n 4096 2>/dev/null || true; \
+    echo "### file descriptors: $(ulimit -n)"; \
     usable() { node -e "require.resolve('vite/package.json')" 2>/dev/null; }; \
     for attempt in 1 2 3; do \
       echo "### install attempt $attempt"; \
@@ -139,6 +147,8 @@ COPY simorgh-backend/package*.json ./
 # runs off — an empty one would only be discovered when the container failed to
 # start.
 RUN set -eu; \
+    ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || ulimit -n 4096 2>/dev/null || true; \
+    echo "### file descriptors: $(ulimit -n)"; \
     usable() { node -e "require.resolve('express/package.json')" 2>/dev/null; }; \
     for attempt in 1 2 3; do \
       echo "### install attempt $attempt"; \
