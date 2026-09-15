@@ -60,7 +60,24 @@ ENV VITE_API_URL=/simorgh-design-suite
 # Called this way the step cannot reach the network at all: vite is either in
 # node_modules or the build stops with a clear reason, which is the honest
 # pair of outcomes.
-RUN ./node_modules/.bin/vite build
+# If vite is not there, say why rather than dying on "not found". `npm ci`
+# from this lockfile installs it (vite 5.4.21, dev: true, and the .bin symlink
+# with it), so its absence in the image is an install that quietly skipped the
+# dev dependencies — and which of the handful of ways that happens is worth
+# one line of output instead of a guess.
+RUN set -eu; \
+    if [ ! -x node_modules/.bin/vite ]; then \
+      echo "### vite is missing after npm ci"; \
+      echo "### NODE_ENV=[${NODE_ENV:-unset}]"; \
+      echo "### npm omit=[$(npm config get omit)] production=[$(npm config get production)]"; \
+      echo "### npm version: $(npm --version)"; \
+      if [ -d node_modules/vite ]; then echo "### node_modules/vite EXISTS, only the bin link is gone"; \
+      else echo "### node_modules/vite ABSENT — dev dependencies were not installed"; fi; \
+      echo "### node_modules/.bin holds:"; ls node_modules/.bin 2>/dev/null | head -40 || echo "(no .bin at all)"; \
+      echo "### packages installed: $(ls node_modules 2>/dev/null | wc -l)"; \
+      exit 1; \
+    fi; \
+    node_modules/.bin/vite build
 
 # Stage 2: Install backend dependencies
 FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS backend-build
