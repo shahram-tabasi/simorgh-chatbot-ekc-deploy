@@ -21,6 +21,7 @@
 import { Drawing, Pt, Shape, translateShape } from './shapes';
 import { renderFragment } from './svg';
 import { readDxf } from './readDxf';
+import { LibraryKind } from './symbolLibraries';
 
 /** How many cells of the branch a symbol may take. */
 const MAX_CELLS = 4;
@@ -29,6 +30,17 @@ export interface DxfSymbol {
   /** The library symbol this replaces, from the file's name. */
   id: string;
   fileName: string;
+  /**
+   * Which of the three libraries it belongs to, and which shelf inside it.
+   *
+   * Absent on everything filed before there were three: `readKind` reads that
+   * as the single line, which is what those symbols are — they were added to
+   * replace symbols on the single-line branch and nothing else existed.
+   */
+  kind?: LibraryKind;
+  group?: string;
+  /** What the office calls it, where that is not just the file name. */
+  title?: string;
   /** The geometry, as markup with no `<svg>` around it. */
   art: string;
   /** The box the geometry is placed by — the terminal span, when there is one. */

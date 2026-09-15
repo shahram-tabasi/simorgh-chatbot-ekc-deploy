@@ -25,12 +25,19 @@ import { mapShape, newBlockId, scaling, translation } from './geom';
 import { boundsOfAll } from './edit';
 import { DxfSymbol, loadDxfSymbols } from './dxfSymbols';
 import { CELL, IEC_SYMBOLS, SymbolId, drawIecSymbol, symbolHeight } from '../iecSymbols';
+import { LibraryKind, defaultGroup, readKind } from './symbolLibraries';
 
 export interface LibraryItem {
   key: string;
   name: string;
   /** Where it came from, for the badge and the grouping. */
   source: 'IEC' | 'Pack' | 'File';
+  /**
+   * Which of the three libraries it belongs to — single line, wiring diagram
+   * or layout. A symbol drawn for one is wrong on the others, so nothing that
+   * offers symbols offers all three at once.
+   */
+  kind: LibraryKind;
   group: string;
   /** Markup with no `<svg>` round it — what the preview draws and what is read. */
   art: string;
@@ -79,6 +86,9 @@ export function iecItems(): LibraryItem[] {
       id: sym.id,
       name: sym.title,
       source: 'IEC' as const,
+      // Every one of these is a single-line symbol: the set was drawn from the
+      // office's own SLD legend sheet, and nothing else existed when it was.
+      kind: 'sld' as const,
       group: sym.group,
       // Drawn at the origin, so what is read back starts where it is placed.
       art: drawIecSymbol(sym.id as SymbolId, CELL / 2, 4),
@@ -94,9 +104,10 @@ export function iecItems(): LibraryItem[] {
 export const packItems = (packs: DxfSymbol[]): LibraryItem[] => packs.map(p => ({
   key: `pack:${p.id}:${p.fileName}`,
   id: p.id,
-  name: p.fileName.replace(/\.[^.]+$/, ''),
+  name: p.title || p.fileName.replace(/\.[^.]+$/, ''),
   source: 'Pack' as const,
-  group: 'Office DXF',
+  kind: readKind(p.kind),
+  group: p.group || defaultGroup(readKind(p.kind)),
   art: p.art,
   width: p.width,
   height: p.height,
@@ -130,9 +141,14 @@ const key = (s: string) => String(s ?? '').trim().toLowerCase().replace(/[^a-z0-
  * replaces it on a sheet — one name, one symbol, whichever the office has
  * decided that name means.
  */
-export function symbolCatalogue(items: LibraryItem[] = libraryItems()): CatalogueEntry[] {
+export function symbolCatalogue(
+  items: LibraryItem[] = libraryItems(), kind: LibraryKind = 'sld',
+): CatalogueEntry[] {
   const by = new Map<string, CatalogueEntry>();
   for (const item of items) {
+    // One library at a time. Handing the assistant all three is handing it a
+    // coil to put on a single line, and it will use one.
+    if (item.kind !== kind) continue;
     const id = key(item.id ?? item.name);
     if (!id) continue;
     by.set(id, { id, name: item.name, group: item.group });
@@ -141,13 +157,16 @@ export function symbolCatalogue(items: LibraryItem[] = libraryItems()): Catalogu
 }
 
 /** A symbol the model asked for, by whatever it called it. */
-export function findSymbol(id: string, items: LibraryItem[] = libraryItems()): LibraryItem | null {
+export function findSymbol(
+  id: string, items: LibraryItem[] = libraryItems(), kind?: LibraryKind,
+): LibraryItem | null {
   const want = key(id);
   if (!want) return null;
   // Last wins, so the pack overrides the IEC symbol of the same name — the
   // same precedence `symbolCatalogue` advertised.
   let found: LibraryItem | null = null;
   for (const item of items) {
+    if (kind && item.kind !== kind) continue;
     if (key(item.id ?? '') === want || key(item.name) === want) found = item;
   }
   return found;
@@ -251,12 +270,13 @@ export const isSymPlacement = (s: unknown): s is SymPlacement =>
  */
 export function expandSymbols(
   run: (Shape | SymPlacement)[], items: LibraryItem[] = libraryItems(),
+  kind: LibraryKind = 'sld',
 ): { shapes: Shape[]; missing: string[] } {
   const shapes: Shape[] = [];
   const missing: string[] = [];
   for (const s of run) {
     if (!isSymPlacement(s)) { shapes.push(s as Shape); continue; }
-    const item = findSymbol(s.id, items);
+    const item = findSymbol(s.id, items, kind);
     if (!item) { missing.push(s.id); continue; }
     const placed = placeSymbolAt(
       item, { x: s.x, y: s.y }, s.h, newBlockId(), s.tap === true,

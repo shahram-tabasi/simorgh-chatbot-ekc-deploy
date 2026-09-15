@@ -69,6 +69,8 @@ export interface Strings {
   askGo: string; askWorking: string; askDrew: string; askDrewSome: string; askFailed: string;
   /** The model named symbols this library does not have — {s} lists them. */
   askNoSymbols: string;
+  /** Shown when one of the three libraries has nothing in it yet. */
+  libEmptyLibrary: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
   header: string; headerTip: string; headerOff: string; headerTooSmall: string;
@@ -180,6 +182,7 @@ const EN: Strings = {
   askDrewSome: '{n} shape(s) drawn — {d} were dropped as unusable, so look it over.',
   askFailed: 'The model could not draw that.',
   askNoSymbols: 'The library has no symbol called {s}, so nothing was drawn.',
+  libEmptyLibrary: 'Nothing in this library yet — add symbols with the button above.',
   rect: 'Rectangle', circle: 'Circle — centre, then radius',
   ellipse: 'Ellipse — centre, then the two radii',
   arc: 'Arc — centre, start, then sweep', text: 'Text',
@@ -379,6 +382,7 @@ const FA: Strings = {
   askDrewSome: '{n} شکل کشیده شد — {d} مورد غیرقابل‌استفاده حذف شد، بازبینی کنید.',
   askFailed: 'مدل نتوانست این را بکشد.',
   askNoSymbols: 'سمبلی به نام {s} در کتابخانه نیست، پس چیزی کشیده نشد.',
+  libEmptyLibrary: 'هنوز چیزی در این کتابخانه نیست — با دکمه‌ی بالا سمبل اضافه کنید.',
   rect: 'مستطیل', circle: 'دایره — مرکز، سپس شعاع',
   ellipse: 'بیضی — مرکز، سپس دو شعاع',
   arc: 'کمان — مرکز، شروع، سپس مقدار جاروب', text: 'متن',
@@ -578,6 +582,7 @@ const TR: Strings = {
   askDrewSome: '{n} şekil çizildi — {d} tanesi kullanılamaz olduğu için atıldı, gözden geçirin.',
   askFailed: 'Model bunu çizemedi.',
   askNoSymbols: 'Kütüphanede {s} adlı sembol yok, bu yüzden hiçbir şey çizilmedi.',
+  libEmptyLibrary: 'Bu kütüphanede henüz bir şey yok — yukarıdaki düğmeyle sembol ekleyin.',
   rect: 'Dikdörtgen', circle: 'Daire — merkez, sonra yarıçap',
   ellipse: 'Elips — merkez, sonra iki yarıçap',
   arc: 'Yay — merkez, başlangıç, sonra süpürme', text: 'Yazı',

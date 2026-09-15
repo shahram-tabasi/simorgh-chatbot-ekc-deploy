@@ -3,13 +3,16 @@ import { createPortal } from 'react-dom';
 import {
   XIcon, SearchIcon, UploadIcon, Maximize2Icon, Minimize2Icon, PlusIcon,
 } from 'lucide-react';
-import { SYMBOL_GROUPS } from '../../utils/iecSymbols';
+
 import { Shape } from '../../utils/cad/shapes';
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
 import { renderFragment } from '../../utils/cad/svg';
 import { readDxf } from '../../utils/cad/readDxf';
 import { loadDxfSymbols } from '../../utils/cad/dxfSymbols';
 import { LibraryItem, iecItems, packItems, shapesOf } from '../../utils/cad/symbolSource';
+import {
+  LibraryKind, SYMBOL_LIBRARIES, defaultGroup, libraryOf,
+} from '../../utils/cad/symbolLibraries';
 import { Strings, dirOf, Lang } from './lang';
 import { ThemeId } from './theme';
 
@@ -49,29 +52,43 @@ export const SymbolLibrary: React.FC<Props> = ({ t, lang, theme, onImport, onClo
   const [picked, setPicked] = useState<string | null>(null);
   const [fromFile, setFromFile] = useState<LibraryItem[]>([]);
   const [note, setNote] = useState<string | null>(null);
+  // Which of the three libraries is open. The single line is where the app's
+  // own drawings come from, so it is where this opens.
+  const [kind, setKind] = useState<LibraryKind>('sld');
   const file = useRef<HTMLInputElement>(null);
 
   const items = useMemo(
     () => [...iecItems(), ...packItems(loadDxfSymbols()), ...fromFile],
     [fromFile]);
 
+  /** How many symbols each library holds, for the tab that opens it. */
+  const counts = useMemo(() => {
+    const by = new Map<LibraryKind, number>();
+    for (const i of items) by.set(i.kind, (by.get(i.kind) ?? 0) + 1);
+    return by;
+  }, [items]);
+
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const inLibrary = items.filter(i => i.kind === kind);
     const hit = q
-      ? items.filter(i => i.name.toLowerCase().includes(q) || i.group.toLowerCase().includes(q))
-      : items;
+      ? inLibrary.filter(i => i.name.toLowerCase().includes(q) || i.group.toLowerCase().includes(q))
+      : inLibrary;
     // Grouped the way the Symbols screen groups them, so the two read alike.
     const by = new Map<string, LibraryItem[]>();
     for (const i of hit) {
       const list = by.get(i.group);
       if (list) list.push(i); else by.set(i.group, [i]);
     }
+    // In the order this library declares its shelves; anything filed under a
+    // name of the office's own goes after them rather than being hidden.
+    const order = libraryOf(kind).groups;
     return [...by.entries()].sort((a, b) => {
-      const ai = SYMBOL_GROUPS.indexOf(a[0] as never);
-      const bi = SYMBOL_GROUPS.indexOf(b[0] as never);
+      const ai = order.indexOf(a[0]);
+      const bi = order.indexOf(b[0]);
       return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
     });
-  }, [items, query]);
+  }, [items, query, kind]);
 
   const chosen = items.find(i => i.key === picked) ?? null;
 
@@ -89,7 +106,7 @@ export const SymbolLibrary: React.FC<Props> = ({ t, lang, theme, onImport, onClo
           if (read.drawing.shapes.length === 0) { failed.push(f.name); continue; }
           added.push({
             key: `file:${f.name}:${added.length}`,
-            name, source: 'File', group: 'From this computer',
+            name, source: 'File', kind, group: defaultGroup(kind),
             // The preview is drawn through the same back-end as everything
             // else, and the shapes themselves are kept so importing does not
             // have to parse the markup back out again.
@@ -103,7 +120,7 @@ export const SymbolLibrary: React.FC<Props> = ({ t, lang, theme, onImport, onClo
           if (d.shapes.length === 0) { failed.push(f.name); continue; }
           added.push({
             key: `file:${f.name}:${added.length}`,
-            name, source: 'File', group: 'From this computer',
+            name, source: 'File', kind, group: defaultGroup(kind),
             art: text.replace(/^[\s\S]*?<svg[^>]*>/i, '').replace(/<\/svg>\s*$/i, ''),
             width: Math.max(1, d.width), height: Math.max(1, d.height),
           });
@@ -204,11 +221,46 @@ export const SymbolLibrary: React.FC<Props> = ({ t, lang, theme, onImport, onClo
           </div>
         </div>
 
+        {/* ── The three libraries ──────────────────────────────────────────
+            Tabs rather than one long list with headings: a symbol drawn for a
+            wiring diagram is the wrong answer on a single line, so the two are
+            never on screen together and picking one is a deliberate act. */}
+        <div className="flex items-stretch gap-1 px-4 pt-2 border-b bg-gray-50">
+          {SYMBOL_LIBRARIES.map(lib => {
+            const on = lib.kind === kind;
+            return (
+              <button
+                key={lib.kind}
+                data-lib-kind={lib.code}
+                onClick={() => { setKind(lib.kind); setPicked(null); }}
+                title={lang === 'fa' ? lib.noteFa : lib.note}
+                className={`px-3 py-1.5 -mb-px border-b-2 text-sm transition ${
+                  on
+                    ? 'border-blue-500 text-blue-700 font-medium'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                <span className="font-mono text-[11px] tracking-wide opacity-70">{lib.code}</span>
+                <span className="ms-2">{lang === 'fa' ? lib.nameFa : lib.name}</span>
+                <span className="ms-1.5 text-[11px] text-gray-400">
+                  {counts.get(lib.kind) ?? 0}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* ── The list, and what is picked ─────────────────────────────── */}
         <div className="flex-1 flex min-h-0">
           <div className="flex-1 min-w-0 overflow-y-auto p-4 space-y-5 bg-white">
             {shown.length === 0 && (
-              <p className="text-sm text-gray-500">{t.libNoneFound}</p>
+              <div className="text-sm text-gray-500 space-y-1">
+                <p>{query.trim() ? t.libNoneFound : t.libEmptyLibrary}</p>
+                {!query.trim() && (
+                  <p className="text-[12px] text-gray-400">
+                    {lang === 'fa' ? libraryOf(kind).noteFa : libraryOf(kind).note}
+                  </p>
+                )}
+              </div>
             )}
             {shown.map(([group, list]) => (
               <div key={group}>

@@ -864,7 +864,9 @@ export const DrawingEditor: React.FC<Props> = ({
           // and the office adds to it — so the model is told what is in it now
           // rather than what was in it when the server was built, and it names
           // a symbol instead of drawing a box and hoping it reads as a breaker.
-          symbols: symbolCatalogue(library),
+          // The single-line library only. This editor draws single lines, and
+          // a wiring-diagram coil offered here is a coil that ends up on one.
+          symbols: symbolCatalogue(library, 'sld'),
         }),
       });
       const body = await response.json().catch(() => ({}));
@@ -885,7 +887,7 @@ export const DrawingEditor: React.FC<Props> = ({
       // name the library does not have after all is counted with the rest of
       // what was thrown away rather than drawn as something else.
       const { shapes: drawn, missing } = expandSymbols(
-        body.shapes as (Shape | SymPlacement)[], library);
+        body.shapes as (Shape | SymPlacement)[], library, 'sld');
       if (drawn.length === 0) {
         setNotice(missing.length ? T.askNoSymbols.replace('{s}', missing.join(', ')) : T.askFailed);
         return;
