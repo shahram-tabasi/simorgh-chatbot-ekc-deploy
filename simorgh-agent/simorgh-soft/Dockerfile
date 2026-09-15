@@ -36,7 +36,31 @@ ENV npm_config_fetch_retries=5 \
 
 WORKDIR /app
 COPY simorgh-frontend/package*.json ./
-RUN npm ci
+# The install, and proof that it happened.
+#
+# `npm ci` here exited 0 having created 331 package directories and written
+# nothing into any of them — node_modules/vite an empty folder, no .bin, and no
+# node_modules/.package-lock.json, which npm writes only when an install
+# finishes. An install that leaves a tree of empty directories is not an
+# install, and every "vite: not found" further down was that one fact wearing a
+# different error message.
+#
+# So the check belongs here, in the same layer, where the fault is: the tree is
+# proved usable before anything is allowed to depend on it. `df` goes in the
+# output because a build host that ran out of room mid-install is what this
+# looks like, and that is worth knowing at the moment it happens rather than
+# two steps later.
+RUN set -eu; \
+    npm ci; \
+    if ! node -e "require.resolve('vite/package.json')" 2>/dev/null; then \
+      echo "### npm ci exited 0 but left an unusable tree"; \
+      echo "### node_modules/vite:"; ls -la node_modules/vite 2>&1 | head -5; \
+      echo "### .package-lock.json:"; \
+      test -f node_modules/.package-lock.json && echo present || echo "ABSENT — the install never finished"; \
+      echo "### space on this filesystem:"; df -h /app | tail -2; \
+      echo "### inodes:"; df -i /app | tail -2; \
+      exit 1; \
+    fi
 COPY simorgh-frontend/ ./
 # The app is served under /simorgh-design-suite/ behind two layers of nginx.
 # - VITE_BASE_PATH controls vite's `base` -- used by index.html asset URLs
@@ -49,39 +73,17 @@ ENV VITE_BASE_PATH=/simorgh-design-suite/
 ENV VITE_API_URL=/simorgh-design-suite
 # Vite through its own JavaScript API, found by node's resolver.
 #
-# Four attempts got here and each one found a different shape of the same
-# absence, so the reasoning is worth keeping:
+# Not `npx vite build`, which the npm script runs: npx's contract is "find it
+# or fetch it", so a missing vite became a registry fetch and the build died on
+# whichever network fault was in season — a refused connection to the internal
+# mirror, then a reset from the public one. The network was never the problem,
+# only where the problem surfaced.
 #
-#   `npx vite build`               → went to the registry and died on whichever
-#                                    network fault was in season. npx's contract
-#                                    is "find it or fetch it", and it could not
-#                                    find it.
-#   `./node_modules/.bin/vite`     → exit 127. npm 10.8.2 in this image installs
-#                                    the packages and creates no bin symlinks
-#                                    at all; .bin is empty.
-#   `node .../vite/bin/vite.js`    → the vite directory is there, and that file
-#                                    is not.
-#
-# Every one of those depends on npm having laid the package out where the
-# command was expected to be. This does not: `import('vite')` asks node to
-# resolve the package by its own rules and calls the same `build()` the CLI
-# calls, so it works wherever npm actually put it and needs no bin link, no
-# path, and no network.
-#
-# When even that cannot resolve, the step prints what is on disk rather than
-# failing with a bare "not found" — four rounds of one-line errors is what made
-# this take four attempts.
-RUN set -eu; \
-    if ! node -e "require.resolve('vite/package.json')" 2>/dev/null; then \
-      echo "### vite does not resolve. What is actually installed:"; \
-      echo "### ls -la node_modules/vite:"; ls -la node_modules/vite 2>&1 | head -20; \
-      echo "### node_modules holds $(ls node_modules 2>/dev/null | wc -l) entries:"; \
-      ls node_modules 2>/dev/null | head -40; \
-      echo "### .package-lock.json:"; test -f node_modules/.package-lock.json && echo present || echo absent; \
-      echo "### any vite.js anywhere under node_modules:"; find node_modules -name 'vite.js' 2>/dev/null | head -5; \
-      exit 1; \
-    fi; \
-    node -e "import('vite').then(m => m.build()).catch(e => { console.error(e); process.exit(1); })"
+# Not the bin link either, nor the package's bin file by path: this image's npm
+# leaves neither reliably. `import('vite')` asks node to resolve the package by
+# its own rules and calls the same build() the CLI calls, so it works wherever
+# npm actually put it, and it cannot reach the network.
+RUN node -e "import('vite').then(m => m.build()).catch(e => { console.error(e); process.exit(1); })"
 
 # Stage 2: Install backend dependencies
 FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS backend-build
@@ -94,7 +96,17 @@ ENV npm_config_fetch_retries=5 \
     npm_config_fetch_retry_maxtimeout=120000
 WORKDIR /app
 COPY simorgh-backend/package*.json ./
-RUN npm ci --omit=dev
+# Proved the same way as the frontend's, and for the same reason: this is the
+# tree the server runs off, and an empty one would only be discovered when the
+# container failed to start.
+RUN set -eu; \
+    npm ci --omit=dev; \
+    if ! node -e "require.resolve('express/package.json')" 2>/dev/null; then \
+      echo "### npm ci exited 0 but left an unusable tree"; \
+      test -f node_modules/.package-lock.json && echo "lock present" || echo "lock ABSENT — the install never finished"; \
+      df -h /app | tail -2; \
+      exit 1; \
+    fi
 COPY simorgh-backend/ ./
 
 # Stage 3: Final runtime image — nginx:alpine as the base (nginx already
