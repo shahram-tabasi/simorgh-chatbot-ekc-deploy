@@ -47,31 +47,41 @@ COPY simorgh-frontend/ ./
 #   internal nginx, which proxies /api/ to the Express backend on :3001).
 ENV VITE_BASE_PATH=/simorgh-design-suite/
 ENV VITE_API_URL=/simorgh-design-suite
-# Vite run through node, by the path to its own entry point.
+# Vite through its own JavaScript API, found by node's resolver.
 #
-# Three attempts got here, so the reasoning is worth keeping. `npm run build`
-# ran `npx vite build`, and npx's contract is "find it or fetch it" — so when
-# it could not find vite it went to the registry, and the build died on
-# whichever network fault was in season: a refused connection to the internal
-# mirror, then a reset from the public one. The network was never the problem,
-# only where the problem surfaced.
+# Four attempts got here and each one found a different shape of the same
+# absence, so the reasoning is worth keeping:
 #
-# Calling ./node_modules/.bin/vite instead made the real fault legible: exit
-# 127, not found. And the state that turned up was not the one expected — the
-# dev dependencies ARE installed, all 331 packages of them, vite among them.
-# What is missing is node_modules/.bin: npm 10.8.2 in this image lays the
-# packages down and creates none of the bin symlinks.
+#   `npx vite build`               → went to the registry and died on whichever
+#                                    network fault was in season. npx's contract
+#                                    is "find it or fetch it", and it could not
+#                                    find it.
+#   `./node_modules/.bin/vite`     → exit 127. npm 10.8.2 in this image installs
+#                                    the packages and creates no bin symlinks
+#                                    at all; .bin is empty.
+#   `node .../vite/bin/vite.js`    → the vite directory is there, and that file
+#                                    is not.
 #
-# A symlink this build never needed. `vite` the command is
-# node_modules/vite/bin/vite.js and nothing else, so node runs it by path. That
-# depends on the package being installed, which it is, and on nothing that npm
-# may or may not link. It cannot reach the network either, which was the point
-# of moving off npx to begin with.
-RUN if [ ! -f node_modules/vite/bin/vite.js ]; then \
-      echo "vite is not installed — node_modules holds $(ls node_modules 2>/dev/null | wc -l) packages"; \
+# Every one of those depends on npm having laid the package out where the
+# command was expected to be. This does not: `import('vite')` asks node to
+# resolve the package by its own rules and calls the same `build()` the CLI
+# calls, so it works wherever npm actually put it and needs no bin link, no
+# path, and no network.
+#
+# When even that cannot resolve, the step prints what is on disk rather than
+# failing with a bare "not found" — four rounds of one-line errors is what made
+# this take four attempts.
+RUN set -eu; \
+    if ! node -e "require.resolve('vite/package.json')" 2>/dev/null; then \
+      echo "### vite does not resolve. What is actually installed:"; \
+      echo "### ls -la node_modules/vite:"; ls -la node_modules/vite 2>&1 | head -20; \
+      echo "### node_modules holds $(ls node_modules 2>/dev/null | wc -l) entries:"; \
+      ls node_modules 2>/dev/null | head -40; \
+      echo "### .package-lock.json:"; test -f node_modules/.package-lock.json && echo present || echo absent; \
+      echo "### any vite.js anywhere under node_modules:"; find node_modules -name 'vite.js' 2>/dev/null | head -5; \
       exit 1; \
     fi; \
-    node node_modules/vite/bin/vite.js build
+    node -e "import('vite').then(m => m.build()).catch(e => { console.error(e); process.exit(1); })"
 
 # Stage 2: Install backend dependencies
 FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS backend-build
