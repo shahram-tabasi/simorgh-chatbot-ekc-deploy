@@ -17,8 +17,28 @@
 # own; that has to already be in the local Docker credential store.
 # =============================================================================
 
+# The musl node binary, for the runtime image only.
+#
+# The final image is nginx:alpine and lifts node in as a binary rather than
+# reinstalling it, so that binary has to be the Alpine one. It comes from here
+# and nowhere else — this stage runs no npm, which is the entire point.
+FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS node-bin
+
 # Stage 1: Build the React frontend
-FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS frontend-build
+#
+# On Debian, not Alpine, and not by preference — npm 10.8.2 on this Alpine image
+# cannot complete an install on this host. It dies with its own internal error,
+# "Exit handler never called!", and then exits 0, leaving 331 package
+# directories with nothing inside them. Three attempts, a cleared cache and
+# `npm install` instead of `npm ci` all ended the same way.
+#
+# Nothing is apt-installed here, in this stage or the next. The objection to a
+# Debian base was `apt update` failing behind the network restrictions, and
+# these stages never run apt: they run npm and nothing else. What they produce
+# — a `dist` of static files, and a backend node_modules of pure JavaScript
+# with not one native build or install script in it — copies into the Alpine
+# runtime unchanged.
+FROM registry.simorghai.com/docker-proxy/library/node:20-slim AS frontend-build
 # Internal npm mirror (see NPM_REGISTRY in the top-level .env.example) —
 # override at build with --build-arg, or via soft-app.yml's build.args,
 # which passes it through automatically. No pip/apt anywhere in this
@@ -76,7 +96,7 @@ RUN set -eu; \
       echo "### .package-lock.json:"; \
       test -f node_modules/.package-lock.json && echo present || echo "ABSENT — the install never finished"; \
       echo "### space:"; df -h /app | tail -2; \
-      echo "### memory:"; free -m 2>/dev/null | head -3 || cat /proc/meminfo | head -3; \
+      echo "### memory:"; head -3 /proc/meminfo; \
       exit 1; \
     fi
 COPY simorgh-frontend/ ./
@@ -104,7 +124,7 @@ ENV VITE_API_URL=/simorgh-design-suite
 RUN node -e "import('vite').then(m => m.build()).catch(e => { console.error(e); process.exit(1); })"
 
 # Stage 2: Install backend dependencies
-FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS backend-build
+FROM registry.simorghai.com/docker-proxy/library/node:20-slim AS backend-build
 # This stage never had the registry ARG at all — it always hit the public
 # registry regardless of what stage 1 (or --build-arg) was told, silently.
 ARG NPM_REGISTRY=https://registry.npmjs.org/
@@ -141,15 +161,19 @@ COPY simorgh-backend/ ./
 
 # Stage 3: Final runtime image — nginx:alpine as the base (nginx already
 # installed, from the same Alpine nginx package `apk add nginx` used to
-# fetch here), node lifted in as a binary from stage 1's own base image
-# rather than reinstalled. Node's musl-alpine build is self-contained
-# enough for this — both images track the same Alpine generation, so the
-# shared C library ABI lines up.
+# fetch here), node lifted in as a binary from the node-bin stage rather
+# than reinstalled. Node's musl-alpine build is self-contained enough for
+# this — both images track the same Alpine generation, so the shared C
+# library ABI lines up.
+#
+# The binary comes from node-bin and not from the build stages, which are
+# Debian: a glibc node would not run here. What does come from them is only
+# JavaScript, which does not care which libc built it.
 FROM registry.simorghai.com/docker-proxy/library/nginx:alpine
 
 WORKDIR /app
 
-COPY --from=frontend-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-bin /usr/local/bin/node /usr/local/bin/node
 
 # Copy backend
 COPY --from=backend-build /app ./
