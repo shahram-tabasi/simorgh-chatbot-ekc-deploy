@@ -210,8 +210,29 @@ jobs:
           build-args: |
             NPM_REGISTRY=https://registry.npmjs.org/
             BASE_REGISTRY=${{ inputs.base_registry || 'library' }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          # Cache in the registry, beside the image, not in the Actions cache.
+          #
+          # `type=gha` was the obvious choice and is the wrong one at this
+          # size. The Actions cache is 10 GB for the whole repository, evicted
+          # least-recently-used. Thirty-nine images with mode=max — which
+          # stores every intermediate layer, not just the final ones — go well
+          # past that on the pytorch-based services alone, so the entries
+          # evict each other and almost every run starts cold. A cache that
+          # does not survive to the next run is not a cache.
+          #
+          # The registry has no such budget. Each image gets a :buildcache tag
+          # next to it in GHCR, written by the run that built it and read by
+          # the next one. On a first build the tag does not exist yet and
+          # buildx says so and carries on, which is the correct behaviour for
+          # a cold cache.
+          #
+          # mode=max is worth keeping now that there is room for it: the
+          # expensive layer in these builds is the dependency install, and
+          # that is an intermediate stage in every multi-stage Dockerfile
+          # here. min would cache the final layers and miss precisely the one
+          # that costs eleven minutes.
+          cache-from: type=registry,ref=${{ steps.meta.outputs.ref }}:buildcache
+          cache-to: type=registry,ref=${{ steps.meta.outputs.ref }}:buildcache,mode=max
           provenance: false
 
       - name: Report
