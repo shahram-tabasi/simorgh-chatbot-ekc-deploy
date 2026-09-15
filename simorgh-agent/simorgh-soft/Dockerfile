@@ -36,29 +36,47 @@ ENV npm_config_fetch_retries=5 \
 
 WORKDIR /app
 COPY simorgh-frontend/package*.json ./
-# The install, and proof that it happened.
+# The install, retried until the tree is real.
 #
-# `npm ci` here exited 0 having created 331 package directories and written
-# nothing into any of them — node_modules/vite an empty folder, no .bin, and no
-# node_modules/.package-lock.json, which npm writes only when an install
-# finishes. An install that leaves a tree of empty directories is not an
-# install, and every "vite: not found" further down was that one fact wearing a
-# different error message.
+# npm here dies with "Exit handler never called!" — its own internal crash —
+# and then **exits 0 anyway**, having created 331 package directories and
+# written nothing into any of them. node_modules/vite an empty folder, no .bin,
+# no node_modules/.package-lock.json. Every "vite: not found" further down was
+# that one fact wearing a different error message, and BuildKit cached it as a
+# success because npm said it was one.
 #
-# So the check belongs here, in the same layer, where the fault is: the tree is
-# proved usable before anything is allowed to depend on it. `df` goes in the
-# output because a build host that ran out of room mid-install is what this
-# looks like, and that is worth knowing at the moment it happens rather than
-# two steps later.
+# So npm's exit code is not evidence here, and the only thing that counts as
+# proof is the tree itself resolving. That check runs after every attempt.
+#
+# The two things that provoke the crash are both present on this build host: a
+# mirror slow enough to take eleven minutes over one install, which means
+# sockets aborting late, and a heap that a dependency tree this size can
+# exhaust. `--maxsockets 3` keeps fewer connections in flight to abort;
+# NODE_OPTIONS gives it room. Neither is a guarantee, which is why it tries
+# again — with the cache cleared, and finally with `npm install`, whose
+# resolution is more forgiving than `npm ci`'s.
+ENV NODE_OPTIONS=--max-old-space-size=4096
+
 RUN set -eu; \
-    npm ci; \
-    if ! node -e "require.resolve('vite/package.json')" 2>/dev/null; then \
-      echo "### npm ci exited 0 but left an unusable tree"; \
+    usable() { node -e "require.resolve('vite/package.json')" 2>/dev/null; }; \
+    for attempt in 1 2 3; do \
+      echo "### install attempt $attempt"; \
+      rm -rf node_modules; \
+      case $attempt in \
+        1|2) npm ci --no-audit --no-fund --maxsockets 3 || echo "### npm reported a failure"; ;; \
+        3)   npm cache clean --force || true; \
+             npm install --no-audit --no-fund --maxsockets 3 || echo "### npm reported a failure"; ;; \
+      esac; \
+      if usable; then echo "### attempt $attempt produced a usable tree"; break; fi; \
+      echo "### attempt $attempt left an unusable tree"; \
+    done; \
+    if ! usable; then \
+      echo "### every attempt failed"; \
       echo "### node_modules/vite:"; ls -la node_modules/vite 2>&1 | head -5; \
       echo "### .package-lock.json:"; \
       test -f node_modules/.package-lock.json && echo present || echo "ABSENT — the install never finished"; \
-      echo "### space on this filesystem:"; df -h /app | tail -2; \
-      echo "### inodes:"; df -i /app | tail -2; \
+      echo "### space:"; df -h /app | tail -2; \
+      echo "### memory:"; free -m 2>/dev/null | head -3 || cat /proc/meminfo | head -3; \
       exit 1; \
     fi
 COPY simorgh-frontend/ ./
@@ -96,14 +114,26 @@ ENV npm_config_fetch_retries=5 \
     npm_config_fetch_retry_maxtimeout=120000
 WORKDIR /app
 COPY simorgh-backend/package*.json ./
-# Proved the same way as the frontend's, and for the same reason: this is the
-# tree the server runs off, and an empty one would only be discovered when the
-# container failed to start.
+# Retried and proved the same way as the frontend's, and for the same reason:
+# npm's exit code is not evidence on this host, and this is the tree the server
+# runs off — an empty one would only be discovered when the container failed to
+# start.
 RUN set -eu; \
-    npm ci --omit=dev; \
-    if ! node -e "require.resolve('express/package.json')" 2>/dev/null; then \
-      echo "### npm ci exited 0 but left an unusable tree"; \
-      test -f node_modules/.package-lock.json && echo "lock present" || echo "lock ABSENT — the install never finished"; \
+    usable() { node -e "require.resolve('express/package.json')" 2>/dev/null; }; \
+    for attempt in 1 2 3; do \
+      echo "### install attempt $attempt"; \
+      rm -rf node_modules; \
+      case $attempt in \
+        1|2) npm ci --omit=dev --no-audit --no-fund --maxsockets 3 || echo "### npm reported a failure"; ;; \
+        3)   npm cache clean --force || true; \
+             npm install --omit=dev --no-audit --no-fund --maxsockets 3 || echo "### npm reported a failure"; ;; \
+      esac; \
+      if usable; then echo "### attempt $attempt produced a usable tree"; break; fi; \
+      echo "### attempt $attempt left an unusable tree"; \
+    done; \
+    if ! usable; then \
+      echo "### every attempt failed"; \
+      test -f node_modules/.package-lock.json && echo "lock present" || echo "lock ABSENT"; \
       df -h /app | tail -2; \
       exit 1; \
     fi
