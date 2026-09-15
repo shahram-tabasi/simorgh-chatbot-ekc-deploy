@@ -5,7 +5,7 @@
 services:
   file-export:
     build: ../file-export-service
-    image: simorgh-file-export:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-file-export:${IMAGE_TAG:-latest}
     container_name: file-export
     expose:
       - "8025"

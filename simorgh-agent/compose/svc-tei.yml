@@ -15,7 +15,7 @@
 # =============================================================================
 services:
   tei:
-    image: simorgh-tei:offline
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-tei:${IMAGE_TAG:-latest}
     build:
       context: ../tei
       dockerfile: Dockerfile

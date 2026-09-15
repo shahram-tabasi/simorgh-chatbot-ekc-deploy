@@ -1,0 +1,191 @@
+name: Build images
+
+# Build every service image here and push it to ghcr.io, so the server does
+# not have to build anything.
+#
+# The server's link to the outside is slow and unreliable enough that a build
+# on it is a coin toss — an `npm ci` there takes eleven minutes and has been
+# ending in an npm crash that exits 0 and leaves an empty tree. A runner with
+# ordinary internet does the same work in a couple of minutes and hands over a
+# finished image. That is the whole reason this file exists.
+#
+# What gets built is `.github/images.json`: one entry per service, naming its
+# build context and Dockerfile. Adding a service is one entry there; nothing
+# in this file changes.
+#
+# On a push, only the services whose files actually changed are rebuilt. Run
+# it by hand to force a service, or all of them.
+
+on:
+  push:
+    branches: [main, master, 'claude/**']
+    paths:
+      - 'simorgh-agent/**'
+      - '.github/images.json'
+      - '.github/workflows/images-build.yml'
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Which image to build — a service name from .github/images.json, or "all"'
+        type: string
+        default: all
+      tag:
+        description: 'Extra tag to publish alongside latest and the commit sha'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  # One run per branch. A newer push makes an older build pointless, and these
+  # are long jobs to leave queued behind something already superseded.
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Which images does this run actually need to build? ────────────────────
+  #
+  # Run by hand: whatever was asked for. On a push: only the services whose
+  # context or Dockerfile is touched by the diff — rebuilding forty images
+  # because one README moved is how a pipeline stops being used.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      count: ${{ steps.pick.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Two commits, so a push can be diffed against what it replaced.
+          fetch-depth: 2
+
+      - id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, subprocess, sys
+
+          images = json.load(open('.github/images.json'))
+          event = os.environ['GITHUB_EVENT_NAME']
+          wanted = os.environ.get('INPUT_SERVICE', 'all').strip() or 'all'
+
+          if event == 'workflow_dispatch' and wanted != 'all':
+              names = {s.strip() for s in wanted.replace(',', ' ').split()}
+              picked = [i for i in images if i['service'] in names or i['image'] in names]
+              if not picked:
+                  raise SystemExit(f'no service called {wanted!r} in .github/images.json')
+          elif event == 'workflow_dispatch':
+              picked = images
+          else:
+              before = os.environ.get('GITHUB_EVENT_BEFORE', '')
+              # A first push to a branch has no usable "before", and neither
+              # does a force-push to a commit the runner never fetched. Build
+              # everything rather than silently building nothing.
+              try:
+                  if not before or set(before) == {'0'}:
+                      raise ValueError('no base commit')
+                  changed = subprocess.run(
+                      ['git', 'diff', '--name-only', f'{before}..{os.environ["GITHUB_SHA"]}'],
+                      capture_output=True, text=True, check=True).stdout.split()
+              except Exception:
+                  changed = None
+
+              if changed is None:
+                  picked = images
+              else:
+                  # A service is rebuilt when the diff touches something it
+                  # watches. That is its build context for most of them, but
+                  # nine take the whole of simorgh-agent as their context and
+                  # read only a few directories out of it — for those, `watch`
+                  # lists what their Dockerfile actually COPYs, so one edit
+                  # does not rebuild all nine.
+                  def touched(i):
+                      for w in i.get('watch') or [i['context']]:
+                          w = w.rstrip('/')
+                          if any(f == w or f.startswith(w + '/') for f in changed):
+                              return True
+                      return False
+                  picked = [i for i in images if touched(i)]
+
+          print('matrix=' + json.dumps({'include': picked}))
+          print('count=' + str(len(picked)))
+          for i in picked:
+              print(f'# {i["image"]}', file=sys.stderr)
+          PY
+        env:
+          INPUT_SERVICE: ${{ inputs.service }}
+
+      - name: Say what will be built
+        run: |
+          echo "${{ steps.pick.outputs.count }} image(s) to build" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo '${{ steps.pick.outputs.matrix }}' | python3 -m json.tool >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false      # one bad service must not cancel the other 39
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk
+        # Several of these images are multi-gigabyte (whisper, tei, docling,
+        # anything on a torch base). A hosted runner has about 14 GB free
+        # before you clear out its pre-installed toolchains.
+        run: |
+          set -eu
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h / | tail -1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        shell: bash
+        run: |
+          set -eu
+          # GHCR insists on a lowercase path; a repository owner does not have
+          # to be, so this is not paranoia.
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "ref=ghcr.io/$owner/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          # latest is what the server pulls by default; the sha is there so a
+          # deployment can be pinned to an exact commit, and named back to it
+          # when something turns out to be wrong.
+          tags: |
+            ${{ steps.meta.outputs.ref }}:latest
+            ${{ steps.meta.outputs.ref }}:${{ github.sha }}
+            ${{ inputs.tag && format('{0}:{1}', steps.meta.outputs.ref, inputs.tag) || '' }}
+          # The public npm registry, not the internal mirror: a runner has no
+          # route to 192.168.1.64 and every Dockerfile here takes the mirror as
+          # a build arg for exactly this reason.
+          build-args: |
+            NPM_REGISTRY=https://registry.npmjs.org/
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: false
+
+      - name: Report
+        run: |
+          echo "- \`${{ steps.meta.outputs.ref }}:latest\`" >> "$GITHUB_STEP_SUMMARY"

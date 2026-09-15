@@ -5,7 +5,7 @@
 services:
   command-gen:
     build: ../command-gen-service
-    image: simorgh-command-gen:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-command-gen:${IMAGE_TAG:-latest}
     container_name: command-gen
     expose:
       - "8024"

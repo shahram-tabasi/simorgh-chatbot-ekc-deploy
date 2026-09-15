@@ -10,7 +10,7 @@ services:
     build:
       context: ..
       dockerfile: mail-bridge/Dockerfile
-    image: simorgh-mail-bridge:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-mail-bridge:${IMAGE_TAG:-latest}
     container_name: mail-bridge
     expose:
       - "8051"

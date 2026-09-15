@@ -9,7 +9,7 @@ services:
     build:
       context: ..
       dockerfile: tpms-context-agent/Dockerfile
-    image: simorgh-tpms-context-agent:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-tpms-context-agent:${IMAGE_TAG:-latest}
     container_name: tpms-context-agent
     expose:
       - "8050"

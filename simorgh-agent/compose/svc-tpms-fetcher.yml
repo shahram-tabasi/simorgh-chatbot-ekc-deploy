@@ -5,7 +5,7 @@
 services:
   tpms-fetcher:
     build: ../tpms-fetcher-service
-    image: simorgh-tpms-fetcher:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-tpms-fetcher:${IMAGE_TAG:-latest}
     container_name: tpms-fetcher
     expose:
       - "8021"

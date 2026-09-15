@@ -6,7 +6,7 @@
 services:
   project-analysis:
     build: ../project-analysis-service
-    image: simorgh-project-analysis:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-project-analysis:${IMAGE_TAG:-latest}
     container_name: project-analysis
     expose:
       - "8023"

@@ -18,7 +18,7 @@ services:
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple/}
         PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
-    image: simorgh-eplan-files:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-eplan-files:${IMAGE_TAG:-latest}
     container_name: eplan-files
     expose:
       - "8056"

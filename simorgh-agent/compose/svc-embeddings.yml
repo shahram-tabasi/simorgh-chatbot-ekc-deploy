@@ -5,7 +5,7 @@
 # =============================================================================
 services:
   embeddings-service:
-    image: simorgh-embeddings-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-embeddings-service:${IMAGE_TAG:-latest}
     build: ../embeddings-service
     container_name: embeddings-service
     expose:

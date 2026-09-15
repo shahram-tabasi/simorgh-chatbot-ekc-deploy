@@ -3,7 +3,7 @@
 # =============================================================================
 services:
   frontend:
-    image: simorgh-frontend:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-frontend:${IMAGE_TAG:-latest}
     build: ../frontend
     container_name: frontend
     expose:

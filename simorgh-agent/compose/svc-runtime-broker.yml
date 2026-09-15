@@ -10,7 +10,7 @@ services:
     build:
       context: ..
       dockerfile: runtime-broker/Dockerfile
-    image: simorgh-runtime-broker:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-runtime-broker:${IMAGE_TAG:-latest}
     container_name: runtime-broker
     command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8048",
               "--workers", "${BROKER_WORKERS:-4}"]

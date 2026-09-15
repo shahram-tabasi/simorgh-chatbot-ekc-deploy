@@ -10,7 +10,7 @@
 # =============================================================================
 services:
   techserver-mcp:
-    image: simorgh-techserver-mcp:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-techserver-mcp:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: techserver-mcp-service/Dockerfile

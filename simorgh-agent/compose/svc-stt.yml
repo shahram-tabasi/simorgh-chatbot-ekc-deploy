@@ -21,7 +21,7 @@
 # =============================================================================
 services:
   stt-service:
-    image: simorgh-stt-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-stt-service:${IMAGE_TAG:-latest}
     build: ../stt-service
     container_name: stt-service
     expose:

@@ -8,7 +8,7 @@
 # =============================================================================
 services:
   org-data-service:
-    image: simorgh-org-data-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-org-data-service:${IMAGE_TAG:-latest}
     build: ../org-data-service
     container_name: org-data-service
     expose:

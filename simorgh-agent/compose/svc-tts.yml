@@ -4,7 +4,7 @@
 # =============================================================================
 services:
   tts-service:
-    image: simorgh-tts-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-tts-service:${IMAGE_TAG:-latest}
     build: ../tts-service
     container_name: tts-service
     expose:

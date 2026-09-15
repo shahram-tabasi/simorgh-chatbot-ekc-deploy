@@ -10,7 +10,7 @@
 # =============================================================================
 services:
   chat-history-mcp:
-    image: simorgh-chat-history-mcp:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-chat-history-mcp:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: chat-history-mcp-service/Dockerfile

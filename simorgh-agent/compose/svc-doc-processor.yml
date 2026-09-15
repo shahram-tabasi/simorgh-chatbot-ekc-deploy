@@ -4,7 +4,7 @@
 # =============================================================================
 services:
   doc-processor:
-    image: simorgh-doc-processor:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-doc-processor:${IMAGE_TAG:-latest}
     build: ../doc-processor
     container_name: doc-processor
     expose:

@@ -5,7 +5,7 @@
 # =============================================================================
 services:
   documents-rag-service:
-    image: simorgh-documents-rag-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-documents-rag-service:${IMAGE_TAG:-latest}
     build: ../documents-rag-service
     container_name: documents-rag-service
     expose:

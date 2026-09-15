@@ -32,7 +32,7 @@
 # =============================================================================
 services:
   docling-serve:
-    image: simorgh-docling:offline
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-docling:${IMAGE_TAG:-latest}
     build:
       context: ../docling
       dockerfile: Dockerfile

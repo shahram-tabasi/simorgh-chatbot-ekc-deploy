@@ -13,7 +13,7 @@ services:
       # which is what silently caused build failures/partial installs here.
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
-    image: simorgh-soft:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-soft:${IMAGE_TAG:-latest}
     container_name: simorgh-soft
     expose:
       - "80"

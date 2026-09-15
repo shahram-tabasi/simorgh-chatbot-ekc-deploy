@@ -5,7 +5,7 @@
 # =============================================================================
 services:
   graph-rag-service:
-    image: simorgh-graph-rag-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-graph-rag-service:${IMAGE_TAG:-latest}
     build: ../graph-rag-service
     container_name: graph-rag-service
     expose:

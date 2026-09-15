@@ -5,7 +5,7 @@
 # =============================================================================
 services:
   auth-service:
-    image: simorgh-auth-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-auth-service:${IMAGE_TAG:-latest}
     build: ../auth-service
     container_name: auth-service
     expose:

@@ -23,7 +23,7 @@
 # =============================================================================
 services:
   admin-service:
-    image: simorgh-admin-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-admin-service:${IMAGE_TAG:-latest}
     build: ../admin-service
     container_name: admin-service
     expose:

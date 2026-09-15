@@ -1,0 +1,388 @@
+[
+  {
+    "service": "admin-service",
+    "image": "simorgh-admin-service",
+    "context": "simorgh-agent/admin-service",
+    "dockerfile": "simorgh-agent/admin-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/admin-service"
+    ]
+  },
+  {
+    "service": "auth-service",
+    "image": "simorgh-auth-service",
+    "context": "simorgh-agent/auth-service",
+    "dockerfile": "simorgh-agent/auth-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/auth-service"
+    ]
+  },
+  {
+    "service": "backend",
+    "image": "simorgh-backend",
+    "context": "simorgh-agent/backend",
+    "dockerfile": "simorgh-agent/backend/Dockerfile",
+    "watch": [
+      "simorgh-agent/backend"
+    ]
+  },
+  {
+    "service": "chat-history-mcp",
+    "image": "simorgh-chat-history-mcp",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/chat-history-mcp-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/chat-history-mcp-service/Dockerfile",
+      "simorgh-agent/chat-history-mcp-service/app.py",
+      "simorgh-agent/chat-history-mcp-service/requirements.txt"
+    ]
+  },
+  {
+    "service": "chat-service",
+    "image": "simorgh-chat-service",
+    "context": "simorgh-agent/chat-service",
+    "dockerfile": "simorgh-agent/chat-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/chat-service"
+    ]
+  },
+  {
+    "service": "command-gen",
+    "image": "simorgh-command-gen",
+    "context": "simorgh-agent/command-gen-service",
+    "dockerfile": "simorgh-agent/command-gen-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/command-gen-service"
+    ]
+  },
+  {
+    "service": "context-search",
+    "image": "simorgh-context-search",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/context-search-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/context-search-service/Dockerfile",
+      "simorgh-agent/context-search-service/app.py",
+      "simorgh-agent/context-search-service/index_setup.py",
+      "simorgh-agent/context-search-service/requirements.txt",
+      "simorgh-agent/shared"
+    ]
+  },
+  {
+    "service": "doc-processor",
+    "image": "simorgh-doc-processor",
+    "context": "simorgh-agent/doc-processor",
+    "dockerfile": "simorgh-agent/doc-processor/Dockerfile",
+    "watch": [
+      "simorgh-agent/doc-processor"
+    ]
+  },
+  {
+    "service": "docling-serve",
+    "image": "simorgh-docling",
+    "context": "simorgh-agent/docling",
+    "dockerfile": "simorgh-agent/docling/Dockerfile",
+    "watch": [
+      "simorgh-agent/docling"
+    ]
+  },
+  {
+    "service": "documents-rag-service",
+    "image": "simorgh-documents-rag-service",
+    "context": "simorgh-agent/documents-rag-service",
+    "dockerfile": "simorgh-agent/documents-rag-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/documents-rag-service"
+    ]
+  },
+  {
+    "service": "embeddings-service",
+    "image": "simorgh-embeddings-service",
+    "context": "simorgh-agent/embeddings-service",
+    "dockerfile": "simorgh-agent/embeddings-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/embeddings-service"
+    ]
+  },
+  {
+    "service": "eplan-bridge",
+    "image": "simorgh-eplan-bridge",
+    "context": "simorgh-agent/eplan-bridge-service",
+    "dockerfile": "simorgh-agent/eplan-bridge-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/eplan-bridge-service"
+    ]
+  },
+  {
+    "service": "eplan-files",
+    "image": "simorgh-eplan-files",
+    "context": "simorgh-agent/eplan-files-service",
+    "dockerfile": "simorgh-agent/eplan-files-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/eplan-files-service"
+    ]
+  },
+  {
+    "service": "eplan-sql-service",
+    "image": "simorgh-eplan-sql-service",
+    "context": "simorgh-agent/eplan-sql-service",
+    "dockerfile": "simorgh-agent/eplan-sql-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/eplan-sql-service"
+    ]
+  },
+  {
+    "service": "file-export",
+    "image": "simorgh-file-export",
+    "context": "simorgh-agent/file-export-service",
+    "dockerfile": "simorgh-agent/file-export-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/file-export-service"
+    ]
+  },
+  {
+    "service": "frontend",
+    "image": "simorgh-frontend",
+    "context": "simorgh-agent/frontend",
+    "dockerfile": "simorgh-agent/frontend/Dockerfile",
+    "watch": [
+      "simorgh-agent/frontend"
+    ]
+  },
+  {
+    "service": "gitlab-mcp",
+    "image": "simorgh-gitlab-mcp",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/gitlab-mcp-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/gitlab-mcp-service/Dockerfile",
+      "simorgh-agent/gitlab-mcp-service/app.py",
+      "simorgh-agent/gitlab-mcp-service/requirements.txt",
+      "simorgh-agent/shared"
+    ]
+  },
+  {
+    "service": "graph-rag-service",
+    "image": "simorgh-graph-rag-service",
+    "context": "simorgh-agent/graph-rag-service",
+    "dockerfile": "simorgh-agent/graph-rag-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/graph-rag-service"
+    ]
+  },
+  {
+    "service": "grounding-verifier",
+    "image": "simorgh-grounding-verifier",
+    "context": "simorgh-agent/grounding-verifier",
+    "dockerfile": "simorgh-agent/grounding-verifier/Dockerfile",
+    "watch": [
+      "simorgh-agent/grounding-verifier"
+    ]
+  },
+  {
+    "service": "hr-kb-service",
+    "image": "simorgh-hr-kb-service",
+    "context": "simorgh-agent/hr-kb-service",
+    "dockerfile": "simorgh-agent/hr-kb-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/hr-kb-service"
+    ]
+  },
+  {
+    "service": "llm-gateway",
+    "image": "simorgh-llm-gateway",
+    "context": "simorgh-agent/llm-gateway",
+    "dockerfile": "simorgh-agent/llm-gateway/Dockerfile",
+    "watch": [
+      "simorgh-agent/llm-gateway"
+    ]
+  },
+  {
+    "service": "mail-bridge",
+    "image": "simorgh-mail-bridge",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/mail-bridge/Dockerfile",
+    "watch": [
+      "simorgh-agent/mail-bridge/Dockerfile",
+      "simorgh-agent/mail-bridge/app.py",
+      "simorgh-agent/mail-bridge/requirements.txt",
+      "simorgh-agent/shared"
+    ]
+  },
+  {
+    "service": "org-data-service",
+    "image": "simorgh-org-data-service",
+    "context": "simorgh-agent/org-data-service",
+    "dockerfile": "simorgh-agent/org-data-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/org-data-service"
+    ]
+  },
+  {
+    "service": "payments-service",
+    "image": "simorgh-payments-service",
+    "context": "simorgh-agent/payments-service",
+    "dockerfile": "simorgh-agent/payments-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/payments-service"
+    ]
+  },
+  {
+    "service": "project-agent-service",
+    "image": "simorgh-project-agent-service",
+    "context": "simorgh-agent/project-agent-service",
+    "dockerfile": "simorgh-agent/project-agent-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/project-agent-service"
+    ]
+  },
+  {
+    "service": "project-analysis",
+    "image": "simorgh-project-analysis",
+    "context": "simorgh-agent/project-analysis-service",
+    "dockerfile": "simorgh-agent/project-analysis-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/project-analysis-service"
+    ]
+  },
+  {
+    "service": "project-explorer",
+    "image": "simorgh-project-explorer",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/project-explorer-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/project-explorer-service/Dockerfile",
+      "simorgh-agent/project-explorer-service/app.py",
+      "simorgh-agent/project-explorer-service/requirements.txt",
+      "simorgh-agent/shared"
+    ]
+  },
+  {
+    "service": "project-init",
+    "image": "simorgh-project-init",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/project-init-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/project-init-service/Dockerfile",
+      "simorgh-agent/project-init-service/app.py",
+      "simorgh-agent/project-init-service/requirements.txt",
+      "simorgh-agent/shared"
+    ]
+  },
+  {
+    "service": "runtime-broker",
+    "image": "simorgh-runtime-broker",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/runtime-broker/Dockerfile",
+    "watch": [
+      "simorgh-agent/runtime-broker/Dockerfile",
+      "simorgh-agent/runtime-broker/app.py",
+      "simorgh-agent/runtime-broker/requirements.txt",
+      "simorgh-agent/shared"
+    ]
+  },
+  {
+    "service": "search-service",
+    "image": "simorgh-search-service",
+    "context": "simorgh-agent/search-service",
+    "dockerfile": "simorgh-agent/search-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/search-service"
+    ]
+  },
+  {
+    "service": "simorgh-soft",
+    "image": "simorgh-soft",
+    "context": "simorgh-agent/simorgh-soft",
+    "dockerfile": "simorgh-agent/simorgh-soft/Dockerfile",
+    "watch": [
+      "simorgh-agent/simorgh-soft"
+    ]
+  },
+  {
+    "service": "specification-agent-service",
+    "image": "simorgh-specification-agent-service",
+    "context": "simorgh-agent/specification-agent-service",
+    "dockerfile": "simorgh-agent/specification-agent-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/specification-agent-service"
+    ]
+  },
+  {
+    "service": "stt-service",
+    "image": "simorgh-stt-service",
+    "context": "simorgh-agent/stt-service",
+    "dockerfile": "simorgh-agent/stt-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/stt-service"
+    ]
+  },
+  {
+    "service": "techserver-mcp",
+    "image": "simorgh-techserver-mcp",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/techserver-mcp-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/techserver-mcp-service/Dockerfile",
+      "simorgh-agent/techserver-mcp-service/app.py",
+      "simorgh-agent/techserver-mcp-service/requirements.txt"
+    ]
+  },
+  {
+    "service": "tei",
+    "image": "simorgh-tei",
+    "context": "simorgh-agent/tei",
+    "dockerfile": "simorgh-agent/tei/Dockerfile",
+    "watch": [
+      "simorgh-agent/tei"
+    ]
+  },
+  {
+    "service": "tier-quota-service",
+    "image": "simorgh-tier-quota-service",
+    "context": "simorgh-agent/tier-quota-service",
+    "dockerfile": "simorgh-agent/tier-quota-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/tier-quota-service"
+    ]
+  },
+  {
+    "service": "tpms-context-agent",
+    "image": "simorgh-tpms-context-agent",
+    "context": "simorgh-agent",
+    "dockerfile": "simorgh-agent/tpms-context-agent/Dockerfile",
+    "watch": [
+      "simorgh-agent/shared",
+      "simorgh-agent/tpms-context-agent/Dockerfile",
+      "simorgh-agent/tpms-context-agent/app.py",
+      "simorgh-agent/tpms-context-agent/requirements.txt"
+    ]
+  },
+  {
+    "service": "tpms-fetcher",
+    "image": "simorgh-tpms-fetcher",
+    "context": "simorgh-agent/tpms-fetcher-service",
+    "dockerfile": "simorgh-agent/tpms-fetcher-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/tpms-fetcher-service"
+    ]
+  },
+  {
+    "service": "tts-service",
+    "image": "simorgh-tts-service",
+    "context": "simorgh-agent/tts-service",
+    "dockerfile": "simorgh-agent/tts-service/Dockerfile",
+    "watch": [
+      "simorgh-agent/tts-service"
+    ]
+  },
+  {
+    "service": "whisper-server",
+    "image": "simorgh-whisper",
+    "context": "simorgh-agent/whisper",
+    "dockerfile": "simorgh-agent/whisper/Dockerfile",
+    "watch": [
+      "simorgh-agent/whisper"
+    ]
+  }
+]

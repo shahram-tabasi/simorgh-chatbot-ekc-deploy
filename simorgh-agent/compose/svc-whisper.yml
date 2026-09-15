@@ -16,7 +16,7 @@
 # =============================================================================
 services:
   whisper-server:
-    image: simorgh-whisper:offline
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-whisper:${IMAGE_TAG:-latest}
     build:
       context: ../whisper
       dockerfile: Dockerfile

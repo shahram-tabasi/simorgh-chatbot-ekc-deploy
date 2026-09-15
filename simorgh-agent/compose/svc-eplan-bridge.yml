@@ -15,7 +15,7 @@
 services:
   eplan-bridge:
     build: ../eplan-bridge-service
-    image: simorgh-eplan-bridge:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-eplan-bridge:${IMAGE_TAG:-latest}
     container_name: eplan-bridge
     expose:
       - "8026"

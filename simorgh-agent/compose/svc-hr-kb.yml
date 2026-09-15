@@ -8,7 +8,7 @@
 # =============================================================================
 services:
   hr-kb-service:
-    image: simorgh-hr-kb-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-hr-kb-service:${IMAGE_TAG:-latest}
     build: ../hr-kb-service
     container_name: hr-kb-service
     expose:

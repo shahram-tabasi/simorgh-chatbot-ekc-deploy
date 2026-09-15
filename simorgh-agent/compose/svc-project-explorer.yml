@@ -9,7 +9,7 @@ services:
     build:
       context: ..
       dockerfile: project-explorer-service/Dockerfile
-    image: simorgh-project-explorer:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-project-explorer:${IMAGE_TAG:-latest}
     container_name: project-explorer
     expose:
       - "8052"

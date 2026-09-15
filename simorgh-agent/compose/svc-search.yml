@@ -5,7 +5,7 @@
 services:
   search-service:
     build: ../search-service
-    image: simorgh-search-service:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-search-service:${IMAGE_TAG:-latest}
     container_name: search-service
     expose:
       - "8020"

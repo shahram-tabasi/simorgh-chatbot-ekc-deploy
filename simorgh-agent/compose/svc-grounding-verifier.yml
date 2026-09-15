@@ -14,7 +14,7 @@
 # =============================================================================
 services:
   grounding-verifier:
-    image: simorgh-grounding-verifier:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-grounding-verifier:${IMAGE_TAG:-latest}
     build: ../grounding-verifier
     container_name: grounding-verifier
     expose:

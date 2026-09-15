@@ -14,7 +14,7 @@
 # =============================================================================
 services:
   llm-gateway:
-    image: simorgh-llm-gateway:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-llm-gateway:${IMAGE_TAG:-latest}
     build: ../llm-gateway
     container_name: llm-gateway
     expose:

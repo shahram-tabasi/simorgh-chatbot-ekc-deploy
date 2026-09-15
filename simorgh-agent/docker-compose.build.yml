@@ -1,0 +1,153 @@
+# =============================================================================
+# Simorgh — BUILD ON THIS MACHINE
+#
+# The default docker-compose.yml pulls every image from ghcr.io, where the
+# GitHub workflow puts them. This file is the other half: an override that
+# tells compose to build each of them here instead.
+#
+#   Pull (default):   docker compose up -d
+#   Build here:       docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#                     docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+#
+# It is an override rather than a second copy of the stack on purpose: every
+# service is still defined once, in compose/<name>.yml, with its build context
+# and its environment. All this file changes is where the image comes from.
+#
+# `pull_policy: build` is what does it. Without it compose is free to take a
+# stale image off the local daemon, or to reach for ghcr.io — which on a
+# machine with limited internet is a twenty-minute hang, not an error.
+#
+# The image keeps the same ghcr.io name when built here. That is deliberate:
+# the service files name the image once, `docker compose up` finds what was
+# just built, and nothing has to agree about a second name. To build under the
+# old local names instead, set IMAGE_PREFIX and IMAGE_TAG:
+#
+#   IMAGE_PREFIX= IMAGE_TAG=local docker compose -f docker-compose.yml \
+#     -f docker-compose.build.yml build
+#
+# One service is missing from this list and belongs there when you need it:
+# anything added to compose/ after this file was written. The list is every
+# service in compose/*.yml that carries a `build:` section.
+# =============================================================================
+
+services:
+  # ── compose/core-backend.yml
+  backend:
+    pull_policy: build
+  # ── compose/core-frontend.yml
+  frontend:
+    pull_policy: build
+  # ── compose/soft-app.yml
+  simorgh-soft:
+    pull_policy: build
+  # ── compose/svc-admin.yml
+  admin-service:
+    pull_policy: build
+  # ── compose/svc-auth.yml
+  auth-service:
+    pull_policy: build
+  # ── compose/svc-chat-history-mcp.yml
+  chat-history-mcp:
+    pull_policy: build
+  # ── compose/svc-chat.yml
+  chat-service:
+    pull_policy: build
+  # ── compose/svc-command-gen.yml
+  command-gen:
+    pull_policy: build
+  # ── compose/svc-context-search.yml
+  context-search:
+    pull_policy: build
+  # ── compose/svc-doc-processor.yml
+  doc-processor:
+    pull_policy: build
+  # ── compose/svc-docling.yml
+  docling-serve:
+    pull_policy: build
+  # ── compose/svc-documents-rag.yml
+  documents-rag-service:
+    pull_policy: build
+  # ── compose/svc-embeddings.yml
+  embeddings-service:
+    pull_policy: build
+  # ── compose/svc-eplan-bridge.yml
+  eplan-bridge:
+    pull_policy: build
+  # ── compose/svc-eplan-files.yml
+  eplan-files:
+    pull_policy: build
+  # ── compose/svc-eplan-sql.yml
+  eplan-sql-service:
+    pull_policy: build
+  # ── compose/svc-file-export.yml
+  file-export:
+    pull_policy: build
+  # ── compose/svc-gitlab-mcp.yml
+  gitlab-mcp:
+    pull_policy: build
+  # ── compose/svc-graph-rag.yml
+  graph-rag-service:
+    pull_policy: build
+  # ── compose/svc-grounding-verifier.yml
+  grounding-verifier:
+    pull_policy: build
+  # ── compose/svc-hr-kb.yml
+  hr-kb-service:
+    pull_policy: build
+  # ── compose/svc-llm-gateway.yml
+  llm-gateway:
+    pull_policy: build
+  # ── compose/svc-mail-bridge.yml
+  mail-bridge:
+    pull_policy: build
+  # ── compose/svc-org-data.yml
+  org-data-service:
+    pull_policy: build
+  # ── compose/svc-payments.yml
+  payments-service:
+    pull_policy: build
+  # ── compose/svc-project-agent.yml
+  project-agent-service:
+    pull_policy: build
+  # ── compose/svc-project-analysis.yml
+  project-analysis:
+    pull_policy: build
+  # ── compose/svc-project-explorer.yml
+  project-explorer:
+    pull_policy: build
+  # ── compose/svc-project-init.yml
+  project-init:
+    pull_policy: build
+  # ── compose/svc-runtime-broker.yml
+  runtime-broker:
+    pull_policy: build
+  # ── compose/svc-search.yml
+  search-service:
+    pull_policy: build
+  # ── compose/svc-specification-agent.yml
+  specification-agent-service:
+    pull_policy: build
+  # ── compose/svc-stt.yml
+  stt-service:
+    pull_policy: build
+  # ── compose/svc-techserver-mcp.yml
+  techserver-mcp:
+    pull_policy: build
+  # ── compose/svc-tei.yml
+  tei:
+    pull_policy: build
+  # ── compose/svc-tier-quota.yml
+  tier-quota-service:
+    pull_policy: build
+  # ── compose/svc-tpms-context-agent.yml
+  tpms-context-agent:
+    pull_policy: build
+  # ── compose/svc-tpms-fetcher.yml
+  tpms-fetcher:
+    pull_policy: build
+  # ── compose/svc-tts.yml
+  tts-service:
+    pull_policy: build
+  # ── compose/svc-whisper.yml
+  whisper-server:
+    pull_policy: build
