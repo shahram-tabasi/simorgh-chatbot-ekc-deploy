@@ -33,6 +33,10 @@ on:
         description: 'Extra tag to publish alongside latest and the commit sha'
         type: string
         default: ''
+      base_registry:
+        description: 'Where base images come from. "library" is Docker Hub; set another mirror if Hub rate-limits'
+        type: string
+        default: library
 
 permissions:
   contents: read
@@ -156,6 +160,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Anonymous pulls from Docker Hub are rate-limited per IP, and a hosted
+      # runner shares its IP with everyone else on it. Thirty-nine builds
+      # pulling base images can trip that and start failing halfway through
+      # with a 429 that looks like nothing to do with us. Set DOCKERHUB_USERNAME
+      # and DOCKERHUB_TOKEN in the repository secrets and this logs in; leave
+      # them unset and it is skipped, which is fine until it is not.
+      - name: Log in to Docker Hub, if credentials are configured
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
       - id: meta
         shell: bash
         run: |
@@ -177,11 +196,20 @@ jobs:
             ${{ steps.meta.outputs.ref }}:latest
             ${{ steps.meta.outputs.ref }}:${{ github.sha }}
             ${{ inputs.tag && format('{0}:{1}', steps.meta.outputs.ref, inputs.tag) || '' }}
-          # The public npm registry, not the internal mirror: a runner has no
-          # route to 192.168.1.64 and every Dockerfile here takes the mirror as
-          # a build arg for exactly this reason.
+          # Both of these say the same thing: a runner is not the build host.
+          #
+          # NPM_REGISTRY — the public one, not the internal mirror on
+          # 192.168.1.64, which a runner has no route to.
+          #
+          # BASE_REGISTRY — Docker Hub, not the Harbor proxy-cache. Harbor is
+          # what the build host uses because its own path to Docker Hub is
+          # unreliable; a runner is the reverse, reaching Docker Hub fine and
+          # holding no Harbor credentials, where it gets a 401 on the first
+          # FROM and stops. `library` resolves to docker.io/library, and Harbor
+          # is a cache of exactly those images, so the result is identical.
           build-args: |
             NPM_REGISTRY=https://registry.npmjs.org/
+            BASE_REGISTRY=${{ inputs.base_registry || 'library' }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
           provenance: false

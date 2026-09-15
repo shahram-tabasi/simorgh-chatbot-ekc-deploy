@@ -70,6 +70,47 @@ ok('every entry is complete',
    [i.get('image', '?') for i in images
     if not all(i.get(k) for k in ('service', 'image', 'context', 'dockerfile', 'watch'))], [])
 
+
+# ── And the Dockerfiles themselves, for the two ways a build dies on a runner
+# rather than on the build host. Both were found one workflow failure at a
+# time, which is the slow way; this is the fast one.
+import re
+
+def lines_of(entry):
+    with open(os.path.join(ROOT, entry['dockerfile']), encoding='utf-8') as fh:
+        return list(enumerate(fh, 1))
+
+# `ENV key=value` takes the rest of the line as more key=value pairs, so a
+# trailing comment is parsed as one: "can't find = in #". It never showed up
+# until whisper was built for the first time.
+trailing = []
+for i in images:
+    for n, line in lines_of(i):
+        m = re.match(r'^\s*(ENV|ARG)\s+(\S+=\S*)(.*)$', line.rstrip('\n'))
+        if m and '#' in m.group(3):
+            trailing.append('%s:%d' % (i['dockerfile'], n))
+ok('no ENV or ARG carries a trailing comment on the key=value form', trailing, [])
+
+# The Harbor proxy-cache is private and a runner has no credentials for it: a
+# FROM pinned there is a 401 on the first instruction. It stays the default,
+# but through an ARG the workflow can override.
+pinned = []
+for i in images:
+    for n, line in lines_of(i):
+        if re.match(r'^\s*FROM\s', line) and 'registry.simorghai.com' in line:
+            pinned.append('%s:%d' % (i['dockerfile'], n))
+ok('no FROM is hard-pinned to the internal registry', pinned, [])
+
+# A FROM built from a variable needs a default, or a plain `docker build`
+# resolves it to nothing.
+undefaulted = []
+for i in images:
+    src = open(os.path.join(ROOT, i['dockerfile']), encoding='utf-8').read()
+    for m in re.finditer(r'^\s*FROM\s+\S*\$\{(\w+)\}', src, re.M):
+        if not re.search(r'^\s*ARG\s+%s=\S' % m.group(1), src, re.M):
+            undefaulted.append('%s: %s' % (i['dockerfile'], m.group(1)))
+ok('every variable used in a FROM has an ARG default', undefaulted, [])
+
 print()
 print('ALL PASS' if not failures else '%d FAILED' % len(failures))
 sys.exit(1 if failures else 0)

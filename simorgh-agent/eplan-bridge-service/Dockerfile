@@ -1,9 +1,19 @@
-# Pulled through the Harbor proxy-cache (registry.simorghai.com/docker-proxy)
-# rather than docker.io directly — direct outbound access to Docker Hub has
-# proven unreliable on the build host. `docker login registry.simorghai.com`
-# (HARBOR_USER / HARBOR_PASSWORD) must happen before building — docker-proxy
-# is a private project.
-FROM registry.simorghai.com/docker-proxy/library/python:3.11-slim
+# ---- Where the base images come from ----------------------------------------
+#
+# The build host's direct path to Docker Hub has proven unreliable, so it pulls
+# these through the Harbor proxy-cache instead — which is why that is the
+# default. `docker login registry.simorghai.com` (HARBOR_USER /
+# HARBOR_PASSWORD) has to have happened first; docker-proxy is a private
+# project.
+#
+# A GitHub runner is the other way round: it reaches Docker Hub perfectly well
+# and has no credentials for Harbor, where it gets a 401 and the build stops on
+# the first FROM. So the registry is an argument rather than a fact, and the
+# workflow passes BASE_REGISTRY=library to take the images straight from Docker
+# Hub. Nothing about the resulting image differs — Harbor is a cache of exactly
+# these.
+ARG BASE_REGISTRY=registry.simorghai.com/docker-proxy/library
+FROM ${BASE_REGISTRY}/python:3.11-slim
 # ---- Air-gapped registry proxies (override at build with --build-arg) ----
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TRUSTED_HOST=
