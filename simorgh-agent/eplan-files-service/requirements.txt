@@ -1,9 +1,0 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-# Pure-Python SMB3 client. Deliberately not the smbclient CLI, which is an
-# apt package: this server cannot reach Debian's mirrors, and the Harbor
-# proxy-cache in front of Docker Hub is a container registry, so it cannot
-# stand in for one (see simorgh-soft/Dockerfile, which learned the same thing
-# about Alpine's APK CDN). Everything here installs as a wheel from the Nexus
-# PyPI proxy, which is the one package path this network does have.
-smbprotocol==1.15.0

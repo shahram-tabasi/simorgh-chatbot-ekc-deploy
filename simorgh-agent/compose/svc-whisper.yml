@@ -17,6 +17,7 @@
 services:
   whisper-server:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-whisper:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     build:
       context: ../whisper
       dockerfile: Dockerfile

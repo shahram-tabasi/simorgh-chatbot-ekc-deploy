@@ -7,10 +7,18 @@
 # project's tree WITHOUT downloading and fetches single files on demand —
 # it never bulk-copies (the Drawing/ CAD subtree is gigabytes and is hard-
 # excluded). The CoT engine consumes it via TECHSERVER_MCP_URL.
+#
+# It also serves what EPLAN writes back to that share: /eplan/pdf and
+# /eplan/zip, which simorgh-soft's Send to EPLAN download buttons read. Those
+# two step past the exclusions on purpose — see the note in app.py. They used
+# to live in a service of their own; there is one techserver and one set of
+# credentials for it, and two services SMB-ing into the same shares with two
+# different SMB libraries was one configuration too many.
 # =============================================================================
 services:
   techserver-mcp:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-techserver-mcp:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     build:
       context: ..
       dockerfile: techserver-mcp-service/Dockerfile
@@ -49,6 +57,16 @@ services:
       - TECHSERVER_SHARE_TTL=${TECHSERVER_SHARE_TTL:-86400}
       # Type-aware extraction (PDF/Office/text + VLM for images).
       - DOC_PROCESSOR_URL=${DOC_PROCESSOR_URL:-http://doc-processor:8000}
+      # What EPLAN produced. /eplan/pdf and /eplan/zip hand back the drawing
+      # and the project that Send to EPLAN leaves on this same share — the
+      # only two routes here that step past the exclusions above, because an
+      # .elk, its .edb and a plot PDF are exactly what those exclusions name.
+      # Bounded instead by the .elk suffix and by this ceiling, which is its
+      # own because a project legitimately runs to hundreds of megabytes.
+      - EPLAN_ZIP_MAX_BYTES=${EPLAN_ZIP_MAX_BYTES:-2147483648}
+      # Optional. Set it and those two routes require X-API-Key; leave it
+      # unset and they are open on app_net like the rest of this service.
+      - EPLAN_FILES_API_KEY=${EPLAN_FILES_API_KEY:-}
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8053/health',timeout=5).status==200 else 1)\""]
       interval: 30s

@@ -10,6 +10,7 @@ services:
       context: ..
       dockerfile: project-explorer-service/Dockerfile
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-project-explorer:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: project-explorer
     expose:
       - "8052"

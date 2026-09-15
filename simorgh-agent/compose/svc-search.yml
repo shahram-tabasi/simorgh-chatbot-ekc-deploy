@@ -6,6 +6,7 @@ services:
   search-service:
     build: ../search-service
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-search-service:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: search-service
     expose:
       - "8020"

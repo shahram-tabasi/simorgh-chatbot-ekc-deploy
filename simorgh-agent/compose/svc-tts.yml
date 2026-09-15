@@ -5,6 +5,7 @@
 services:
   tts-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-tts-service:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     build: ../tts-service
     container_name: tts-service
     expose:

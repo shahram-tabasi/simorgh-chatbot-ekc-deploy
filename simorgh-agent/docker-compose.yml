@@ -90,7 +90,6 @@ include:
   - compose/svc-command-gen.yml
   - compose/svc-file-export.yml
   - compose/svc-eplan-bridge.yml
-  - compose/svc-eplan-files.yml       # EPLAN output (PDF / project zip) off the techserver
 
   # ---- New services (enterprise migration) ----------------------------------
   - compose/svc-gitlab-mcp.yml         # GitLab REST + MCP (replaces tech-kb + techserver)

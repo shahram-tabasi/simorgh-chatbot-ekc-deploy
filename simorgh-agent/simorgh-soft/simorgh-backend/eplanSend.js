@@ -20,7 +20,7 @@
 // the bridge itself reaches EPLAN across servers (eplan-port-forwarder).
 
 const DEFAULT_BRIDGE_URL = 'http://eplan-bridge:8026';
-const DEFAULT_EPLAN_FILES_URL = 'http://eplan-files:8056';
+const DEFAULT_EPLAN_FILES_URL = 'http://techserver-mcp:8053';
 
 // Where EPLAN says it put the drawing.
 //
@@ -203,7 +203,8 @@ export function registerEplanRoutes(app) {
   //
   // The drawings land on the techserver SMB share, which this backend has no
   // credentials for and no SMB client in, so the bytes are streamed through
-  // eplan-files rather than either being duplicated here.
+  // techserver-mcp rather than either being duplicated here — the same service
+  // that already reads that host for everything else.
   //
   // Streamed, not buffered: an EPLAN project zip is routinely hundreds of
   // megabytes, and reading one into memory to hand it on would be the largest

@@ -14,6 +14,7 @@ services:
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-soft:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: simorgh-soft
     expose:
       - "80"
@@ -49,10 +50,14 @@ services:
       - EPLAN_BRIDGE_TIMEOUT_MS=${EPLAN_BRIDGE_TIMEOUT_MS:-120000}
       # Downloading what EPLAN produced. The drawings live on the techserver
       # SMB share, which this backend has no credentials for and no SMB client
-      # in, so it streams through eplan-files rather than holding either.
+      # in, so it streams through techserver-mcp rather than holding either.
+      # That is the service that already speaks to this host, and its /eplan/
+      # routes are where the PDF and the project archive come from now — a
+      # second service SMB-ing into the same shares with a second SMB library
+      # was one configuration too many, and it drifted.
       # Generous timeout: a project archive is often hundreds of megabytes,
       # fetched over SMB and then zipped.
-      - EPLAN_FILES_URL=${EPLAN_FILES_URL:-http://eplan-files:8056}
+      - EPLAN_FILES_URL=${EPLAN_FILES_URL:-http://techserver-mcp:8053}
       - EPLAN_FILES_API_KEY=${EPLAN_FILES_API_KEY:-}
       - EPLAN_DOWNLOAD_TIMEOUT_MS=${EPLAN_DOWNLOAD_TIMEOUT_MS:-900000}
     volumes:

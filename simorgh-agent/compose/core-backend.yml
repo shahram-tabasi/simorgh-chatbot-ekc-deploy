@@ -4,11 +4,11 @@
 # =============================================================================
 services:
   backend:
-    # Use the locally-loaded image (delivered as a docker save tarball by
-    # the build-backend-image GHA workflow) when present; only fall back
-    # to building when the image isn't found.
+    # This one used to be `pull_policy: never`, from when the image arrived
+    # as a docker-save tarball loaded by hand. It comes off ghcr.io with the
+    # rest of them now, so it follows the same rule as the rest of them.
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-backend:${IMAGE_TAG:-latest}
-    pull_policy: never
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     build:
       context: ../backend
       tags:

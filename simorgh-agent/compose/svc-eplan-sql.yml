@@ -6,6 +6,7 @@
 services:
   eplan-sql-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-eplan-sql-service:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     build: ../eplan-sql-service
     container_name: eplan-sql-service
     expose:

@@ -6,6 +6,7 @@
 services:
   auth-service:
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-auth-service:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     build: ../auth-service
     container_name: auth-service
     expose:

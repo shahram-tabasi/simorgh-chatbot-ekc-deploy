@@ -11,6 +11,7 @@ services:
       context: ..
       dockerfile: mail-bridge/Dockerfile
     image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-mail-bridge:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: mail-bridge
     expose:
       - "8051"

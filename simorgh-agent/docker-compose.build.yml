@@ -25,9 +25,12 @@
 #   IMAGE_PREFIX= IMAGE_TAG=local docker compose -f docker-compose.yml \
 #     -f docker-compose.build.yml build
 #
-# One service is missing from this list and belongs there when you need it:
-# anything added to compose/ after this file was written. The list is every
-# service in compose/*.yml that carries a `build:` section.
+# The list is every service the default stack actually starts. Two buildable
+# services are deliberately absent — tei and whisper-server, whose includes are
+# commented out in docker-compose.yml — because an override for a service the
+# project does not define is not an override, it is a half-declared service,
+# and compose rejects the whole project for it. Uncomment one of those
+# includes and add its two lines here at the same time.
 # =============================================================================
 
 services:
@@ -72,9 +75,6 @@ services:
     pull_policy: build
   # ── compose/svc-eplan-bridge.yml
   eplan-bridge:
-    pull_policy: build
-  # ── compose/svc-eplan-files.yml
-  eplan-files:
     pull_policy: build
   # ── compose/svc-eplan-sql.yml
   eplan-sql-service:
@@ -133,9 +133,6 @@ services:
   # ── compose/svc-techserver-mcp.yml
   techserver-mcp:
     pull_policy: build
-  # ── compose/svc-tei.yml
-  tei:
-    pull_policy: build
   # ── compose/svc-tier-quota.yml
   tier-quota-service:
     pull_policy: build
@@ -147,7 +144,4 @@ services:
     pull_policy: build
   # ── compose/svc-tts.yml
   tts-service:
-    pull_policy: build
-  # ── compose/svc-whisper.yml
-  whisper-server:
     pull_policy: build

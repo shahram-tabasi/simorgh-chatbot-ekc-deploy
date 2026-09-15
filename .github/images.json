@@ -114,15 +114,6 @@
     ]
   },
   {
-    "service": "eplan-files",
-    "image": "simorgh-eplan-files",
-    "context": "simorgh-agent/eplan-files-service",
-    "dockerfile": "simorgh-agent/eplan-files-service/Dockerfile",
-    "watch": [
-      "simorgh-agent/eplan-files-service"
-    ]
-  },
-  {
     "service": "eplan-sql-service",
     "image": "simorgh-eplan-sql-service",
     "context": "simorgh-agent/eplan-sql-service",
