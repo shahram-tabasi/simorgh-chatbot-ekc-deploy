@@ -670,23 +670,49 @@ export const DrawingEditor: React.FC<Props> = ({
    * frame you will end up with two of.
    */
   const headerOn = useMemo(() => hasHeader(shapes), [shapes]);
+
+  /** What this sheet's title block says — and, through it, how big it is. */
+  const headerFields = useCallback((): HeaderFields => ({
+    title: sheet.name,
+    // The lines the project already hands the exporter for its title block.
+    // First is the job, second whatever the job calls this document.
+    project: titleBlock[0] ?? '',
+    number: titleBlock[1] ?? '',
+    sheet: sheets.length > 1 ? `${index + 1} / ${sheets.length}` : '1 / 1',
+    size: paper === 'auto' ? '' : paper,
+    // A circuit diagram is not to scale and saying so is the honest entry;
+    // a layout drawing that is to scale can have this retyped.
+    scale: 'NTS',
+    date: new Date().toISOString().slice(0, 10),
+  }), [sheet, titleBlock, sheets.length, index, paper]);
+
+  /**
+   * The part of the sheet a drawing may use — the frame's inside, less the
+   * title block.
+   *
+   * The assistant needs this, and "the sheet" is not it: a drawing that only
+   * has to stay on the sheet is free to run through the title block, and one
+   * told to keep a margin has no idea the bottom-right corner is spoken for.
+   * It is the same rectangle `doHeader` fits an imported drawing into, so what
+   * the assistant draws and what the frame allows are one number, not two.
+   */
+  const designArea = useCallback(() => {
+    const { width: W, height: H } = sheet.drawing;
+    if (headerOn) {
+      const best = drawingAreas(W, H, headerFields(), { mmPerUnit })
+        .sort((a, b) => b.w * b.h - a.w * a.h)[0];
+      if (best) return best;
+    }
+    // No frame yet: the sheet, inset, so there is room for one later.
+    const margin = Math.min(20, Math.min(W, H) / 12);
+    return { x: margin, y: margin, w: W - 2 * margin, h: H - 2 * margin };
+  }, [sheet, headerOn, mmPerUnit, headerFields]);
+
   const doHeader = useCallback(() => {
     if (headerOn) { commit(stripHeader(shapes)); setNotice(null); return; }
 
     const { width: W, height: H } = sheet.drawing;
-    const fields: HeaderFields = {
-      title: sheet.name,
-      // The lines the project already hands the exporter for its title block.
-      // First is the job, second whatever the job calls this document.
-      project: titleBlock[0] ?? '',
-      number: titleBlock[1] ?? '',
-      sheet: sheets.length > 1 ? `${index + 1} / ${sheets.length}` : '1 / 1',
-      size: paper === 'auto' ? '' : paper,
-      // A circuit diagram is not to scale and saying so is the honest entry;
-      // a layout drawing that is to scale can have this retyped.
-      scale: 'NTS',
-      date: new Date().toISOString().slice(0, 10),
-    };
+    const fields = headerFields();
     // The sheet's own scale, so the frame plots at the millimetres a drawing
     // standard names rather than at a size that only looks about right.
     const style = { mmPerUnit };
@@ -730,7 +756,7 @@ export const DrawingEditor: React.FC<Props> = ({
     // the geometry is a frame that hides a wire.
     commit([...frameShapes, ...fitted]);
     setNotice(percent < 100 ? T.headerFitted.replace('{n}', String(percent)) : null);
-  }, [headerOn, shapes, sheet, sheets.length, index, titleBlock, paper, mmPerUnit, commit, T]);
+  }, [headerOn, shapes, sheet, headerFields, mmPerUnit, commit, T]);
 
   /** Devices that appear on more than one sheet — a coil and its contacts. */
   const xrefs = useMemo(
@@ -829,6 +855,11 @@ export const DrawingEditor: React.FC<Props> = ({
           width: sheet.drawing.width,
           height: sheet.drawing.height,
           textSize,
+          // Where on the sheet it may draw. Without it the model is told the
+          // size of the paper and nothing about the frame, so it draws through
+          // the title block or huddles in a corner and fills the rest with a
+          // line going nowhere — which is exactly what it did.
+          area: designArea(),
           // The library goes with the question. It lives here, in the browser,
           // and the office adds to it — so the model is told what is in it now
           // rather than what was in it when the server was built, and it names
@@ -873,7 +904,7 @@ export const DrawingEditor: React.FC<Props> = ({
     } finally {
       setAsking(false);
     }
-  }, [askText, sheet, textSize, draw, T]);
+  }, [askText, sheet, textSize, designArea, draw, T]);
 
 
   /**

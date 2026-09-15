@@ -63,6 +63,30 @@ function readCatalogue(raw) {
 }
 
 /**
+ * The part of the sheet the drawing may use.
+ *
+ * The browser knows it — it is what `drawingAreas` computes from the header
+ * already on the sheet — so it is sent rather than guessed at here. A missing
+ * or nonsense area falls back to the whole sheet inset by a margin, which is
+ * what this did before there was an area at all.
+ */
+function readArea(raw, width, height) {
+  const n = v => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const [x, y, w, h] = [n(raw?.x), n(raw?.y), n(raw?.w), n(raw?.h)];
+  const margin = Math.min(20, Math.min(width, height) / 12);
+  const fallback = { x: margin, y: margin, w: width - 2 * margin, h: height - 2 * margin };
+  if (x === null || y === null || w === null || h === null) return fallback;
+  const ax = Math.max(0, Math.min(x, width));
+  const ay = Math.max(0, Math.min(y, height));
+  const aw = Math.min(w, width - ax);
+  const ah = Math.min(h, height - ay);
+  // An area a tenth of the sheet across is a reading of something that was
+  // not an area; the whole sheet is a better guess than a stamp-sized one.
+  if (aw < Math.min(width, height) / 10 || ah < Math.min(width, height) / 10) return fallback;
+  return { x: ax, y: ay, w: aw, h: ah };
+}
+
+/**
  * The catalogue as the model reads it: grouped, one line each.
  *
  * Grouped because the grouping is half the instruction — a model that sees
@@ -89,13 +113,25 @@ function symbolLines(symbols) {
  * drawing an electrician would reject — diagonal wires, symbols drawn as
  * free-floating strokes with nothing tying them together, text with no size.
  */
-function systemPrompt({ width, height, textSize, symbols = [] }) {
+function systemPrompt({ width, height, textSize, symbols = [], area }) {
   const library = symbolLines(symbols);
+  const a = area || { x: 0, y: 0, w: width, h: height };
+  const x0 = Math.round(a.x), y0 = Math.round(a.y);
+  const x1 = Math.round(a.x + a.w), y1 = Math.round(a.y + a.h);
+  const cell = Math.max(8, Math.round(Math.min(a.w, a.h) / 12));
   return [
     'You draw electrical schematics as JSON. Answer with JSON only, no prose.',
     '',
     `The sheet is ${width} by ${height} units, x to the right, y DOWNWARDS from the top-left.`,
-    'Keep everything inside the sheet with a margin of at least 20 units.',
+    '',
+    // The frame, the title block and the zone grid are already on the sheet
+    // before the model is asked anything. Giving it the sheet and asking for
+    // "a margin" got a drawing in the top-left corner with a staircase across
+    // the rest: it had no idea which part of the page was its to use.
+    'THE DESIGN AREA — everything you draw goes inside this rectangle:',
+    `    x from ${x0} to ${x1}      y from ${y0} to ${y1}`,
+    'The sheet frame, title block and zone grid are already drawn outside it.',
+    'Nothing you return may fall outside those four numbers.',
     '',
     'Answer with: {"shapes":[...],"note":"one short sentence"}',
     '',
@@ -105,15 +141,18 @@ function systemPrompt({ width, height, textSize, symbols = [] }) {
     '  {"t":"circle","cx":N,"cy":N,"r":N,"layer":L}',
     '  {"t":"arc","cx":N,"cy":N,"r":N,"a0":DEG,"a1":DEG,"layer":L}',
     '  {"t":"poly","pts":[[x,y],...],"layer":L}',
-    `  {"t":"text","x":N,"y":N,"s":"...","size":${textSize},"layer":L}`,
+    `  {"t":"text","x":N,"y":N,"s":"...","size":${textSize},"layer":L,"anchor":A}`,
+    '      anchor is start (text runs right from x), end (it ends at x) or',
+    '      middle. A tag to the LEFT of a symbol needs "end", or it runs back',
+    '      over the symbol.',
     ...(library.length
       ? [
         '  {"t":"sym","id":"ID","x":N,"y":N,"h":N,"name":"WHAT IT IS"}',
         '',
         'A "sym" is a device taken from the drawing office\'s own symbol library.',
-        'x,y is where the incoming wire meets it — its top terminal — and h how',
-        'far down the page it reaches; the outgoing wire leaves at (x, y+h).',
-        `Use h of about ${Math.max(8, Math.round(Math.min(width, height) / 14))} unless the device needs more room.`,
+        'x,y is its TOP TERMINAL — where the incoming wire meets it — and h how',
+        'far down the page it reaches, so its BOTTOM TERMINAL is at (x, y+h).',
+        `Use h = ${cell} unless the device needs more room.`,
         'The library draws it; you only say which one and where.',
         '',
         'The library holds:',
@@ -124,33 +163,85 @@ function systemPrompt({ width, height, textSize, symbols = [] }) {
     `layer is one of: ${Object.entries(LAYERS).map(([k, v]) => `${k} (${v})`).join(', ')}.`,
     'Optional on any shape: "dash" as one of solid, dashed, dash-dot, dotted.',
     '',
+    // ── How a circuit is laid out ──────────────────────────────────────────
+    //
+    // Series and parallel are the two facts a schematic is made of, and the
+    // model was never told either. What came back was devices stacked down a
+    // line with no wires between their terminals and a polyline wandering
+    // across the page, because "draw a motor feeder" had been left to mean
+    // whatever it liked.
+    'SERIES AND PARALLEL — this is what makes it a circuit and not a picture:',
+    '',
+    '  IN SERIES: one vertical branch, one x for all of them, each device',
+    '  below the last. The current goes through every one in turn.',
+    '      -Q1 at (x, y)            bottom terminal (x, y+h)',
+    '      -K1 at (x, y+h+gap)      a line from (x, y+h) to (x, y+h+gap)',
+    '      -F1 below that, and so on down the branch.',
+    '',
+    '  IN PARALLEL: a second branch at its own x. It leaves the main branch',
+    '  at a junction, runs down its own x, and rejoins — a horizontal wire out',
+    '  at the top, the devices, a horizontal wire back at the bottom. Two',
+    '  devices in parallel share both of their ends; two in series share one.',
+    '',
+    'A MOTOR FEEDER, which is the common request, top to bottom IN SERIES on',
+    'one branch — this exact order:',
+    '      circuit breaker or disconnector   -Q1',
+    '      contactor                         -K1',
+    '      thermal overload                  -F1',
+    '      current transformer               -T1',
+    '      motor                             -M1',
+    'The ammeter is NOT in that branch. It is fed from the CT SECONDARY: a',
+    'wire from the CT sideways (to the right, clear of the branch) to the',
+    'ammeter, and a second wire back to the CT. The CT primary carries the',
+    'load current; its secondary feeds instruments and nothing else.',
+    '',
+    'What a CT secondary feeds — ammeter, protection relay, kWh or kVArh',
+    'meter, transducer, multimeter — all in series on the secondary loop, one',
+    'after another and back to the CT. A CT secondary is never left open.',
+    '',
     'Rules:',
     '1. Wires run horizontally or vertically only. Never diagonal. To get from',
     '   one place to another, use a poly that turns at right angles.',
+    '2. A wire joins two terminals and exists for no other reason. Every line',
+    '   and every poly starts at one terminal and ends at another — the bottom',
+    '   of one device to the top of the next, a branch to a busbar, a CT to its',
+    '   ammeter. A line that starts nowhere, or wanders across the sheet in',
+    '   steps, is not a wire and does not belong on the drawing.',
     library.length
-      ? '2. Anything you do draw yourself out of several shapes — a busbar with its'
+      ? '3. Anything you do draw yourself out of several shapes — a busbar with its'
         + '\n   droppers, an outgoing arrow — carries the same "block" string and the'
         + '\n   same "blockName" on every shape, so it is one object rather than loose'
         + '\n   strokes. A "sym" is already one object and needs neither.'
-      : '2. Every shape making up one device carries the same "block" string and the'
+      : '3. Every shape making up one device carries the same "block" string and the'
         + '\n   same "blockName" (what the device is, e.g. "CONTACTOR"). This is what'
         + '\n   makes it one object rather than loose strokes.',
-    '3. Give each device a designation as a text on the TAG layer just above it:',
+    '4. Give each device a designation as a text on the TAG layer, placed to',
+    '   the LEFT of its symbol — at x - 10 or further, anchored so it does not',
+    '   sit on top of the symbol it names:',
     '   -Q1 for breakers and isolators, -K1 contactors, -F1 fuses and overloads,',
-    '   -M1 motors, -T1 transformers, -P1 meters. Number upwards from 1.',
+    '   -M1 motors, -T1 transformers and CTs, -P1 meters. Number upwards from 1.',
     ...(library.length
       ? [
-        '4. Every device is a "sym" from the library above. Do not draw a breaker,',
-        '   a contactor, a fuse or a motor out of rectangles, circles and lines —',
-        '   the library already has the symbol the office issues its drawings with,',
-        '   and a hand-made one does not match the rest of the sheet. Use lines and',
-        '   polys for the wires between symbols, and text for tags and notes.',
+        '5. Every device is a "sym" from the library above, and the id you pick is',
+        '   the device you mean: a circuit breaker is circuit-breaker, not the',
+        '   nearest-looking thing in the list. Do not draw a breaker, a contactor,',
+        '   a fuse or a motor out of rectangles, circles and lines — the library',
+        '   already has the symbol the office issues its drawings with. Use lines',
+        '   and polys only for the wires between symbols, and text for tags.',
       ]
       : [
-        '4. Leave the symbols simple: a rectangle, a circle and a few lines read',
+        '5. Leave the symbols simple: a rectangle, a circle and a few lines read',
         '   better on a schematic than a detailed picture.',
       ]),
-    '5. Power flows down the page: supply at the top, load at the bottom.',
+    '6. Power flows down the page: supply at the top, load at the bottom. Start',
+    `   the branch near the top of the design area, around x = ${Math.round(a.x + a.w / 5)},`,
+    '   and leave room to the right for the instruments the CT feeds.',
+    '7. Fill the area. A branch of N devices in series runs from near the top of',
+    '   it to near the bottom, so size them to the page rather than drawing five',
+    '   small symbols in a corner:',
+    `       h   = ${Math.round(a.h * 0.8)} / (1.5 × N)      the height of each device`,
+    '       gap = h / 2                  the wire between two of them',
+    `   For five devices that is h ≈ ${Math.round(a.h * 0.8 / 7.5)} and a gap of about ${Math.round(a.h * 0.8 / 15)}.`,
   ].join('\n');
 }
 
@@ -167,9 +258,16 @@ function validateShapes(raw, bounds) {
   const known = new Set((bounds.symbols ?? []).map(sym => symKey(sym.id)));
   const shapes = [];
   const dropped = [];
-  const clamp = (v, hi) => Math.max(0, Math.min(hi, v));
-  const cx = v => clamp(v, width);
-  const cy = v => clamp(v, height);
+  // Clamped to the design area, not to the sheet. The sheet includes the
+  // frame, the title block and the zone grid, and a shape "inside the sheet"
+  // can still be drawn straight through the title block — which is how a
+  // generated drawing ends up overwriting the one part of the page that was
+  // already correct. Where no area was given the whole sheet is the area, so
+  // an older page that sends none behaves exactly as it did.
+  const area = bounds.area || { x: 0, y: 0, w: width, h: height };
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const cx = v => clamp(v, area.x, area.x + area.w);
+  const cy = v => clamp(v, area.y, area.y + area.h);
 
   if (!Array.isArray(raw)) return { shapes, dropped: ['the model did not return a list of shapes'] };
 
@@ -203,7 +301,7 @@ function validateShapes(raw, bounds) {
           dropped.push(`#${i}: rect missing a dimension`); return;
         }
         if (w <= 0 || h <= 0) { dropped.push(`#${i}: rect with no area`); return; }
-        shapes.push({ t: 'rect', x: cx(x), y: cy(y), w: Math.min(w, width), h: Math.min(h, height), ...pen });
+        shapes.push({ t: 'rect', x: cx(x), y: cy(y), w: Math.min(w, area.w), h: Math.min(h, area.h), ...pen });
         return;
       }
       case 'circle': {
@@ -211,7 +309,7 @@ function validateShapes(raw, bounds) {
         if (c1 === null || c2 === null || r === null || r <= 0) {
           dropped.push(`#${i}: circle without a centre and radius`); return;
         }
-        shapes.push({ t: 'circle', cx: cx(c1), cy: cy(c2), r: Math.min(r, Math.min(width, height) / 2), ...pen });
+        shapes.push({ t: 'circle', cx: cx(c1), cy: cy(c2), r: Math.min(r, Math.min(area.w, area.h) / 2), ...pen });
         return;
       }
       case 'arc': {
@@ -242,6 +340,12 @@ function validateShapes(raw, bounds) {
           // A size the model invented can be a hundred units tall. Its own
           // suggestion is taken only when it is within reason of the sheet's.
           size: size && size > 0 && size < textSize * 4 ? size : textSize,
+          // Which side of its own point the text sits on. Dropped until now,
+          // which quietly undid the one rule that keeps a device tag off its
+          // symbol: a tag placed to the LEFT of the branch still ran rightwards
+          // from there, straight back over the thing it names.
+          ...(s.anchor === 'end' || s.anchor === 'middle' || s.anchor === 'start'
+            ? { anchor: s.anchor } : {}),
           ...pen,
         });
         return;
@@ -260,7 +364,7 @@ function validateShapes(raw, bounds) {
         const out = { t: 'sym', id, x: cx(x), y: cy(y) };
         // A height it invented can be the length of the page. Taken when it is
         // within reason, and left to the library's own size when it is not.
-        if (h !== null && h > 0 && h <= Math.min(width, height)) out.h = h;
+        if (h !== null && h > 0 && h <= Math.min(area.w, area.h)) out.h = h;
         if (typeof s.name === 'string' && s.name.trim()) out.name = s.name.trim().slice(0, 64);
         shapes.push(out);
         return;
@@ -394,7 +498,7 @@ function mendTruncated(text) {
 
 export function registerDrawAssistRoutes(app, callLocalModel) {
   app.post('/api/draw/generate', async (req, res) => {
-    const { prompt, width, height, textSize, symbols } = req.body || {};
+    const { prompt, width, height, textSize, symbols, area } = req.body || {};
     if (typeof prompt !== 'string' || prompt.trim().length < 3) {
       return res.status(400).json({ success: false, error: 'Describe what to draw.' });
     }
@@ -407,6 +511,8 @@ export function registerDrawAssistRoutes(app, callLocalModel) {
       // vocabulary and nothing can be dropped for using it: an older page
       // talking to a newer server still gets the drawing it used to get.
       symbols: readCatalogue(symbols),
+      area: readArea(area, Number(width) > 0 ? Number(width) : 420,
+                     Number(height) > 0 ? Number(height) : 297),
     };
 
     try {
@@ -463,4 +569,4 @@ export function registerDrawAssistRoutes(app, callLocalModel) {
   });
 }
 
-export { validateShapes, parseAnswer, systemPrompt, readCatalogue, symbolLines, LAYERS, DASHES };
+export { validateShapes, parseAnswer, systemPrompt, readCatalogue, readArea, symbolLines, LAYERS, DASHES };
