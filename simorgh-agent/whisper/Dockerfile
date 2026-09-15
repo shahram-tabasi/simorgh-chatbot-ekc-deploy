@@ -1,4 +1,25 @@
 # =============================================================================
+# NOT BUILT BY THE WORKFLOW. Two things have to be settled first, and both are
+# decisions rather than bugs. This service's include is commented out in
+# docker-compose.yml, so nothing is running on it meanwhile.
+#
+#   1. The default model below answers HTTP 401 on the HuggingFace API —
+#      gated, renamed or gone. No build can fetch it without a token, and the
+#      first CI run to try it failed on exactly that.
+#
+#   2. `WhisperModel(...)` in this file assumes faster-whisper converts a
+#      transformers checkpoint to CTranslate2 on first use. It does not — that
+#      is what ct2-transformers-converter is for. The documented alternative,
+#      vhdm/whisper-large-fa-v1, does exist and is a transformers model
+#      (config.json, model.safetensors, no model.bin), so it needs the
+#      conversion adding as a build stage.
+#
+# Neither is hard to fix. What is not ours to decide is which Persian model
+# this office wants to run, so that choice is left open rather than quietly
+# swapped for whichever one happened to be reachable. Pick one and this
+# becomes a fetch-and-convert stage like tei/Dockerfile now has, and an entry
+# back in .github/images.json.
+#
 # Faster-Whisper Server — offline Persian-tuned STT (OpenAI /v1/audio compat)
 # =============================================================================
 # Drop-in replacement for stt-service. Uses faster-whisper (4× faster than

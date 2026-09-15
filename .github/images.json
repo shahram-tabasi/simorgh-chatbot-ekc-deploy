@@ -366,14 +366,5 @@
     "watch": [
       "simorgh-agent/tts-service"
     ]
-  },
-  {
-    "service": "whisper-server",
-    "image": "simorgh-whisper",
-    "context": "simorgh-agent/whisper",
-    "dockerfile": "simorgh-agent/whisper/Dockerfile",
-    "watch": [
-      "simorgh-agent/whisper"
-    ]
   }
 ]

@@ -111,6 +111,24 @@ for i in images:
             undefaulted.append('%s: %s' % (i['dockerfile'], m.group(1)))
 ok('every variable used in a FROM has an ARG default', undefaulted, [])
 
+
+# A RUN that reaches for an interpreter its base image does not carry. TEI is a
+# Rust binary and its image has no python3 at all; the model download had been
+# written straight into it and failed with "python3: not found" the first time
+# anyone built it. Continuations are folded first — that fault lives on the
+# line after the RUN, which is how a first version of this check missed it.
+interpreter = []
+for i in images:
+    src = open(os.path.join(ROOT, i['dockerfile']), encoding='utf-8').read()
+    joined = re.sub(r'\\\s*\n', ' ', src)
+    froms = re.findall(r'^\s*FROM\s+(\S+)', src, re.M)
+    uses = re.search(r'^\s*RUN\b[^\n]*\b(python3?|pip3?)\b', joined, re.M)
+    carries = any(re.search(r'python|pytorch|docling', f, re.I) for f in froms)
+    installs = re.search(r'apt-get install[^\n]*python', joined)
+    if uses and not carries and not installs:
+        interpreter.append('%s (base %s)' % (i['image'], froms[-1] if froms else '?'))
+ok('no RUN calls python on a base image that has none', interpreter, [])
+
 print()
 print('ALL PASS' if not failures else '%d FAILED' % len(failures))
 sys.exit(1 if failures else 0)
