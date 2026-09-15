@@ -68,19 +68,58 @@ cd C:\simorgh\simorgh-agent\eplan-port-forwarder
 docker compose up -d
 ```
 
-`docker compose up` builds from `python:3.11-slim`, so that machine needs to
-be able to pull from Docker Hub. If it cannot, or you would rather not put a
-container on that box at all, use the Windows port proxy below instead — it
-needs no files and no image.
+That **pulls** `simorgh-eplan-port-forwarder`, the image the GitHub workflow
+builds from this directory — the same default the rest of the stack follows,
+for the same reason: the machines that run these containers are not the
+machines that should be building them. If the packages are private, the one
+thing this needs first is a login:
 
-That's it — `TARGET_HOST` defaults to `host.docker.internal` (Docker
-Desktop's name for the Windows host it runs on), which is what
+```
+docker login ghcr.io -u <github user>          # a PAT with read:packages
+```
+
+### If this machine cannot reach ghcr.io
+
+Build it here instead. There is nothing to download but the base image, and
+that comes from Harbor on the LAN (see `BASE_REGISTRY` in the Dockerfile):
+
+```
+docker login registry.simorghai.com
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+The build is seconds: the relay is one stdlib Python file, `pip` never runs
+and neither does a package manager. On a machine that does reach Docker Hub
+directly, `--build-arg BASE_REGISTRY=library` skips Harbor as well.
+
+Either way, that's it — `TARGET_HOST` defaults to `host.docker.internal`
+(Docker Desktop's name for the Windows host it runs on), which is what
 `127.0.0.1` means to `AsyncTcpServer` on that same machine. **Do not**
 change `TARGET_HOST` to `127.0.0.1` for the container — inside a container,
 that's the container's own loopback, not the host's, and the forwarder
 would just fail to reach anything. (Running `forwarder.py` directly on
 Windows instead of in a container is the one case where `127.0.0.1` is
 right, because then the loopback really is the host's.)
+
+### Check it came up
+
+```
+docker ps --filter name=eplan-port-forwarder
+docker logs eplan-port-forwarder --tail 20
+netstat -ano | findstr "12000"      # expect 0.0.0.0:12000 LISTENING
+```
+
+A container that is restarting rather than running is almost always the port
+publish: something else on the machine already holds a port in 12000-12100.
+
+### Updating it later
+
+```
+docker compose pull && docker compose up -d
+```
+
+(Or the build form above, with `--build`.) The relay carries no state, so a
+restart costs nothing but the sends in flight at that second.
 
 ## Or: Windows' own port proxy, with no files at all
 

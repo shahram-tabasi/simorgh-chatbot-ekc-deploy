@@ -1,0 +1,14 @@
+# Building the forwarder on the EPLAN machine instead of pulling it.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# For the machine that cannot reach ghcr.io — the base image still comes from
+# Harbor on the LAN (see the Dockerfile's BASE_REGISTRY), and there is nothing
+# else to fetch: the relay is one stdlib Python file, so this build is seconds
+# and needs no package manager.
+services:
+  eplan-port-forwarder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: build

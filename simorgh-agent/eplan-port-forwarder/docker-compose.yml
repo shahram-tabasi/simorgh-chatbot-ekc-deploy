@@ -7,13 +7,23 @@
 #   cd eplan-port-forwarder
 #   docker compose up -d
 #
+# That pulls the image the GitHub workflow builds, like the rest of the
+# stack. To build it on this machine instead — no ghcr.io, no login, just
+# Harbor for the base image:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
 # Then set EPLAN_HOST on eplan-bridge-service (in the main stack, on the
 # other server) to this machine's LAN IP — see ../eplan-bridge-service and
 # ../docs/EPLAN_SEND.md.
 services:
   eplan-port-forwarder:
-    build: .
-    image: eplan-port-forwarder:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-eplan-port-forwarder:${IMAGE_TAG:-latest}
+    # No `build:` here on purpose, the same rule the main stack follows: a
+    # service that names both pulls *and*, when the pull fails, builds —
+    # silently, and on a machine nobody is watching. Building is the
+    # override's job, above.
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: eplan-port-forwarder
     restart: unless-stopped
     environment:

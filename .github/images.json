@@ -114,6 +114,15 @@
     ]
   },
   {
+    "service": "eplan-port-forwarder",
+    "image": "simorgh-eplan-port-forwarder",
+    "context": "simorgh-agent/eplan-port-forwarder",
+    "dockerfile": "simorgh-agent/eplan-port-forwarder/Dockerfile",
+    "watch": [
+      "simorgh-agent/eplan-port-forwarder"
+    ]
+  },
+  {
     "service": "eplan-sql-service",
     "image": "simorgh-eplan-sql-service",
     "context": "simorgh-agent/eplan-sql-service",
