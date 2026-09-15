@@ -147,11 +147,18 @@ function systemPrompt({ width, height, textSize, symbols = [], area }) {
     '      over the symbol.',
     ...(library.length
       ? [
-        '  {"t":"sym","id":"ID","x":N,"y":N,"h":N,"name":"WHAT IT IS"}',
+        '  {"t":"sym","id":"ID","x":N,"y":N,"h":N,"name":"WHAT IT IS","tap":true|false}',
         '',
         'A "sym" is a device taken from the drawing office\'s own symbol library.',
         'x,y is its TOP TERMINAL — where the incoming wire meets it — and h how',
         'far down the page it reaches, so its BOTTOM TERMINAL is at (x, y+h).',
+        '',
+        '"tap":true is for a device fed FROM the line rather than standing ON it',
+        '— a single ammeter off a CT. Then x,y is where that one line arrives at',
+        'its side, and it carries no conductor of its own. Leave tap out for',
+        'anything on the branch, and for instruments stacked one under another',
+        'on a shared x: there their own conductors join into the short bus that',
+        'parallels them, which is the only thing that line ever means.',
         `Use h = ${cell} unless the device needs more room.`,
         'The library draws it; you only say which one and where.',
         '',
@@ -203,13 +210,15 @@ function systemPrompt({ width, height, textSize, symbols = [], area }) {
     '      motor                             -M1',
     'The ammeter is NOT on that branch: it is what the CT feeds. Draw it to',
     'the RIGHT of the CT, at the CT\'s own height, joined by ONE horizontal',
-    'line from the CT to it. One line, no return — the CT primary is on the',
-    'branch, and what its secondary feeds hangs off it to the side.',
+    'line from the CT to it, and mark it "tap":true — one line, no return. The',
+    'CT primary is on the branch; what its secondary feeds hangs off to the',
+    'side.',
     '',
     'Everything a CT feeds is drawn that way: ammeter, protection relay, kWh',
-    'or kVArh meter, transducer, multimeter — to the right of the CT, one line',
-    'each. If there are several, put them one under another on their own x and',
-    'take the single line from the CT to them.',
+    'or kVArh meter, transducer, multimeter. ONE of them is a tap. SEVERAL go',
+    'one under another on a shared x, without tap, so their own conductors make',
+    'the short bus that parallels them, and the single line from the CT lands',
+    'on the top one.',
     '',
     'Rules:',
     '1. Wires run horizontally or vertically only. Never diagonal. To get from',
@@ -375,6 +384,11 @@ function validateShapes(raw, bounds) {
         if (x === null || y === null) { dropped.push(`#${i}: symbol "${id}" without a position`); return; }
         const h = num(s.h);
         const out = { t: 'sym', id, x: cx(x), y: cy(y) };
+        // Fed from the side rather than standing on the line. The browser
+        // drops the conductor such a symbol would otherwise carry down the
+        // branch — see `placeSymbolAt` — so a lone ammeter off a CT stops
+        // arriving with a vertical line in front of it attached to nothing.
+        if (s.tap === true) out.tap = true;
         // A height it invented can be the length of the page. Taken when it is
         // within reason, and left to the library's own size when it is not.
         if (h !== null && h > 0 && h <= Math.min(area.w, area.h)) out.h = h;

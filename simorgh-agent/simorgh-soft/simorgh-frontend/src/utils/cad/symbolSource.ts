@@ -154,25 +154,58 @@ export function findSymbol(id: string, items: LibraryItem[] = libraryItems()): L
 }
 
 /**
- * A symbol placed on the branch at a point, as one block.
+ * The line every symbol carries down its own cell, and what it is for.
  *
- * `at` is where the wire meets it — the top connection — and `span` how far
- * down the branch it should reach, so the caller can say "an isolator in this
- * 30-unit gap" without knowing how the symbol happens to be drawn. The pin
- * stays put while the geometry is scaled about it, which is why a symbol that
- * reaches sideways still hangs off the same conductor after scaling.
+ * A meter in the library is drawn as a box tapped off a conductor that runs
+ * the full height of the cell. On a branch that conductor is the branch. Off
+ * one — a single ammeter fed from a CT — it is a stub attached to nothing,
+ * which is exactly what it looked like: a vertical line in front of the
+ * ammeter with no meaning.
+ *
+ * It does have a meaning, but only in the plural: stack three instruments on
+ * one x and those conductors join end to end into the little bus that parallels
+ * them, fed by the one line from the CT. So it is kept when instruments are
+ * stacked and dropped when there is one, rather than removed from the symbol.
+ */
+const throughConductor = (s: Shape, pin: { x: number; span: number }) =>
+  s.t === 'line'
+  && Math.abs(s.x1 - pin.x) < 0.5 && Math.abs(s.x2 - pin.x) < 0.5
+  && Math.abs(s.y2 - s.y1) >= pin.span * 0.9;
+
+/**
+ * A symbol placed at a point, as one block.
+ *
+ * `at` is where the line meets it and `span` how far down it should reach, so
+ * the caller can say "an isolator in this 30-unit gap" without knowing how the
+ * symbol happens to be drawn. The pin stays put while the geometry is scaled
+ * about it, which is why a symbol that reaches sideways still hangs off the
+ * same conductor after scaling.
+ *
+ * `tap` is the difference between a device **on** the line and one **fed from**
+ * it. On the line, `at` is the top terminal and the current passes through.
+ * Tapped, `at` is where the single line from the CT arrives at its side, and
+ * the conductor it would have carried down the branch is dropped — there is no
+ * branch there to be part of.
  */
 export function placeSymbolAt(
   item: LibraryItem, at: { x: number; y: number }, span?: number, block?: string,
+  tap = false,
 ): Shape[] {
-  const run = shapesOf(item);
+  let run = shapesOf(item);
   if (run.length === 0) return [];
   const box = boundsOfAll(run);
-  const pin = item.pin ?? {
+  let pin = item.pin ?? {
     x: box ? box.x + box.w / 2 : 0,
     y: box ? box.y : 0,
     span: box ? box.h : 1,
   };
+  if (tap) {
+    run = run.filter(s => !throughConductor(s, pin));
+    if (run.length === 0) return [];
+    // Joined at its side, half way down, which is where the symbol's own tap
+    // into the box leaves the conductor that is no longer drawn.
+    pin = { ...pin, y: pin.y + pin.span / 2 };
+  }
   const k = span && span > 0 && pin.span > 0 ? span / pin.span : 1;
   const scaled = k === 1 ? run : run.map(s => mapShape(s, scaling(pin.x, pin.y, k)));
   const moved = scaled.map(s => mapShape(s, translation(at.x - pin.x, at.y - pin.y)));
@@ -196,6 +229,12 @@ export interface SymPlacement {
   y: number;
   /** How far down the branch it reaches. One cell when it is not said. */
   h?: number;
+  /**
+   * Fed from the side rather than standing on the line — an ammeter off a CT.
+   * `x,y` is then where that line arrives, and the symbol keeps no conductor
+   * of its own. See `placeSymbolAt`.
+   */
+  tap?: boolean;
   /** What to call the block — the device, where the model knows it. */
   name?: string;
 }
@@ -220,7 +259,7 @@ export function expandSymbols(
     const item = findSymbol(s.id, items);
     if (!item) { missing.push(s.id); continue; }
     const placed = placeSymbolAt(
-      item, { x: s.x, y: s.y }, s.h, newBlockId(),
+      item, { x: s.x, y: s.y }, s.h, newBlockId(), s.tap === true,
     );
     if (placed.length === 0) { missing.push(s.id); continue; }
     if (s.name) {
