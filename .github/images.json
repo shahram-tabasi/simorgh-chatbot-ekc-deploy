@@ -296,7 +296,10 @@
     "context": "simorgh-agent/simorgh-soft",
     "dockerfile": "simorgh-agent/simorgh-soft/Dockerfile",
     "watch": [
-      "simorgh-agent/simorgh-soft"
+      "simorgh-agent/simorgh-soft/simorgh-frontend",
+      "simorgh-agent/simorgh-soft/simorgh-backend",
+      "simorgh-agent/simorgh-soft/docker",
+      "simorgh-agent/simorgh-soft/Dockerfile"
     ]
   },
   {
