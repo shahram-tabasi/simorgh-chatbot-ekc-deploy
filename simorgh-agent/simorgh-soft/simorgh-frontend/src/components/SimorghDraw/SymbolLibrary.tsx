@@ -3,13 +3,13 @@ import { createPortal } from 'react-dom';
 import {
   XIcon, SearchIcon, UploadIcon, Maximize2Icon, Minimize2Icon, PlusIcon,
 } from 'lucide-react';
-import { IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId, drawIecSymbol, symbolHeight, CELL }
-  from '../../utils/iecSymbols';
+import { SYMBOL_GROUPS } from '../../utils/iecSymbols';
 import { Shape } from '../../utils/cad/shapes';
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
 import { renderFragment } from '../../utils/cad/svg';
 import { readDxf } from '../../utils/cad/readDxf';
-import { DxfSymbol, loadDxfSymbols } from '../../utils/cad/dxfSymbols';
+import { loadDxfSymbols } from '../../utils/cad/dxfSymbols';
+import { LibraryItem, iecItems, packItems, shapesOf } from '../../utils/cad/symbolSource';
 import { Strings, dirOf, Lang } from './lang';
 import { ThemeId } from './theme';
 
@@ -30,25 +30,9 @@ import { ThemeId } from './theme';
 // returns `Shape[]` for the editor to place with `placeAsBlock` rather than
 // dropping loose geometry on the canvas.
 
-export interface LibraryItem {
-  key: string;
-  name: string;
-  /** Where it came from, for the badge and the grouping. */
-  source: 'IEC' | 'Pack' | 'File';
-  group: string;
-  /** Markup with no `<svg>` round it — what the preview draws and what is read. */
-  art: string;
-  width: number;
-  height: number;
-  /**
-   * The geometry, where it is already known.
-   *
-   * A file read here has been parsed once; re-serialising it to markup only to
-   * parse it back would be work for nothing, and every round trip through SVG
-   * is a chance to lose a layer or a dash.
-   */
-  shapes?: Shape[];
-}
+// `LibraryItem` and the three sources live in `utils/cad/symbolSource`, so the
+// drawing assistant asks for symbols out of the same list this panel shows.
+export type { LibraryItem };
 
 interface Props {
   t: Strings;
@@ -58,41 +42,6 @@ interface Props {
   onImport: (shapes: Shape[], name: string) => void;
   onClose: () => void;
 }
-
-/** One item's geometry, as shapes. */
-function shapesOf(item: LibraryItem): Shape[] {
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${item.width} ${item.height}" ` +
-    `width="${item.width}" height="${item.height}">${item.art}</svg>`;
-  return drawingFromSvg(svg, item.name).shapes;
-}
-
-/** The IEC library, drawn the way a sheet draws it so it matches what is there. */
-function iecItems(): LibraryItem[] {
-  return Object.values(IEC_SYMBOLS).map(sym => {
-    const h = symbolHeight(sym.id as SymbolId);
-    return {
-      key: `iec:${sym.id}`,
-      name: sym.title,
-      source: 'IEC' as const,
-      group: sym.group,
-      // Drawn at the origin, so what is read back starts where it is placed.
-      art: drawIecSymbol(sym.id as SymbolId, CELL / 2, 4),
-      width: CELL,
-      height: h + 8,
-    };
-  });
-}
-
-const packItems = (packs: DxfSymbol[]): LibraryItem[] => packs.map(p => ({
-  key: `pack:${p.id}:${p.fileName}`,
-  name: p.fileName.replace(/\.[^.]+$/, ''),
-  source: 'Pack' as const,
-  group: 'Office DXF',
-  art: p.art,
-  width: p.width,
-  height: p.height,
-}));
 
 export const SymbolLibrary: React.FC<Props> = ({ t, lang, theme, onImport, onClose }) => {
   const [query, setQuery] = useState('');

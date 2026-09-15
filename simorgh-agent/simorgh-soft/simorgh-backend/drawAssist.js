@@ -31,6 +31,57 @@ const DASHES = { solid: undefined, dashed: '6 4', 'dash-dot': '10 3 2 3', dotted
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /**
+ * The symbol library, as the browser reported it.
+ *
+ * The library lives in the browser — the IEC set the app draws its own sheets
+ * from, plus whatever DXF symbols the office has loaded into the pack — and it
+ * changes as the office adds to it. So it arrives with the request rather than
+ * being listed here: this file never draws a symbol, it only checks that the
+ * name the model asked for is one the browser said it had, and hands the name
+ * back for the browser to draw from its own library.
+ */
+const SYMBOL_LIMIT = 200;
+
+/** A symbol name the way both ends compare them: case and punctuation forgiven. */
+const symKey = v => String(v ?? '').trim().toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+/** What came in as a catalogue, kept to what is usable. */
+function readCatalogue(raw) {
+  if (!Array.isArray(raw)) return [];
+  const by = new Map();
+  for (const entry of raw) {
+    const id = symKey(typeof entry === 'string' ? entry : entry?.id);
+    if (!id || by.has(id)) continue;
+    const name = typeof entry?.name === 'string' && entry.name.trim()
+      ? entry.name.trim().slice(0, 80) : id;
+    const group = typeof entry?.group === 'string' ? entry.group.trim().slice(0, 40) : '';
+    by.set(id, { id, name, group });
+    if (by.size >= SYMBOL_LIMIT) break;
+  }
+  return [...by.values()];
+}
+
+/**
+ * The catalogue as the model reads it: grouped, one line each.
+ *
+ * Grouped because the grouping is half the instruction — a model that sees
+ * `mcb` under "Protection" next to `hrc-fuse` picks between them far better
+ * than one handed two hundred bare names in the order they happened to load.
+ */
+function symbolLines(symbols) {
+  if (!Array.isArray(symbols) || symbols.length === 0) return [];
+  const by = new Map();
+  for (const sym of symbols) {
+    const group = sym.group || 'Other';
+    const list = by.get(group);
+    if (list) list.push(sym); else by.set(group, [sym]);
+  }
+  return [...by.entries()].map(([group, list]) =>
+    `  ${group}: ${list.map(s => `${s.id} (${s.name})`).join(', ')}`);
+}
+
+/**
  * The instructions the model works to.
  *
  * Deliberately narrow: a short vocabulary it can hold in mind beats a complete
@@ -38,7 +89,8 @@ const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
  * drawing an electrician would reject — diagonal wires, symbols drawn as
  * free-floating strokes with nothing tying them together, text with no size.
  */
-function systemPrompt({ width, height, textSize }) {
+function systemPrompt({ width, height, textSize, symbols = [] }) {
+  const library = symbolLines(symbols);
   return [
     'You draw electrical schematics as JSON. Answer with JSON only, no prose.',
     '',
@@ -54,6 +106,20 @@ function systemPrompt({ width, height, textSize }) {
     '  {"t":"arc","cx":N,"cy":N,"r":N,"a0":DEG,"a1":DEG,"layer":L}',
     '  {"t":"poly","pts":[[x,y],...],"layer":L}',
     `  {"t":"text","x":N,"y":N,"s":"...","size":${textSize},"layer":L}`,
+    ...(library.length
+      ? [
+        '  {"t":"sym","id":"ID","x":N,"y":N,"h":N,"name":"WHAT IT IS"}',
+        '',
+        'A "sym" is a device taken from the drawing office\'s own symbol library.',
+        'x,y is where the incoming wire meets it — its top terminal — and h how',
+        'far down the page it reaches; the outgoing wire leaves at (x, y+h).',
+        `Use h of about ${Math.max(8, Math.round(Math.min(width, height) / 14))} unless the device needs more room.`,
+        'The library draws it; you only say which one and where.',
+        '',
+        'The library holds:',
+        ...library,
+      ]
+      : []),
     '',
     `layer is one of: ${Object.entries(LAYERS).map(([k, v]) => `${k} (${v})`).join(', ')}.`,
     'Optional on any shape: "dash" as one of solid, dashed, dash-dot, dotted.',
@@ -61,14 +127,29 @@ function systemPrompt({ width, height, textSize }) {
     'Rules:',
     '1. Wires run horizontally or vertically only. Never diagonal. To get from',
     '   one place to another, use a poly that turns at right angles.',
-    '2. Every shape making up one device carries the same "block" string and the',
-    '   same "blockName" (what the device is, e.g. "CONTACTOR"). This is what',
-    '   makes it one object rather than loose strokes.',
+    library.length
+      ? '2. Anything you do draw yourself out of several shapes — a busbar with its'
+        + '\n   droppers, an outgoing arrow — carries the same "block" string and the'
+        + '\n   same "blockName" on every shape, so it is one object rather than loose'
+        + '\n   strokes. A "sym" is already one object and needs neither.'
+      : '2. Every shape making up one device carries the same "block" string and the'
+        + '\n   same "blockName" (what the device is, e.g. "CONTACTOR"). This is what'
+        + '\n   makes it one object rather than loose strokes.',
     '3. Give each device a designation as a text on the TAG layer just above it:',
     '   -Q1 for breakers and isolators, -K1 contactors, -F1 fuses and overloads,',
     '   -M1 motors, -T1 transformers, -P1 meters. Number upwards from 1.',
-    '4. Leave the symbols simple: a rectangle, a circle and a few lines read',
-    '   better on a schematic than a detailed picture.',
+    ...(library.length
+      ? [
+        '4. Every device is a "sym" from the library above. Do not draw a breaker,',
+        '   a contactor, a fuse or a motor out of rectangles, circles and lines —',
+        '   the library already has the symbol the office issues its drawings with,',
+        '   and a hand-made one does not match the rest of the sheet. Use lines and',
+        '   polys for the wires between symbols, and text for tags and notes.',
+      ]
+      : [
+        '4. Leave the symbols simple: a rectangle, a circle and a few lines read',
+        '   better on a schematic than a detailed picture.',
+      ]),
     '5. Power flows down the page: supply at the top, load at the bottom.',
   ].join('\n');
 }
@@ -83,6 +164,7 @@ function systemPrompt({ width, height, textSize }) {
  */
 function validateShapes(raw, bounds) {
   const { width, height, textSize } = bounds;
+  const known = new Set((bounds.symbols ?? []).map(sym => symKey(sym.id)));
   const shapes = [];
   const dropped = [];
   const clamp = (v, hi) => Math.max(0, Math.min(hi, v));
@@ -162,6 +244,25 @@ function validateShapes(raw, bounds) {
           size: size && size > 0 && size < textSize * 4 ? size : textSize,
           ...pen,
         });
+        return;
+      }
+      case 'sym': {
+        // Not geometry — a name, a place on the branch and how much room it
+        // gets. The browser draws it from the library it already has, which is
+        // the whole point: the symbol on an AI-drawn sheet is byte for byte
+        // the symbol the same office places by hand.
+        const id = symKey(s.id);
+        const [x, y] = [num(s.x), num(s.y)];
+        if (!id) { dropped.push(`#${i}: symbol without a name`); return; }
+        if (!known.has(id)) { dropped.push(`#${i}: no symbol called "${id}" in the library`); return; }
+        if (x === null || y === null) { dropped.push(`#${i}: symbol "${id}" without a position`); return; }
+        const h = num(s.h);
+        const out = { t: 'sym', id, x: cx(x), y: cy(y) };
+        // A height it invented can be the length of the page. Taken when it is
+        // within reason, and left to the library's own size when it is not.
+        if (h !== null && h > 0 && h <= Math.min(width, height)) out.h = h;
+        if (typeof s.name === 'string' && s.name.trim()) out.name = s.name.trim().slice(0, 64);
+        shapes.push(out);
         return;
       }
       default:
@@ -293,7 +394,7 @@ function mendTruncated(text) {
 
 export function registerDrawAssistRoutes(app, callLocalModel) {
   app.post('/api/draw/generate', async (req, res) => {
-    const { prompt, width, height, textSize } = req.body || {};
+    const { prompt, width, height, textSize, symbols } = req.body || {};
     if (typeof prompt !== 'string' || prompt.trim().length < 3) {
       return res.status(400).json({ success: false, error: 'Describe what to draw.' });
     }
@@ -302,6 +403,10 @@ export function registerDrawAssistRoutes(app, callLocalModel) {
       width: Number(width) > 0 ? Number(width) : 420,
       height: Number(height) > 0 ? Number(height) : 297,
       textSize: Number(textSize) > 0 ? Number(textSize) : 3,
+      // Empty when the browser sent none, and then the prompt never offers the
+      // vocabulary and nothing can be dropped for using it: an older page
+      // talking to a newer server still gets the drawing it used to get.
+      symbols: readCatalogue(symbols),
     };
 
     try {
@@ -358,4 +463,4 @@ export function registerDrawAssistRoutes(app, callLocalModel) {
   });
 }
 
-export { validateShapes, parseAnswer, systemPrompt, LAYERS, DASHES };
+export { validateShapes, parseAnswer, systemPrompt, readCatalogue, symbolLines, LAYERS, DASHES };

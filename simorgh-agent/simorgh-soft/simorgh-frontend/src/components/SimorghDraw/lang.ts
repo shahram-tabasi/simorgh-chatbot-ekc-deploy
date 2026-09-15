@@ -67,6 +67,8 @@ export interface Strings {
   ask: string; askTip: string; askPlaceholder: string; askNote: string;
   askSaidNothing: string; dockLeft: string; dockRight: string; undock: string;
   askGo: string; askWorking: string; askDrew: string; askDrewSome: string; askFailed: string;
+  /** The model named symbols this library does not have — {s} lists them. */
+  askNoSymbols: string;
   solid: string; dashed: string; dashDot: string; dotted: string;
   paperOf: string; fitDrawing: string;
   header: string; headerTip: string; headerOff: string; headerTooSmall: string;
@@ -177,6 +179,7 @@ const EN: Strings = {
   askDrew: '{n} shape(s) drawn.',
   askDrewSome: '{n} shape(s) drawn — {d} were dropped as unusable, so look it over.',
   askFailed: 'The model could not draw that.',
+  askNoSymbols: 'The library has no symbol called {s}, so nothing was drawn.',
   rect: 'Rectangle', circle: 'Circle — centre, then radius',
   ellipse: 'Ellipse — centre, then the two radii',
   arc: 'Arc — centre, start, then sweep', text: 'Text',
@@ -375,6 +378,7 @@ const FA: Strings = {
   askDrew: '{n} شکل کشیده شد.',
   askDrewSome: '{n} شکل کشیده شد — {d} مورد غیرقابل‌استفاده حذف شد، بازبینی کنید.',
   askFailed: 'مدل نتوانست این را بکشد.',
+  askNoSymbols: 'سمبلی به نام {s} در کتابخانه نیست، پس چیزی کشیده نشد.',
   rect: 'مستطیل', circle: 'دایره — مرکز، سپس شعاع',
   ellipse: 'بیضی — مرکز، سپس دو شعاع',
   arc: 'کمان — مرکز، شروع، سپس مقدار جاروب', text: 'متن',
@@ -573,6 +577,7 @@ const TR: Strings = {
   askDrew: '{n} şekil çizildi.',
   askDrewSome: '{n} şekil çizildi — {d} tanesi kullanılamaz olduğu için atıldı, gözden geçirin.',
   askFailed: 'Model bunu çizemedi.',
+  askNoSymbols: 'Kütüphanede {s} adlı sembol yok, bu yüzden hiçbir şey çizilmedi.',
   rect: 'Dikdörtgen', circle: 'Daire — merkez, sonra yarıçap',
   ellipse: 'Elips — merkez, sonra iki yarıçap',
   arc: 'Yay — merkez, başlangıç, sonra süpürme', text: 'Yazı',

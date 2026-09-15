@@ -172,6 +172,60 @@
 [data-theme="dark"] .bg-pink-50    { background-color: rgba(236,72,153,.14) !important; }
 [data-theme="dark"] .bg-rose-50    { background-color: rgba(244,63,94,.14) !important; }
 
+/* The same tints under the cursor.
+ *
+ * A hover is the easiest of these to miss, because it is only ever on screen
+ * while something is pointing at it — and it is the one place the miss hurts
+ * most: `hover:bg-blue-50` on a dropdown row left the row under the cursor
+ * pure #eff6ff with the list's own light text still on it, so the project you
+ * were about to click was the one project you could not read. Each hover is a
+ * step stronger than the resting tint, so hovering still shows. */
+[data-theme="dark"] .hover\:bg-blue-50:hover    { background-color: rgba(59,130,246,.22) !important; }
+[data-theme="dark"] .hover\:bg-blue-100:hover   { background-color: rgba(59,130,246,.30) !important; }
+[data-theme="dark"] .hover\:bg-emerald-50:hover { background-color: rgba(16,185,129,.22) !important; }
+[data-theme="dark"] .hover\:bg-emerald-100:hover{ background-color: rgba(16,185,129,.30) !important; }
+[data-theme="dark"] .hover\:bg-green-50:hover   { background-color: rgba(34,197,94,.22) !important; }
+[data-theme="dark"] .hover\:bg-green-100:hover  { background-color: rgba(34,197,94,.30) !important; }
+[data-theme="dark"] .hover\:bg-red-50:hover     { background-color: rgba(239,68,68,.22) !important; }
+[data-theme="dark"] .hover\:bg-red-100:hover    { background-color: rgba(239,68,68,.30) !important; }
+[data-theme="dark"] .hover\:bg-amber-50:hover   { background-color: rgba(245,158,11,.22) !important; }
+[data-theme="dark"] .hover\:bg-amber-100:hover  { background-color: rgba(245,158,11,.30) !important; }
+[data-theme="dark"] .hover\:bg-yellow-50:hover  { background-color: rgba(234,179,8,.22) !important; }
+[data-theme="dark"] .hover\:bg-yellow-100:hover { background-color: rgba(234,179,8,.30) !important; }
+[data-theme="dark"] .hover\:bg-orange-50:hover  { background-color: rgba(249,115,22,.22) !important; }
+[data-theme="dark"] .hover\:bg-orange-100:hover { background-color: rgba(249,115,22,.30) !important; }
+[data-theme="dark"] .hover\:bg-purple-50:hover  { background-color: rgba(168,85,247,.22) !important; }
+[data-theme="dark"] .hover\:bg-purple-100:hover { background-color: rgba(168,85,247,.30) !important; }
+[data-theme="dark"] .hover\:bg-indigo-50:hover  { background-color: rgba(99,102,241,.22) !important; }
+[data-theme="dark"] .hover\:bg-indigo-100:hover { background-color: rgba(99,102,241,.30) !important; }
+[data-theme="dark"] .hover\:bg-teal-50:hover    { background-color: rgba(20,184,166,.22) !important; }
+[data-theme="dark"] .hover\:bg-sky-50:hover     { background-color: rgba(14,165,233,.22) !important; }
+[data-theme="dark"] .hover\:bg-sky-100:hover    { background-color: rgba(14,165,233,.30) !important; }
+[data-theme="dark"] .hover\:bg-pink-50:hover    { background-color: rgba(236,72,153,.22) !important; }
+[data-theme="dark"] .hover\:bg-rose-50:hover    { background-color: rgba(244,63,94,.22) !important; }
+
+/* And the same tints thinned with a slash.
+ *
+ * `bg-purple-50/50` is its own class, not `bg-purple-50` with something added,
+ * so remapping the solid tint leaves the thinned one exactly as Tailwind wrote
+ * it: half of a near-white over a dark panel, which is the flat grey card that
+ * made the TPMS panel glare and took its text down with it. Thinned in the
+ * dark too, so the panel stays the quiet wash it is in the light. */
+[data-theme="dark"] .bg-blue-50\/40    { background-color: rgba(59,130,246,.07) !important; }
+[data-theme="dark"] .bg-green-50\/60   { background-color: rgba(34,197,94,.09) !important; }
+[data-theme="dark"] .bg-amber-50\/40   { background-color: rgba(245,158,11,.07) !important; }
+[data-theme="dark"] .bg-amber-50\/60   { background-color: rgba(245,158,11,.09) !important; }
+[data-theme="dark"] .bg-amber-100\/60  { background-color: rgba(245,158,11,.14) !important; }
+[data-theme="dark"] .hover\:bg-amber-50\/50:hover { background-color: rgba(245,158,11,.18) !important; }
+[data-theme="dark"] .bg-purple-50\/50  { background-color: rgba(168,85,247,.08) !important; }
+[data-theme="dark"] .bg-indigo-50\/40  { background-color: rgba(99,102,241,.07) !important; }
+/* The neutral pair. Left translucent, because both sit on a tinted card and
+ * are meant to read as a lighter band of it rather than as their own surface.
+ * (bg-white/10 … /30 are not here: those sit on saturated buttons and headers,
+ * where white at low alpha is right in either theme.) */
+[data-theme="dark"] .bg-white\/60      { background-color: rgba(30,41,59,.6) !important; }
+[data-theme="dark"] .bg-gray-50\/60    { background-color: rgba(23,32,51,.6) !important; }
+
 [data-theme="dark"] .text-blue-900,   [data-theme="dark"] .text-blue-800,
 [data-theme="dark"] .text-blue-700    { color: #93c5fd !important; }
 [data-theme="dark"] .text-emerald-900,[data-theme="dark"] .text-emerald-800,

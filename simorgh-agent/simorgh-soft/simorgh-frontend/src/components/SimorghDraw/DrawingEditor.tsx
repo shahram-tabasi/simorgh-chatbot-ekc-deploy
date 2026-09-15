@@ -43,6 +43,9 @@ import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
 import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang';
 import { DrawingHelp } from './DrawingHelp';
 import { SymbolLibrary } from './SymbolLibrary';
+import {
+  SymPlacement, expandSymbols, libraryItems, symbolCatalogue,
+} from '../../utils/cad/symbolSource';
 import { ThemeId, loadTheme, saveTheme } from './theme';
 import { DRAWS, DrawingCanvas, PICKS, Tool, Viewport, fitView, viewOn } from './DrawingCanvas';
 
@@ -813,6 +816,10 @@ export const DrawingEditor: React.FC<Props> = ({
     if (prompt.length < 3 || !sheet) return;
     setAsking(true);
     setNotice(null);
+    // Read now rather than at mount: the office's DXF pack is loaded on another
+    // screen, and a symbol added there should be in the assistant's vocabulary
+    // without reloading the app.
+    const library = libraryItems();
     try {
       const response = await fetch(`${(import.meta as { env?: Record<string, string> }).env?.VITE_API_URL || ''}/api/draw/generate`, {
         method: 'POST',
@@ -822,6 +829,11 @@ export const DrawingEditor: React.FC<Props> = ({
           width: sheet.drawing.width,
           height: sheet.drawing.height,
           textSize,
+          // The library goes with the question. It lives here, in the browser,
+          // and the office adds to it — so the model is told what is in it now
+          // rather than what was in it when the server was built, and it names
+          // a symbol instead of drawing a box and hoping it reads as a breaker.
+          symbols: symbolCatalogue(library),
         }),
       });
       const body = await response.json().catch(() => ({}));
@@ -838,14 +850,24 @@ export const DrawingEditor: React.FC<Props> = ({
         return;
       }
       setAskRaw(null);
-      draw(body.shapes as Shape[]);
+      // The model named symbols; the geometry comes from the library here. A
+      // name the library does not have after all is counted with the rest of
+      // what was thrown away rather than drawn as something else.
+      const { shapes: drawn, missing } = expandSymbols(
+        body.shapes as (Shape | SymPlacement)[], library);
+      if (drawn.length === 0) {
+        setNotice(missing.length ? T.askNoSymbols.replace('{s}', missing.join(', ')) : T.askFailed);
+        return;
+      }
+      draw(drawn);
       setAskOpen(false);
       setAskText('');
       // How much was thrown away matters as much as what arrived: a draft
       // that lost half its shapes is one to look over rather than build on.
-      setNotice(body.droppedCount
-        ? T.askDrewSome.replace('{n}', String(body.shapes.length)).replace('{d}', String(body.droppedCount))
-        : T.askDrew.replace('{n}', String(body.shapes.length)));
+      const lost = (Number(body.droppedCount) || 0) + missing.length;
+      setNotice(lost
+        ? T.askDrewSome.replace('{n}', String(drawn.length)).replace('{d}', String(lost))
+        : T.askDrew.replace('{n}', String(drawn.length)));
     } catch (err) {
       setNotice(`${T.askFailed} ${(err as Error).message}`);
     } finally {
