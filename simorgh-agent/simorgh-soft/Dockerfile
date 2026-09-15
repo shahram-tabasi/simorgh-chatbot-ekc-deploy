@@ -47,37 +47,31 @@ COPY simorgh-frontend/ ./
 #   internal nginx, which proxies /api/ to the Express backend on :3001).
 ENV VITE_BASE_PATH=/simorgh-design-suite/
 ENV VITE_API_URL=/simorgh-design-suite
-# The vite that `npm ci` just installed, run directly — not through `npx`.
+# Vite run through node, by the path to its own entry point.
 #
-# `npm run build` runs `npx vite build`, and npx's contract is "find it or
-# fetch it". That second half has no business in a container build: every
-# package this step needs is already in /app/node_modules, so the only thing
-# a registry lookup here can do is fail. It did — the internal npm mirror
-# refused connections between `npm ci` and this line, npx went looking for
-# vite on the network instead of at its feet, and seventeen minutes of build
-# died on a package that was already installed.
+# Three attempts got here, so the reasoning is worth keeping. `npm run build`
+# ran `npx vite build`, and npx's contract is "find it or fetch it" — so when
+# it could not find vite it went to the registry, and the build died on
+# whichever network fault was in season: a refused connection to the internal
+# mirror, then a reset from the public one. The network was never the problem,
+# only where the problem surfaced.
 #
-# Called this way the step cannot reach the network at all: vite is either in
-# node_modules or the build stops with a clear reason, which is the honest
-# pair of outcomes.
-# If vite is not there, say why rather than dying on "not found". `npm ci`
-# from this lockfile installs it (vite 5.4.21, dev: true, and the .bin symlink
-# with it), so its absence in the image is an install that quietly skipped the
-# dev dependencies — and which of the handful of ways that happens is worth
-# one line of output instead of a guess.
-RUN set -eu; \
-    if [ ! -x node_modules/.bin/vite ]; then \
-      echo "### vite is missing after npm ci"; \
-      echo "### NODE_ENV=[${NODE_ENV:-unset}]"; \
-      echo "### npm omit=[$(npm config get omit)] production=[$(npm config get production)]"; \
-      echo "### npm version: $(npm --version)"; \
-      if [ -d node_modules/vite ]; then echo "### node_modules/vite EXISTS, only the bin link is gone"; \
-      else echo "### node_modules/vite ABSENT — dev dependencies were not installed"; fi; \
-      echo "### node_modules/.bin holds:"; ls node_modules/.bin 2>/dev/null | head -40 || echo "(no .bin at all)"; \
-      echo "### packages installed: $(ls node_modules 2>/dev/null | wc -l)"; \
+# Calling ./node_modules/.bin/vite instead made the real fault legible: exit
+# 127, not found. And the state that turned up was not the one expected — the
+# dev dependencies ARE installed, all 331 packages of them, vite among them.
+# What is missing is node_modules/.bin: npm 10.8.2 in this image lays the
+# packages down and creates none of the bin symlinks.
+#
+# A symlink this build never needed. `vite` the command is
+# node_modules/vite/bin/vite.js and nothing else, so node runs it by path. That
+# depends on the package being installed, which it is, and on nothing that npm
+# may or may not link. It cannot reach the network either, which was the point
+# of moving off npx to begin with.
+RUN if [ ! -f node_modules/vite/bin/vite.js ]; then \
+      echo "vite is not installed — node_modules holds $(ls node_modules 2>/dev/null | wc -l) packages"; \
       exit 1; \
     fi; \
-    node_modules/.bin/vite build
+    node node_modules/vite/bin/vite.js build
 
 # Stage 2: Install backend dependencies
 FROM registry.simorghai.com/docker-proxy/library/node:20-alpine AS backend-build
