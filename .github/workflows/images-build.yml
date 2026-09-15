@@ -183,6 +183,12 @@ jobs:
           # to be, so this is not paranoia.
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "ref=ghcr.io/$owner/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+          # Passed to every build as BUILD_TIME. Every image here is tagged
+          # :latest, and :latest is whichever branch pushed last — so which
+          # commit and which branch an image came from has to be recorded in
+          # the image itself, or a running container cannot be traced back to
+          # a line of source.
+          echo "now=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         with:
@@ -210,6 +216,9 @@ jobs:
           build-args: |
             NPM_REGISTRY=https://registry.npmjs.org/
             BASE_REGISTRY=${{ inputs.base_registry || 'library' }}
+            GIT_SHA=${{ github.sha }}
+            GIT_REF=${{ github.ref_name }}
+            BUILD_TIME=${{ steps.meta.outputs.now }}
           # Cache in the registry, beside the image, not in the Actions cache.
           #
           # `type=gha` was the obvious choice and is the wrong one at this

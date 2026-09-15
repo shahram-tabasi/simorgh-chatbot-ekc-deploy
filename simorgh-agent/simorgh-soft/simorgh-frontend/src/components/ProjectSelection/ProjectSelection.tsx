@@ -4,6 +4,7 @@ import { projectService, tpmsService, TpmsOption } from '../../services/projectS
 import { syncProjectFromTpms, findLinkedProject, TpmsSyncResult } from '../../services/tpmsSync';
 import { TpmsProjectHeader } from '../../utils/tpmsProjectImport';
 import logoMark from '../../assets/logo-mark.png';
+import { buildLabel, buildStamp } from '../../utils/buildStamp';
 
 interface ProjectSelectionProps {
   onProjectSelect: (project: ProjectData, revision?: Revision) => void;
@@ -762,6 +763,15 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
             {projects.length} project{projects.length === 1 ? '' : 's'}
             {tpmsProjects.length > 0 && <> · {tpmsProjects.length} in TPMS</>}
             {tpmsListError && <span className="text-amber-600" title={tpmsListError}> · TPMS unavailable</span>}
+            {/* Which build this is. Small, out of the way, and the first thing
+                worth reading when something that was working is not — every
+                image is tagged :latest, so the version on screen is the only
+                way to tell one from another without the server. */}
+            {buildLabel() && (
+              <span title={`build ${buildStamp.sha}${buildStamp.built ? ` · built ${buildStamp.built}` : ''}`}>
+                {' · '}{buildLabel()}
+              </span>
+            )}
           </span>
           {selectedTpms ? (
             <button

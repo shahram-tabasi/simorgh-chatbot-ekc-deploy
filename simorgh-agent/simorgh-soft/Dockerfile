@@ -133,6 +133,19 @@ COPY simorgh-frontend/ ./
 #   internal nginx, which proxies /api/ to the Express backend on :3001).
 ENV VITE_BASE_PATH=/simorgh-design-suite/
 ENV VITE_API_URL=/simorgh-design-suite
+# ---- Which build is this? ---------------------------------------------------
+#
+# "It worked yesterday and the feature is gone today" is a question about which
+# image is running, and until now nothing in the app could answer it: every
+# build is called :latest, and :latest is whatever branch pushed last. These
+# travel into the bundle and into build.json beside it, so the answer is one
+# curl away instead of an afternoon.
+ARG GIT_SHA=unknown
+ARG GIT_REF=unknown
+ARG BUILD_TIME=unknown
+ENV VITE_BUILD_SHA=${GIT_SHA}
+ENV VITE_BUILD_REF=${GIT_REF}
+ENV VITE_BUILD_TIME=${BUILD_TIME}
 # Vite through its own JavaScript API, found by node's resolver.
 #
 # Not `npx vite build`, which the npm script runs: npx's contract is "find it
@@ -206,6 +219,15 @@ COPY --from=backend-build /app ./
 
 # Copy frontend build to nginx html directory
 COPY --from=frontend-build /app/dist /usr/share/nginx/html
+
+# The same stamp as a file beside the bundle, so which build is running can be
+# read over the wire — `curl .../simorgh-design-suite/build.json` — without
+# opening the app, logging in or picking a project.
+ARG GIT_SHA=unknown
+ARG GIT_REF=unknown
+ARG BUILD_TIME=unknown
+RUN printf '{"sha":"%s","ref":"%s","built":"%s"}\n' \
+      "${GIT_SHA}" "${GIT_REF}" "${BUILD_TIME}" > /usr/share/nginx/html/build.json
 
 # Copy nginx configuration — conf.d, not http.d: the official nginx:alpine
 # image's own nginx.conf includes /etc/nginx/conf.d/*.conf (nginx Inc.'s own
