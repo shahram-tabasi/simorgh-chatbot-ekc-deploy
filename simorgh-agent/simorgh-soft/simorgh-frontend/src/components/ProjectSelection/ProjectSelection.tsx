@@ -216,10 +216,29 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     return (o.text || '').toLowerCase().includes(q);
   });
 
+  // The same rule the database uses (projectNameKey on the server): no case,
+  // no double spaces, no edges. Comparing on case alone let "Sarmad Iron &
+  // Steel CO." and "Sarmad  Iron & Steel CO." both be created, and then there
+  // were two of them in the list with no way to tell which was which.
+  const nameKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
+
   const exactMatch =
-    projects.some(p => p.projectName.toLowerCase() === trimmed.toLowerCase()) ||
-    tpmsProjects.some(o => tpmsLabel(o).toLowerCase() === trimmed.toLowerCase());
+    projects.some(p => nameKey(p.projectName) === nameKey(trimmed)) ||
+    tpmsProjects.some(o => nameKey(tpmsLabel(o)) === nameKey(trimmed));
   const canCreate  = trimmed.length > 0 && !exactMatch;
+
+  // Projects that already share a name. They cannot be told apart in a list
+  // that shows only the name, so the ones that clash say so and show when
+  // each was last changed — enough to decide which to keep.
+  const sharedNames = new Set(
+    Object.entries(
+      projects.reduce<Record<string, number>>((n, p) => {
+        const k = nameKey(p.projectName || '');
+        n[k] = (n[k] ?? 0) + 1;
+        return n;
+      }, {}),
+    ).filter(([, n]) => n > 1).map(([k]) => k),
+  );
   const nothingFound = filteredProjects.length === 0 && filteredTpms.length === 0;
 
   const openNewRevisionForm = () => {
@@ -456,6 +475,17 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                           </span>
                         )}
                         {p.projectName}
+                        {sharedNames.has(nameKey(p.projectName || '')) && (
+                          <span
+                            className={`ml-2 text-[10px] ${isSel ? 'text-amber-100' : 'text-amber-700'}`}
+                            title={'Another project has this name. Open each one, rename or delete '
+                              + 'the one you do not want, and the two will stop being confusable.'}
+                          >
+                            ⚠ same name · changed {p.changedOn
+                              ? new Date(p.changedOn).toLocaleDateString()
+                              : '—'}
+                          </span>
+                        )}
                       </li>
                     );
                   })}

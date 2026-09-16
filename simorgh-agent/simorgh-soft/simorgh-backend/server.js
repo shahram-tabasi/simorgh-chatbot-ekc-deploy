@@ -63,6 +63,66 @@ async function connectToDatabase() {
   }
 }
 
+// ── Two projects must not share a name, and two computers must not
+//    silently overwrite each other ──────────────────────────────────────────
+//
+// Both of these were open. The name check on create was a read followed by a
+// write with nothing between them to stop a second create slipping through,
+// and a rename through PUT was not checked at all — which is how the same
+// client ended up in the list twice. And every save wrote the whole project
+// document, so two people on two computers each held their own copy and
+// whoever saved last wiped the other's work with no sign that anything had
+// happened.
+//
+// The answers are a unique index and a version counter, and both live here
+// because both have to be the database's rules rather than the app's: an app
+// can only check, and a check that is not the database's is a check two
+// clients can pass at the same time.
+
+/** A project name as it is compared: no case, no double spaces, no edges. */
+function projectNameKey(name) {
+  return String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * Put the index in place, and say plainly when existing data will not allow it.
+ *
+ * A unique index cannot be built over a collection that already has duplicates
+ * — and this one has, which is the whole reason it is being added. Rather than
+ * fail to start, the duplicates are named in the log so somebody can merge or
+ * rename them, and the server runs on with the app-level check it always had.
+ */
+async function ensureProjectIndexes() {
+  try {
+    // Backfill the key on anything saved before this existed.
+    const missing = await db.collection('projects')
+      .find({ projectNameKey: { $exists: false } }, { projection: { projectName: 1 } })
+      .toArray();
+    for (const doc of missing) {
+      await db.collection('projects').updateOne(
+        { _id: doc._id },
+        { $set: { projectNameKey: projectNameKey(doc.projectName) } },
+      );
+    }
+    if (missing.length) console.log(`Backfilled projectNameKey on ${missing.length} project(s)`);
+
+    await db.collection('projects').createIndex(
+      { projectNameKey: 1 }, { unique: true, name: 'projectNameKey_unique' });
+    console.log('Project name uniqueness is enforced by the database');
+  } catch (error) {
+    const duplicates = await db.collection('projects').aggregate([
+      { $group: { _id: '$projectNameKey', n: { $sum: 1 }, names: { $push: '$projectName' } } },
+      { $match: { n: { $gt: 1 } } },
+    ]).toArray().catch(() => []);
+    console.warn(
+      '⚠️  Could not make project names unique: ' + error.message);
+    for (const d of duplicates) {
+      console.warn(`    "${d.names[0]}" appears ${d.n} times — merge or rename, `
+        + 'then restart this service to put the rule in place');
+    }
+  }
+}
+
 // ============================================
 // SQL Server Connection (ADDED - from server-example.js)
 // ============================================
@@ -256,35 +316,107 @@ app.get('/api/projects/:id', async (req, res) => {
 });
 
 app.post('/api/projects', async (req, res) => {
+  const name = String(req.body?.projectName ?? '').trim();
+  if (!name) return res.status(400).json({ error: 'A project needs a name' });
+
   try {
-    // Check if project with same name already exists
-    const existing = await db.collection('projects').findOne({
-      projectName: { $regex: new RegExp('^' + req.body.projectName + '$', 'i') }
-    });
-    
+    // Asked first so the answer can name the project, and caught below as
+    // well because this check and the insert are two steps and two clients
+    // can be between them at the same time. The index is what actually
+    // decides; this only makes the message a good one.
+    const existing = await db.collection('projects')
+      .findOne({ projectNameKey: projectNameKey(name) });
     if (existing) {
-      return res.status(409).json({ error: 'Project with this name already exists' });
+      return res.status(409).json({
+        error: `A project called "${existing.projectName}" already exists — open that one, or give this a different name`,
+        existingId: existing._id,
+      });
     }
-    
-    const projectData = { ...req.body, createdOn: new Date().toISOString(), changedOn: new Date().toISOString() };
+
+    const projectData = {
+      ...req.body,
+      projectName: name,
+      projectNameKey: projectNameKey(name),
+      rev: 1,
+      createdOn: new Date().toISOString(),
+      changedOn: new Date().toISOString(),
+    };
     const result = await db.collection('projects').insertOne(projectData);
     res.status(201).json({ _id: result.insertedId, ...projectData });
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({
+        error: `A project called "${name}" already exists — open that one, or give this a different name`,
+      });
+    }
     console.error('Error creating project:', error);
-    res.status(500).json({ error: 'Failed to create project' });
+    res.status(500).json({ error: `Failed to create project: ${error.message}` });
   }
 });
 
+/**
+ * Save a project — but only over the version the client started from.
+ *
+ * `baseRev` is the version the client last read or wrote. The write only
+ * matches a document still on that version, so a save built on a copy that
+ * somebody else has since changed does not land: it comes back 409 with the
+ * current document, and the app puts the choice to the person instead of
+ * quietly throwing one of the two days' work away.
+ *
+ * A request without `baseRev` writes unconditionally, which is what an older
+ * client or another tool does. This app always sends it.
+ */
 app.put('/api/projects/:id', async (req, res) => {
+  if (!ObjectId.isValid(req.params.id)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const { baseRev, _id: _ignored, ...body } = req.body ?? {};
+  const _id = new ObjectId(req.params.id);
+
   try {
+    const name = body.projectName === undefined ? undefined : String(body.projectName).trim();
+    if (name !== undefined) {
+      if (!name) return res.status(400).json({ error: 'A project needs a name' });
+      // A rename used to go through unchecked, so the second "Sarmad Iron &
+      // Steel CO." could be made by renaming rather than by creating.
+      const clash = await db.collection('projects').findOne({
+        projectNameKey: projectNameKey(name),
+        _id: { $ne: _id },
+      });
+      if (clash) {
+        return res.status(409).json({
+          error: `A project called "${clash.projectName}" already exists — pick another name`,
+        });
+      }
+      body.projectName = name;
+      body.projectNameKey = projectNameKey(name);
+    }
+
+    const filter = Number.isFinite(baseRev) ? { _id, rev: baseRev } : { _id };
     const result = await db.collection('projects').findOneAndUpdate(
-      { _id: new ObjectId(req.params.id) },
-      { $set: { ...req.body, changedOn: new Date().toISOString() } },
+      filter,
+      { $set: { ...body, changedOn: new Date().toISOString() }, $inc: { rev: 1 } },
       { returnDocument: 'after' }
     );
-    if (!result) return res.status(404).json({ error: 'Not found' });
+
+    if (!result) {
+      const current = await db.collection('projects').findOne({ _id });
+      if (!current) return res.status(404).json({ error: 'Not found' });
+      // The project exists but has moved on: somebody else saved it while
+      // this copy was open.
+      return res.status(409).json({
+        error: 'This project was changed on another computer while you had it open',
+        conflict: true,
+        currentRev: current.rev ?? 0,
+        changedOn: current.changedOn,
+        project: current,
+      });
+    }
     res.json(result);
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({ error: 'Another project already has that name' });
+    }
     // The reason, not just the fact. A project too large for one BSON
     // document, a database that is down and a malformed id all failed the
     // same way here, and the app could only say "failed" — which is the one
@@ -1613,6 +1745,7 @@ process.on('unhandledRejection', (reason) => {
 // ============================================
 async function startServer() {
   await connectToDatabase();
+  await ensureProjectIndexes();
 
   // Try to connect to SQL Server on startup (non-blocking)
   connectToSqlServer().catch(err => {

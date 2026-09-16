@@ -7,7 +7,7 @@ import DeviceSelectionTab from './components/DeviceSelection/DeviceSelectionTab'
 import { OutputTypesTab } from './components/OutputTypes/OutputTypesTab';
 import { ProjectSelection } from './components/ProjectSelection/ProjectSelection';
 import { SplashScreen } from './components/SplashScreen/SplashScreen';
-import { ProjectProvider, useProject } from './context/ProjectContext';
+import { ProjectConflictState, ProjectProvider, useProject } from './context/ProjectContext';
 import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
 import { useTheme } from './useTheme';
@@ -560,6 +560,87 @@ const AboutDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
   </div>
 );
 
+/**
+ * Two people, one project, two versions of it.
+ *
+ * This is what used to happen silently: two computers each held the whole
+ * project and each saved the whole of it, so whoever saved last wrote over
+ * the other's work with nothing on screen to say so. A morning of templates
+ * made on one machine disappeared under a morning of device rows made on
+ * another.
+ *
+ * It cannot be merged — the two are whole documents, and guessing which half
+ * of each to keep is how both get damaged instead of one. So it is a choice,
+ * put plainly, and the side that loses is downloaded first either way. Nothing
+ * is thrown away by pressing either button.
+ */
+const ProjectConflictModal: React.FC<{
+  conflict: ProjectConflictState;
+  onTakeTheirs: () => void;
+  onKeepMine: () => Promise<void>;
+}> = ({ conflict, onTakeTheirs, onKeepMine }) => {
+  const [busy, setBusy] = useState(false);
+  const count = (p: any) => ({
+    equipments: p?.equipments?.length ?? 0,
+    rows: (p?.equipments ?? []).reduce((n: number, e: any) => n + (e?.devices?.length ?? 0), 0),
+    templates: ['LV', 'MV', 'HV'].reduce((n, t) => n + (p?.templates?.[t]?.length ?? 0), 0),
+  });
+  const mine = count(conflict.mine);
+  const theirs = count(conflict.theirs);
+
+  const Side: React.FC<{ title: string; note: string; n: ReturnType<typeof count> }> =
+    ({ title, note, n }) => (
+      <div className="flex-1 rounded border border-gray-200 bg-gray-50 px-3 py-2">
+        <p className="font-medium text-sm text-gray-800">{title}</p>
+        <p className="text-[11px] text-gray-500 mb-1.5">{note}</p>
+        <p className="text-xs text-gray-700">
+          {n.templates} template(s) · {n.equipments} switchgear(s) · {n.rows} device row(s)
+        </p>
+      </div>
+    );
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[10001] p-4">
+      <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl">
+        <div className="px-5 py-3 border-b border-l-4 border-l-amber-500">
+          <h3 className="font-semibold text-gray-800">
+            This project was changed on another computer
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Somebody saved <strong>{conflict.theirs?.projectName}</strong> while you had it
+            open, so your last change was not saved. Nothing has been lost yet — whichever
+            you choose, the other one is downloaded first.
+          </p>
+        </div>
+
+        <div className="px-5 py-4 flex gap-3">
+          <Side title="Yours" note="what is on this screen" n={mine} />
+          <Side title="Theirs" note="what is in the database now" n={theirs} />
+        </div>
+
+        <div className="px-5 py-3 border-t bg-gray-50 flex flex-wrap justify-end gap-2">
+          <button
+            disabled={busy}
+            onClick={onTakeTheirs}
+            className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-white disabled:opacity-50"
+            title="Load their version. Yours is downloaded as a .json file first."
+          >
+            Take theirs (mine is downloaded)
+          </button>
+          <button
+            disabled={busy}
+            onClick={async () => { setBusy(true); try { await onKeepMine(); } finally { setBusy(false); } }}
+            className="px-4 py-2 text-sm bg-amber-700 text-white rounded hover:bg-amber-800 disabled:opacity-50"
+            title="Save your version over theirs. Theirs is downloaded as a .json file first."
+          >
+            {busy ? 'Saving…' : 'Keep mine (theirs is downloaded)'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // کامپوننت اصلی اپ
 const MainApp: React.FC = () => {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -593,12 +674,19 @@ const MainApp: React.FC = () => {
     dismissRevisionLockNotice,
     lastSavedAt,
     saving,
-    saveError
+    saveError,
+    conflict,
+    resolveConflictTakeTheirs,
+    resolveConflictKeepMine
   } = useProject();
 
   // Auto-save — off while a locked (non-latest) revision is selected, and off
   // while TPMS owns the project (it is written by the sync, not from here).
-  useAutoSave(projectData, saveProject, isCurrentRevisionEditable && !isTpmsMastered);
+  // Off while two versions of the project are on the table: saving would
+  // either keep failing or, once it stopped failing, overwrite one of them.
+  useAutoSave(
+    projectData, saveProject,
+    isCurrentRevisionEditable && !isTpmsMastered && !conflict);
 
   // Closing the window while work is still on its way to the database — or
   // stuck because the server cannot be reached — asks first. The browser shows
@@ -1242,6 +1330,14 @@ const MainApp: React.FC = () => {
       {/* Revision-locked warning — raised by any blocked edit attempt */}
       {revisionLockNotice && (
         <RevisionLockedModal notice={revisionLockNotice} onClose={dismissRevisionLockNotice} />
+      )}
+
+      {conflict && (
+        <ProjectConflictModal
+          conflict={conflict}
+          onTakeTheirs={resolveConflictTakeTheirs}
+          onKeepMine={resolveConflictKeepMine}
+        />
       )}
     </div>
   );

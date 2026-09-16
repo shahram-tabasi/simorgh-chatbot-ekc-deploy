@@ -1,7 +1,8 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
 import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, TemplateMechanical, Revision } from '../types/project';
-import { projectService } from '../services/projectService';
+import { ProjectConflict, projectService } from '../services/projectService';
 import { removeTemplateEverywhere } from '../utils/cascadeDelete';
+import { downloadText, fileSafe } from '../utils/download';
 
 interface ProjectContextType {
   projectData: ProjectData;
@@ -19,6 +20,15 @@ interface ProjectContextType {
   saving: boolean;
   /** Why the last save failed, or null when the last one went through. */
   saveError: string | null;
+  /** Set when another computer saved this project while this copy was open. */
+  conflict: ProjectConflictState | null;
+  /**
+   * Take the other computer's version. This copy is handed back as a file
+   * first, so the work being set aside is still somewhere.
+   */
+  resolveConflictTakeTheirs: () => void;
+  /** Keep this copy and write it over theirs — theirs is downloaded first. */
+  resolveConflictKeepMine: () => Promise<void>;
   addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
@@ -130,6 +140,16 @@ export const defaultProjectData: ProjectData = {
   outputTypes: []
 };
 
+/** Two versions of one project, and what each of them is. */
+export interface ProjectConflictState {
+  message: string;
+  /** The version on the server — somebody else's work. */
+  theirs: ProjectData;
+  theirRev: number;
+  /** This copy, as it was when the save was refused. */
+  mine: ProjectData;
+}
+
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
 interface ProjectProviderProps {
@@ -154,6 +174,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   // down and nothing had been written for an hour. These three are the truth:
   // set from the save itself, never from an edit.
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const conflictRef = React.useRef(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -165,6 +186,24 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const currentRevisionRef = React.useRef<Revision | null>(null);
   /** The tail of the save chain, so two saves can never overlap or land out of order. */
   const saveChain = React.useRef<Promise<void>>(Promise.resolve());
+  /**
+   * The version of the project this copy is working from.
+   *
+   * Sent with every save and only moved on by a save that succeeded. It is
+   * what tells the server that this copy is up to date — and what it refuses
+   * the write on when somebody else has saved in the meantime.
+   */
+  const revRef = React.useRef<number | undefined>(
+    (initialProject as { rev?: number } | null | undefined)?.rev);
+
+  /**
+   * Somebody else's version of this project, and the choice between them.
+   *
+   * While this is set the project is not saved at all: whichever way it is
+   * resolved, one of the two days' work is being set aside, and that is not a
+   * decision to make on somebody's behalf while they are typing.
+   */
+  const [conflict, setConflict] = useState<ProjectConflictState | null>(null);
   
   // Revision state - centralized source of truth
   const [currentRevision, setCurrentRevision] = useState<Revision | null>(initialRevision || null);
@@ -273,6 +312,35 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     }));
   };
 
+  /** Hand a version back as a file, so whichever one loses is still kept. */
+  const keepACopy = (project: ProjectData, whose: string) => {
+    const name = fileSafe(`${project.projectName || 'project'}-${whose}`);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    downloadText(`${name}-${stamp}.json`, JSON.stringify(project, null, 2), 'application/json');
+  };
+
+  const resolveConflictTakeTheirs = () => {
+    if (!conflict) return;
+    keepACopy(conflict.mine, 'my-version');
+    setProjectData({ ...defaultProjectData, ...conflict.theirs });
+    revRef.current = conflict.theirRev;
+    conflictRef.current = false;
+    setConflict(null);
+    setSaveError(null);
+  };
+
+  const resolveConflictKeepMine = async () => {
+    if (!conflict) return;
+    keepACopy(conflict.theirs, 'their-version');
+    // Their version is on disk, so writing over it loses nothing. Catching up
+    // to their rev is what makes the next save land.
+    revRef.current = conflict.theirRev;
+    conflictRef.current = false;
+    setConflict(null);
+    setSaveError(null);
+    await saveProject().catch(() => { /* reported through saveError */ });
+  };
+
   const saveProject = async (): Promise<void> => {
     // A TPMS-mastered project is written by the sync, not from here.
     if (isTpmsMastered) {
@@ -289,6 +357,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         `${blockingRevisionNumbers.map(n => `REV ${n}`).join(', ')} exist. ` +
         `Delete the newer revisions to edit it again.`
       );
+    }
+    // While two versions are on the table, nothing is written.
+    if (conflictRef.current) {
+      throw new Error('This project was changed on another computer — resolve that first');
     }
     // Saves run one at a time, in order.
     //
@@ -307,11 +379,13 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       setSaving(true);
       try {
         if (id) {
-          await projectService.updateProject(id, projectToSave);
+          const saved = await projectService.updateProject(id, projectToSave, revRef.current);
+          revRef.current = (saved as { rev?: number })?.rev ?? revRef.current;
         } else {
           const created = await projectService.createProject(projectToSave);
           setProjectId(created._id!);
           projectIdRef.current = created._id!;
+          revRef.current = (created as { rev?: number })?.rev ?? 1;
           // Only the id is taken from the reply, and only when the project has
           // not got one yet.
           //
@@ -347,6 +421,19 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         setLastSavedAt(new Date());
         setSaveError(null);
       } catch (error) {
+        if (error instanceof ProjectConflict) {
+          // Not a failure to be retried — retrying would either keep failing
+          // or, worse, eventually overwrite. It is a question for the person.
+          conflictRef.current = true;
+          setConflict({
+            message: error.message,
+            theirs: error.theirs,
+            theirRev: error.theirRev,
+            mine: projectToSave as ProjectData,
+          });
+          setSaveError(error.message);
+          throw error;
+        }
         // Said out loud rather than logged and forgotten: an unsaved project
         // that looks saved is how a day's work goes missing.
         const message = (error as Error)?.message || 'Could not reach the server';
@@ -742,6 +829,9 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         lastSavedAt,
         saving,
         saveError,
+        conflict,
+        resolveConflictTakeTheirs,
+        resolveConflictKeepMine,
         addTemplate,
         updateTemplate,
         setTemplateMechanical,

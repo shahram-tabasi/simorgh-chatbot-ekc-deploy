@@ -224,6 +224,23 @@ export interface DesktopInstallerInfo {
   version?: string;
 }
 
+/**
+ * Somebody else saved this project while this copy was open.
+ *
+ * Carries their version, so the app can show what the choice is between
+ * rather than only that there is one.
+ */
+export class ProjectConflict extends Error {
+  readonly theirs: ProjectData;
+  readonly theirRev: number;
+  constructor(message: string, theirs: ProjectData, theirRev: number) {
+    super(message || 'This project was changed on another computer');
+    this.name = 'ProjectConflict';
+    this.theirs = theirs;
+    this.theirRev = theirRev;
+  }
+}
+
 export const projectService = {
   // The Windows desktop installer published on the server, if there is one.
   // Never throws — a missing endpoint or an empty folder simply means the
@@ -322,15 +339,33 @@ export const projectService = {
   },
 
   // آپدیت پروژه
-  async updateProject(id: string, projectData: Partial<ProjectData>): Promise<ProjectData> {
+  /**
+   * Save a project over the version it was started from.
+   *
+   * `baseRev` is the version this copy last read or wrote. The server only
+   * writes over a document still on that version — so when somebody else has
+   * saved in the meantime the write does not land, and what comes back is
+   * their version rather than a silent overwrite of one of the two.
+   *
+   * Left out, the write is unconditional. That is for an older client; this
+   * app always sends it.
+   */
+  async updateProject(
+    id: string, projectData: Partial<ProjectData>, baseRev?: number,
+  ): Promise<ProjectData> {
     const response = await fetch(`${API_BASE_URL}/projects/${id}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(projectData),
+      body: JSON.stringify(baseRev === undefined ? projectData : { ...projectData, baseRev }),
     });
-    
+
+    if (response.status === 409) {
+      const body = await response.json().catch(() => ({}));
+      if (body?.conflict) throw new ProjectConflict(body.error, body.project, body.currentRev);
+      throw new Error(body?.error || 'Another project already has that name');
+    }
     if (!response.ok) {
       throw new Error(await this._reason(response, 'Failed to save the project'));
     }
