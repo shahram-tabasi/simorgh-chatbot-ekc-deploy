@@ -27,6 +27,7 @@
 // cell is empty until somebody signs it.
 
 import { Anchor, Layer, Shape } from './shapes';
+import { PRODUCT_AND_OWNER } from '../../branding';
 
 /** Marks every shape the header put down, so it can be found and replaced. */
 export const HEADER = 'SHEET-HEADER';
@@ -117,8 +118,8 @@ const CAPTIONS = {
   owner: 'OWNER',
 };
 
-/** Ours unless the job says otherwise. */
-const SIGNATURE = 'Simorgh Design Suite';
+/** Ours unless the job says otherwise — see src/branding.ts. */
+const SIGNATURE = PRODUCT_AND_OWNER;
 
 /** Zone letters, skipping the two that are misread as digits. */
 const ZONE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';

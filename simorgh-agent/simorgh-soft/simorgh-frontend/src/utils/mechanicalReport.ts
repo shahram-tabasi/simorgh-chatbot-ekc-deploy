@@ -37,6 +37,7 @@
 
 import * as XLSX from 'xlsx-js-style';
 import { ProjectData, Equipment } from '../types/project';
+import { COPYRIGHT_LINE, PRODUCT_TAGLINE } from '../branding';
 import { buildPanelLayout, PanelLayout, parseSize } from './panelLayout';
 import { buildMechanicalItems, MECHANICAL_HEADERS } from './mechanicalItems';
 import {
@@ -389,8 +390,9 @@ function coverSheet(f: Facts): XLSX.WorkSheet {
   g.height(4, 46);
   g.band(5, 1, LAST, 'DESIGN SUITE', { bold: true, size: 18, color: COVER_BLUE, fill: COVER_NAVY, v: 'center' });
   g.height(5, 26);
-  g.band(6, 1, 6, 'Electrical Engineering Design Platform',
-    { size: 9, color: COVER_GREY, fill: COVER_NAVY });
+  g.band(6, 1, 6, PRODUCT_TAGLINE, { size: 9, color: COVER_GREY, fill: COVER_NAVY });
+  // Whose it is, on the page that says what it is.
+  g.band(7, 1, 8, COPYRIGHT_LINE, { size: 8, color: COVER_GREY, fill: COVER_NAVY });
   g.band(8, 1, 6, '', { fill: COVER_BLUE });
   g.height(8, 3);
 

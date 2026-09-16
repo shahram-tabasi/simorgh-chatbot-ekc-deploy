@@ -8,6 +8,9 @@ import { OutputTypesTab } from './components/OutputTypes/OutputTypesTab';
 import { ProjectSelection } from './components/ProjectSelection/ProjectSelection';
 import { SplashScreen } from './components/SplashScreen/SplashScreen';
 import { ProjectConflictState, ProjectProvider, useProject } from './context/ProjectContext';
+import { COPYRIGHT_LINE, PRODUCT_NAME, PRODUCT_TAGLINE } from './branding';
+import { BackupsModal } from './components/shared/BackupsModal';
+import { buildLabel, buildStamp } from './utils/buildStamp';
 import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
 import { useTheme } from './useTheme';
@@ -107,7 +110,11 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout,     setShowAbout]     = useState(false);
   const [zoom,          setZoom]          = useState(100);
-  const { projectData, saveProject, notifyRevisionLocked, lastSavedAt, saving, saveError } = useProject();
+  const {
+    projectData, saveProject, notifyRevisionLocked, lastSavedAt, saving, saveError,
+    backupKey, restoreSnapshot, backupNow,
+  } = useProject();
+  const [showBackups, setShowBackups] = useState(false);
   const desktopInstaller = useDesktopInstaller();
   // Everything on screen that can be put away, so View can bring it back.
   // Null outside a provider — the menu simply shows no panel section then.
@@ -296,6 +303,15 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                   disabled={!canCreateRevision}
                 >
                   ➕ Create New Revision
+                </button>
+                {/* The copies kept on this computer. Under Save, because that
+                    is what somebody is looking for when they come here after
+                    losing something. */}
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={() => { setShowBackups(true); setActiveMenu(null); }}
+                >
+                  🗂️ Backups…
                 </button>
                 <div className="border-t border-gray-600 my-1"></div>
                 <button
@@ -520,6 +536,15 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
       </div>
       {showShortcuts && <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+      {showBackups && (
+        <BackupsModal
+          projectKey={backupKey}
+          projectName={projectData.projectName}
+          onClose={() => setShowBackups(false)}
+          onRestore={restoreSnapshot}
+          onBackupNow={backupNow}
+        />
+      )}
     </div>
   );
 };
@@ -535,12 +560,23 @@ const AboutDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
       <div className="flex items-center gap-3 px-6 py-5 bg-slate-800 text-white">
         <img src={logoMark} alt="" data-theme-invert className="w-10 h-10 rounded" />
         <div>
-          <h3 className="font-semibold text-lg leading-tight">Simorgh Design Suite</h3>
-          <p className="text-xs text-slate-300">Electrical switchgear design &amp; documentation</p>
+          <h3 className="font-semibold text-lg leading-tight">{PRODUCT_NAME}</h3>
+          <p className="text-xs text-slate-300">{PRODUCT_TAGLINE}</p>
         </div>
       </div>
       <div className="px-6 py-4 text-sm space-y-1.5">
         <p><span className="text-gray-500">Version:</span> <strong>{APP_VERSION}</strong></p>
+        {/* The build. It used to be printed across the foot of the project
+            picker, which is not what the front door of the application should
+            say — but it is still the first thing worth reading when something
+            that was working yesterday is not, because every image is tagged
+            :latest and the version on screen is the only way to tell two
+            apart without the server. */}
+        {buildLabel() && (
+          <p title={`commit ${buildStamp.sha}${buildStamp.built ? ` · built ${buildStamp.built}` : ''}`}>
+            <span className="text-gray-500">Build:</span> <strong>{buildLabel()}</strong>
+          </p>
+        )}
         <p><span className="text-gray-500">Modules:</span> Project Definition · Create Template · Device Selection · Output · Simorgh Draw</p>
         <p><span className="text-gray-500">Guide:</span>{' '}
           <a
@@ -552,6 +588,7 @@ const AboutDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
             help.html
           </a>
         </p>
+        <p className="pt-2 mt-2 border-t text-xs text-gray-500">{COPYRIGHT_LINE}</p>
       </div>
       <div className="flex justify-end px-6 py-3 border-t bg-gray-50">
         <button className="px-4 py-2 border rounded text-sm hover:bg-gray-100" onClick={onClose}>Close</button>
@@ -1191,7 +1228,7 @@ const MainApp: React.FC = () => {
       {/* Footer */}
       <div className="bg-gray-800 text-white text-xs py-2">
         <div className="w-full px-4 flex justify-between items-center">
-          <span>© 2025 Simorgh Software - Professional Electrical Design</span>
+          <span>{COPYRIGHT_LINE}</span>
           <span className="flex items-center gap-3">
             {desktopInstaller.available && (
               <a

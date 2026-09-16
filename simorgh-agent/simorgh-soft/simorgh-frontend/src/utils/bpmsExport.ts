@@ -21,6 +21,7 @@
 // the LV modular frame's own. Everything else is the same report, so it is the
 // same code with two layouts rather than a second one that drifts.
 import { ProjectData, DeviceTableRow, TemplateItem } from '../types/project';
+import { COPYRIGHT_SHORT, PRODUCT_NAME } from '../branding';
 import {
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, getEplanixValue, stripLocaleTags,
 } from './tierEquipmentMatrix';
@@ -301,8 +302,12 @@ export function buildBpmsSheets(data: ProjectData, meta: BpmsMeta = {}): BpmsShe
       ['Revision',         meta.revisionNumber ? `REV ${meta.revisionNumber}` : '', 'Generated', generated],
     ];
 
+    // A sheet that leaves the building says whose it is.
+    const signature: (string | number)[] = new Array(layout.headers.length).fill('');
+    signature[0] = COPYRIGHT_SHORT;
+
     const rows: (string | number)[][] = [
-      ['SIMORGH DESIGN SUITE — BPMS REPORT'],
+      [`${PRODUCT_NAME.toUpperCase()} — BPMS REPORT`],
       ...info.map(([l1, v1, l2, v2]) => {
         const r: (string | number)[] = new Array(layout.headers.length).fill('');
         r[0] = l1; r[1] = v1; r[INFO_RIGHT_LABEL] = l2; r[INFO_RIGHT_LABEL + 1] = v2;
@@ -311,6 +316,8 @@ export function buildBpmsSheets(data: ProjectData, meta: BpmsMeta = {}): BpmsShe
       [],
       [...layout.headers],
       ...body,
+      [],
+      signature,
     ];
 
     // Title across the sheet, and each info value across the columns after

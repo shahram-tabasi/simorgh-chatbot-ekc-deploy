@@ -203,8 +203,10 @@ export const LightBeam: React.FC<LightBeamProps> = ({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Ownership line shown on the splash screen / startup dialog.
+//
+// The words live in src/branding.ts now — everything that signs anything takes
+// them from there, so the signature on a drawing, a report and the splash are
+// the same signature. Re-exported under the old names so nothing that already
+// imports them has to change.
 // ─────────────────────────────────────────────────────────────────────────────
-export const COMPANY_NAME_FA = 'شرکت سیمرغ فناوری هوشمند ایرانیان';
-export const COMPANY_RIGHTS_FA = `© تمامی حقوق متعلق به ${COMPANY_NAME_FA} است.`;
-export const COMPANY_NAME_EN = 'Simorgh Smart Technology of Iranians Co.';
-export const COMPANY_RIGHTS_EN = `© ${COMPANY_NAME_EN} — All rights reserved.`;
+export { COMPANY_NAME as COMPANY_NAME_EN, COPYRIGHT_LINE as COMPANY_RIGHTS_EN } from '../../branding';

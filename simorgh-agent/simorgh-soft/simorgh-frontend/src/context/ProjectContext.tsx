@@ -3,6 +3,7 @@ import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, Te
 import { ProjectConflict, projectService } from '../services/projectService';
 import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 import { downloadText, fileSafe } from '../utils/download';
+import { keepSnapshot } from '../utils/localBackup';
 
 interface ProjectContextType {
   projectData: ProjectData;
@@ -29,6 +30,12 @@ interface ProjectContextType {
   resolveConflictTakeTheirs: () => void;
   /** Keep this copy and write it over theirs — theirs is downloaded first. */
   resolveConflictKeepMine: () => Promise<void>;
+  /** The key the local snapshots of this project are filed under. */
+  backupKey: string;
+  /** Put a snapshot back into the app. It is saved like any other edit. */
+  restoreSnapshot: (project: ProjectData) => void;
+  /** Take one now, by hand, whatever the timer says. */
+  backupNow: () => Promise<boolean>;
   addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
@@ -175,6 +182,17 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   // set from the save itself, never from an edit.
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const conflictRef = React.useRef(false);
+  /**
+   * When the last local snapshot was taken, and of what.
+   *
+   * A copy of the whole project on every autosave would be a copy every five
+   * seconds; a copy only on success would be missing exactly when it is
+   * wanted. So: at most one a minute while things are going well, and always
+   * one when a save fails or is refused, which is when there is something to
+   * recover from.
+   */
+  const lastBackupAt = React.useRef(0);
+  const lastBackupOf = React.useRef('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -341,6 +359,37 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     await saveProject().catch(() => { /* reported through saveError */ });
   };
 
+  // Where this project's snapshots are filed. A project that has never been
+  // saved has no id, and is filed under its name so that even the first
+  // afternoon's work is recoverable.
+  const backupKey = String(projectData._id ?? projectId ?? projectData.projectName ?? 'unsaved');
+
+  const backupNow = () => keepSnapshot(projectDataRef.current, 'by hand', revRef.current);
+
+  /**
+   * Put a snapshot back.
+   *
+   * The id and the version are the ones this copy already has, not the ones in
+   * the snapshot: what is being restored is the *content* of an older state
+   * into the project that exists now. Saving it is then an ordinary save, and
+   * if somebody else has changed the project in the meantime the conflict
+   * dialog asks about it like any other.
+   */
+  const restoreSnapshot = (project: ProjectData) => {
+    if (!guardEdit()) return;
+    // Before overwriting what is on screen, keep it — restoring the wrong
+    // snapshot must not be the thing that loses the afternoon.
+    void keepSnapshot(projectDataRef.current, 'replaced by a restore', revRef.current);
+    const { _id, ...content } = project as ProjectData & { rev?: number };
+    delete (content as { rev?: number }).rev;
+    setProjectData(prev => ({
+      ...defaultProjectData,
+      ...content,
+      _id: prev._id,
+      changedOn: new Date().toISOString(),
+    }));
+  };
+
   const saveProject = async (): Promise<void> => {
     // A TPMS-mastered project is written by the sync, not from here.
     if (isTpmsMastered) {
@@ -375,6 +424,15 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
 
       const { _id, ...withoutId } = data;
       const projectToSave = { ...withoutId, changedOn: new Date().toISOString() };
+
+      // Before the write, not after: a save that never lands is the one whose
+      // copy is worth having.
+      const changed = String(data.changedOn ?? '');
+      if (changed !== lastBackupOf.current && Date.now() - lastBackupAt.current > 60_000) {
+        lastBackupAt.current = Date.now();
+        lastBackupOf.current = changed;
+        void keepSnapshot(projectToSave, 'saved', revRef.current);
+      }
 
       setSaving(true);
       try {
@@ -421,6 +479,11 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         setLastSavedAt(new Date());
         setSaveError(null);
       } catch (error) {
+        // Whatever went wrong, there is now a copy of what was in hand.
+        void keepSnapshot(
+          projectToSave,
+          error instanceof ProjectConflict ? 'conflict' : 'save failed',
+          revRef.current);
         if (error instanceof ProjectConflict) {
           // Not a failure to be retried — retrying would either keep failing
           // or, worse, eventually overwrite. It is a question for the person.
@@ -832,6 +895,9 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         conflict,
         resolveConflictTakeTheirs,
         resolveConflictKeepMine,
+        backupKey,
+        restoreSnapshot,
+        backupNow,
         addTemplate,
         updateTemplate,
         setTemplateMechanical,
