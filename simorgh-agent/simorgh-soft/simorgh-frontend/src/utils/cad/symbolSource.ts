@@ -19,13 +19,14 @@
 // What leaves here is always `Shape[]` for `placeAsBlock`: a contactor is one
 // object, not fourteen lines that happen to be near each other.
 
-import { Shape } from './shapes';
+import { Pt, Shape } from './shapes';
 import { drawingFromSvg } from './fromSvg';
 import { mapShape, newBlockId, scaling, translation } from './geom';
 import { boundsOfAll } from './edit';
 import { DxfSymbol, loadDxfSymbols } from './dxfSymbols';
 import { CELL, IEC_SYMBOLS, SymbolId, drawIecSymbol, symbolHeight } from '../iecSymbols';
 import { LibraryKind, defaultGroup, readKind } from './symbolLibraries';
+import { terminalMarks } from './terminals';
 
 export interface LibraryItem {
   key: string;
@@ -58,6 +59,16 @@ export interface LibraryItem {
    * withdrawable breaker to the left, and both would hang off the branch.
    */
   pin?: { x: number; y: number; span: number };
+  /**
+   * The points a wire is allowed to land on, in the art's own coordinates,
+   * each with the designation the device prints beside it.
+   *
+   * Absent means the symbol has not been given any, and it is placed exactly as
+   * it always was — geometry with no terminals, joined by coordinate. Present
+   * means a connection to it is a connection to the *device*, which is what
+   * the connection list and the terminal diagram are read from.
+   */
+  terminals?: { x: number; y: number; name: string }[];
   /**
    * The geometry, where it is already known.
    *
@@ -97,6 +108,14 @@ export function iecItems(): LibraryItem[] {
       // `drawIecSymbol` runs the conductor down x and spans one cell from y:
       // that line, not the bounding box, is where a wire meets this symbol.
       pin: { x: CELL / 2, y: 4, span: h },
+      // A single-line device stands in the branch: current in at the top, out
+      // at the bottom. `1` and `2` are what IEC numbers those, and they are
+      // the two ends of the conductor the symbol is drawn around — not the
+      // corners of its box, which is why they are taken off the pin axis.
+      terminals: [
+        { x: CELL / 2, y: 4, name: '1' },
+        { x: CELL / 2, y: 4 + h, name: '2' },
+      ],
     };
   });
 }
@@ -115,6 +134,14 @@ export const packItems = (packs: DxfSymbol[]): LibraryItem[] => packs.map(p => (
   // one, that is exactly the pin, and where it did not it has already fallen
   // back to the middle of the box.
   pin: { x: p.pinX, y: 0, span: p.height },
+  // A file in the pack says where its own terminals are, on its CONN layer;
+  // where it said nothing, the two ends of the conductor the reader settled
+  // on. Numbered in the order the file declared them, which is the order the
+  // person who drew it put them in.
+  terminals: (p.terminalPoints?.length
+    ? p.terminalPoints
+    : [[p.pinX, 0], [p.pinX, p.height]] as Pt[]
+  ).map(([x, y], i) => ({ x, y, name: String(i + 1) })),
 }));
 
 /** Everything in the library right now, the office's own pack included. */
@@ -225,6 +252,14 @@ export function placeSymbolAt(
     // into the box leaves the conductor that is no longer drawn.
     pin = { ...pin, y: pin.y + pin.span / 2 };
   }
+  // The terminals join the run *before* it is transformed, so they are scaled,
+  // moved and blocked by exactly the same arithmetic as the ink. Working them
+  // out afterwards would be the same sum written twice, and the second copy
+  // would be the one that went wrong.
+  if (item.terminals?.length && !tap) {
+    run = [...run, ...terminalMarks(item.terminals)];
+  }
+
   const k = span && span > 0 && pin.span > 0 ? span / pin.span : 1;
   const scaled = k === 1 ? run : run.map(s => mapShape(s, scaling(pin.x, pin.y, k)));
   const moved = scaled.map(s => mapShape(s, translation(at.x - pin.x, at.y - pin.y)));

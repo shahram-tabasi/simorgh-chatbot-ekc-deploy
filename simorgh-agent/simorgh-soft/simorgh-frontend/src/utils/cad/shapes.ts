@@ -34,6 +34,7 @@ export type Layer =
   | 'TABLE'    // the data block under each feeder
   | 'PANEL'    // panel/column outlines in the layout
   | 'SLOT'     // feeder bands in the layout
+  | 'PIN'      // connection points on a symbol — where a wire is allowed to land
   | 'FREE';    // spare space in the layout
 
 /** DXF colour (ACI) and linetype for each layer. */
@@ -49,6 +50,7 @@ export const LAYERS: Record<Layer, { aci: number; linetype: 'CONTINUOUS' | 'DASH
   TABLE:  { aci: 8, linetype: 'CONTINUOUS' },
   PANEL:  { aci: 7, linetype: 'CONTINUOUS' },
   SLOT:   { aci: 4, linetype: 'CONTINUOUS' },
+  PIN:    { aci: 2, linetype: 'CONTINUOUS' },
   FREE:   { aci: 8, linetype: 'DASHED' },
 };
 
@@ -74,6 +76,7 @@ export const LAYER_NOTES: Record<Layer, string> = {
   TABLE: 'The data block under each feeder',
   PANEL: 'Column outlines',
   SLOT: 'Feeder bands',
+  PIN: 'Connection points',
   FREE: 'Spare space and picture symbols',
 };
 
@@ -107,6 +110,21 @@ export interface Pen {
   block?: string;
   /** What the block is called, for the DXF block table and the layer list. */
   blockName?: string;
+  /**
+   * This shape is a connection point of its block, and this is what that point
+   * is called — `A1`, `13`, `I0.0`, `2`.
+   *
+   * A wire that ends on one of these is joined to the *device*, not merely to a
+   * coordinate that happens to be near it. That is the whole difference between
+   * a picture of a circuit and a circuit: with it, a connection list can say
+   * `-K1:A1 → -X1:3` and mean it; without it, all anyone can report is that two
+   * lines meet somewhere.
+   *
+   * It lives on `Pen` rather than in a shape of its own so that everything that
+   * already moves, scales, mirrors, groups and exports a shape carries it
+   * along without knowing it exists.
+   */
+  pin?: string;
 }
 
 export type Pt = [number, number];

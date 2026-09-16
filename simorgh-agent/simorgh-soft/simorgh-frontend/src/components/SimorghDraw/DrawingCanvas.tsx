@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { connectionRun } from '../../utils/cad/connect';
+import { nearestTerminal, terminals } from '../../utils/cad/terminals';
 import { Drawing, Layer, Pen, Pt, Shape } from '../../utils/cad/shapes';
 import {
   Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip, withWholeBlocks,
@@ -226,6 +227,19 @@ export const DrawingCanvas: React.FC<Props> = ({
     () => (objectSnap && DRAWS.has(tool) ? snapPoints(shapes, hidden) : []),
     [objectSnap, tool, shapes, hidden]);
 
+  // Connection points, kept apart from the general snaps because they are not
+  // one of them — they win.
+  //
+  // A terminal sits on the end of the symbol's own conductor, so the two are a
+  // fraction of a unit apart and "nearest point" is a coin toss between them.
+  // Landing on the conductor instead of the terminal draws the identical wire
+  // and connects the device to nothing, which is a mistake nobody can see and
+  // the reports find out about later. So under the connect tool the terminal
+  // is looked for first, and with more reach than an ordinary snap.
+  const pins = useMemo(
+    () => (tool === 'connect' && !hidden.has('PIN') ? terminals(shapes) : []),
+    [tool, shapes, hidden]);
+
   /** The shapes a click is allowed to find. */
   const offLimits = useMemo(() => new Set([...hidden, ...locked]), [hidden, locked]);
 
@@ -279,6 +293,10 @@ export const DrawingCanvas: React.FC<Props> = ({
    */
   const resolve = useCallback((clientX: number, clientY: number, ortho: boolean, from?: Pt) => {
     const raw = toDrawing(clientX, clientY);
+    const pin = pins.length
+      ? nearestTerminal(pins, raw.x, raw.y, unitsPerPixel() * 12) : null;
+    if (pin) return { point: [pin.at[0], pin.at[1]] as Pt, onGeometry: true };
+
     const near = snaps.length ? nearestSnap(snaps, raw.x, raw.y, unitsPerPixel() * 9) : null;
     if (near) return { point: [near[0], near[1]] as Pt, onGeometry: true };
 
@@ -298,7 +316,7 @@ export const DrawingCanvas: React.FC<Props> = ({
       y = Math.round(y / grid) * grid;
     }
     return { point: [x, y] as Pt, onGeometry: false };
-  }, [toDrawing, snaps, unitsPerPixel, grid]);
+  }, [toDrawing, pins, snaps, unitsPerPixel, grid]);
 
   /**
    * A draft with enough points, as the geometry it stands for.

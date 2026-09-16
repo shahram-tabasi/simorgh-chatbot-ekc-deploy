@@ -263,7 +263,10 @@ export function checkSheet(shapes: Shape[]): Message[] {
     const onAnother = segs.some(s => onSegment(p, s.a, s.b));
     const atDevice = shapes.some((s, i) => {
       const layer = (s as { layer?: Layer }).layer;
-      if (layer !== 'SYMBOL' && layer !== 'LOAD') return false;
+      // PIN as well as SYMBOL and LOAD: a wire that ends exactly on a
+      // connection point is the most connected a wire gets, and reporting it
+      // as ending in mid-air would train people to ignore this check.
+      if (layer !== 'SYMBOL' && layer !== 'LOAD' && layer !== 'PIN') return false;
       return i !== index && pointsOf(s).some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < TAG_REACH / 3);
     });
     if (!onAnother && !atDevice) {

@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx-js-style';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { tableShapes, replaceTable, tableOrigin, tableIdOf } from '../../utils/cad/table';
 import { checkSheet, Message } from '../../utils/cad/schematic';
+import { checkTerminals } from '../../utils/cad/terminals';
 import { numberWires, autoTagDevices, crossReferences } from '../../utils/cad/annotate';
 import { HeaderFields, drawingAreas, hasHeader, sheetHeader, stripHeader } from '../../utils/cad/header';
 import {
@@ -630,15 +631,20 @@ export const DrawingEditor: React.FC<Props> = ({
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [showChecks, setShowChecks] = useState(false);
 
+  // The geometry checks and the terminal checks are two lists because they are
+  // two modules; they are one list to the person reading them.
+  const allChecks = useCallback(
+    (run: Shape[]) => [...checkSheet(run), ...checkTerminals(run)], []);
+
   const runChecks = useCallback(() => {
-    setMessages(checkSheet(shapes));
+    setMessages(allChecks(shapes));
     setShowChecks(true);
-  }, [shapes]);
+  }, [allChecks, shapes]);
 
   // Re-run on every edit once the panel is open, so the list is never stale
   // enough to send someone to a wire they have already fixed.
   useEffect(() => {
-    if (showChecks) setMessages(checkSheet(shapes));
+    if (showChecks) setMessages(allChecks(shapes));
   }, [shapes, showChecks]);
 
   /** Select what a message is about, and look at it. */

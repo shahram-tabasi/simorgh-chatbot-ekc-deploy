@@ -53,6 +53,15 @@ export interface DxfSymbol {
   /** What was read, for the panel that lists them. */
   entities: number;
   terminals: number;
+  /**
+   * Where those terminals are, in the box's own coordinates — the points a
+   * wire is allowed to land on, shifted with the geometry.
+   *
+   * `terminals` above has always been the count, which is what the panel
+   * listing the pack shows. The count is enough to say a file declared its
+   * connection points; it is not enough to connect anything to them.
+   */
+  terminalPoints?: Pt[];
   skipped: Record<string, number>;
   /** How the box was decided, in a sentence the user can act on. */
   note: string;
@@ -120,6 +129,8 @@ export function symbolFromDxf(text: string, fileName: string, id: string): DxfSy
     cells,
     entities: read.entities,
     terminals: read.connections.length,
+    // Shifted by the same dy as the ink, so they sit where they are drawn.
+    terminalPoints: read.connections.map(([x, y]) => [x, y + dy] as Pt),
     skipped: read.skipped,
     note,
   };
