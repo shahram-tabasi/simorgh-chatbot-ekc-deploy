@@ -21,8 +21,10 @@ import {
 } from './catalog';
 import { EK36_CATALOG } from './ek36';
 import { SIMOPRIMEA4_CATALOG } from './simoprimeA4';
+import { templateFacts } from './template';
 
 export * from './catalog';
+export * from './template';
 export { MECHANICAL_PARTS } from './parts';
 
 const CATALOGS: MechanicalCatalog[] = [EK36_CATALOG, SIMOPRIMEA4_CATALOG];
@@ -122,13 +124,13 @@ export function contextOf(
       return Array.isArray(list) ? list.map(p => ({ property, part: p as Record<string, unknown> })) : [];
     });
 
-  // The breaker on the cell, as the sheets read it: the order number of
-  // whatever sits under a property whose name says breaker or contactor.
-  const cb = parts.find(p => /breaker|vcb|contactor/i.test(p.property));
-  const cbType = cb ? text(cb.part.partNumber) || text(cb.part.label) : '';
-
-  // A VT is a property naming one, the same test the single line makes.
-  const hasVt = parts.some(p => /voltage transformer|\bvt\b|\bpt\b/i.test(p.property));
+  // Breaker, VT and CT are read from the template's own columns rather than
+  // guessed from property names — the column for each is named per tier in
+  // `template.ts`, and an empty column means the cell has not got one. The
+  // guess this replaces could not work on LV, where the breaker column is
+  // "CB ORDER": nothing in it says "breaker", and the only property that did
+  // say so was the contactor.
+  const facts = templateFacts(template, template?.type ?? equipment.type ?? 'MV');
 
   const labels = [
     text(row.tag), text(row.feederNo), text(row.sfdHfd),
@@ -138,10 +140,13 @@ export function contextOf(
   return cellContext({
     panelType: panelTypeOf(data, equipment),
     size: cellTypeOf(template),
-    cbType,
+    cbType: facts.hasBreaker.value ? facts.breakerType.value : '',
     cableSize: text(row.cableSize),
-    magnetLabel: text(row.sfdHfd),
-    ptStatus: hasVt ? 'YES' : 'NO',
+    // The magnet label is answered on the template, because no column states
+    // it; until one is answered the feeder's own SFD/HFD stands in, which is
+    // where this office writes it today.
+    magnetLabel: facts.magnetLabel || text(row.sfdHfd),
+    ptStatus: facts.hasVt.value ? 'YES' : 'NO',
     description: text(row.description),
     // Rated current: the feeder's own FLC, else the rating in its power column.
     cbCurrent: Number(String(row.flc).replace(/[^\d.]/g, '')) > 0
@@ -152,11 +157,14 @@ export function contextOf(
     // sheets' rules name IP41 and IP42 exactly, and reading the 4 out of IP4X
     // would fire a rule the panel never satisfied.
     ip: ipOf(spec.ip),
-    // QC1 / QC2 are earth-switch labels on the feeder in TPMS; here they are
-    // whatever the project wrote as a tag or a template property.
-    qc1: labels.some(l => /\bQC1\b/i.test(l)),
-    qc2: labels.some(l => /\bQC2\b/i.test(l)),
-    earthSwitch: labels.some(l => /earth/i.test(l)),
+    // QC1 / QC2 are the cable and bus earth switches. Answered on the
+    // template, because no column states them; a QC1 or QC2 written on the
+    // feeder still counts, so a project that labels them the old way keeps
+    // working without anybody re-answering it.
+    qc1: facts.cableEarthSwitch || labels.some(l => /\bQC1\b/i.test(l)),
+    qc2: facts.busEarthSwitch || labels.some(l => /\bQC2\b/i.test(l)),
+    earthSwitch: facts.cableEarthSwitch || facts.busEarthSwitch
+      || labels.some(l => /earth/i.test(l)),
     labels,
   });
 }

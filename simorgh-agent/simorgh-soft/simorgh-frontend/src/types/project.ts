@@ -272,6 +272,40 @@ export interface TemplateItem {
    *  whether the extra per-equipment questions (a separate, later piece)
    *  are asked. */
   useSimorghDraw?: boolean;
+  /**
+   * The few mechanical facts about the cell that its own columns do not
+   * state — the earth switches and the magnet label — plus overrides for
+   * the ones they do. Read by the estimate sheets; see
+   * `utils/mechanical/template.ts`.
+   */
+  mechanical?: TemplateMechanical;
+}
+
+/**
+ * What a template is asked about its mechanics, and what it is allowed to
+ * overrule.
+ *
+ * Breaker, VT and CT are read from the template's own columns — an empty
+ * `CB ORDER` says the cell has no breaker — so they are not asked, only
+ * overridden. The earth switches and the magnet label are written nowhere,
+ * so they are asked; once the office's labelling is standardised they can be
+ * read too, and the answer becomes an override like the rest.
+ */
+export interface TemplateMechanical {
+  /** QC1 — a cable earth switch on this cell. */
+  cableEarthSwitch?: boolean;
+  /** QC2 — a bus earth switch. */
+  busEarthSwitch?: boolean;
+  /** MB3 / MB4, or empty for neither. */
+  magnetLabel?: string;
+  /** Overrules the reading of the breaker column. */
+  hasBreaker?: boolean;
+  /** Overrules the breaker's order number. */
+  breakerType?: string;
+  /** Overrules the reading of the PT column. */
+  hasVt?: boolean;
+  /** Overrules the reading of the CT column. */
+  hasCt?: boolean;
 }
 
 export interface DeviceItem {

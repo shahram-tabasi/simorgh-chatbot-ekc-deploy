@@ -1,5 +1,5 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
-import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, Revision } from '../types/project';
+import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, TemplateMechanical, Revision } from '../types/project';
 import { projectService } from '../services/projectService';
 import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 
@@ -13,8 +13,10 @@ interface ProjectContextType {
    *  stale copy, and the last one would throw the others away. */
   patchProjectData: (updater: (prev: ProjectData) => Partial<ProjectData>) => void;
   saveProject: () => Promise<void>;
-  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean) => void;
+  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
+  /** The mechanical answers a template holds, replaced whole. */
+  setTemplateMechanical: (templateId: string, mechanical: TemplateMechanical) => void;
   deleteTemplate: (templateId: string) => void;
   addDevice: (device: Partial<DeviceItem>) => void;
   updateDevice: (deviceId: string, data: Partial<DeviceItem>) => void;
@@ -311,6 +313,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     hierarchy?: TemplateHierarchy,
     copyFromId?: string,
     useSimorghDraw?: boolean,
+    mechanical?: TemplateMechanical,
   ) => {
     if (!guardEdit()) return;
     setProjectData(prev => {
@@ -318,10 +321,21 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       // our value tree). Used by the hierarchical wizard's "use as a starting
       // point" flow.
       let baseProps: Record<string, any> = {};
+      // A template cloned from another inherits its mechanical answers too —
+      // the earth switches and the magnet label are properties of the kind of
+      // cell it is, and a copy is the same kind of cell. Anything answered in
+      // the wizard still wins, so the inheritance is a starting point rather
+      // than something to undo.
+      let baseMechanical: TemplateMechanical | undefined;
       if (copyFromId) {
         const source = prev.templates[type].find(t => t.id === copyFromId);
-        if (source) baseProps = JSON.parse(JSON.stringify(source.properties || {}));
+        if (source) {
+          baseProps = JSON.parse(JSON.stringify(source.properties || {}));
+          if (source.mechanical) baseMechanical = { ...source.mechanical };
+        }
       }
+      const mech = mechanical && Object.keys(mechanical).length > 0
+        ? mechanical : baseMechanical;
       const newTemplate: TemplateItem = {
         id: `${type}-${Date.now()}`,
         name,
@@ -329,6 +343,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         properties: baseProps,
         ...(hierarchy ? { hierarchy } : {}),
         ...(useSimorghDraw !== undefined ? { useSimorghDraw } : {}),
+        // Only when something was actually answered: an empty object on
+        // every template would make "nobody has looked at this yet"
+        // indistinguishable from "looked at, nothing to say".
+        ...(mech && Object.keys(mech).length > 0 ? { mechanical: mech } : {}),
       };
       return {
         ...prev,
@@ -355,6 +373,21 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         templates: updatedTemplates,
         changedOn: new Date().toISOString()
       };
+    });
+  };
+
+  // The mechanical answers are replaced whole rather than merged: clearing an
+  // override is dropping its key, and a merge would have no way to say so.
+  const setTemplateMechanical = (templateId: string, mechanical: TemplateMechanical) => {
+    if (!guardEdit()) return;
+    setProjectData(prev => {
+      const updatedTemplates = { ...prev.templates };
+      for (const type of ['LV', 'MV', 'HV'] as const) {
+        updatedTemplates[type] = updatedTemplates[type].map(template =>
+          template.id === templateId ? { ...template, mechanical } : template
+        );
+      }
+      return { ...prev, templates: updatedTemplates, changedOn: new Date().toISOString() };
     });
   };
 
@@ -624,6 +657,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         saveProject,
         addTemplate,
         updateTemplate,
+        setTemplateMechanical,
         deleteTemplate,
         addDevice,
         updateDevice,

@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { foldedPath } from '../../utils/templateFamilies';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ChevronDownIcon, ChevronRightIcon, WrenchIcon, XIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
 import { findTemplateUsage, UsageReport } from '../../utils/cascadeDelete';
 import { TEMPLATE_FAMILIES, groupByFamily, hasFamilies } from '../../utils/templateFamilies';
 import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
+import { MechanicalQuestions } from './MechanicalQuestions';
+import { TemplateItem, TemplateMechanical } from '../../types/project';
 
 interface TemplateTreeProps {
   projectData: any;
@@ -57,7 +59,8 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
 }) => {
   const {
     addTemplate,
-    deleteTemplate
+    deleteTemplate,
+    setTemplateMechanical,
   } = useProject();
 
   // Pending template deletion — confirmed through the cascade dialog, which
@@ -80,6 +83,10 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   // a separate flag so the rest of the file doesn't have to change.
   const [wizard, setWizard] = useState<
     { tier: 'LV' | 'MV' | 'HV'; family: string | null } | null>(null);
+  // The mechanical answers being edited on an existing template. Held here
+  // rather than written straight through, so Cancel means cancel.
+  const [mechEdit, setMechEdit] = useState<
+    { template: TemplateItem; value: TemplateMechanical } | null>(null);
 
   // 🔹 بررسی امن برای templates - اضافه شده
   const safeTemplates = {
@@ -148,6 +155,16 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     // deleteTemplate cascades to the rows built on the template.
     deleteTemplate(templateDeleteTarget.id);
     setTemplateDeleteTarget(null);
+  };
+
+  /** Open the mechanical questions on the template the menu was opened on. */
+  const handleEditMechanical = () => {
+    const id = contextMenu.templateId;
+    setContextMenu({ ...contextMenu, visible: false });
+    if (!id) return;
+    const all = [...safeTemplates.LV, ...safeTemplates.MV, ...safeTemplates.HV];
+    const template = all.find((t: TemplateItem) => t.id === id);
+    if (template) setMechEdit({ template, value: { ...(template.mechanical ?? {}) } });
   };
 
   const handleCloseContextMenu = () => {
@@ -370,6 +387,13 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           )}
           {contextMenu.templateId && (
             <>
+              <button
+                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                onClick={handleEditMechanical}
+              >
+                <WrenchIcon className="w-4 h-4 mr-2" />
+                Mechanical…
+              </button>
               <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center">
                 <CopyIcon className="w-4 h-4 mr-2" />
                 Copy
@@ -410,8 +434,8 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           family={wizard.family}
           existing={safeTemplates[wizard.tier]}
           onCancel={() => setWizard(null)}
-          onSubmit={({ name, hierarchy, useSimorghDraw, copyFromId }) => {
-            addTemplate(wizard.tier, name, hierarchy, copyFromId, useSimorghDraw);
+          onSubmit={({ name, hierarchy, useSimorghDraw, mechanical, copyFromId }) => {
+            addTemplate(wizard.tier, name, hierarchy, copyFromId, useSimorghDraw, mechanical);
             const newExpanded = new Set(expandedNodes);
             newExpanded.add(wizard.tier);
             // The new template's own section is opened too, so it is on screen
@@ -421,6 +445,64 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
             setWizard(null);
           }}
         />
+      )}
+
+      {/* The same questions as the wizard asks, on a template that already
+          exists — so an answer can be changed without rebuilding anything,
+          and so a template made before this existed can be answered now. */}
+      {mechEdit && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[200]"
+          onClick={() => setMechEdit(null)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl w-[560px] max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-5 py-3 border-b flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gray-800 truncate">
+                  Mechanical — {mechEdit.template.name}
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  {mechEdit.template.type} · what the estimate sheets ask about this cell
+                </p>
+              </div>
+              <button
+                onClick={() => setMechEdit(null)}
+                className="p-1 rounded hover:bg-gray-100 text-gray-500 shrink-0"
+              >
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4 overflow-y-auto">
+              <MechanicalQuestions
+                tier={mechEdit.template.type}
+                template={mechEdit.template}
+                value={mechEdit.value}
+                onChange={value => setMechEdit({ ...mechEdit, value })}
+                framed={false}
+              />
+            </div>
+            <div className="px-5 py-3 border-t bg-gray-50 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setMechEdit(null)}
+                className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-white"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setTemplateMechanical(mechEdit.template.id, mechEdit.value);
+                  setMechEdit(null);
+                }}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

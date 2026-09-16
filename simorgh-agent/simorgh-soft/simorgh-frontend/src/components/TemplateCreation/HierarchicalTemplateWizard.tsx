@@ -36,9 +36,10 @@
 import React, { useMemo, useState } from 'react';
 import { XIcon, ChevronRightIcon, SparklesIcon, CheckIcon } from 'lucide-react';
 import {
-  TemplateItem, TemplateHierarchy, TemplateLeafKind,
+  TemplateItem, TemplateHierarchy, TemplateLeafKind, TemplateMechanical,
 } from '../../types/project';
 import { TEMPLATE_FAMILIES, foldedPath } from '../../utils/templateFamilies';
+import { MechanicalQuestions } from './MechanicalQuestions';
 
 const LV_ROOTS       = ['S8', '8PT'] as const;
 // SFD and HFD used to head this list, and each of them asked exactly one
@@ -144,6 +145,8 @@ interface Props {
     name: string;
     hierarchy: TemplateHierarchy;
     useSimorghDraw: boolean;
+    /** What the estimate sheets ask that the columns do not answer. */
+    mechanical: TemplateMechanical;
     copyFromId?: string;
   }) => void;
 }
@@ -168,6 +171,10 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   // Either way the equipment draws — this only decides whether the extra
   // per-equipment questions (a separate, later piece of work) get asked.
   const [useSimorghDraw, setUseSimorghDraw] = useState<boolean | null>(null);
+  // The mechanical answers. Never required: a template with none behaves
+  // exactly as one made before this step existed, because every fact it
+  // would have overruled is read from the columns instead.
+  const [mechanical, setMechanical] = useState<TemplateMechanical>({});
 
   const feederApplies = tier === 'LV' && (
     (family === 'OFW' && !!switch_ && LV_OFW_FEEDER_SWITCHES.includes(switch_)) ||
@@ -205,7 +212,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
 
   // Which step are we on? The first step missing a value is the active one.
   type Step = 'family' | 'root' | 'switch' | 'group' | 'feeder'
-    | 'cellType' | 'cellSub' | 'kind' | 'params' | 'simorghDraw' | 'name';
+    | 'cellType' | 'cellSub' | 'kind' | 'params' | 'mechanical'
+    | 'simorghDraw' | 'name';
   const activeStep: Step = (() => {
     if (tier === 'LV') {
       if (!family) return 'family';
@@ -220,6 +228,10 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     }
     if (candidateLeafKinds.length > 0 && !leafKind) return 'kind';
     if (!kw && !currentA) return 'params';
+    // Mechanical is optional, so it holds the cursor only while nothing has
+    // been answered and nothing after it has been either — answering the next
+    // step is how it is skipped, rather than a step that has to be dismissed.
+    if (Object.keys(mechanical).length === 0 && useSimorghDraw === null) return 'mechanical';
     if (useSimorghDraw === null) return 'simorghDraw';
     return 'name';
   })();
@@ -265,6 +277,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     tier === 'MV' && needsCellSub(cellType) && 'cellSub',
     candidateLeafKinds.length > 0 && 'kind',
     structuralPathComplete && 'params',
+    structuralPathComplete && 'mechanical',
     'simorghDraw',
     'name',
   ].filter(Boolean) as string[];
@@ -370,6 +383,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
         },
       },
       useSimorghDraw: !!useSimorghDraw,
+      mechanical,
       copyFromId,
     });
   };
@@ -577,6 +591,33 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {/* Step — Mechanical. Below the path, because it is the path that
+              decides which basket the cell falls in and these answers only
+              adjust it; above the name, because it is part of what the
+              template is rather than what it is called. */}
+          {structuralPathComplete && (
+            <div>
+              <StepHeader
+                n={stepNumber('mechanical')}
+                label="Mechanical"
+                active={activeStep === 'mechanical'}
+                done={Object.keys(mechanical).length > 0}
+              />
+              <div className="mt-2 rounded border border-gray-200 p-3">
+                <MechanicalQuestions
+                  tier={tier}
+                  value={mechanical}
+                  onChange={setMechanical}
+                  framed={false}
+                />
+                <p className="mt-2 text-[10px] text-gray-400 italic">
+                  Optional — nothing here has to be answered now, and all of it
+                  can be changed later from the template's own menu.
+                </p>
+              </div>
             </div>
           )}
 
