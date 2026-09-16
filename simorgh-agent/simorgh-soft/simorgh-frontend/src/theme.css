@@ -241,6 +241,18 @@
 [data-theme="dark"] .text-purple-900, [data-theme="dark"] .text-purple-800,
 [data-theme="dark"] .text-purple-700  { color: #d8b4fe !important; }
 [data-theme="dark"] .text-indigo-800, [data-theme="dark"] .text-indigo-700 { color: #a5b4fc !important; }
+
+/* The faded forms of the same colours. A label written as text-blue-700/60
+ * keeps its dark ink under the rule above — which remaps text-blue-700 and
+ * not text-blue-700\/60, a different class — and 60% of a dark blue on a dark
+ * blue card is a label nobody can read. Faded here too, from the light ink the
+ * theme already uses, so it still reads as secondary and still reads. */
+[data-theme="dark"] .text-blue-700\/70    { color: rgba(147,197,253,.75) !important; }
+[data-theme="dark"] .text-blue-700\/60    { color: rgba(147,197,253,.68) !important; }
+[data-theme="dark"] .text-emerald-700\/70 { color: rgba(110,231,183,.75) !important; }
+[data-theme="dark"] .text-emerald-700\/60 { color: rgba(110,231,183,.68) !important; }
+[data-theme="dark"] .text-amber-700\/70   { color: rgba(252,211,77,.75) !important; }
+[data-theme="dark"] .text-red-700\/70     { color: rgba(252,165,165,.75) !important; }
 [data-theme="dark"] .text-teal-800,   [data-theme="dark"] .text-teal-700   { color: #5eead4 !important; }
 
 [data-theme="dark"] .border-blue-200    { border-color: rgba(59,130,246,.45) !important; }
