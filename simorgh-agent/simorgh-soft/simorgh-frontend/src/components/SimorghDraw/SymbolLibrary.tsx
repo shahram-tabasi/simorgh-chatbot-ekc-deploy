@@ -1,7 +1,8 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   XIcon, SearchIcon, UploadIcon, Maximize2Icon, Minimize2Icon, PlusIcon,
+  ChevronDownIcon, ChevronRightIcon, PencilIcon, Trash2Icon, FilePlusIcon,
 } from 'lucide-react';
 
 import { Shape } from '../../utils/cad/shapes';
@@ -10,9 +11,15 @@ import { renderFragment } from '../../utils/cad/svg';
 import { readDxf } from '../../utils/cad/readDxf';
 import { loadDxfSymbols } from '../../utils/cad/dxfSymbols';
 import { LibraryItem, iecItems, packItems, shapesOf } from '../../utils/cad/symbolSource';
+import { wdItems } from '../../utils/cad/wdSymbols';
 import {
   LibraryKind, SYMBOL_LIBRARIES, defaultGroup, libraryOf,
 } from '../../utils/cad/symbolLibraries';
+import {
+  forgetOfficeSymbol, loadOfficeSymbols, officeItems, officeSymbols, onOfficeSymbols,
+} from '../../utils/cad/officeSymbols';
+import { OfficeSymbol, symbolLibraryService } from '../../services/projectService';
+import { SymbolMaker } from './SymbolMaker';
 import { Strings, dirOf, Lang } from './lang';
 import { ThemeId } from './theme';
 
@@ -52,10 +59,18 @@ interface Props {
    * All three stay reachable: this is where it opens, not where it is locked.
    */
   kind?: LibraryKind;
+  /**
+   * What is picked on the sheet, so a symbol can be made out of it.
+   *
+   * This is the step the separate symbol editors do not have: draw the thing,
+   * select it, and it is in the library. Absent means the button says so
+   * rather than disappearing.
+   */
+  selection?: Shape[];
 }
 
 export const SymbolLibrary: React.FC<Props> = ({
-  t, lang, theme, onImport, onClose, kind: openOn,
+  t, lang, theme, onImport, onClose, kind: openOn, selection,
 }) => {
   const [query, setQuery] = useState('');
   const [big, setBig] = useState(false);
@@ -67,10 +82,23 @@ export const SymbolLibrary: React.FC<Props> = ({
   // come from.
   const [kind, setKind] = useState<LibraryKind>(openOn ?? 'sld');
   const file = useRef<HTMLInputElement>(null);
+  const [making, setMaking] = useState(false);
+  const [editing, setEditing] = useState<OfficeSymbol | null>(null);
+  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
+
+  // The office's library comes off the server, so it arrives after the first
+  // draw. `beat` is what says "it is here now" — without it the list would be
+  // right and the screen would not.
+  const [beat, setBeat] = useState(0);
+  useEffect(() => {
+    const off = onOfficeSymbols(() => setBeat(b => b + 1));
+    loadOfficeSymbols();
+    return off;
+  }, []);
 
   const items = useMemo(
-    () => [...iecItems(), ...packItems(loadDxfSymbols()), ...fromFile],
-    [fromFile]);
+    () => [...iecItems(), ...wdItems(), ...officeItems(), ...packItems(loadDxfSymbols()), ...fromFile],
+    [fromFile, beat]);
 
   /** How many symbols each library holds, for the tab that opens it. */
   const counts = useMemo(() => {
@@ -169,6 +197,64 @@ export const SymbolLibrary: React.FC<Props> = ({
     />
   );
 
+  /**
+   * The symbol large, with its connection points on it.
+   *
+   * The points are the thing a catalogue picture leaves out and the thing
+   * somebody about to wire this needs: where the wire goes, and what that
+   * place is called. Drawn here rather than baked into the art, because on the
+   * sheet they belong to the PIN layer and can be switched off — a preview is
+   * where you look at them, not where you live with them.
+   */
+  const BigPreview: React.FC<{ item: LibraryItem }> = ({ item }) => {
+    // Enough room round the ink for a terminal ring and its name, in the
+    // symbol's own units so it holds at any size.
+    const extent = Math.max(item.width, item.height);
+    const pad = extent * 0.12 + 2;
+    const r = extent / 55 + 0.6;
+    const size = extent / 14 + 1.5;
+
+    // Shown at a fixed magnification rather than stretched to fill the pane.
+    //
+    // These symbols are drawn with a one-unit line in a twenty-unit box,
+    // because that is the right weight on an A3 sheet. Blown up to fill 700
+    // pixels the same line is thirty pixels thick, and the symbol stops
+    // looking like a drawing and starts looking like a logo. Six pixels to the
+    // unit is about what it looks like on the sheet, which is the thing
+    // somebody is deciding about.
+    const PX = 8;
+    const w = (item.width + pad * 2) * PX;
+    const h = (item.height + pad * 2) * PX;
+
+    // The wiring-diagram symbols print their own terminal numbers, and a
+    // second copy beside them in orange is the same number twice. So the ring
+    // is always drawn — it is what says *where* — and the name only where the
+    // drawing does not already say it.
+    const named = (name: string) => !item.art.includes(`>${name}<`);
+
+    return (
+      <svg
+        width={w}
+        height={h}
+        viewBox={`${-pad} ${-pad} ${item.width + pad * 2} ${item.height + pad * 2}`}
+        preserveAspectRatio="xMidYMid meet"
+        className="max-w-full max-h-full"
+      >
+        <g dangerouslySetInnerHTML={{ __html: item.art }} />
+        {(item.terminals ?? []).map((p, i) => (
+          <g key={i}>
+            <circle cx={p.x} cy={p.y} r={r} fill="none" stroke="#ea580c" strokeWidth={r / 3} />
+            {named(p.name) && (
+              <text x={p.x + r * 1.8} y={p.y - r * 0.6} fontSize={size} fill="#ea580c">
+                {p.name}
+              </text>
+            )}
+          </g>
+        ))}
+      </svg>
+    );
+  };
+
   // Through a portal, like the cell editor: the editor can be inside a window
   // that is itself positioned, and `fixed` inside a positioned ancestor is not
   // fixed to the viewport at all. Drawn on the body it always fills the screen.
@@ -197,6 +283,14 @@ export const SymbolLibrary: React.FC<Props> = ({
                 className="ps-7 pe-2 py-1.5 text-sm border border-gray-300 rounded w-56 bg-white"
               />
             </div>
+            <button
+              onClick={() => { setEditing(null); setMaking(true); }}
+              data-lib-new
+              title={t.libNewNote}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-sm text-white hover:bg-blue-700"
+            >
+              <FilePlusIcon className="w-4 h-4" /> {t.libNew}
+            </button>
             <button
               onClick={() => file.current?.click()}
               data-lib-file
@@ -260,11 +354,16 @@ export const SymbolLibrary: React.FC<Props> = ({
           })}
         </div>
 
-        {/* ── The list, and what is picked ─────────────────────────────── */}
+        {/* ── The list, and the shape beside it ────────────────────────────
+            A list and not a wall of cards. Somebody looking for a symbol knows
+            what it is called — "breaker", "CT" — and types it; what they are
+            unsure of is which of the four breakers it is, and that is answered
+            by the drawing, large, beside the name. A grid answers the second
+            question at thumbnail size and the first not at all. */}
         <div className="flex-1 flex min-h-0">
-          <div className="flex-1 min-w-0 overflow-y-auto p-4 space-y-5 bg-white">
+          <div className="w-[21rem] shrink-0 overflow-y-auto border-e bg-white">
             {shown.length === 0 && (
-              <div className="text-sm text-gray-500 space-y-1">
+              <div className="p-4 text-sm text-gray-500 space-y-1">
                 <p>{query.trim() ? t.libNoneFound : t.libEmptyLibrary}</p>
                 {!query.trim() && (
                   <p className="text-[12px] text-gray-400">
@@ -273,70 +372,154 @@ export const SymbolLibrary: React.FC<Props> = ({
                 )}
               </div>
             )}
-            {shown.map(([group, list]) => (
-              <div key={group}>
-                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  {group} <span className="text-gray-400">· {list.length}</span>
-                </p>
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(132px,1fr))] gap-2.5">
-                  {list.map(item => (
+            {shown.map(([group, list]) => {
+              // Searching opens everything: a shelf collapsed over a match is
+              // a match nobody can see.
+              const open = Boolean(query.trim()) || !shut.has(group);
+              return (
+                <div key={group}>
+                  <button
+                    onClick={() => setShut(prev => {
+                      const next = new Set(prev);
+                      if (next.has(group)) next.delete(group); else next.add(group);
+                      return next;
+                    })}
+                    className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 border-y text-[11px] font-semibold text-gray-600 uppercase tracking-wide sticky top-0 z-10 hover:bg-gray-100"
+                  >
+                    {open
+                      ? <ChevronDownIcon className="w-3.5 h-3.5" />
+                      : <ChevronRightIcon className="w-3.5 h-3.5" />}
+                    <span className="truncate">{group}</span>
+                    <span className="ms-auto text-gray-400">{list.length}</span>
+                  </button>
+                  {open && list.map(item => (
                     <button
                       key={item.key}
                       data-lib-item={item.name}
                       onClick={() => setPicked(item.key)}
                       onDoubleClick={() => place(item)}
                       title={`${item.name} — ${t.libDoubleClick}`}
-                      className={`text-start border rounded-md p-2 bg-white transition ${
+                      className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-start border-s-2 ${
                         picked === item.key
-                          ? 'border-blue-500 ring-2 ring-blue-200'
-                          : 'border-gray-200 hover:border-blue-400 hover:shadow-sm'}`}
+                          ? 'border-s-blue-500 bg-blue-50'
+                          : 'border-s-transparent hover:bg-gray-50'}`}
                     >
-                      <Preview item={item} size={58} />
-                      <p className="text-[11px] text-gray-800 leading-tight mt-1 line-clamp-2">
-                        {item.name}
-                      </p>
-                      <p className="text-[10px] text-gray-400">{item.source}</p>
+                      {/* A thumbnail as well as the name, because half of
+                          recognising a symbol is recognising its shape. */}
+                      <span className="w-8 h-7 shrink-0 flex items-center justify-center">
+                        <Preview item={item} size={26} />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[12.5px] text-gray-800 leading-tight truncate">
+                          {item.name}
+                        </span>
+                        <span className="block text-[10px] text-gray-400">
+                          {item.source}
+                          {item.terminals?.length ? ` · ${t.libPoints(item.terminals.length)}` : ''}
+                        </span>
+                      </span>
                     </button>
                   ))}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
-          <aside className="w-72 shrink-0 border-s bg-white flex flex-col">
-            <div className="px-3 py-2 border-b bg-gray-50">
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                {t.selection}
-              </h4>
-            </div>
+          <aside className="flex-1 min-w-0 flex flex-col bg-gray-50">
             {chosen ? (
-              <div className="p-3 space-y-3 flex-1 overflow-y-auto">
-                <div className="border border-gray-200 rounded p-3 bg-white">
-                  <Preview item={chosen} size={150} />
+              <>
+                {/* The white card wraps the drawing rather than filling the
+                    pane. A small symbol shown at its proper weight in a large
+                    empty box reads as an error; shown on a card its own size,
+                    it reads as a symbol. */}
+                <div className="flex-1 min-h-0 p-8 flex items-center justify-center overflow-auto">
+                  <div className="bg-white rounded border border-gray-200 p-6 flex items-center justify-center max-w-full max-h-full">
+                    <BigPreview item={chosen} />
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-800">{chosen.name}</p>
-                  <p className="text-[11px] text-gray-500">
-                    {chosen.source} · {chosen.group} · {Math.round(chosen.width)} × {Math.round(chosen.height)}
-                  </p>
+
+                <div className="px-6 py-3 border-t bg-white flex items-center gap-4 flex-wrap">
+                  <div className="min-w-0">
+                    <p className="text-base font-medium text-gray-900 truncate">{chosen.name}</p>
+                    <p className="text-[11px] text-gray-500">
+                      {chosen.source} · {chosen.group} · {Math.round(chosen.width)} × {Math.round(chosen.height)}
+                      {chosen.terminals?.length ? ` · ${t.libPoints(chosen.terminals.length)}` : ''}
+                    </p>
+                  </div>
+
+                  <div className="ms-auto flex items-center gap-2">
+                    {/* Only the office's own symbols can be changed here. The
+                        built-in ones are what the app draws with, and a drawing
+                        made last year has to keep meaning what it meant. */}
+                    {chosen.source === 'Office' && (
+                      <>
+                        <button
+                          onClick={() => {
+                            const own = officeSymbols().find(o => `office:${o.id}` === chosen.key);
+                            if (own) { setEditing(own); setMaking(true); }
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          <PencilIcon className="w-4 h-4" /> {t.libEdit}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const own = officeSymbols().find(o => `office:${o.id}` === chosen.key);
+                            if (!own || !window.confirm(t.libDeleteAsk(own.name))) return;
+                            try {
+                              await symbolLibraryService.remove(own.id);
+                              forgetOfficeSymbol(own.id);
+                              setPicked(null);
+                            } catch (err) {
+                              setNote(err instanceof Error ? err.message : String(err));
+                            }
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded border border-gray-300 bg-white text-sm text-red-700 hover:bg-red-50"
+                        >
+                          <Trash2Icon className="w-4 h-4" /> {t.libDelete}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => place(chosen)}
+                      data-lib-import
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+                    >
+                      <PlusIcon className="w-4 h-4" /> {t.libImport}
+                    </button>
+                  </div>
+                  <p className="w-full text-[11px] text-gray-500 leading-relaxed">{t.libAsBlock}</p>
                 </div>
-                <button
-                  onClick={() => place(chosen)}
-                  data-lib-import
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-                >
-                  <PlusIcon className="w-4 h-4" /> {t.libImport}
-                </button>
-                <p className="text-[11px] text-gray-500 leading-relaxed">{t.libAsBlock}</p>
-              </div>
+              </>
             ) : (
-              <p className="p-4 text-[13px] text-gray-400 leading-relaxed">{t.libPickOne}</p>
+              <p className="flex-1 flex items-center justify-center p-8 text-[13px] text-gray-400 text-center max-w-md mx-auto leading-relaxed">
+                {t.libPickOne}
+              </p>
             )}
             {note && (
-              <p className="px-3 py-2 border-t text-[11px] text-blue-700 bg-gray-50">{note}</p>
+              <p className="px-6 py-2 border-t text-[11px] text-blue-700 bg-white">{note}</p>
             )}
           </aside>
         </div>
+
+        {making && (
+          <SymbolMaker
+            t={t}
+            lang={lang}
+            theme={theme}
+            kind={kind}
+            selection={selection}
+            editing={editing}
+            onSaved={saved => {
+              setMaking(false);
+              setEditing(null);
+              setKind(saved.kind);
+              setPicked(`office:${saved.id}`);
+              setNote(t.libSaved(saved.name));
+            }}
+            onClose={() => { setMaking(false); setEditing(null); }}
+          />
+        )}
       </div>
     </div>,
     document.body,

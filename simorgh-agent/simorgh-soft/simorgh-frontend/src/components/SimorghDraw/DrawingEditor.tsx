@@ -2010,6 +2010,7 @@ export const DrawingEditor: React.FC<Props> = ({
               lang={lang}
               theme={themeId}
               kind={sheet?.kind}
+              selection={picked}
               onImport={importSymbol}
               onClose={() => setShowLibrary(false)}
             />

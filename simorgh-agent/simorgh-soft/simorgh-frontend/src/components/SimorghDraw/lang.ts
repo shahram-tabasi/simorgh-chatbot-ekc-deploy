@@ -102,6 +102,15 @@ export interface Strings {
   libAsBlock: string; libPickOne: string; libDoubleClick: string;
   libNothingIn: (name: string) => string;
   libPlaced: (name: string) => string;
+  // The office's own symbols
+  libNew: string; libNewNote: string; libEdit: string; libDelete: string;
+  libFromSelection: string; libFromSelectionNote: string; libNoSelection: string;
+  libName: string; libGroup: string; libWhichLibrary: string; libGeometry: string;
+  libTerminalsTitle: string; libTerminalsNote: string; libAddTerminal: string;
+  libSave: string; libSaving: string; libSaved: (name: string) => string;
+  libPoints: (n: number) => string;
+  libDeleteAsk: (name: string) => string;
+  libNeedsName: string; libNeedsArt: string; libOfficeOnly: string;
 
   // Light or dark
   themeLight: string; themeDark: string;
@@ -264,6 +273,28 @@ const EN: Strings = {
   libDoubleClick: 'double-click to place',
   libNothingIn: name => `There is no geometry in ${name}`,
   libPlaced: name => `${name} placed as a block — drag it where it belongs`,
+  libNew: 'New symbol',
+  libNewNote: 'Add a symbol to this office\u2019s own library — kept on the server, not in this browser',
+  libEdit: 'Edit',
+  libDelete: 'Delete',
+  libFromSelection: 'What is selected on the sheet',
+  libFromSelectionNote: 'Take the geometry from what you have picked on the drawing',
+  libNoSelection: 'Nothing is selected on the sheet. Pick the geometry first, then come back.',
+  libName: 'Name',
+  libGroup: 'Shelf',
+  libWhichLibrary: 'Library',
+  libGeometry: 'Geometry',
+  libTerminalsTitle: 'Connection points',
+  libTerminalsNote: 'Click the drawing to put a point where a wire may land, and give it the name the device is marked with — A1, 13, I0.0. A symbol with none can be placed but nothing can be wired to it.',
+  libAddTerminal: 'Click the preview to add one',
+  libSave: 'Save to the library',
+  libSaving: 'Saving…',
+  libSaved: name => `${name} is in the library`,
+  libPoints: n => `${n} connection point${n === 1 ? '' : 's'}`,
+  libDeleteAsk: name => `Delete ${name} from the office library? Drawings that already use it keep their copy.`,
+  libNeedsName: 'It needs a name.',
+  libNeedsArt: 'It needs some geometry — choose a file or pick something on the sheet.',
+  libOfficeOnly: 'Only symbols this office added can be changed here. The built-in ones stay as they are.',
 
   themeLight: 'Light', themeDark: 'Dark',
 
@@ -464,6 +495,28 @@ const FA: Strings = {
   libDoubleClick: 'دابل‌کلیک برای گذاشتن',
   libNothingIn: name => `در ${name} هندسه‌ای نیست`,
   libPlaced: name => `${name} به‌صورت بلاک گذاشته شد — آن را به جای خودش بکشید`,
+  libNew: 'سیمبل جدید',
+  libNewNote: 'یک سیمبل به کتابخانه‌ی خودِ شرکت اضافه کنید — روی سرور ذخیره می‌شود، نه در این مرورگر',
+  libEdit: 'ویرایش',
+  libDelete: 'حذف',
+  libFromSelection: 'آنچه روی صفحه انتخاب شده',
+  libFromSelectionNote: 'هندسه را از چیزی که روی نقشه انتخاب کرده‌اید بردار',
+  libNoSelection: 'چیزی روی صفحه انتخاب نشده. اول هندسه را انتخاب کنید و برگردید.',
+  libName: 'نام',
+  libGroup: 'قفسه',
+  libWhichLibrary: 'کتابخانه',
+  libGeometry: 'هندسه',
+  libTerminalsTitle: 'نقاط اتصال',
+  libTerminalsNote: 'روی نقشه کلیک کنید تا نقطه‌ای بگذارید که سیم به آن می‌نشیند، و همان نامی را بدهید که روی خود دستگاه نوشته شده — A1، 13، I0.0. سیمبلی که نقطه‌ی اتصال ندارد گذاشته می‌شود ولی چیزی به آن وصل نمی‌شود.',
+  libAddTerminal: 'برای افزودن، روی پیش‌نمایش کلیک کنید',
+  libSave: 'ذخیره در کتابخانه',
+  libSaving: 'در حال ذخیره…',
+  libSaved: name => `${name} در کتابخانه ثبت شد`,
+  libPoints: n => `${n} نقطه‌ی اتصال`,
+  libDeleteAsk: name => `${name} از کتابخانه‌ی شرکت حذف شود؟ نقشه‌هایی که از آن استفاده کرده‌اند نسخه‌ی خودشان را نگه می‌دارند.`,
+  libNeedsName: 'نام لازم دارد.',
+  libNeedsArt: 'هندسه لازم دارد — یک فایل انتخاب کنید یا چیزی روی صفحه انتخاب کنید.',
+  libOfficeOnly: 'فقط سیمبل‌هایی که خودِ شرکت اضافه کرده اینجا قابل تغییرند. سیمبل‌های داخلی دست‌نخورده می‌مانند.',
 
   themeLight: 'روشن', themeDark: 'تیره',
 
@@ -665,6 +718,28 @@ const TR: Strings = {
   libDoubleClick: 'yerleştirmek için çift tık',
   libNothingIn: name => `${name} içinde geometri yok`,
   libPlaced: name => `${name} blok olarak yerleşti — yerine sürükleyin`,
+  libNew: 'Yeni sembol',
+  libNewNote: 'Bu ofisin kendi kitaplığına bir sembol ekleyin — tarayıcıda değil, sunucuda saklanır',
+  libEdit: 'Düzenle',
+  libDelete: 'Sil',
+  libFromSelection: 'Sayfada seçili olan',
+  libFromSelectionNote: 'Geometriyi çizimde seçtiğiniz şeyden al',
+  libNoSelection: 'Sayfada hiçbir şey seçili değil. Önce geometriyi seçin, sonra geri gelin.',
+  libName: 'Ad',
+  libGroup: 'Raf',
+  libWhichLibrary: 'Kitaplık',
+  libGeometry: 'Geometri',
+  libTerminalsTitle: 'Bağlantı noktaları',
+  libTerminalsNote: 'Bir telin ineceği noktayı koymak için çizime tıklayın ve cihazın üzerindeki adı verin — A1, 13, I0.0. Bağlantı noktası olmayan bir sembol yerleştirilebilir ama ona hiçbir şey bağlanamaz.',
+  libAddTerminal: 'Eklemek için önizlemeye tıklayın',
+  libSave: 'Kitaplığa kaydet',
+  libSaving: 'Kaydediliyor…',
+  libSaved: name => `${name} kitaplıkta`,
+  libPoints: n => `${n} bağlantı noktası`,
+  libDeleteAsk: name => `${name} ofis kitaplığından silinsin mi? Onu kullanan çizimler kendi kopyasını korur.`,
+  libNeedsName: 'Bir ada ihtiyacı var.',
+  libNeedsArt: 'Biraz geometriye ihtiyacı var — bir dosya seçin ya da sayfadan bir şey seçin.',
+  libOfficeOnly: 'Burada yalnızca bu ofisin eklediği semboller değiştirilebilir. Yerleşik olanlar olduğu gibi kalır.',
 
   themeLight: 'Açık', themeDark: 'Koyu',
 

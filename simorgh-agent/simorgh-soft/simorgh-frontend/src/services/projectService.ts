@@ -128,6 +128,66 @@ export interface PackSymbol {
   title?: string;
 }
 
+// ── The office's own symbol library ─────────────────────────────────────────
+// Kept on the server, not in the browser. A library an office builds up over
+// years does not belong in a cache that clearing site data erases and that the
+// draughtsman at the next desk cannot see.
+
+export interface OfficeSymbol {
+  /** What a drawing and the assistant name it by. Unique, never reassigned. */
+  id: string;
+  name: string;
+  kind: 'sld' | 'wd' | 'old';
+  group: string;
+  /** Markup with no `<svg>` around it, like every other symbol source. */
+  art: string;
+  width: number;
+  height: number;
+  /** Where a wire may land on it, and what each point is called. */
+  terminals: { x: number; y: number; name: string }[];
+  changedOn?: string;
+}
+
+export const symbolLibraryService = {
+  /**
+   * Everything the office has added.
+   *
+   * Never throws: the built-in libraries are on this machine, and a drawing
+   * must still open when the server is unreachable. An empty list is the
+   * honest answer to "what has the office added" when nobody can be asked.
+   */
+  async all(): Promise<OfficeSymbol[]> {
+    try {
+      const r = await fetch(`${API_BASE_URL}/symbols`);
+      if (!r.ok) return [];
+      return (await r.json()).symbols ?? [];
+    } catch {
+      return [];
+    }
+  },
+
+  /** Adds or replaces one. Throws, because saving is something a user asked for. */
+  async save(symbol: OfficeSymbol): Promise<OfficeSymbol> {
+    const r = await fetch(`${API_BASE_URL}/symbols/${encodeURIComponent(symbol.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(symbol),
+    });
+    if (!r.ok) {
+      const said = await r.json().catch(() => ({}));
+      throw new Error(said.error || 'The symbol could not be saved');
+    }
+    return (await r.json()).symbol;
+  },
+
+  async remove(id: string): Promise<void> {
+    const r = await fetch(`${API_BASE_URL}/symbols/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (!r.ok) throw new Error('The symbol could not be deleted');
+  },
+};
+
 export const eplanSymbolService = {
   async schema(): Promise<any> {
     const r = await fetch(`${API_BASE_URL}/eplan-symbols/schema`);

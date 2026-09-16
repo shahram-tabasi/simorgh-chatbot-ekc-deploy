@@ -28,12 +28,20 @@ import { CELL, IEC_SYMBOLS, SymbolId, drawIecSymbol, symbolHeight } from '../iec
 import { LibraryKind, defaultGroup, readKind } from './symbolLibraries';
 import { terminalMarks } from './terminals';
 import { wdItems } from './wdSymbols';
+import { officeItems } from './officeSymbols';
 
 export interface LibraryItem {
   key: string;
   name: string;
-  /** Where it came from, for the badge and the grouping. */
-  source: 'IEC' | 'Pack' | 'File';
+  /**
+   * Where it came from, for the badge and the grouping.
+   *
+   *   IEC     built in — the single-line legend and the wiring-diagram set
+   *   Office  added by this office and kept on the server
+   *   Pack    a DXF pack loaded into this browser
+   *   File    read off this computer for one drawing, kept nowhere
+   */
+  source: 'IEC' | 'Office' | 'Pack' | 'File';
   /**
    * Which of the three libraries it belongs to — single line, wiring diagram
    * or layout. A symbol drawn for one is wrong on the others, so nothing that
@@ -147,7 +155,7 @@ export const packItems = (packs: DxfSymbol[]): LibraryItem[] => packs.map(p => (
 
 /** Everything in the library right now, the office's own pack included. */
 export const libraryItems = (): LibraryItem[] =>
-  [...iecItems(), ...wdItems(), ...packItems(loadDxfSymbols())];
+  [...iecItems(), ...wdItems(), ...officeItems(), ...packItems(loadDxfSymbols())];
 
 // ── The assistant's vocabulary ─────────────────────────────────────────────
 

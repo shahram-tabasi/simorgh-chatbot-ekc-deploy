@@ -19,6 +19,7 @@ import { registerEplanRoutes } from './eplanSend.js';
 import { registerDrawAssistRoutes } from './drawAssist.js';
 import { registerDocumentRoutes } from './documents.js';
 import { registerPlotframeFieldRoutes } from './plotframeFields.js';
+import { registerSymbolLibraryRoutes } from './symbolLibrary.js';
 import {
   ensureHistoryIndexes, keepVersion, registerProjectHistoryRoutes,
 } from './projectHistory.js';
@@ -480,6 +481,10 @@ registerPlotframeFieldRoutes(app, () => db);
 // Every version of every project, so a bad save has a yesterday to go
 // back to. See projectHistory.js.
 registerProjectHistoryRoutes(app, () => db);
+
+// The office's own symbols. In Mongo rather than the browser's cache, so the
+// library is one library and it is in the nightly dump.
+const symbolLibrary = registerSymbolLibraryRoutes(app, () => db);
 
 app.get('/api/health', async (req, res) => {
   try {
@@ -1777,6 +1782,7 @@ async function startServer() {
   await connectToDatabase();
   await ensureProjectIndexes();
   await ensureHistoryIndexes(db);
+  await symbolLibrary.ensureIndexes();
 
   // Try to connect to SQL Server on startup (non-blocking)
   connectToSqlServer().catch(err => {
