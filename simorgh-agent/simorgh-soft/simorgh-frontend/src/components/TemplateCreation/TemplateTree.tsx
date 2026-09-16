@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { foldedPath } from '../../utils/templateFamilies';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ChevronDownIcon, ChevronRightIcon, WrenchIcon, XIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ClipboardPasteIcon, BanIcon, ChevronDownIcon, ChevronRightIcon, WrenchIcon, XIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
 import { findTemplateUsage, UsageReport } from '../../utils/cascadeDelete';
 import { TEMPLATE_FAMILIES, groupByFamily, hasFamilies } from '../../utils/templateFamilies';
@@ -61,6 +61,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     addTemplate,
     deleteTemplate,
     setTemplateMechanical,
+    moveTemplate,
   } = useProject();
 
   // Pending template deletion — confirmed through the cascade dialog, which
@@ -81,8 +82,24 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   });
   // The hierarchical wizard replaces the old "just a name" modal — we keep
   // a separate flag so the rest of the file doesn't have to change.
-  const [wizard, setWizard] = useState<
-    { tier: 'LV' | 'MV' | 'HV'; family: string | null } | null>(null);
+  const [wizard, setWizard] = useState<{
+    tier: 'LV' | 'MV' | 'HV';
+    family: string | null;
+    /** Set when the wizard was opened by a paste rather than by Create. */
+    startFrom?: TemplateItem | null;
+    pasteMode?: 'copy' | 'move';
+  } | null>(null);
+
+  // What was copied or cut, kept until it is pasted or replaced.
+  //
+  // A template carries the property columns of its own tier — CB ORDER and
+  // CONTACTOR. ORDER on LV, VCB OR VC/FUSE on MV — so a LV template pasted
+  // into MV would arrive with parts filed under columns that tier has not
+  // got. Between the sections of one tier the columns are the same, so OFW
+  // to FIX is a real paste; between tiers it is refused, and the menu says
+  // so rather than leaving somebody to wonder why nothing happened.
+  const [clip, setClip] = useState<
+    { template: TemplateItem; mode: 'copy' | 'cut' } | null>(null);
   // The mechanical answers being edited on an existing template. Held here
   // rather than written straight through, so Cancel means cancel.
   const [mechEdit, setMechEdit] = useState<
@@ -157,13 +174,40 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     setTemplateDeleteTarget(null);
   };
 
+  const templateById = (id: string | null): TemplateItem | undefined => {
+    if (!id) return undefined;
+    const all = [...safeTemplates.LV, ...safeTemplates.MV, ...safeTemplates.HV];
+    return all.find((t: TemplateItem) => t.id === id);
+  };
+
+  /** Take the template the menu was opened on, to be pasted somewhere. */
+  const handleClip = (mode: 'copy' | 'cut') => {
+    const template = templateById(contextMenu.templateId);
+    setContextMenu({ ...contextMenu, visible: false });
+    if (template) setClip({ template, mode });
+  };
+
+  /**
+   * Paste into a section: the wizard opens on it with the copied template as
+   * its base, so its path and its name can be settled before anything is
+   * written. A cut is a move — the template keeps its id, and the device rows
+   * built on it stay attached.
+   */
+  const handlePaste = (family: string | null) => {
+    if (!clip) return;
+    setContextMenu({ ...contextMenu, visible: false });
+    setWizard({
+      tier: clip.template.type,
+      family,
+      startFrom: clip.template,
+      pasteMode: clip.mode === 'cut' ? 'move' : 'copy',
+    });
+  };
+
   /** Open the mechanical questions on the template the menu was opened on. */
   const handleEditMechanical = () => {
-    const id = contextMenu.templateId;
+    const template = templateById(contextMenu.templateId);
     setContextMenu({ ...contextMenu, visible: false });
-    if (!id) return;
-    const all = [...safeTemplates.LV, ...safeTemplates.MV, ...safeTemplates.HV];
-    const template = all.find((t: TemplateItem) => t.id === id);
     if (template) setMechEdit({ template, value: { ...(template.mechanical ?? {}) } });
   };
 
@@ -385,6 +429,43 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               Create Template
             </button>
           )}
+          {/* Paste — offered on the tier, on a section, and on a template,
+              because all three name a place to put one. Same tier only. */}
+          {clip && contextMenu.nodeType === clip.template.type && (
+            contextMenu.family || (TEMPLATE_FAMILIES[contextMenu.nodeType] ?? []).length === 0 ? (
+              <button
+                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                onClick={() => handlePaste(contextMenu.family)}
+                title={`${clip.mode === 'cut' ? 'Move' : 'Paste a copy of'} ${clip.template.name} here`}
+              >
+                <ClipboardPasteIcon className="w-4 h-4 mr-2" />
+                {clip.mode === 'cut' ? 'Move' : 'Paste'} {clip.template.name}
+              </button>
+            ) : (
+              (TEMPLATE_FAMILIES[contextMenu.nodeType] ?? []).map(family => (
+                <button
+                  key={`paste-${family.id}`}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                  onClick={() => handlePaste(family.id)}
+                >
+                  <ClipboardPasteIcon className="w-4 h-4 mr-2" />
+                  {clip.mode === 'cut' ? 'Move' : 'Paste'} into {family.label}
+                </button>
+              ))
+            )
+          )}
+          {clip && contextMenu.nodeType && contextMenu.nodeType !== clip.template.type && (
+            <div
+              className="px-4 py-2 text-xs text-gray-400 flex items-start gap-2 cursor-not-allowed"
+              title={`A ${clip.template.type} template's property columns are not ${contextMenu.nodeType}'s`}
+            >
+              <BanIcon className="w-4 h-4 shrink-0 mt-px" />
+              <span>
+                Can’t paste a {clip.template.type} template into {contextMenu.nodeType} —
+                they do not share property columns.
+              </span>
+            </div>
+          )}
           {contextMenu.templateId && (
             <>
               <button
@@ -394,11 +475,18 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                 <WrenchIcon className="w-4 h-4 mr-2" />
                 Mechanical…
               </button>
-              <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center">
+              <button
+                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                onClick={() => handleClip('copy')}
+              >
                 <CopyIcon className="w-4 h-4 mr-2" />
                 Copy
               </button>
-              <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center">
+              <button
+                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                onClick={() => handleClip('cut')}
+                title="Take it to file somewhere else — it keeps its id, so the device rows built on it stay attached"
+              >
                 <ScissorsIcon className="w-4 h-4 mr-2" />
                 Cut
               </button>
@@ -433,9 +521,19 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           tier={wizard.tier}
           family={wizard.family}
           existing={safeTemplates[wizard.tier]}
+          startFrom={wizard.startFrom ?? null}
+          pasteMode={wizard.pasteMode ?? 'copy'}
           onCancel={() => setWizard(null)}
           onSubmit={({ name, hierarchy, useSimorghDraw, mechanical, copyFromId }) => {
-            addTemplate(wizard.tier, name, hierarchy, copyFromId, useSimorghDraw, mechanical);
+            if (wizard.pasteMode === 'move' && wizard.startFrom) {
+              // A move is the same template, filed elsewhere — not a new one.
+              moveTemplate(wizard.startFrom.id, hierarchy, name, useSimorghDraw);
+              // Answers edited on the way through are the template's now.
+              setTemplateMechanical(wizard.startFrom.id, mechanical);
+              setClip(null);
+            } else {
+              addTemplate(wizard.tier, name, hierarchy, copyFromId, useSimorghDraw, mechanical);
+            }
             const newExpanded = new Set(expandedNodes);
             newExpanded.add(wizard.tier);
             // The new template's own section is opened too, so it is on screen

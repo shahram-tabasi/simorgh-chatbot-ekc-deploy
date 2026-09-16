@@ -17,6 +17,8 @@ interface ProjectContextType {
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
   setTemplateMechanical: (templateId: string, mechanical: TemplateMechanical) => void;
+  /** Re-file a template under a new path, keeping its id and its parts. */
+  moveTemplate: (templateId: string, hierarchy: TemplateHierarchy, name?: string, useSimorghDraw?: boolean) => void;
   deleteTemplate: (templateId: string) => void;
   addDevice: (device: Partial<DeviceItem>) => void;
   updateDevice: (deviceId: string, data: Partial<DeviceItem>) => void;
@@ -391,6 +393,32 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     });
   };
 
+  // Moving a template keeps its id, and that is the whole point: the device
+  // rows built on it point at that id, so re-filing it under another path
+  // leaves every row it is used by exactly as it was. A move done as a copy
+  // and a delete would take those rows with it.
+  const moveTemplate = (
+    templateId: string, hierarchy: TemplateHierarchy, name?: string,
+    useSimorghDraw?: boolean,
+  ) => {
+    if (!guardEdit()) return;
+    setProjectData(prev => {
+      const updatedTemplates = { ...prev.templates };
+      for (const type of ['LV', 'MV', 'HV'] as const) {
+        updatedTemplates[type] = updatedTemplates[type].map(template =>
+          template.id === templateId
+            ? {
+                ...template, hierarchy,
+                ...(name?.trim() ? { name: name.trim() } : {}),
+                ...(useSimorghDraw !== undefined ? { useSimorghDraw } : {}),
+              }
+            : template
+        );
+      }
+      return { ...prev, templates: updatedTemplates, changedOn: new Date().toISOString() };
+    });
+  };
+
   // Deleting a template also clears the device rows that were built on it —
   // a row pointing at a template that no longer exists would keep a name in
   // the grid while all of its property columns come out blank.
@@ -658,6 +686,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         addTemplate,
         updateTemplate,
         setTemplateMechanical,
+        moveTemplate,
         deleteTemplate,
         addDevice,
         updateDevice,

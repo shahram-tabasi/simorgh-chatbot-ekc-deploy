@@ -38,7 +38,7 @@ import { XIcon, ChevronRightIcon, SparklesIcon, CheckIcon } from 'lucide-react';
 import {
   TemplateItem, TemplateHierarchy, TemplateLeafKind, TemplateMechanical,
 } from '../../types/project';
-import { TEMPLATE_FAMILIES, foldedPath } from '../../utils/templateFamilies';
+import { TEMPLATE_FAMILIES, foldedPath, familyOf } from '../../utils/templateFamilies';
 import { MechanicalQuestions } from './MechanicalQuestions';
 
 const LV_ROOTS       = ['S8', '8PT'] as const;
@@ -110,6 +110,64 @@ function allowedLeafKinds(
   return [];
 }
 
+/**
+ * A stored path read back into the steps that produced it.
+ *
+ * Used when a template is pasted: the copy starts where its original sits, so
+ * only what actually differs — usually the name — has to be typed. A node the
+ * step does not offer is dropped rather than forced in, which is what happens
+ * to a path pasted into a section that does not file it: the person picks the
+ * new one, because only they know which group of the new section it belongs in.
+ */
+function seedPath(
+  tier: 'LV' | 'MV' | 'HV',
+  family: string | null,
+  path: readonly string[],
+): {
+  root: string | null; switchNode: string | null; group: string | null;
+  feeder: string | null; cellType: string | null; cellSub: string | null;
+} {
+  const empty = {
+    root: null, switchNode: null, group: null,
+    feeder: null, cellType: null, cellSub: null,
+  };
+  const at = (i: number) => String(path[i] ?? '').toUpperCase();
+  const pick = (value: string, options: readonly string[]) =>
+    options.find(o => o.toUpperCase() === value) ?? null;
+
+  if (tier === 'LV') {
+    if (family === 'OFW') {
+      const switchNode = pick(at(1), LV_OFW_SWITCHES);
+      return {
+        ...empty,
+        root: pick(at(0), LV_ROOTS),
+        switchNode,
+        feeder: switchNode && LV_OFW_FEEDER_SWITCHES.includes(switchNode)
+          ? pick(at(2), LV_FCB_FEEDERS) : null,
+      };
+    }
+    if (family === 'FIX') {
+      const group = pick(at(1), LV_FIX_GROUPS);
+      return {
+        ...empty,
+        root: pick(at(0), LV_ROOTS),
+        group,
+        feeder: group && group !== 'MARSHALING' ? pick(at(2), LV_FIX_FEEDERS) : null,
+      };
+    }
+    return empty;
+  }
+  if (tier === 'MV') {
+    const cellType = pick(at(0), MV_CELL_TYPES);
+    return {
+      ...empty,
+      cellType,
+      cellSub: cellType ? pick(at(1), cellSubOptions(cellType)) : null,
+    };
+  }
+  return empty;
+}
+
 function scoreSimilarity(
   candidate: TemplateItem,
   draft: TemplateHierarchy,
@@ -138,6 +196,18 @@ interface Props {
   family?: string | null;
   /** All existing templates for this tier (used for suggestions). */
   existing: TemplateItem[];
+  /**
+   * The template being pasted, if this was opened by a paste.
+   *
+   * Its parts, its parameters and its mechanical answers come with it, and
+   * its path comes too when the section it is being pasted into is the one
+   * it was already filed in. Only a template of this tier can ever arrive
+   * here — a LV template's columns are not a MV template's, so the paste is
+   * refused where it is offered, not here.
+   */
+  startFrom?: TemplateItem | null;
+  /** `move` re-files the template that was cut; `copy` makes a new one. */
+  pasteMode?: 'copy' | 'move';
   onCancel: () => void;
   /** `copyFromId` populated when the user picked an existing template
    *  as the starting point. */
@@ -152,29 +222,46 @@ interface Props {
 }
 
 export const HierarchicalTemplateWizard: React.FC<Props> = ({
-  tier, family: givenFamily = null, existing, onCancel, onSubmit,
+  tier, family: givenFamily = null, existing, startFrom = null,
+  pasteMode = 'copy', onCancel, onSubmit,
 }) => {
+  // Where a pasted template's path can be reused: only when it is being
+  // filed back into the section it already belongs to. A OFW path pasted
+  // into FIX names nodes FIX has not got, so it is not carried over.
+  const seed = seedPath(
+    tier,
+    givenFamily,
+    startFrom && (tier !== 'LV' || familyOf('LV', startFrom.hierarchy)?.id === givenFamily)
+      ? foldedPath(startFrom.hierarchy?.path)
+      : [],
+  );
   // Path nodes — present iff the tier exposes that step.
   const [family,  setFamily]  = useState<string | null>(givenFamily); // OFW | FIX (LV only)
   const askFamily = tier === 'LV' && !givenFamily;
   const section = TEMPLATE_FAMILIES[tier]?.find(f => f.id === family) ?? null;
-  const [root,    setRoot]    = useState<string | null>(null);   // S8 | 8PT (LV only, both families)
-  const [switch_, setSwitch]  = useState<string | null>(null);   // OFW only
-  const [group,   setGroup]   = useState<string | null>(null);   // FIX only
-  const [feeder,  setFeeder]  = useState<string | null>(null);   // OFW/FCBn or FIX non-Marshaling
-  const [cellType, setCellType] = useState<string | null>(null); // MV only
-  const [cellSub,  setCellSub]  = useState<string | null>(null); // MV only
-  const [leafKind, setLeafKind] = useState<TemplateLeafKind | null>(null);
-  const [kw, setKw] = useState('');
-  const [currentA, setCurrentA] = useState('');
-  const [name, setName] = useState('');
+  const [root,    setRoot]    = useState<string | null>(seed.root);       // S8 | 8PT (LV only, both families)
+  const [switch_, setSwitch]  = useState<string | null>(seed.switchNode); // OFW only
+  const [group,   setGroup]   = useState<string | null>(seed.group);      // FIX only
+  const [feeder,  setFeeder]  = useState<string | null>(seed.feeder);     // OFW/FCBn or FIX non-Marshaling
+  const [cellType, setCellType] = useState<string | null>(seed.cellType); // MV only
+  const [cellSub,  setCellSub]  = useState<string | null>(seed.cellSub);  // MV only
+  const [leafKind, setLeafKind] = useState<TemplateLeafKind | null>(
+    (startFrom?.hierarchy?.leafKind as TemplateLeafKind | undefined) ?? null);
+  const [kw, setKw] = useState(startFrom?.hierarchy?.params?.kw ?? '');
+  const [currentA, setCurrentA] = useState(startFrom?.hierarchy?.params?.currentA ?? '');
+  // A move keeps the name it had; a copy says it is one, so the tree does not
+  // show two rows that read the same.
+  const [name, setName] = useState(
+    startFrom ? (pasteMode === 'move' ? startFrom.name : `${startFrom.name} copy`) : '');
   // Either way the equipment draws — this only decides whether the extra
   // per-equipment questions (a separate, later piece of work) get asked.
-  const [useSimorghDraw, setUseSimorghDraw] = useState<boolean | null>(null);
+  const [useSimorghDraw, setUseSimorghDraw] = useState<boolean | null>(
+    startFrom?.useSimorghDraw ?? null);
   // The mechanical answers. Never required: a template with none behaves
   // exactly as one made before this step existed, because every fact it
   // would have overruled is read from the columns instead.
-  const [mechanical, setMechanical] = useState<TemplateMechanical>({});
+  const [mechanical, setMechanical] = useState<TemplateMechanical>(
+    { ...(startFrom?.mechanical ?? {}) });
 
   const feederApplies = tier === 'LV' && (
     (family === 'OFW' && !!switch_ && LV_OFW_FEEDER_SWITCHES.includes(switch_)) ||
@@ -384,7 +471,9 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
       },
       useSimorghDraw: !!useSimorghDraw,
       mechanical,
-      copyFromId,
+      // A paste brings the source with it even when the button that started
+      // it was not one of the suggestions.
+      copyFromId: copyFromId ?? startFrom?.id,
     });
   };
 
@@ -399,7 +488,9 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             <SparklesIcon className="w-5 h-5" />
             <h2 className="text-base font-semibold">
-              New {tier} Template{section ? ` — ${section.label}` : ''}
+              {startFrom
+                ? `${pasteMode === 'move' ? 'Move' : 'Paste'} ${tier} Template${section ? ` — ${section.label}` : ''}`
+                : `New ${tier} Template${section ? ` — ${section.label}` : ''}`}
             </h2>
           </div>
           <button onClick={onCancel} className="p-1 rounded hover:bg-white/20">
@@ -411,6 +502,21 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
         <div className="px-5 py-2 border-b bg-gray-50">
           <PathBreadcrumb />
         </div>
+
+        {/* What is being pasted, and what came with it. Said plainly, because
+            the parts arriving with the template are the reason to paste it
+            and are the one thing the steps below never show. */}
+        {startFrom && (
+          <div className="px-5 py-2 border-b bg-indigo-50/70 text-[11px] text-indigo-900">
+            {pasteMode === 'move' ? 'Moving' : 'Copying'} <span className="font-semibold">{startFrom.name}</span>
+            {' — its parts, parameters and mechanical answers come with it.'}
+            {tier === 'LV' && !seed.root && (
+              <span className="block text-indigo-700">
+                Its path is not one this section files, so pick the new one below.
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
@@ -609,6 +715,10 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               <div className="mt-2 rounded border border-gray-200 p-3">
                 <MechanicalQuestions
                   tier={tier}
+                  /* A pasted template has columns to read; a brand-new one
+                     has none yet, and the panel says so rather than
+                     reporting every fact as absent. */
+                  template={startFrom ?? undefined}
                   value={mechanical}
                   onChange={setMechanical}
                   framed={false}
@@ -662,9 +772,15 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             onClick={() => handleCreate()}
             disabled={!canCreate}
             className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
-            title={canCreate ? 'Create a fresh template at this path' : 'Pick a path and enter a name first'}
+            title={canCreate
+              ? (startFrom
+                  ? (pasteMode === 'move' ? 'File this template here' : 'Paste a copy of it here')
+                  : 'Create a fresh template at this path')
+              : 'Pick a path and enter a name first'}
           >
-            Create empty template
+            {startFrom
+              ? (pasteMode === 'move' ? 'Move here' : 'Paste a copy here')
+              : 'Create empty template'}
           </button>
         </div>
       </div>
