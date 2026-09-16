@@ -36,10 +36,12 @@
 //   the same information and survives being opened by anything.
 
 import * as XLSX from 'xlsx-js-style';
-import { ProjectData, Equipment, DeviceTableRow } from '../types/project';
+import { ProjectData, Equipment, TemplateItem } from '../types/project';
 import { buildPanelLayout, PanelLayout, parseSize } from './panelLayout';
 import { buildMechanicalItems, MECHANICAL_HEADERS } from './mechanicalItems';
-import { templateParts } from './tierEquipmentMatrix';
+import {
+  CellEstimate, MechanicalCellContext, catalogFor, cellTypeOf, estimateFor,
+} from './mechanical';
 
 // ── The palette, as the original mixes it ──────────────────────────────────
 const INK = '0F172A';
@@ -228,10 +230,14 @@ class Grid {
 
 /** One part on one cell — the row both the summary and the matrix count. */
 export interface ReportPart {
-  /** The template property it sits under: "Circuit breaker", "Contactor"… */
+  /** The basket of the estimate sheet that emitted it. */
   property: string;
+  /** The office's own HR code. */
+  hr: string;
+  /** The manufacturer's order number. */
   partNumber: string;
-  manufacturer: string;
+  /** The EKC code. */
+  ekc: string;
   description: string;
   quantity: number;
 }
@@ -255,6 +261,12 @@ export interface ReportCell {
   parts: ReportPart[];
   /** Everything on this cell, added up. */
   items: number;
+  /** The cell type the estimate sheet selects a basket by. */
+  cellType: string;
+  /** What the sheet was read with — the report shows these as the inputs. */
+  context: MechanicalCellContext;
+  /** Why this cell produced nothing, when it produced nothing. */
+  note?: string;
 }
 
 /**
@@ -268,36 +280,34 @@ export function familyOf(description: string): string {
   return head.length === 0 ? 'Other' : head;
 }
 
-/** The parts on the template behind one feeder line. */
-function partsOfRow(row: DeviceTableRow, templates: Map<string, unknown>): ReportPart[] {
-  const template = templates.get(text(row.templateId));
-  if (!template) return [];
-  const out: ReportPart[] = [];
-  for (const [property, parts] of Object.entries(templateParts(template))) {
-    for (const part of parts as Record<string, unknown>[]) {
-      const full = (part.fullData ?? {}) as Record<string, unknown>;
-      out.push({
-        property,
-        partNumber: text(part.partNumber),
-        // The override is the office's own decision about who supplies it and
-        // beats what the parts library says — the same precedence the template
-        // screen shows.
-        manufacturer: text(part.manufacturerOverride) || text(full.Manufacturer),
-        description: text(full.Designation3) || text(part.label),
-        quantity: Number(part.quantity) > 0 ? Number(part.quantity) : 1,
-      });
-    }
-  }
-  return out;
+/**
+ * What one feeder needs, from the estimate sheet its panel type has.
+ *
+ * Not the parts on its template: those are the electrical devices the feeder
+ * switches, and a mechanical report is about the sheet metal, the insulators
+ * and the contact fingers around them. The sheet decides those from the cell
+ * type and a handful of facts — see utils/mechanical/catalog.ts.
+ */
+function partsOfRow(estimate: CellEstimate): ReportPart[] {
+  return estimate.equipment.map(e => ({
+    property: e.group,
+    hr: e.hr,
+    partNumber: e.manufacture,
+    ekc: e.ekc,
+    description: e.description,
+    quantity: e.quantity,
+  }));
 }
 
 /** The switchgear as the report sees it. */
 export function readCells(data: ProjectData, equipment: Equipment): ReportCell[] {
-  const templates = new Map<string, unknown>(
-    (data.templates?.[equipment.type] ?? []).map((t: { id: string }) => [text(t.id), t]),
+  const templates = new Map<string, TemplateItem>(
+    (data.templates?.[equipment.type] ?? []).map((t: TemplateItem) => [text(t.id), t]),
   );
   return (equipment.devices ?? []).map((row, i) => {
-    const parts = partsOfRow(row, templates);
+    const template = templates.get(text(row.templateId));
+    const estimate = estimateFor(data, equipment, row, template);
+    const parts = partsOfRow(estimate);
     return {
       index: i + 1,
       feederNo: text(row.feederNo) || String(i + 1),
@@ -314,6 +324,9 @@ export function readCells(data: ProjectData, equipment: Equipment): ReportCell[]
       sfdHfd: text(row.sfdHfd),
       parts,
       items: parts.reduce((n, p) => n + p.quantity, 0),
+      cellType: cellTypeOf(template),
+      context: estimate.context,
+      note: estimate.note,
     };
   });
 }
@@ -330,6 +343,10 @@ interface Facts {
   totalQty: number;
   distinctParts: number;
   cellWidthMm: number;
+  /** The estimate sheet this switchgear was read with, when one covers it. */
+  sheet: string;
+  /** Why nothing was produced, when nothing was — the first cell's reason. */
+  why?: string;
 }
 
 function gather(data: ProjectData, equipment: Equipment, revision: string): Facts {
@@ -346,8 +363,12 @@ function gather(data: ProjectData, equipment: Equipment, revision: string): Fact
     revision: text(revision) || '-',
     everyPart,
     totalQty: everyPart.reduce((n, p) => n + p.quantity, 0),
-    distinctParts: new Set(everyPart.map(p => p.partNumber || p.description)).size,
+    distinctParts: new Set(everyPart.map(p => p.hr || p.description)).size,
     cellWidthMm: numOf(spec.width),
+    sheet: catalogFor(text(spec.type) || text(spec.panelType))?.panelType ?? '',
+    // Every cell fails for the same reason when the panel type is the problem,
+    // so the first one that has a reason is the one worth reporting.
+    why: everyPart.length === 0 ? cells.find(c => c.note)?.note : undefined,
   };
 }
 
@@ -436,7 +457,9 @@ function overviewSheet(f: Facts): XLSX.WorkSheet {
   kpi(6, 5, 'TOTAL ITEMS', f.totalQty, AMBER);
 
   kpi(9, 1, 'PANEL TYPE', f.panelType, TEAL);
-  kpi(9, 3, 'COLUMNS', f.layout.columns.length, TEAL);
+  // Which sheet the numbers came from. A report whose items are computed has
+  // to say what computed them, or nobody can check it against the sheet.
+  kpi(9, 3, 'ESTIMATE SHEET', f.sheet || 'none', f.sheet ? TEAL : AMBER);
   kpi(9, 5, 'TOTAL WIDTH (mm)', totalWidth || '-', TEAL);
 
   kpi(12, 1, 'CELLS WITH CABLE', withCable, SLATE);
@@ -445,6 +468,9 @@ function overviewSheet(f: Facts): XLSX.WorkSheet {
 
   g.set(15, 1, `Generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
     { size: 8, color: SLATE });
+  if (f.why) {
+    g.band(15, 3, 10, `No items: ${f.why}`, { size: 9, italic: true, color: AMBER });
+  }
 
   // ---- Panel line-up: the cells in the order they stand ------------------
   let r = 17;
@@ -520,11 +546,11 @@ function summarySheet(f: Facts): XLSX.WorkSheet {
   const g = new Grid();
   g.width(0, 2.5);
 
-  g.band(0, 1, 7, 'EQUIPMENT SUMMARY  —  every part, totalled across the switchgear',
+  g.band(0, 1, 8, 'EQUIPMENT SUMMARY  —  every part, totalled across the switchgear',
     { bold: true, size: 14, color: NAVY, v: 'center' });
   g.height(0, 32);
 
-  const headers = ['Family', 'Part number', 'Manufacturer', 'Description', 'Cells', 'Total qty'];
+  const headers = ['Family', 'HR Code', 'Manufacture Code', 'EKC Code', 'Description', 'Cells', 'Total qty'];
   const HEAD = 2;
   headers.forEach((h, i) => g.set(HEAD, 1 + i, h, {
     bold: true, size: 10, color: WHITE, fill: AMBER,
@@ -535,18 +561,19 @@ function summarySheet(f: Facts): XLSX.WorkSheet {
   // Grouped on the part, exactly as the original groups: one row per distinct
   // part, how many cells carry it, how many there are in total.
   const by = new Map<string, {
-    family: string; partNumber: string; manufacturer: string; description: string;
+    family: string; hr: string; partNumber: string; ekc: string; description: string;
     cells: Set<string>; qty: number;
   }>();
   for (const cell of f.cells) {
     for (const p of cell.parts) {
-      const key = `${p.partNumber}|${p.manufacturer}|${p.description}`;
+      const key = `${p.hr}|${p.partNumber}|${p.ekc}|${p.description}`;
       const had = by.get(key);
       if (had) { had.cells.add(cell.feederNo); had.qty += p.quantity; continue; }
       by.set(key, {
         family: familyOf(p.description),
+        hr: p.hr || '-',
         partNumber: p.partNumber || '-',
-        manufacturer: p.manufacturer || '-',
+        ekc: p.ekc || '-',
         description: p.description || '-',
         cells: new Set([cell.feederNo]),
         qty: p.quantity,
@@ -561,29 +588,50 @@ function summarySheet(f: Facts): XLSX.WorkSheet {
     const fill = r % 2 === 0 ? AMBER_FAINT : WHITE;
     const line: Look = { size: 9.5, h: 'center', v: 'center', fill, box: 'thin', boxColor: HAIR };
     g.set(r, 1, item.family, line);
-    g.set(r, 2, item.partNumber, line);
-    g.set(r, 3, item.manufacturer, line);
-    g.set(r, 4, item.description, { ...line, h: 'left' });
-    g.set(r, 5, item.cells.size, line);
-    g.set(r, 6, item.qty, { ...line, fill: bar(AMBER, item.qty / most), bold: true });
+    g.set(r, 2, item.hr, line);
+    g.set(r, 3, item.partNumber, line);
+    g.set(r, 4, item.ekc, line);
+    g.set(r, 5, item.description, { ...line, h: 'left' });
+    g.set(r, 6, item.cells.size, line);
+    g.set(r, 7, item.qty, { ...line, fill: bar(AMBER, item.qty / most), bold: true });
     g.height(r, 20);
     r++;
   }
 
   if (summary.length > 0) {
-    g.band(r, 1, 5, 'TOTAL',
+    g.band(r, 1, 6, 'TOTAL',
       { bold: true, h: 'right', fill: NAVY_SOFT, top: 'double', topColor: NAVY });
-    g.set(r, 6, f.totalQty,
+    g.set(r, 7, f.totalQty,
       { bold: true, h: 'center', fill: NAVY_SOFT, top: 'double', topColor: NAVY });
     g.height(r, 24);
-    g.autoFilter(HEAD, 1, r - 1, 6);
+    g.autoFilter(HEAD, 1, r - 1, 7);
   } else {
-    g.band(r, 1, 6, 'No parts on the templates behind these feeders.',
+    g.band(r, 1, 7, f.why || 'No estimate sheet covers these cells.',
       { italic: true, color: AMBER, size: 10 });
   }
 
-  [16, 20, 20, 50, 10, 12].forEach((w, i) => g.width(1 + i, w));
+  [16, 14, 20, 16, 50, 10, 12].forEach((w, i) => g.width(1 + i, w));
   return g.sheet();
+}
+
+/**
+ * The left-hand columns of one cell on the Mechanical Data sheet.
+ *
+ * In one place because they are written twice — once cell by cell, and again
+ * as a merged block when the cell carries more than one part — and two copies
+ * of a column order is how a report ends up with a cable size under "IP".
+ */
+function cellValues(cell: ReportCell, f: Facts): (string | number)[] {
+  const c = cell.context;
+  return [
+    cell.index, cell.feederNo, cell.tag || '-', cell.description || '-',
+    cell.template || '-', cell.cellType || '-', cell.busSection || '-',
+    c.panelWidth ?? (f.cellWidthMm > 0 ? f.cellWidthMm : '-'),
+    c.cbCurrent ?? '-', c.cableSize || '-', c.cbType || '-',
+    c.ptStatus === 'YES' ? 'Yes' : 'No',
+    c.ip != null ? `IP${c.ip}` : '-',
+    c.qc1 ? 'Yes' : 'No', c.qc2 ? 'Yes' : 'No', c.earthSwitch ? 'Yes' : 'No',
+  ];
 }
 
 // ── Sheet 4: Mechanical Data ───────────────────────────────────────────────
@@ -595,8 +643,8 @@ function dataSheet(f: Facts): XLSX.WorkSheet {
   const g = new Grid();
 
   const CELL_COLS = 7;     // 0..6
-  const INPUT_COLS = 6;    // 7..12
-  const ITEM_COLS = 5;     // 13..17
+  const INPUT_COLS = 9;    // 7..15
+  const ITEM_COLS = 6;     // 16..21
   const LAST = CELL_COLS + INPUT_COLS + ITEM_COLS - 1;
 
   g.band(0, 0, LAST, 'MECHANICAL DATA  —  every cell, the inputs it was read with, and the items it produced',
@@ -612,9 +660,13 @@ function dataSheet(f: Facts): XLSX.WorkSheet {
   g.height(1, 20);
 
   const headers = [
-    '#', 'Feeder no.', 'Tag', 'Description', 'Template', 'Bus section', 'Module no.',
-    'Size', 'Rating / power', 'FLC (A)', 'Cable size', 'SFD/HFD', 'Cell width (mm)',
-    'Property', 'Part number', 'Manufacturer', 'Description', 'Qty',
+    // the cell
+    '#', 'Feeder no.', 'Tag', 'Description', 'Template', 'Cell type', 'Bus section',
+    // what the estimate sheet read it with — the same facts the rules test
+    'Panel width (mm)', 'Rated current (A)', 'Cable size', 'CB type', 'VT',
+    'IP', 'QC1', 'QC2', 'Earth switch',
+    // what the sheet produced
+    'Basket', 'HR Code', 'Manufacture Code', 'EKC Code', 'Description', 'Qty',
   ];
   const HEAD = 2;
   headers.forEach((h, i) => {
@@ -638,14 +690,8 @@ function dataSheet(f: Facts): XLSX.WorkSheet {
     for (let k = 0; k < span; k++) {
       const row = start + k;
       if (k === 0) {
-        const cells = [
-          cell.index, cell.feederNo, cell.tag || '-', cell.description || '-',
-          cell.template || '-', cell.busSection || '-', cell.moduleNo || '-',
-          cell.size || '-', cell.ratingPower || '-', cell.flc || '-',
-          cell.cableSize || '-', cell.sfdHfd || '-',
-          f.cellWidthMm > 0 ? f.cellWidthMm : '-',
-        ];
-        cells.forEach((v, c) => g.set(row, c, v, c === 3 ? { ...left, h: 'left' } : left));
+        cellValues(cell, f).forEach((v, c) =>
+          g.set(row, c, v, c === 3 ? { ...left, h: 'left' } : left));
       } else {
         // Left of the divider, a cell speaks once: the remaining rows of its
         // block are blank so the part list reads as belonging to it.
@@ -658,31 +704,32 @@ function dataSheet(f: Facts): XLSX.WorkSheet {
       const divider: Look = { ...item, left: 'medium', leftColor: AMBER };
       if (cell.parts.length > 0) {
         const p = cell.parts[k];
-        g.set(row, 13, p.property || '-', divider);
-        g.set(row, 14, p.partNumber || '-', item);
-        g.set(row, 15, p.manufacturer || '-', item);
-        g.set(row, 16, p.description || '-', { ...item, h: 'left' });
-        g.set(row, 17, p.quantity, item);
+        g.set(row, 16, p.property || '-', divider);
+        g.set(row, 17, p.hr || '-', item);
+        g.set(row, 18, p.partNumber || '-', item);
+        g.set(row, 19, p.ekc || '-', item);
+        g.set(row, 20, p.description || '-', { ...item, h: 'left' });
+        g.set(row, 21, p.quantity, item);
       } else {
-        g.set(row, 13, '-', { ...divider, italic: true, color: AMBER });
-        g.set(row, 14, '-', { ...item, italic: true, color: AMBER });
-        g.set(row, 15, '-', { ...item, italic: true, color: AMBER });
-        g.set(row, 16, 'no parts on this template', { ...item, h: 'left', italic: true, color: AMBER });
-        g.set(row, 17, 0, { ...item, italic: true, color: AMBER });
+        // Why, not just nothing: a cell with no items is either a cell type
+        // the sheet does not carry or a panel type no sheet covers, and the
+        // difference is what somebody has to act on.
+        const told: Look = { ...item, italic: true, color: AMBER };
+        g.set(row, 16, '-', { ...divider, italic: true, color: AMBER });
+        g.set(row, 17, '-', told);
+        g.set(row, 18, '-', told);
+        g.set(row, 19, '-', told);
+        g.set(row, 20, cell.note ?? 'no items', { ...told, h: 'left' });
+        g.set(row, 21, 0, told);
       }
       g.height(row, 19);
     }
 
     if (span > 1) {
       // One cell, one block: the left columns merge down the parts it carries.
+      const values = cellValues(cell, f);
       for (let c = 0; c < CELL_COLS + INPUT_COLS; c++) {
-        g.block(start, c, start + span - 1, c,
-          c === 0 ? cell.index : c === 1 ? cell.feederNo : c === 2 ? (cell.tag || '-')
-          : c === 3 ? (cell.description || '-') : c === 4 ? (cell.template || '-')
-          : c === 5 ? (cell.busSection || '-') : c === 6 ? (cell.moduleNo || '-')
-          : c === 7 ? (cell.size || '-') : c === 8 ? (cell.ratingPower || '-')
-          : c === 9 ? (cell.flc || '-') : c === 10 ? (cell.cableSize || '-')
-          : c === 11 ? (cell.sfdHfd || '-') : (f.cellWidthMm > 0 ? f.cellWidthMm : '-'),
+        g.block(start, c, start + span - 1, c, values[c],
           c === 3 ? { ...left, h: 'left' } : left);
       }
     }
@@ -691,7 +738,7 @@ function dataSheet(f: Facts): XLSX.WorkSheet {
 
   if (f.cells.length > 0) g.autoFilter(HEAD, 0, r - 1, LAST);
 
-  [5, 14, 12, 26, 20, 12, 12, 10, 14, 10, 12, 10, 14, 18, 20, 20, 38, 8]
+  [5, 14, 12, 24, 20, 20, 12, 15, 15, 12, 16, 7, 8, 7, 7, 12, 22, 14, 20, 16, 40, 8]
     .forEach((w, i) => g.width(i, w));
   return g.sheet();
 }
