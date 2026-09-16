@@ -10,6 +10,7 @@ import { useProject } from '../../context/ProjectContext';
 import { withCodeCaseAll } from '../../utils/deviceCodes';
 import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/simarisImport';
 import { ImportPlan, applyPlan, planImport } from '../../utils/deviceImport';
+import { templateMeta } from '../../utils/templateMeta';
 
 // ===== PROPS INTERFACES =====
 interface DeviceTableProps {
@@ -105,7 +106,10 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
         <div className="bg-blue-600 text-white px-6 py-4 rounded-t-lg flex justify-between items-center">
           <div>
             <h2 className="text-xl font-semibold">Template Properties</h2>
-            <p className="text-sm text-blue-100 mt-1">{template.name}</p>
+            <p className="text-sm text-blue-100 mt-1">
+              {template.name}
+              {templateMeta(template) && <span className="ml-2 text-blue-200">· {templateMeta(template)}</span>}
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <span className={`px-3 py-1 rounded-full text-sm font-semibold ${getTypeColor(template.type)}`}>
@@ -1828,7 +1832,17 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                   }}
                 >
                   <CheckIcon className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
-                  {tmpl.name}
+                  {/* The name alone does not tell two templates apart — what
+                      does is the path they were filed at and what they were
+                      sized for. */}
+                  <span className="min-w-0">
+                    <span className="block truncate">{tmpl.name}</span>
+                    {templateMeta(tmpl) && (
+                      <span className="block text-[10px] text-gray-500 truncate">
+                        {templateMeta(tmpl)}
+                      </span>
+                    )}
+                  </span>
                 </button>
               ))}
               <div className="border-t my-1" />
@@ -1957,6 +1971,11 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                 onClick={() => handleAddTemplateToCell(template.id)}
               >
                 {template.name}
+                {templateMeta(template) && (
+                  <span className="block text-[10px] text-gray-500 truncate">
+                    {templateMeta(template)}
+                  </span>
+                )}
               </button>
             ))
           ) : (
@@ -2654,6 +2673,11 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
                 onContextMenu={(e) => handleTemplateContextMenu(e, template.id)}
               >
                 {template.name}
+                {templateMeta(template) && (
+                  <span className="block text-[10px] text-gray-500 truncate">
+                    {templateMeta(template)}
+                  </span>
+                )}
               </div>
             ))}
           </div>

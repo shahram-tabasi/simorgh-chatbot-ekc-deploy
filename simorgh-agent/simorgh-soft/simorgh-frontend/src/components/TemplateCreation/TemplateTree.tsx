@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { foldedPath } from '../../utils/templateFamilies';
+import { templateMeta } from '../../utils/templateMeta';
 import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ClipboardPasteIcon, BanIcon, ChevronDownIcon, ChevronRightIcon, WrenchIcon, XIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
@@ -258,12 +258,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                         onContextMenu={event => handleContextMenu(event, 'LV', template.id, group.family?.id ?? null)}
                       >
                         <span className="text-sm">{template.name}</span>
-                        {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
+                        {templateMeta(template) && (
                           <span className="text-[10px] text-gray-500 truncate">
-                            {foldedPath(template.hierarchy.path).join(' / ')}
-                            {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
-                            {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
-                            {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
+                            {templateMeta(template)}
                           </span>
                         )}
                       </div>
@@ -340,12 +337,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                       onContextMenu={event => handleContextMenu(event, 'MV', template.id)}
                     >
                       <span className="text-sm">{template.name}</span>
-                      {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
+                      {templateMeta(template) && (
                         <span className="text-[10px] text-gray-500 truncate">
-                          {foldedPath(template.hierarchy.path).join(' / ')}
-                          {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
-                          {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
-                          {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
+                          {templateMeta(template)}
                         </span>
                       )}
                     </div>
@@ -381,12 +375,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                       onContextMenu={event => handleContextMenu(event, 'HV', template.id)}
                     >
                       <span className="text-sm">{template.name}</span>
-                      {template.hierarchy?.path && template.hierarchy.path.length > 0 && (
+                      {templateMeta(template) && (
                         <span className="text-[10px] text-gray-500 truncate">
-                          {foldedPath(template.hierarchy.path).join(' / ')}
-                          {template.hierarchy.leafKind && ` · ${template.hierarchy.leafKind}`}
-                          {template.hierarchy.params?.kw && ` · ${template.hierarchy.params.kw} kW`}
-                          {template.hierarchy.params?.currentA && ` · ${template.hierarchy.params.currentA} A`}
+                          {templateMeta(template)}
                         </span>
                       )}
                     </div>

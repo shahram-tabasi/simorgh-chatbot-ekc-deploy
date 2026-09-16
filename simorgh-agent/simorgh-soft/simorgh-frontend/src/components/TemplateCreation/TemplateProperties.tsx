@@ -9,6 +9,7 @@ import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { EplanSymbolMap } from '../../utils/eplanSingleLine';
 import { setProjectSymbolOverrides } from '../../utils/iecSymbols';
 import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
+import { templateMeta } from '../../utils/templateMeta';
 
 // Reserved keys inside template.properties used to carry per-template metadata.
 // These keys are NOT real property rows; the renderer skips them.
@@ -22,6 +23,12 @@ interface TemplateItem {
   name: string;
   type: 'LV' | 'MV' | 'HV';
   properties: Record<string, PropertyValue>;
+  /** Where it is filed and what it was sized for — see utils/templateMeta. */
+  hierarchy?: {
+    path?: string[];
+    leafKind?: string;
+    params?: { kw?: string; currentA?: string };
+  };
 }
 
 interface PropertyValue {
@@ -842,7 +849,10 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     <div className="h-full">
       <div className="mb-4">
         <h3 className="text-lg font-semibold">{template.name}</h3>
-        <p className="text-sm text-gray-500">Type: {template.type}</p>
+        <p className="text-sm text-gray-500">
+          Type: {template.type}
+          {templateMeta(template) && <span className="ml-2">· {templateMeta(template)}</span>}
+        </p>
       </div>
 
       {/* The table is untouched; the schematic sits beside it — and gives its

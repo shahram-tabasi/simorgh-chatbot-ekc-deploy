@@ -1,5 +1,6 @@
 import React from 'react';
 import { TemplateItem } from '../../types/project';
+import { templateMeta } from '../../utils/templateMeta';
 
 interface DeviceListProps {
   templates: TemplateItem[];
@@ -25,7 +26,9 @@ export const DeviceList: React.FC<DeviceListProps> = ({
           onClick={() => onDeviceSelect(template.id)}
         >
           <div className="font-medium">{template.name}</div>
-          <div className="text-xs text-gray-500">{template.type}</div>
+          <div className="text-xs text-gray-500 truncate">
+            {template.type}{templateMeta(template) && ` · ${templateMeta(template)}`}
+          </div>
         </div>
       ))}
     </div>
