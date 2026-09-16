@@ -453,7 +453,12 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       const id = projectIdRef.current;
       const revision = currentRevisionRef.current;
 
-      const { _id, ...withoutId } = data;
+      // The version goes as `baseRev`, never in the body. It is the database's
+      // own field, moved by $inc, and a body that also carries it asks Mongo
+      // to set and increment the same path in one update — which it refuses,
+      // with a 500, on every save of a project that had ever been loaded.
+      const { _id, rev: _loadedRev, ...withoutId } =
+        data as ProjectData & { rev?: number };
       const projectToSave = { ...withoutId, changedOn: new Date().toISOString() };
 
       setSaving(true);

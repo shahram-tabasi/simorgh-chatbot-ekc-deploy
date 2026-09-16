@@ -373,7 +373,19 @@ app.put('/api/projects/:id', async (req, res) => {
   if (!ObjectId.isValid(req.params.id)) {
     return res.status(404).json({ error: 'Not found' });
   }
-  const { baseRev, _id: _ignored, ...body } = req.body ?? {};
+  // `rev` is dropped, and that is not tidiness — it is the bug this had.
+  //
+  // The version counter is moved by `$inc`, and the client sends back the
+  // whole project it loaded, `rev` included. MongoDB refuses an update that
+  // touches one field with two operators: "Updating the path 'rev' would
+  // create a conflict at 'rev'". Every save of a project that had ever been
+  // loaded failed with a 500, which is every save — the first one to show it
+  // was opening a TPMS project, because that saves the moment it is read.
+  //
+  // `_id` is dropped for the same reason: it is immutable and $set on it is
+  // an error. Neither is ever taken from the client anyway — the id is the
+  // one in the URL and the version is the database's own.
+  const { baseRev, _id: _ignoredId, rev: _ignoredRev, ...body } = req.body ?? {};
   const _id = new ObjectId(req.params.id);
 
   try {

@@ -159,7 +159,12 @@ export async function syncProjectFromTpms(
 
   // ── The project document ────────────────────────────────────────────────
   say('Saving the project…', step, total);
-  const { _id, ...body } = projectToSave as any;
+  // `rev` goes with `_id`. It is the database's own version counter, moved by
+  // $inc on the server, and a body that carries it asks Mongo to set and
+  // increment the same field in one update — which it refuses. This is the
+  // call that showed it: opening a TPMS project saves the moment it is read,
+  // and the project it had just read carried the rev it was read at.
+  const { _id, rev, ...body } = projectToSave as any;
   const saved: ProjectData = existing?._id
     ? await projectService.updateProject(existing._id, body)
     : await projectService.createProject(body);
