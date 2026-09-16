@@ -282,6 +282,26 @@ export const projectService = {
   },
 
   // ایجاد پروژه جدید
+  /**
+   * Why a request failed, in the server's own words.
+   *
+   * "Failed to update project" is true of every failure and useful for none.
+   * A project too big for one MongoDB document, a database that is down, a
+   * proxy refusing the size — all three read the same, and the one person who
+   * could act on the difference is the one being told.
+   */
+  async _reason(response: Response, fallback: string): Promise<string> {
+    let detail = '';
+    try {
+      const body = await response.clone().json();
+      detail = (body as { error?: string; message?: string })?.error
+        || (body as { message?: string })?.message || '';
+    } catch {
+      try { detail = (await response.text()).slice(0, 200); } catch { /* nothing to read */ }
+    }
+    return `${fallback} (HTTP ${response.status})${detail ? `: ${detail}` : ''}`;
+  },
+
   async createProject(projectData: Omit<ProjectData, '_id'>): Promise<ProjectData> {
     const response = await fetch(`${API_BASE_URL}/projects`, {
       method: 'POST',
@@ -296,7 +316,7 @@ export const projectService = {
     }
     
     if (!response.ok) {
-      throw new Error('Failed to create project');
+      throw new Error(await this._reason(response, 'Failed to create the project'));
     }
     return response.json();
   },
@@ -312,7 +332,7 @@ export const projectService = {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to update project');
+      throw new Error(await this._reason(response, 'Failed to save the project'));
     }
     return response.json();
   },

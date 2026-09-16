@@ -285,7 +285,12 @@ app.put('/api/projects/:id', async (req, res) => {
     if (!result) return res.status(404).json({ error: 'Not found' });
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update project' });
+    // The reason, not just the fact. A project too large for one BSON
+    // document, a database that is down and a malformed id all failed the
+    // same way here, and the app could only say "failed" — which is the one
+    // thing the person already knew.
+    console.error('Error updating project:', error);
+    res.status(500).json({ error: `Failed to update project: ${error.message}` });
   }
 });
 

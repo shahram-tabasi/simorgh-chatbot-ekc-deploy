@@ -27,35 +27,50 @@ import { Revision } from './types/project';
 const APP_VERSION = '1.0.0';
 
 // هوک Auto-save
+//
+// Five seconds after the last change, and again every fifteen while the save
+// is failing. A backend that was unreachable for a minute used to cost every
+// edit made in that minute: the failure was logged to a console nobody has
+// open and the attempt was never made again until the next edit.
+//
+// The save function is held in a ref rather than named as a dependency. It is
+// a new closure on every render, so depending on it restarted the five-second
+// timer on every render — and on a screen that renders often, the save would
+// keep being pushed into the future.
 const useAutoSave = (projectData: any, saveProject: () => Promise<void>, enabled = true) => {
-  const timeoutRef = useRef<NodeJS.Timeout>();
+  const saveRef = useRef(saveProject);
+  saveRef.current = saveProject;
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const retryRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
-    // Clear previous timeout
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
+    clearTimeout(timeoutRef.current);
+    clearTimeout(retryRef.current);
 
     // A revision that is no longer the latest one is read-only — there is
     // nothing to auto-save, and trying would only raise the lock warning.
     if (!enabled) return;
 
-    // Set new timeout for auto-save (5 seconds after last change)
-    timeoutRef.current = setTimeout(async () => {
-      try {
-        await saveProject();
-        console.log('Auto-saved at:', new Date().toLocaleTimeString());
-      } catch (error) {
-        console.error('Auto-save failed:', error);
-      }
-    }, 5000);
-
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
+    const attempt = () => {
+      saveRef.current()
+        .then(() => console.log('Auto-saved at:', new Date().toLocaleTimeString()))
+        .catch(error => {
+          console.error('Auto-save failed, trying again in 15s:', error);
+          clearTimeout(retryRef.current);
+          retryRef.current = setTimeout(attempt, 15000);
+        });
     };
-  }, [projectData, saveProject, enabled]);
+
+    timeoutRef.current = setTimeout(attempt, 5000);
+
+    return () => clearTimeout(timeoutRef.current);
+  }, [projectData, enabled]);
+
+  // The retry belongs to the window, not to one run of the effect above.
+  useEffect(() => () => {
+    clearTimeout(timeoutRef.current);
+    clearTimeout(retryRef.current);
+  }, []);
 };
 
 // Looks up the Windows installer published on the server. Checked once per
@@ -92,7 +107,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout,     setShowAbout]     = useState(false);
   const [zoom,          setZoom]          = useState(100);
-  const { projectData, saveProject, notifyRevisionLocked } = useProject();
+  const { projectData, saveProject, notifyRevisionLocked, lastSavedAt, saving, saveError } = useProject();
   const desktopInstaller = useDesktopInstaller();
   // Everything on screen that can be put away, so View can bring it back.
   // Null outside a provider — the menu simply shows no panel section then.
@@ -480,7 +495,27 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
             <span>Revision: <strong className="text-blue-300">REV {currentRevision.revisionNumber}</strong></span>
           )}
           <span>Standard: <strong>{projectData.standard}</strong></span>
-          <span>Last saved: <strong>{new Date(projectData.changedOn).toLocaleTimeString()}</strong></span>
+          {/* What the database has, not what the screen has. This used to show
+              projectData.changedOn, which is stamped on every edit — so it read
+              as freshly saved while nothing had been written for an hour. */}
+          {saveError ? (
+            <span
+              className="flex items-center text-red-300"
+              title={`${saveError} — still trying. Do not close this window.`}
+            >
+              <span className="inline-block w-2 h-2 bg-red-400 rounded-full mr-2" />
+              Not saved{lastSavedAt && ` since ${lastSavedAt.toLocaleTimeString()}`}
+            </span>
+          ) : saving ? (
+            <span className="flex items-center">
+              <span className="inline-block w-2 h-2 bg-amber-300 rounded-full mr-2 animate-pulse" />
+              Saving…
+            </span>
+          ) : (
+            <span>
+              Last saved: <strong>{lastSavedAt ? lastSavedAt.toLocaleTimeString() : '—'}</strong>
+            </span>
+          )}
         </div>
       </div>
       {showShortcuts && <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} />}
@@ -555,12 +590,30 @@ const MainApp: React.FC = () => {
     blockingRevisionNumbers,
     revisionLockNotice,
     notifyRevisionLocked,
-    dismissRevisionLockNotice
+    dismissRevisionLockNotice,
+    lastSavedAt,
+    saving,
+    saveError
   } = useProject();
 
   // Auto-save — off while a locked (non-latest) revision is selected, and off
   // while TPMS owns the project (it is written by the sync, not from here).
   useAutoSave(projectData, saveProject, isCurrentRevisionEditable && !isTpmsMastered);
+
+  // Closing the window while work is still on its way to the database — or
+  // stuck because the server cannot be reached — asks first. The browser shows
+  // its own wording; all it wants from us is that there is something to lose.
+  React.useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const edited = new Date(projectData.changedOn).getTime();
+      const written = lastSavedAt ? lastSavedAt.getTime() : 0;
+      if (!saving && !saveError && written >= edited) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [projectData.changedOn, lastSavedAt, saving, saveError]);
 
   const desktopInstaller = useDesktopInstaller();
 

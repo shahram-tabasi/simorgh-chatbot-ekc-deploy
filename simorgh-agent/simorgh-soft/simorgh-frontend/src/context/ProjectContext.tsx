@@ -13,6 +13,12 @@ interface ProjectContextType {
    *  stale copy, and the last one would throw the others away. */
   patchProjectData: (updater: (prev: ProjectData) => Partial<ProjectData>) => void;
   saveProject: () => Promise<void>;
+  /** When the project was last written to the database — not when it was edited. */
+  lastSavedAt: Date | null;
+  /** True while a save is in flight. */
+  saving: boolean;
+  /** Why the last save failed, or null when the last one went through. */
+  saveError: string | null;
   addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
@@ -140,6 +146,25 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   );
   const [projectId, setProjectId] = useState<string | null>(initialProject?._id || null);
   const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null);
+
+  // What the project screen can honestly say about saving.
+  //
+  // It used to say "Last saved: <projectData.changedOn>", and changedOn is set
+  // locally on every edit — so it read as freshly saved while the backend was
+  // down and nothing had been written for an hour. These three are the truth:
+  // set from the save itself, never from an edit.
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // A save reads these rather than its own closure. A save scheduled five
+  // seconds ago and running now must write what the project is now, not what
+  // it was when the timer was set.
+  const projectDataRef = React.useRef<ProjectData>(defaultProjectData);
+  const projectIdRef = React.useRef<string | null>(null);
+  const currentRevisionRef = React.useRef<Revision | null>(null);
+  /** The tail of the save chain, so two saves can never overlap or land out of order. */
+  const saveChain = React.useRef<Promise<void>>(Promise.resolve());
   
   // Revision state - centralized source of truth
   const [currentRevision, setCurrentRevision] = useState<Revision | null>(initialRevision || null);
@@ -169,6 +194,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   // again on every open, so an edit made here would be overwritten. The way
   // out is to raise a revision, which hands ownership to this side.
   const isTpmsMastered = projectData.tpmsSync?.master === 'tpms';
+
+  projectDataRef.current = projectData;
+  projectIdRef.current = projectId;
+  currentRevisionRef.current = currentRevision;
 
   const notifyRevisionLocked = () => {
     setRevisionLockNotice(
@@ -261,52 +290,79 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         `Delete the newer revisions to edit it again.`
       );
     }
-    try {
-      console.log('Saving project...', projectData);
+    // Saves run one at a time, in order.
+    //
+    // Two overlapping PUTs of the whole project are a coin toss: the one that
+    // reaches Mongo last wins, and that is not necessarily the newer one. The
+    // chain also coalesces — a save queued behind another reads the project as
+    // it is when its turn comes, so what lands is always the latest.
+    const run = async (): Promise<void> => {
+      const data = projectDataRef.current;
+      const id = projectIdRef.current;
+      const revision = currentRevisionRef.current;
 
-      const { _id, ...projectDataWithoutId } = projectData;
-      const projectToSave = {
-        ...projectDataWithoutId,
-        changedOn: new Date().toISOString()
-      };
+      const { _id, ...withoutId } = data;
+      const projectToSave = { ...withoutId, changedOn: new Date().toISOString() };
 
-      let savedProject;
-
-      if (projectId) {
-        console.log('Updating existing project with ID:', projectId);
-        savedProject = await projectService.updateProject(projectId, projectToSave);
-      } else {
-        console.log('Creating new project');
-        savedProject = await projectService.createProject(projectToSave);
-        setProjectId(savedProject._id!);
-      }
-
-      setProjectData(savedProject);
-
-      // Revisions are otherwise frozen at creation time. Keep the active
-      // revision's stored snapshot in sync with further edits so that
-      // switching away and back to it preserves the latest changes.
-      if (currentRevision) {
-        const updatedRevision = await projectService.updateRevision(currentRevision._id!, {
-          projectSnapshot: savedProject
-        });
-        // Only take the response when it really is a revision. A malformed
-        // reply used to replace the active revision with something that had no
-        // _id, which reads as "not the latest revision" — and the whole
-        // project silently went read-only.
-        if (updatedRevision && (updatedRevision as any)._id) {
-          setCurrentRevision(updatedRevision);
-          setRevisions(prev => prev.map(r => (r._id === updatedRevision._id ? updatedRevision : r)));
+      setSaving(true);
+      try {
+        if (id) {
+          await projectService.updateProject(id, projectToSave);
         } else {
-          console.warn('updateRevision returned no revision; keeping the current one.');
+          const created = await projectService.createProject(projectToSave);
+          setProjectId(created._id!);
+          projectIdRef.current = created._id!;
+          // Only the id is taken from the reply, and only when the project has
+          // not got one yet.
+          //
+          // The whole reply used to be written back over the open project:
+          // `setProjectData(savedProject)`. A save takes as long as a round
+          // trip, and anything typed while it was in flight was thrown away by
+          // its own answer — the edit stayed on screen, where the table keeps
+          // its own copy of the rows, and never reached the database. Coming
+          // back to that switchgear later is when it appeared to vanish.
+          setProjectData(prev => (prev._id ? prev : { ...prev, _id: created._id }));
         }
-      }
 
-      console.log('Project saved successfully:', savedProject);
-    } catch (error) {
-      console.error('Error saving project:', error);
-      throw error;
-    }
+        // Revisions are otherwise frozen at creation time. Keep the active
+        // revision's stored snapshot in sync with further edits so that
+        // switching away and back to it preserves the latest changes. The
+        // snapshot is what was sent, not what came back.
+        if (revision) {
+          const updatedRevision = await projectService.updateRevision(revision._id!, {
+            projectSnapshot: { ...projectToSave, _id: id ?? projectIdRef.current ?? undefined },
+          });
+          // Only take the response when it really is a revision. A malformed
+          // reply used to replace the active revision with something that had
+          // no _id, which reads as "not the latest revision" — and the whole
+          // project silently went read-only.
+          if (updatedRevision && (updatedRevision as any)._id) {
+            setCurrentRevision(updatedRevision);
+            setRevisions(prev => prev.map(r => (r._id === updatedRevision._id ? updatedRevision : r)));
+          } else {
+            console.warn('updateRevision returned no revision; keeping the current one.');
+          }
+        }
+
+        setLastSavedAt(new Date());
+        setSaveError(null);
+      } catch (error) {
+        // Said out loud rather than logged and forgotten: an unsaved project
+        // that looks saved is how a day's work goes missing.
+        const message = (error as Error)?.message || 'Could not reach the server';
+        console.error('Error saving project:', error);
+        setSaveError(message);
+        throw error;
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    const next = saveChain.current.then(run, run);
+    // The chain must survive a failure, or one unreachable server would stop
+    // every later save from ever being attempted.
+    saveChain.current = next.catch(() => {});
+    return next;
   };
 
   const addTemplate = (
@@ -683,6 +739,9 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         updateProjectData,
         patchProjectData,
         saveProject,
+        lastSavedAt,
+        saving,
+        saveError,
         addTemplate,
         updateTemplate,
         setTemplateMechanical,
