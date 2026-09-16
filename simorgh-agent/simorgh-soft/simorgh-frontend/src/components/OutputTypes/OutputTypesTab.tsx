@@ -12,7 +12,7 @@ import {
   LV_DEVICE_COLS, MV_DEVICE_COLS,
   buildTierMatrix,
 } from '../../utils/tierEquipmentMatrix';
-import { buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
+import { BpmsTier, buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
 import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/revisionDiff';
 
 // ── Human-readable labels for DeviceLibraryProperties fields ──
@@ -63,14 +63,18 @@ function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {
   XLSX.writeFile(wb, `${data.projectName}_${tier}_Equipment.xlsx`);
 }
 
-// ─── BPMS export (LV only) ────────────────────────────────────────────────────
-// One sheet per LV switchgear, laid out like the hand-made BPMS workbook: the
+// ─── BPMS export ──────────────────────────────────────────────────────────────
+// The BPMS sheet for one switchgear, laid out like the hand-made workbook: the
 // line columns from Device Selection, then one row per part on that line's
-// template from Create Template.
-function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
-  const sheets = buildBpmsSheets(data, { revisionNumber });
+// template from Create Template. One switchgear per file, because that is what
+// a BPMS sheet is — it is read beside one panel's own drawing set, and a
+// workbook holding every switchgear in the project is a different document.
+function exportBpmsExcel(
+  data: ProjectData, tier: BpmsTier, equipmentId: string, revisionNumber?: string,
+) {
+  const sheets = buildBpmsSheets(data, { revisionNumber, tier, equipmentId });
   if (sheets.length === 0) {
-    alert('No LV equipment in this project — the BPMS report covers LV switchgears only.');
+    alert(`No ${tier} switchgear to report on — pick one first.`);
     return;
   }
   const wb = XLSX.utils.book_new();
@@ -81,8 +85,92 @@ function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
     XLSX.utils.book_append_sheet(wb, ws, sheetName(sheet.name, taken));
   }
   const rev = revisionNumber ? `_REV${revisionNumber}` : '';
-  XLSX.writeFile(wb, `${data.projectName || 'project'}_BPMS${rev}.xlsx`);
+  const who = (sheets[0].name || tier).replace(/[^\w.-]+/g, '_');
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_${who}_BPMS${rev}.xlsx`);
 }
+
+/**
+ * The BPMS report, one switchgear at a time.
+ *
+ * A BPMS sheet belongs to a panel: it is read beside that panel's drawings and
+ * checked against them. So the switchgear is picked and the file holds that
+ * one — LV and MV alike, each with its own layout. The MV sheet is the same
+ * sheet without Position and Size, which are the LV modular frame's own.
+ */
+const BpmsSection: React.FC<{
+  projectData: ProjectData;
+  revisionNumber?: string;
+  downloading: string | null;
+  trigger: (key: string, fn: () => void) => void;
+}> = ({ projectData, revisionNumber, downloading, trigger }) => {
+  const [chosen, setChosen] = useState<Record<BpmsTier, string>>({ LV: '', MV: '' });
+
+  const row = (tier: BpmsTier) => {
+    const equipments = (projectData.equipments ?? []).filter(e => e.type === tier);
+    // One switchgear, and when there is only one it needs no picking.
+    const id = chosen[tier] || (equipments.length === 1 ? equipments[0].id : '');
+    const sheet = id
+      ? buildBpmsSheets(projectData, { tier, equipmentId: id })[0]
+      : undefined;
+    const key = `bpms-${tier}`;
+
+    return (
+      <div
+        key={tier}
+        className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span
+            className="text-xs font-bold px-2 py-0.5 rounded-full text-white"
+            style={{ background: tier === 'LV' ? '#0f766e' : '#b45309' }}
+          >
+            BPMS
+          </span>
+          <div className="min-w-0">
+            <p className="font-medium text-sm text-gray-800">BPMS Report — {tier}</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {equipments.length === 0
+                ? `No ${tier} switchgear yet.`
+                : sheet
+                  ? `${sheet.lineCount} line${sheet.lineCount === 1 ? '' : 's'} · `
+                    + `${sheet.partRowCount} row${sheet.partRowCount === 1 ? '' : 's'} — one row per part.`
+                  : `Pick one of the ${equipments.length} ${tier} switchgears.`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {equipments.length > 1 && (
+            <select
+              value={id}
+              onChange={e => setChosen(prev => ({ ...prev, [tier]: e.target.value }))}
+              className="border border-gray-300 rounded-lg px-2 py-2 text-sm bg-white max-w-[200px]"
+            >
+              <option value="">Switchgear…</option>
+              {equipments.map(eq => (
+                <option key={eq.id} value={eq.id}>{eq.name}</option>
+              ))}
+            </select>
+          )}
+          <button
+            disabled={!!downloading || !id}
+            onClick={() => trigger(key, () =>
+              exportBpmsExcel(projectData, tier, id, revisionNumber))}
+            className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap ${
+              tier === 'LV' ? 'bg-teal-700 hover:bg-teal-800' : 'bg-amber-700 hover:bg-amber-800'}`}
+            title={id ? `Export the BPMS sheet for this switchgear` : 'Pick a switchgear first'}
+          >
+            {downloading === key
+              ? <span className="animate-spin">⏳</span>
+              : <FileSpreadsheetIcon className="w-4 h-4" />}
+            BPMS Excel
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  return <>{(['LV', 'MV'] as BpmsTier[]).map(row)}</>;
+};
 
 // ─── EPLAN single line ────────────────────────────────────────────────────────
 // The device list EPLAN imports (one sheet per switchgear, one row per device
@@ -1040,40 +1128,13 @@ export const OutputTypesTab: React.FC = () => {
         }
       </Section>
 
-      {/* ── BPMS export (LV only) ─────────────────────────────────────────── */}
-      {(() => {
-        const lvSheets = buildBpmsSheets(projectData);
-        const lvLines = lvSheets.reduce((sum, s) => sum + s.lineCount, 0);
-        const lvPartRows = lvSheets.reduce(
-          (sum, s) => sum + Math.max(0, s.rows.length - 3), 0);
-        return (
-          <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50">
-            <div className="flex items-center gap-3 min-w-0">
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: '#0f766e' }}>
-                BPMS
-              </span>
-              <div className="min-w-0">
-                <p className="font-medium text-sm text-gray-800">BPMS Report — LV only</p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {lvSheets.length === 0
-                    ? 'No LV equipment yet.'
-                    : `${lvSheets.length} switchgear${lvSheets.length === 1 ? '' : 's'} · ${lvLines} line${lvLines === 1 ? '' : 's'} · ${lvPartRows} row${lvPartRows === 1 ? '' : 's'} — one sheet each, one row per part.`}
-                </p>
-              </div>
-            </div>
-            <button
-              disabled={!!downloading || lvSheets.length === 0}
-              onClick={() => trigger('bpms', () => exportBpmsExcel(projectData, currentRevision?.revisionNumber))}
-              className="flex items-center gap-2 px-4 py-2 bg-teal-700 text-white rounded-lg hover:bg-teal-800 disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap"
-            >
-              {downloading === 'bpms'
-                ? <span className="animate-spin">⏳</span>
-                : <FileSpreadsheetIcon className="w-4 h-4" />}
-              BPMS Excel
-            </button>
-          </div>
-        );
-      })()}
+      {/* ── BPMS export — one switchgear at a time, LV and MV ───────────── */}
+      <BpmsSection
+        projectData={projectData}
+        revisionNumber={currentRevision?.revisionNumber}
+        downloading={downloading}
+        trigger={trigger}
+      />
 
       {/* The single line, the layout and the mechanical items live in their
           own tab now — Simorgh Draw — where each one is previewed before it is
