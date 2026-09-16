@@ -248,8 +248,17 @@ export interface ImportPlan {
   /** True when the file carried any colour at all. */
   colored: boolean;
   unchanged: number;
-  /** Rows in the table the file says nothing about. They are left alone. */
-  untouched: number;
+  /**
+   * Rows in the table the file does not have, which it is taken to have
+   * deleted.
+   *
+   * The file is this table, exported and edited, so a row missing from it is
+   * a row somebody deleted in Excel. They are listed rather than counted,
+   * because deleting is the one thing here that cannot be read back off the
+   * table afterwards and the dialog shows each of them before any of it
+   * happens.
+   */
+  removed: DeviceTableRow[];
   matchedColumns: string[];
   unknownColumns: string[];
 }
@@ -366,19 +375,22 @@ export function planImport(
     recolored: plans.filter(p => p.changes.some(c => c.field === HIGHLIGHT_FIELD)).length,
     colored,
     unchanged: plans.filter(p => p.kind === 'same').length,
-    untouched: current.filter(r => !used.has(r.id)).length,
+    removed: current.filter(r => !used.has(r.id)),
     matchedColumns: matched,
     unknownColumns: unknown,
   };
 }
 
 /**
- * The table after a plan is applied.
+ * The table after a plan is applied — which is the table becoming the file.
  *
- * Rows the file did not mention keep their place and their values: an import
- * is a merge, not a replacement. Rows it adds go on the end, and the row
- * numbers are renumbered once at the end so they read 1..n whatever order the
- * file was in.
+ * Every row the file names takes the file's values. Rows it has that the
+ * table has not go on the end. Rows the table has that the file has not are
+ * gone, because the file is this table as somebody edited it and a row they
+ * took out of the spreadsheet is a row they meant to take out.
+ *
+ * The numbers are redone once at the end, so they read 1..n whatever order
+ * the file was in and whatever was taken out of the middle of it.
  */
 export function applyPlan(plan: ImportPlan, current: DeviceTableRow[]): DeviceTableRow[] {
   const replacement = new Map<string, DeviceTableRow>();
@@ -387,6 +399,7 @@ export function applyPlan(plan: ImportPlan, current: DeviceTableRow[]): DeviceTa
     if (p.kind === 'add') added.push(p.next);
     else if (p.kind === 'change' && p.rowId) replacement.set(p.rowId, p.next);
   }
-  return [...current.map(r => replacement.get(r.id) ?? r), ...added]
+  const gone = new Set(plan.removed.map(r => r.id));
+  return [...current.filter(r => !gone.has(r.id)).map(r => replacement.get(r.id) ?? r), ...added]
     .map((r, i) => (r.rowNumber === i + 1 ? r : { ...r, rowNumber: i + 1 }));
 }

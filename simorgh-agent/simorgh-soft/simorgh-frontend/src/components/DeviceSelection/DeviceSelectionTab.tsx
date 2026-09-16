@@ -1157,7 +1157,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           );
           return;
         }
-        if (plan.added === 0 && plan.changed === 0) {
+        if (plan.added === 0 && plan.changed === 0 && plan.removed.length === 0) {
           setExcelNote(`${file.name} — nothing to change, the table already matches`);
           setExcelReadAt(new Date());
           return;
@@ -1187,15 +1187,15 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     const { plan, fileName } = importPlan;
     setRows(applyPlan(plan, rows));
     setExcelReadAt(new Date());
-    // The file wins on every row it names: the values it carries replace what
-    // is there, blank columns included, and rows it has that the table has not
-    // are added. Rows it says nothing about are kept — a spreadsheet covering
-    // part of the table is not an instruction to delete the rest of it.
+    // The table becomes the file: the values it carries replace what is
+    // there, blank columns included; rows it has that the table has not are
+    // added; and rows the table has that it has not are removed, because a
+    // row taken out of the spreadsheet is a row somebody meant to take out.
     setExcelNote(
       `${fileName} — ${plan.changed} row(s) replaced`
       + (plan.added ? `, ${plan.added} added` : '')
-      + (plan.recolored ? `, ${plan.recolored} recoloured` : '')
-      + (plan.untouched ? `, ${plan.untouched} not in the file and left as they were` : ''),
+      + (plan.removed.length ? `, ${plan.removed.length} removed` : '')
+      + (plan.recolored ? `, ${plan.recolored} recoloured` : ''),
     );
     setImportPlan(null);
   };
@@ -1303,9 +1303,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {importPlan.fileName} — {importPlan.plan.changed} to replace,{' '}
-                  {importPlan.plan.added} to add, {importPlan.plan.unchanged} already match
-                  {importPlan.plan.untouched > 0
-                    && `, ${importPlan.plan.untouched} not in the file and left as they are`}
+                  {importPlan.plan.added} to add, {importPlan.plan.removed.length} to remove,{' '}
+                  {importPlan.plan.unchanged} already match
                   {importPlan.plan.recolored > 0
                     && `, ${importPlan.plan.recolored} recoloured`}
                 </p>
@@ -1335,6 +1334,38 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                     always ignored: a template is assigned in the table, by right-click or by
                     dropping one on the row.
                   </p>
+                </div>
+              )}
+
+              {/* Read before the rest: this is the only part of an import
+                  that cannot be worked out again from the table afterwards. */}
+              {importPlan.plan.removed.length > 0 && (
+                <div className="rounded border border-gray-200 bg-gray-50 border-l-4 border-l-rose-500 overflow-hidden">
+                  <p className="px-3 py-2 font-medium text-gray-800 border-b border-gray-200">
+                    <span className="inline-block px-1.5 py-0.5 mr-2 rounded bg-rose-600 text-white text-xs font-semibold">
+                      {importPlan.plan.removed.length}
+                    </span>
+                    row(s) will be removed — they are not in the file
+                  </p>
+                  <table className="w-full text-xs">
+                    <tbody className="divide-y divide-gray-200">
+                      {importPlan.plan.removed.slice(0, 15).map(r => (
+                        <tr key={r.id}>
+                          <td className="px-3 py-1 text-gray-400 whitespace-nowrap">row {r.rowNumber}</td>
+                          <td className="pr-3 py-1 font-mono text-gray-700">{r.feederNo || '—'}</td>
+                          <td className="pr-3 py-1 text-gray-800">
+                            {[r.templateName, r.wiringType, r.ratingPower, r.description]
+                              .filter(Boolean).join(' · ')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {importPlan.plan.removed.length > 15 && (
+                    <p className="px-3 py-1.5 text-[11px] text-gray-500 border-t border-gray-200">
+                      and {importPlan.plan.removed.length - 15} more
+                    </p>
+                  )}
                 </div>
               )}
 
