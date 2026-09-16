@@ -9,7 +9,7 @@ import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES,
 import { useProject } from '../../context/ProjectContext';
 import { withCodeCaseAll } from '../../utils/deviceCodes';
 import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/simarisImport';
-import { applyPlan, planImport, readFills } from '../../utils/deviceImport';
+import { HIGHLIGHT_FIELD, ImportPlan, applyPlan, planImport, readFills } from '../../utils/deviceImport';
 import { templateMeta } from '../../utils/templateMeta';
 
 /** The spreadsheet one switchgear was last filled from. */
@@ -35,6 +35,23 @@ const NO_EXCEL: ExcelMemory = { file: null, readAt: null, note: null };
  * reload costs one trip through the file picker.
  */
 const excelMemory = new Map<string, ExcelMemory>();
+
+/**
+ * One colour, as it will look — or the word for having none.
+ *
+ * `value` is either a `#rrggbb` the whole row carries, or a count of the
+ * cells that carry their own ("3 cells"), which is what the import plan says
+ * when a row is not one colour throughout.
+ */
+const Swatch: React.FC<{ value: string }> = ({ value }) => (
+  /^#[0-9a-f]{6}$/i.test(value)
+    ? <span
+        className="inline-block w-4 h-4 rounded border border-gray-300 align-middle"
+        style={{ backgroundColor: value }}
+        title={value}
+      />
+    : <span className="opacity-70">{value || 'none'}</span>
+);
 
 // ===== PROPS INTERFACES =====
 interface DeviceTableProps {
@@ -617,9 +634,11 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       // The file each switchgear was filled from stays with that switchgear —
       // it is keyed by its id, so coming back finds Update where it was left
       // and no switchgear can ever be updated from another's spreadsheet.
-      // What does go is anything a project no longer holds.
+      // What does go is anything a project no longer holds, and the dialog,
+      // which is about a table that is no longer on screen.
       const live = new Set((projectData.equipments ?? []).map((e: Equipment) => e.id));
       for (const id of [...excelMemory.keys()]) if (!live.has(id)) excelMemory.delete(id);
+      setImportPlan(null);
       setSimarisReport(null);
     }
   }, [selectedEquipment]);
@@ -951,6 +970,18 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const setExcelReadAt = (readAt: Date | null) => patchExcel({ readAt });
   const setExcelNote = (note: string | null) => patchExcel({ note });
 
+  /**
+   * What a file would do to this table, waiting to be confirmed.
+   *
+   * An import used to replace every row the moment the file was chosen. It is
+   * now shown first — what is added, what changes, field by field — and
+   * applied on purpose, which is the same rule the SIMARIS import already
+   * follows and the only way an Update on a file somebody else edited is safe
+   * to press.
+   */
+  const [importPlan, setImportPlan] = useState<
+    { plan: ImportPlan; fileName: string; quiet: boolean } | null>(null);
+
   // ── SIMARIS feeder list → MODULE NO. ──────────────────────────────────────
   //
   // Nothing is written until the report below has been looked at: the whole
@@ -1062,7 +1093,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       try {
         const file = await excelFile.handle.getFile();
         setExcelNote(null);
-        importExcelFile(file);
+        importExcelFile(file, true);
         return;
       } catch {
         setExcelNote('Could not read the file again — it may have been moved or renamed.');
@@ -1090,7 +1121,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
    * its column, and why that is derived from these same column definitions
    * rather than from a list of guesses at them.
    */
-  const importExcelFile = (file: File) => {
+  const importExcelFile = (file: File, quiet = false) => {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
@@ -1126,31 +1157,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           );
           return;
         }
-        setExcelReadAt(new Date());
         if (plan.added === 0 && plan.changed === 0) {
           setExcelNote(`${file.name} — nothing to change, the table already matches`);
+          setExcelReadAt(new Date());
           return;
         }
-        // The file wins. It is this table, exported and edited, so every row
-        // it names is replaced with what it says and every row it has that
-        // the table has not is added. Rows the file says nothing about are
-        // kept: a spreadsheet that covers part of the table is not an
-        // instruction to delete the rest of it.
-        //
-        // No dialog. There was one — what would change, field by field,
-        // waiting to be confirmed — and it was in the way: the answer to
-        // "shall I apply the file you just chose" is always yes.
-        if (!isCurrentRevisionEditable) {
-          notifyRevisionLocked();
-          return;
-        }
-        setRows(applyPlan(plan, rows));
-        setExcelNote(
-          `${file.name} — ${plan.changed} row(s) replaced`
-          + (plan.added ? `, ${plan.added} added` : '')
-          + (plan.recolored ? `, ${plan.recolored} recoloured` : '')
-          + (plan.untouched ? `, ${plan.untouched} not in the file and left as they were` : ''),
-        );
+        setImportPlan({ plan, fileName: file.name, quiet });
       } catch (error) {
         console.error('Import error:', error);
         alert('Could not read that file. It should be an Excel (.xlsx/.xls) or CSV file '
@@ -1159,6 +1171,33 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     };
 
     reader.readAsArrayBuffer(file);
+  };
+
+  /** Apply what the dialog showed. */
+  const applyImportPlan = () => {
+    if (!importPlan) return;
+    // The gate `setRows` applies is silent by design — it raises the
+    // locked-revision dialog and drops the write. Asked here first so an
+    // import cannot report success on a revision that cannot be written.
+    if (!isCurrentRevisionEditable) {
+      setImportPlan(null);
+      notifyRevisionLocked();
+      return;
+    }
+    const { plan, fileName } = importPlan;
+    setRows(applyPlan(plan, rows));
+    setExcelReadAt(new Date());
+    // The file wins on every row it names: the values it carries replace what
+    // is there, blank columns included, and rows it has that the table has not
+    // are added. Rows it says nothing about are kept — a spreadsheet covering
+    // part of the table is not an instruction to delete the rest of it.
+    setExcelNote(
+      `${fileName} — ${plan.changed} row(s) replaced`
+      + (plan.added ? `, ${plan.added} added` : '')
+      + (plan.recolored ? `, ${plan.recolored} recoloured` : '')
+      + (plan.untouched ? `, ${plan.untouched} not in the file and left as they were` : ''),
+    );
+    setImportPlan(null);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1254,6 +1293,148 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       {/* ── What an import would do, before it does it ──────────────────
           The same shape as the SIMARIS report below: what is added, what
           changes field by field, and what is left alone — then Apply. */}
+      {importPlan && createPortal(
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[10000] p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <div>
+                <h3 className="font-semibold text-gray-800">
+                  {importPlan.quiet ? 'Update from file' : 'Import Excel'}
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {importPlan.fileName} — {importPlan.plan.changed} to replace,{' '}
+                  {importPlan.plan.added} to add, {importPlan.plan.unchanged} already match
+                  {importPlan.plan.untouched > 0
+                    && `, ${importPlan.plan.untouched} not in the file and left as they are`}
+                  {importPlan.plan.recolored > 0
+                    && `, ${importPlan.plan.recolored} recoloured`}
+                </p>
+              </div>
+              <button className="p-1 hover:bg-gray-100 rounded" onClick={() => setImportPlan(null)}>
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* The body is a plain surface with the colour kept to the rule
+                down the left of each block and to the count beside its title.
+                It used to be three saturated tinted panels with text of the
+                same hue written on them, which is hard to read in daylight
+                and unreadable in the dark theme — there the tint goes dark
+                and the text, being the dark ink of that same colour, goes
+                with it. What a row is becoming is the thing to look at, so
+                that is what is dark and bold; the column it is in and the
+                value it had are grey behind it. */}
+            <div className="p-4 space-y-3 overflow-y-auto text-sm">
+              {importPlan.plan.unknownColumns.length > 0 && (
+                <div className="rounded border border-gray-200 bg-gray-50 border-l-4 border-l-amber-400 px-3 py-2">
+                  <p className="font-medium text-gray-800 mb-0.5">
+                    {importPlan.plan.unknownColumns.length} column(s) in the file are not columns here
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    {importPlan.plan.unknownColumns.join(', ')} — ignored. The Template column is
+                    always ignored: a template is assigned in the table, by right-click or by
+                    dropping one on the row.
+                  </p>
+                </div>
+              )}
+
+              {importPlan.plan.added > 0 && (
+                <div className="rounded border border-gray-200 bg-gray-50 border-l-4 border-l-emerald-500 overflow-hidden">
+                  <p className="px-3 py-2 font-medium text-gray-800 border-b border-gray-200">
+                    <span className="inline-block px-1.5 py-0.5 mr-2 rounded bg-emerald-600 text-white text-xs font-semibold">
+                      {importPlan.plan.added}
+                    </span>
+                    row(s) will be added
+                  </p>
+                  <table className="w-full text-xs">
+                    <tbody className="divide-y divide-gray-200">
+                      {importPlan.plan.plans.filter(p => p.kind === 'add').slice(0, 15).map(p => (
+                        <tr key={p.sheetRow}>
+                          <td className="px-3 py-1 text-gray-400 whitespace-nowrap">sheet row {p.sheetRow}</td>
+                          <td className="pr-3 py-1 font-mono text-gray-700">{p.feederNo || '—'}</td>
+                          <td className="pr-3 py-1 text-gray-800">
+                            {[p.next.wiringType, p.next.ratingPower, p.next.description]
+                              .filter(Boolean).join(' · ')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {importPlan.plan.added > 15 && (
+                    <p className="px-3 py-1.5 text-[11px] text-gray-500 border-t border-gray-200">
+                      and {importPlan.plan.added - 15} more
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {importPlan.plan.changed > 0 && (
+                <div className="rounded border border-gray-200 bg-gray-50 border-l-4 border-l-blue-500 overflow-hidden">
+                  <p className="px-3 py-2 font-medium text-gray-800 border-b border-gray-200">
+                    <span className="inline-block px-1.5 py-0.5 mr-2 rounded bg-blue-600 text-white text-xs font-semibold">
+                      {importPlan.plan.changed}
+                    </span>
+                    row(s) will change
+                  </p>
+                  <table className="w-full text-xs">
+                    <tbody className="divide-y divide-gray-200">
+                      {importPlan.plan.plans.filter(p => p.kind === 'change').slice(0, 15).map(p => (
+                        <tr key={p.sheetRow} className="align-top">
+                          <td className="px-3 py-1.5 font-mono text-gray-700 whitespace-nowrap">
+                            {p.feederNo || `row ${p.sheetRow}`}
+                          </td>
+                          <td className="pr-3 py-1.5 space-y-0.5">
+                            {p.changes.map(c => (
+                              c.field === HIGHLIGHT_FIELD ? (
+                                // Colour is shown, not spelled: a hex code
+                                // says nothing about what the row will look
+                                // like, and looking is the whole question.
+                                <div key={c.field} className="flex items-center gap-1.5">
+                                  <span className="text-gray-500">Highlight</span>
+                                  <Swatch value={c.from} />
+                                  <span className="text-gray-400">→</span>
+                                  <Swatch value={c.to} />
+                                </div>
+                              ) : (
+                                <div key={c.field}>
+                                  <span className="text-gray-500">{
+                                    activeColumns.find(col => col.key === c.field)?.header ?? c.field
+                                  }{' '}</span>
+                                  <span className="line-through text-gray-400">{c.from || '—'}</span>
+                                  <span className="text-gray-400">{' → '}</span>
+                                  <span className="font-medium text-gray-900">{c.to || '—'}</span>
+                                </div>
+                              )
+                            ))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {importPlan.plan.changed > 15 && (
+                    <p className="px-3 py-1.5 text-[11px] text-gray-500 border-t border-gray-200">
+                      and {importPlan.plan.changed - 15} more
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 px-4 py-3 border-t bg-gray-50">
+              <button className="px-3 py-1.5 border rounded text-sm hover:bg-gray-100"
+                onClick={() => setImportPlan(null)}>
+                Cancel
+              </button>
+              <button className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                onClick={applyImportPlan}>
+                Apply to the table
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {simarisReport && (() => {
         const m = simarisReport.match;
         const blocking = m.duplicateInSimaris.length > 0 || m.duplicateInTable.length > 0;
