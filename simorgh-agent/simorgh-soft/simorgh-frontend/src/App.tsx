@@ -9,7 +9,6 @@ import { ProjectSelection } from './components/ProjectSelection/ProjectSelection
 import { SplashScreen } from './components/SplashScreen/SplashScreen';
 import { ProjectConflictState, ProjectProvider, useProject } from './context/ProjectContext';
 import { COPYRIGHT_LINE, PRODUCT_NAME, PRODUCT_TAGLINE } from './branding';
-import { BackupsModal } from './components/shared/BackupsModal';
 import { buildLabel, buildStamp } from './utils/buildStamp';
 import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
@@ -28,6 +27,116 @@ import { Revision } from './types/project';
 
 // The build shown in Help → About.
 const APP_VERSION = '1.0.0';
+
+/** Read a project back out of a .json file this application wrote. */
+function readProjectFile(file: File, onLoad: (project: any) => void): void {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(String(reader.result));
+      if (!data || typeof data !== 'object' || !('projectName' in data)) {
+        alert('That file is not a project saved by this application.');
+        return;
+      }
+      if (!window.confirm(
+        `Replace what is on screen with "${data.projectName}" from this file?\n\n`
+        + 'The project as it is now is written to a file first, so this can be undone.')) return;
+      onLoad(data);
+    } catch {
+      alert('That file could not be read as a project.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+/**
+ * Autosave has stopped working, and somebody has to be told in the only way
+ * that cannot be missed.
+ *
+ * A red word in the status bar is not enough for this. Work that is on screen
+ * and nowhere else looks exactly like work that is saved — that is the whole
+ * danger — and the longer nobody notices the more there is to lose.
+ *
+ * The one useful thing it offers is a file. Not a copy inside the browser:
+ * that goes with a cleared cache, a reinstall or a different machine, and a
+ * copy somebody believes in and does not have is worse than no copy at all.
+ * A .json in a folder is somewhere, and Restore from a copy reads it back.
+ *
+ * Dismissing it is allowed — the server may come back on its own, and the
+ * status bar keeps saying so in red — but each further failure brings it back,
+ * because a warning dismissed once must not buy silence for an afternoon in
+ * which nothing is being written.
+ */
+const SaveFailedModal: React.FC<{
+  saveError: string | null;
+  saveFailures: number;
+  saving: boolean;
+  lastSavedAt: Date | null;
+  onDownload: () => void;
+  onRetry: () => void;
+}> = ({ saveError, saveFailures, saving, lastSavedAt, onDownload, onRetry }) => {
+  const [dismissedAt, setDismissedAt] = useState(0);
+  const [saved, setSaved] = useState(false);
+
+  // A save that goes through closes it, whatever the person was in the middle
+  // of deciding.
+  useEffect(() => { if (!saveError) { setDismissedAt(0); setSaved(false); } }, [saveError]);
+
+  if (!saveError || saveFailures === 0 || saveFailures <= dismissedAt) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[10002] p-4">
+      <div className="bg-white rounded-lg shadow-2xl w-full max-w-lg">
+        <div className="px-5 py-3 border-b border-l-4 border-l-red-500">
+          <h3 className="font-semibold text-gray-800">Your work is not being saved</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {lastSavedAt
+              ? <>Nothing has reached the database since <strong>{lastSavedAt.toLocaleTimeString()}</strong>.</>
+              : <>Nothing has reached the database yet.</>}
+            {' '}Everything since then is on this screen only — closing this window would lose it.
+          </p>
+        </div>
+
+        <div className="px-5 py-4 space-y-3">
+          <p className="text-sm text-gray-700">
+            Save a copy to a folder now. That is the one place it is safe, and
+            <strong> File → Restore from a copy…</strong> reads it back when the server is well again.
+          </p>
+          <p className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+            <span className="text-gray-500">The server said: </span>{saveError}
+            {saveFailures > 1 && <> · {saveFailures} attempts</>}
+          </p>
+          <p className="text-xs text-gray-500">
+            It keeps trying every 15 seconds. If it succeeds, this closes itself and the
+            status bar goes back to saying when it last saved.
+          </p>
+        </div>
+
+        <div className="px-5 py-3 border-t bg-gray-50 flex flex-wrap justify-end gap-2">
+          <button
+            className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-white"
+            onClick={() => setDismissedAt(saveFailures)}
+          >
+            Keep working
+          </button>
+          <button
+            className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-white disabled:opacity-50"
+            onClick={onRetry}
+            disabled={saving}
+          >
+            {saving ? 'Trying…' : 'Try now'}
+          </button>
+          <button
+            className="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
+            onClick={() => { onDownload(); setSaved(true); }}
+          >
+            {saved ? 'Save another copy' : 'Save a copy to disk'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // هوک Auto-save
 //
@@ -112,9 +221,8 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const [zoom,          setZoom]          = useState(100);
   const {
     projectData, saveProject, notifyRevisionLocked, lastSavedAt, saving, saveError,
-    backupKey, restoreSnapshot, backupNow,
+    saveFailures, downloadProjectCopy, restoreFromFile,
   } = useProject();
-  const [showBackups, setShowBackups] = useState(false);
   const desktopInstaller = useDesktopInstaller();
   // Everything on screen that can be put away, so View can bring it back.
   // Null outside a provider — the menu simply shows no panel section then.
@@ -304,15 +412,33 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 >
                   ➕ Create New Revision
                 </button>
-                {/* The copies kept on this computer. Under Save, because that
-                    is what somebody is looking for when they come here after
-                    losing something. */}
+                {/* A copy in a folder, and the way back from one. Under Save,
+                    because that is what somebody is looking for when they come
+                    here after losing something. */}
                 <button
                   className="block w-full text-left px-4 py-2 hover:bg-gray-600"
-                  onClick={() => { setShowBackups(true); setActiveMenu(null); }}
+                  onClick={() => { downloadProjectCopy(); setActiveMenu(null); }}
+                  title="Write the whole project to a .json file on this computer"
                 >
-                  🗂️ Backups…
+                  🗂️ Save a copy to disk…
                 </button>
+                <label
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600 cursor-pointer"
+                  title="Read a project back from a .json file this application wrote"
+                >
+                  📂 Restore from a copy…
+                  <input
+                    type="file"
+                    accept="application/json,.json"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      setActiveMenu(null);
+                      if (file) readProjectFile(file, restoreFromFile);
+                    }}
+                  />
+                </label>
                 <div className="border-t border-gray-600 my-1"></div>
                 <button
                   className="block w-full text-left px-4 py-2 hover:bg-gray-600"
@@ -536,15 +662,14 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
       </div>
       {showShortcuts && <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
-      {showBackups && (
-        <BackupsModal
-          projectKey={backupKey}
-          projectName={projectData.projectName}
-          onClose={() => setShowBackups(false)}
-          onRestore={restoreSnapshot}
-          onBackupNow={backupNow}
-        />
-      )}
+      <SaveFailedModal
+        saveError={saveError}
+        saveFailures={saveFailures}
+        saving={saving}
+        lastSavedAt={lastSavedAt}
+        onDownload={downloadProjectCopy}
+        onRetry={() => { saveProject().catch(() => { /* the banner already says */ }); }}
+      />
     </div>
   );
 };
