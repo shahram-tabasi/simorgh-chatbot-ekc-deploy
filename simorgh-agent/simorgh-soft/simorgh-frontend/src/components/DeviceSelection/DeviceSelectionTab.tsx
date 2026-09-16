@@ -25,7 +25,6 @@ interface DeviceTableProps {
 }
 
 interface EquipmentTreeProps {
-  onImportFromTpms?: () => void;
   projectData: ProjectData;
   addEquipment: (equipment: Equipment) => void;
   deleteEquipment: (id: string) => void;
@@ -36,7 +35,6 @@ interface EquipmentTreeProps {
 }
 
 interface DeviceSelectionTabProps {
-  onImportFromTpms?: () => void;
   projectData: ProjectData;
   selectedEquipment: Equipment | null;
   setSelectedEquipment: (equipment: Equipment | null) => void;
@@ -1998,7 +1996,6 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
 // ===== EQUIPMENT TREE COMPONENT =====
 const EquipmentTree: React.FC<EquipmentTreeProps> = ({
-  onImportFromTpms,
   projectData,
   addEquipment,
   deleteEquipment,
@@ -2097,16 +2094,11 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
     <div className="h-full p-4 bg-gray-50">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-sm">Equipment</h3>
+        {/* TPMS import lives on the File menu, where the other things that
+            bring a whole project in from somewhere else live. It was here as
+            well, which made the Equipment panel's header read as though
+            importing a switchgear were one of the two things to do with it. */}
         <div className="flex gap-1">
-          {onImportFromTpms && (
-            <button
-              className="px-2 py-1 bg-sky-700 text-white rounded text-xs"
-              onClick={onImportFromTpms}
-              title="Import a switchgear from TPMS — lines, parts and panel specification"
-            >
-              🗄️ TPMS
-            </button>
-          )}
           <button
             className="px-2 py-1 bg-blue-600 text-white rounded text-xs"
             onClick={() => setShowAddModal(true)}
@@ -2543,7 +2535,6 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
 
 // ===== DEVICE SELECTION TAB (MAIN COMPONENT) =====
 const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
-  onImportFromTpms,
   projectData,
   selectedEquipment,
   setSelectedEquipment,
@@ -2798,7 +2789,6 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
           className="w-[260px]"
         >
           <EquipmentTree
-            onImportFromTpms={onImportFromTpms}
             projectData={projectData}
             addEquipment={addEquipment}
             deleteEquipment={deleteEquipment}

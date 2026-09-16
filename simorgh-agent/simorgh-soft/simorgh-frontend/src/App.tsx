@@ -261,11 +261,15 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
           {activeMenu === 'file' && (
             <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
               <div className="py-1">
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={onShowProjectSelection}>
-                  📁 New Project
-                </button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={onShowProjectSelection}>
-                  📂 Open Project
+                {/* One entry, not two: "New Project" and "Open Project" both
+                    went to the project selection screen, which is where a
+                    project is both opened and started. */}
+                <button
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  onClick={onShowProjectSelection}
+                  title="Open an existing project, or start a new one"
+                >
+                  📁 Projects…
                 </button>
                 <div className="border-t border-gray-600 my-1"></div>
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleSave}>
@@ -321,21 +325,9 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={() => handleClipboard('paste')}>
                   📄 Paste <span className="text-xs text-gray-400 float-right">Ctrl+V</span>
                 </button>
-                <div className="border-t border-gray-600 my-1"></div>
-                <button
-                  className="block w-full text-left px-4 py-2 opacity-40 cursor-not-allowed"
-                  disabled
-                  title="Coming soon — use the browser's own find (Ctrl+F) for now"
-                >
-                  🔍 Find
-                </button>
-                <div className="border-t border-gray-600 my-1"></div>
-                <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
-                  onClick={() => { setShowShortcuts(true); setActiveMenu(null); }}
-                >
-                  ⌨️ Keyboard Shortcuts
-                </button>
+                {/* Find was a disabled entry promising something, and the
+                    shortcuts dialog is on the Help menu where such things
+                    live — it was on both. */}
               </div>
             </div>
           )}
@@ -782,7 +774,6 @@ const MainApp: React.FC = () => {
           onNext={() => requestTab(3)}
           onNavigateToTemplate={handleNavigateToTemplate}
           onNavigateToDeviceLibrary={handleNavigateToDeviceLibrary}
-          onImportFromTpms={() => setShowTpmsImport(true)}
         />
       )
     },

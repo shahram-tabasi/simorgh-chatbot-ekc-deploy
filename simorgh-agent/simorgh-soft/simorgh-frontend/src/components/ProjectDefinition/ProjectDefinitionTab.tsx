@@ -307,7 +307,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   onComplete, requestedSubTab, requestedDeviceId
 }) => {
   const {
-    projectData, updateProjectData, saveProject,
+    projectData, updateProjectData,
     selectedEquipment, setSelectedEquipment,
   } = useProject();
 
@@ -379,11 +379,6 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
         [section]: { ...(techSettings[section] as Record<string,string>), [field]: val }
       }
     });
-
-  const handleSave = async () => {
-    try   { await saveProject(); alert('Project saved successfully!'); }
-    catch (error) { alert((error as Error)?.message || 'Error saving project'); }
-  };
 
   // ── Device Library CRUD ──────────────────────────────────────
   const addLib = (item: DeviceLibraryItem) => {
@@ -920,14 +915,11 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
       {activeSubTab === 'project-data'   && renderProjectData()}
       {activeSubTab === 'device-library' && renderDeviceLibrary()}
 
-      {/* Save / Next */}
+      {/* Next. Saving is not a button here: the project saves itself as it is
+          edited, and File → Save is there for anybody who wants to say so
+          outright. A Save on one tab of five suggested the other four did
+          not save, which was never true. */}
       <div className="flex justify-end gap-3 mt-6">
-        <button
-          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-          onClick={handleSave}
-        >
-          Save Project
-        </button>
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           onClick={onComplete}
