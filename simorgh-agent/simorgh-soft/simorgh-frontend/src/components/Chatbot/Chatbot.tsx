@@ -27,8 +27,19 @@ import logoMark from '../../assets/logo-mark.png';
  * bolt-on, and it should look like it — the same mark the splash screen and the
  * header wear.
  */
-const SimorghMark: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
-  <img src={logoMark} alt="" aria-hidden className={`${className} object-contain select-none`} />
+const SimorghMark: React.FC<{ className?: string; white?: boolean }> = ({
+  className = 'w-5 h-5', white = false,
+}) => (
+  // `white` for the mark on a coloured ground. The bird is drawn in navy, and
+  // navy on the indigo-to-pink gradient of the launcher and the header is a
+  // shape somebody has to go looking for — which is the opposite of what a
+  // mark is for.
+  <img
+    src={logoMark}
+    alt=""
+    aria-hidden
+    className={`${className} object-contain select-none${white ? ' brightness-0 invert' : ''}`}
+  />
 );
 import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
@@ -657,7 +668,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
           title="Open Simorgh AI Assistant"
           className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white shadow-lg flex items-center justify-center transition-transform hover:scale-110 ring-2 ring-white"
         >
-          <SimorghMark className="w-6 h-6" />
+          <SimorghMark className="w-6 h-6" white />
         </button>
         <span className="mt-3 text-[10px] font-semibold text-indigo-700 [writing-mode:vertical-rl] rotate-180 tracking-widest">
           SIMORGH&nbsp;AI
@@ -688,7 +699,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       {/* Title bar */}
       <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white px-4 py-2 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-2">
-          <SimorghMark className="w-5 h-5" />
+          <SimorghMark className="w-5 h-5" white />
           <span className="text-sm font-semibold">Simorgh AI Assistant</span>
           <span className="text-[10px] bg-blue-800 px-2 py-0.5 rounded-full uppercase">
             {mode}

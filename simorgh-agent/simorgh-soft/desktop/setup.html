@@ -30,13 +30,18 @@
 <body>
   <div class="card">
     <h1>Where is Simorgh Design Suite served from?</h1>
-    <p>Enter the address of the server running the suite. It is remembered, and can be changed later from <strong>File → Change server address…</strong></p>
+    <p>Enter the address of the <strong>server</strong> running the suite — the same address
+       you would type in a browser on this computer. It is remembered, and can be changed
+       later from <strong>File → Change server address…</strong></p>
     <input id="url" type="text" spellcheck="false" placeholder="http://192.168.1.10/simorgh-design-suite/">
     <div class="row">
       <button class="secondary" id="cancel">Cancel</button>
       <button id="save">Connect</button>
     </div>
-    <div class="hint">Examples: <code>localhost</code> · <code>192.168.1.10/simorgh-design-suite/</code></div>
+    <!-- `localhost` used to be offered here as an example, and it is the one
+         answer that is always wrong from a workstation: it means this computer,
+         and the suite runs on the site's server. -->
+    <div class="hint">For example <code>192.168.1.10/simorgh-design-suite/</code> or <code>simorgh.local/simorgh-design-suite/</code></div>
   </div>
   <script>
     const params = new URLSearchParams(location.search);
@@ -46,6 +51,9 @@
     input.select();
 
     const save = async () => {
+      // Nothing typed is not an address; saying so beats saving an empty
+      // string and opening a window onto nowhere.
+      if (!input.value.trim()) { input.focus(); return; }
       const ok = await window.simorgh.saveServerUrl(input.value);
       if (ok) window.close();
     };

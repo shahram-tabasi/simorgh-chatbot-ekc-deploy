@@ -22,8 +22,19 @@ function packagedUrl() {
   }
 }
 
-const DEFAULT_URL =
-  process.env.SIMORGH_URL || packagedUrl() || 'http://localhost/simorgh-design-suite/';
+// No fallback to localhost.
+//
+// It used to fall back to `http://localhost/simorgh-design-suite/`, and that is
+// where this went wrong: the first-run box opened with localhost already
+// filled in, which reads as "this is the answer" rather than "here is an
+// example". Pressing Connect then saved it, and the app opened a blank window
+// onto a server that is not on this machine — the suite runs on the site's
+// server, and localhost is only ever right on the server itself.
+//
+// So when nothing is baked in and nothing is saved, the box opens empty and
+// says what it wants. An empty field asks a question; a wrong field answers
+// one.
+const DEFAULT_URL = process.env.SIMORGH_URL || packagedUrl() || '';
 const configPath = () => path.join(app.getPath('userData'), 'config.json');
 
 function readConfig() {
@@ -72,6 +83,9 @@ function createMainWindow(url) {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
+      // Only so the error page can offer "Change server address…". The bridge
+      // exposes two calls and nothing else; the suite's own pages never use it.
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -113,8 +127,11 @@ function showErrorPage(url, reason) {
     <h1>Can't reach Simorgh Design Suite</h1>
     <p>Tried to open <code>${url}</code></p>
     <p>${reason || ''}</p>
-    <p>Check that the server is running and reachable from this computer, then try again.</p>
+    <p>Check that the server is running and reachable from this computer, then try again.
+       If this is the wrong address, change it — the suite runs on the site's server,
+       not on this computer.</p>
     <button onclick="location.reload()">Retry</button>
+    <button class="secondary" onclick="window.simorgh && window.simorgh.changeServerUrl()">Change server address…</button>
     <button class="secondary" onclick="window.close()">Close</button>
   </div>`;
   mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
@@ -125,8 +142,8 @@ function showErrorPage(url, reason) {
 function createSetupWindow(currentUrl) {
   if (setupWindow) { setupWindow.focus(); return; }
   setupWindow = new BrowserWindow({
-    width: 520,
-    height: 300,
+    width: 540,
+    height: 330,
     resizable: false,
     minimizable: false,
     title: 'Server address',
@@ -142,7 +159,7 @@ function createSetupWindow(currentUrl) {
   });
   setupWindow.setMenuBarVisibility(false);
   setupWindow.loadFile(path.join(__dirname, 'setup.html'), {
-    query: { url: currentUrl || DEFAULT_URL },
+    query: { url: currentUrl || DEFAULT_URL || '' },
   });
   setupWindow.on('closed', () => {
     setupWindow = null;
@@ -150,6 +167,10 @@ function createSetupWindow(currentUrl) {
     if (!mainWindow && !readConfig().serverUrl) app.quit();
   });
 }
+
+ipcMain.handle('simorgh:change-server-url', () => {
+  createSetupWindow(readConfig().serverUrl || DEFAULT_URL);
+});
 
 ipcMain.handle('simorgh:save-server-url', (_event, raw) => {
   const url = normaliseUrl(raw);
@@ -196,7 +217,7 @@ function buildMenu() {
             type: 'info',
             title: 'Simorgh Design Suite',
             message: `Simorgh Design Suite ${app.getVersion()}`,
-            detail: `Server: ${readConfig().serverUrl || DEFAULT_URL}\n\n© تمامی حقوق متعلق به شرکت سیمرغ فناوری هوشمند ایرانیان است.`,
+            detail: `Server: ${readConfig().serverUrl || DEFAULT_URL || '(not set)'}\n\n© تمامی حقوق متعلق به شرکت سیمرغ فناوری هوشمند ایرانیان است.`,
           }),
         },
       ],
