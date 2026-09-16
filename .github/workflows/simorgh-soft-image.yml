@@ -1,6 +1,6 @@
 name: Build simorgh-soft
 
-# One image, on its own.
+# The two images simorgh-soft is, on their own.
 #
 # `images-build.yml` builds all thirty-nine services and already knows how to
 # build just this one — run it by hand with `service: simorgh-soft`. This file
@@ -9,10 +9,21 @@ name: Build simorgh-soft
 # server, and a run that is over in a couple of minutes rather than one that
 # has to plan a matrix first.
 #
-# It builds exactly what the big workflow would build for this service — same
-# context, same Dockerfile, same registry, same cache, same build arguments —
-# so an image from here and an image from there are the same image. When that
-# stops being true, this file is the one that is wrong.
+# It builds exactly what the big workflow would build for these services —
+# same context, same Dockerfile, same registry, same cache, same build
+# arguments — so an image from here and an image from there are the same
+# image. When that stops being true, this file is the one that is wrong.
+#
+# Two of them:
+#
+#   simorgh-soft        the application: frontend, backend, nginx.
+#   simorgh-soft-mongo  its database — mongo:7 with the nightly dump script
+#                       inside it. It is built rather than pulled straight
+#                       from Docker Hub because this server's link to the
+#                       outside is slow and unreliable and everything else it
+#                       runs comes from one registry. The image that has to
+#                       come from somewhere else is the one that fails on the
+#                       day the link is bad, and it is the database.
 
 on:
   push:
@@ -22,9 +33,15 @@ on:
       - 'simorgh-agent/simorgh-soft/simorgh-backend/**'
       - 'simorgh-agent/simorgh-soft/docker/**'
       - 'simorgh-agent/simorgh-soft/Dockerfile'
+      - 'simorgh-agent/simorgh-soft/mongo/**'
       - '.github/workflows/simorgh-soft-image.yml'
   workflow_dispatch:
     inputs:
+      image:
+        description: 'Which to build'
+        type: choice
+        default: both
+        options: [both, simorgh-soft, simorgh-soft-mongo]
       tag:
         description: 'Extra tag to publish alongside latest and the commit sha — e.g. rc1'
         type: string
@@ -44,9 +61,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Which of the two this run needs. On a push: whichever one's files the diff
+  # touched — the database image changes about once a year and there is no
+  # reason to rebuild it because a React component moved.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      count: ${{ steps.pick.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, subprocess
+
+          images = [
+              {
+                  'image': 'simorgh-soft',
+                  'context': 'simorgh-agent/simorgh-soft',
+                  'dockerfile': 'simorgh-agent/simorgh-soft/Dockerfile',
+                  'watch': [
+                      'simorgh-agent/simorgh-soft/simorgh-frontend',
+                      'simorgh-agent/simorgh-soft/simorgh-backend',
+                      'simorgh-agent/simorgh-soft/docker',
+                      'simorgh-agent/simorgh-soft/Dockerfile',
+                  ],
+              },
+              {
+                  'image': 'simorgh-soft-mongo',
+                  'context': 'simorgh-agent/simorgh-soft/mongo',
+                  'dockerfile': 'simorgh-agent/simorgh-soft/mongo/Dockerfile',
+                  'watch': ['simorgh-agent/simorgh-soft/mongo'],
+              },
+          ]
+
+          wanted = (os.environ.get('INPUT_IMAGE') or 'both').strip() or 'both'
+          if os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch':
+              picked = images if wanted == 'both' else [i for i in images if i['image'] == wanted]
+          else:
+              before = os.environ.get('GITHUB_EVENT_BEFORE', '')
+              try:
+                  # A first push to a branch has no usable "before", and neither
+                  # does a force-push to a commit the runner never fetched.
+                  if not before or set(before) == {'0'}:
+                      raise ValueError('no base commit')
+                  changed = subprocess.run(
+                      ['git', 'diff', '--name-only', f'{before}..{os.environ["GITHUB_SHA"]}'],
+                      capture_output=True, text=True, check=True).stdout.split()
+              except Exception:
+                  changed = None
+
+              def touched(i):
+                  return any(f == w or f.startswith(w + '/')
+                             for w in i['watch'] for f in changed)
+
+              # Build both rather than silently building nothing.
+              picked = images if changed is None else [i for i in images if touched(i)]
+
+          print('matrix=' + json.dumps({'include': picked}))
+          print('count=' + str(len(picked)))
+          PY
+        env:
+          INPUT_IMAGE: ${{ inputs.image }}
+
   build:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false      # a database image that will not build must not
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}   # stop the app one
     steps:
       - uses: actions/checkout@v4
 
@@ -78,7 +169,7 @@ jobs:
           # GHCR insists on a lowercase path; a repository owner does not have
           # to be, so this is not paranoia.
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "ref=ghcr.io/$owner/simorgh-soft" >> "$GITHUB_OUTPUT"
+          echo "ref=ghcr.io/$owner/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
           # :latest is whichever branch pushed last, so which commit an image
           # came from has to be recorded in the image itself — it is what the
           # About dialog shows, and what makes "a feature disappeared"
@@ -87,8 +178,8 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: simorgh-agent/simorgh-soft
-          file: simorgh-agent/simorgh-soft/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: |
             ${{ steps.meta.outputs.ref }}:latest
@@ -113,7 +204,7 @@ jobs:
         shell: bash
         run: |
           {
-            echo '### simorgh-soft built'
+            echo "### ${{ matrix.image }} built"
             echo
             echo "| | |"
             echo "|---|---|"
@@ -125,7 +216,11 @@ jobs:
             echo
             echo '```bash'
             echo "docker pull ${{ steps.meta.outputs.ref }}:latest"
-            echo 'docker compose up -d simorgh-soft'
+            if [ "${{ matrix.image }}" = "simorgh-soft-mongo" ]; then
+              echo 'docker compose up -d simorgh-soft-mongo simorgh-soft-mongo-backup'
+            else
+              echo 'docker compose up -d simorgh-soft'
+            fi
             echo '```'
             echo
             echo 'Pinned to this exact commit instead of whatever pushed last:'
@@ -137,6 +232,6 @@ jobs:
             echo 'Check the running container is this build — Help → About shows the same:'
             echo
             echo '```bash'
-            echo "docker inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' \$(docker compose ps -q simorgh-soft)"
+            echo "docker inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' \$(docker compose ps -q ${{ matrix.image }})"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

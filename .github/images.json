@@ -303,6 +303,15 @@
     ]
   },
   {
+    "service": "simorgh-soft-mongo",
+    "image": "simorgh-soft-mongo",
+    "context": "simorgh-agent/simorgh-soft/mongo",
+    "dockerfile": "simorgh-agent/simorgh-soft/mongo/Dockerfile",
+    "watch": [
+      "simorgh-agent/simorgh-soft/mongo"
+    ]
+  },
+  {
     "service": "specification-agent-service",
     "image": "simorgh-specification-agent-service",
     "context": "simorgh-agent/specification-agent-service",

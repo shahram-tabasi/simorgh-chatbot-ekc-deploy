@@ -71,10 +71,15 @@ SOFT_BACKUP_KEEP_DAYS=30
 docker logs -f simorgh-soft-mongo-backup
 
 # Take one right now, without waiting for tonight
-docker exec simorgh-soft-mongo-backup \
-  mongodump --uri=mongodb://simorgh-soft-mongo:27017 \
-  --archive=/backups/manual-$(date +%F_%H%M).archive.gz --gzip
+docker exec simorgh-soft-mongo-backup backup.sh once
 ```
+
+The database and the backup sidecar are the same image —
+`simorgh-soft-mongo`, which is `mongo:7` with `backup.sh` inside it. It is
+built and published beside the application rather than pulled from Docker Hub,
+so both come from one registry: on a server whose link to the outside is
+unreliable, the image that has to come from somewhere else is the one that
+fails on the day the link is bad, and it is the database.
 
 ### Putting a dump back
 

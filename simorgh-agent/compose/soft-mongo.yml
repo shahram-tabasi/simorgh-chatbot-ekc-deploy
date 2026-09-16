@@ -3,7 +3,11 @@
 # =============================================================================
 services:
   simorgh-soft-mongo:
-    image: mongo:7
+    # mongo:7 with the backup script inside it — see simorgh-soft/mongo/.
+    # Built and published beside the application so both come from one
+    # registry: on this server the image that has to come from Docker Hub is
+    # the one that fails on the day the link is bad, and it is the database.
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-soft-mongo:${IMAGE_TAG:-latest}
     container_name: simorgh-soft-mongo
     expose:
       - "27017"
@@ -33,7 +37,9 @@ services:
   # the host filesystem where they can be copied off — a backup only a docker
   # command can reach is one nobody takes.
   simorgh-soft-mongo-backup:
-    image: mongo:7
+    # The same image. It carries mongodump of the matching version and the
+    # script; only the command differs.
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-soft-mongo:${IMAGE_TAG:-latest}
     container_name: simorgh-soft-mongo-backup
     depends_on:
       - simorgh-soft-mongo
@@ -47,35 +53,11 @@ services:
       BACKUP_AT: ${SOFT_BACKUP_AT:-02:30}
       KEEP_DAYS: ${SOFT_BACKUP_KEEP_DAYS:-30}
       MONGO_URI: ${SOFT_BACKUP_URI:-mongodb://simorgh-soft-mongo:27017}
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        set -u
-        echo "Backups: nightly at $$BACKUP_AT, keeping $$KEEP_DAYS days, into /backups"
-        # One dump at start-up, so a fresh deployment does not go a whole day
-        # with nothing — and so a broken configuration is found now.
-        first=1
-        while true; do
-          if [ "$$first" = "1" ]; then
-            first=0
-          else
-            now=$$(date +%H:%M)
-            if [ "$$now" != "$$BACKUP_AT" ]; then sleep 30; continue; fi
-          fi
-          stamp=$$(date +%Y-%m-%d_%H%M%S)
-          out="/backups/simorgh-soft-$$stamp.archive.gz"
-          echo "$$(date -Iseconds) dumping to $$out"
-          if mongodump --uri="$$MONGO_URI" --archive="$$out" --gzip --quiet; then
-            echo "$$(date -Iseconds) ok, $$(du -h "$$out" | cut -f1)"
-          else
-            echo "$$(date -Iseconds) DUMP FAILED — the database was not backed up" >&2
-            rm -f "$$out"
-          fi
-          # Old dumps go, so the disk does not fill and stop the database.
-          find /backups -name 'simorgh-soft-*.archive.gz' -type f \
-               -mtime +$$KEEP_DAYS -print -delete || true
-          sleep 60
-        done
+    # It was thirty lines of bash inlined here, with every `$` doubled so
+    # compose would not interpolate it. A stray one was a silent substitution
+    # rather than an error, and none of it could be run without bringing the
+    # stack up. It is a script in the image now.
+    entrypoint: ["/usr/local/bin/backup.sh"]
     restart: unless-stopped
 
 networks:
