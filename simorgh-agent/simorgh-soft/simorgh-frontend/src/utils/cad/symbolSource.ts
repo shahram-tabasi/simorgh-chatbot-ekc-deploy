@@ -27,6 +27,7 @@ import { DxfSymbol, loadDxfSymbols } from './dxfSymbols';
 import { CELL, IEC_SYMBOLS, SymbolId, drawIecSymbol, symbolHeight } from '../iecSymbols';
 import { LibraryKind, defaultGroup, readKind } from './symbolLibraries';
 import { terminalMarks } from './terminals';
+import { wdItems } from './wdSymbols';
 
 export interface LibraryItem {
   key: string;
@@ -145,7 +146,8 @@ export const packItems = (packs: DxfSymbol[]): LibraryItem[] => packs.map(p => (
 }));
 
 /** Everything in the library right now, the office's own pack included. */
-export const libraryItems = (): LibraryItem[] => [...iecItems(), ...packItems(loadDxfSymbols())];
+export const libraryItems = (): LibraryItem[] =>
+  [...iecItems(), ...wdItems(), ...packItems(loadDxfSymbols())];
 
 // ── The assistant's vocabulary ─────────────────────────────────────────────
 

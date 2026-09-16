@@ -60,8 +60,8 @@ export const SYMBOL_LIBRARIES: SymbolLibraryDef[] = [
     noteFa: 'همه‌ی هادی‌ها کشیده می‌شوند — بوبین، کنتاکت و ترمینال روی مسیر خودشان.',
     groups: [
       'Contacts', 'Coils and actuators', 'Protection', 'Motors and drives',
-      'Measuring', 'Terminals and plugs', 'Cables and shields', 'Power supply',
-      'Control and signalling', 'Cross references',
+      'PLC', 'Measuring', 'Terminals and plugs', 'Cables and shields',
+      'Power supply', 'Control and signalling', 'Cross references',
     ],
   },
   {
