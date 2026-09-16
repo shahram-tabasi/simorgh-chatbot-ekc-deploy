@@ -36,11 +36,11 @@
 //   the same information and survives being opened by anything.
 
 import * as XLSX from 'xlsx-js-style';
-import { ProjectData, Equipment, TemplateItem } from '../types/project';
+import { ProjectData, Equipment } from '../types/project';
 import { buildPanelLayout, PanelLayout, parseSize } from './panelLayout';
 import { buildMechanicalItems, MECHANICAL_HEADERS } from './mechanicalItems';
 import {
-  CellEstimate, MechanicalCellContext, catalogFor, cellTypeOf, estimateFor, panelTypeOf,
+  CellEstimate, MechanicalCellContext, catalogFor, estimatesFor, panelTypeOf,
 } from './mechanical';
 
 // ── The palette, as the original mixes it ──────────────────────────────────
@@ -299,14 +299,16 @@ function partsOfRow(estimate: CellEstimate): ReportPart[] {
   }));
 }
 
-/** The switchgear as the report sees it. */
+/**
+ * The switchgear as the report sees it.
+ *
+ * Read in one pass, because the feeders are not independent of each other:
+ * the width of a riser depends on the coupling in the same switchgear, and
+ * the width is what several of the sheet's quantities are written against.
+ */
 export function readCells(data: ProjectData, equipment: Equipment): ReportCell[] {
-  const templates = new Map<string, TemplateItem>(
-    (data.templates?.[equipment.type] ?? []).map((t: TemplateItem) => [text(t.id), t]),
-  );
-  return (equipment.devices ?? []).map((row, i) => {
-    const template = templates.get(text(row.templateId));
-    const estimate = estimateFor(data, equipment, row, template);
+  return estimatesFor(data, equipment).map((estimate, i) => {
+    const row = estimate.feeder.row;
     const parts = partsOfRow(estimate);
     return {
       index: i + 1,
@@ -324,7 +326,7 @@ export function readCells(data: ProjectData, equipment: Equipment): ReportCell[]
       sfdHfd: text(row.sfdHfd),
       parts,
       items: parts.reduce((n, p) => n + p.quantity, 0),
-      cellType: cellTypeOf(template),
+      cellType: estimate.feeder.size,
       context: estimate.context,
       note: estimate.note,
     };

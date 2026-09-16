@@ -8,7 +8,7 @@ import { useProject } from '../../context/ProjectContext';
 import { buildEplanData, EplanData, EplanDataOptions } from '../../utils/eplanDataExport';
 import { eplanApi, EplanTarget, EplanProject } from '../../services/eplanApi';
 import { plotframeFieldsApi, PlotframeDrawingType } from '../../services/plotframeFieldsApi';
-import { buildMechanicalItems } from '../../utils/mechanicalItems';
+import { catalogFor, estimatesFor } from '../../utils/mechanical';
 import { buildMechanicalReport, mechanicalReportName } from '../../utils/mechanicalReport';
 import { downloadText, fileSafe } from '../../utils/download';
 
@@ -284,9 +284,25 @@ export const SendToEplanTab: React.FC = () => {
 
   // ── Mechanical (matches Eplanix's own Mechanical screen: pick a
   // switchgear, load the items, export — no TCP send involved) ──
-  const mechanical = useMemo(
-    () => (equipment ? buildMechanicalItems(projectData, equipment) : []),
-    [projectData, equipment]);
+  //
+  // What is counted here is what the report will hold: the estimate sheets
+  // read against each feeder as Eplanix reads them. It used to be a different
+  // list — the one this app derives from the panel specification — so the
+  // count on screen was not the count in the file, and the button went dead
+  // on a switchgear whose specification was thin even when the sheets had
+  // plenty to say about it.
+  const mechanical = useMemo(() => {
+    if (!equipment) return { cells: 0, items: 0, sheet: '', why: '' };
+    const estimates = estimatesFor(projectData, equipment);
+    const items = estimates.reduce((n, e) =>
+      n + e.equipment.reduce((q, x) => q + x.quantity, 0), 0);
+    return {
+      cells: estimates.length,
+      items,
+      sheet: catalogFor(estimates[0]?.context.panelType ?? '')?.panelType ?? '',
+      why: items === 0 ? (estimates.find(e => e.note)?.note ?? '') : '',
+    };
+  }, [projectData, equipment]);
 
   /**
    * The mechanical report, in the shape Eplanix issues one.
@@ -300,9 +316,8 @@ export const SendToEplanTab: React.FC = () => {
   const exportMechanicalExcel = () => {
     if (!equipment) return;
     const cells = equipment.devices ?? [];
-    if (cells.length === 0 && mechanical.length === 0) {
-      alert('Nothing to report yet — this switchgear has no feeders in Device Selection '
-          + 'and no panel specification in Device Library.');
+    if (cells.length === 0) {
+      alert('Nothing to report yet — this switchgear has no feeders in Device Selection.');
       return;
     }
     const revision = currentRevision?.revisionNumber ? String(currentRevision.revisionNumber) : '';
@@ -359,20 +374,27 @@ export const SendToEplanTab: React.FC = () => {
             <div className="border border-gray-200 rounded-lg">
               <div className="px-4 py-3 bg-gray-50 border-b flex items-center justify-between">
                 <div>
-                  <p className="font-medium text-sm text-gray-800">{mechanical.length} item(s) — {equipment?.name}</p>
-                  <p className="text-xs text-gray-500">Counted from the panel specification and the feeders.</p>
+                  <p className="font-medium text-sm text-gray-800">
+                    {mechanical.items} item(s) across {mechanical.cells} cell(s) — {equipment?.name}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {mechanical.sheet
+                      ? `Read off the ${mechanical.sheet} estimate sheet, cell by cell.`
+                      : 'Read off the estimate sheet for this panel type, cell by cell.'}
+                  </p>
                 </div>
                 <button
                   onClick={exportMechanicalExcel}
-                  disabled={mechanical.length === 0}
+                  disabled={mechanical.cells === 0}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm bg-amber-700 text-white hover:bg-amber-800 disabled:opacity-40"
                 >
                   <DownloadIcon className="w-4 h-4" /> Export Mechanical Excel
                 </button>
               </div>
-              {mechanical.length === 0 && (
+              {mechanical.items === 0 && (
                 <p className="p-6 text-sm text-gray-500">
-                  Nothing to list yet — this switchgear needs a panel specification in Device Library.
+                  {mechanical.why
+                    || 'Nothing to list yet — add the feeders in Device Selection first.'}
                 </p>
               )}
             </div>

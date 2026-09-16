@@ -25,6 +25,7 @@
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../types/project';
 import { templateParts, getEplanixValue, stripLocaleTags } from './tierEquipmentMatrix';
 import { buildPanelLayout } from './panelLayout';
+import { buildOutline } from './outline';
 
 const text = (v: any) => (v == null ? '' : String(v).trim());
 
@@ -168,6 +169,24 @@ export function buildEplanDataForEquipment(
   const lines = equipment.devices ?? [];
   if (lines.length === 0) return [];
 
+  // The outline: the same description of each feeder Eplanix's OutlineService
+  // produces — the cell width, the doors, the floor opening, the baffle, the
+  // interlocks. It is read per feeder below; only the two totals and the
+  // breaker family belong to the switchgear as a whole.
+  //
+  // MV only, because the rules are MV rules — an HV door, a VCB truck, a pole
+  // centre. Eplanix produces an outline for a MV scope and for nothing else,
+  // and a LV switchgear run through them would come back with a cell width
+  // nobody worked out and a door that does not exist. For those the fields
+  // stay empty, which is what the add-in reads as "not stated".
+  const outline = equipment.type === 'MV'
+    ? buildOutline(data, equipment, {
+        lvCompartmentHeight: options.generationType === 'old'
+          ? options.lvCompartmentHeightOld
+          : options.lvCompartmentHeightSldOld,
+      })
+    : null;
+
   const templates = new Map(
     (data.templates?.[equipment.type] ?? []).map(t => [t.id, t as TemplateItem]));
   const layout = buildPanelLayout(data, equipment);
@@ -305,18 +324,16 @@ export function buildEplanDataForEquipment(
     AdditionalPanelField2Key: '', AdditionalPanelField2Value: '',
     AdditionalPanelField3Key: '', AdditionalPanelField3Value: '',
 
-    // ── outline data — the outline drawing is not generated from here yet ──
-    HV_Door: '', DxfOpening: '', DxfLvDoor: '', DxfBaffle: '',
-    PlaneType: '', CbType: '',
+    // ── outline data that belongs to the whole switchgear ──
     IsGenrateOLD: options.generationType === 'old' || options.generationType === 'sldold',
-    SldType: text(equipment.type),
-    PanelWidth: text(spec.width), CabelBox: false, PanelCableSize: '',
-    LEO: false, LEC: false, LQ: false, IEB: false, ICO: false, QC1: false, QC2: false,
-    DevTotalWidth: '', ExhaustType: text(options.exhaustType), GenerationType: options.generationType || 'sld',
-    TotalWidth: 0,
-    CBType: '', ExhaustLinePosition: '', ReverseFromLineNumber: text(options.reverseFromLineNumber),
-    VentilationType: '', HasDampingR: false, CtCurrent: 0, Cblabel: '',
-    PanelAccess: text(spec.switchgearAccess),
+    DevTotalWidth: '', ExhaustType: text(options.exhaustType),
+    GenerationType: options.generationType || 'sld',
+    // How wide the switchgear comes out, and the breaker family it is built
+    // around — the add-in places the row against these.
+    TotalWidth: outline?.totalWidth ?? 0,
+    CBType: outline?.cbType ?? '',
+    ExhaustLinePosition: '', ReverseFromLineNumber: text(options.reverseFromLineNumber),
+    PanelAccess: text(outline?.panel.access) || text(spec.switchgearAccess),
     LvCompartmentHeightOld: text(options.lvCompartmentHeightOld),
     LvCompartmentHeightSldOld: text(options.lvCompartmentHeightSldOld),
     BuffelType: text(options.buffelType),
@@ -333,10 +350,33 @@ export function buildEplanDataForEquipment(
   return lines.map((line: DeviceTableRow, index: number): EplanData => {
     const template = line.templateId ? templates.get(line.templateId) : undefined;
     const parts = template ? templateParts(template) : {};
+    // One outline record per line, in the same order — the add-in reads them
+    // by position, and so does Eplanix.
+    const cell = outline?.feeders[index];
     return {
       ...common,
       Id: index + 1,
       DraftId: 0,
+
+      // ── outline data, per feeder ──
+      PlaneType:   cell?.planeType ?? '',
+      SldType:     cell?.sldType ?? text(equipment.type),
+      CbType:      cell?.cbType ?? '',
+      HV_Door:     cell?.hvDoor ?? '',
+      DxfOpening:  cell?.dxfOpening ?? '',
+      DxfLvDoor:   cell?.dxfLvDoor ?? '',
+      DxfBaffle:   cell?.dxfBaffle ?? '',
+      PanelWidth:  cell?.panelWidth ?? text(spec.width),
+      CabelBox:    cell?.cableBox ?? false,
+      // The cable size as written, not the YES/NO the sheet shows.
+      PanelCableSize: cell?.cableSize ?? '',
+      LEO: cell?.leo ?? false, LEC: cell?.lec ?? false, LQ: cell?.lq ?? false,
+      ICO: cell?.ico ?? false, IEB: cell?.ieb ?? false,
+      QC1: cell?.qc1 ?? false, QC2: cell?.qc2 ?? false,
+      VentilationType: cell?.ventilationType ?? '',
+      HasDampingR: cell?.hasDampingR ?? false,
+      CtCurrent:   cell?.feederCurrent ?? 0,
+      Cblabel:     cell?.cbLabel ?? '',
 
       BusSection:  text(line.busSection),
       LineNumber:  text(line.feederNo) || String(index + 1),
