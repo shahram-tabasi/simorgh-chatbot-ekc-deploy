@@ -58,6 +58,23 @@ because a backup only a `docker` command can reach is one nobody takes. Copy
 them somewhere else regularly: a dump on the same disk as the database is one
 disk failure from being no backup at all.
 
+`mongodump --uri --archive` with no `--db` takes **every** database on the
+server, which is why the office library (`simorgh_library` — the symbols added
+in Simorgh Draw) is in these dumps too without anything being added here. It is
+a separate database because it belongs to the office rather than to any job,
+not because it is looked after separately.
+
+## 5 — The library as a file
+
+The office library has its own export, in Simorgh Draw's symbol panel:
+**Export library** writes every symbol to one JSON file, **Import library**
+reads one back — either merged into what is there, or replacing it outright.
+
+This is not a duplicate of layer 4. A dump restores a server; a library file
+moves between servers, is kept with the drawing set for a customer, or is the
+copy somebody takes before reorganising the shelves. It is also the only
+transport these sites have: the servers are off the internet.
+
 ```bash
 # Where they are, by default
 ls -lh ./backups/simorgh-soft-mongo/

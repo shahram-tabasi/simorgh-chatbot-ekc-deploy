@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   XIcon, SearchIcon, UploadIcon, Maximize2Icon, Minimize2Icon, PlusIcon,
   ChevronDownIcon, ChevronRightIcon, PencilIcon, Trash2Icon, FilePlusIcon,
+  DownloadIcon, LibraryIcon,
 } from 'lucide-react';
 
 import { Shape } from '../../utils/cad/shapes';
@@ -18,7 +19,10 @@ import {
 import {
   forgetOfficeSymbol, loadOfficeSymbols, officeItems, officeSymbols, onOfficeSymbols,
 } from '../../utils/cad/officeSymbols';
-import { OfficeSymbol, symbolLibraryService } from '../../services/projectService';
+import {
+  LIBRARY_FORMAT, LibraryFile, OfficeSymbol, symbolLibraryService,
+} from '../../services/projectService';
+import { downloadText } from '../../utils/download';
 import { SymbolMaker } from './SymbolMaker';
 import { Strings, dirOf, Lang } from './lang';
 import { ThemeId } from './theme';
@@ -69,6 +73,22 @@ interface Props {
   selection?: Shape[];
 }
 
+/**
+ * The thickest line in a piece of symbol art, in the symbol's own units.
+ *
+ * Read out of the markup because that is where it is: these symbols come from
+ * three sources and nothing else records how heavily they are drawn. One unit
+ * when nothing says otherwise, which is what the wiring-diagram set uses.
+ */
+function heaviestStroke(art: string): number {
+  let most = 0;
+  for (const m of art.matchAll(/stroke-width="([\d.]+)"/g)) {
+    const w = Number(m[1]);
+    if (Number.isFinite(w) && w > most) most = w;
+  }
+  return most > 0 ? most : 1;
+}
+
 export const SymbolLibrary: React.FC<Props> = ({
   t, lang, theme, onImport, onClose, kind: openOn, selection,
 }) => {
@@ -85,6 +105,9 @@ export const SymbolLibrary: React.FC<Props> = ({
   const [making, setMaking] = useState(false);
   const [editing, setEditing] = useState<OfficeSymbol | null>(null);
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
+  const libraryFile = useRef<HTMLInputElement>(null);
+  const [incoming, setIncoming] = useState<LibraryFile | null>(null);
+  const [busy, setBusy] = useState(false);
 
   // The office's library comes off the server, so it arrives after the first
   // draw. `beat` is what says "it is here now" — without it the list would be
@@ -214,15 +237,19 @@ export const SymbolLibrary: React.FC<Props> = ({
     const r = extent / 55 + 0.6;
     const size = extent / 14 + 1.5;
 
-    // Shown at a fixed magnification rather than stretched to fill the pane.
+    // How much to magnify it, worked out from the symbol's own line weight
+    // rather than stretched to fill the pane.
     //
-    // These symbols are drawn with a one-unit line in a twenty-unit box,
-    // because that is the right weight on an A3 sheet. Blown up to fill 700
-    // pixels the same line is thirty pixels thick, and the symbol stops
-    // looking like a drawing and starts looking like a logo. Six pixels to the
-    // unit is about what it looks like on the sheet, which is the thing
-    // somebody is deciding about.
-    const PX = 8;
+    // One magnification cannot serve both libraries. A wiring-diagram symbol
+    // carries a one-unit line in a twenty-unit box; a single-line one carries a
+    // 2.2-unit line in a forty-eight-unit box. At eight pixels to the unit the
+    // first reads as a drawing and the second as a row of black blobs — and
+    // both are drawn correctly, they are simply issued at different sizes and
+    // so drawn at different weights.
+    //
+    // Two things are wanted at once: a symbol big enough to look at, and a
+    // line no thicker than a line. Whichever is the tighter constraint wins.
+    const PX = Math.max(2.5, Math.min(260 / extent, 6 / heaviestStroke(item.art)));
     const w = (item.width + pad * 2) * PX;
     const h = (item.height + pad * 2) * PX;
 
@@ -264,7 +291,7 @@ export const SymbolLibrary: React.FC<Props> = ({
         data-sd-theme={theme}
         dir={dirOf(lang)}
         data-symbol-library
-        className={`bg-white rounded-lg shadow-2xl flex flex-col overflow-hidden ${
+        className={`relative bg-white rounded-lg shadow-2xl flex flex-col overflow-hidden ${
           big ? 'w-full h-full' : 'w-[1100px] max-w-full h-[80vh] max-h-full'}`}
       >
         {/* ── Title bar ────────────────────────────────────────────────── */}
@@ -306,6 +333,62 @@ export const SymbolLibrary: React.FC<Props> = ({
               multiple
               className="hidden"
               onChange={e => readFiles(e.target.files)}
+            />
+            <button
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const file = await symbolLibraryService.exportAll();
+                  downloadText(
+                    `simorgh-library-${new Date().toISOString().slice(0, 10)}.json`,
+                    JSON.stringify(file, null, 2),
+                    'application/json',
+                  );
+                  setNote(t.libExported(file.symbols.length));
+                } catch (err) {
+                  setNote(err instanceof Error ? err.message : String(err));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              disabled={busy}
+              data-lib-export
+              title={t.libExportNote}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+            >
+              <DownloadIcon className="w-4 h-4" /> {t.libExport}
+            </button>
+            <button
+              onClick={() => libraryFile.current?.click()}
+              disabled={busy}
+              data-lib-import-file
+              title={t.libImportNote}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+            >
+              <LibraryIcon className="w-4 h-4" /> {t.libImportFile}
+            </button>
+            <input
+              ref={libraryFile}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={async e => {
+                const f = e.target.files?.[0];
+                e.target.value = '';
+                if (!f) return;
+                try {
+                  const read = JSON.parse(await f.text()) as LibraryFile;
+                  if (read?.format !== LIBRARY_FORMAT || !Array.isArray(read.symbols)) {
+                    setNote(t.libNotALibrary);
+                    return;
+                  }
+                  // Asked before anything happens, because one of the two
+                  // answers throws away the library that is here.
+                  setIncoming(read);
+                } catch {
+                  setNote(t.libNotALibrary);
+                }
+              }}
             />
             <button
               onClick={() => setBig(b => !b)}
@@ -501,6 +584,56 @@ export const SymbolLibrary: React.FC<Props> = ({
             )}
           </aside>
         </div>
+
+        {incoming && (
+          <div className="absolute inset-0 z-[10] bg-black/40 flex items-center justify-center p-6">
+            <div className="bg-white rounded-lg shadow-2xl w-[30rem] max-w-full p-5 space-y-4">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900">{t.libImportFile}</h4>
+                <p className="text-[12px] text-gray-600 mt-1">
+                  {t.libImportAsk(incoming.symbols.length)}
+                  {incoming.exportedOn && (
+                    <span className="text-gray-400"> · {incoming.exportedOn.slice(0, 10)}</span>
+                  )}
+                </p>
+              </div>
+              <div className="flex flex-col gap-2">
+                {([['merge', t.libImportMerge], ['replace', t.libImportReplace]] as const).map(
+                  ([mode, label]) => (
+                    <button
+                      key={mode}
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        try {
+                          const done = await symbolLibraryService.importAll(incoming, mode);
+                          await loadOfficeSymbols(true);
+                          setNote(t.libImported(done.added, done.updated));
+                          setIncoming(null);
+                        } catch (err) {
+                          setNote(err instanceof Error ? err.message : String(err));
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                      className={`px-3 py-2 rounded-md text-sm text-start border disabled:opacity-40 ${
+                        mode === 'replace'
+                          ? 'border-red-300 text-red-800 bg-red-50 hover:bg-red-100'
+                          : 'border-gray-300 text-gray-800 bg-white hover:bg-gray-50'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+              </div>
+              <button
+                onClick={() => setIncoming(null)}
+                className="w-full px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-100"
+              >
+                {t.closeHelp}
+              </button>
+            </div>
+          </div>
+        )}
 
         {making && (
           <SymbolMaker

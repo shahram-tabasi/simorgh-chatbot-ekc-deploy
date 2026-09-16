@@ -186,7 +186,53 @@ export const symbolLibraryService = {
     });
     if (!r.ok) throw new Error('The symbol could not be deleted');
   },
+
+  /**
+   * The whole library as a file.
+   *
+   * A file because it is the only transport these sites have — the servers are
+   * off the internet, and a library moves between them the way a drawing does.
+   * It is also what makes the library something the office owns rather than
+   * something inside a server.
+   */
+  async exportAll(): Promise<LibraryFile> {
+    const r = await fetch(`${API_BASE_URL}/library/export`);
+    if (!r.ok) throw new Error('The library could not be exported');
+    return r.json();
+  },
+
+  /** Read a library file back in. `merge` keeps what is here; `replace` does not. */
+  async importAll(file: LibraryFile, mode: 'merge' | 'replace'): Promise<ImportResult> {
+    const r = await fetch(`${API_BASE_URL}/library/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...file, mode }),
+    });
+    if (!r.ok) {
+      const said = await r.json().catch(() => ({}));
+      throw new Error(said.error || 'The library could not be imported');
+    }
+    return r.json();
+  },
 };
+
+/** What an exported library file holds. */
+export interface LibraryFile {
+  format: string;
+  version: number;
+  exportedOn?: string;
+  symbols: OfficeSymbol[];
+}
+
+export interface ImportResult {
+  added: number;
+  updated: number;
+  skipped: number;
+  replaced: boolean;
+}
+
+/** The only value `format` may take — anything else is not one of our files. */
+export const LIBRARY_FORMAT = 'simorgh-draw-library';
 
 export const eplanSymbolService = {
   async schema(): Promise<any> {

@@ -111,6 +111,13 @@ export interface Strings {
   libPoints: (n: number) => string;
   libDeleteAsk: (name: string) => string;
   libNeedsName: string; libNeedsArt: string; libOfficeOnly: string;
+  // Taking the library somewhere else
+  libExport: string; libExportNote: string; libImportFile: string;
+  libImportNote: string; libImportAsk: (n: number) => string;
+  libImportMerge: string; libImportReplace: string;
+  libImported: (added: number, updated: number) => string;
+  libExported: (n: number) => string;
+  libNotALibrary: string;
 
   // Light or dark
   themeLight: string; themeDark: string;
@@ -295,6 +302,16 @@ const EN: Strings = {
   libNeedsName: 'It needs a name.',
   libNeedsArt: 'It needs some geometry — choose a file or pick something on the sheet.',
   libOfficeOnly: 'Only symbols this office added can be changed here. The built-in ones stay as they are.',
+  libExport: 'Export library',
+  libExportNote: 'Write the whole office library to a file — to keep, to restore from, or to carry to another site',
+  libImportFile: 'Import library',
+  libImportNote: 'Read an office library file back in',
+  libImportAsk: n => `This file holds ${n} symbol${n === 1 ? '' : 's'}.`,
+  libImportMerge: 'Add them, keeping what is here',
+  libImportReplace: 'Replace the whole library with this file',
+  libImported: (added, updated) => `${added} added, ${updated} replaced`,
+  libExported: n => `${n} symbol${n === 1 ? '' : 's'} written to a file`,
+  libNotALibrary: 'That is not a Simorgh Draw library file.',
 
   themeLight: 'Light', themeDark: 'Dark',
 
@@ -517,6 +534,16 @@ const FA: Strings = {
   libNeedsName: 'نام لازم دارد.',
   libNeedsArt: 'هندسه لازم دارد — یک فایل انتخاب کنید یا چیزی روی صفحه انتخاب کنید.',
   libOfficeOnly: 'فقط سیمبل‌هایی که خودِ شرکت اضافه کرده اینجا قابل تغییرند. سیمبل‌های داخلی دست‌نخورده می‌مانند.',
+  libExport: 'خروجی کتابخانه',
+  libExportNote: 'کل کتابخانه‌ی شرکت را در یک فایل بنویس — برای نگهداری، برای برگرداندن، یا برای بردن به یک سایت دیگر',
+  libImportFile: 'ورودی کتابخانه',
+  libImportNote: 'یک فایل کتابخانه‌ی شرکت را بخوان',
+  libImportAsk: n => `این فایل ${n} سیمبل دارد.`,
+  libImportMerge: 'اضافه شوند و آنچه هست بماند',
+  libImportReplace: 'کل کتابخانه با این فایل جایگزین شود',
+  libImported: (added, updated) => `${added} اضافه شد، ${updated} جایگزین شد`,
+  libExported: n => `${n} سیمبل در فایل نوشته شد`,
+  libNotALibrary: 'این فایل، فایل کتابخانه‌ی سیمرغ دراو نیست.',
 
   themeLight: 'روشن', themeDark: 'تیره',
 
@@ -740,6 +767,16 @@ const TR: Strings = {
   libNeedsName: 'Bir ada ihtiyacı var.',
   libNeedsArt: 'Biraz geometriye ihtiyacı var — bir dosya seçin ya da sayfadan bir şey seçin.',
   libOfficeOnly: 'Burada yalnızca bu ofisin eklediği semboller değiştirilebilir. Yerleşik olanlar olduğu gibi kalır.',
+  libExport: 'Kitaplığı dışa aktar',
+  libExportNote: 'Tüm ofis kitaplığını bir dosyaya yaz — saklamak, geri yüklemek ya da başka bir sahaya taşımak için',
+  libImportFile: 'Kitaplığı içe aktar',
+  libImportNote: 'Bir ofis kitaplığı dosyasını oku',
+  libImportAsk: n => `Bu dosyada ${n} sembol var.`,
+  libImportMerge: 'Eklensin, buradakiler kalsın',
+  libImportReplace: 'Tüm kitaplık bu dosyayla değiştirilsin',
+  libImported: (added, updated) => `${added} eklendi, ${updated} değiştirildi`,
+  libExported: n => `${n} sembol dosyaya yazıldı`,
+  libNotALibrary: 'Bu bir Simorgh Draw kitaplık dosyası değil.',
 
   themeLight: 'Açık', themeDark: 'Koyu',
 

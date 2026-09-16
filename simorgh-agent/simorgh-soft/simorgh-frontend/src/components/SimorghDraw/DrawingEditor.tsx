@@ -1399,8 +1399,15 @@ export const DrawingEditor: React.FC<Props> = ({
             >
               {/* Our own mark, not a generic sparkle. Every product on the
                   market puts the same star on its AI button; this one is the
-                  bird off the splash screen, and it is ours. */}
-              <img src={logoMark} alt="" aria-hidden className="w-4 h-4 object-contain" />
+                  bird off the splash screen, and it is ours.
+                  Forced to white: the mark is drawn in navy, and navy on
+                  violet is a shape you have to look for. */}
+              <img
+                src={logoMark}
+                alt=""
+                aria-hidden
+                className="w-4 h-4 object-contain brightness-0 invert"
+              />
               {T.ask}
             </button>
             <Tool title={T.undo} keyHint="Ctrl+Z" disabled={!history.canUndo} on={undo}>

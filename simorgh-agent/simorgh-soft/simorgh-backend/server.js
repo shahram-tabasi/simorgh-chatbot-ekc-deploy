@@ -36,6 +36,13 @@ const PORT = process.env.PORT || 3001;
 const MONGODB_URI = process.env.MONGODB_URI;
 const DATABASE_NAME = process.env.DATABASE_NAME || 'simorgh_db';
 
+// The office's library — symbols, and whatever else outlives a job — in a
+// database of its own on the same server. Separate because it belongs to the
+// office rather than to any project: it is the same library whichever job is
+// open, and it can be dumped, restored or handed on by itself, without
+// carrying anybody's commercial drawings with it.
+const LIBRARY_DATABASE_NAME = process.env.LIBRARY_DATABASE_NAME || 'simorgh_library';
+
 app.use(cors());
 // A project's snapshot is the whole project — for a switchgear plant with a
 // dozen panels that is megabytes, and express.json()'s default 100 KB was
@@ -46,6 +53,7 @@ app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: process.env.JSON_BODY_LIMIT || '100mb' }));
 
 let db;
+let libraryDb;
 
 // ============================================
 // MongoDB Connection (existing)
@@ -59,8 +67,10 @@ async function connectToDatabase() {
     const client = new MongoClient(MONGODB_URI);
     await client.connect();
     db = client.db(DATABASE_NAME);
+    libraryDb = client.db(LIBRARY_DATABASE_NAME);
     console.log('Connected to MongoDB successfully');
     console.log(`Database: ${DATABASE_NAME}`);
+    console.log(`Library database: ${LIBRARY_DATABASE_NAME}`);
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error.message);
     process.exit(1);
@@ -482,9 +492,10 @@ registerPlotframeFieldRoutes(app, () => db);
 // back to. See projectHistory.js.
 registerProjectHistoryRoutes(app, () => db);
 
-// The office's own symbols. In Mongo rather than the browser's cache, so the
-// library is one library and it is in the nightly dump.
-const symbolLibrary = registerSymbolLibraryRoutes(app, () => db);
+// The office's own symbols, in the library database. The projects database is
+// handed over too, only so that symbols saved before the library had one of its
+// own are moved across on the first start.
+const symbolLibrary = registerSymbolLibraryRoutes(app, () => libraryDb, () => db);
 
 app.get('/api/health', async (req, res) => {
   try {
