@@ -4,6 +4,7 @@
 
 // A sheet edited in Simorgh Draw is kept as its own geometry — see DrawingEdits.
 import { Shape } from '../utils/cad/shapes';
+import { DrawingPage } from '../utils/cad/pages';
 
 export interface DeviceLibraryProperties {
   // Electrical / Mechanical — the three voltages lead the tab: they are the
@@ -159,6 +160,14 @@ export interface ProjectData {
   drawingEdits?: DrawingEdits;
   /** Symbols redrawn for this project — see SymbolArtOverride. */
   symbolOverrides?: Record<string, SymbolArtOverride>;
+  /**
+   * Pages drawn by hand in Simorgh Draw — the WD / SLD / OLD set.
+   *
+   * Only the page's identity lives here; its geometry is in `drawingEdits`
+   * under `page#<id>`, which is the same store every other sheet uses and so
+   * the same thing the backup and the history already carry.
+   */
+  drawingPages?: DrawingPage[];
 }
 
 // ── Redrawn symbols ──────────────────────────────────────────────────────────

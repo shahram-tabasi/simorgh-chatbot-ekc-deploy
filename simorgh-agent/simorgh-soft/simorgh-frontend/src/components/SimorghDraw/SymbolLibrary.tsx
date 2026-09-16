@@ -44,17 +44,28 @@ interface Props {
   /** Chosen geometry, ready to be placed as one block. */
   onImport: (shapes: Shape[], name: string) => void;
   onClose: () => void;
+  /**
+   * Which library to open on — the kind of page being drawn.
+   *
+   * A wiring diagram page offering single-line symbols is two thirds wrong
+   * before anybody clicks anything, so the page says which shelf it wants.
+   * All three stay reachable: this is where it opens, not where it is locked.
+   */
+  kind?: LibraryKind;
 }
 
-export const SymbolLibrary: React.FC<Props> = ({ t, lang, theme, onImport, onClose }) => {
+export const SymbolLibrary: React.FC<Props> = ({
+  t, lang, theme, onImport, onClose, kind: openOn,
+}) => {
   const [query, setQuery] = useState('');
   const [big, setBig] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
   const [fromFile, setFromFile] = useState<LibraryItem[]>([]);
   const [note, setNote] = useState<string | null>(null);
-  // Which of the three libraries is open. The single line is where the app's
-  // own drawings come from, so it is where this opens.
-  const [kind, setKind] = useState<LibraryKind>('sld');
+  // Which of the three libraries is open. The page being drawn decides; with
+  // no page to ask, the single line, which is where the app's own drawings
+  // come from.
+  const [kind, setKind] = useState<LibraryKind>(openOn ?? 'sld');
   const file = useRef<HTMLInputElement>(null);
 
   const items = useMemo(

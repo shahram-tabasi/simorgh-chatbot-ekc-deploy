@@ -43,6 +43,7 @@ import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
 import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang';
 import { DrawingHelp } from './DrawingHelp';
 import { SymbolLibrary } from './SymbolLibrary';
+import { LibraryKind } from '../../utils/cad/symbolLibraries';
 import {
   SymPlacement, expandSymbols, libraryItems, symbolCatalogue,
 } from '../../utils/cad/symbolSource';
@@ -64,10 +65,19 @@ export interface EditorSheet {
   key: string;
   /** Fingerprint of the sheet as drawn, so a stale edit can be spotted. */
   drawnAs: string;
+  /**
+   * Which of the three kinds of document this is — WD, SLD or OLD.
+   *
+   * Only hand-drawn pages carry it; a generated single line leaves it unset
+   * and everything falls back to the single-line library as before.
+   */
+  kind?: LibraryKind;
 }
 
 interface Props {
   sheets: EditorSheet[];
+  /** Which sheet to open on. Absent means the first, as it always was. */
+  startAt?: number;
   /** Stem for downloaded file names. */
   fileBase: string;
   /** Lines for the title block on exported sheets. */
@@ -402,10 +412,10 @@ const AskPanel: React.FC<{
 );
 
 export const DrawingEditor: React.FC<Props> = ({
-  sheets, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
+  sheets, startAt = 0, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
   savedEdits, onSaveEdits, canEdit = true,
 }) => {
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(startAt);
   const sheet = sheets[Math.min(index, Math.max(0, sheets.length - 1))];
 
   // Edits live per sheet, so paging through a set does not lose them.
@@ -1993,6 +2003,7 @@ export const DrawingEditor: React.FC<Props> = ({
               t={T}
               lang={lang}
               theme={themeId}
+              kind={sheet?.kind}
               onImport={importSymbol}
               onClose={() => setShowLibrary(false)}
             />

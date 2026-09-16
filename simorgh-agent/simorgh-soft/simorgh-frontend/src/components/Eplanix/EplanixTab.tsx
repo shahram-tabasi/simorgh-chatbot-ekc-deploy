@@ -34,18 +34,20 @@ import { SymbolGraphicEditor } from '../SimorghDraw/SymbolGraphicEditor';
 import { DxfSymbol, loadDxfSymbols, saveDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
 import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
-import { SymbolArtOverride } from '../../types/project';
+import { DrawingEdits, SymbolArtOverride } from '../../types/project';
 import { downloadText, fileSafe } from '../../utils/download';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
 } from '../../utils/mechanicalItems';
+import { DrawingPage, pageKey, readPages } from '../../utils/cad/pages';
+import { PageNavigator } from '../SimorghDraw/PageNavigator';
 
 // The Simorgh Draw tab: the drawings-and-lists outputs that come off the
 // switchgear itself — the single line, the panel layout, and the mechanical
 // items. Each one is previewed here before it is downloaded or printed, so
 // what leaves the app has been looked at first.
 
-type View = 'single-line' | 'layout' | 'mechanical' | 'symbols';
+type View = 'single-line' | 'pages' | 'layout' | 'mechanical' | 'symbols';
 
 /**
  * The single line as CAD, one file per switchgear — the output for a customer
@@ -126,6 +128,8 @@ export const EplanixTab: React.FC = () => {
   // a sketch for the workshop, a detail to send with an order, a cover sheet.
   // Those need somewhere to start from that is not a switchgear.
   const [blank, setBlank] = useState(false);
+  // The page the editor is opened on, or null when it is not open on a page.
+  const [openPage, setOpenPage] = useState<string | null>(null);
   const [selected, setSelected] = useState<string>('');   // equipment id, '' = all
   const [perPage, setPerPage] = useState(8);
   const [sheet, setSheet] = useState(0);
@@ -308,6 +312,36 @@ export const EplanixTab: React.FC = () => {
     }];
   }, [blank]);
 
+  // ── The page set ──────────────────────────────────────────────────────
+  // Read rather than taken: a project saved before pages existed has none, and
+  // a project edited by hand could have anything.
+  const drawPages = useMemo<DrawingPage[]>(
+    () => readPages(projectData.drawingPages), [projectData.drawingPages]);
+
+  const setPages = (next: DrawingPage[], edits: DrawingEdits) =>
+    patchProjectData(() => ({ drawingPages: next, drawingEdits: edits }));
+
+  /**
+   * The page set as sheets the editor can page through.
+   *
+   * Every page, not just the one that was opened — the editor already has a
+   * sheet strip, and turning it into the page tree costs nothing and means the
+   * draughtsman can move between pages without closing anything.
+   *
+   * `drawnAs` is the constant 'page' because a hand-drawn page is not drawn
+   * from anything: there is no project data underneath it that could move on
+   * and leave the edits stale.
+   */
+  const pageSheets = useMemo<EditorSheet[]>(
+    () => drawPages.map(page => ({
+      name: page.name,
+      drawing: new Drawing(page.width, page.height, page.name),
+      key: pageKey(page.id),
+      drawnAs: 'page',
+      kind: page.type,
+    })),
+    [drawPages]);
+
   const editorSheets = useMemo<EditorSheet[]>(
     () => (editing && preview
       ? pages.map(page => ({
@@ -381,12 +415,24 @@ export const EplanixTab: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-5 gap-3 mb-5">
         <Tab id="single-line" label="Single line" note="Busbar, feeders, devices, data blocks" />
+        <Tab id="pages" label="Pages" note="Wiring diagrams, single lines, layouts" />
         <Tab id="layout" label="Layout" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical" note="Enclosure, busbars, compartments" />
         <Tab id="symbols" label="Symbols" note="The IEC single-line library" />
       </div>
+
+      {/* ── Pages ─────────────────────────────────────────────────────── */}
+      {view === 'pages' && (
+        <PageNavigator
+          pages={drawPages}
+          edits={projectData.drawingEdits}
+          onChange={setPages}
+          onOpen={id => { setOpenPage(id); setBlank(false); setEditing(true); }}
+          canEdit={isCurrentRevisionEditable}
+        />
+      )}
 
       {/* ── Single line ───────────────────────────────────────────────── */}
       {view === 'single-line' && (
@@ -514,8 +560,31 @@ export const EplanixTab: React.FC = () => {
         </div>
       )}
 
+      {/* ── A page of the set, opened from the page tree ──────────────── */}
+      {editing && openPage && (
+        <SheetEditorWindow
+          title={`Simorgh Draw — ${drawPages.find(p => p.id === openPage)?.name ?? 'page'}`}
+          note={`${drawPages.length} page(s) in this project · the sheet list at the top right turns between them`}
+          sheets={pageSheets}
+          startAt={Math.max(0, drawPages.findIndex(p => p.id === openPage))}
+          fileBase={`${projectData.projectName || 'project'}_pages`}
+          paper={paper}
+          savedEdits={projectData.drawingEdits}
+          canEdit={isCurrentRevisionEditable}
+          onSaveEdits={next => patchProjectData(() => ({ drawingEdits: next }))}
+          titleBlock={[
+            drawPages.find(p => p.id === openPage)?.name ?? 'DRAWING',
+            [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]
+              .filter(Boolean).join('   ·   '),
+            drawPages.find(p => p.id === openPage)?.description ?? '',
+            new Date().toLocaleDateString(),
+          ].filter(Boolean)}
+          onClose={() => { setEditing(false); setOpenPage(null); }}
+        />
+      )}
+
       {/* ── An empty sheet, opened from Blank sheet ─────────────────── */}
-      {editing && blank && (
+      {editing && blank && !openPage && (
         <SheetEditorWindow
           title="Blank sheet"
           note="An empty sheet — draw anything, and write DXF / PDF / SVG"
@@ -537,7 +606,7 @@ export const EplanixTab: React.FC = () => {
       )}
 
       {/* ── The drawing editor, opened from the single line ─────────── */}
-      {editing && !blank && (
+      {editing && !blank && !openPage && (
         editorSheets.length > 0 && preview ? (
           <SheetEditorWindow
             title={`Edit drawing — ${preview.name}`}

@@ -15,6 +15,8 @@ interface Props {
   title: string;
   note?: string;
   sheets: EditorSheet[];
+  /** Which sheet to open on. The page tree opens on the page that was clicked. */
+  startAt?: number;
   fileBase: string;
   titleBlock: string[];
   paper?: PaperChoice;
@@ -29,7 +31,7 @@ interface Props {
 }
 
 export const SheetEditorWindow: React.FC<Props> = ({
-  title, note, sheets, fileBase, titleBlock, paper, savedEdits, onSaveEdits,
+  title, note, sheets, startAt, fileBase, titleBlock, paper, savedEdits, onSaveEdits,
   canEdit = true, headerActions, onClose,
 }) => (
   <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]" onClick={onClose}>
@@ -53,6 +55,7 @@ export const SheetEditorWindow: React.FC<Props> = ({
       <div className="flex-1 overflow-auto p-3 bg-gray-100">
         <DrawingEditor
           sheets={sheets}
+          startAt={startAt}
           fileBase={fileBase}
           titleBlock={titleBlock}
           paper={paper}
