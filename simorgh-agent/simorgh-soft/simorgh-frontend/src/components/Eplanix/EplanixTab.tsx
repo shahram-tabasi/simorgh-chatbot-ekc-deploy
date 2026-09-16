@@ -431,6 +431,7 @@ export const EplanixTab: React.FC = () => {
           onChange={setPages}
           onOpen={id => { setOpenPage(id); setBlank(false); setEditing(true); }}
           canEdit={isCurrentRevisionEditable}
+          fileBase={fileSafe(projectData.projectName || 'project')}
         />
       )}
 

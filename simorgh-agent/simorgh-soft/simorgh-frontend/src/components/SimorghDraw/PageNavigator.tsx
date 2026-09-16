@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   CopyIcon, FilePlusIcon, PencilIcon, PencilRulerIcon, Trash2Icon,
-  ChevronUpIcon, ChevronDownIcon, FileSpreadsheetIcon,
+  ChevronUpIcon, ChevronDownIcon, FileSpreadsheetIcon, ListIcon,
 } from 'lucide-react';
 import { DrawingEdits } from '../../types/project';
 import {
@@ -9,6 +9,7 @@ import {
 } from '../../utils/cad/pages';
 import { SYMBOL_LIBRARIES, libraryOf } from '../../utils/cad/symbolLibraries';
 import { IoListImport } from './IoListImport';
+import { DrawingReportsModal } from './DrawingReportsModal';
 
 // The page tree.
 //
@@ -38,16 +39,19 @@ interface Props {
   /** Open the editor on this page. */
   onOpen: (id: string) => void;
   canEdit: boolean;
+  /** Stem for the report file's name. */
+  fileBase: string;
 }
 
 export const PageNavigator: React.FC<Props> = ({
-  pages, edits, onChange, onOpen, canEdit,
+  pages, edits, onChange, onOpen, canEdit, fileBase,
 }) => {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [draftNote, setDraftNote] = useState('');
   const [fromList, setFromList] = useState(false);
   const [made, setMade] = useState<number | null>(null);
+  const [reporting, setReporting] = useState(false);
 
   const add = (type: PageType) => {
     const page = newPage(pages, type);
@@ -112,6 +116,14 @@ export const PageNavigator: React.FC<Props> = ({
             the symbol library the page draws from.
           </p>
         </div>
+        <button
+          onClick={() => setReporting(true)}
+          disabled={pages.length === 0}
+          title="The I/O list, terminal diagram, connection list and device list, read off these pages"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+        >
+          <ListIcon className="w-4 h-4" /> Reports
+        </button>
         <button
           onClick={() => setFromList(true)}
           disabled={!canEdit}
@@ -229,6 +241,18 @@ export const PageNavigator: React.FC<Props> = ({
             );
           })}
         </ul>
+      )}
+
+      {reporting && (
+        <DrawingReportsModal
+          // Only pages with something drawn on them: an empty page in a report
+          // is a row of nothing that somebody has to scroll past.
+          pages={pages
+            .map(page => ({ name: page.name, shapes: edits?.[pageKey(page.id)]?.shapes ?? [] }))
+            .filter(p => p.shapes.length > 0)}
+          fileBase={fileBase}
+          onClose={() => setReporting(false)}
+        />
       )}
 
       {fromList && (

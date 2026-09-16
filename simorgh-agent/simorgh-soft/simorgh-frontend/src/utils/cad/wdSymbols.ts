@@ -352,6 +352,19 @@ const DEFS: Def[] = [
     ],
   },
   {
+    id: 'transmitter', name: 'Transmitter, two wire', group: 'Measuring',
+    width: 24, height: 30,
+    // Two wires and both in the path: a 4–20 mA loop is powered down the same
+    // pair it measures on, which is exactly why it can be drawn in one path
+    // and a three-wire sensor cannot.
+    terminals: [{ x: 12, y: 0, name: '+' }, { x: 12, y: 30, name: '-' }],
+    draw: () => [
+      wire(12, 0, 12, 6), wire(12, 24, 12, 30),
+      circle(12, 15, 9, 'none'),
+      label(12, 17.5, 'T', 7, 'middle'),
+    ],
+  },
+  {
     id: 'relay-module', name: 'Interposing relay', group: 'Coils and actuators',
     width: 30, height: 30,
     terminals: [

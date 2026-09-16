@@ -99,7 +99,20 @@ function device(
 ): { shapes: Shape[]; bottom: number } {
   const block = newBlockId();
   let placed = placeSymbolAt(item, { x, y }, undefined, block);
-  const bottom = y + item.height;
+
+  // Where the path leaves this device: its lowest connection point, not the
+  // bottom of its box.
+  //
+  // Those are the same thing for everything drawn to stand in a path, and
+  // different for anything that is not — a three-wire sensor has all three of
+  // its terminals along the top, and running the path on from the bottom of
+  // its outline leaves a wire hanging off a device it is not connected to.
+  // Leaving from a terminal cannot do that.
+  const anchorX = item.terminals?.[0]?.x ?? item.width / 2;
+  const lowest = (item.terminals ?? []).reduce(
+    (low, t) => (low === null || t.y > low.y ? t : low),
+    null as { x: number; y: number; name: string } | null);
+  const bottom = lowest ? y + lowest.y : y + item.height;
 
   // The list's own names for this device's connection points, in the order the
   // symbol declares them.
@@ -127,8 +140,7 @@ function device(
   // and the address inside the box they belong beside.
   // A library item without terminals is placed by the middle of its ink, so
   // that is the offset to measure from when one turns up.
-  const anchor = item.terminals?.[0]?.x ?? item.width / 2;
-  const right = x - anchor + item.width + 2;
+  const right = x - anchorX + item.width + 2;
 
   if (tag) shapes.push(text(right, y + 5, tag, 3.6, 'TAG'));
   if (note) shapes.push(text(right, y + 10.5, note, 3.2, 'TEXT'));

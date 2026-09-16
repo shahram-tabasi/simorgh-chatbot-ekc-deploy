@@ -103,9 +103,10 @@ export function defaultSymbol(kind: IoPoint['kind']): string {
     case 'DI': return 'pb-no';
     // A lamp: likewise the commonest load, and unmistakable on the page.
     case 'DO': return 'lamp';
-    // A transmitter, two wire, which is what almost every analogue input is.
-    case 'AI': return 'sensor-pnp';
-    case 'AO': return 'sensor-pnp';
+    // A two-wire transmitter, which is what almost every analogue loop is —
+    // and, not by coincidence, the only kind that can be drawn down one path.
+    case 'AI': return 'transmitter';
+    case 'AO': return 'transmitter';
   }
 }
 
