@@ -418,7 +418,17 @@ function validateShapes(raw, bounds) {
  * coordinate it never wrote would put a line in a schematic that nobody drew.
  * The first is reading, the second is making things up.
  */
-function parseAnswer(text) {
+/**
+ * The answer as an object, however the model wrapped it.
+ *
+ * `looksRight` says what we are hunting for among several candidate blocks — a
+ * narrated answer contains small objects the model wrote *about* itself, and
+ * the first valid JSON in the text is usually one of those. The drawing
+ * assistant wants shapes; the ladder assistant wants rungs; everything else
+ * about the salvage is the same, so it is one function with a predicate rather
+ * than two copies that will drift.
+ */
+function parseAnswer(text, looksRight = v => Array.isArray(v.shapes) && v.shapes.length > 0) {
   if (typeof text !== 'string') return null;
   const clean = stripReasoning(text);
 
@@ -439,7 +449,7 @@ function parseAnswer(text) {
   //    model wrote about itself.
   for (const found of balanced(clean)) {
     const parsed = tryParse(found);
-    if (parsed && Array.isArray(parsed.shapes) && parsed.shapes.length > 0) return parsed;
+    if (parsed && looksRight(parsed)) return parsed;
   }
 
   // 4. It ran out of room. Close what is open and drop the half-written tail.

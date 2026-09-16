@@ -14,8 +14,10 @@ import { buildLabel, buildStamp } from './utils/buildStamp';
 import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
 import { useTheme } from './useTheme';
-import { SunIcon, MoonIcon } from 'lucide-react';
+import { SunIcon, MoonIcon, CpuIcon } from 'lucide-react';
 import { Chatbot } from './components/Chatbot/Chatbot';
+import { LogicWorkspace } from './components/SimorghLogic/LogicWorkspace';
+import { fileSafe } from './utils/download';
 import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
 import { FeederDuplicateModal } from './components/DeviceSelection/FeederDuplicateModal';
 import { TpmsImportModal } from './components/TpmsImport/TpmsImportModal';
@@ -832,6 +834,8 @@ const ProjectConflictModal: React.FC<{
 const MainApp: React.FC = () => {
   const { theme, toggle: toggleTheme } = useTheme();
   const [activeTab,               setActiveTab]               = useState(0);
+  // Simorgh Logic takes the whole window while it is open — see the button.
+  const [logicOpen,               setLogicOpen]               = useState(false);
   const [navigatingToTemplateId,  setNavigatingToTemplateId]  = useState<string | null>(null);
   // Controls which sub-tab ProjectDefinitionTab opens on
   const [projDefSubTab, setProjDefSubTab] = useState<'project-data' | 'device-library'>('project-data');
@@ -1301,6 +1305,22 @@ const MainApp: React.FC = () => {
               <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
                 {projectData.devices.length} devices
               </div>
+
+              {/* Simorgh Logic — a door, not a tab.
+                  Ladder is a different job from drawing a panel: a different
+                  vocabulary, a different unit of work, often a different person
+                  at the keyboard. As one more tab it would put a PLC toolbar on
+                  every switchgear drawing and leave every program one mis-click
+                  from the busbar, so it takes the whole window and hands it
+                  back on the way out. */}
+              <button
+                onClick={() => setLogicOpen(true)}
+                title="Ladder programming — its own workspace"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-violet-700 text-white hover:bg-violet-800"
+              >
+                <CpuIcon className="w-4 h-4" />
+                Simorgh Logic
+              </button>
             </div>
           </div>
         </div>
@@ -1374,6 +1394,18 @@ const MainApp: React.FC = () => {
             current tab to the model and let the AI navigate between tabs. */}
         <Chatbot activeTab={activeTab} setActiveTab={setActiveTab} />
       </div>
+
+      {logicOpen && (
+        <LogicWorkspace
+          fileBase={fileSafe(projectData.projectName || 'project')}
+          titleBlock={[
+            projectData.projectName || 'PROJECT',
+            projectData.projectNumber ? `OE ${projectData.projectNumber}` : '',
+            new Date().toLocaleDateString(),
+          ].filter(Boolean)}
+          onClose={() => setLogicOpen(false)}
+        />
+      )}
 
       {/* Footer */}
       <div className="bg-gray-800 text-white text-xs py-2">

@@ -306,6 +306,15 @@ export interface LadderPage {
   drawing: Drawing;
   /** Which rungs are on it, by number. */
   rungs: number[];
+  /**
+   * How far down the page the drawing actually reaches.
+   *
+   * The drawing is a full sheet, because that is what gets printed and what
+   * goes out as DXF. On screen a three-rung program on an A3 sheet is three
+   * rungs in the top corner and two thirds of nothing, so a view can crop to
+   * this instead. The sheet is not changed — only what is looked at.
+   */
+  used: number;
 }
 
 /**
@@ -345,17 +354,27 @@ export function renderProgram(
   return groups.map((rungs, i) => {
     const shapes: Shape[] = [];
 
-    // The two rails. They are the page's own frame as much as the circuit's:
-    // everything hangs between them and nothing crosses them.
-    shapes.push(line(RAIL_LEFT, top - 6, RAIL_LEFT, height - footer + 2, 'BUS', 1.6));
-    shapes.push(line(right, top - 6, right, height - footer + 2, 'BUS', 1.6));
-
     let y = top;
     for (const rung of rungs) y = drawRung(rung, y, right, shapes);
 
+    // The two rails, drawn last because they run from the top of the page to
+    // the foot of the last rung — which is not known until the rungs are laid
+    // out. They are the page's own frame as much as the circuit's: everything
+    // hangs between them and nothing crosses them.
+    const foot = Math.min(height - footer + 2, y + 2);
+    shapes.unshift(line(RAIL_LEFT, top - 6, RAIL_LEFT, foot, 'BUS', 1.6));
+    shapes.unshift(line(right, top - 6, right, foot, 'BUS', 1.6));
+
     const d = new Drawing(width, height, `${program.title} ${i + 1}`);
     for (const s of shapes) d.add(s);
-    return { index: i + 1, of: groups.length, drawing: d, rungs: rungs.map(r => r.number) };
+    return {
+      index: i + 1,
+      of: groups.length,
+      drawing: d,
+      rungs: rungs.map(r => r.number),
+      // A little past the last rung, so the rails do not end flush with the edge.
+      used: Math.min(height, y + 8),
+    };
   });
 }
 

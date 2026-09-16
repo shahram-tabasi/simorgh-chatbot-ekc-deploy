@@ -17,6 +17,7 @@ import { deadline, MYSQL_PING_TIMEOUT_MS } from './dbTimeout.js';
 import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 import { registerEplanRoutes } from './eplanSend.js';
 import { registerDrawAssistRoutes } from './drawAssist.js';
+import { registerLadderAssistRoutes } from './ladderAssist.js';
 import { registerDocumentRoutes } from './documents.js';
 import { registerPlotframeFieldRoutes } from './plotframeFields.js';
 import { registerSymbolLibraryRoutes } from './symbolLibrary.js';
@@ -480,6 +481,11 @@ registerEplanRoutes(app);
 // before any of it reaches a sheet. Same model the chat uses — one endpoint to
 // configure, not two.
 registerDrawAssistRoutes(app, callLocalModel);
+
+// Simorgh Logic: the same model, asked for a ladder program instead of a
+// schematic. Its own endpoint because the two ask for entirely different
+// answers and neither prompt should have to mention the other.
+registerLadderAssistRoutes(app, callLocalModel);
 
 // Project documents — the Documents tab. A getter, not `db` itself: this
 // registration runs before connectToDatabase() resolves (see startServer

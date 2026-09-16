@@ -234,6 +234,63 @@ export interface ImportResult {
 /** The only value `format` may take — anything else is not one of our files. */
 export const LIBRARY_FORMAT = 'simorgh-draw-library';
 
+// ── Simorgh Logic ───────────────────────────────────────────────────────────
+
+export interface LadderRequest {
+  /** What the program should do, in the engineer's own words. */
+  task: string;
+  /** This vendor's vocabulary, written out from the dialect table. */
+  briefing: string;
+  controller?: string;
+  language?: string;
+  /** 'teach' explains from further back; 'brief' assumes the reader knows. */
+  style?: 'teach' | 'brief';
+}
+
+export interface LadderAnswer {
+  success: boolean;
+  /** The program as it arrived — validated in the browser, not here. */
+  program?: unknown;
+  model?: string;
+  error?: string;
+  /** What the model said when it did not answer with a program. */
+  raw?: string;
+}
+
+export const ladderService = {
+  /**
+   * Ask the model for a program.
+   *
+   * Never throws: a refusal is an answer, and the panel shows the model's own
+   * words rather than a dead end. Only a network failure comes back as one of
+   * these, and it says so.
+   */
+  async generate(request: LadderRequest): Promise<LadderAnswer> {
+    try {
+      const r = await fetch(`${API_BASE_URL}/ladder/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      const said = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return {
+          success: false,
+          error: said.error || `The assistant answered ${r.status}.`,
+          raw: said.raw,
+          model: said.model,
+        };
+      }
+      return said as LadderAnswer;
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'The assistant could not be reached.',
+      };
+    }
+  },
+};
+
 export const eplanSymbolService = {
   async schema(): Promise<any> {
     const r = await fetch(`${API_BASE_URL}/eplan-symbols/schema`);
