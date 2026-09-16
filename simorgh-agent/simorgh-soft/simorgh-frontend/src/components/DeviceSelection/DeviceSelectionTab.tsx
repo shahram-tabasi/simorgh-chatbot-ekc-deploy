@@ -9,6 +9,7 @@ import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES,
 import { useProject } from '../../context/ProjectContext';
 import { withCodeCaseAll } from '../../utils/deviceCodes';
 import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/simarisImport';
+import { ImportPlan, applyPlan, planImport } from '../../utils/deviceImport';
 
 // ===== PROPS INTERFACES =====
 interface DeviceTableProps {
@@ -587,6 +588,15 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       loadedRowsRef.current = loaded;
       setRowsRaw(loaded);
       setSelectedRows(new Set());
+      // Everything about the last switchgear's import belongs to that
+      // switchgear: an "Update from feeders.xlsx" button left standing after
+      // moving to the next one is an invitation to write one panel's feeders
+      // into another.
+      setExcelFile(null);
+      setExcelNote(null);
+      setExcelReadAt(null);
+      setImportPlan(null);
+      setSimarisReport(null);
     }
   }, [selectedEquipment]);
 
@@ -901,6 +911,18 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const [excelReadAt, setExcelReadAt] = useState<Date | null>(null);
   const [excelNote, setExcelNote] = useState<string | null>(null);
 
+  /**
+   * What a file would do to this table, waiting to be confirmed.
+   *
+   * An import used to replace every row the moment the file was chosen. It is
+   * now shown first — what is added, what changes, field by field — and
+   * applied on purpose, which is the same rule the SIMARIS import already
+   * follows and the only way an Update on a file somebody else edited is safe
+   * to press.
+   */
+  const [importPlan, setImportPlan] = useState<
+    { plan: ImportPlan; fileName: string; quiet: boolean } | null>(null);
+
   // ── SIMARIS feeder list → MODULE NO. ──────────────────────────────────────
   //
   // Nothing is written until the report below has been looked at: the whole
@@ -1031,101 +1053,76 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
    * Import and Update both come through here, so a re-read cannot drift from
    * the first read — the same columns, the same rules, the same result.
    */
+  /**
+   * Read a file and work out what it would do — it is applied from the dialog.
+   *
+   * Read as a grid rather than as objects: `sheet_to_json`'s object form drops
+   * one of two columns that share a header, and the header row is what the
+   * whole mapping hangs on. See utils/deviceImport.ts for how a header finds
+   * its column, and why that is derived from these same column definitions
+   * rather than from a list of guesses at them.
+   */
   const importExcelFile = (file: File, quiet = false) => {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const data = new Uint8Array(event.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-
-        // Convert to array of arrays (raw) to handle empty cells properly
-        const jsonData = XLSX.utils.sheet_to_json<Record<string, string>>(worksheet, {
-          defval: '',
-          raw: false
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        const grid = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+          header: 1, defval: '', raw: false, blankrows: false,
         });
 
-        if (jsonData.length === 0) {
-          alert('No data found in the Excel file.');
+        if (grid.length < 2) {
+          alert('That file has no rows under its header.');
           return;
         }
 
-        // Template column is NEVER imported - only via right-click or drag-and-drop
-        // Expected columns: Bus Section, Feeder No, Wiring Type, Rating Power, FLC (A)
-        const importedRows: DeviceTableRow[] = jsonData
-          .filter(row => {
-            // Skip rows where all relevant cells are empty
-            const busSection = (row['Bus Section'] || row['busSection'] || row['bus section'] || row['BUS SECTION'] || '').toString().trim();
-            const feederNo = (row['Feeder No'] || row['feederNo'] || row['feeder no'] || row['FEEDER NO'] || row['Feeder Number'] || '').toString().trim();
-            const wiringType = (row['Wiring Type'] || row['wiringType'] || row['wiring type'] || row['WIRING TYPE'] || '').toString().trim();
-            const ratingPower = (row['Rating Power'] || row['ratingPower'] || row['rating power'] || row['RATING POWER'] || row['Rating (kW)'] || '').toString().trim();
-            const flc = (row['FLC (A)'] || row['FLC'] || row['flc'] || row['Flc'] || row['FLC(A)'] || '').toString().trim();
-            return busSection || feederNo || wiringType || ratingPower || flc;
-          })
-          .map((row, index) => {
-            const pick = (...keys: string[]) => {
-              for (const k of keys) {
-                if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') {
-                  return String(row[k]).trim();
-                }
-              }
-              return '';
-            };
-            const busSection  = pick('Bus Section', 'busSection', 'bus section', 'BUS SECTION');
-            const feederNo    = pick('Feeder No', 'feederNo', 'feeder no', 'FEEDER NO', 'FEEDER NO.', 'Feeder Number');
-            const wiringType  = pick('Wiring Type', 'wiringType', 'wiring type', 'WIRING TYPE');
-            const ratingPower = pick('Rating Power', 'ratingPower', 'rating power', 'RATING POWER', 'RATING POWER(KW OR KVA)', 'Rating (kW)');
-            const flc         = pick('FLC (A)', 'FLC', 'flc', 'Flc', 'FLC(A)');
-            const tag         = pick('TAG', 'Tag', 'tag');
-            const description = pick('DESCRIPTION', 'Description', 'description');
-            const cableSize   = pick('CABLE SIZE', 'Cable Size', 'cableSize', 'CABEL SIZE');
-            const sfdHfd      = pick('SFD/HFD', 'sfdHfd', 'SFD HFD');
-            const moduleNo    = pick('MODULE NO.', 'MODULE NO', 'Module No', 'moduleNo');
-            const size        = pick('SIZE', 'SAIZE', 'Size', 'size');
-
-            return {
-              id: `device-${Date.now()}-${index}`,
-              rowNumber: index + 1,   // always starts from 1
-              templateId: '',
-              templateName: '',
-              busSection,
-              feederNo,
-              wiringType,
-              ratingPower,
-              flc,
-              tag,
-              description,
-              cableSize,
-              sfdHfd,
-              moduleNo,
-              size,
-              equipmentId: selectedEquipment!.id
-            };
-          });
-
-        if (importedRows.length === 0) {
-          alert('No valid rows found. Make sure the Excel file has data in columns: Bus Section, Feeder No, Wiring Type, Rating Power, FLC (A)');
+        const plan = planImport(grid, activeColumns, rows, selectedEquipment!.id);
+        if (plan.matchedColumns.length === 0) {
+          alert(
+            'None of the columns in that file match this table.\n\n'
+            + `It has: ${plan.unknownColumns.slice(0, 8).join(', ')}\n`
+            + `This table expects: ${activeColumns.filter(c => !c.isTemplate)
+                .map(c => c.header).join(', ')}`,
+          );
           return;
         }
-
-        // Replace all rows with imported data (starting from row 1)
-        setRows(importedRows);
-        setExcelReadAt(new Date());
-        if (quiet) {
-          // An Update says how many rows came back and nothing else: it is a
-          // button pressed on purpose, not a surprise.
-          setExcelNote(`Updated from ${file.name} — ${importedRows.length} row(s)`);
-        } else {
-          alert(`Imported ${importedRows.length} row(s) — existing rows replaced.\n\nAssign templates via right-click on the Template cell or drag-and-drop.`);
+        if (plan.added === 0 && plan.changed === 0) {
+          setExcelNote(`${file.name} — nothing to change, the table already matches`);
+          setExcelReadAt(new Date());
+          return;
         }
+        setImportPlan({ plan, fileName: file.name, quiet });
       } catch (error) {
         console.error('Import error:', error);
-        alert('Error importing file. Please make sure it is a valid Excel (.xlsx/.xls) or CSV file with columns: Bus Section, Feeder No, Wiring Type, Rating Power, FLC (A)');
+        alert('Could not read that file. It should be an Excel (.xlsx/.xls) or CSV file '
+            + 'with a header row — the one Export Excel writes is the shape this expects.');
       }
     };
 
     reader.readAsArrayBuffer(file);
+  };
+
+  /** Apply what the dialog showed. */
+  const applyImportPlan = () => {
+    if (!importPlan) return;
+    // The gate `setRows` applies is silent by design — it raises the
+    // locked-revision dialog and drops the write. Asked here first so an
+    // import cannot report success on a revision that cannot be written.
+    if (!isCurrentRevisionEditable) {
+      setImportPlan(null);
+      notifyRevisionLocked();
+      return;
+    }
+    const { plan, fileName } = importPlan;
+    setRows(applyPlan(plan, rows));
+    setExcelReadAt(new Date());
+    setExcelNote(
+      `${fileName} — ${plan.added} row(s) added, ${plan.changed} changed`
+      + (plan.untouched ? `, ${plan.untouched} left alone` : ''),
+    );
+    setImportPlan(null);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1201,6 +1198,116 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           adds up; the two duplicate cases do need one, because a feeder that
           appears twice has no single cubicle to take MODULE NO. from, and
           nothing is written for those rows either way. */}
+      {/* ── What an import would do, before it does it ──────────────────
+          The same shape as the SIMARIS report below: what is added, what
+          changes field by field, and what is left alone — then Apply. */}
+      {importPlan && createPortal(
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[10000] p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <div>
+                <h3 className="font-semibold text-gray-800">
+                  {importPlan.quiet ? 'Update from file' : 'Import Excel'}
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {importPlan.fileName} — {importPlan.plan.added} to add,{' '}
+                  {importPlan.plan.changed} to change, {importPlan.plan.unchanged} already match
+                  {importPlan.plan.untouched > 0
+                    && `, ${importPlan.plan.untouched} row(s) in the table left alone`}
+                </p>
+              </div>
+              <button className="p-1 hover:bg-gray-100 rounded" onClick={() => setImportPlan(null)}>
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3 overflow-y-auto text-sm">
+              {importPlan.plan.unknownColumns.length > 0 && (
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                  <p className="font-medium mb-0.5">
+                    {importPlan.plan.unknownColumns.length} column(s) in the file are not columns here
+                  </p>
+                  <p className="text-xs">
+                    {importPlan.plan.unknownColumns.join(', ')} — ignored. The Template column is
+                    always ignored: a template is assigned in the table, by right-click or by
+                    dropping one on the row.
+                  </p>
+                </div>
+              )}
+
+              {importPlan.plan.added > 0 && (
+                <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900">
+                  <p className="font-medium mb-1">{importPlan.plan.added} row(s) will be added</p>
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {importPlan.plan.plans.filter(p => p.kind === 'add').slice(0, 15).map(p => (
+                        <tr key={p.sheetRow}>
+                          <td className="pr-3 text-emerald-700/60">sheet row {p.sheetRow}</td>
+                          <td className="pr-3 font-mono">{p.feederNo || '—'}</td>
+                          <td className="text-emerald-800">
+                            {[p.next.wiringType, p.next.ratingPower, p.next.description]
+                              .filter(Boolean).join(' · ')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {importPlan.plan.added > 15 && (
+                    <p className="text-[11px] mt-1 text-emerald-700/70">
+                      and {importPlan.plan.added - 15} more
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {importPlan.plan.changed > 0 && (
+                <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-blue-900">
+                  <p className="font-medium mb-1">{importPlan.plan.changed} row(s) will change</p>
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {importPlan.plan.plans.filter(p => p.kind === 'change').slice(0, 15).map(p => (
+                        <tr key={p.sheetRow} className="align-top">
+                          <td className="pr-3 font-mono whitespace-nowrap">{p.feederNo || `row ${p.sheetRow}`}</td>
+                          <td>
+                            {p.changes.map(c => (
+                              <div key={c.field}>
+                                <span className="text-blue-700/60">{
+                                  activeColumns.find(col => col.key === c.field)?.header ?? c.field
+                                }: </span>
+                                <span className="line-through opacity-60">{c.from || '—'}</span>
+                                {' → '}
+                                <span className="font-medium">{c.to || '—'}</span>
+                              </div>
+                            ))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {importPlan.plan.changed > 15 && (
+                    <p className="text-[11px] mt-1 text-blue-700/70">
+                      and {importPlan.plan.changed - 15} more
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 px-4 py-3 border-t bg-gray-50">
+              <button className="px-3 py-1.5 border rounded text-sm hover:bg-gray-100"
+                onClick={() => setImportPlan(null)}>
+                Cancel
+              </button>
+              <button className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                onClick={applyImportPlan}>
+                Apply to the table
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {simarisReport && (() => {
         const m = simarisReport.match;
         const blocking = m.duplicateInSimaris.length > 0 || m.duplicateInTable.length > 0;
@@ -1360,17 +1467,21 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             <DownloadIcon className="w-4 h-4 inline mr-1" />
             Import Excel
           </button>
-          {/* Stub for now — reads a SIMARIS export (a different sheet layout
-              than the app's own Import Excel above) to pull MODULE NO. from.
-              Behaviour to be specified; this just gets the button in place. */}
-          <button
-            className="px-3 py-1 bg-orange-600 text-white rounded text-sm hover:bg-orange-700"
-            onClick={handleImportSimaris}
-            title="Import a SIMARIS Excel export to pull MODULE NO. from"
-          >
-            <DownloadIcon className="w-4 h-4 inline mr-1" />
-            Import from SIMARIS
-          </button>
+          {/* Reads a SIMARIS export — a different sheet layout than the app's
+              own Import Excel above — to pull MODULE NO. from. LV only: a
+              SIMARIS feeder list is a low-voltage distribution document, and
+              MODULE NO. is an LV column, so the button has nothing to do on
+              an MV switchgear. */}
+          {selectedEquipment.type === 'LV' && (
+            <button
+              className="px-3 py-1 bg-orange-600 text-white rounded text-sm hover:bg-orange-700"
+              onClick={handleImportSimaris}
+              title="Import a SIMARIS Excel export to pull MODULE NO. from"
+            >
+              <DownloadIcon className="w-4 h-4 inline mr-1" />
+              Import from SIMARIS
+            </button>
+          )}
           {/* Shown only once something has been imported: a button that reads
               the same file again, for when the spreadsheet has been edited in
               Excel and saved back to the same place. */}
