@@ -11,6 +11,7 @@ import { plotframeFieldsApi, PlotframeDrawingType } from '../../services/plotfra
 import { catalogFor, estimatesFor } from '../../utils/mechanical';
 import { buildMechanicalReport, mechanicalReportName } from '../../utils/mechanicalReport';
 import { downloadText, fileSafe } from '../../utils/download';
+import { CreatingProjectSlideshow } from './CreatingProjectSlideshow';
 
 // The "Send to EPLAN" tab — pulled out of Simorgh Draw so sending a project
 // to EPLAN is its own place, not tucked inside the drawing preview. Mirrors
@@ -193,6 +194,9 @@ export const SendToEplanTab: React.FC = () => {
   const [target, setTarget] = useState<EplanTarget | null>(null);
   const [probe, setProbe] = useState<{ state: 'idle' | 'testing' | 'up' | 'down'; note?: string }>({ state: 'idle' });
   const [sending, setSending] = useState(false);
+  // The slideshow while EPLAN builds it. Separate from `sending` because it
+  // can be put away without stopping the job.
+  const [showSlides, setShowSlides] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string; projects?: EplanProject[] } | null>(null);
 
   useEffect(() => {
@@ -245,6 +249,7 @@ export const SendToEplanTab: React.FC = () => {
 
   const handleSend = async () => {
     setSending(true);
+    setShowSlides(true);
     setResult(null);
     try {
       const answer = await eplanApi.send({
@@ -261,6 +266,8 @@ export const SendToEplanTab: React.FC = () => {
       setResult({ ok: false, text: (err as Error).message });
     } finally {
       setSending(false);
+      // Whether it worked or not, the answer is the thing to look at now.
+      setShowSlides(false);
     }
   };
 
@@ -330,6 +337,17 @@ export const SendToEplanTab: React.FC = () => {
 
   return (
     <div>
+      {/* The wait, while EPLAN builds the project. Minutes of it, so there is
+          something to watch and something to read. */}
+      <CreatingProjectSlideshow
+        open={sending && showSlides}
+        projectName={projectData.projectName}
+        switchgear={equipment?.name ?? ''}
+        generationType={generationType || ''}
+        recordCount={records.length}
+        onHide={() => setShowSlides(false)}
+      />
+
       <div className="mb-5">
         <h2 className="text-xl font-bold text-gray-800">Send to EPLAN</h2>
         <p className="text-sm text-gray-500 mt-0.5">
