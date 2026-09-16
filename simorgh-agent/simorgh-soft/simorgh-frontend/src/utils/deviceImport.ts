@@ -84,6 +84,85 @@ export interface ParsedRow {
   values: Record<string, string>;
   /** 1-based row number in the sheet, for saying where something came from. */
   sheetRow: number;
+  /** The colours this row carries, when the file carries any. */
+  highlight?: RowHighlight;
+}
+
+/**
+ * The cell fills of a sheet, `[rowIndex][columnIndex]`, as `#rrggbb` or ''.
+ *
+ * Indexed the same way as the grid, so a row of one is the same row of the
+ * other. Built by the caller, which is the only place that has the worksheet
+ * the styles live on.
+ */
+export type SheetFills = string[][];
+
+/** Column index to its spreadsheet letter: 0 → A, 26 → AA. */
+const colLetter = (c: number): string => {
+  let out = '';
+  for (let n = c; n >= 0; n = Math.floor(n / 26) - 1) out = String.fromCharCode(65 + (n % 26)) + out;
+  return out;
+};
+
+/**
+ * The fills of a worksheet, as `#rrggbb` per cell.
+ *
+ * Only solid fills with a colour of their own are read. A theme colour has no
+ * rgb to read and a pure white one is what an uncoloured cell looks like, so
+ * neither becomes a highlight — the table's own "no colour" is white.
+ *
+ * `sheet` is a SheetJS worksheet read with `cellStyles: true`; without that
+ * option the styles are not parsed at all and every cell comes back plain.
+ *
+ * The two shapes are both looked at on purpose. A style written by this app
+ * is `s.fill.fgColor`, but the same file read back comes out flattened —
+ * xlsx-js-style's reader puts the fill's own fields straight on `s`, so a
+ * sheet this app wrote would read as having no colour if only the written
+ * shape were looked for.
+ */
+export function readFills(sheet: any, rows: number, cols: number): SheetFills {
+  const out: SheetFills = [];
+  for (let r = 0; r < rows; r++) {
+    const line: string[] = [];
+    for (let c = 0; c < cols; c++) {
+      const cell = sheet?.[`${colLetter(c)}${r + 1}`];
+      const fill = cell?.s?.fill ?? cell?.s;
+      const rgb = String(fill?.fgColor?.rgb ?? '');
+      const hex = /^[0-9A-Fa-f]{6,8}$/.test(rgb) ? rgb.slice(-6).toLowerCase() : '';
+      line.push(hex && hex !== 'ffffff' ? `#${hex}` : '');
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/** A row's colours, in the two forms the table stores them. */
+export interface RowHighlight {
+  rowColor?: string;
+  cellColors?: Record<string, string>;
+}
+
+/**
+ * The colours of one sheet row, read as the table stores them.
+ *
+ * A row whose cells are all one colour is a coloured row; anything else is a
+ * set of coloured cells. That is the inverse of how the table paints — the
+ * row colour underneath, cell colours over it — so a colour that came out of
+ * this table goes back into it looking the same.
+ */
+function rowHighlight(
+  fills: string[], fieldOf: string[],
+): RowHighlight {
+  const seen: { field: string; color: string }[] = [];
+  fieldOf.forEach((field, c) => {
+    if (field) seen.push({ field, color: fills[c] ?? '' });
+  });
+  if (seen.length === 0) return {};
+  const first = seen[0].color;
+  if (first && seen.every(x => x.color === first)) return { rowColor: first };
+  const cellColors: Record<string, string> = {};
+  for (const x of seen) if (x.color) cellColors[x.field] = x.color;
+  return Object.keys(cellColors).length > 0 ? { cellColors } : {};
 }
 
 /**
@@ -95,8 +174,8 @@ export interface ParsedRow {
  * row can be handled by slicing before calling.
  */
 export function parseSheet(
-  grid: unknown[][], columns: ImportColumn[],
-): { rows: ParsedRow[]; matched: string[]; unknown: string[] } {
+  grid: unknown[][], columns: ImportColumn[], fills?: SheetFills,
+): { rows: ParsedRow[]; matched: string[]; unknown: string[]; colored: boolean } {
   const index = columnIndex(columns);
   const header = (grid[0] ?? []).map(h => String(h ?? '').trim());
   const fieldOf = header.map(h => index.get(headerKey(h)) ?? '');
@@ -107,6 +186,11 @@ export function parseSheet(
     if (!h) return;
     if (fieldOf[i]) matched.push(h); else unknown.push(h);
   });
+
+  // A file with no fill anywhere says nothing about colour, and a file that
+  // says nothing cannot repaint the table. Only a file that actually carries
+  // colour replaces what the table has.
+  const colored = !!fills?.some((line, r) => r > 0 && line?.some(Boolean));
 
   const rows: ParsedRow[] = [];
   for (let r = 1; r < grid.length; r++) {
@@ -123,9 +207,15 @@ export function parseSheet(
       values[field] = text;
       if (text) any = true;
     });
-    if (any) rows.push({ values, sheetRow: r + 1 });
+    if (any) {
+      rows.push({
+        values,
+        sheetRow: r + 1,
+        ...(colored ? { highlight: rowHighlight(fills?.[r] ?? [], fieldOf) } : {}),
+      });
+    }
   }
-  return { rows, matched, unknown };
+  return { rows, matched, unknown, colored };
 }
 
 // ── What the file would do to the table ────────────────────────────────────
@@ -153,6 +243,10 @@ export interface ImportPlan {
   plans: RowPlan[];
   added: number;
   changed: number;
+  /** Rows whose colours the file changes. */
+  recolored: number;
+  /** True when the file carried any colour at all. */
+  colored: boolean;
   unchanged: number;
   /** Rows in the table the file says nothing about. They are left alone. */
   untouched: number;
@@ -175,11 +269,26 @@ const store = (field: string, value: string) =>
  * point of importing into an empty table, and why a table with no rows is not
  * a special case here.
  */
+/** Two sets of colours, compared the way the table would draw them. */
+const sameHighlight = (a: RowHighlight, b: RowHighlight): boolean =>
+  (a.rowColor ?? '') === (b.rowColor ?? '')
+  && JSON.stringify(Object.entries(a.cellColors ?? {}).sort())
+     === JSON.stringify(Object.entries(b.cellColors ?? {}).sort());
+
+/** The pseudo-field a colour change is listed under in the dialog. */
+export const HIGHLIGHT_FIELD = '__highlight';
+
+const describeHighlight = (h: RowHighlight): string => {
+  if (h.rowColor) return h.rowColor;
+  const n = Object.keys(h.cellColors ?? {}).length;
+  return n > 0 ? `${n} cell${n === 1 ? '' : 's'}` : 'none';
+};
+
 export function planImport(
   grid: unknown[][], columns: ImportColumn[], current: DeviceTableRow[],
-  equipmentId: string,
+  equipmentId: string, fills?: SheetFills,
 ): ImportPlan {
-  const { rows, matched, unknown } = parseSheet(grid, columns);
+  const { rows, matched, unknown, colored } = parseSheet(grid, columns, fills);
 
   const byFeeder = new Map<string, DeviceTableRow>();
   for (const row of current) {
@@ -220,6 +329,25 @@ export function planImport(
       next[field] = to;
     }
 
+    // Colour. A file that carries colour carries all of it: a cell it leaves
+    // white is a cell with no colour, so an old highlight goes rather than
+    // surviving under a file that plainly does not have it.
+    if (parsed.highlight) {
+      const was: RowHighlight = {
+        rowColor: base.rowColor,
+        cellColors: base.cellColors,
+      };
+      if (!sameHighlight(was, parsed.highlight)) {
+        changes.push({
+          field: HIGHLIGHT_FIELD,
+          from: describeHighlight(was),
+          to: describeHighlight(parsed.highlight),
+        });
+        next.rowColor = parsed.highlight.rowColor;
+        next.cellColors = parsed.highlight.cellColors;
+      }
+    }
+
     plans.push({
       kind: existing ? (changes.length > 0 ? 'change' : 'same') : 'add',
       sheetRow: parsed.sheetRow,
@@ -235,6 +363,8 @@ export function planImport(
     plans,
     added: plans.filter(p => p.kind === 'add').length,
     changed: plans.filter(p => p.kind === 'change').length,
+    recolored: plans.filter(p => p.changes.some(c => c.field === HIGHLIGHT_FIELD)).length,
+    colored,
     unchanged: plans.filter(p => p.kind === 'same').length,
     untouched: current.filter(r => !used.has(r.id)).length,
     matchedColumns: matched,

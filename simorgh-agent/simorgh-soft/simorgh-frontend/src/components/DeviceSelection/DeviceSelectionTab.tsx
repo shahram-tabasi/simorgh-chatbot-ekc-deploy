@@ -9,8 +9,25 @@ import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES,
 import { useProject } from '../../context/ProjectContext';
 import { withCodeCaseAll } from '../../utils/deviceCodes';
 import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/simarisImport';
-import { ImportPlan, applyPlan, planImport } from '../../utils/deviceImport';
+import { HIGHLIGHT_FIELD, ImportPlan, applyPlan, planImport, readFills } from '../../utils/deviceImport';
 import { templateMeta } from '../../utils/templateMeta';
+
+/**
+ * One colour, as it will look — or the word for having none.
+ *
+ * `value` is either a `#rrggbb` the whole row carries, or a count of the
+ * cells that carry their own ("3 cells"), which is what the import plan says
+ * when a row is not one colour throughout.
+ */
+const Swatch: React.FC<{ value: string }> = ({ value }) => (
+  /^#[0-9a-f]{6}$/i.test(value)
+    ? <span
+        className="inline-block w-4 h-4 rounded border border-gray-300 align-middle"
+        style={{ backgroundColor: value }}
+        title={value}
+      />
+    : <span className="opacity-70">{value || 'none'}</span>
+);
 
 // ===== PROPS INTERFACES =====
 interface DeviceTableProps {
@@ -1069,10 +1086,16 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     reader.onload = (event) => {
       try {
         const data = new Uint8Array(event.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
+        // `cellStyles` is what makes the fills readable; without it every cell
+        // comes back plain and the highlights in the file are invisible here.
+        const workbook = XLSX.read(data, { type: 'array', cellStyles: true });
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        // Blank rows are kept so a row of the grid is the same row of the
+        // sheet — which is what lets the fills below line up with it, and
+        // what makes "sheet row 14" in the dialog mean row 14. Rows with no
+        // values in them are dropped when the grid is read, not here.
         const grid = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-          header: 1, defval: '', raw: false, blankrows: false,
+          header: 1, defval: '', raw: false, blankrows: true,
         });
 
         if (grid.length < 2) {
@@ -1080,7 +1103,11 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           return;
         }
 
-        const plan = planImport(grid, activeColumns, rows, selectedEquipment!.id);
+        const width = Math.max(...grid.map(line => (line ?? []).length), 0);
+        const plan = planImport(
+          grid, activeColumns, rows, selectedEquipment!.id,
+          readFills(worksheet, grid.length, width),
+        );
         if (plan.matchedColumns.length === 0) {
           alert(
             'None of the columns in that file match this table.\n\n'
@@ -1122,6 +1149,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     setExcelReadAt(new Date());
     setExcelNote(
       `${fileName} — ${plan.added} row(s) added, ${plan.changed} changed`
+      + (plan.recolored ? `, ${plan.recolored} recoloured` : '')
       + (plan.untouched ? `, ${plan.untouched} left alone` : ''),
     );
     setImportPlan(null);
@@ -1150,6 +1178,23 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     const headerRow = fillableColumns.map(col => col.header);
     const dataRows = rows.map(row => fillableColumns.map(col => (row as any)[col.key] ?? ''));
     const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+
+    // The highlights go into the file as cell fills. Without this the colours
+    // stop at the export and a sheet sent out to be filled in comes back
+    // plain — and since an import that carries colour replaces the colours in
+    // the table, a round trip would quietly strip the table of them.
+    rows.forEach((row, r) => {
+      fillableColumns.forEach((col, c) => {
+        const color = row.cellColors?.[col.key] || row.rowColor;
+        if (!color) return;
+        const ref = XLSX.utils.encode_cell({ r: r + 1, c });
+        if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+        ws[ref].s = {
+          ...(ws[ref].s ?? {}),
+          fill: { patternType: 'solid', fgColor: { rgb: `FF${color.replace('#', '').toUpperCase()}` } },
+        };
+      });
+    });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Devices');
     XLSX.writeFile(wb, `${selectedEquipment.name}_Devices.xlsx`);
@@ -1216,6 +1261,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                   {importPlan.plan.changed} to change, {importPlan.plan.unchanged} already match
                   {importPlan.plan.untouched > 0
                     && `, ${importPlan.plan.untouched} row(s) in the table left alone`}
+                  {importPlan.plan.recolored > 0
+                    && `, ${importPlan.plan.recolored} recoloured`}
                 </p>
               </div>
               <button className="p-1 hover:bg-gray-100 rounded" onClick={() => setImportPlan(null)}>
@@ -1272,14 +1319,26 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                           <td className="pr-3 font-mono whitespace-nowrap">{p.feederNo || `row ${p.sheetRow}`}</td>
                           <td>
                             {p.changes.map(c => (
-                              <div key={c.field}>
-                                <span className="text-blue-700/60">{
-                                  activeColumns.find(col => col.key === c.field)?.header ?? c.field
-                                }: </span>
-                                <span className="line-through opacity-60">{c.from || '—'}</span>
-                                {' → '}
-                                <span className="font-medium">{c.to || '—'}</span>
-                              </div>
+                              c.field === HIGHLIGHT_FIELD ? (
+                                // Colour is shown, not spelled: a hex code
+                                // says nothing about what the row will look
+                                // like, and looking is the whole question.
+                                <div key={c.field} className="flex items-center gap-1.5">
+                                  <span className="text-blue-700/60">Highlight: </span>
+                                  <Swatch value={c.from} />
+                                  <span>→</span>
+                                  <Swatch value={c.to} />
+                                </div>
+                              ) : (
+                                <div key={c.field}>
+                                  <span className="text-blue-700/60">{
+                                    activeColumns.find(col => col.key === c.field)?.header ?? c.field
+                                  }: </span>
+                                  <span className="line-through opacity-60">{c.from || '—'}</span>
+                                  {' → '}
+                                  <span className="font-medium">{c.to || '—'}</span>
+                                </div>
+                              )
                             ))}
                           </td>
                         </tr>
