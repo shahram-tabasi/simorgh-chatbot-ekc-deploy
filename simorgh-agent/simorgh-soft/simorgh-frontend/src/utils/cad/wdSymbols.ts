@@ -288,7 +288,12 @@ const DEFS: Def[] = [
   {
     id: 'terminal', name: 'Terminal', group: 'Terminals and plugs',
     width: W, height: H,
-    terminals: [{ x: CX, y: 0, name: '1' }],
+    // Both sides, and both called the same thing — because they are. A
+    // terminal is one number with a field side and an internal side, and a
+    // wire lands on each. Giving it one connection point makes it a dead end:
+    // whatever is wired below it is connected to nothing above it, and the
+    // connection list quietly loses half the panel.
+    terminals: [{ x: CX, y: 0, name: '1' }, { x: CX, y: H, name: '1' }],
     draw: () => [wire(CX, 0, CX, H / 2 - 2.5), wire(CX, H / 2 + 2.5, CX, H),
       circle(CX, H / 2, 2.5, 'none')],
   },
@@ -382,7 +387,15 @@ const DEFS: Def[] = [
   {
     id: 'plc-do', name: 'PLC digital output', group: 'PLC',
     width: 34, height: 20,
-    terminals: [{ x: 6, y: 0, name: 'Q' }, { x: 6, y: 20, name: 'M' }],
+    // The common at the top and the output at the bottom, which is the way
+    // round an output is drawn: the card is fed from the positive rail and the
+    // load hangs underneath it. An input is the other way round — the field
+    // contact is above and the signal arrives from it — so the two symbols are
+    // not mirror images by accident.
+    // `L+` and not `M`: the supply an output card switches from is not the
+    // common an input card returns to, and calling both of them M makes one
+    // terminal that is at 24 V on half the pages and at 0 V on the other half.
+    terminals: [{ x: 6, y: 0, name: 'L+' }, { x: 6, y: 20, name: 'Q' }],
     draw: () => plcChannel('DO'),
   },
   {
@@ -394,7 +407,7 @@ const DEFS: Def[] = [
   {
     id: 'plc-ao', name: 'PLC analogue output', group: 'PLC',
     width: 34, height: 20,
-    terminals: [{ x: 6, y: 0, name: '+' }, { x: 6, y: 20, name: '-' }],
+    terminals: [{ x: 6, y: 0, name: '-' }, { x: 6, y: 20, name: '+' }],
     draw: () => plcChannel('AO'),
   },
 ];

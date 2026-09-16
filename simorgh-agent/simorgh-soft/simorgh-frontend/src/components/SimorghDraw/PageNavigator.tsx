@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import {
   CopyIcon, FilePlusIcon, PencilIcon, PencilRulerIcon, Trash2Icon,
-  ChevronUpIcon, ChevronDownIcon,
+  ChevronUpIcon, ChevronDownIcon, FileSpreadsheetIcon,
 } from 'lucide-react';
 import { DrawingEdits } from '../../types/project';
 import {
   DrawingPage, PageType, copyOfPage, movePage, newPage, pageKey,
 } from '../../utils/cad/pages';
 import { SYMBOL_LIBRARIES, libraryOf } from '../../utils/cad/symbolLibraries';
+import { IoListImport } from './IoListImport';
 
 // The page tree.
 //
@@ -45,6 +46,8 @@ export const PageNavigator: React.FC<Props> = ({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [draftNote, setDraftNote] = useState('');
+  const [fromList, setFromList] = useState(false);
+  const [made, setMade] = useState<number | null>(null);
 
   const add = (type: PageType) => {
     const page = newPage(pages, type);
@@ -109,6 +112,14 @@ export const PageNavigator: React.FC<Props> = ({
             the symbol library the page draws from.
           </p>
         </div>
+        <button
+          onClick={() => setFromList(true)}
+          disabled={!canEdit}
+          title="Read an I/O list and draw a wiring page for every signal in it"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40"
+        >
+          <FileSpreadsheetIcon className="w-4 h-4" /> From I/O list
+        </button>
         {SYMBOL_LIBRARIES.map(lib => (
           <button
             key={lib.kind}
@@ -121,6 +132,14 @@ export const PageNavigator: React.FC<Props> = ({
           </button>
         ))}
       </div>
+
+      {made !== null && (
+        <p className="px-4 py-2 bg-emerald-50 border-b border-emerald-200 text-sm text-emerald-900">
+          {made} page{made === 1 ? '' : 's'} drawn from the list. They are pages like any
+          other now — draw on them, and bringing in a newer list adds new pages rather than
+          overwriting these.
+        </p>
+      )}
 
       {pages.length === 0 ? (
         <p className="p-6 text-sm text-gray-500">
@@ -210,6 +229,19 @@ export const PageNavigator: React.FC<Props> = ({
             );
           })}
         </ul>
+      )}
+
+      {fromList && (
+        <IoListImport
+          pages={pages}
+          edits={edits}
+          onDone={(next, nextEdits, count) => {
+            onChange(next, nextEdits);
+            setFromList(false);
+            setMade(count);
+          }}
+          onClose={() => setFromList(false)}
+        />
       )}
     </div>
   );

@@ -146,6 +146,8 @@ export interface Device {
   tag: string | null;
   /** Index of the text carrying that tag. */
   tagIndex: number | null;
+  /** What its connection points are called. Empty for a symbol with none. */
+  pins: string[];
 }
 
 /** How far from a symbol a TAG text can sit and still belong to it. */
@@ -176,19 +178,30 @@ export function devices(shapes: Shape[]): Device[] {
   const used = new Set<number>();
 
   return [...byBlock.entries()].map(([block, e]) => {
-    const at: Pt = [Math.min(...e.xs), Math.min(...e.ys)];
-    // The nearest unclaimed tag within reach. Nearest rather than first so two
-    // symbols side by side do not both take the same label.
+    const x0 = Math.min(...e.xs), y0 = Math.min(...e.ys);
+    const x1 = Math.max(...e.xs), y1 = Math.max(...e.ys);
+    const at: Pt = [x0, y0];
+    // The nearest unclaimed tag within reach of the symbol's *box*, not of its
+    // top-left corner. The corner is where a symbol is placed from, not where
+    // it is: a PLC channel reaches thirty units to the right of the conductor
+    // it stands on, so its own designation, written beside it, was further
+    // from that corner than the reach allowed and the symbol came back
+    // untagged. Nearest rather than first, so two symbols side by side do not
+    // both take the same label.
     let best: { i: number; s: string; d: number } | null = null;
     for (const t of tags) {
       if (used.has(t.index)) continue;
-      const d = Math.hypot(t.at[0] - at[0], t.at[1] - at[1]);
+      const dx = Math.max(x0 - t.at[0], 0, t.at[0] - x1);
+      const dy = Math.max(y0 - t.at[1], 0, t.at[1] - y1);
+      const d = Math.hypot(dx, dy);
       if (d <= TAG_REACH && (!best || d < best.d)) best = { i: t.index, s: t.text, d };
     }
     if (best) used.add(best.i);
     return {
       block, blockName: e.name, shapes: e.idx, at,
       tag: best?.s ?? null, tagIndex: best?.i ?? null,
+      pins: e.idx.map(i => String((shapes[i] as { pin?: string }).pin ?? ''))
+        .filter(Boolean),
     };
   }).sort((a, b) => (a.at[1] - b.at[1]) || (a.at[0] - b.at[0]));
 }
@@ -251,6 +264,11 @@ export function checkSheet(shapes: Shape[]): Message[] {
   // 1. A conductor end touching nothing at all.
   const ends = new Map<string, { p: Pt; count: number; index: number }>();
   for (const s of segs) {
+    // A busbar or a potential rail is *meant* to end in space — it runs past
+    // the last path on the page and stops. Reporting both ends of every rail
+    // as a dangling wire is four warnings a page that are never once right,
+    // and a check list that is never once empty is a check list nobody reads.
+    if (s.layer === 'BUS') continue;
     for (const p of [s.a, s.b]) {
       const k = key(p);
       const e = ends.get(k);
@@ -288,6 +306,18 @@ export function checkSheet(shapes: Shape[]): Message[] {
   }
   for (const [tag, group] of byTag) {
     if (group.length < 2) continue;
+    // One designation shown in several places is not a fault — it is how a
+    // wiring diagram works. Terminal strip -X1 appears once per path, card -A1
+    // once per channel, and the card's own common on every one of them. A page
+    // that reported those as errors would report forty of them and be switched
+    // off by lunchtime.
+    //
+    // So a device with connection points is left to `checkTerminals`, which
+    // has the nets in hand and can ask the question that actually matters:
+    // is the same terminal sitting on two different potentials. Here the older
+    // rule stands only for symbols with no connection points, where the
+    // designation is all there is to go on.
+    if (group.every(d => d.pins.length > 0)) continue;
     out.push({
       cls: 'error', code: 'E-DUP-TAG', category: 'Designations',
       text: `${group.length} devices are all designated ${tag}.`,

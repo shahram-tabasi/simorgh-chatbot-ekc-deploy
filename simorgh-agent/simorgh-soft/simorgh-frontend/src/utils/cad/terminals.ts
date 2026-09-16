@@ -265,6 +265,68 @@ export function looseTerminals(shapes: Shape[]): Terminal[] {
  * one. The editor runs both and shows one list.
  */
 export function checkTerminals(shapes: Shape[]): Message[] {
+  return [...openPins(shapes), ...splitPotentials(shapes)];
+}
+
+/**
+ * The same terminal shown on two different potentials.
+ *
+ * On a wiring diagram one terminal is drawn in as many places as it is wired
+ * in: -X1:7 appears on the path it belongs to, the card's common M appears on
+ * every channel of the card. Those are the same physical point, drawn twice,
+ * and that is not a fault.
+ *
+ * What cannot be true is the same point being at two different potentials at
+ * once. That is either two terminals wrongly given one number, or a wire on
+ * the wrong one — and either way it is a panel that does not work, found here
+ * rather than by an electrician with a meter.
+ */
+function splitPotentials(shapes: Shape[]): Message[] {
+  const marks = terminals(shapes);
+  if (marks.length === 0) return [];
+
+  const byBlock = new Map<string, Device>();
+  for (const d of devices(shapes)) byBlock.set(d.block, d);
+
+  const all = nets(shapes);
+  const netOf = (t: Terminal): number => all.findIndex(
+    n => n.points.some(p => Math.hypot(p[0] - t.at[0], p[1] - t.at[1]) <= REACH));
+
+  // Every drawn occurrence of a device:pin, which net it is on, and which
+  // symbol it came off.
+  const seen = new Map<string, { nets: Set<number>; blocks: Set<string>; marks: Terminal[] }>();
+  for (const m of marks) {
+    const net = netOf(m);
+    if (net < 0) continue;              // unwired; `openPins` has that one
+    const ref = refOf(m, byBlock);
+    const id = sortKey(ref);
+    if (!seen.has(id)) seen.set(id, { nets: new Set(), blocks: new Set(), marks: [] });
+    const e = seen.get(id)!;
+    e.nets.add(net);
+    e.blocks.add(m.block);
+    e.marks.push(m);
+  }
+
+  const out: Message[] = [];
+  for (const [id, e] of seen) {
+    if (e.nets.size < 2) continue;
+    // One symbol with the same designation on both sides is a terminal, and a
+    // terminal separating two nets is the entire job of a terminal. It is only
+    // a fault when two *different* symbols claim the point, because then two
+    // pieces of metal are wearing one number.
+    if (e.blocks.size < 2) continue;
+    out.push({
+      cls: 'error', code: 'E-SPLIT-PIN', category: 'Connections',
+      text: `${id} is drawn on ${e.nets.size} different potentials — one terminal cannot be at two.`,
+      shapes: e.marks.map(m => m.index),
+      at: e.marks[0].at,
+    });
+  }
+  return out;
+}
+
+/** Connection points with nothing wired to them. */
+function openPins(shapes: Shape[]): Message[] {
   const loose = looseTerminals(shapes);
   if (loose.length === 0) return [];
 
