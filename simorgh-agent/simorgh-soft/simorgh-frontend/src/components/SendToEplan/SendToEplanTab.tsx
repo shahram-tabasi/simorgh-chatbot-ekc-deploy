@@ -8,7 +8,8 @@ import { useProject } from '../../context/ProjectContext';
 import { buildEplanData, EplanData, EplanDataOptions } from '../../utils/eplanDataExport';
 import { eplanApi, EplanTarget, EplanProject } from '../../services/eplanApi';
 import { plotframeFieldsApi, PlotframeDrawingType } from '../../services/plotframeFieldsApi';
-import { MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows } from '../../utils/mechanicalItems';
+import { buildMechanicalItems } from '../../utils/mechanicalItems';
+import { buildMechanicalReport, mechanicalReportName } from '../../utils/mechanicalReport';
 import { downloadText, fileSafe } from '../../utils/download';
 
 // The "Send to EPLAN" tab — pulled out of Simorgh Draw so sending a project
@@ -287,18 +288,28 @@ export const SendToEplanTab: React.FC = () => {
     () => (equipment ? buildMechanicalItems(projectData, equipment) : []),
     [projectData, equipment]);
 
+  /**
+   * The mechanical report, in the shape Eplanix issues one.
+   *
+   * Not a sheet of rows any more: the same six sheets its Mechanical screen
+   * produces — cover, overview, equipment summary, per-cell data, the cell ×
+   * part matrix and the panel elevation — built from this project's own
+   * feeders, templates and panel specification. See `mechanicalReport.ts` for
+   * what was taken from that routine and what deliberately was not.
+   */
   const exportMechanicalExcel = () => {
     if (!equipment) return;
-    const rows = buildMechanicalRows(projectData, [equipment]);
-    if (rows.length === 0) {
-      alert('Nothing to export yet — this switchgear has no panel specification in Device Library.');
+    const cells = equipment.devices ?? [];
+    if (cells.length === 0 && mechanical.length === 0) {
+      alert('Nothing to report yet — this switchgear has no feeders in Device Selection '
+          + 'and no panel specification in Device Library.');
       return;
     }
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([MECHANICAL_HEADERS, ...rows]);
-    ws['!cols'] = [{ wch: 16 }, { wch: 14 }, { wch: 26 }, { wch: 34 }, { wch: 6 }, { wch: 10 }, { wch: 46 }];
-    XLSX.utils.book_append_sheet(wb, ws, 'Mechanical items');
-    XLSX.writeFile(wb, `${projectData.projectName || 'project'}_${equipment.name}_Mechanical_items.xlsx`);
+    const revision = currentRevision?.revisionNumber ? String(currentRevision.revisionNumber) : '';
+    XLSX.writeFile(
+      buildMechanicalReport(projectData, equipment, revision),
+      mechanicalReportName(projectData, equipment, revision),
+    );
   };
 
 
