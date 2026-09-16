@@ -1,16 +1,20 @@
-# Standalone compose file — run THIS on the EPLAN machine (the Windows box
-# with Eplanix + EPLAN installed), via the Docker Desktop already there.
-# It is not part of the main stack's `docker-compose.yml` and is never
-# started from the Linux server: eplan-bridge-service lives there and talks
-# to this forwarder over the LAN, not the other way round.
+# The relay as a container — NOT the way to deploy this on the EPLAN machine.
 #
-#   cd eplan-port-forwarder
+# On Docker Desktop this cannot reach AsyncTcpServer at all (it binds the
+# host's loopback, and a container can only dial the host's real interface),
+# and publishing these ports puts Docker's proxy on them, which makes the relay
+# forward to itself and makes EPLAN's own port resolver time out on the machine
+# itself. `forwarder.py` detects that at startup and refuses to run.
+#
+# Use the `netsh interface portproxy` rules in README.md instead. They run in
+# the kernel on that machine and dial 127.0.0.1, which is the only place
+# AsyncTcpServer listens.
+#
+# This file stays for the case the container IS right for: relaying to
+# something that binds a real interface, on a host that is not also publishing
+# the same ports.
+#
 #   docker compose up -d
-#
-# That pulls the image the GitHub workflow builds, like the rest of the
-# stack. To build it on this machine instead — no ghcr.io, no login, just
-# Harbor for the base image:
-#
 #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 #
 # Then set EPLAN_HOST on eplan-bridge-service (in the main stack, on the

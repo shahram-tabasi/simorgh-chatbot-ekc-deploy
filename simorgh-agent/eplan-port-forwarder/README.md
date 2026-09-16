@@ -56,77 +56,12 @@ For every port in the pool (12000–12100 by default — the same range
 interface and forwards each connection, byte-for-byte, to that same port
 number on `127.0.0.1`. No parsing, no state — just a relay.
 
-## Deploy it (on the EPLAN machine, via Docker Desktop)
+## Use the Windows port proxy
 
-These files live in this repo, which is checked out on the Linux server —
-not on the EPLAN machine. Clone it there first (or copy this one directory
-across), then run from inside it:
-
-```
-git clone <this repo> C:\simorgh
-cd C:\simorgh\simorgh-agent\eplan-port-forwarder
-docker compose up -d
-```
-
-That **pulls** `simorgh-eplan-port-forwarder`, the image the GitHub workflow
-builds from this directory — the same default the rest of the stack follows,
-for the same reason: the machines that run these containers are not the
-machines that should be building them. If the packages are private, the one
-thing this needs first is a login:
-
-```
-docker login ghcr.io -u <github user>          # a PAT with read:packages
-```
-
-### If this machine cannot reach ghcr.io
-
-Build it here instead. There is nothing to download but the base image, and
-that comes from Harbor on the LAN (see `BASE_REGISTRY` in the Dockerfile):
-
-```
-docker login registry.simorghai.com
-docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-```
-
-The build is seconds: the relay is one stdlib Python file, `pip` never runs
-and neither does a package manager. On a machine that does reach Docker Hub
-directly, `--build-arg BASE_REGISTRY=library` skips Harbor as well.
-
-Either way, that's it — `TARGET_HOST` defaults to `host.docker.internal`
-(Docker Desktop's name for the Windows host it runs on), which is what
-`127.0.0.1` means to `AsyncTcpServer` on that same machine. **Do not**
-change `TARGET_HOST` to `127.0.0.1` for the container — inside a container,
-that's the container's own loopback, not the host's, and the forwarder
-would just fail to reach anything. (Running `forwarder.py` directly on
-Windows instead of in a container is the one case where `127.0.0.1` is
-right, because then the loopback really is the host's.)
-
-### Check it came up
-
-```
-docker ps --filter name=eplan-port-forwarder
-docker logs eplan-port-forwarder --tail 20
-netstat -ano | findstr "12000"      # expect 0.0.0.0:12000 LISTENING
-```
-
-A container that is restarting rather than running is almost always the port
-publish: something else on the machine already holds a port in 12000-12100.
-
-### Updating it later
-
-```
-docker compose pull && docker compose up -d
-```
-
-(Or the build form above, with `--build`.) The relay carries no state, so a
-restart costs nothing but the sends in flight at that second.
-
-## Or: Windows' own port proxy, with no files at all
-
-Windows ships a TCP port forwarder (`netsh interface portproxy`) that does
-the same byte-for-byte relay this container does. On the EPLAN machine it is
-the shortest path to a working bridge: nothing to clone, no image to pull,
-and the rules live in the registry so they survive a reboot on their own.
+Windows ships a TCP port forwarder (`netsh interface portproxy`) and it is the
+one to use here. It is not the shortest path, it is the only one that reaches a
+loopback-only listener: the rules run in the kernel, on the machine itself, and
+they dial `127.0.0.1` — the address `AsyncTcpServer` actually binds.
 
 In an **elevated** PowerShell:
 
@@ -153,6 +88,12 @@ To undo it:
   netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=$_ | Out-Null
 }
 ```
+
+Local traffic is unaffected: a connection to `127.0.0.1:12000` goes to the more
+specific bind, which is `AsyncTcpServer` itself, so Eplanix's own MVC app on
+that machine carries on talking to it exactly as before. A connection from the
+Linux server to `192.168.1.x:12000` lands on the portproxy rule and is handed
+to the same loopback socket.
 
 ### Does it survive a reboot?
 
@@ -181,11 +122,40 @@ Get-NetTCPConnection -State Listen |
 Rules present but nothing listening means it is the EPLAN instance, not the
 plumbing — which is what the bridge reports as `eplan_server: "unreachable"`.
 
-The trade-off against the container: this is machine configuration rather
-than something in version control, so it has to be reapplied by hand if the
-box is rebuilt. Everything else about it is the same — a raw TCP relay that
-never looks at what it carries, which is why the firewall rule below matters
-just as much here.
+The trade-off: this is machine configuration rather than something in version
+control, so it has to be reapplied by hand if the box is rebuilt.
+
+## The container in this directory, and why it is not the answer here
+
+`docker-compose.yml` runs the same relay as a container, and on Docker Desktop
+it **cannot work for this listener** — worse, deploying it breaks EPLAN on that
+machine. Both halves of that are worth stating, because the container looks
+like the tidier option and was the first thing tried:
+
+- A container cannot dial the host's loopback. `TARGET_HOST` has to be
+  `host.docker.internal`, which is the host's *real* interface, and
+  `AsyncTcpServer` is not on it.
+- Publishing `12000-12100` puts Docker's own proxy on those ports on the
+  Windows host. So `host.docker.internal:12000` reaches that proxy: the relay
+  forwards to itself, for ever. And the proxy now answers the port that
+  Eplanix's `TcpPortResolverService` polls, which never gets the "running"
+  status it waits for and fails with `TimeoutException` — EPLAN appears broken
+  on the machine, from a container that was only meant to expose it.
+
+`forwarder.py` now dials its own target once at startup and refuses to run if
+the call comes back through its own front door, so this fails loudly at
+`docker compose up` instead of silently afterwards. The container remains
+useful where the thing being relayed to binds a real interface rather than
+loopback — which is not the case here.
+
+If it is already running on the EPLAN machine, this is the fix:
+
+```powershell
+docker stop eplan-port-forwarder
+docker rm eplan-port-forwarder
+```
+
+then the portproxy rules above.
 
 ## Firewall it
 

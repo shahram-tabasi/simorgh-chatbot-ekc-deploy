@@ -36,10 +36,11 @@ socket to the network:
   `TcpPortResolverService` hands out from), so a send never has to know or
   guess one.
 - **`eplan-port-forwarder`** (`simorgh-agent/eplan-port-forwarder`) is a
-  plain byte-for-byte TCP relay deployed *on the EPLAN machine itself*, via
-  the Docker Desktop already there — its own standalone compose file, which
-  pulls the workflow-built image by default and can build in place where
-  ghcr.io is out of reach. It's the only thing that actually needs
+  plain byte-for-byte TCP relay on the EPLAN machine itself — in practice the
+  `netsh interface portproxy` rules in that directory's README, which run in
+  the Windows kernel and dial `127.0.0.1`. That address is the whole point: it
+  is where `AsyncTcpServer` listens, and it is the one place a container
+  cannot reach. It's the only thing that actually needs
   to run where EPLAN does — it forwards the whole port pool from that
   machine's real network interface to its own loopback, which is what lets
   `eplan-bridge-service` (on a different server) reach a socket that only
@@ -141,14 +142,16 @@ running: `docker compose up -d eplan-bridge`.
 docker ps --filter name=eplan-port-forwarder
 ```
 
-If it is not listed, this is the usual cause — nothing binds that machine's
-real interface without it, so the bridge's probes are dropped rather than
-refused. Deploy it: `cd eplan-port-forwarder && docker compose up -d`, which
-pulls `simorgh-eplan-port-forwarder` the way the rest of the stack pulls its
-images. On a machine that cannot reach ghcr.io, build it there instead —
-`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
---build`, seconds, no package manager involved. See
-`../eplan-port-forwarder/README.md`.
+Nothing binds that machine's real interface without a relay, so the bridge's
+probes are dropped rather than refused. Deploy the `netsh interface portproxy`
+rules in `../eplan-port-forwarder/README.md` — **not** the container in that
+directory. On Docker Desktop the container cannot reach `AsyncTcpServer` at all
+(it binds the host's loopback; a container can only dial the host's real
+interface), and publishing the pool puts Docker's proxy on those ports, which
+makes the relay forward to itself *and* makes Eplanix's own
+`TcpPortResolverService` time out waiting for EPLAN to reach "running" — the
+machine looks broken, from the thing that was meant to expose it. If that
+container is running there, `docker stop eplan-port-forwarder` first.
 
 Note that `eplan-nginx`, `eplan-api-gateway` and `eplan-mssql` on that
 machine are **not** part of this path. They belong to a different project
