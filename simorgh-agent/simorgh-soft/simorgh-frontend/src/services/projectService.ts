@@ -241,6 +241,34 @@ export class ProjectConflict extends Error {
   }
 }
 
+/** One switchgear as a kept version remembers it. */
+export interface VersionSwitchgear {
+  id: string;
+  name: string;
+  type: string;
+  rows: number;
+}
+
+/** A version of a project the server kept before replacing it. */
+export interface ProjectVersion {
+  _id: string;
+  projectId: string;
+  projectName: string;
+  rev: number | null;
+  /** When this version was replaced. */
+  savedAt: string;
+  /** When it had last been edited. */
+  changedOn: string | null;
+  reason: string;
+  plainSize: number;
+  counts: {
+    templates: number;
+    equipments: number;
+    rows: number;
+    switchgears: VersionSwitchgear[];
+  };
+}
+
 export const projectService = {
   // The Windows desktop installer published on the server, if there is one.
   // Never throws — a missing endpoint or an empty folder simply means the
@@ -317,6 +345,20 @@ export const projectService = {
       try { detail = (await response.text()).slice(0, 200); } catch { /* nothing to read */ }
     }
     return `${fallback} (HTTP ${response.status})${detail ? `: ${detail}` : ''}`;
+  },
+
+  /** The versions of a project the server has kept, newest first. */
+  async listProjectHistory(id: string): Promise<ProjectVersion[]> {
+    const response = await fetch(`${API_BASE_URL}/projects/${id}/history`);
+    if (!response.ok) throw new Error(await this._reason(response, 'Failed to read the history'));
+    return response.json();
+  },
+
+  /** One kept version, whole, as the project was at that moment. */
+  async readProjectVersion(id: string, versionId: string): Promise<ProjectData> {
+    const response = await fetch(`${API_BASE_URL}/projects/${id}/history/${versionId}`);
+    if (!response.ok) throw new Error(await this._reason(response, 'Failed to read that version'));
+    return response.json();
   },
 
   async createProject(projectData: Omit<ProjectData, '_id'>): Promise<ProjectData> {

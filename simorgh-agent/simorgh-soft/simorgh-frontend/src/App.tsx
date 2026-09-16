@@ -9,6 +9,7 @@ import { ProjectSelection } from './components/ProjectSelection/ProjectSelection
 import { SplashScreen } from './components/SplashScreen/SplashScreen';
 import { ProjectConflictState, ProjectProvider, useProject } from './context/ProjectContext';
 import { COPYRIGHT_LINE, PRODUCT_NAME, PRODUCT_TAGLINE } from './branding';
+import { ProjectHistoryModal } from './components/shared/ProjectHistoryModal';
 import { buildLabel, buildStamp } from './utils/buildStamp';
 import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
@@ -221,8 +222,9 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const [zoom,          setZoom]          = useState(100);
   const {
     projectData, saveProject, notifyRevisionLocked, lastSavedAt, saving, saveError,
-    saveFailures, downloadProjectCopy, restoreFromFile,
+    saveFailures, downloadProjectCopy, restoreFromFile, restoreOneSwitchgear,
   } = useProject();
+  const [showHistory, setShowHistory] = useState(false);
   const desktopInstaller = useDesktopInstaller();
   // Everything on screen that can be put away, so View can bring it back.
   // Null outside a provider — the menu simply shows no panel section then.
@@ -415,6 +417,20 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                 {/* A copy in a folder, and the way back from one. Under Save,
                     because that is what somebody is looking for when they come
                     here after losing something. */}
+                {/* The versions the server kept. First of the three, because
+                    it is the one that answers "it was there this morning"
+                    without anybody needing a file or a database client. */}
+                <button
+                  className={`block w-full text-left px-4 py-2 hover:bg-gray-600 ${
+                    projectData._id ? '' : 'opacity-50 cursor-not-allowed'}`}
+                  disabled={!projectData._id}
+                  onClick={() => { setShowHistory(true); setActiveMenu(null); }}
+                  title={projectData._id
+                    ? 'Every version of this project the server kept — restore one switchgear or all of it'
+                    : 'This project has not been saved yet, so there is nothing kept for it'}
+                >
+                  🕘 History &amp; restore…
+                </button>
                 <button
                   className="block w-full text-left px-4 py-2 hover:bg-gray-600"
                   onClick={() => { downloadProjectCopy(); setActiveMenu(null); }}
@@ -662,6 +678,15 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
       </div>
       {showShortcuts && <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+      {showHistory && projectData._id && (
+        <ProjectHistoryModal
+          projectId={String(projectData._id)}
+          projectName={projectData.projectName}
+          onClose={() => setShowHistory(false)}
+          onRestoreProject={restoreFromFile}
+          onRestoreSwitchgear={restoreOneSwitchgear}
+        />
+      )}
       <SaveFailedModal
         saveError={saveError}
         saveFailures={saveFailures}

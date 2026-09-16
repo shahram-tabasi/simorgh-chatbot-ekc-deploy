@@ -676,6 +676,11 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
   // Track previous equipment ID to only reload rows when equipment changes
   const prevEquipmentIdRef = useRef<string | null>(null);
+  // And the switchgear object itself, for the one case where the id does not
+  // change but the rows do: a restore putting an older version of this same
+  // switchgear back. Without this the table would keep showing the rows it had
+  // and, on the next edit, write them straight back over what was restored.
+  const prevEquipmentRef = useRef<Equipment | null>(null);
   // The exact rows array last loaded from an equipment, so the write-back
   // effect below can tell "freshly loaded" from "edited by the user".
   const loadedRowsRef = useRef<DeviceTableRow[] | null>(null);
@@ -706,8 +711,17 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   useEffect(() => {
     // Only reload rows when the selected equipment ID changes (different equipment selected)
     // NOT when the same equipment's data is updated (would cause infinite loop)
-    if (selectedEquipment?.id !== prevEquipmentIdRef.current) {
+    const switched = selectedEquipment?.id !== prevEquipmentIdRef.current;
+    // A different object under the same id, holding rows this table has not
+    // loaded: that is a restore, and it has to be picked up.
+    const restored = !switched
+      && selectedEquipment != null
+      && selectedEquipment !== prevEquipmentRef.current
+      && selectedEquipment.devices !== loadedRowsRef.current;
+
+    if (switched || restored) {
       prevEquipmentIdRef.current = selectedEquipment?.id || null;
+      prevEquipmentRef.current = selectedEquipment ?? null;
       // Loading rows for a newly selected equipment is not a user edit —
       // bypass the read-only gate so viewing an old revision still works.
       // Folded on the way in as well, so a project saved before this rule

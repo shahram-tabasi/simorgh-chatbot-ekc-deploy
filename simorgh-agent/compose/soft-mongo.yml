@@ -19,6 +19,65 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # ── A dump of the whole database, every night ──────────────────────────────
+  #
+  # The application keeps sixty versions of every project, which answers "it
+  # was there this morning". This answers the other question: what if the
+  # database itself is lost — the volume, the disk, the machine. The history
+  # lives inside the database it is protecting, so it cannot be the answer to
+  # that one.
+  #
+  # Same image as the database, so mongodump is the matching version and there
+  # is nothing extra to pull onto a server with a poor link to the outside.
+  # The dumps land on a bind mount rather than a named volume, so they are on
+  # the host filesystem where they can be copied off — a backup only a docker
+  # command can reach is one nobody takes.
+  simorgh-soft-mongo-backup:
+    image: mongo:7
+    container_name: simorgh-soft-mongo-backup
+    depends_on:
+      - simorgh-soft-mongo
+    networks:
+      - app_net
+    volumes:
+      - ${SOFT_BACKUP_DIR:-./backups/simorgh-soft-mongo}:/backups
+    environment:
+      # 02:30 by default. Nothing is being edited then, and it is early enough
+      # that a dump which goes wrong is noticed the same working day.
+      BACKUP_AT: ${SOFT_BACKUP_AT:-02:30}
+      KEEP_DAYS: ${SOFT_BACKUP_KEEP_DAYS:-30}
+      MONGO_URI: ${SOFT_BACKUP_URI:-mongodb://simorgh-soft-mongo:27017}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -u
+        echo "Backups: nightly at $$BACKUP_AT, keeping $$KEEP_DAYS days, into /backups"
+        # One dump at start-up, so a fresh deployment does not go a whole day
+        # with nothing — and so a broken configuration is found now.
+        first=1
+        while true; do
+          if [ "$$first" = "1" ]; then
+            first=0
+          else
+            now=$$(date +%H:%M)
+            if [ "$$now" != "$$BACKUP_AT" ]; then sleep 30; continue; fi
+          fi
+          stamp=$$(date +%Y-%m-%d_%H%M%S)
+          out="/backups/simorgh-soft-$$stamp.archive.gz"
+          echo "$$(date -Iseconds) dumping to $$out"
+          if mongodump --uri="$$MONGO_URI" --archive="$$out" --gzip --quiet; then
+            echo "$$(date -Iseconds) ok, $$(du -h "$$out" | cut -f1)"
+          else
+            echo "$$(date -Iseconds) DUMP FAILED — the database was not backed up" >&2
+            rm -f "$$out"
+          fi
+          # Old dumps go, so the disk does not fill and stop the database.
+          find /backups -name 'simorgh-soft-*.archive.gz' -type f \
+               -mtime +$$KEEP_DAYS -print -delete || true
+          sleep 60
+        done
+    restart: unless-stopped
+
 networks:
   app_net:
     name: simorgh_app_net

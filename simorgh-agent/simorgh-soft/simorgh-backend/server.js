@@ -19,6 +19,9 @@ import { registerEplanRoutes } from './eplanSend.js';
 import { registerDrawAssistRoutes } from './drawAssist.js';
 import { registerDocumentRoutes } from './documents.js';
 import { registerPlotframeFieldRoutes } from './plotframeFields.js';
+import {
+  ensureHistoryIndexes, keepVersion, registerProjectHistoryRoutes,
+} from './projectHistory.js';
 import { extractPdfText } from './pdfText.js';
 import {
   buildSystemPrompt, extractToolEnvelope, callLocalModel,
@@ -393,11 +396,18 @@ app.put('/api/projects/:id', async (req, res) => {
     }
 
     const filter = Number.isFinite(baseRev) ? { _id, rev: baseRev } : { _id };
-    const result = await db.collection('projects').findOneAndUpdate(
+    const changedOn = new Date().toISOString();
+    // 'before', so the version being replaced is in hand. It is what goes into
+    // the history — the point of a history is the state you no longer have.
+    const previous = await db.collection('projects').findOneAndUpdate(
       filter,
-      { $set: { ...body, changedOn: new Date().toISOString() }, $inc: { rev: 1 } },
-      { returnDocument: 'after' }
+      { $set: { ...body, changedOn }, $inc: { rev: 1 } },
+      { returnDocument: 'before' }
     );
+
+    const result = previous && {
+      ...previous, ...body, changedOn, rev: (previous.rev ?? 0) + 1,
+    };
 
     if (!result) {
       const current = await db.collection('projects').findOne({ _id });
@@ -412,7 +422,11 @@ app.put('/api/projects/:id', async (req, res) => {
         project: current,
       });
     }
+
+    // Answered first, then the copy: the person is waiting on the save, not
+    // on its safety net, and the net must never be what makes a save fail.
     res.json(result);
+    keepVersion(db, previous).catch(() => { /* already logged */ });
   } catch (error) {
     if (error?.code === 11000) {
       return res.status(409).json({ error: 'Another project already has that name' });
@@ -450,6 +464,10 @@ registerDrawAssistRoutes(app, callLocalModel);
 // a request actually arrives.
 registerDocumentRoutes(app, () => db);
 registerPlotframeFieldRoutes(app, () => db);
+
+// Every version of every project, so a bad save has a yesterday to go
+// back to. See projectHistory.js.
+registerProjectHistoryRoutes(app, () => db);
 
 app.get('/api/health', async (req, res) => {
   try {
@@ -1746,6 +1764,7 @@ process.on('unhandledRejection', (reason) => {
 async function startServer() {
   await connectToDatabase();
   await ensureProjectIndexes();
+  await ensureHistoryIndexes(db);
 
   // Try to connect to SQL Server on startup (non-blocking)
   connectToSqlServer().catch(err => {

@@ -42,6 +42,13 @@ interface ProjectContextType {
   downloadProjectCopy: () => void;
   /** Read one of those files back in. Saved afterwards like any other edit. */
   restoreFromFile: (project: ProjectData) => void;
+  /**
+   * Put one switchgear back as an older version of the project had it.
+   *
+   * The narrow restore, and the one that is usually wanted: a morning's rows
+   * on one panel went, and nothing should happen to the other nine.
+   */
+  restoreOneSwitchgear: (from: ProjectData, equipmentId: string) => void;
   addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
@@ -390,6 +397,28 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       _id: prev._id,
       changedOn: new Date().toISOString(),
     }));
+  };
+
+  const restoreOneSwitchgear = (from: ProjectData, equipmentId: string) => {
+    if (!guardEdit()) return;
+    const older = (from?.equipments ?? []).find(e => e.id === equipmentId);
+    if (!older) return;
+    keepACopy(projectDataRef.current, 'replaced');
+    setProjectData(prev => {
+      const here = prev.equipments.some(e => e.id === equipmentId);
+      return {
+        ...prev,
+        // Back where it was if it is still in the project, and on the end if
+        // it was the switchgear itself that went.
+        equipments: here
+          ? prev.equipments.map(e => (e.id === equipmentId ? older : e))
+          : [...prev.equipments, older],
+        changedOn: new Date().toISOString(),
+      };
+    });
+    // The rows on screen come from the selected switchgear, and this is the
+    // selected switchgear changing underneath it.
+    if (selectedEquipment?.id === equipmentId) setSelectedEquipment(older);
   };
 
   const saveProject = async (): Promise<void> => {
@@ -890,6 +919,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         saveFailures,
         downloadProjectCopy,
         restoreFromFile,
+        restoreOneSwitchgear,
         addTemplate,
         updateTemplate,
         setTemplateMechanical,
