@@ -1,0 +1,142 @@
+name: Build simorgh-soft
+
+# One image, on its own.
+#
+# `images-build.yml` builds all thirty-nine services and already knows how to
+# build just this one — run it by hand with `service: simorgh-soft`. This file
+# exists because that is not what somebody wants at four in the afternoon with
+# a change to push: they want one button, one job, one line to paste on the
+# server, and a run that is over in a couple of minutes rather than one that
+# has to plan a matrix first.
+#
+# It builds exactly what the big workflow would build for this service — same
+# context, same Dockerfile, same registry, same cache, same build arguments —
+# so an image from here and an image from there are the same image. When that
+# stops being true, this file is the one that is wrong.
+
+on:
+  push:
+    branches: [main, master, 'claude/**']
+    paths:
+      - 'simorgh-agent/simorgh-soft/simorgh-frontend/**'
+      - 'simorgh-agent/simorgh-soft/simorgh-backend/**'
+      - 'simorgh-agent/simorgh-soft/docker/**'
+      - 'simorgh-agent/simorgh-soft/Dockerfile'
+      - '.github/workflows/simorgh-soft-image.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Extra tag to publish alongside latest and the commit sha — e.g. rc1'
+        type: string
+        default: ''
+      base_registry:
+        description: 'Where the node and nginx base images come from. "library" is Docker Hub'
+        type: string
+        default: library
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  # A newer push makes an older build pointless.
+  group: simorgh-soft-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Anonymous pulls from Docker Hub are rate-limited per IP and a hosted
+      # runner shares its IP. Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the
+      # repository secrets and this logs in; leave them unset and it is
+      # skipped, which is fine for one image most of the time.
+      - name: Log in to Docker Hub, if credentials are configured
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+      - id: meta
+        shell: bash
+        run: |
+          set -eu
+          # GHCR insists on a lowercase path; a repository owner does not have
+          # to be, so this is not paranoia.
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "ref=ghcr.io/$owner/simorgh-soft" >> "$GITHUB_OUTPUT"
+          # :latest is whichever branch pushed last, so which commit an image
+          # came from has to be recorded in the image itself — it is what the
+          # About dialog shows, and what makes "a feature disappeared"
+          # answerable by looking.
+          echo "now=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: simorgh-agent/simorgh-soft
+          file: simorgh-agent/simorgh-soft/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.ref }}:latest
+            ${{ steps.meta.outputs.ref }}:${{ github.sha }}
+            ${{ inputs.tag && format('{0}:{1}', steps.meta.outputs.ref, inputs.tag) || '' }}
+          # A runner is not the build host: the public npm registry rather than
+          # the mirror on the office network, and Docker Hub rather than the
+          # Harbor proxy-cache it holds no credentials for.
+          build-args: |
+            NPM_REGISTRY=https://registry.npmjs.org/
+            BASE_REGISTRY=${{ inputs.base_registry || 'library' }}
+            GIT_SHA=${{ github.sha }}
+            GIT_REF=${{ github.ref_name }}
+            BUILD_TIME=${{ steps.meta.outputs.now }}
+          # The same registry cache the big workflow writes and reads, so a
+          # build here warms the one there and the other way round.
+          cache-from: type=registry,ref=${{ steps.meta.outputs.ref }}:buildcache
+          cache-to: type=registry,ref=${{ steps.meta.outputs.ref }}:buildcache,mode=max
+          provenance: false
+
+      - name: What to run on the server
+        shell: bash
+        run: |
+          {
+            echo '### simorgh-soft built'
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| commit | \`${{ github.sha }}\` |"
+            echo "| branch | \`${{ github.ref_name }}\` |"
+            echo "| built  | ${{ steps.meta.outputs.now }} |"
+            echo
+            echo 'On the server:'
+            echo
+            echo '```bash'
+            echo "docker pull ${{ steps.meta.outputs.ref }}:latest"
+            echo 'docker compose up -d simorgh-soft'
+            echo '```'
+            echo
+            echo 'Pinned to this exact commit instead of whatever pushed last:'
+            echo
+            echo '```bash'
+            echo "docker pull ${{ steps.meta.outputs.ref }}:${{ github.sha }}"
+            echo '```'
+            echo
+            echo 'Check the running container is this build — Help → About shows the same:'
+            echo
+            echo '```bash'
+            echo "docker inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' \$(docker compose ps -q simorgh-soft)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -114,6 +114,15 @@ jobs:
                       return False
                   picked = [i for i in images if touched(i)]
 
+                  # simorgh-soft has a workflow of its own on push
+                  # (simorgh-soft-image.yml) — it is the service that changes
+                  # daily and the one somebody waits on. Building it here too
+                  # means two runs racing for the same :latest tag and the
+                  # same build cache. It is still built by a manual run, with
+                  # `service: simorgh-soft` or `all`, so deleting that file
+                  # costs the automatic build and nothing else.
+                  picked = [i for i in picked if i['service'] != 'simorgh-soft']
+
           print('matrix=' + json.dumps({'include': picked}))
           print('count=' + str(len(picked)))
           for i in picked:
