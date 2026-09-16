@@ -40,7 +40,7 @@ import { ProjectData, Equipment, TemplateItem } from '../types/project';
 import { buildPanelLayout, PanelLayout, parseSize } from './panelLayout';
 import { buildMechanicalItems, MECHANICAL_HEADERS } from './mechanicalItems';
 import {
-  CellEstimate, MechanicalCellContext, catalogFor, cellTypeOf, estimateFor,
+  CellEstimate, MechanicalCellContext, catalogFor, cellTypeOf, estimateFor, panelTypeOf,
 } from './mechanical';
 
 // ── The palette, as the original mixes it ──────────────────────────────────
@@ -359,13 +359,13 @@ function gather(data: ProjectData, equipment: Equipment, revision: string): Fact
     layout,
     project: text(data.projectName) || '-',
     switchgear: text(equipment.name) || '-',
-    panelType: text(spec.type) || text(spec.panelType) || text(equipment.type) || '-',
+    panelType: panelTypeOf(data, equipment) || text(equipment.type) || '-',
     revision: text(revision) || '-',
     everyPart,
     totalQty: everyPart.reduce((n, p) => n + p.quantity, 0),
     distinctParts: new Set(everyPart.map(p => p.hr || p.description)).size,
     cellWidthMm: numOf(spec.width),
-    sheet: catalogFor(text(spec.type) || text(spec.panelType))?.panelType ?? '',
+    sheet: catalogFor(panelTypeOf(data, equipment))?.panelType ?? '',
     // Every cell fails for the same reason when the panel type is the problem,
     // so the first one that has a reason is the one worth reporting.
     why: everyPart.length === 0 ? cells.find(c => c.note)?.note : undefined,

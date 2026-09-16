@@ -27,7 +27,6 @@ export { MECHANICAL_PARTS } from './parts';
 
 const CATALOGS: MechanicalCatalog[] = [EK36_CATALOG, SIMOPRIMEA4_CATALOG];
 
-const up = (v: unknown) => String(v ?? '').trim().toUpperCase();
 
 /** A protection degree the sheets can test: IP41, IP42 — two digits, or null. */
 function ipOf(value: unknown): number | null {
@@ -39,16 +38,46 @@ const text = (v: unknown) => String(v ?? '').trim();
 /**
  * Which sheet covers a panel type.
  *
- * Matched on a contained token rather than on equality, because a panel type
- * is written out in full on a project ("EK36 — 36 kV metal-clad", "AIS
- * SIMOPRIME A4 24kV") and the sheets are named for the family.
+ * Matched on the family name inside the text rather than on equality, because
+ * nobody writes the panel type on its own: it arrives as a switchgear name
+ * ("B.B.1 Switchgear, 36KV, 2000A, 25KA/3S, EK36"), as a TPMS switchgear type,
+ * or as a Device Library entry's name.
+ *
+ * On word boundaries, and never on stripped text. "A4" is a real product name
+ * and also what "400A" and "4 cells" collapse to when the punctuation between
+ * them is thrown away — matching that would hand a switchgear the wrong
+ * estimate sheet and fill a bill of materials with the wrong parts.
  */
 export function catalogFor(panelType: string): MechanicalCatalog | null {
-  const key = up(panelType).replace(/[^A-Z0-9]+/g, '');
-  if (!key) return null;
-  if (key.includes('EK36')) return EK36_CATALOG;
-  if (key.includes('SIMOPRIME') || key.includes('A4')) return SIMOPRIMEA4_CATALOG;
-  return CATALOGS.find(c => key.includes(up(c.panelType).replace(/[^A-Z0-9]+/g, ''))) ?? null;
+  const s = String(panelType ?? '');
+  if (!s.trim()) return null;
+  if (/\bEK\s*-?\s*36\b/i.test(s)) return EK36_CATALOG;
+  if (/SIMOPRIME/i.test(s) || /\bA4\b/i.test(s)) return SIMOPRIMEA4_CATALOG;
+  return null;
+}
+
+/**
+ * Everything this project says about what kind of panel a switchgear is.
+ *
+ * There is no one field for it — `DeviceLibraryProperties` has no panel type
+ * at all — so every place it is actually written gets a look: TPMS's own
+ * switchgear type first, because that is the field TPMS fills for exactly
+ * this, then the description it is copied to, then the names, which in this
+ * office's naming carry the family at the end.
+ */
+export function panelTypeOf(data: ProjectData, equipment: Equipment): string {
+  const library = data.deviceLibrary?.[equipment.type] ?? [];
+  const entry = library.find(d => d.id === equipment.properties?.deviceLibraryItemId)
+    ?? library.find(d => d.name === equipment.name);
+  const candidates = [
+    text(equipment.properties?.tpms?.switchgearType),
+    text(equipment.description),
+    text(equipment.name),
+    text(entry?.name),
+  ].filter(Boolean);
+  // The first one a sheet recognises, so a name that happens to mention a
+  // family the office does not have a sheet for does not win over one it does.
+  return candidates.find(c => catalogFor(c)) ?? candidates[0] ?? '';
 }
 
 /** Every panel type an estimate sheet covers, for telling someone what is missing. */
@@ -107,7 +136,7 @@ export function contextOf(
   ].filter(Boolean);
 
   return cellContext({
-    panelType: text(spec.type) || text(spec.panelType),
+    panelType: panelTypeOf(data, equipment),
     size: cellTypeOf(template),
     cbType,
     cableSize: text(row.cableSize),
@@ -147,7 +176,11 @@ export function estimateFor(
 ): CellEstimate {
   const context = contextOf(data, equipment, row, template);
   if (!context.panelType) {
-    return { context, equipment: [], note: 'no panel type on the Device Library entry' };
+    return {
+      context, equipment: [],
+      note: 'no panel type on this switchgear — it is read from the TPMS switchgear '
+          + 'type, the description, or the name',
+    };
   }
   const catalog = catalogFor(context.panelType);
   if (!catalog) {
