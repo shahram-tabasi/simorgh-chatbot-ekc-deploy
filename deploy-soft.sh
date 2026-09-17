@@ -1,15 +1,28 @@
 #!/usr/bin/env bash
 #
-# Rebuild and restart the Design Suite (simorgh-soft) on the server.
+# Bring the Design Suite (simorgh-soft) up to date on the server.
 #
-#   ./deploy-soft.sh
+#   ./deploy-soft.sh            take the image GitHub built and restart
+#   ./deploy-soft.sh --here     build it on this machine instead
+#
+# The default is a pull, because that is what the stack is set up for: the
+# service in docker-compose.yml names an image and no build context, and the
+# build instructions live in docker-compose.build.yml on purpose — a service
+# that names both falls through to building whatever it failed to pull, which
+# turns an expired registry login into a twenty-minute surprise.
+#
+# This script used to run `up -d --build`, which with no build section in the
+# default stack does nothing at all: compose says "No services to build" and
+# starts the image already on the daemon. It looked like a deploy and shipped
+# the previous build. Hence the explicit pull, and hence the line at the end
+# that prints which commit is actually running.
 #
 # The compose file lives in simorgh-agent/, with its .env beside it, so compose
 # has to run from there. Running it from the repository root is exactly what
 # "no configuration file provided: not found" means — this script is here so
 # that cannot happen.
 #
-# nginx is not part of this: the app is rebuilt into its container and the
+# nginx is not part of this: only the app's own container is replaced and the
 # proxies in front of it are untouched. Only a change to
 # simorgh-agent/nginx_configs/** or host-nginx-config/** needs a reload, and
 # those are printed at the end when they have changed.
@@ -19,12 +32,30 @@ cd "$(dirname "$0")"
 root=$(pwd)
 cd simorgh-agent
 
-echo "▶ building simorgh-soft …"
-docker compose up -d --build simorgh-soft
+if [ "${1:-}" = "--here" ]; then
+  echo "▶ building simorgh-soft on this machine …"
+  docker compose -f docker-compose.yml -f docker-compose.build.yml build simorgh-soft
+  docker compose -f docker-compose.yml -f docker-compose.build.yml up -d simorgh-soft
+else
+  echo "▶ pulling simorgh-soft …"
+  docker compose pull simorgh-soft
+  echo "▶ restarting simorgh-soft …"
+  # Recreated rather than left alone: the pull above changes what :latest
+  # points at, and a container already running on the old image would stay on
+  # it — which is "I deployed and nothing changed", again.
+  docker compose up -d --force-recreate simorgh-soft
+fi
 
 echo
 echo "▶ state"
 docker compose ps simorgh-soft
+
+# Which commit this actually is. The whole point of the label: "the feature is
+# not there" is then answerable by looking rather than by guessing.
+echo
+echo "▶ running commit"
+docker inspect --format '  {{index .Config.Labels "org.opencontainers.image.revision"}}' simorgh-soft 2>/dev/null \
+  || echo "  (no revision label — an image built before the label was added)" 
 
 # The container answers on :80 inside the app network; the host proxies to it.
 echo
