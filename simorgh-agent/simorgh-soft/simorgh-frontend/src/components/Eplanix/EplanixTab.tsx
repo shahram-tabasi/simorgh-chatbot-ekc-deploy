@@ -35,7 +35,9 @@ import { downloadText, fileSafe } from '../../utils/download';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
 } from '../../utils/mechanicalItems';
-import { DrawingPage, pageKey, readPages } from '../../utils/cad/pages';
+import {
+  DrawingGroups, DrawingPage, pageKey, readGroups, readPages,
+} from '../../utils/cad/pages';
 import { PageNavigator } from '../SimorghDraw/PageNavigator';
 
 // The Simorgh Draw tab: the drawings-and-lists outputs that come off the
@@ -318,8 +320,13 @@ export const EplanixTab: React.FC = () => {
   const drawPages = useMemo<DrawingPage[]>(
     () => readPages(projectData.drawingPages), [projectData.drawingPages]);
 
-  const setPages = (next: DrawingPage[], edits: DrawingEdits) =>
-    patchProjectData(() => ({ drawingPages: next, drawingEdits: edits }));
+  const drawGroups = useMemo<DrawingGroups>(
+    () => readGroups(projectData.drawingGroups), [projectData.drawingGroups]);
+
+  const setPages = (next: DrawingPage[], edits: DrawingEdits, groups: DrawingGroups) =>
+    patchProjectData(() => ({
+      drawingPages: next, drawingEdits: edits, drawingGroups: groups,
+    }));
 
   /**
    * The page set as sheets the editor can page through.
@@ -436,8 +443,10 @@ export const EplanixTab: React.FC = () => {
       {view === 'pages' && (
         <PageNavigator
           pages={drawPages}
+          groups={drawGroups}
           edits={projectData.drawingEdits}
           onChange={setPages}
+          projectName={projectData.projectName}
           onOpen={id => { setOpenPage(id); setBlank(false); setEditing(true); }}
           canEdit={isCurrentRevisionEditable}
           fileBase={fileSafe(projectData.projectName || 'project')}

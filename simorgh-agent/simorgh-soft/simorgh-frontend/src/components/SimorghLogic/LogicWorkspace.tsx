@@ -8,7 +8,7 @@ import logoMark from '../../assets/logo-mark.png';
 import { LadderAsk } from './LadderAsk';
 import { useProject } from '../../context/ProjectContext';
 import { PageNavigator } from '../SimorghDraw/PageNavigator';
-import { DrawingPage, readPages } from '../../utils/cad/pages';
+import { DrawingGroups, DrawingPage, readGroups, readPages } from '../../utils/cad/pages';
 import { renderFragment } from '../../utils/cad/svg';
 import { renderDxf } from '../../utils/cad/dxf';
 import { renderPdf } from '../../utils/cad/pdf';
@@ -65,6 +65,9 @@ export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose 
 
   const drawPages: DrawingPage[] = useMemo(
     () => readPages(projectData.drawingPages), [projectData.drawingPages]);
+
+  const drawGroups: DrawingGroups = useMemo(
+    () => readGroups(projectData.drawingGroups), [projectData.drawingGroups]);
 
   const pages = useMemo(
     () => (program ? renderProgram(program) : []), [program]);
@@ -123,9 +126,13 @@ export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose 
           <div className="max-w-5xl mx-auto">
             <PageNavigator
               pages={drawPages}
+              groups={drawGroups}
               edits={projectData.drawingEdits}
-              onChange={(next, edits) =>
-                patchProjectData(() => ({ drawingPages: next, drawingEdits: edits }))}
+              projectName={projectData.projectName}
+              onChange={(next, edits, groups) =>
+                patchProjectData(() => ({
+                  drawingPages: next, drawingEdits: edits, drawingGroups: groups,
+                }))}
               // Opening a page belongs to the drawing tab, which is where the
               // editor lives. From here the tree is for getting the set in
               // order — adding, naming, reordering — so a click on a page says

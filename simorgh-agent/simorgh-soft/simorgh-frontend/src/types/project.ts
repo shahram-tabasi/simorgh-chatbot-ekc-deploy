@@ -4,7 +4,7 @@
 
 // A sheet edited in Simorgh Draw is kept as its own geometry — see DrawingEdits.
 import { Shape } from '../utils/cad/shapes';
-import { DrawingPage } from '../utils/cad/pages';
+import { DrawingGroups, DrawingPage } from '../utils/cad/pages';
 
 export interface DeviceLibraryProperties {
   // Electrical / Mechanical — the three voltages lead the tab: they are the
@@ -168,6 +168,15 @@ export interface ProjectData {
    * the same thing the backup and the history already carry.
    */
   drawingPages?: DrawingPage[];
+  /**
+   * Headings in the page tree that hold nothing yet.
+   *
+   * A group is normally an accident of the pages inside it — the tree reads
+   * the paths and the headings appear. That leaves nowhere to keep the group
+   * somebody has just made and not filled, which would vanish between being
+   * named and being used, so those live here until a page joins them.
+   */
+  drawingGroups?: DrawingGroups;
 }
 
 // ── Redrawn symbols ──────────────────────────────────────────────────────────
