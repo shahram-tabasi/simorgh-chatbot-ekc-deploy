@@ -21,6 +21,7 @@ import { registerLadderAssistRoutes } from './ladderAssist.js';
 import { registerDocumentRoutes } from './documents.js';
 import { registerPlotframeFieldRoutes } from './plotframeFields.js';
 import { registerSymbolLibraryRoutes } from './symbolLibrary.js';
+import { isRename, projectNameKey } from './projectNames.js';
 import {
   ensureHistoryIndexes, keepVersion, registerProjectHistoryRoutes,
 } from './projectHistory.js';
@@ -95,10 +96,6 @@ async function connectToDatabase() {
 // clients can pass at the same time.
 
 /** A project name as it is compared: no case, no double spaces, no edges. */
-function projectNameKey(name) {
-  return String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
 /**
  * Put the index in place, and say plainly when existing data will not allow it.
  *
@@ -404,19 +401,45 @@ app.put('/api/projects/:id', async (req, res) => {
     const name = body.projectName === undefined ? undefined : String(body.projectName).trim();
     if (name !== undefined) {
       if (!name) return res.status(400).json({ error: 'A project needs a name' });
-      // A rename used to go through unchecked, so the second "Sarmad Iron &
-      // Steel CO." could be made by renaming rather than by creating.
-      const clash = await db.collection('projects').findOne({
-        projectNameKey: projectNameKey(name),
-        _id: { $ne: _id },
-      });
-      if (clash) {
-        return res.status(409).json({
-          error: `A project called "${clash.projectName}" already exists — pick another name`,
+      const key = projectNameKey(name);
+
+      // ── Only a *rename* is checked ──────────────────────────────────────
+      //
+      // This check used to run on every save, and on a database that already
+      // held two projects of the same name — which this one did, and which is
+      // the whole reason the rule was added — it made both of them
+      // unsaveable. Saving either found the other, answered 409, and the
+      // autosave sat there retrying every fifteen seconds forever. A guard
+      // against making a second duplicate had turned into a guard against
+      // working at all.
+      //
+      // So: keeping the name you already have is never a clash. The name is
+      // compared with the one on the stored document, and only a save that
+      // actually changes it is checked against the others. Duplicates that
+      // predate the rule keep working, and nothing new can join them.
+      //
+      // The stored *name* is what it is derived from, not the stored key —
+      // a document written before the key existed has none, and comparing
+      // against a missing field would call every save a rename and put us
+      // straight back here.
+      const current = await db.collection('projects').findOne(
+        { _id }, { projection: { projectName: 1 } });
+      const renaming = !current || isRename(current.projectName, name);
+
+      if (renaming) {
+        const clash = await db.collection('projects').findOne({
+          projectNameKey: key,
+          _id: { $ne: _id },
         });
+        if (clash) {
+          return res.status(409).json({
+            error: `A project called "${clash.projectName}" already exists — pick another name`,
+          });
+        }
       }
+
       body.projectName = name;
-      body.projectNameKey = projectNameKey(name);
+      body.projectNameKey = key;
     }
 
     const filter = Number.isFinite(baseRev) ? { _id, rev: baseRev } : { _id };

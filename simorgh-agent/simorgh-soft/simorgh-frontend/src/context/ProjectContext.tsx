@@ -1,6 +1,6 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
 import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, TemplateMechanical, Revision } from '../types/project';
-import { ProjectConflict, projectService } from '../services/projectService';
+import { ProjectConflict, SaveNeedsYou, projectService } from '../services/projectService';
 import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 import { downloadText, fileSafe } from '../utils/download';
 
@@ -20,6 +20,13 @@ interface ProjectContextType {
   saving: boolean;
   /** Why the last save failed, or null when the last one went through. */
   saveError: string | null;
+  /**
+   * True where the last failure will fail again however long it waits — two
+   * projects with one name, a request the server refuses. The autosave stops
+   * its loop for these, and the warning says so rather than claiming to be
+   * still trying.
+   */
+  saveNeedsYou: boolean;
   /** Set when another computer saved this project while this copy was open. */
   conflict: ProjectConflictState | null;
   /**
@@ -206,6 +213,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const [saveFailures, setSaveFailures] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // True where the last failure is one that will fail again however long it
+  // waits — a name clash, a request the server will not take. It decides
+  // whether the autosave keeps trying and what the warning says.
+  const [saveNeedsYou, setSaveNeedsYou] = useState(false);
 
   // A save reads these rather than its own closure. A save scheduled five
   // seconds ago and running now must write what the project is now, not what
@@ -505,6 +516,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
 
         setLastSavedAt(new Date());
         setSaveError(null);
+        setSaveNeedsYou(false);
         setSaveFailures(0);
       } catch (error) {
         if (error instanceof ProjectConflict) {
@@ -525,6 +537,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         const message = (error as Error)?.message || 'Could not reach the server';
         console.error('Error saving project:', error);
         setSaveError(message);
+        setSaveNeedsYou(error instanceof SaveNeedsYou);
         // Each failure is its own telling. A warning dismissed once must not
         // buy silence for the rest of an afternoon in which nothing is saved.
         setSaveFailures(n => n + 1);
@@ -918,6 +931,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         lastSavedAt,
         saving,
         saveError,
+        saveNeedsYou,
         conflict,
         resolveConflictTakeTheirs,
         resolveConflictKeepMine,

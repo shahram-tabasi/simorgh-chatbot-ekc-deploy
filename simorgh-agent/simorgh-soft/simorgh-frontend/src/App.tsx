@@ -15,6 +15,7 @@ import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
 import { useTheme } from './useTheme';
 import { SunIcon, MoonIcon, CpuIcon } from 'lucide-react';
+import { SaveNeedsYou } from './services/projectService';
 import { Chatbot } from './components/Chatbot/Chatbot';
 import { LogicWorkspace } from './components/SimorghLogic/LogicWorkspace';
 import { fileSafe } from './utils/download';
@@ -75,9 +76,11 @@ const SaveFailedModal: React.FC<{
   saveFailures: number;
   saving: boolean;
   lastSavedAt: Date | null;
+  /** True where retrying cannot help — see SaveNeedsYou. */
+  needsYou: boolean;
   onDownload: () => void;
   onRetry: () => void;
-}> = ({ saveError, saveFailures, saving, lastSavedAt, onDownload, onRetry }) => {
+}> = ({ saveError, saveFailures, saving, lastSavedAt, needsYou, onDownload, onRetry }) => {
   const [dismissedAt, setDismissedAt] = useState(0);
   const [saved, setSaved] = useState(false);
 
@@ -110,8 +113,11 @@ const SaveFailedModal: React.FC<{
             {saveFailures > 1 && <> · {saveFailures} attempts</>}
           </p>
           <p className="text-xs text-gray-500">
-            It keeps trying every 15 seconds. If it succeeds, this closes itself and the
-            status bar goes back to saying when it last saved.
+            {needsYou
+              ? <>This one will not fix itself by waiting — deal with what the server said, then
+                  press <strong>Try now</strong>. Save a copy first either way.</>
+              : <>It keeps trying every 15 seconds. If it succeeds, this closes itself and the
+                  status bar goes back to saying when it last saved.</>}
           </p>
         </div>
 
@@ -170,6 +176,16 @@ const useAutoSave = (projectData: any, saveProject: () => Promise<void>, enabled
       saveRef.current()
         .then(() => console.log('Auto-saved at:', new Date().toLocaleTimeString()))
         .catch(error => {
+          // Some failures will fail again however long this waits: two
+          // projects with one name, a request the server will not take. The
+          // loop stops for those — it was ten attempts deep and climbing when
+          // this was reported, and none of them could have worked. The warning
+          // stays up, because the work is still unsaved, and Try now still
+          // works, because the person may have just fixed it.
+          if (error instanceof SaveNeedsYou) {
+            console.error('Auto-save cannot succeed until this is dealt with:', error);
+            return;
+          }
           console.error('Auto-save failed, trying again in 15s:', error);
           clearTimeout(retryRef.current);
           retryRef.current = setTimeout(attempt, 15000);
@@ -224,7 +240,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const [zoom,          setZoom]          = useState(100);
   const {
     projectData, saveProject, notifyRevisionLocked, lastSavedAt, saving, saveError,
-    saveFailures, downloadProjectCopy, restoreFromFile, restoreOneSwitchgear,
+    saveNeedsYou, saveFailures, downloadProjectCopy, restoreFromFile, restoreOneSwitchgear,
   } = useProject();
   const [showHistory, setShowHistory] = useState(false);
   const desktopInstaller = useDesktopInstaller();
@@ -694,6 +710,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
         saveFailures={saveFailures}
         saving={saving}
         lastSavedAt={lastSavedAt}
+        needsYou={saveNeedsYou}
         onDownload={downloadProjectCopy}
         onRetry={() => { saveProject().catch(() => { /* the banner already says */ }); }}
       />

@@ -434,6 +434,28 @@ export class ProjectConflict extends Error {
   }
 }
 
+/**
+ * A save that will fail again, however many times it is tried.
+ *
+ * Two projects with one name, a project too large for a document, a request
+ * the server will not take: these are not "the server is down for a minute",
+ * they are "somebody has to change something". Retrying them on a timer is
+ * noise in the log, load on the server, and — worst — a dialog that says it is
+ * still trying when trying is not what will fix it.
+ *
+ * The autosave stops its loop when it sees one of these. The warning stays up,
+ * because the work is still not saved, and Try now still works, because the
+ * person may have fixed it.
+ */
+export class SaveNeedsYou extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'SaveNeedsYou';
+    this.status = status;
+  }
+}
+
 /** One switchgear as a kept version remembers it. */
 export interface VersionSwitchgear {
   id: string;
@@ -599,10 +621,21 @@ export const projectService = {
     if (response.status === 409) {
       const body = await response.json().catch(() => ({}));
       if (body?.conflict) throw new ProjectConflict(body.error, body.project, body.currentRev);
-      throw new Error(body?.error || 'Another project already has that name');
+      // A name clash is not going to clear itself: somebody has to rename
+      // something. Retrying it every fifteen seconds was ten attempts deep
+      // and counting when this was reported.
+      throw new SaveNeedsYou(
+        body?.error || 'Another project already has that name', 409);
     }
     if (!response.ok) {
-      throw new Error(await this._reason(response, 'Failed to save the project'));
+      const reason = await this._reason(response, 'Failed to save the project');
+      // Anything the server refuses outright — a bad request, a payload it
+      // will not take — is the same kind of thing. A 5xx is not: that really
+      // can be a minute of trouble, and retrying is right.
+      if (response.status >= 400 && response.status < 500) {
+        throw new SaveNeedsYou(reason, response.status);
+      }
+      throw new Error(reason);
     }
     return response.json();
   },
