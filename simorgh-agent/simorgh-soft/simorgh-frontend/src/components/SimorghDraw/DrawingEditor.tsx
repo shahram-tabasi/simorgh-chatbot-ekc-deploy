@@ -45,6 +45,9 @@ import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang
 import { DrawingHelp } from './DrawingHelp';
 import { SymbolLibrary } from './SymbolLibrary';
 import { LibraryKind } from '../../utils/cad/symbolLibraries';
+import { CpuIcon, PencilRulerIcon } from 'lucide-react';
+import { LadderAsk, LadderAskResult } from '../SimorghLogic/LadderAsk';
+import { renderProgram } from '../../utils/ladder/render';
 import {
   SymPlacement, expandSymbols, libraryItems, symbolCatalogue,
 } from '../../utils/cad/symbolSource';
@@ -326,6 +329,18 @@ const saveDock = (d: Dock) => {
  * React throws the old one away and builds a new one, and the cursor goes with
  * it — which is the bug this editor has already been bitten by once.
  */
+/**
+ * Which of the two the panel is on.
+ *
+ * Drawing a schematic and writing a PLC program are two different jobs asked
+ * in two different ways: one is a sentence, the other needs the vendor settled
+ * before the first word is useful. They share a panel because they share a
+ * sheet — what either produces lands on the drawing in front of you — and they
+ * are two tabs inside it because putting the vendor chips above a request to
+ * draw a motor starter would be asking for something that changes nothing.
+ */
+export type AskMode = 'draw' | 'plc';
+
 const AskPanel: React.FC<{
   t: Strings;
   text: string;
@@ -335,10 +350,17 @@ const AskPanel: React.FC<{
   onClose: () => void;
   dock: Dock;
   onDock: (d: Dock) => void;
+  mode: AskMode;
+  onMode: (m: AskMode) => void;
+  /** What to do with a ladder program the assistant wrote. */
+  onProgram: (result: LadderAskResult) => void;
   /** What the model actually said, when what it said could not be drawn. */
   raw: { error: string; text: string; model: string } | null;
   onDragStart?: (e: React.MouseEvent) => void;
-}> = ({ t, text, onText, asking, onGo, onClose, dock, onDock, raw, onDragStart }) => (
+}> = ({
+  t, text, onText, asking, onGo, onClose, dock, onDock, mode, onMode, onProgram,
+  raw, onDragStart,
+}) => (
   <>
     <div
       className={`flex items-center justify-between px-3 py-2 border-b border-gray-200 ${
@@ -376,7 +398,38 @@ const AskPanel: React.FC<{
         </button>
       </span>
     </div>
+    {/* Two tabs, the way the two environments are two icons in the corner. */}
+    <div className="flex items-stretch border-b border-gray-200 bg-gray-50">
+      {([['draw', t.askModeDraw, PencilRulerIcon], ['plc', t.askModePlc, CpuIcon]] as const).map(
+        ([id, label, Icon]) => (
+          <button
+            key={id}
+            onClick={() => onMode(id)}
+            data-ask-mode={id}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[12px] border-b-2 ${
+              mode === id
+                ? 'border-violet-600 text-violet-800 font-medium bg-white'
+                : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            {label}
+          </button>
+        ))}
+    </div>
+
+    {mode === 'plc' ? (
+      <div className="p-3 overflow-y-auto">
+        <LadderAsk
+          compact
+          onProgram={onProgram}
+          footnote={
+            <p className="text-[11px] text-amber-700 leading-relaxed">{t.askPlcNote}</p>
+          }
+        />
+      </div>
+    ) : (
     <div className="p-3 overflow-y-auto">
+      <p className="text-[11px] text-gray-500 mb-1.5">{t.askDrawNote}</p>
       <textarea
         value={text}
         onChange={e => onText(e.target.value)}
@@ -409,6 +462,7 @@ const AskPanel: React.FC<{
         </div>
       )}
     </div>
+    )}
   </>
 );
 
@@ -852,6 +906,39 @@ export const DrawingEditor: React.FC<Props> = ({
   const [askRaw, setAskRaw] = useState<{ error: string; text: string; model: string } | null>(null);
   const [askText, setAskText] = useState('');
   const [asking, setAsking] = useState(false);
+  const [askMode, setAskMode] = useState<AskMode>('draw');
+
+  /**
+   * A ladder program, onto this sheet.
+   *
+   * Drawn at the sheet's own size and put down as one undo step, like anything
+   * else the assistant produces — so a program that is not what was wanted
+   * comes straight back off with Ctrl+Z rather than having to be picked apart.
+   *
+   * Only the first page: what goes on a sheet is a sheet's worth. A program
+   * longer than that belongs in Simorgh Logic, which paginates it and prints
+   * the set, and the notice says how much was left behind rather than quietly
+   * dropping it.
+   */
+  const drawLadder = useCallback((result: LadderAskResult) => {
+    if (!sheet) return;
+    const rendered = renderProgram(result.program, {
+      width: sheet.drawing.width,
+      height: sheet.drawing.height,
+    });
+    const first = rendered[0];
+    if (!first || first.drawing.shapes.length === 0) {
+      setNotice(T.askFailed);
+      return;
+    }
+    draw(first.drawing.shapes);
+    setAskOpen(false);
+    const left = result.program.rungs.length - first.rungs.length;
+    setNotice(
+      T.askDrewLadder(first.rungs.length)
+      + (left > 0 ? ` · ${left} more would not fit — open Simorgh Logic for the whole set` : '')
+      + (result.dropped.length ? ` · ${result.dropped.length} could not be drawn` : ''));
+  }, [sheet, draw, T]);
 
   const askToDraw = useCallback(async () => {
     const prompt = askText.trim();
@@ -1892,6 +1979,7 @@ export const DrawingEditor: React.FC<Props> = ({
               t={T} text={askText} onText={setAskText} asking={asking}
               onGo={askToDraw} onClose={() => setAskOpen(false)}
               dock={askDock} onDock={chooseDock} raw={askRaw}
+              mode={askMode} onMode={setAskMode} onProgram={drawLadder}
             />
           </aside>
         )}
@@ -1944,6 +2032,7 @@ export const DrawingEditor: React.FC<Props> = ({
                 t={T} text={askText} onText={setAskText} asking={asking}
                 onGo={askToDraw} onClose={() => setAskOpen(false)}
                 dock={askDock} onDock={chooseDock} raw={askRaw}
+                mode={askMode} onMode={setAskMode} onProgram={drawLadder}
                 onDragStart={dragAsk}
               />
             </div>
@@ -2032,6 +2121,7 @@ export const DrawingEditor: React.FC<Props> = ({
               t={T} text={askText} onText={setAskText} asking={asking}
               onGo={askToDraw} onClose={() => setAskOpen(false)}
               dock={askDock} onDock={chooseDock} raw={askRaw}
+              mode={askMode} onMode={setAskMode} onProgram={drawLadder}
             />
           </aside>
         )}

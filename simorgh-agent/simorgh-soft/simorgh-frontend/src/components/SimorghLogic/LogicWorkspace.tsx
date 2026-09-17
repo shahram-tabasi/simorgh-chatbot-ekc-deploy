@@ -1,12 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import {
-  AlertTriangleIcon, CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon,
-  CodeIcon, CpuIcon, DownloadIcon, FactoryIcon, FilesIcon, LayersIcon, PrinterIcon,
-  SendIcon, XIcon,
+  ChevronLeftIcon, ChevronRightIcon, CpuIcon, DownloadIcon, FilesIcon,
+  PrinterIcon, XIcon,
 } from 'lucide-react';
 
 import logoMark from '../../assets/logo-mark.png';
-import { LadderQuestion, ladderService } from '../../services/projectService';
+import { LadderAsk } from './LadderAsk';
 import { useProject } from '../../context/ProjectContext';
 import { PageNavigator } from '../SimorghDraw/PageNavigator';
 import { DrawingPage, readPages } from '../../utils/cad/pages';
@@ -14,10 +13,7 @@ import { renderFragment } from '../../utils/cad/svg';
 import { renderDxf } from '../../utils/cad/dxf';
 import { renderPdf } from '../../utils/cad/pdf';
 import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
-import {
-  DIALECTS, Dialect, dialectBriefing, dialectOf,
-} from '../../utils/ladder/dialects';
-import { LadderProgram, Tag, readProgram } from '../../utils/ladder/model';
+import { LadderProgram, Tag } from '../../utils/ladder/model';
 import { renderProgram } from '../../utils/ladder/render';
 
 // Simorgh Logic — a room of its own.
@@ -43,9 +39,6 @@ interface Props {
   onClose: () => void;
 }
 
-const LANGUAGE_NOTE =
-  'Ladder is what is drawn here whichever language you pick — the choice tells the assistant which one you will type it into, so it explains in those terms.';
-
 type View = 'pages' | 'ladder';
 
 export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose }) => {
@@ -60,126 +53,22 @@ export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose 
   // S7-1200 because nobody noticed the box already said so is a program that
   // cannot be typed into the machine it was asked for. The empty chip is the
   // question, and the disabled button is what makes it get answered.
-  const [vendor, setVendor] = useState('');
-  const [dialectId, setDialectId] = useState('');
-  const dialect: Dialect = dialectOf(dialectId);
-  const [controller, setController] = useState('');
-  const [language, setLanguage] = useState('');
-  const [style, setStyle] = useState<'teach' | 'brief'>('teach');
-  const chosen = Boolean(vendor && dialectId && controller && language);
-  const [note, setNote] = useState<string | null>(null);
-
-  const [task, setTask] = useState('');
-  const [working, setWorking] = useState(false);
+  // The vendor, the task and the questions all live in LadderAsk — the same
+  // component the assistant panel in the drawing editor uses. What is left
+  // here is what this workspace adds: the pages, the steps and the tags.
   const [program, setProgram] = useState<LadderProgram | null>(null);
   const [dropped, setDropped] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [raw, setRaw] = useState<string | null>(null);
+  const [controller, setController] = useState('');
   const [page, setPage] = useState(0);
   const [openStep, setOpenStep] = useState<number | null>(null);
-
-  // What the assistant asked instead of guessing, and what has been picked.
-  const [questions, setQuestions] = useState<LadderQuestion[] | null>(null);
-  const [picked, setPicked] = useState<Record<number, string[]>>({});
-  const [settled, setSettled] = useState<{ ask: string; chose: string }[]>([]);
+  const [note, setNote] = useState<string | null>(null);
 
   const drawPages: DrawingPage[] = useMemo(
     () => readPages(projectData.drawingPages), [projectData.drawingPages]);
 
-  const families = DIALECTS.filter(d => d.vendor === vendor);
-  const allAnswered = questions
-    ? questions.every((_, i) => (picked[i] ?? []).length > 0)
-    : false;
-
-  // Choosing one thing clears what hung off it, rather than filling it in.
-  //
-  // Auto-selecting the first family of a vendor and its first controller would
-  // save two clicks and cost the point of asking: the chips would be answered
-  // without anybody deciding, and a program for an S7-1211C would go out
-  // because that is what came first in a list. An unanswered chip is a
-  // question; a pre-answered one is a trap.
-  const chooseVendor = (v: string) => {
-    setVendor(v);
-    setDialectId('');
-    setController('');
-    setLanguage('');
-  };
-
-  const chooseFamily = (id: string) => {
-    setDialectId(id);
-    setController('');
-    setLanguage('');
-  };
-
   const pages = useMemo(
     () => (program ? renderProgram(program) : []), [program]);
   const sheet = pages[Math.min(page, Math.max(0, pages.length - 1))];
-
-  const ask = async (withAnswers = settled) => {
-    if (task.trim().length < 3 || working || !chosen) return;
-    setWorking(true);
-    setError(null);
-    setRaw(null);
-
-    const answer = await ladderService.generate({
-      task: task.trim(),
-      // The vocabulary is written here, from the table in this browser, and
-      // sent with the request. The server never holds a copy to go stale.
-      briefing: dialectBriefing(dialect),
-      controller,
-      language,
-      style,
-      answers: withAnswers,
-    });
-
-    // Asked rather than answered. Everything already settled stays settled, so
-    // a second round asks about what is left rather than starting again.
-    if (answer.success && answer.questions?.length) {
-      setQuestions(answer.questions);
-      setPicked({});
-      setWorking(false);
-      return;
-    }
-
-    if (!answer.success || !answer.program) {
-      setError(answer.error ?? 'The assistant did not answer.');
-      setRaw(answer.raw ?? null);
-      setWorking(false);
-      return;
-    }
-
-    // Validated here, by the same reader a saved program is read back through.
-    const read = readProgram(answer.program, dialect.id);
-    read.program.controller = controller;
-    read.program.language = language;
-    read.program.dialect = dialect.id;
-
-    if (read.program.rungs.length === 0) {
-      setError('Nothing in that answer could be drawn as a rung.');
-      setRaw(JSON.stringify(answer.program).slice(0, 1500));
-      setWorking(false);
-      return;
-    }
-
-    setProgram(read.program);
-    setDropped(read.dropped);
-    setQuestions(null);
-    setPage(0);
-    setOpenStep(read.program.steps?.length ? 0 : null);
-    setWorking(false);
-  };
-
-  /** Hand the picked options back and ask again. */
-  const answerQuestions = () => {
-    if (!questions || !allAnswered) return;
-    const next = [
-      ...settled,
-      ...questions.map((q, i) => ({ ask: q.ask, chose: (picked[i] ?? []).join('; ') })),
-    ];
-    setSettled(next);
-    setQuestions(null);
-    ask(next);
-  };
 
   const download = (what: 'dxf' | 'pdf') => {
     if (pages.length === 0) return;
@@ -254,176 +143,25 @@ export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose 
       <div className="flex-1 min-h-0 flex">
         {/* ── What you asked, and what it said ───────────────────────── */}
         <aside className="w-[24rem] shrink-0 border-e border-slate-300 bg-white flex flex-col min-h-0">
-          <div className="p-3 border-b space-y-2.5">
-            {/* The chips.
-                Four things the assistant cannot work without, asked as chips
-                above the box rather than as dropdowns in a bar — they belong to
-                the question being asked, not to the room. Each one is empty
-                until it is answered, and the button below stays out of reach
-                while any of them is. */}
-            <div className="flex flex-wrap gap-1.5">
-              <Chip
-                Icon={FactoryIcon} label="Vendor" value={vendor}
-                options={[...new Set(DIALECTS.map(d => d.vendor))]}
-                onChange={chooseVendor}
-              />
-              {vendor && (
-                <Chip
-                  Icon={LayersIcon} label="Family" value={dialectId}
-                  options={families.map(d => d.id)}
-                  display={id => dialectOf(id).family}
-                  onChange={chooseFamily}
-                />
-              )}
-              {dialectId && (
-                <Chip
-                  Icon={CpuIcon} label="Controller" value={controller}
-                  options={dialect.controllers} onChange={setController}
-                />
-              )}
-              {dialectId && (
-                <Chip
-                  Icon={CodeIcon} label="Language" value={language}
-                  options={dialect.languages} onChange={setLanguage}
-                  note={LANGUAGE_NOTE}
-                />
-              )}
-            </div>
-
-            {dialectId && (
-              <p className="text-[11px] text-gray-500 leading-relaxed">
-                {dialect.software} · {dialect.addressing.note}
-              </p>
-            )}
-
-            <label className="block">
-              <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
-                What should the program do?
-              </span>
-              <textarea
-                value={task}
-                onChange={e => setTask(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) ask(); }}
-                rows={5}
-                placeholder={'Start and stop a conveyor from two push buttons, with a seal-in and an overload.\nRun a lamp five seconds after it starts.\nCount the boxes past a sensor and stop at 100.'}
-                className="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm resize-y"
-              />
-            </label>
-
-            <div className="flex items-center gap-2">
-              <select
-                value={style}
-                onChange={e => setStyle(e.target.value as 'teach' | 'brief')}
-                className="border border-gray-300 rounded px-2 py-1.5 text-sm"
-                title="How much to explain"
-              >
-                <option value="teach">Explain each step</option>
-                <option value="brief">Keep it short</option>
-              </select>
-              <button
-                onClick={() => ask()}
-                disabled={working || !chosen || task.trim().length < 3}
-                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-violet-700 text-white text-sm font-medium hover:bg-violet-800 disabled:opacity-40"
-              >
-                <SendIcon className="w-4 h-4" />
-                {working ? 'Writing…' : 'Write the program'}
-              </button>
-            </div>
-
-            <p className="text-[11px] text-gray-400">
-              {!chosen
-                ? 'Answer the chips above first — the vendor decides what the blocks are called.'
-                : 'Ctrl+Enter sends it.'}
-            </p>
-
-            {settled.length > 0 && (
-              <div className="pt-1 border-t">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Settled</p>
-                <ul className="mt-1 space-y-0.5">
-                  {settled.map((a, i) => (
-                    <li key={i} className="text-[11px] text-gray-600">
-                      <span className="text-gray-400">{a.ask}</span> — {a.chose}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+          <div className="p-3 border-b">
+            <LadderAsk
+              onProgram={({ program: made, dropped: lost, controller: on }) => {
+                setProgram(made);
+                setDropped(lost);
+                setController(on);
+                setPage(0);
+                setOpenStep(made.steps?.length ? 0 : null);
+              }}
+              footnote={
+                <p className="text-[11px] text-amber-700 leading-relaxed">
+                  What it writes is a draft for an engineer to read, not a program to
+                  download to a running machine.
+                </p>
+              }
+            />
           </div>
 
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
-            {questions && (
-              <div className="rounded border border-violet-300 bg-violet-50 p-3 space-y-3">
-                <p className="text-[12px] text-violet-900">
-                  Before writing it, {questions.length === 1 ? 'one thing' : `${questions.length} things`} that
-                  would change the program:
-                </p>
-
-                {questions.map((q, i) => (
-                  <div key={i} className="space-y-1.5">
-                    <p className="text-[12.5px] font-medium text-gray-900">{q.ask}</p>
-                    {q.why && <p className="text-[11px] text-gray-600">{q.why}</p>}
-                    <div className="space-y-1">
-                      {q.options.map(option => {
-                        const on = (picked[i] ?? []).includes(option.label);
-                        return (
-                          <button
-                            key={option.label}
-                            onClick={() => setPicked(prev => {
-                              const was = prev[i] ?? [];
-                              // One answer replaces; several toggle.
-                              const now = q.multi
-                                ? (was.includes(option.label)
-                                    ? was.filter(v => v !== option.label)
-                                    : [...was, option.label])
-                                : [option.label];
-                              return { ...prev, [i]: now };
-                            })}
-                            className={`w-full text-start px-2.5 py-1.5 rounded border text-[12px] flex items-start gap-2 ${
-                              on
-                                ? 'border-violet-500 bg-white text-violet-900'
-                                : 'border-gray-300 bg-white text-gray-800 hover:border-violet-400'}`}
-                          >
-                            <span className={`mt-0.5 w-3.5 h-3.5 shrink-0 flex items-center justify-center border ${
-                              q.multi ? 'rounded-sm' : 'rounded-full'
-                            } ${on ? 'border-violet-600 bg-violet-600 text-white' : 'border-gray-400'}`}>
-                              {on && <CheckIcon className="w-2.5 h-2.5" />}
-                            </span>
-                            <span className="min-w-0">
-                              <span className="block">{option.label}</span>
-                              {option.note && (
-                                <span className="block text-[11px] text-gray-500">{option.note}</span>
-                              )}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-
-                <button
-                  onClick={answerQuestions}
-                  disabled={!allAnswered || working}
-                  className="w-full px-3 py-2 rounded-md bg-violet-700 text-white text-sm font-medium hover:bg-violet-800 disabled:opacity-40"
-                >
-                  {allAnswered ? 'Carry on with these' : 'Pick one of each to carry on'}
-                </button>
-              </div>
-            )}
-
-            {error && (
-              <div className="rounded border border-red-200 bg-red-50 p-2.5">
-                <p className="flex items-start gap-2 text-[12px] text-red-800">
-                  <AlertTriangleIcon className="w-4 h-4 mt-0.5 shrink-0" /> {error}
-                </p>
-                {raw && (
-                  <pre className="mt-2 text-[10px] leading-snug text-gray-700 whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
-                    {raw}
-                  </pre>
-                )}
-              </div>
-            )}
-
             {dropped.length > 0 && (
               <div className="rounded border border-amber-200 bg-amber-50 p-2.5">
                 <p className="text-[12px] font-medium text-amber-900">
@@ -473,22 +211,13 @@ export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose 
                   );
                 })}
               </ol>
-            ) : !program && !error && (
-              <div className="text-[12px] text-gray-500 leading-relaxed space-y-2">
-                <p>
-                  Pick the controller at the top, say what the machine should do, and the
-                  assistant writes the rungs and walks through them.
-                </p>
-                <p className="text-gray-400">
-                  It writes with {dialect.vendor}&rsquo;s own blocks — {' '}
-                  {Object.values(dialect.blocks).slice(0, 4).map(b => b.type).join(', ')} — and
-                  {dialect.vendor === 'IEC 61131-3' ? ' the standard’s' : ' that vendor’s'} addressing.
-                </p>
-                <p className="text-amber-700">
-                  What it writes is a draft for an engineer to read, not a program to
-                  download to a running machine.
-                </p>
-              </div>
+            ) : !program && (
+              <p className="text-[12px] text-gray-500 leading-relaxed">
+                Answer the chips, say what the machine should do, and the assistant writes
+                the rungs and walks through them. Where it is unsure of something that
+                would change the program, it asks rather than guessing — and asks in
+                options you can pick.
+              </p>
             )}
           </div>
         </aside>
@@ -654,56 +383,3 @@ const TagTable: React.FC<{ tags: Tag[] }> = ({ tags }) => {
  * plausible values already in them reads as neither, which is how somebody
  * ends up with a program for a controller they never chose.
  */
-const Chip: React.FC<{
-  Icon: React.FC<{ className?: string }>;
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (v: string) => void;
-  display?: (v: string) => string;
-  note?: string;
-}> = ({ Icon, label, value, options, onChange, display, note }) => {
-  const [open, setOpen] = useState(false);
-  const shown = value ? (display ? display(value) : value) : label;
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(o => !o)}
-        title={note ?? label}
-        className={`flex items-center gap-1.5 px-2 py-1 rounded-md border text-[12px] max-w-[15rem] ${
-          value
-            ? 'border-gray-300 bg-white text-gray-800'
-            : 'border-dashed border-violet-400 bg-violet-50 text-violet-800'}`}
-      >
-        <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
-        <span className="truncate">{shown}</span>
-        <ChevronDownIcon className="w-3 h-3 shrink-0 opacity-50" />
-      </button>
-
-      {open && (
-        <>
-          {/* A click anywhere else closes it, which is what every other menu on
-              this machine does. */}
-          <div className="fixed inset-0 z-[10]" onClick={() => setOpen(false)} />
-          <ul className="absolute z-[20] mt-1 min-w-[14rem] max-h-72 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg py-1">
-            {note && (
-              <li className="px-3 py-1.5 text-[11px] text-gray-500 border-b leading-relaxed">{note}</li>
-            )}
-            {options.map(o => (
-              <li key={o}>
-                <button
-                  onClick={() => { onChange(o); setOpen(false); }}
-                  className={`w-full text-start px-3 py-1.5 text-[12.5px] hover:bg-violet-50 ${
-                    o === value ? 'text-violet-800 font-medium' : 'text-gray-800'}`}
-                >
-                  {display ? display(o) : o}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </div>
-  );
-};

@@ -121,6 +121,9 @@ export interface Strings {
   libNewGroup: string; libNewGroupName: string; libVariant: string;
   libVariantNote: string; libRedraw: string; libRedrawNote: string;
   libRedrawnHere: string; libPack: string;
+  // The assistant panel's two tabs
+  askModeDraw: string; askModePlc: string; askDrawNote: string; askPlcNote: string;
+  askDrewLadder: (rungs: number) => string;
 
   // Light or dark
   themeLight: string; themeDark: string;
@@ -323,6 +326,11 @@ const EN: Strings = {
   libRedrawNote: 'Draw your own version of this symbol, used by this project only. To give it to every project, add it as a variant instead.',
   libRedrawnHere: 'redrawn for this project',
   libPack: 'DXF pack',
+  askModeDraw: 'Draw',
+  askModePlc: 'PLC',
+  askDrawNote: 'It draws a single line — the symbols on this sheet\u2019s own library.',
+  askPlcNote: 'The rungs land on this sheet as one undo step. A draft for an engineer to read, not a program to download.',
+  askDrewLadder: rungs => `${rungs} rung${rungs === 1 ? '' : 's'} drawn — Ctrl+Z takes it back off`,
 
   themeLight: 'Light', themeDark: 'Dark',
 
@@ -563,6 +571,11 @@ const FA: Strings = {
   libRedrawNote: 'نسخه‌ی خودت از این سیمبل را بکش؛ فقط همین پروژه از آن استفاده می‌کند. اگر می‌خواهی همه‌ی پروژه‌ها داشته باشند، به‌جایش گونه اضافه کن.',
   libRedrawnHere: 'برای این پروژه بازکشیده شده',
   libPack: 'پک DXF',
+  askModeDraw: 'نقشه',
+  askModePlc: 'PLC',
+  askDrawNote: 'تک‌خطی می‌کشد — با سیمبل‌های کتابخانه‌ی همین صفحه.',
+  askPlcNote: 'رانگ‌ها به‌صورت یک مرحله‌ی undo روی همین برگه می‌نشینند. پیش‌نویسی برای خواندنِ مهندس، نه برنامه‌ای برای دانلود.',
+  askDrewLadder: rungs => `${rungs} رانگ کشیده شد — با Ctrl+Z برداشته می‌شود`,
 
   themeLight: 'روشن', themeDark: 'تیره',
 
@@ -804,6 +817,11 @@ const TR: Strings = {
   libRedrawNote: 'Bu sembolün kendi sürümünüzü çizin; yalnızca bu proje kullanır.',
   libRedrawnHere: 'bu proje için yeniden çizildi',
   libPack: 'DXF paketi',
+  askModeDraw: 'Çiz',
+  askModePlc: 'PLC',
+  askDrawNote: 'Tek hat çizer — bu sayfanın kendi kitaplığındaki sembollerle.',
+  askPlcNote: 'Basamaklar bu sayfaya tek bir geri alma adımı olarak iner. Mühendisin okuması için bir taslak.',
+  askDrewLadder: rungs => `${rungs} basamak çizildi — Ctrl+Z geri alır`,
 
   themeLight: 'Açık', themeDark: 'Koyu',
 
