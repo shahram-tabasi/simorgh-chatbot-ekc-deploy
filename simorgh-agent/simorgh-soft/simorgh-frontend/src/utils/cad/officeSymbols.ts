@@ -86,6 +86,11 @@ export function officeItems(): LibraryItem[] {
     // for every other source.
     pin: { x: s.terminals[0]?.x ?? s.width / 2, y: 0, span: s.height },
     terminals: s.terminals,
+    // A variant belongs to the family of whatever it was made from; anything
+    // else is its own family. `variantOf` holds a library key, so the two sit
+    // in the same namespace and a variant of a built-in symbol works exactly
+    // like a variant of one of the office's own.
+    family: s.variantOf || `office:${s.id}`,
   }));
 }
 

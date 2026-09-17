@@ -145,6 +145,16 @@ export interface OfficeSymbol {
   height: number;
   /** Where a wire may land on it, and what each point is called. */
   terminals: { x: number; y: number; name: string }[];
+  /**
+   * The symbol this one is a face of — its key in the library, not its name.
+   *
+   * A breaker's LSI, LSIG and LI are one device drawn three ways. Saying which
+   * one a variant came from is what lets the library show the family together
+   * and Tab turn between them while one hangs on the cursor. It is a plain
+   * string rather than a live reference: the original may be deleted, and a
+   * variant whose original is gone is still a symbol.
+   */
+  variantOf?: string;
   changedOn?: string;
 }
 

@@ -974,6 +974,21 @@ export const DrawingEditor: React.FC<Props> = ({
   const [ribbon, setRibbon] = useState<RibbonTab>('home');
   /** The whole set, over the drawing — groups, reports, pages from a list. */
   const [tree, setTree] = useState(false);
+  /**
+   * The symbol on the cursor, and every other face of it.
+   *
+   * A symbol used to land in the middle of the view and then have to be found
+   * and dragged. It hangs on the pointer instead and lands where it is
+   * clicked, which is what every CAD does and what a hand already expects.
+   * It stays on the cursor after a click — placing four terminals is four
+   * clicks, not four trips to the library — and Escape puts it down for good.
+   *
+   * `variants` is the family: a breaker's LSI, LSIG and LI are one symbol with
+   * three faces, and Tab turns between them without letting go, which is
+   * EPLAN's own gesture for exactly this.
+   */
+  const [placing, setPlacing] = useState<
+    { at: number; variants: { name: string; shapes: Shape[] }[] } | null>(null);
   const [askDock, setAskDock] = useState<Dock>(loadDock);
   const chooseDock = (d: Dock) => { setAskDock(d); saveDock(d); };
   // Where a floating panel has been dragged to, in pixels from the canvas's
@@ -1259,24 +1274,59 @@ export const DrawingEditor: React.FC<Props> = ({
   };
 
   /**
-   * A symbol from the library, placed as one block in the middle of the view.
+   * A symbol chosen in the library: onto the cursor, not onto the sheet.
    *
-   * The middle rather than the origin: the sheet is bigger than the window, and
-   * something dropped at 0,0 on an A0 lands somewhere nobody is looking.
+   * Nothing is committed here. The library closes, the symbol follows the
+   * pointer, and the click that puts it down is the one that changes the
+   * drawing — so an undo step is made when something is actually placed
+   * rather than when a panel was closed.
    */
-  const importSymbol = (run: Shape[], name: string) => {
+  const importSymbol = (
+    run: Shape[], name: string, variants?: { name: string; shapes: Shape[] }[],
+  ) => {
     if (run.length === 0) return;
-    const at: Pt = [view.x + view.w / 2, view.y + view.h / 2];
-    const placed = placeAsBlock(run, at, name);
+    const family = variants?.length ? variants : [{ name, shapes: run }];
+    const at = Math.max(0, family.findIndex(v => v.name === name));
     setShowLibrary(false);
-    setNotice(T.libPlaced(name));
+    setPlacing({ at, variants: family });
+    setTool('place');
+    setSelection(new Set());
+    setNotice(family.length > 1 ? T.libOnCursorTab(name, family.length) : T.libOnCursor(name));
+  };
+
+  /** The symbol on the cursor, moved so its top-left sits at the origin. */
+  const ghost = useMemo(() => {
+    if (!placing) return null;
+    const run = placing.variants[placing.at]?.shapes ?? [];
+    const box = boundsOfAll(run);
+    return box ? run.map(sh => translateShape(sh, -box.x, -box.y)) : run;
+  }, [placing]);
+
+  /** The face on the cursor, put down here as one block. */
+  const dropGhost = (at: Pt) => {
+    if (!placing) return;
+    const face = placing.variants[placing.at];
+    if (!face) return;
+    const placed = placeAsBlock(face.shapes, at, face.name);
+    if (placed.length === 0) return;
     historyFor(index).push(shapes);
     const next = [...shapes, ...placed];
     setEdits(e => ({ ...e, [index]: next }));
-    setSelection(new Set(placed.map((_, k) => shapes.length + k)));
     touch(index);
     forceRender(n => n + 1);
+    // Still on the cursor, so a second one is a second click. Said out loud,
+    // because a symbol that will not let go is alarming when it is a surprise.
+    setNotice(T.libPlacedAgain(face.name));
   };
+
+  /** The next face of the symbol on the cursor — Tab forward, Shift+Tab back. */
+  const turnVariant = (by: number) => setPlacing(p => (p && p.variants.length > 1
+    ? { ...p, at: (p.at + by + p.variants.length) % p.variants.length }
+    : p));
+
+  // A symbol on the cursor belongs to the place tool and to nothing else:
+  // reaching for Line or Select puts it down without placing it.
+  useEffect(() => { if (tool !== 'place') setPlacing(null); }, [tool]);
 
   const align = (to: AlignTo) => {
     if (selection.size < 2) return;
@@ -1455,6 +1505,23 @@ export const DrawingEditor: React.FC<Props> = ({
       // draft is open, so this stays out of the way rather than depending on
       // which of the two listeners the browser happens to reach first.
       if (drafting && (e.key === 'Escape' || e.key === 'Backspace')) return;
+      // A symbol on the cursor takes Tab and Escape before anything else does.
+      // Tab would otherwise walk the browser's focus ring off the canvas,
+      // which is the one thing it must not do while something is being aimed.
+      if (placing) {
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          turnVariant(e.shiftKey ? -1 : 1);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setPlacing(null);
+          setTool('select');
+          setNotice(null);
+          return;
+        }
+      }
       switch (e.key) {
         case 'Delete': case 'Backspace': e.preventDefault(); remove(); break;
         case 'F1': e.preventDefault(); setShowHelp(h => !h); break;
@@ -1576,6 +1643,11 @@ export const DrawingEditor: React.FC<Props> = ({
     tool === 'text' ? T.hintText
     : tool === 'polyline' ? T.hintPolyline
     : tool === 'dim' ? T.hintDim
+    : tool === 'place' && placing
+      ? (placing.variants.length > 1
+        ? T.hintPlaceVariants(
+          placing.variants[placing.at]?.name ?? '', placing.at + 1, placing.variants.length)
+        : T.hintPlace)
     : tool === 'pin' ? T.hintPin
     : tool === 'trim' ? T.hintTrim
     : tool === 'extend' ? T.hintExtend
@@ -2259,10 +2331,16 @@ export const DrawingEditor: React.FC<Props> = ({
             onDraw={draw}
             onPlaceText={placeText}
             onPlacePin={placePin}
+            ghost={ghost}
+            onPlaceGhost={dropGhost}
             onPick={command}
             onGrip={grip}
             onDrafting={setDrafting}
-            onCancelTool={() => { setPendingCorner(null); setTool('select'); }}
+            onCancelTool={() => {
+              setPendingCorner(null);
+              setPlacing(null);
+              setTool('select');
+            }}
             onEditText={i => {
               const current = shapes[i];
               // A connection point carries its name on the pen rather than as

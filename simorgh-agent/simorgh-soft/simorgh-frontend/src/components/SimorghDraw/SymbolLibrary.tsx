@@ -10,7 +10,9 @@ import { Shape } from '../../utils/cad/shapes';
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
 import { renderFragment } from '../../utils/cad/svg';
 import { readDxf } from '../../utils/cad/readDxf';
-import { LibraryItem, iecItems, packItems, shapesOf } from '../../utils/cad/symbolSource';
+import {
+  LibraryItem, iecItems, packItems, shapesOf, variantsOf,
+} from '../../utils/cad/symbolSource';
 import { wdItems } from '../../utils/cad/wdSymbols';
 import {
   LibraryKind, SYMBOL_LIBRARIES, defaultGroup, libraryOf,
@@ -57,8 +59,17 @@ interface Props {
   t: Strings;
   lang: Lang;
   theme: ThemeId;
-  /** Chosen geometry, ready to be placed as one block. */
-  onImport: (shapes: Shape[], name: string) => void;
+  /**
+   * Chosen geometry, ready to be placed as one block.
+   *
+   * `variants` is every face of the same symbol — a breaker's LSI, LSIG and
+   * LI — so the editor can hang one on the cursor and turn between them with
+   * Tab rather than sending somebody back here to pick a different entry.
+   */
+  onImport: (
+    shapes: Shape[], name: string,
+    variants?: { name: string; shapes: Shape[] }[],
+  ) => void;
   onClose: () => void;
   /**
    * Which library to open on — the kind of page being drawn.
@@ -122,7 +133,8 @@ export const SymbolLibrary: React.FC<Props> = ({
   /** The symbol a variant is being started from, if any. */
   const [variantOf, setVariantOf] = useState<
     { art: string; width: number; height: number;
-      terminals?: { x: number; y: number; name: string }[]; name: string } | null>(null);
+      terminals?: { x: number; y: number; name: string }[]; name: string;
+      family?: string } | null>(null);
   const [pack, setPack] = useState<DxfSymbol[]>(loadDxfSymbols);
   const [redrawing, setRedrawing] = useState<SymbolId | null>(null);
   const { projectData, patchProjectData } = useProject();
@@ -179,6 +191,9 @@ export const SymbolLibrary: React.FC<Props> = ({
   }, [items, query, kind]);
 
   const chosen = items.find(i => i.key === picked) ?? null;
+  /** The family of whatever is picked: itself, and every other face of it. */
+  const kin = useMemo(
+    () => (chosen ? variantsOf(chosen, items) : []), [chosen, items]);
 
   /** True where this project has drawn its own version of a built-in symbol. */
   const redrawnHere = (item: LibraryItem | null): boolean =>
@@ -233,10 +248,15 @@ export const SymbolLibrary: React.FC<Props> = ({
     if (file.current) file.current.value = '';
   };
 
+  /** Every face of one symbol, each with its geometry, for the cursor. */
+  const family = (item: LibraryItem) => variantsOf(item, items)
+    .map(v => ({ name: v.name, shapes: v.shapes ?? shapesOf(v) }))
+    .filter(v => v.shapes.length > 0);
+
   const place = (item: LibraryItem) => {
     const shapes = item.shapes ?? shapesOf(item);
     if (shapes.length === 0) { setNote(t.libNothingIn(item.name)); return; }
-    onImport(shapes, item.name);
+    onImport(shapes, item.name, family(item));
   };
 
   const Preview: React.FC<{ item: LibraryItem; size: number }> = ({ item, size }) => (
@@ -323,6 +343,63 @@ export const SymbolLibrary: React.FC<Props> = ({
   // screen it will not bring up a symbol" was. The order above 300 is: the
   // panels the editor opens (320), the symbol maker the library opens (330),
   // the drawing page the maker opens (340).
+  // Editing a symbol and making a variant are panels in this screen, not
+  // windows on top of it: a window hides the list the symbol was picked out
+  // of and the row of its variants beside it, which is half of what somebody
+  // working on a symbol is looking at. EPLAN puts them in a box beside the
+  // library for the same reason.
+  const maker = making && (
+    <SymbolMaker
+      inline
+      t={t}
+      lang={lang}
+      theme={theme}
+      kind={kind}
+      selection={selection}
+      editing={editing}
+      group={newInGroup ?? undefined}
+      from={variantOf ?? undefined}
+      onSaved={saved => {
+        setMaking(false);
+      setEditing(null);
+      setNewInGroup(null);
+      setVariantOf(null);
+      setKind(saved.kind);
+      setPicked(`office:${saved.id}`);
+      setNote(t.libSaved(saved.name));
+    }}
+    onClose={() => {
+      setMaking(false); setEditing(null);
+      setNewInGroup(null); setVariantOf(null);
+    }}
+    />
+  );
+
+  const redrawer = redrawing && (
+    <SymbolGraphicEditor
+      inline
+      symbolId={redrawing}
+      override={projectData.symbolOverrides?.[redrawing]}
+      onSave={art => {
+        patchProjectData(prev => {
+          const next = { ...(prev.symbolOverrides ?? {}) };
+          next[redrawing] = art;
+          return { symbolOverrides: next };
+        });
+      setRedrawing(null);
+    }}
+    onReset={() => {
+      patchProjectData(prev => {
+        const next = { ...(prev.symbolOverrides ?? {}) };
+        delete next[redrawing];
+        return { symbolOverrides: next };
+      });
+      setRedrawing(null);
+    }}
+    onClose={() => setRedrawing(null)}
+    />
+  );
+
   return createPortal(
     <div className="fixed inset-0 z-[320] bg-black/50 flex items-center justify-center p-4">
       <div
@@ -569,7 +646,7 @@ export const SymbolLibrary: React.FC<Props> = ({
           </div>
 
           <aside className="flex-1 min-w-0 flex flex-col bg-gray-50">
-            {chosen ? (
+            {making ? maker : redrawing ? redrawer : chosen ? (
               <>
                 {/* The white card wraps the drawing rather than filling the
                     pane. A small symbol shown at its proper weight in a large
@@ -580,6 +657,37 @@ export const SymbolLibrary: React.FC<Props> = ({
                     <BigPreview item={chosen} />
                   </div>
                 </div>
+
+                {/* Every face of this symbol, in a row.
+                    A breaker's LSI, LSIG and LI are one device drawn three
+                    ways, and a draughtsman reaching for "the breaker" wants
+                    to see the three rather than hunt three entries in the
+                    list. Click one to look at it; Tab turns between them
+                    once one is on the cursor, which is the same set. */}
+                {kin.length > 1 && (
+                  <div className="px-6 py-2 border-t bg-white flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                      {t.libVariants(kin.length)}
+                    </span>
+                    {kin.map(v => (
+                      <button
+                        key={v.key}
+                        onClick={() => setPicked(v.key)}
+                        onDoubleClick={() => place(v)}
+                        title={`${v.name} — ${t.libDoubleClick}`}
+                        className={`flex items-center gap-2 ps-1.5 pe-2.5 py-1 rounded border text-[12px] ${
+                          v.key === chosen.key
+                            ? 'border-blue-500 bg-blue-50 text-blue-900 font-medium'
+                            : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
+                      >
+                        <span className="w-7 h-6 flex items-center justify-center shrink-0">
+                          <Preview item={v} size={22} />
+                        </span>
+                        <span className="truncate max-w-[10rem]">{v.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <div className="px-6 py-3 border-t bg-white flex items-center gap-4 flex-wrap">
                   <div className="min-w-0">
@@ -640,6 +748,10 @@ export const SymbolLibrary: React.FC<Props> = ({
                           height: chosen.height,
                           terminals: chosen.terminals,
                           name: chosen.name,
+                          // Its own family if it has one, itself if it does
+                          // not: a variant of a variant belongs with the
+                          // original, not in a family of two.
+                          family: chosen.family ?? chosen.key,
                         });
                         setMaking(true);
                       }}
@@ -736,32 +848,6 @@ export const SymbolLibrary: React.FC<Props> = ({
           </div>
         )}
 
-        {making && (
-          <SymbolMaker
-            t={t}
-            lang={lang}
-            theme={theme}
-            kind={kind}
-            selection={selection}
-            editing={editing}
-            group={newInGroup ?? undefined}
-            from={variantOf ?? undefined}
-            onSaved={saved => {
-              setMaking(false);
-              setEditing(null);
-              setNewInGroup(null);
-              setVariantOf(null);
-              setKind(saved.kind);
-              setPicked(`office:${saved.id}`);
-              setNote(t.libSaved(saved.name));
-            }}
-            onClose={() => {
-              setMaking(false); setEditing(null);
-              setNewInGroup(null); setVariantOf(null);
-            }}
-          />
-        )}
-
         {/* The DXF pack — the browser's own, and sending one to the server's.
             It lived on the Symbols tab; it belongs wherever symbols are
             looked at, and that is now here. */}
@@ -794,29 +880,6 @@ export const SymbolLibrary: React.FC<Props> = ({
           </div>
         )}
 
-        {redrawing && (
-          <SymbolGraphicEditor
-            symbolId={redrawing}
-            override={projectData.symbolOverrides?.[redrawing]}
-            onSave={art => {
-              patchProjectData(prev => {
-                const next = { ...(prev.symbolOverrides ?? {}) };
-                next[redrawing] = art;
-                return { symbolOverrides: next };
-              });
-              setRedrawing(null);
-            }}
-            onReset={() => {
-              patchProjectData(prev => {
-                const next = { ...(prev.symbolOverrides ?? {}) };
-                delete next[redrawing];
-                return { symbolOverrides: next };
-              });
-              setRedrawing(null);
-            }}
-            onClose={() => setRedrawing(null)}
-          />
-        )}
       </div>
     </div>,
     document.body,

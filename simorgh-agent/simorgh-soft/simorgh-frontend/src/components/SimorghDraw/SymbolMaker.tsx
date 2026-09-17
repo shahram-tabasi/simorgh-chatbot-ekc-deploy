@@ -58,9 +58,28 @@ interface Props {
    * breakers end up in a library. So the geometry and the connection points
    * come across, and what is left to do is the name.
    */
-  from?: { art: string; width: number; height: number; terminals?: { x: number; y: number; name: string }[]; name: string };
+  from?: {
+    art: string; width: number; height: number;
+    terminals?: { x: number; y: number; name: string }[];
+    name: string;
+    /**
+     * The family the new symbol joins — the library key of the symbol it is a
+     * face of. Kept on the saved symbol so the library can show the set
+     * together and Tab can turn between them on the cursor.
+     */
+    family?: string;
+  };
   onSaved: (symbol: OfficeSymbol) => void;
   onClose: () => void;
+  /**
+   * Draw it into the panel it was opened from instead of over everything.
+   *
+   * EPLAN edits a symbol in a box beside the library rather than in a window
+   * on top of it, and the reason is worth copying: a window over the library
+   * hides the list you were just reading, and the symbol you are editing is
+   * only half the question — the other half is the row of ones beside it.
+   */
+  inline?: boolean;
 }
 
 interface Geometry {
@@ -128,7 +147,7 @@ function symbolFromShapes(shapes: Shape[], from: string): {
 
 export const SymbolMaker: React.FC<Props> = ({
   t, lang, theme, kind: openOn, selection, editing, group: openGroup, from,
-  onSaved, onClose,
+  onSaved, onClose, inline,
 }) => {
   const file = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(editing?.name ?? '');
@@ -272,6 +291,10 @@ export const SymbolMaker: React.FC<Props> = ({
         width: geometry.width,
         height: geometry.height,
         terminals,
+        // A variant keeps the family it was started from; editing one keeps
+        // the family it already had. A symbol drawn from nothing has none,
+        // which is the honest answer — it is its own family.
+        variantOf: editing?.variantOf ?? from?.family,
       };
       const kept = await symbolLibraryService.save(symbol);
       rememberOfficeSymbol(kept);
@@ -285,14 +308,13 @@ export const SymbolMaker: React.FC<Props> = ({
 
   const groups = libraryOf(kind).groups;
 
-  // 330: over the library that opened it, which is itself over the editor in
-  // full screen. See the note on the library's own portal.
-  return createPortal(
-    <div className="fixed inset-0 z-[330] bg-black/50 flex items-center justify-center p-4">
+  const box = (
       <div
         data-sd-theme={theme}
         dir={dirOf(lang)}
-        className="bg-white rounded-lg shadow-2xl w-[1000px] max-w-full h-[82vh] max-h-full flex flex-col overflow-hidden"
+        className={inline
+          ? 'bg-white flex-1 min-h-0 flex flex-col overflow-hidden'
+          : 'bg-white rounded-lg shadow-2xl w-[1000px] max-w-full h-[82vh] max-h-full flex flex-col overflow-hidden'}
       >
         <div className="flex items-center gap-3 px-4 py-2.5 bg-gray-50 border-b">
           <h3 className="text-sm font-semibold text-gray-800">
@@ -500,7 +522,10 @@ export const SymbolMaker: React.FC<Props> = ({
           </aside>
         </div>
       </div>
+  );
 
+  const drawingPage = (
+    <>
       {/* ── The drawing page, on top of all of it ─────────────────────────
           Not a second, smaller editor: the editor. Trim, extend, corner, the
           grips, the symbol library, the layers and the connection-point tool,
@@ -551,6 +576,23 @@ export const SymbolMaker: React.FC<Props> = ({
           </div>
         </div>
       )}
+    </>
+  );
+
+  // Inline, nothing is portalled: this is a panel where it was opened from,
+  // and the drawing page — which is full screen either way — stays fixed on
+  // top of it.
+  // 330 otherwise: over the library that opened it, which is itself over the
+  // editor in full screen. See the note on the library's own portal.
+  return inline ? (
+    <>
+      {box}
+      {drawingPage}
+    </>
+  ) : createPortal(
+    <div className="fixed inset-0 z-[330] bg-black/50 flex items-center justify-center p-4">
+      {box}
+      {drawingPage}
     </div>,
     document.body,
   );

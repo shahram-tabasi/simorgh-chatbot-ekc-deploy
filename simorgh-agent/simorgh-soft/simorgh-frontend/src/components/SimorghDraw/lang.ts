@@ -124,6 +124,10 @@ export interface Strings {
   libTerminalsTitle: string; libTerminalsNote: string; libAddTerminal: string;
   libSave: string; libSaving: string; libSaved: (name: string) => string;
   libPoints: (n: number) => string;
+  libVariants: (n: number) => string;
+  libOnCursor: (name: string) => string;
+  libOnCursorTab: (name: string, of: number) => string;
+  libPlacedAgain: (name: string) => string;
   libDeleteAsk: (name: string) => string;
   libNeedsName: string; libNeedsArt: string; libOfficeOnly: string;
   // Taking the library somewhere else
@@ -160,6 +164,8 @@ export interface Strings {
   // What to do now
   hintIdle: string; hintText: string; hintPolyline: string; hintTwoClicks: string;
   hintDim: string; hintTrim: string; hintExtend: string; hintPin: string;
+  hintPlace: string;
+  hintPlaceVariants: (name: string, at: number, of: number) => string;
   hintCornerFirst: string; hintCornerSecond: string;
 
   // When a command cannot do what was asked
@@ -346,6 +352,11 @@ const EN: Strings = {
   libSaving: 'Saving…',
   libSaved: name => `${name} is in the library`,
   libPoints: n => `${n} connection point${n === 1 ? '' : 's'}`,
+  libVariants: n => `${n} variants`,
+  libOnCursor: name => `${name} is on the cursor — click where it goes. Esc lets go.`,
+  libOnCursorTab: (name, of) =>
+    `${name} is on the cursor — click where it goes, Tab turns between its ${of} variants, Esc lets go.`,
+  libPlacedAgain: name => `${name} placed — still on the cursor for the next one. Esc lets go.`,
   libDeleteAsk: name => `Delete ${name} from the office library? Drawings that already use it keep their copy.`,
   libNeedsName: 'It needs a name.',
   libNeedsArt: 'It needs some geometry — choose a file or pick something on the sheet.',
@@ -397,6 +408,9 @@ const EN: Strings = {
   hintTrim: 'Click the piece of a line to cut away — it is cut at what crosses it',
   hintExtend: 'Click the end of a line to run it on to the next thing in its way',
   hintPin: 'Click where a wire lands · it goes on the PIN layer under the name you give it · double-click one to rename it',
+  hintPlace: 'Click to put it down · it stays on the cursor for the next one · Esc lets go',
+  hintPlaceVariants: (name, at, of) =>
+    `${name} — ${at} of ${of} · Tab turns to the next one · click to put it down · Esc lets go`,
   hintCornerFirst: 'Click the first line, on the side you want to keep',
   hintCornerSecond: 'Now the second line, on the side you want to keep',
 
@@ -622,6 +636,11 @@ const FA: Strings = {
   libSaving: 'در حال ذخیره…',
   libSaved: name => `${name} در کتابخانه ثبت شد`,
   libPoints: n => `${n} نقطه‌ی اتصال`,
+  libVariants: n => `${n} وریانت`,
+  libOnCursor: name => `${name} روی مکان‌نماست — هرجا که می‌خواهید کلیک کنید. Esc رهایش می‌کند.`,
+  libOnCursorTab: (name, of) =>
+    `${name} روی مکان‌نماست — هرجا می‌خواهید کلیک کنید، Tab بین ${of} وریانتش می‌چرخد، Esc رهایش می‌کند.`,
+  libPlacedAgain: name => `${name} گذاشته شد — هنوز روی مکان‌نماست برای بعدی. Esc رهایش می‌کند.`,
   libDeleteAsk: name => `${name} از کتابخانه‌ی شرکت حذف شود؟ نقشه‌هایی که از آن استفاده کرده‌اند نسخه‌ی خودشان را نگه می‌دارند.`,
   libNeedsName: 'نام لازم دارد.',
   libNeedsArt: 'هندسه لازم دارد — یک فایل انتخاب کنید یا چیزی روی صفحه انتخاب کنید.',
@@ -673,6 +692,9 @@ const FA: Strings = {
   hintTrim: 'روی تکه‌ای از خط که باید برود کلیک کنید — تا محل تقاطع بریده می‌شود',
   hintExtend: 'روی سر خط کلیک کنید تا تا اولین مانع پیش برود',
   hintPin: 'روی محل نشستن سیم کلیک کنید · با نامی که می‌دهید روی لایهٔ PIN می‌نشیند · دوبار کلیک برای تغییر نام',
+  hintPlace: 'کلیک کنید تا بنشیند · روی مکان‌نما می‌ماند برای بعدی · Esc رهایش می‌کند',
+  hintPlaceVariants: (name, at, of) =>
+    `${name} — ${at} از ${of} · Tab به بعدی می‌چرخد · کلیک کنید تا بنشیند · Esc رهایش می‌کند`,
   hintCornerFirst: 'روی خط اول، در سمتی که باید بماند، کلیک کنید',
   hintCornerSecond: 'حالا روی خط دوم، در سمتی که باید بماند',
 
@@ -899,6 +921,11 @@ const TR: Strings = {
   libSaving: 'Kaydediliyor…',
   libSaved: name => `${name} kitaplıkta`,
   libPoints: n => `${n} bağlantı noktası`,
+  libVariants: n => `${n} çeşit`,
+  libOnCursor: name => `${name} imleçte — nereye gidecekse tıklayın. Esc bırakır.`,
+  libOnCursorTab: (name, of) =>
+    `${name} imleçte — nereye gidecekse tıklayın, Tab ${of} çeşidi arasında döner, Esc bırakır.`,
+  libPlacedAgain: name => `${name} kondu — bir sonraki için hâlâ imleçte. Esc bırakır.`,
   libDeleteAsk: name => `${name} ofis kitaplığından silinsin mi? Onu kullanan çizimler kendi kopyasını korur.`,
   libNeedsName: 'Bir ada ihtiyacı var.',
   libNeedsArt: 'Biraz geometriye ihtiyacı var — bir dosya seçin ya da sayfadan bir şey seçin.',
@@ -950,6 +977,9 @@ const TR: Strings = {
   hintTrim: 'Çizginin atılacak parçasına tıklayın — kesiştiği yere kadar budanır',
   hintExtend: 'Çizginin ucuna tıklayın, önündeki ilk nesneye kadar uzasın',
   hintPin: 'Kablonun oturacağı yere tıklayın · verdiğiniz adla PIN katmanına konur · adını değiştirmek için çift tıklayın',
+  hintPlace: 'Koymak için tıklayın · bir sonraki için imleçte kalır · Esc bırakır',
+  hintPlaceVariants: (name, at, of) =>
+    `${name} — ${of} içinden ${at} · Tab sonrakine döner · koymak için tıklayın · Esc bırakır`,
   hintCornerFirst: 'İlk çizgiye, kalmasını istediğiniz taraftan tıklayın',
   hintCornerSecond: 'Şimdi ikinci çizgiye, kalmasını istediğiniz taraftan',
 

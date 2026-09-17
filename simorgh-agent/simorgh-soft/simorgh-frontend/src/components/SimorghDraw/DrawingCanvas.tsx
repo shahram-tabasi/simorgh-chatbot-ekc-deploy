@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { connectionRun } from '../../utils/cad/connect';
 import { MARK_R, nearestTerminal, terminals } from '../../utils/cad/terminals';
-import { Drawing, Layer, Pen, Pt, Shape } from '../../utils/cad/shapes';
+import { Drawing, Layer, Pen, Pt, Shape, translateShape } from '../../utils/cad/shapes';
 import {
   Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip, withWholeBlocks,
 } from '../../utils/cad/geom';
@@ -44,11 +44,14 @@ export type Tool =
   | 'select' | 'pan'
   | 'line' | 'polyline' | 'connect' | 'rect' | 'circle' | 'ellipse' | 'arc' | 'text' | 'dim'
   | 'pin'
+  /** A symbol on the cursor, waiting to be put down. */
+  | 'place'
   | 'trim' | 'extend' | 'corner';
 
 /** Tools that put something new on the sheet. */
 export const DRAWS: ReadonlySet<Tool> = new Set<Tool>(
-  ['line', 'polyline', 'connect', 'rect', 'circle', 'ellipse', 'arc', 'text', 'dim', 'pin']);
+  ['line', 'polyline', 'connect', 'rect', 'circle', 'ellipse', 'arc', 'text', 'dim', 'pin',
+    'place']);
 
 /** Tools that operate on the shape they are clicked on. */
 export const PICKS: ReadonlySet<Tool> = new Set<Tool>(['trim', 'extend', 'corner']);
@@ -101,6 +104,16 @@ interface Props {
    * else, and what the point is called is the editor's question to ask.
    */
   onPlacePin: (at: { x: number; y: number }) => void;
+  /**
+   * The symbol hanging on the cursor, with its top-left at the origin.
+   *
+   * Drawn where the pointer is, and put down where it is clicked. A symbol
+   * dropped in the middle of the view is a symbol that then has to be found
+   * and dragged; every CAD hands it to the cursor instead, and so does this.
+   */
+  ghost?: Shape[] | null;
+  /** The ghost, put down here. */
+  onPlaceGhost: (at: Pt) => void;
   /** A command tool was used on the shape at `index`. */
   onPick: (index: number, at: Pt) => void;
   /**
@@ -174,6 +187,7 @@ export const DrawingCanvas: React.FC<Props> = ({
   drawing, shapes, selection, hidden, locked, view, grid, showGrid, tool,
   pen, textSize, objectSnap, mmPerUnit, theme: themeId = 'light',
   onView, onSelection, onMove, onCursor, onEditText, onDraw, onPlaceText, onPlacePin,
+  ghost, onPlaceGhost,
   onPick, onGrip, onDrafting, onCancelTool,
 }) => {
   const theme: Theme = THEMES[themeId] ?? THEMES.light;
@@ -463,6 +477,7 @@ export const DrawingCanvas: React.FC<Props> = ({
 
       if (tool === 'text') { onPlaceText({ x: point[0], y: point[1] }); return; }
       if (tool === 'pin') { onPlacePin({ x: point[0], y: point[1] }); return; }
+      if (tool === 'place') { onPlaceGhost(point); return; }
 
       const pts = draft && draft.tool === tool ? [...draft.pts, point] : [point];
       const needed = NEEDS[tool];
@@ -858,6 +873,30 @@ export const DrawingCanvas: React.FC<Props> = ({
           <rect x={snapped[0] - stroke * 5} y={snapped[1] - stroke * 5}
                 width={stroke * 10} height={stroke * 10}
                 fill="none" stroke={theme.accent} strokeWidth={stroke * 1.5} />
+        </g>
+      )}
+
+      {/* The symbol on the cursor. Drawn as it will land — same geometry, same
+          layers — rather than as an outline: what you see before the click is
+          what is on the sheet after it. Half-transparent so the drawing under
+          it can still be read while a place is being aimed. */}
+      {tool === 'place' && ghost && ghost.length > 0 && cursorHint && (
+        <g pointerEvents="none" opacity={0.7}>
+          {ghost.map((sh, k) => {
+            const node = shapeToNode(translateShape(sh, cursorHint.x, cursorHint.y));
+            if (!node) return null;
+            const props: Record<string, unknown> = { pointerEvents: 'none' };
+            for (const [attr, v] of Object.entries(node.attrs)) {
+              props[REACT_PROP[attr] ?? attr] = v;
+            }
+            props.stroke = SELECTED;
+            if (node.tag === 'text') props.fill = SELECTED;
+            else if (!sh.fill || sh.fill === 'none') props.fill = 'none';
+            else props.fill = SELECTED;
+            return node.tag === 'text'
+              ? <text key={k} {...props}>{node.body}</text>
+              : React.createElement(node.tag, { key: k, ...props });
+          })}
         </g>
       )}
 

@@ -42,6 +42,12 @@ function clean(body) {
     width: num(body?.width, 20),
     height: num(body?.height, 20),
     terminals,
+    // Which symbol this one is a face of. A breaker's LSI, LSIG and LI are one
+    // device drawn three ways, and saying so here is what lets the library
+    // show them together and Tab turn between them while one is being placed.
+    // A plain string and not a reference: the symbol it names may be deleted,
+    // and a variant whose original is gone is still a symbol.
+    variantOf: String(body?.variantOf ?? '').trim().slice(0, 120) || undefined,
   };
 }
 
@@ -55,6 +61,7 @@ const asSymbol = doc => ({
   width: doc.width,
   height: doc.height,
   terminals: doc.terminals ?? [],
+  variantOf: doc.variantOf,
   changedOn: doc.changedOn,
 });
 

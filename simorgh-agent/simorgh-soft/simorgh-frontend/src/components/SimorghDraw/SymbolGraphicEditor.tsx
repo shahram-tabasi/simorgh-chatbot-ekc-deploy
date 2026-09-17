@@ -30,6 +30,14 @@ interface Props {
   /** Put the library's own symbol back. */
   onReset: () => void;
   onClose: () => void;
+  /**
+   * Draw it into the panel it was opened from instead of over everything.
+   *
+   * A window on top hides the list the symbol was picked out of, and the row
+   * of its variants beside it — which is half of what somebody redrawing a
+   * symbol is looking at.
+   */
+  inline?: boolean;
 }
 
 /** A symbol as a drawing: its own box, with the conductor where it belongs. */
@@ -48,7 +56,7 @@ export function symbolDrawing(symbolId: SymbolId, override?: SymbolArtOverride):
 }
 
 export const SymbolGraphicEditor: React.FC<Props> = ({
-  symbolId, override, onSave, onReset, onClose,
+  symbolId, override, onSave, onReset, onClose, inline,
 }) => {
   const { drawing, pinX, markup } = useMemo(
     () => symbolDrawing(symbolId, override), [symbolId, override]);
@@ -60,10 +68,11 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
     drawnAs: fingerprint(markup),
   }], [drawing, markup, symbolId]);
 
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]" onClick={onClose}>
+  const box = (
       <div
-        className="bg-white rounded-lg shadow-2xl w-[1180px] max-w-[96vw] max-h-[94vh] flex flex-col overflow-hidden"
+        className={inline
+          ? 'bg-white flex-1 min-h-0 flex flex-col overflow-hidden'
+          : 'bg-white rounded-lg shadow-2xl w-[1180px] max-w-[96vw] max-h-[94vh] flex flex-col overflow-hidden'}
         onClick={e => e.stopPropagation()}
       >
         <div className="bg-slate-700 text-white px-5 py-3 flex items-center justify-between">
@@ -122,6 +131,14 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
           picks it up. The library's own symbol is never changed.
         </div>
       </div>
+  );
+
+  return inline ? box : (
+    <div
+      className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]"
+      onClick={onClose}
+    >
+      {box}
     </div>
   );
 };

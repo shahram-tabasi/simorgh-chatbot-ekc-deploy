@@ -86,6 +86,36 @@ export interface LibraryItem {
    * through SVG is a chance to lose a layer or a dash.
    */
   shapes?: Shape[];
+  /**
+   * The family this symbol belongs to — itself, or the symbol it is a face of.
+   *
+   * A breaker's LSI, LSIG and LI are one device drawn three ways, and a
+   * draughtsman reaching for "the breaker" wants to see the three together and
+   * turn between them rather than hunt three entries in a list. Everything
+   * with the same family is one symbol as far as the library and the placing
+   * cursor are concerned.
+   *
+   * Absent means the symbol is its own family, which is true of every built-in
+   * one: nothing was made from anything.
+   */
+  family?: string;
+}
+
+/**
+ * Every face of one symbol, the original first.
+ *
+ * The original first because that is the one somebody picked, and a list that
+ * starts somewhere else makes Tab feel like it skipped a turn. Ordered after
+ * that by name, so the set is the same every time it is opened.
+ */
+export function variantsOf(item: LibraryItem, all: LibraryItem[]): LibraryItem[] {
+  const family = item.family ?? item.key;
+  const kin = all.filter(o => (o.family ?? o.key) === family);
+  if (kin.length < 2) return [item];
+  return [
+    ...kin.filter(o => o.key === family),
+    ...kin.filter(o => o.key !== family).sort((a, b) => a.name.localeCompare(b.name)),
+  ];
 }
 
 /** One item's geometry, as shapes. */
