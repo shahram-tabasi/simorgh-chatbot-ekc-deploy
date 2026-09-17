@@ -164,17 +164,36 @@ export function loadDxfSymbols(): DxfSymbol[] {
  * symbols without their sources rather than nothing at all. Silent either way:
  * a symbol that cannot be stored still draws for the rest of the session.
  */
+// ── Who else is looking at the pack ─────────────────────────────────────────
+// The pack is edited in one place — the symbol library panel — and read in
+// another: the Simorgh Draw tab merges it into the overrides that decide which
+// symbol a generated drawing uses. The two used to be the same screen and one
+// could tell the other directly. They are not any more, so the store says so
+// itself rather than each reader polling or guessing.
+
+const watchers = new Set<() => void>();
+
+/** Called whenever the pack changes. Returns the unsubscribe. */
+export function onDxfSymbols(fn: () => void): () => void {
+  watchers.add(fn);
+  return () => { watchers.delete(fn); };
+}
+
 export function saveDxfSymbols(symbols: DxfSymbol[]): void {
   try {
     localStorage.setItem(STORE, JSON.stringify(symbols));
-    return;
   } catch {
     /* Out of room, most likely. Try again with the sources left out. */
+    try {
+      localStorage.setItem(STORE, JSON.stringify(
+        symbols.map(({ source, ...rest }) => rest)));
+    } catch {
+      /* A private window, or still no room — this session is unaffected. */
+    }
   }
-  try {
-    localStorage.setItem(STORE, JSON.stringify(
-      symbols.map(({ source, ...rest }) => rest)));
-  } catch {
-    /* A private window, or still no room — this session is unaffected. */
-  }
+  // Always, and last: whether or not the browser agreed to keep it, the pack
+  // in this session has changed and everything reading it has to know. The
+  // first version of this returned early on the path that works, so the
+  // watchers only ever fired when the write had gone wrong.
+  for (const fn of watchers) fn();
 }

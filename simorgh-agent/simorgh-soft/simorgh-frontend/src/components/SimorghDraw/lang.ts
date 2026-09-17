@@ -118,6 +118,9 @@ export interface Strings {
   libImported: (added: number, updated: number) => string;
   libExported: (n: number) => string;
   libNotALibrary: string;
+  libNewGroup: string; libNewGroupName: string; libVariant: string;
+  libVariantNote: string; libRedraw: string; libRedrawNote: string;
+  libRedrawnHere: string; libPack: string;
 
   // Light or dark
   themeLight: string; themeDark: string;
@@ -312,6 +315,14 @@ const EN: Strings = {
   libImported: (added, updated) => `${added} added, ${updated} replaced`,
   libExported: n => `${n} symbol${n === 1 ? '' : 's'} written to a file`,
   libNotALibrary: 'That is not a Simorgh Draw library file.',
+  libNewGroup: '＋ A new shelf…',
+  libNewGroupName: 'What to call the new shelf',
+  libVariant: 'Add a variant',
+  libVariantNote: 'Start a new symbol from this one — same drawing, same connection points, your own name. For the LSI, the LSIG and the LI of a breaker you have already drawn once.',
+  libRedraw: 'Redraw for this project',
+  libRedrawNote: 'Draw your own version of this symbol, used by this project only. To give it to every project, add it as a variant instead.',
+  libRedrawnHere: 'redrawn for this project',
+  libPack: 'DXF pack',
 
   themeLight: 'Light', themeDark: 'Dark',
 
@@ -544,6 +555,14 @@ const FA: Strings = {
   libImported: (added, updated) => `${added} اضافه شد، ${updated} جایگزین شد`,
   libExported: n => `${n} سیمبل در فایل نوشته شد`,
   libNotALibrary: 'این فایل، فایل کتابخانه‌ی سیمرغ دراو نیست.',
+  libNewGroup: '＋ قفسه‌ی جدید…',
+  libNewGroupName: 'نام قفسه‌ی جدید',
+  libVariant: 'افزودن گونه',
+  libVariantNote: 'یک سیمبل تازه از روی همین بساز — همان نقشه، همان نقاط اتصال، نام خودت. برای LSI و LSIG و LI یک کلید که یک‌بار کشیده‌ای.',
+  libRedraw: 'بازکشیدن برای این پروژه',
+  libRedrawNote: 'نسخه‌ی خودت از این سیمبل را بکش؛ فقط همین پروژه از آن استفاده می‌کند. اگر می‌خواهی همه‌ی پروژه‌ها داشته باشند، به‌جایش گونه اضافه کن.',
+  libRedrawnHere: 'برای این پروژه بازکشیده شده',
+  libPack: 'پک DXF',
 
   themeLight: 'روشن', themeDark: 'تیره',
 
@@ -777,6 +796,14 @@ const TR: Strings = {
   libImported: (added, updated) => `${added} eklendi, ${updated} değiştirildi`,
   libExported: n => `${n} sembol dosyaya yazıldı`,
   libNotALibrary: 'Bu bir Simorgh Draw kitaplık dosyası değil.',
+  libNewGroup: '＋ Yeni bir raf…',
+  libNewGroupName: 'Yeni rafın adı',
+  libVariant: 'Varyant ekle',
+  libVariantNote: 'Bundan yeni bir sembol başlat — aynı çizim, aynı bağlantı noktaları, kendi adınız.',
+  libRedraw: 'Bu proje için yeniden çiz',
+  libRedrawNote: 'Bu sembolün kendi sürümünüzü çizin; yalnızca bu proje kullanır.',
+  libRedrawnHere: 'bu proje için yeniden çizildi',
+  libPack: 'DXF paketi',
 
   themeLight: 'Açık', themeDark: 'Koyu',
 

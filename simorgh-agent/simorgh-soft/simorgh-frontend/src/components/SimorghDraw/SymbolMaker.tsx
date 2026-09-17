@@ -47,6 +47,17 @@ interface Props {
   selection?: Shape[];
   /** The symbol being changed, when this opened on an existing one. */
   editing?: OfficeSymbol | null;
+  /** The shelf to start on, when this was opened from one. */
+  group?: string;
+  /**
+   * A symbol to start from, when this was opened as "add a variant".
+   *
+   * A breaker's LSI, LSIG and LI are the same drawing with a different name —
+   * and drawing the same breaker three times is how three slightly different
+   * breakers end up in a library. So the geometry and the connection points
+   * come across, and what is left to do is the name.
+   */
+  from?: { art: string; width: number; height: number; terminals?: { x: number; y: number; name: string }[]; name: string };
   onSaved: (symbol: OfficeSymbol) => void;
   onClose: () => void;
 }
@@ -79,18 +90,22 @@ function geometryOf(shapes: Shape[], from: string): Geometry | null {
 }
 
 export const SymbolMaker: React.FC<Props> = ({
-  t, lang, theme, kind: openOn, selection, editing, onSaved, onClose,
+  t, lang, theme, kind: openOn, selection, editing, group: openGroup, from,
+  onSaved, onClose,
 }) => {
   const file = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(editing?.name ?? '');
   const [kind, setKind] = useState<LibraryKind>(editing?.kind ?? openOn);
-  const [group, setGroup] = useState(editing?.group ?? defaultGroup(openOn));
+  const [group, setGroup] = useState(
+    editing?.group ?? openGroup ?? defaultGroup(openOn));
   const [geometry, setGeometry] = useState<Geometry | null>(
     editing
       ? { art: editing.art, width: editing.width, height: editing.height, from: t.libEdit }
-      : null);
+      : from
+        ? { art: from.art, width: from.width, height: from.height, from: from.name }
+        : null);
   const [terminals, setTerminals] = useState<{ x: number; y: number; name: string }[]>(
-    editing?.terminals ?? []);
+    editing?.terminals ?? from?.terminals ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -326,20 +341,31 @@ export const SymbolMaker: React.FC<Props> = ({
                 </div>
               </div>
 
-              <label className="block">
+              <div>
                 <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{t.libGroup}</span>
-                {/* A list of the library's own shelves, and free text, because
-                    an office's own shelf is as legitimate as the ones shipped. */}
-                <input
-                  list="sd-symbol-groups"
-                  value={group}
-                  onChange={e => setGroup(e.target.value)}
+                {/* The shelves this library has, and a box for one it does not.
+                    An office's own shelf is as legitimate as the ones shipped —
+                    the list is a starting point, not a fence — so typing a name
+                    nobody has used makes that shelf, and it appears in the panel
+                    as soon as something is on it. */}
+                <select
+                  value={groups.includes(group) ? group : '__new'}
+                  onChange={e => setGroup(e.target.value === '__new' ? '' : e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                />
-                <datalist id="sd-symbol-groups">
-                  {groups.map(g => <option key={g} value={g} />)}
-                </datalist>
-              </label>
+                >
+                  {groups.map(g => <option key={g} value={g}>{g}</option>)}
+                  <option value="__new">{t.libNewGroup}</option>
+                </select>
+                {!groups.includes(group) && (
+                  <input
+                    autoFocus
+                    value={group}
+                    onChange={e => setGroup(e.target.value)}
+                    placeholder={t.libNewGroupName}
+                    className="mt-1.5 w-full border border-violet-300 rounded px-2 py-1.5 text-sm"
+                  />
+                )}
+              </div>
             </div>
 
             <div className="p-4 space-y-2 flex-1">

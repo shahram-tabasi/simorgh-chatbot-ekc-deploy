@@ -9,12 +9,10 @@ import { eplanSymbolService } from '../../services/projectService';
 import { templateParts } from '../../utils/tierEquipmentMatrix';
 import {
   EPLAN_HEADERS, EplanSymbolMap, buildEplanRows, buildSingleLinePages, buildSingleLineHtml,
-  buildSymbolLibraryHtml, partKeys,
+  partKeys,
 } from '../../utils/eplanSingleLine';
 import {
-  IEC_SYMBOLS, SYMBOL_GROUPS, CELL, SymbolId, SymbolOverride,
-  setSymbolOverrides, setProjectSymbolOverrides, symbolOverride, symbolHeight,
-  drawIecSymbol,
+  IEC_SYMBOLS, SymbolId, SymbolOverride, setSymbolOverrides, setProjectSymbolOverrides,
 } from '../../utils/iecSymbols';
 
 // The library's own ids, to match a file in the pack against by name.
@@ -29,12 +27,10 @@ import { drawingFromSvg, svgSize } from '../../utils/cad/fromSvg';
 import { fingerprint } from '../../utils/cad/edit';
 import { EditorSheet } from '../SimorghDraw/DrawingEditor';
 import { SheetEditorWindow } from '../SimorghDraw/SheetEditorWindow';
-import { DxfSymbolPack } from '../SimorghDraw/DxfSymbolPack';
-import { SymbolGraphicEditor } from '../SimorghDraw/SymbolGraphicEditor';
-import { DxfSymbol, loadDxfSymbols, saveDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
+import { DxfSymbol, loadDxfSymbols, onDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
 import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
-import { DrawingEdits, SymbolArtOverride } from '../../types/project';
+import { DrawingEdits } from '../../types/project';
 import { downloadText, fileSafe } from '../../utils/download';
 import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
@@ -47,7 +43,7 @@ import { PageNavigator } from '../SimorghDraw/PageNavigator';
 // items. Each one is previewed here before it is downloaded or printed, so
 // what leaves the app has been looked at first.
 
-type View = 'single-line' | 'pages' | 'layout' | 'mechanical' | 'symbols';
+type View = 'single-line' | 'pages' | 'layout' | 'mechanical';
 
 /**
  * The single line as CAD, one file per switchgear — the output for a customer
@@ -136,7 +132,6 @@ export const EplanixTab: React.FC = () => {
   // What EPLAN says each part is — the symbol it places for it. Without this
   // the drawing falls back to the slot the part sits in.
   const [symbols, setSymbols] = useState<EplanSymbolMap>({});
-  const [packReplaced, setPackReplaced] = useState(0);
   // The pack's own symbols and the office's DXF ones are separate sources that
   // have to reach the library as one map, or whichever arrives last wins.
   const [packOverrides, setPackOverrides] = useState<Partial<Record<SymbolId, SymbolOverride>>>({});
@@ -145,11 +140,14 @@ export const EplanixTab: React.FC = () => {
   // when they change.
   const [symbolVersion, setSymbolVersion] = useState(0);
   const [paper, setPaper] = useState<PaperChoice>('auto');
-  // Bumped when a symbol is sent to the pack, so the pack is read again
-  // without waiting for the parts on the sheet to change.
+  // Bumped when the pack changes, so it is read again without waiting for the
+  // parts on the sheet to change. The pack is edited in the symbol library
+  // now — a different screen — so this listens rather than being told.
   const [packVersion, setPackVersion] = useState(0);
-  // The library symbol the graphic page is open on, when one is.
-  const [editingSymbol, setEditingSymbol] = useState<SymbolId | null>(null);
+  useEffect(() => onDxfSymbols(() => {
+    setDxfSymbols(loadDxfSymbols());
+    setPackVersion(v => v + 1);
+  }), []);
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
 
   const equipments = projectData.equipments ?? [];
@@ -236,7 +234,6 @@ export const EplanixTab: React.FC = () => {
         replaced += 1;
       }
       setPackOverrides(overrides);
-      setPackReplaced(replaced);
       const matched = new Set(Object.values(found).map(e => e.partNumber || e.symbol)).size;
       const replacedNote = Object.keys(overrides).length > 0
         ? ` ${Object.keys(overrides).length} library symbol(s) replaced by the pack`
@@ -261,7 +258,10 @@ export const EplanixTab: React.FC = () => {
     // The office's own drawing wins over the pack's picture of the same device.
     setSymbolOverrides({ ...packOverrides, ...fromDxf });
     setSymbolVersion(v => v + 1);
-    saveDxfSymbols(dxfSymbols);
+    // Not saved from here any more: the pack is edited in the symbol library
+    // and saved there. Writing it back on every merge would have this screen
+    // overwrite the store it is only reading — and would fire the change
+    // notice it is itself listening to.
   }, [packOverrides, dxfSymbols]);
 
   // Symbols this project draws its own way, redrawn on the graphic page in the
@@ -415,12 +415,21 @@ export const EplanixTab: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-5 gap-3 mb-5">
+      {/* Four, not five.
+          There was a Symbols tab here listing all sixty-one single-line
+          symbols with the DXF pack above them. The symbol library in the
+          drawing editor now lists every symbol from every source — the two
+          built-in libraries, the office's own on the server, and the pack —
+          with a proper preview and its terminals. Two places to look at
+          symbols is one too many, and the one that had to go is the one that
+          only knew about a third of them. What it could do that the library
+          could not — the pack, and redrawing a symbol for this project — went
+          with it into the library rather than being dropped. */}
+      <div className="grid grid-cols-4 gap-3 mb-5">
         <Tab id="single-line" label="Single line" note="Busbar, feeders, devices, data blocks" />
         <Tab id="pages" label="Pages" note="Wiring diagrams, single lines, layouts" />
         <Tab id="layout" label="Layout" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical" note="Enclosure, busbars, compartments" />
-        <Tab id="symbols" label="Symbols" note="The IEC single-line library" />
       </div>
 
       {/* ── Pages ─────────────────────────────────────────────────────── */}
@@ -742,98 +751,6 @@ export const EplanixTab: React.FC = () => {
             </p>
           )}
         </div>
-      )}
-
-      {/* ── The symbol library ────────────────────────────────────────── */}
-      {view === 'symbols' && (
-        <div className="space-y-4">
-        <DxfSymbolPack
-          symbols={dxfSymbols}
-          onChange={setDxfSymbols}
-          onPackChanged={() => setPackVersion(v => v + 1)}
-        />
-        <div className="border border-gray-200 rounded-lg">
-          <div className="px-4 py-3 bg-gray-50 border-b space-y-2.5">
-            <div className="flex items-start gap-3 min-w-0">
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-slate-700">IEC</span>
-              <div className="min-w-0">
-                <p className="font-medium text-sm text-gray-800">
-                  {Object.keys(IEC_SYMBOLS).length} single-line symbols
-                </p>
-                <p className="text-xs text-gray-500">
-                  What the drawing uses for each device. Click one to redraw it for this
-                  project. An SVG or DXF dropped into the symbol pack under one of these
-                  names replaces the symbol here, everywhere.
-                  {packReplaced > 0 && (
-                    <span className="text-emerald-700 font-medium">
-                      {' '}{packReplaced} replaced by the pack.
-                    </span>
-                  )}
-                </p>
-              </div>
-            </div>
-            <Btn
-              onClick={() => openPrintable(buildSymbolLibraryHtml(), 'symbol library')}
-              icon="print"
-              className="bg-slate-700 text-white hover:bg-slate-800"
-            >
-              Print / PDF
-            </Btn>
-          </div>
-
-          <div className="p-4 space-y-5">
-            {SYMBOL_GROUPS.map(group => (
-              <div key={group}>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{group}</p>
-                <div className="grid grid-cols-6 gap-3">
-                  {Object.values(IEC_SYMBOLS).filter(sym => sym.group === group).map(sym => {
-                    // Drawn the way a sheet draws it, so a symbol the pack has
-                    // replaced shows here as what the drawing will use.
-                    const replaced = !!symbolOverride(sym.id);
-                    const tall = symbolHeight(sym.id) / CELL;
-                    return (
-                      <button key={sym.id}
-                           onClick={() => setEditingSymbol(sym.id)}
-                           title={`Open ${sym.title} on the graphic page`}
-                           className={`text-left border rounded p-2 bg-white hover:border-blue-400 hover:shadow-sm transition ${
-                             replaced ? 'border-emerald-400' : 'border-gray-200'}`}>
-                        <svg width="100%" height={CELL + 16} viewBox={`0 0 90 ${CELL + 16}`}>
-                          <g transform={tall > 1 ? `translate(28 8) scale(${1 / tall}) translate(-28 -8)` : undefined}
-                             dangerouslySetInnerHTML={{ __html: drawIecSymbol(sym.id, 28, 8) }} />
-                        </svg>
-                        <p className="text-[11px] text-gray-800 leading-tight mt-1">{sym.title}</p>
-                        {replaced && (
-                          <p className="text-[10px] text-emerald-700 leading-tight">
-                            {projectData.symbolOverrides?.[sym.id] ? 'redrawn for this project' : 'from the pack'}
-                          </p>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        </div>
-      )}
-
-      {editingSymbol && (
-        <SymbolGraphicEditor
-          symbolId={editingSymbol}
-          override={projectData.symbolOverrides?.[editingSymbol]}
-          onSave={(art: SymbolArtOverride) => patchProjectData(prev => {
-            const next = { ...(prev.symbolOverrides ?? {}) };
-            next[editingSymbol] = art;
-            return { symbolOverrides: next };
-          })}
-          onReset={() => patchProjectData(prev => {
-            const next = { ...(prev.symbolOverrides ?? {}) };
-            delete next[editingSymbol];
-            return { symbolOverrides: next };
-          })}
-          onClose={() => setEditingSymbol(null)}
-        />
       )}
 
       <p className="mt-4 text-xs text-gray-400">

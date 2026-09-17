@@ -3,14 +3,13 @@ import { createPortal } from 'react-dom';
 import {
   XIcon, SearchIcon, UploadIcon, Maximize2Icon, Minimize2Icon, PlusIcon,
   ChevronDownIcon, ChevronRightIcon, PencilIcon, Trash2Icon, FilePlusIcon,
-  DownloadIcon, LibraryIcon,
+  DownloadIcon, LibraryIcon, CopyPlusIcon, PackageIcon, PaintbrushIcon,
 } from 'lucide-react';
 
 import { Shape } from '../../utils/cad/shapes';
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
 import { renderFragment } from '../../utils/cad/svg';
 import { readDxf } from '../../utils/cad/readDxf';
-import { loadDxfSymbols } from '../../utils/cad/dxfSymbols';
 import { LibraryItem, iecItems, packItems, shapesOf } from '../../utils/cad/symbolSource';
 import { wdItems } from '../../utils/cad/wdSymbols';
 import {
@@ -24,6 +23,12 @@ import {
 } from '../../services/projectService';
 import { downloadText } from '../../utils/download';
 import { SymbolMaker } from './SymbolMaker';
+import { DxfSymbolPack } from './DxfSymbolPack';
+import { SymbolGraphicEditor } from './SymbolGraphicEditor';
+import { DxfSymbol, loadDxfSymbols, saveDxfSymbols } from '../../utils/cad/dxfSymbols';
+import { SymbolId, setProjectSymbolOverrides } from '../../utils/iecSymbols';
+import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
+import { useProject } from '../../context/ProjectContext';
 import { Strings, dirOf, Lang } from './lang';
 import { ThemeId } from './theme';
 
@@ -109,6 +114,27 @@ export const SymbolLibrary: React.FC<Props> = ({
   const [incoming, setIncoming] = useState<LibraryFile | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // The two things the old Symbols tab could do that this panel could not.
+  // They came here rather than being dropped when that tab went.
+  const [showPack, setShowPack] = useState(false);
+  /** The shelf a "new symbol" was started from, so it opens already on it. */
+  const [newInGroup, setNewInGroup] = useState<string | null>(null);
+  /** The symbol a variant is being started from, if any. */
+  const [variantOf, setVariantOf] = useState<
+    { art: string; width: number; height: number;
+      terminals?: { x: number; y: number; name: string }[]; name: string } | null>(null);
+  const [pack, setPack] = useState<DxfSymbol[]>(loadDxfSymbols);
+  const [redrawing, setRedrawing] = useState<SymbolId | null>(null);
+  const { projectData, patchProjectData } = useProject();
+
+  // A symbol redrawn for this project replaces the library's everywhere the
+  // project draws — so the override map is pushed into the symbol module
+  // whenever it changes, exactly as the old tab did.
+  useEffect(() => {
+    setProjectSymbolOverrides(toSymbolOverrides(projectData.symbolOverrides));
+    setBeat(b => b + 1);
+  }, [projectData.symbolOverrides]);
+
   // The office's library comes off the server, so it arrives after the first
   // draw. `beat` is what says "it is here now" — without it the list would be
   // right and the screen would not.
@@ -153,6 +179,10 @@ export const SymbolLibrary: React.FC<Props> = ({
   }, [items, query, kind]);
 
   const chosen = items.find(i => i.key === picked) ?? null;
+
+  /** True where this project has drawn its own version of a built-in symbol. */
+  const redrawnHere = (item: LibraryItem | null): boolean =>
+    Boolean(item?.id && projectData.symbolOverrides?.[item.id]);
 
   /** A DXF or SVG off the person's own machine, read and put in the list. */
   const readFiles = async (list: FileList | null) => {
@@ -319,6 +349,14 @@ export const SymbolLibrary: React.FC<Props> = ({
               <FilePlusIcon className="w-4 h-4" /> {t.libNew}
             </button>
             <button
+              onClick={() => setShowPack(true)}
+              data-lib-pack
+              title="The DXF symbols loaded into this browser, and sending one to the server pack"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100"
+            >
+              <PackageIcon className="w-4 h-4" /> DXF pack
+            </button>
+            <button
               onClick={() => file.current?.click()}
               data-lib-file
               title={t.libFromFileNote}
@@ -461,20 +499,34 @@ export const SymbolLibrary: React.FC<Props> = ({
               const open = Boolean(query.trim()) || !shut.has(group);
               return (
                 <div key={group}>
-                  <button
-                    onClick={() => setShut(prev => {
-                      const next = new Set(prev);
-                      if (next.has(group)) next.delete(group); else next.add(group);
-                      return next;
-                    })}
-                    className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 border-y text-[11px] font-semibold text-gray-600 uppercase tracking-wide sticky top-0 z-10 hover:bg-gray-100"
-                  >
-                    {open
-                      ? <ChevronDownIcon className="w-3.5 h-3.5" />
-                      : <ChevronRightIcon className="w-3.5 h-3.5" />}
-                    <span className="truncate">{group}</span>
-                    <span className="ms-auto text-gray-400">{list.length}</span>
-                  </button>
+                  <div className="flex items-stretch bg-gray-50 border-y sticky top-0 z-10">
+                    <button
+                      onClick={() => setShut(prev => {
+                        const next = new Set(prev);
+                        if (next.has(group)) next.delete(group); else next.add(group);
+                        return next;
+                      })}
+                      className="flex-1 min-w-0 flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold text-gray-600 uppercase tracking-wide hover:bg-gray-100"
+                    >
+                      {open
+                        ? <ChevronDownIcon className="w-3.5 h-3.5" />
+                        : <ChevronRightIcon className="w-3.5 h-3.5" />}
+                      <span className="truncate">{group}</span>
+                      <span className="ms-auto text-gray-400">{list.length}</span>
+                    </button>
+                    {/* Straight into this shelf.
+                        A breaker has an LSI, an LSIG and an LI, and they belong
+                        on the shelf the breaker is on. Reaching New symbol at
+                        the top and then finding that shelf again in a dropdown
+                        is three steps for something that is plainly one. */}
+                    <button
+                      onClick={() => { setEditing(null); setNewInGroup(group); setMaking(true); }}
+                      title={`Add a symbol to ${group}`}
+                      className="px-2 text-gray-400 hover:text-violet-700 hover:bg-gray-100 border-s"
+                    >
+                      <FilePlusIcon className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   {open && list.map(item => (
                     <button
                       key={item.key}
@@ -527,6 +579,9 @@ export const SymbolLibrary: React.FC<Props> = ({
                     <p className="text-[11px] text-gray-500">
                       {chosen.source} · {chosen.group} · {Math.round(chosen.width)} × {Math.round(chosen.height)}
                       {chosen.terminals?.length ? ` · ${t.libPoints(chosen.terminals.length)}` : ''}
+                      {redrawnHere(chosen) && (
+                        <span className="text-emerald-700 font-medium"> · {t.libRedrawnHere}</span>
+                      )}
                     </p>
                   </div>
 
@@ -563,6 +618,44 @@ export const SymbolLibrary: React.FC<Props> = ({
                         </button>
                       </>
                     )}
+                    {/* From any symbol, whoever drew it: a copy in the office
+                        library under a new name. This is how a shelf gets the
+                        LSI, the LSIG and the LI of a breaker somebody has
+                        already drawn once. */}
+                    <button
+                      onClick={() => {
+                        setEditing(null);
+                        setNewInGroup(chosen.group);
+                        setVariantOf({
+                          art: chosen.art,
+                          width: chosen.width,
+                          height: chosen.height,
+                          terminals: chosen.terminals,
+                          name: chosen.name,
+                        });
+                        setMaking(true);
+                      }}
+                      title={t.libVariantNote}
+                      data-lib-variant
+                      className="flex items-center gap-1.5 px-3 py-2 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100"
+                    >
+                      <CopyPlusIcon className="w-4 h-4" /> {t.libVariant}
+                    </button>
+
+                    {/* Only a built-in single-line symbol can be redrawn for
+                        one project: the override map is keyed on the library's
+                        own ids, and it is what the generated drawings look up. */}
+                    {chosen.source === 'IEC' && chosen.kind === 'sld' && chosen.id && (
+                      <button
+                        onClick={() => setRedrawing(chosen.id as SymbolId)}
+                        title={t.libRedrawNote}
+                        data-lib-redraw
+                        className="flex items-center gap-1.5 px-3 py-2 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        <PaintbrushIcon className="w-4 h-4" /> {t.libRedraw}
+                      </button>
+                    )}
+
                     <button
                       onClick={() => place(chosen)}
                       data-lib-import
@@ -643,14 +736,77 @@ export const SymbolLibrary: React.FC<Props> = ({
             kind={kind}
             selection={selection}
             editing={editing}
+            group={newInGroup ?? undefined}
+            from={variantOf ?? undefined}
             onSaved={saved => {
               setMaking(false);
               setEditing(null);
+              setNewInGroup(null);
+              setVariantOf(null);
               setKind(saved.kind);
               setPicked(`office:${saved.id}`);
               setNote(t.libSaved(saved.name));
             }}
-            onClose={() => { setMaking(false); setEditing(null); }}
+            onClose={() => {
+              setMaking(false); setEditing(null);
+              setNewInGroup(null); setVariantOf(null);
+            }}
+          />
+        )}
+
+        {/* The DXF pack — the browser's own, and sending one to the server's.
+            It lived on the Symbols tab; it belongs wherever symbols are
+            looked at, and that is now here. */}
+        {showPack && (
+          <div className="absolute inset-0 z-[10] bg-black/40 flex items-start justify-center p-6 overflow-y-auto">
+            <div className="bg-white rounded-lg shadow-2xl w-full max-w-3xl">
+              <div className="flex items-center gap-3 px-4 py-2.5 bg-gray-50 border-b">
+                <h4 className="text-sm font-semibold text-gray-800">{t.libPack}</h4>
+                <button
+                  onClick={() => setShowPack(false)}
+                  className="ms-auto p-1.5 rounded text-gray-500 hover:bg-gray-200"
+                >
+                  <XIcon className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-3">
+                <DxfSymbolPack
+                  symbols={pack}
+                  onChange={next => {
+                    setPack(next);
+                    // Saved here, because this panel is now the only place the
+                    // pack is edited from — the tab that used to save it is gone.
+                    saveDxfSymbols(next);
+                    setBeat(b => b + 1);
+                  }}
+                  onPackChanged={() => setBeat(b => b + 1)}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {redrawing && (
+          <SymbolGraphicEditor
+            symbolId={redrawing}
+            override={projectData.symbolOverrides?.[redrawing]}
+            onSave={art => {
+              patchProjectData(prev => {
+                const next = { ...(prev.symbolOverrides ?? {}) };
+                next[redrawing] = art;
+                return { symbolOverrides: next };
+              });
+              setRedrawing(null);
+            }}
+            onReset={() => {
+              patchProjectData(prev => {
+                const next = { ...(prev.symbolOverrides ?? {}) };
+                delete next[redrawing];
+                return { symbolOverrides: next };
+              });
+              setRedrawing(null);
+            }}
+            onClose={() => setRedrawing(null)}
           />
         )}
       </div>
