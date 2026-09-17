@@ -16,6 +16,12 @@ services:
       - PORT=3001
       - MONGODB_URI=mongodb://simorgh-soft-mongo:27017
       - DATABASE_NAME=${SIMORGH_SOFT_DATABASE_NAME:-simorgh_db}
+      # The office's symbol library, in a database of its own beside the
+      # projects. Separate because it belongs to the office rather than to any
+      # job: it outlives every project in it, and it can be dumped, restored
+      # or carried to another site by itself. The nightly mongodump takes
+      # every database on the server, so it is already in the backup.
+      - LIBRARY_DATABASE_NAME=${SIMORGH_SOFT_LIBRARY_DATABASE_NAME:-simorgh_library}
       - SQL_USER=${SIMORGH_SOFT_SQL_USER:-userfanni}
       - SQL_PASSWORD=${SIMORGH_SOFT_SQL_PASSWORD:-12345678}
       - SQL_SERVER=${SIMORGH_SOFT_SQL_SERVER:-192.168.1.39}
