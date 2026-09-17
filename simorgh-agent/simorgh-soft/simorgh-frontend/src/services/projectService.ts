@@ -245,12 +245,42 @@ export interface LadderRequest {
   language?: string;
   /** 'teach' explains from further back; 'brief' assumes the reader knows. */
   style?: 'teach' | 'brief';
+  /** What has already been asked and answered, so it is not asked again. */
+  answers?: { ask: string; chose: string }[];
+}
+
+/** One option of a question the assistant came back with. */
+export interface LadderOption {
+  label: string;
+  /** A line under it, where the choice needs one. */
+  note?: string;
+}
+
+/**
+ * A question the assistant asked rather than guessing at.
+ *
+ * Most of what makes a program right is not in the sentence it was given —
+ * whether the stop is maintained, what happens on a fault, how many the
+ * counter counts to. Guessing produces a program that looks finished and is
+ * wrong in a place nobody can see, so the assistant is told to ask, and to ask
+ * in options somebody can click rather than in prose somebody has to answer.
+ */
+export interface LadderQuestion {
+  ask: string;
+  /** Why it matters — what it changes about the program. */
+  why?: string;
+  options: LadderOption[];
+  /** True where more than one option may be picked. */
+  multi?: boolean;
 }
 
 export interface LadderAnswer {
   success: boolean;
   /** The program as it arrived — validated in the browser, not here. */
   program?: unknown;
+  /** Asked instead of answered. Never both: a model that asks and then answers
+   *  has guessed, and the guess is what asking was meant to avoid. */
+  questions?: LadderQuestion[];
   model?: string;
   error?: string;
   /** What the model said when it did not answer with a program. */

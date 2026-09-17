@@ -80,6 +80,36 @@ function systemPrompt({ briefing, controller, language, style }) {
     '  Pin names are the vendor\'s, spelled exactly as listed. A pin with nothing on',
     '  it keeps its name and leaves "value" out.',
     '',
+    'WHEN YOU DO NOT KNOW ENOUGH, ASK. DO NOT GUESS.',
+    'Most of what makes a program right is not in the sentence you were given:',
+    'whether the stop is maintained or momentary, whether the motor reverses,',
+    'whether a jog is wanted, how many the counter counts to, what happens on a',
+    'fault — hold, or stop and need a reset. Guessing any of those produces a',
+    'program that looks finished and is wrong, and nobody can see which part.',
+    '',
+    'So when a choice would change the rungs, answer with QUESTIONS INSTEAD OF',
+    'RUNGS, in this shape and nothing else:',
+    '{',
+    '  "questions": [',
+    '    {',
+    '      "ask": "What should happen when the overload trips?",',
+    '      "why": "It decides whether rung 1 needs a latch and a reset button.",',
+    '      "options": [',
+    '        {"label": "Stop, and need a reset before restarting", "note": "The usual choice on a motor"},',
+    '        {"label": "Stop, and restart by itself when it cools"},',
+    '        {"label": "Only light a lamp and keep running"}',
+    '      ],',
+    '      "multi": false',
+    '    }',
+    '  ]',
+    '}',
+    'Ask at most four, all at once rather than one at a time. Every question',
+    'carries two to four options a person can pick between, written as what they',
+    'would do and not as jargon. "multi": true where several may be picked.',
+    'Ask only what changes the program. Do not ask what the vendor briefing above',
+    'already answers, and do not ask to be told again what the task already said.',
+    'When the task is clear enough, write the program and ask nothing.',
+    '',
     'RULES:',
     '  - Every rung drives something. A rung with conditions and no output is not a rung.',
     '  - A stop button is a normally closed contact wired to a normally open input, so a',
@@ -99,12 +129,45 @@ function systemPrompt({ briefing, controller, language, style }) {
   ].filter(Boolean).join('\n');
 }
 
-/** Is this parsed object actually a program? */
-const looksLikeProgram = v => Array.isArray(v?.rungs) && v.rungs.length > 0;
+/** A useful answer is either a program or a set of questions. */
+const looksLikeAnswer = v =>
+  (Array.isArray(v?.rungs) && v.rungs.length > 0)
+  || (Array.isArray(v?.questions) && v.questions.length > 0);
+
+/** How many questions may come back, and how many options each may carry. */
+const MAX_QUESTIONS = 4;
+const MAX_OPTIONS = 6;
+
+/**
+ * Questions, kept to what can be put on screen as buttons.
+ *
+ * A question with no options is not a question in this sense — it is the model
+ * asking for an essay, and the whole point of asking this way is that the
+ * answer is one click. So those are dropped rather than shown as a text box
+ * nobody fills in.
+ */
+function readQuestions(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw.slice(0, MAX_QUESTIONS)) {
+    const ask = clean(item?.ask, 300);
+    if (!ask) continue;
+    const options = (Array.isArray(item?.options) ? item.options : [])
+      .slice(0, MAX_OPTIONS)
+      .map(o => ({
+        label: clean(typeof o === 'string' ? o : o?.label, 120),
+        note: clean(typeof o === 'string' ? '' : o?.note, 160),
+      }))
+      .filter(o => o.label);
+    if (options.length < 2) continue;
+    out.push({ ask, why: clean(item?.why, 300), options, multi: item?.multi === true });
+  }
+  return out;
+}
 
 export function registerLadderAssistRoutes(app, callLocalModel) {
   app.post('/api/ladder/generate', async (req, res) => {
-    const { task, briefing, controller, language, style } = req.body || {};
+    const { task, briefing, controller, language, style, answers } = req.body || {};
 
     if (typeof task !== 'string' || task.trim().length < 3) {
       return res.status(400).json({ success: false, error: 'Describe what the program should do.' });
@@ -121,6 +184,16 @@ export function registerLadderAssistRoutes(app, callLocalModel) {
     }
 
     try {
+      // What was already asked and answered, so the model does not ask again.
+      const settled = (Array.isArray(answers) ? answers : [])
+        .slice(0, 12)
+        .map(a => `  ${clean(a?.ask, 300)} — ${clean(a?.chose, 300)}`)
+        .filter(l => l.trim().length > 3);
+
+      const user = settled.length
+        ? `${task.trim().slice(0, 4000)}\n\nAlready settled, do not ask these again:\n${settled.join('\n')}`
+        : task.trim().slice(0, 4000);
+
       const answer = await callLocalModel({
         system: systemPrompt({
           briefing: clean(briefing, BRIEFING_LIMIT),
@@ -128,7 +201,7 @@ export function registerLadderAssistRoutes(app, callLocalModel) {
           language: clean(language, 60),
           style: style === 'teach' ? 'teach' : 'brief',
         }),
-        user: task.trim().slice(0, 4000),
+        user,
         abortMs: Number(process.env.LADDER_ASSIST_TIMEOUT_MS) || 180000,
         // A program with its explanation is a long answer — longer than a
         // drawing, because every rung carries a comment and a step.
@@ -136,7 +209,7 @@ export function registerLadderAssistRoutes(app, callLocalModel) {
       });
 
       const text = typeof answer === 'string' ? answer : answer?.content ?? answer?.text ?? '';
-      const parsed = parseAnswer(text, looksLikeProgram);
+      const parsed = parseAnswer(text, looksLikeAnswer);
 
       if (!parsed) {
         // What it did say goes back with the refusal: the one question worth
@@ -147,6 +220,14 @@ export function registerLadderAssistRoutes(app, callLocalModel) {
           raw: String(text).slice(0, 1500),
           model: answer?.model || '',
         });
+      }
+
+      // Questions win over rungs when both arrive. A model that asks and then
+      // answers its own question has guessed, and the guess is exactly what
+      // asking was meant to avoid.
+      const questions = readQuestions(parsed.questions);
+      if (questions.length > 0) {
+        return res.json({ success: true, questions, model: answer?.model || '' });
       }
 
       // Handed on as it arrived. The browser validates it element by element —
