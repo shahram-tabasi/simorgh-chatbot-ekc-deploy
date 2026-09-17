@@ -36,16 +36,20 @@ import {
   MECHANICAL_HEADERS, buildMechanicalItems, buildMechanicalRows,
 } from '../../utils/mechanicalItems';
 import {
-  DrawingGroups, DrawingPage, pageKey, readGroups, readPages,
+  DrawingGroups, DrawingPage, newPage, pageKey, readGroups, readPages,
 } from '../../utils/cad/pages';
-import { PageNavigator } from '../SimorghDraw/PageNavigator';
 
 // The Simorgh Draw tab: the drawings-and-lists outputs that come off the
 // switchgear itself — the single line, the panel layout, and the mechanical
 // items. Each one is previewed here before it is downloaded or printed, so
 // what leaves the app has been looked at first.
 
-type View = 'single-line' | 'pages' | 'layout' | 'mechanical';
+// Three, not four. Pages were a tab here and are not any more: a drawing set
+// is worked on inside Simorgh Draw, where the Page tab on the ribbon adds,
+// names, files and reorders them without closing the drawing. A tab here meant
+// leaving the sheet to reach the next page, which is the one thing a
+// draughtsman does all day.
+type View = 'single-line' | 'layout' | 'mechanical';
 
 /**
  * The single line as CAD, one file per switchgear — the output for a customer
@@ -329,6 +333,27 @@ export const EplanixTab: React.FC = () => {
     }));
 
   /**
+   * Into the drawing, on the page set.
+   *
+   * This is the only way in now that the Pages tab is gone, so it cannot be a
+   * button that does nothing on a project with no pages yet: the first one is
+   * made here. A single line, because that is what this office draws first and
+   * because the Page tab in the editor turns it into any of the three in one
+   * click if that was the wrong guess.
+   */
+  const openPages = () => {
+    if (drawPages.length > 0) {
+      setOpenPage(drawPages[0].id);
+    } else {
+      const first = newPage([], 'sld');
+      setPages([first], { ...(projectData.drawingEdits ?? {}) }, drawGroups);
+      setOpenPage(first.id);
+    }
+    setBlank(false);
+    setEditing(true);
+  };
+
+  /**
    * The page set as sheets the editor can page through.
    *
    * Every page, not just the one that was opened — the editor already has a
@@ -408,6 +433,21 @@ export const EplanixTab: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center flex-wrap gap-2">
+          {/* The way into the drawing set. It was a tab; a tab meant leaving
+              the sheet to reach the next page, and the page tree now lives on
+              the editor's own ribbon where it is wanted. */}
+          <button
+            onClick={openPages}
+            disabled={!isCurrentRevisionEditable && drawPages.length === 0}
+            title="Open Simorgh Draw on this project's pages — wiring diagrams, single lines and layouts, with the page tree on the ribbon"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40"
+          >
+            <PencilRulerIcon className="w-4 h-4" />
+            Pages
+            <span className="text-[11px] font-normal text-amber-100">
+              {drawPages.length || 'new'}
+            </span>
+          </button>
           <label className="text-sm text-gray-600">Switchgear</label>
           <select
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
@@ -422,7 +462,7 @@ export const EplanixTab: React.FC = () => {
         </div>
       </div>
 
-      {/* Four, not five.
+      {/* Three, not four, and once not five.
           There was a Symbols tab here listing all sixty-one single-line
           symbols with the DXF pack above them. The symbol library in the
           drawing editor now lists every symbol from every source — the two
@@ -432,26 +472,11 @@ export const EplanixTab: React.FC = () => {
           only knew about a third of them. What it could do that the library
           could not — the pack, and redrawing a symbol for this project — went
           with it into the library rather than being dropped. */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-3 gap-3 mb-5">
         <Tab id="single-line" label="Single line" note="Busbar, feeders, devices, data blocks" />
-        <Tab id="pages" label="Pages" note="Wiring diagrams, single lines, layouts" />
         <Tab id="layout" label="Layout" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical" note="Enclosure, busbars, compartments" />
       </div>
-
-      {/* ── Pages ─────────────────────────────────────────────────────── */}
-      {view === 'pages' && (
-        <PageNavigator
-          pages={drawPages}
-          groups={drawGroups}
-          edits={projectData.drawingEdits}
-          onChange={setPages}
-          projectName={projectData.projectName}
-          onOpen={id => { setOpenPage(id); setBlank(false); setEditing(true); }}
-          canEdit={isCurrentRevisionEditable}
-          fileBase={fileSafe(projectData.projectName || 'project')}
-        />
-      )}
 
       {/* ── Single line ───────────────────────────────────────────────── */}
       {view === 'single-line' && (
@@ -580,7 +605,7 @@ export const EplanixTab: React.FC = () => {
       )}
 
       {/* ── A page of the set, opened from the page tree ──────────────── */}
-      {editing && openPage && (
+      {editing && openPage && pageSheets.length > 0 && (
         <SheetEditorWindow
           title={`Simorgh Draw — ${drawPages.find(p => p.id === openPage)?.name ?? 'page'}`}
           note={`${drawPages.length} page(s) in this project · the sheet list at the top right turns between them`}

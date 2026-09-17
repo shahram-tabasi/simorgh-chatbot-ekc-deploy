@@ -137,7 +137,7 @@ export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose 
               // editor lives. From here the tree is for getting the set in
               // order — adding, naming, reordering — so a click on a page says
               // where to go rather than pretending to open it.
-              onOpen={() => setNote('Open a page from Simorgh Draw → Pages in the project.')}
+              onOpen={() => setNote('Pages open with the Pages button on the Simorgh Draw screen — and once a drawing is open, the Page tab on its ribbon turns between them.')}
               canEdit={isCurrentRevisionEditable}
               fileBase={fileBase}
             />

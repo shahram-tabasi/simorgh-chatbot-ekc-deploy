@@ -113,63 +113,16 @@ function symbolLines(symbols) {
  * drawing an electrician would reject — diagonal wires, symbols drawn as
  * free-floating strokes with nothing tying them together, text with no size.
  */
-function systemPrompt({ width, height, textSize, symbols = [], area }) {
-  const library = symbolLines(symbols);
-  const a = area || { x: 0, y: 0, w: width, h: height };
-  const x0 = Math.round(a.x), y0 = Math.round(a.y);
-  const x1 = Math.round(a.x + a.w), y1 = Math.round(a.y + a.h);
-  const cell = Math.max(8, Math.round(Math.min(a.w, a.h) / 12));
+/**
+ * How a single line is laid out, for the model that has to draw one.
+ *
+ * Lifted out of the prompt whole when the other two kinds of page arrived.
+ * Every word of it is about one line standing for three phases, which is true
+ * of an SLD and false of everything else — a wiring diagram drawn to these
+ * rules is a wiring diagram with the wires missing.
+ */
+function singleLineRules({ library, a }) {
   return [
-    'You draw electrical schematics as JSON. Answer with JSON only, no prose.',
-    '',
-    `The sheet is ${width} by ${height} units, x to the right, y DOWNWARDS from the top-left.`,
-    '',
-    // The frame, the title block and the zone grid are already on the sheet
-    // before the model is asked anything. Giving it the sheet and asking for
-    // "a margin" got a drawing in the top-left corner with a staircase across
-    // the rest: it had no idea which part of the page was its to use.
-    'THE DESIGN AREA — everything you draw goes inside this rectangle:',
-    `    x from ${x0} to ${x1}      y from ${y0} to ${y1}`,
-    'The sheet frame, title block and zone grid are already drawn outside it.',
-    'Nothing you return may fall outside those four numbers.',
-    '',
-    'Answer with: {"shapes":[...],"note":"one short sentence"}',
-    '',
-    'Each shape is one of:',
-    '  {"t":"line","x1":N,"y1":N,"x2":N,"y2":N,"layer":L}',
-    '  {"t":"rect","x":N,"y":N,"w":N,"h":N,"layer":L}',
-    '  {"t":"circle","cx":N,"cy":N,"r":N,"layer":L}',
-    '  {"t":"arc","cx":N,"cy":N,"r":N,"a0":DEG,"a1":DEG,"layer":L}',
-    '  {"t":"poly","pts":[[x,y],...],"layer":L}',
-    `  {"t":"text","x":N,"y":N,"s":"...","size":${textSize},"layer":L,"anchor":A}`,
-    '      anchor is start (text runs right from x), end (it ends at x) or',
-    '      middle. A tag to the LEFT of a symbol needs "end", or it runs back',
-    '      over the symbol.',
-    ...(library.length
-      ? [
-        '  {"t":"sym","id":"ID","x":N,"y":N,"h":N,"name":"WHAT IT IS","tap":true|false}',
-        '',
-        'A "sym" is a device taken from the drawing office\'s own symbol library.',
-        'x,y is its TOP TERMINAL — where the incoming wire meets it — and h how',
-        'far down the page it reaches, so its BOTTOM TERMINAL is at (x, y+h).',
-        '',
-        '"tap":true is for a device fed FROM the line rather than standing ON it',
-        '— a single ammeter off a CT. Then x,y is where that one line arrives at',
-        'its side, and it carries no conductor of its own. Leave tap out for',
-        'anything on the branch, and for instruments stacked one under another',
-        'on a shared x: there their own conductors join into the short bus that',
-        'parallels them, which is the only thing that line ever means.',
-        `Use h = ${cell} unless the device needs more room.`,
-        'The library draws it; you only say which one and where.',
-        '',
-        'The library holds:',
-        ...library,
-      ]
-      : []),
-    '',
-    `layer is one of: ${Object.entries(LAYERS).map(([k, v]) => `${k} (${v})`).join(', ')}.`,
-    'Optional on any shape: "dash" as one of solid, dashed, dash-dot, dotted.',
-    '',
     // ── How a circuit is laid out ──────────────────────────────────────────
     //
     // Series and parallel are the two facts a schematic is made of, and the
@@ -264,6 +217,180 @@ function systemPrompt({ width, height, textSize, symbols = [], area }) {
     `       h   = ${Math.round(a.h * 0.8)} / (1.5 × N)      the height of each device`,
     '       gap = h / 2                  the wire between two of them',
     `   For five devices that is h ≈ ${Math.round(a.h * 0.8 / 7.5)} and a gap of about ${Math.round(a.h * 0.8 / 15)}.`,
+  ];
+}
+
+/**
+ * How a wiring diagram is laid out.
+ *
+ * The opposite of a single line in the one way that matters: every conductor
+ * is drawn. A WD page asked for with the single-line rules comes back as one
+ * line per circuit, which is the wrong document — and the office cannot wire a
+ * panel from it.
+ */
+function wiringRules({ library, a }) {
+  const left = Math.round(a.x + 12);
+  const right = Math.round(a.x + a.w - 12);
+  return [
+    'THIS IS A WIRING DIAGRAM (WD) — the multi-line set the panel is built',
+    'from. EVERY conductor is drawn. This is not a single line: do not draw',
+    'one line and call it three phases.',
+    '',
+    'THE RAILS. A control circuit hangs between two horizontal rails on the',
+    `BUS layer, one near the top and one near the bottom: L+ at y = ${Math.round(a.y + 14)}`,
+    `and M (or N) at y = ${Math.round(a.y + a.h - 14)}, both running from x = ${left} to x = ${right}.`,
+    'Every circuit is a vertical run from the top rail, down through its',
+    'devices, to the bottom one. Current goes down the page; the rails are the',
+    'only horizontal conductors.',
+    '',
+    'WHAT GOES ON A RUN, top to bottom:',
+    '  · the contacts that have to be made — a start button, a stop button,',
+    '    an auxiliary contact, a limit switch, an overload contact',
+    '  · then the thing that is operated: a coil, a lamp, a valve',
+    '  · then down to the bottom rail.',
+    'A seal-in is a second contact in PARALLEL with the start button: two',
+    'short horizontal lines to a second x, the contact on it, and back.',
+    '',
+    'TERMINALS AND TERMINAL NUMBERS. Every device terminal is named, and the',
+    'name is what the panel is wired to: a coil is A1 at the top and A2 at the',
+    'bottom, a normally-open auxiliary contact is 13 and 14, a normally-closed',
+    'one 11 and 12, a main pole 1-2, 3-4, 5-6, an overload contact 95 and 96.',
+    'Write each of them as a small text on the TAG layer beside the terminal it',
+    'belongs to. A wiring diagram without terminal numbers cannot be wired.',
+    '',
+    'WIRE NUMBERS. Give each conductor between two terminals a number as a',
+    'text on the TAG layer, sitting just above the wire near its middle.',
+    '',
+    'THREE PHASES ARE THREE LINES. A motor circuit is L1, L2 and L3 drawn one',
+    'beside the other, about 8 units apart, each with its own pole of the',
+    'breaker, its own contactor pole and its own overload element, down to U, V',
+    'and W on the motor. Draw all three. If the request is a power circuit and',
+    'the sheet has room for only one of them, draw one phase and say so in the',
+    'note rather than drawing a single line and pretending.',
+    '',
+    'Rules:',
+    '1. Wires run horizontally or vertically only, never diagonal.',
+    '2. A line joins two terminals and exists for no other reason.',
+    library.length
+      ? '3. Every device is a "sym" from the library above — a contact, a coil, a'
+        + '\n   button, a lamp, a PLC channel. The library draws it; you say which one'
+        + '\n   and where. Do not draw a coil out of arcs.'
+      : '3. Every shape making up one device carries the same "block" string and'
+        + '\n   the same "blockName", so it is one object rather than loose strokes.',
+    '4. Give every device a designation on the TAG layer, to the LEFT of its',
+    '   symbol: -K1 contactors and relays, -S1 buttons and switches, -F1',
+    '   overloads and fuses, -H1 lamps, -M1 motors, -X1 terminal strips.',
+    '   The same device on two rungs keeps the same designation — that is what',
+    '   says the contact belongs to that coil.',
+    '5. Space the runs across the page, about 45 units apart, and start the',
+    `   first at x = ${Math.round(a.x + 40)}. Fill the width before adding a second row.`,
+  ];
+}
+
+/**
+ * How a panel layout is laid out.
+ *
+ * Nothing here is a circuit: it is the front of a cubicle, drawn to scale,
+ * and the mistake to head off is a layout page that comes back with wires on
+ * it because the model was told to draw a schematic.
+ */
+function layoutRules({ a }) {
+  return [
+    'THIS IS A PANEL LAYOUT (OLD) — the front elevation of the switchboard,',
+    'drawn to scale. It is NOT a circuit: there are no wires on this page, no',
+    'conductors, no terminal numbers, and nothing is "connected" to anything.',
+    '',
+    'WHAT IS ON IT:',
+    '  · the outline of the enclosure, as a rectangle on the PANEL layer',
+    '  · the cubicles inside it, as rectangles side by side on the PANEL layer',
+    '  · the compartments within a cubicle, stacked as rectangles',
+    '  · the devices mounted on the front — breakers, meters, lamps, buttons —',
+    '    each a rectangle on the SYMBOL layer, in its place, at its own size',
+    '  · a text on the TAG layer naming each cubicle and each device',
+    '  · overall dimensions where they are asked for, on the TABLE layer.',
+    '',
+    'SCALE. Everything on this page is drawn in proportion to the real panel.',
+    `The design area is ${Math.round(a.w)} by ${Math.round(a.h)} units, so pick one scale — say`,
+    '1 unit to 10 mm — and hold to it for every rectangle on the page. A door',
+    'twice as wide as the one beside it is drawn twice as wide.',
+    '',
+    'Rules:',
+    '1. Rectangles and text. No arcs, no circles unless the device really is',
+    '   round — a pilot lamp or a selector — and no wires at all.',
+    '2. Every device rectangle carries the same "block" and "blockName" as the',
+    '   text that names it, so the device is one object.',
+    '3. Cubicles sit on a common floor line and are the same height unless the',
+    '   request says otherwise. Fill the width of the design area.',
+    '4. Name every cubicle along the top and every device beside or under its',
+    '   rectangle. A layout nobody can read the names off is a picture.',
+  ];
+}
+
+/** The rules for the kind of page being drawn — see the three above. */
+function kindRules(kind, context) {
+  if (kind === 'wd') return wiringRules(context);
+  if (kind === 'old') return layoutRules(context);
+  return singleLineRules(context);
+}
+
+function systemPrompt({ width, height, textSize, symbols = [], area, kind = 'sld' }) {
+  const library = symbolLines(symbols);
+  const a = area || { x: 0, y: 0, w: width, h: height };
+  const x0 = Math.round(a.x), y0 = Math.round(a.y);
+  const x1 = Math.round(a.x + a.w), y1 = Math.round(a.y + a.h);
+  const cell = Math.max(8, Math.round(Math.min(a.w, a.h) / 12));
+  return [
+    'You draw electrical schematics as JSON. Answer with JSON only, no prose.',
+    '',
+    `The sheet is ${width} by ${height} units, x to the right, y DOWNWARDS from the top-left.`,
+    '',
+    // The frame, the title block and the zone grid are already on the sheet
+    // before the model is asked anything. Giving it the sheet and asking for
+    // "a margin" got a drawing in the top-left corner with a staircase across
+    // the rest: it had no idea which part of the page was its to use.
+    'THE DESIGN AREA — everything you draw goes inside this rectangle:',
+    `    x from ${x0} to ${x1}      y from ${y0} to ${y1}`,
+    'The sheet frame, title block and zone grid are already drawn outside it.',
+    'Nothing you return may fall outside those four numbers.',
+    '',
+    'Answer with: {"shapes":[...],"note":"one short sentence"}',
+    '',
+    'Each shape is one of:',
+    '  {"t":"line","x1":N,"y1":N,"x2":N,"y2":N,"layer":L}',
+    '  {"t":"rect","x":N,"y":N,"w":N,"h":N,"layer":L}',
+    '  {"t":"circle","cx":N,"cy":N,"r":N,"layer":L}',
+    '  {"t":"arc","cx":N,"cy":N,"r":N,"a0":DEG,"a1":DEG,"layer":L}',
+    '  {"t":"poly","pts":[[x,y],...],"layer":L}',
+    `  {"t":"text","x":N,"y":N,"s":"...","size":${textSize},"layer":L,"anchor":A}`,
+    '      anchor is start (text runs right from x), end (it ends at x) or',
+    '      middle. A tag to the LEFT of a symbol needs "end", or it runs back',
+    '      over the symbol.',
+    ...(library.length
+      ? [
+        '  {"t":"sym","id":"ID","x":N,"y":N,"h":N,"name":"WHAT IT IS","tap":true|false}',
+        '',
+        'A "sym" is a device taken from the drawing office\'s own symbol library.',
+        'x,y is its TOP TERMINAL — where the incoming wire meets it — and h how',
+        'far down the page it reaches, so its BOTTOM TERMINAL is at (x, y+h).',
+        '',
+        '"tap":true is for a device fed FROM the line rather than standing ON it',
+        '— a single ammeter off a CT. Then x,y is where that one line arrives at',
+        'its side, and it carries no conductor of its own. Leave tap out for',
+        'anything on the branch, and for instruments stacked one under another',
+        'on a shared x: there their own conductors join into the short bus that',
+        'parallels them, which is the only thing that line ever means.',
+        `Use h = ${cell} unless the device needs more room.`,
+        'The library draws it; you only say which one and where.',
+        '',
+        'The library holds:',
+        ...library,
+      ]
+      : []),
+    '',
+    `layer is one of: ${Object.entries(LAYERS).map(([k, v]) => `${k} (${v})`).join(', ')}.`,
+    'Optional on any shape: "dash" as one of solid, dashed, dash-dot, dotted.',
+    '',
+    ...kindRules(kind, { library, a }),
   ].join('\n');
 }
 
@@ -535,7 +662,7 @@ function mendTruncated(text) {
 
 export function registerDrawAssistRoutes(app, callLocalModel) {
   app.post('/api/draw/generate', async (req, res) => {
-    const { prompt, width, height, textSize, symbols, area } = req.body || {};
+    const { prompt, width, height, textSize, symbols, area, kind } = req.body || {};
     if (typeof prompt !== 'string' || prompt.trim().length < 3) {
       return res.status(400).json({ success: false, error: 'Describe what to draw.' });
     }
@@ -550,6 +677,11 @@ export function registerDrawAssistRoutes(app, callLocalModel) {
       symbols: readCatalogue(symbols),
       area: readArea(area, Number(width) > 0 ? Number(width) : 420,
                      Number(height) > 0 ? Number(height) : 297),
+      // Which of the three documents this page is, so the model is told how
+      // that one is laid out rather than being told about a single line and
+      // left to draw a wiring diagram from it. An older browser sends none
+      // and gets the single line it always got.
+      kind: kind === 'wd' || kind === 'old' ? kind : 'sld',
     };
 
     try {

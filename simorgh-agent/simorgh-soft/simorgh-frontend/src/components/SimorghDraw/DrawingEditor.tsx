@@ -394,10 +394,12 @@ const AskPanel: React.FC<{
   onProgram: (result: LadderAskResult) => void;
   /** What the model actually said, when what it said could not be drawn. */
   raw: { error: string; text: string; model: string } | null;
+  /** Which of the three documents the open page is, so the panel says so. */
+  kind: LibraryKind;
   onDragStart?: (e: React.MouseEvent) => void;
 }> = ({
   t, text, onText, asking, onGo, onClose, dock, onDock, mode, onMode, onProgram,
-  raw, onDragStart,
+  raw, kind, onDragStart,
 }) => (
   <>
     <div
@@ -467,7 +469,10 @@ const AskPanel: React.FC<{
       </div>
     ) : (
     <div className="p-3 overflow-y-auto">
-      <p className="text-[11px] text-gray-500 mb-1.5">{t.askDrawNote}</p>
+      {/* What it will draw, and not a general promise: the three pages are
+          three documents, and being told which one is about to be drawn is
+          the difference between a useful answer and a surprise. */}
+      <p className="text-[11px] text-gray-500 mb-1.5">{t.askDrawFor(kind)}</p>
       <textarea
         value={text}
         onChange={e => onText(e.target.value)}
@@ -1037,6 +1042,14 @@ export const DrawingEditor: React.FC<Props> = ({
       + (result.dropped.length ? ` · ${result.dropped.length} could not be drawn` : ''));
   }, [sheet, draw, T]);
 
+  /**
+   * Which of the three documents the open page is.
+   *
+   * A generated single line and the blank sheet carry no kind, and those are
+   * single lines — which is what they always were.
+   */
+  const drawKind: LibraryKind = sheet?.kind ?? 'sld';
+
   const askToDraw = useCallback(async () => {
     const prompt = askText.trim();
     if (prompt.length < 3 || !sheet) return;
@@ -1060,13 +1073,19 @@ export const DrawingEditor: React.FC<Props> = ({
           // the title block or huddles in a corner and fills the rest with a
           // line going nowhere — which is exactly what it did.
           area: designArea(),
+          // Which of the three documents this page is. The three are laid out
+          // nothing like each other — a single line stands for three phases,
+          // a wiring diagram draws all of them, a layout has no wires at all —
+          // and the page already knows which it is, so the model is told
+          // rather than left to guess from the wording of the request.
+          kind: drawKind,
           // The library goes with the question. It lives here, in the browser,
           // and the office adds to it — so the model is told what is in it now
           // rather than what was in it when the server was built, and it names
           // a symbol instead of drawing a box and hoping it reads as a breaker.
-          // The single-line library only. This editor draws single lines, and
-          // a wiring-diagram coil offered here is a coil that ends up on one.
-          symbols: symbolCatalogue(library, 'sld'),
+          // The page's own library, and only that one: a wiring-diagram coil
+          // offered on a single line is a coil that ends up on one.
+          symbols: symbolCatalogue(library, drawKind),
         }),
       });
       const body = await response.json().catch(() => ({}));
@@ -2305,6 +2324,7 @@ export const DrawingEditor: React.FC<Props> = ({
               onGo={askToDraw} onClose={() => setAskOpen(false)}
               dock={askDock} onDock={chooseDock} raw={askRaw}
               mode={askMode} onMode={setAskMode} onProgram={drawLadder}
+              kind={drawKind}
             />
           </aside>
         )}
@@ -2378,6 +2398,7 @@ export const DrawingEditor: React.FC<Props> = ({
                 onGo={askToDraw} onClose={() => setAskOpen(false)}
                 dock={askDock} onDock={chooseDock} raw={askRaw}
                 mode={askMode} onMode={setAskMode} onProgram={drawLadder}
+              kind={drawKind}
                 onDragStart={dragAsk}
               />
             </div>
@@ -2467,6 +2488,7 @@ export const DrawingEditor: React.FC<Props> = ({
               onGo={askToDraw} onClose={() => setAskOpen(false)}
               dock={askDock} onDock={chooseDock} raw={askRaw}
               mode={askMode} onMode={setAskMode} onProgram={drawLadder}
+              kind={drawKind}
             />
           </aside>
         )}

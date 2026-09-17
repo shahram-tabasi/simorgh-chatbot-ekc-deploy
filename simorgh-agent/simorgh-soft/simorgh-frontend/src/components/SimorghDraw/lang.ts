@@ -142,6 +142,8 @@ export interface Strings {
   libRedrawnHere: string; libPack: string;
   // The assistant panel's two tabs
   askModeDraw: string; askModePlc: string; askDrawNote: string; askPlcNote: string;
+  /** What it will draw on this page — the three are three documents. */
+  askDrawFor: (kind: 'sld' | 'wd' | 'old') => string;
   askDrewLadder: (rungs: number) => string;
 
   // Light or dark
@@ -382,6 +384,11 @@ const EN: Strings = {
   askModeDraw: 'Draw',
   askModePlc: 'PLC',
   askDrawNote: 'It draws a single line — the symbols on this sheet\u2019s own library.',
+  askDrawFor: kind => (kind === 'wd'
+    ? 'This is a WD page, so it draws a wiring diagram: every conductor, terminal numbers and wire numbers.'
+    : kind === 'old'
+      ? 'This is an OLD page, so it draws a panel layout: the enclosure, its cubicles and what is mounted on the front. No wires.'
+      : 'This is an SLD page, so it draws a single line — one line for the whole circuit, from this page\u2019s own library.'),
   askPlcNote: 'The rungs land on this sheet as one undo step. A draft for an engineer to read, not a program to download.',
   askDrewLadder: rungs => `${rungs} rung${rungs === 1 ? '' : 's'} drawn — Ctrl+Z takes it back off`,
 
@@ -666,6 +673,11 @@ const FA: Strings = {
   askModeDraw: 'نقشه',
   askModePlc: 'PLC',
   askDrawNote: 'تک‌خطی می‌کشد — با سیمبل‌های کتابخانه‌ی همین صفحه.',
+  askDrawFor: kind => (kind === 'wd'
+    ? 'این صفحه WD است، پس نقشهٔ مولتی‌لاین می‌کشد: همهٔ هادی‌ها، شمارهٔ ترمینال و شمارهٔ سیم.'
+    : kind === 'old'
+      ? 'این صفحه OLD است، پس چیدمان تابلو می‌کشد: بدنه، سلول‌ها و آنچه روی درب نصب می‌شود. بدون سیم.'
+      : 'این صفحه SLD است، پس تک‌خطی می‌کشد — یک خط برای کل مدار، با کتابخانهٔ همین صفحه.'),
   askPlcNote: 'رانگ‌ها به‌صورت یک مرحله‌ی undo روی همین برگه می‌نشینند. پیش‌نویسی برای خواندنِ مهندس، نه برنامه‌ای برای دانلود.',
   askDrewLadder: rungs => `${rungs} رانگ کشیده شد — با Ctrl+Z برداشته می‌شود`,
 
@@ -951,6 +963,11 @@ const TR: Strings = {
   askModeDraw: 'Çiz',
   askModePlc: 'PLC',
   askDrawNote: 'Tek hat çizer — bu sayfanın kendi kitaplığındaki sembollerle.',
+  askDrawFor: kind => (kind === 'wd'
+    ? 'Bu bir WD sayfası: çok hatlı şema çizer — her iletken, terminal numaraları ve kablo numaraları.'
+    : kind === 'old'
+      ? 'Bu bir OLD sayfası: pano yerleşimi çizer — gövde, hücreler ve ön yüze monte edilenler. Kablo yok.'
+      : 'Bu bir SLD sayfası: tek hat çizer — bütün devre için tek çizgi, bu sayfanın kendi kitaplığıyla.'),
   askPlcNote: 'Basamaklar bu sayfaya tek bir geri alma adımı olarak iner. Mühendisin okuması için bir taslak.',
   askDrewLadder: rungs => `${rungs} basamak çizildi — Ctrl+Z geri alır`,
 
