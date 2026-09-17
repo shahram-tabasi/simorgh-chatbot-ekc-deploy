@@ -50,13 +50,6 @@ echo
 echo "▶ state"
 docker compose ps simorgh-soft
 
-# Which commit this actually is. The whole point of the label: "the feature is
-# not there" is then answerable by looking rather than by guessing.
-echo
-echo "▶ running commit"
-docker inspect --format '  {{index .Config.Labels "org.opencontainers.image.revision"}}' simorgh-soft 2>/dev/null \
-  || echo "  (no revision label — an image built before the label was added)" 
-
 # The container answers on :80 inside the app network; the host proxies to it.
 echo
 echo "▶ health"
@@ -66,6 +59,20 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   if [ "$i" = "10" ]; then echo "  /simorgh-design-suite/ → $code (still starting? see: docker compose logs -n 50 simorgh-soft)"; fi
   sleep 3
 done
+
+# Which build this actually is.
+#
+# From build.json, which the Dockerfile writes beside the bundle — not from an
+# image label, because there is no label: an earlier version of this script
+# inspected `org.opencontainers.image.revision` and printed an empty line every
+# time, which is worse than not asking. Read out of the container rather than
+# over the proxy, so it answers even when the host nginx in front of it does
+# not.
+echo
+echo "▶ running build"
+docker exec simorgh-soft cat /usr/share/nginx/html/build.json 2>/dev/null |
+  sed 's/^/  /' ||
+  echo "  (no build.json — an image built before the stamp was added)"
 
 # Symbols exported from EPLAN are read from disk, not baked into the image.
 symbols=$(ls -1 "$root"/simorgh-agent/simorgh-soft/simorgh-backend/eplan-symbols/*.svg 2>/dev/null | wc -l)

@@ -229,9 +229,14 @@ jobs:
             echo "docker pull ${{ steps.meta.outputs.ref }}:${{ github.sha }}"
             echo '```'
             echo
-            echo 'Check the running container is this build — Help → About shows the same:'
-            echo
-            echo '```bash'
-            echo "docker inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' \$(docker compose ps -q ${{ matrix.image }})"
-            echo '```'
+            if [ "${{ matrix.image }}" = "simorgh-soft" ]; then
+              echo 'Check the running container is this build — Help → About shows the same.'
+              echo 'It reads build.json, which the Dockerfile writes beside the bundle;'
+              echo 'there is no image label to inspect, and asking for one prints a blank line:'
+              echo
+              echo '```bash'
+              echo 'docker exec simorgh-soft cat /usr/share/nginx/html/build.json'
+              echo 'curl -s http://127.0.0.1/simorgh-design-suite/build.json   # same thing, over the proxy'
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
