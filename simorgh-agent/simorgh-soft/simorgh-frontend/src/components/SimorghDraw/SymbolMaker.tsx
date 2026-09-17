@@ -1,19 +1,20 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { PlusIcon, Trash2Icon, UploadIcon, XIcon } from 'lucide-react';
+import { PencilRulerIcon, PlusIcon, Trash2Icon, UploadIcon, XIcon } from 'lucide-react';
 
 import { Drawing, Shape } from '../../utils/cad/shapes';
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
 import { renderFragment } from '../../utils/cad/svg';
 import { readDxf } from '../../utils/cad/readDxf';
-import { boundsOfAll } from '../../utils/cad/edit';
+import { boundsOfAll, fingerprint } from '../../utils/cad/edit';
 import { translateShape } from '../../utils/cad/shapes';
-import { MARK_R } from '../../utils/cad/terminals';
+import { MARK_R, terminalMarks } from '../../utils/cad/terminals';
 import { OfficeSymbol, symbolLibraryService } from '../../services/projectService';
 import { newSymbolId, rememberOfficeSymbol } from '../../utils/cad/officeSymbols';
 import {
   LibraryKind, SYMBOL_LIBRARIES, defaultGroup, libraryOf,
 } from '../../utils/cad/symbolLibraries';
+import { DrawingEditor, EditorSheet } from './DrawingEditor';
 import { Strings, dirOf, Lang } from './lang';
 import { ThemeId } from './theme';
 
@@ -89,6 +90,42 @@ function geometryOf(shapes: Shape[], from: string): Geometry | null {
   return { art: renderFragment(d), width, height, from };
 }
 
+/** A blank symbol's sheet, in the units a single-line symbol is drawn in. */
+const BLANK = 40;
+
+/**
+ * A sheet of shapes read back as a symbol: its ink, and its terminals.
+ *
+ * The two are told apart by the connection point's name, which is what a
+ * terminal *is* here — the ink is everything that does not carry one. They are
+ * measured together but framed on the ink alone: a connection point sits on
+ * the very edge of a symbol, and the ring drawn round it is a mark on the
+ * screen rather than part of the device, so letting it push the frame out
+ * would move the conductor a little further from the symbol every time it was
+ * opened and saved.
+ */
+function symbolFromShapes(shapes: Shape[], from: string): {
+  geometry: Geometry; terminals: { x: number; y: number; name: string }[];
+} | null {
+  const pins = shapes.filter(s => s.pin);
+  const ink = shapes.filter(s => !s.pin);
+  const box = boundsOfAll(ink.length ? ink : shapes);
+  if (!box) return null;
+  const geometry = geometryOf(ink, from);
+  if (!geometry) return null;
+  return {
+    geometry,
+    terminals: pins.map((s, i) => {
+      const p = pointOf(s);
+      return {
+        x: round(p[0] - box.x),
+        y: round(p[1] - box.y),
+        name: String(s.pin ?? i + 1),
+      };
+    }),
+  };
+}
+
 export const SymbolMaker: React.FC<Props> = ({
   t, lang, theme, kind: openOn, selection, editing, group: openGroup, from,
   onSaved, onClose,
@@ -108,6 +145,33 @@ export const SymbolMaker: React.FC<Props> = ({
     editing?.terminals ?? from?.terminals ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [drawing, setDrawing] = useState(false);
+  /** Whether the drawing page has been saved back since it was opened. */
+  const [drawn, setDrawn] = useState(false);
+
+  /**
+   * The symbol as a sheet for the drawing page.
+   *
+   * Nothing here changes while the page is open — it is on top of this dialog
+   * — so the sheet is built once on the way in and read back once on the way
+   * out, and the editor keeps its own history in between.
+   */
+  const sheets = useMemo<EditorSheet[]>(() => {
+    const w = geometry?.width ?? BLANK;
+    const h = geometry?.height ?? BLANK;
+    const markup = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}">${geometry?.art ?? ''}</svg>`;
+    const d = drawingFromSvg(markup, 'symbol');
+    // The terminals go on as the PIN shapes they become: placed with the
+    // connection-point tool, moved with everything else, read back by name.
+    for (const mark of terminalMarks(terminals)) d.add(mark);
+    return [{
+      name: name.trim() || t.libDrawTitle,
+      drawing: d,
+      key: 'symbol',
+      drawnAs: fingerprint(markup),
+      kind,
+    }];
+  }, [drawing]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const takeSelection = () => {
     const got = geometryOf(selection ?? [], t.libFromSelection);
@@ -260,6 +324,13 @@ export const SymbolMaker: React.FC<Props> = ({
               >
                 <PlusIcon className="w-4 h-4" /> {t.libFromSelection}
                 {selection?.length ? <span className="text-[11px] text-gray-400">{selection.length}</span> : null}
+              </button>
+              <button
+                onClick={() => { setDrawn(false); setDrawing(true); }}
+                title={t.libDrawNote}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-amber-300 bg-amber-50 text-sm text-amber-800 hover:bg-amber-100"
+              >
+                <PencilRulerIcon className="w-4 h-4" /> {t.libDraw}
               </button>
               <input
                 ref={file}
@@ -427,6 +498,57 @@ export const SymbolMaker: React.FC<Props> = ({
           </aside>
         </div>
       </div>
+
+      {/* ── The drawing page, on top of all of it ─────────────────────────
+          Not a second, smaller editor: the editor. Trim, extend, corner, the
+          grips, the symbol library, the layers and the connection-point tool,
+          on the symbol — which is the whole of what a symbol editor is and the
+          reason EPLAN ships a separate application to do it. Here it is the
+          same canvas, so anything learnt on a sheet is already known here. */}
+      {drawing && (
+        <div className="fixed inset-0 z-[300] bg-slate-900/70 flex flex-col p-3">
+          <div className="flex items-center gap-3 px-4 py-2 bg-slate-800 text-white rounded-t-lg">
+            <PencilRulerIcon className="w-4 h-4 shrink-0" />
+            <span className="text-sm font-semibold truncate">
+              {name.trim() || t.libDrawTitle}
+            </span>
+            <span className="text-[11px] text-slate-300 truncate hidden md:block">
+              {t.libDrawNote}
+            </span>
+            <button
+              onClick={() => {
+                // Leaving without saving loses the drawing, so it is said out
+                // loud rather than found out afterwards.
+                if (!drawn && !window.confirm(t.libDrawLose)) return;
+                setDrawing(false);
+              }}
+              className="ms-auto flex items-center gap-1.5 px-3 py-1.5 rounded bg-white/15 text-white text-xs font-medium hover:bg-white/25"
+            >
+              <XIcon className="w-3.5 h-3.5" /> {t.libDrawDone}
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 bg-white rounded-b-lg overflow-hidden">
+            <DrawingEditor
+              sheets={sheets}
+              fileBase={`symbol_${name.trim() || 'new'}`}
+              titleBlock={[name.trim() || t.libDrawTitle, t.libNew]}
+              mmPerUnit={1}
+              // The editor's Save hands the sheet back; here the sheet is the
+              // symbol, so saving it is the symbol taking the new drawing.
+              onSaveEdits={next => {
+                const edited = next.symbol;
+                if (!edited) return;
+                const got = symbolFromShapes(edited.shapes, t.libDraw);
+                if (!got) { setError(t.libNeedsArt); setDrawing(false); return; }
+                setGeometry(got.geometry);
+                setTerminals(got.terminals);
+                setError(null);
+                setDrawn(true);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>,
     document.body,
   );

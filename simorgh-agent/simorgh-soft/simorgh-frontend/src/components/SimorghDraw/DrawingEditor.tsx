@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx-js-style';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { tableShapes, replaceTable, tableOrigin, tableIdOf } from '../../utils/cad/table';
 import { checkSheet, Message } from '../../utils/cad/schematic';
-import { checkTerminals } from '../../utils/cad/terminals';
+import { MARK_R, checkTerminals, terminalMarks } from '../../utils/cad/terminals';
 import { numberWires, autoTagDevices, crossReferences } from '../../utils/cad/annotate';
 import { HeaderFields, drawingAreas, hasHeader, sheetHeader, stripHeader } from '../../utils/cad/header';
 import {
@@ -19,13 +19,14 @@ import {
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
   LanguagesIcon, CircleHelpIcon, LibraryBigIcon, GroupIcon, UngroupIcon,
-  SunIcon, MoonIcon, CableIcon, FrameIcon,
+  SunIcon, MoonIcon, CableIcon, FrameIcon, FileInputIcon,
   PanelLeftIcon, PanelRightIcon, PictureInPicture2Icon } from 'lucide-react';
 import logoMark from '../../assets/logo-mark.png';
 import { DrawingEdits } from '../../types/project';
 import {
-  Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Pt, Shape, layerColor,
+  Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Pt, Shape, layerColor, translateShape,
 } from '../../utils/cad/shapes';
+import { readDxf } from '../../utils/cad/readDxf';
 import { renderSvg } from '../../utils/cad/svg';
 import { renderDxf } from '../../utils/cad/dxf';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
@@ -140,6 +141,10 @@ const DRAW_SMALL: ToolRow[] = [
   { id: 'circle', name: 'circle', key: 'C', Icon: CircleIcon },
   { id: 'ellipse', name: 'ellipse', key: 'E', Icon: CircleDashedIcon },
   { id: 'arc', name: 'arc', key: 'A', Icon: SplineIcon },
+  // Not decoration among the shapes: a point placed with this is what makes a
+  // wire land on a *device* instead of near one, and it is the difference
+  // between a drawing that can be reported on and a picture.
+  { id: 'pin', name: 'pin', key: 'G', Icon: LinkIcon },
 ];
 
 /** The ones that change a line that is already there. */
@@ -584,6 +589,7 @@ export const DrawingEditor: React.FC<Props> = ({
     id: string; name: string; handle?: FileSystemFileHandle; at: Pt; readAt: Date;
   }>>({});
   const xlsxInput = useRef<HTMLInputElement>(null);
+  const dxfInput = useRef<HTMLInputElement>(null);
   // Set just before falling back to the plain file input, so its change
   // handler knows which table is being placed and where.
   const pendingImport = useRef<{ id: string; at: Pt } | null>(null);
@@ -655,6 +661,42 @@ export const DrawingEditor: React.FC<Props> = ({
     xlsxInput.current?.click();
   }, [view, placeTable]);
 
+
+  /**
+   * A DXF, read onto this sheet.
+   *
+   * Not as a symbol and not as a whole sheet: as geometry, where the view is,
+   * picked so the next drag puts it where it goes. That is what a draughtsman
+   * with a supplier's DXF actually wants — the outline of a terminal rail or a
+   * cubicle door on the page they are on — and it is how a symbol gets drawn
+   * from a manufacturer's file without leaving the editor.
+   *
+   * Connection points come across as terminals rather than as circles: a DXF
+   * that declared a CONN layer has already said where a wire lands, and
+   * throwing that away would mean placing them again by hand.
+   */
+  const placeDxf = useCallback(async (file: File) => {
+    let read: ReturnType<typeof readDxf>;
+    try { read = readDxf(await file.text(), file.name); }
+    catch { setNotice(T.dxfUnreadable); return; }
+
+    const marks = terminalMarks(read.connections.map(([x, y], i) => ({
+      x, y, name: String(i + 1),
+    })));
+    const run = [...read.drawing.shapes, ...marks];
+    if (run.length === 0) { setNotice(T.dxfEmpty); return; }
+
+    // The top left of what is on screen, inset a little, so it lands where the
+    // person is looking rather than at a sheet origin they may be nowhere near.
+    const dx = view.x + view.w * 0.08;
+    const dy = view.y + view.h * 0.08;
+    const placed = run.map(sh => translateShape(sh, dx, dy));
+    commit(
+      [...shapes, ...placed],
+      new Set(placed.map((_, i) => shapes.length + i)),
+    );
+    setNotice(T.dxfPlaced(placed.length, marks.length));
+  }, [shapes, commit, view, T]);
 
   /** Update: read the same file again, and redraw that table where it sits. */
   const updateXlsx = useCallback(async (id: string) => {
@@ -1052,6 +1094,29 @@ export const DrawingEditor: React.FC<Props> = ({
     }]);
   }, [draw, textSize, drawLayer, T]);
 
+  /**
+   * The connection-point tool has a place; the terminal's name comes from here.
+   *
+   * The suggestion is the next number this sheet has not used, because most
+   * terminals are numbered and the ones that are not — A1, 13, I0.0 — are
+   * typed over it in one go. Naming is not optional: an unnamed point is a
+   * circle, and a circle connects nothing.
+   */
+  const placePin = useCallback((at: { x: number; y: number }) => {
+    const used = new Set(shapes.map(s => s.pin).filter(Boolean) as string[]);
+    let n = 1;
+    while (used.has(String(n))) n += 1;
+    const value = window.prompt(T.promptPin, String(n));
+    if (value == null) return;
+    const name = value.trim();
+    if (!name) { setNotice(T.promptPinName); return; }
+    setNotice(null);
+    draw([{
+      t: 'circle', cx: at.x, cy: at.y, r: MARK_R,
+      layer: 'PIN', color: layerColor('PIN'), width: 0.4, pin: name,
+    }]);
+  }, [draw, shapes, T]);
+
   /** Change how the picked shapes are drawn, without redrawing them. */
   const restyle = (patch: StylePatch) => {
     if (selection.size === 0) return;
@@ -1400,6 +1465,7 @@ export const DrawingEditor: React.FC<Props> = ({
     tool === 'text' ? T.hintText
     : tool === 'polyline' ? T.hintPolyline
     : tool === 'dim' ? T.hintDim
+    : tool === 'pin' ? T.hintPin
     : tool === 'trim' ? T.hintTrim
     : tool === 'extend' ? T.hintExtend
     : tool === 'corner' ? (pendingCorner ? T.hintCornerSecond : T.hintCornerFirst)
@@ -1761,6 +1827,10 @@ export const DrawingEditor: React.FC<Props> = ({
                 <Tool label title={`${T.xlsxImport} — ${T.xlsxImportTip}`} on={importXlsx}>
                   <TableIcon className="w-5 h-5" />
                 </Tool>
+                <Tool label title={`${T.dxfImport} — ${T.dxfImportTip}`}
+                      on={() => dxfInput.current?.click()}>
+                  <FileInputIcon className="w-5 h-5" />
+                </Tool>
                 {/* One Update per imported table, named after its file: with
                     several on a sheet, "Update" on its own would not say which.
                     Only shown where the browser handed back a handle — without
@@ -1954,6 +2024,19 @@ export const DrawingEditor: React.FC<Props> = ({
         </div>
 
         <input
+          ref={dxfInput}
+          type="file"
+          accept=".dxf"
+          style={{ display: 'none' }}
+          onChange={e => {
+            const file = e.target.files?.[0];
+            // Cleared so choosing the same file twice still fires onChange.
+            e.target.value = '';
+            if (file) placeDxf(file);
+          }}
+        />
+
+        <input
           ref={xlsxInput}
           type="file"
           accept=".xlsx,.xls,.csv"
@@ -2005,12 +2088,26 @@ export const DrawingEditor: React.FC<Props> = ({
             onCursor={setCursor}
             onDraw={draw}
             onPlaceText={placeText}
+            onPlacePin={placePin}
             onPick={command}
             onGrip={grip}
             onDrafting={setDrafting}
             onCancelTool={() => { setPendingCorner(null); setTool('select'); }}
             onEditText={i => {
               const current = shapes[i];
+              // A connection point carries its name on the pen rather than as
+              // words on the sheet, so renaming it is a different edit from
+              // retyping a label — the same gesture, a different field.
+              if (current.pin && current.t !== 'text') {
+                const value = window.prompt(T.promptPin, current.pin);
+                if (value == null) return;
+                const name = value.trim();
+                if (!name) { setNotice(T.promptPinName); return; }
+                if (name !== current.pin) {
+                  commit(shapes.map((s, j) => (j === i ? { ...s, pin: name } : s)));
+                }
+                return;
+              }
               if (current.t !== 'text') return;
               const value = window.prompt(T.promptText, current.s);
               if (value !== null && value !== current.s) commit(setText(shapes, i, value));

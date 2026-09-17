@@ -55,9 +55,13 @@ export interface Strings {
   // Style
   layerOf: string; widthOf: string; lineTypeOf: string; textHeightOf: string;
   connect: string;
+  pin: string;
   xlsxImport: string; xlsxImportTip: string;
   xlsxUpdate: string; xlsxUpdateTip: string;
   xlsxEmpty: string; xlsxUnreadable: string; xlsxGone: string;
+  dxfImport: string; dxfImportTip: string;
+  dxfEmpty: string; dxfUnreadable: string;
+  dxfPlaced: (shapes: number, pins: number) => string;
   wireNumber: string; wireNumberTip: string; wireNumbered: string;
   wireAllNumbered: string; wireNoneFound: string;
   tagDevices: string; tagDevicesTip: string; tagged: string; tagAllTagged: string;
@@ -105,6 +109,8 @@ export interface Strings {
   // The office's own symbols
   libNew: string; libNewNote: string; libEdit: string; libDelete: string;
   libFromSelection: string; libFromSelectionNote: string; libNoSelection: string;
+  libDraw: string; libDrawNote: string; libDrawDone: string; libDrawTitle: string;
+  libDrawLose: string;
   libName: string; libGroup: string; libWhichLibrary: string; libGeometry: string;
   libTerminalsTitle: string; libTerminalsNote: string; libAddTerminal: string;
   libSave: string; libSaving: string; libSaved: (name: string) => string;
@@ -144,7 +150,7 @@ export interface Strings {
 
   // What to do now
   hintIdle: string; hintText: string; hintPolyline: string; hintTwoClicks: string;
-  hintDim: string; hintTrim: string; hintExtend: string;
+  hintDim: string; hintTrim: string; hintExtend: string; hintPin: string;
   hintCornerFirst: string; hintCornerSecond: string;
 
   // When a command cannot do what was asked
@@ -152,6 +158,7 @@ export interface Strings {
 
   // Prompts
   promptText: string; promptRotate: string; promptScale: string; promptRadius: string;
+  promptPin: string; promptPinName: string;
   cornerRadius: string;
 
   // Help
@@ -165,11 +172,18 @@ const EN: Strings = {
   select: 'Select', pan: 'Pan — or hold Space', line: 'Line',
   polyline: 'Polyline — Enter, right-click or double-click ends it',
   connect: 'Connect — two points, wired square on the WIRE layer, with a dot where it taps an existing run',
+  pin: 'Connection point — where a wire may land on this symbol, and what that terminal is called',
   xlsxImport: 'Excel',
   xlsxImportTip: 'Draw a spreadsheet on the sheet as a table, on the TABLE layer',
   xlsxUpdate: 'Update',
   xlsxUpdateTip: 'Read the same file again and redraw this table where it sits',
   xlsxEmpty: 'That spreadsheet has no rows to draw.',
+  dxfImport: 'DXF',
+  dxfImportTip: 'Read a DXF off this computer onto this sheet — its geometry, and the connection points it declares',
+  dxfEmpty: 'There was nothing in that DXF this reader could draw.',
+  dxfUnreadable: 'That file could not be read as a DXF.',
+  dxfPlaced: (n, pins) => `${n} object${n === 1 ? '' : 's'} placed${
+    pins ? `, ${pins} of them connection points` : ''} — they are picked, so drag them where they go`,
   xlsxUnreadable: 'Could not read that file — it should be .xlsx, .xls or .csv.',
   xlsxGone: 'Could not read the file again — it may have been moved or renamed.',
   wireNumber: 'Number wires',
@@ -254,7 +268,7 @@ const EN: Strings = {
   headerFitted: 'The drawing was brought down to {n}% to sit inside the frame. Undo if you would rather move it yourself.',
   tabHome: 'Home', tabElectrical: 'Electrical', tabOutput: 'Output', tabView: 'View',
   panDraw: 'Draw', panModify: 'Modify', panArrange: 'Arrange', panProps: 'Properties',
-  panBlock: 'Block', panAnnotate: 'Annotate', panCheck: 'Check', panTable: 'Table',
+  panBlock: 'Block', panAnnotate: 'Annotate', panCheck: 'Check', panTable: 'Bring in',
   panSheet: 'Sheet', panExport: 'Export', panKeep: 'Keep',
   panZoom: 'Zoom', panAids: 'Aids', panApp: 'App',
 
@@ -290,6 +304,11 @@ const EN: Strings = {
   libNewNote: 'Add a symbol to this office\u2019s own library — kept on the server, not in this browser',
   libEdit: 'Edit',
   libDelete: 'Delete',
+  libDraw: 'Draw it',
+  libDrawNote: 'Open it on the drawing page — every tool, trim and extend among them, and the connection-point tool for the terminals',
+  libDrawDone: 'Back to the symbol',
+  libDrawLose: 'Leave the drawing page? Nothing has been saved back to the symbol yet, so what was drawn here is lost. Save first to keep it.',
+  libDrawTitle: 'Symbol',
   libFromSelection: 'What is selected on the sheet',
   libFromSelectionNote: 'Take the geometry from what you have picked on the drawing',
   libNoSelection: 'Nothing is selected on the sheet. Pick the geometry first, then come back.',
@@ -354,6 +373,7 @@ const EN: Strings = {
   hintDim: 'Click what it measures from, then to, then where the line sits',
   hintTrim: 'Click the piece of a line to cut away — it is cut at what crosses it',
   hintExtend: 'Click the end of a line to run it on to the next thing in its way',
+  hintPin: 'Click where a wire lands · it goes on the PIN layer under the name you give it · double-click one to rename it',
   hintCornerFirst: 'Click the first line, on the side you want to keep',
   hintCornerSecond: 'Now the second line, on the side you want to keep',
 
@@ -361,6 +381,8 @@ const EN: Strings = {
   noCrossing: 'Nothing in the way to run it on to',
   areParallel: 'Those two are parallel — they have no corner',
 
+  promptPin: 'What is this connection point called? A1, 13, I0.0, 2 — whatever the terminal is marked',
+  promptPinName: 'A connection point has to be called something.',
   promptText: 'Text', promptRotate: 'Turn by how many degrees?',
   promptScale: 'Scale by what factor?', promptRadius: 'Corner radius, in drawing units (0 for a sharp corner)',
   cornerRadius: 'Corner radius',
@@ -378,6 +400,8 @@ const EN: Strings = {
       'A dimension is three clicks: what it measures from, what it measures to, then where the dimension line sits. The label is written in millimetres.',
       'The magnet catches the ends, middles, centres and corners of what is already drawn, so a new line meets the drawing instead of nearly meeting it.',
       'Holding Shift while drawing keeps a line level, upright or on 45°.',
+      'The connection-point tool marks where a wire may land and what that terminal is called — A1, 13, I0.0. A named point is what lets a connection list say -K1:A1 and mean it; a symbol without one can be placed and looked at, and never wired. Double-click one to rename it.',
+      'DXF, on the Bring in panel, reads a file onto this sheet: its geometry, and any connection points it declared, put where you are looking and picked ready to drag into place.',
     ],
     modify: [
       'Click a shape to pick it, shift-click to add another, or drag a box around several.',
@@ -410,11 +434,18 @@ const FA: Strings = {
   select: 'انتخاب', pan: 'جابه‌جایی نما — یا نگه‌داشتن Space', line: 'خط',
   polyline: 'چندخطی — با Enter، راست‌کلیک یا دابل‌کلیک تمام می‌شود',
   connect: 'اتصال — دو نقطه، سیم گوشه‌دار روی لایهٔ WIRE، با نقطهٔ اتصال هرجا به سیم موجود بخورد',
+  pin: 'نقطهٔ اتصال — جایی که سیم روی این سمبل می‌نشیند و نام همان ترمینال',
   xlsxImport: 'اکسل',
   xlsxImportTip: 'اکسل را به‌صورت جدول روی نقشه و روی لایهٔ TABLE رسم می‌کند',
   xlsxUpdate: 'به‌روزرسانی',
   xlsxUpdateTip: 'همان فایل را دوباره می‌خواند و این جدول را در جای خودش بازرسم می‌کند',
   xlsxEmpty: 'این فایل اکسل سطری برای رسم ندارد.',
+  dxfImport: 'DXF',
+  dxfImportTip: 'یک فایل DXF را از این کامپیوتر روی همین برگه بیاور — هندسه‌اش و نقطه‌های اتصالی که اعلام کرده',
+  dxfEmpty: 'در آن DXF چیزی برای رسم پیدا نشد.',
+  dxfUnreadable: 'این فایل به‌عنوان DXF خوانده نشد.',
+  dxfPlaced: (n, pins) => `${n} شیء گذاشته شد${
+    pins ? `، ${pins} تای آن نقطهٔ اتصال` : ''} — انتخاب‌شده‌اند، پس همین‌جا به جای خود بکشیدشان`,
   xlsxUnreadable: 'فایل خوانده نشد — باید .xlsx یا .xls یا .csv باشد.',
   xlsxGone: 'فایل دوباره خوانده نشد — شاید جابه‌جا یا تغییر نام داده شده باشد.',
   wireNumber: 'شماره‌گذاری سیم',
@@ -499,7 +530,7 @@ const FA: Strings = {
   headerFitted: 'نقشه به {n}٪ کوچک شد تا داخل کادر جا بگیرد. اگر می‌خواهید خودتان جابه‌جا کنید، undo بزنید.',
   tabHome: 'خانه', tabElectrical: 'برق', tabOutput: 'خروجی', tabView: 'نما',
   panDraw: 'رسم', panModify: 'ویرایش', panArrange: 'چیدمان', panProps: 'ویژگی‌ها',
-  panBlock: 'بلوک', panAnnotate: 'شماره‌گذاری', panCheck: 'بازبینی', panTable: 'جدول',
+  panBlock: 'بلوک', panAnnotate: 'شماره‌گذاری', panCheck: 'بازبینی', panTable: 'وارد کردن',
   panSheet: 'برگه', panExport: 'خروجی گرفتن', panKeep: 'نگهداری',
   panZoom: 'بزرگ‌نمایی', panAids: 'کمک‌ها', panApp: 'برنامه',
 
@@ -535,6 +566,11 @@ const FA: Strings = {
   libNewNote: 'یک سیمبل به کتابخانه‌ی خودِ شرکت اضافه کنید — روی سرور ذخیره می‌شود، نه در این مرورگر',
   libEdit: 'ویرایش',
   libDelete: 'حذف',
+  libDraw: 'رسم کن',
+  libDrawNote: 'روی صفحهٔ نقشه‌کشی باز می‌شود — همهٔ ابزارها، از جمله کوتاه‌کردن و امتداد خط، و ابزار نقطهٔ اتصال برای ترمینال‌ها',
+  libDrawDone: 'بازگشت به سیمبل',
+  libDrawLose: 'از صفحهٔ نقشه‌کشی خارج شوم؟ هنوز چیزی روی سیمبل ذخیره نشده و آنچه کشیده‌اید از بین می‌رود. اول ذخیره کنید.',
+  libDrawTitle: 'سیمبل',
   libFromSelection: 'آنچه روی صفحه انتخاب شده',
   libFromSelectionNote: 'هندسه را از چیزی که روی نقشه انتخاب کرده‌اید بردار',
   libNoSelection: 'چیزی روی صفحه انتخاب نشده. اول هندسه را انتخاب کنید و برگردید.',
@@ -599,6 +635,7 @@ const FA: Strings = {
   hintDim: 'اول مبدأ اندازه، بعد مقصد، بعد جای خط اندازه را کلیک کنید',
   hintTrim: 'روی تکه‌ای از خط که باید برود کلیک کنید — تا محل تقاطع بریده می‌شود',
   hintExtend: 'روی سر خط کلیک کنید تا تا اولین مانع پیش برود',
+  hintPin: 'روی محل نشستن سیم کلیک کنید · با نامی که می‌دهید روی لایهٔ PIN می‌نشیند · دوبار کلیک برای تغییر نام',
   hintCornerFirst: 'روی خط اول، در سمتی که باید بماند، کلیک کنید',
   hintCornerSecond: 'حالا روی خط دوم، در سمتی که باید بماند',
 
@@ -606,6 +643,8 @@ const FA: Strings = {
   noCrossing: 'چیزی سر راه نیست که خط به آن برسد',
   areParallel: 'این دو موازی‌اند — گوشه‌ای ندارند',
 
+  promptPin: 'نام این نقطهٔ اتصال چیست؟ A1، 13، I0.0، 2 — هرچه روی ترمینال نوشته می‌شود',
+  promptPinName: 'نقطهٔ اتصال باید نام داشته باشد.',
   promptText: 'متن', promptRotate: 'چند درجه بچرخد؟',
   promptScale: 'با چه ضریبی مقیاس شود؟', promptRadius: 'شعاع گوشه، به واحد نقشه (۰ یعنی گوشه تیز)',
   cornerRadius: 'شعاع گوشه',
@@ -623,6 +662,8 @@ const FA: Strings = {
       'اندازه‌گذاری سه کلیک است: از کجا، تا کجا، سپس جای خط اندازه. عدد به میلی‌متر نوشته می‌شود.',
       'آهن‌ربا سر و وسط و مرکز و گوشه اشیای موجود را می‌گیرد تا خط جدید واقعاً به نقشه برسد، نه اینکه نزدیکش بایستد.',
       'نگه‌داشتن Shift هنگام ترسیم، خط را افقی یا عمودی یا ۴۵ درجه نگه می‌دارد.',
+      'ابزار نقطهٔ اتصال مشخص می‌کند سیم کجا می‌نشیند و نام آن ترمینال چیست — A1، 13، I0.0. نقطهٔ نام‌دار است که باعث می‌شود لیست اتصالات بتواند بنویسد ‎-K1:A1‎؛ سمبلی که ندارد فقط گذاشته و دیده می‌شود و هرگز سیم‌کشی نمی‌شود. برای تغییر نام، دوبار کلیک کنید.',
+      'دکمهٔ DXF در بخش «وارد کردن»، فایل را روی همین برگه می‌خواند: هندسه‌اش و نقطه‌های اتصالی که اعلام کرده، همان‌جا که نگاه می‌کنید و انتخاب‌شده تا با یک کشیدن سر جایش برود.',
     ],
     modify: [
       'برای انتخاب روی شکل کلیک کنید، با Shift شکل دیگری اضافه کنید، یا کادری دور چند شکل بکشید.',
@@ -655,11 +696,18 @@ const TR: Strings = {
   select: 'Seç', pan: 'Kaydır — ya da Space tuşunu basılı tutun', line: 'Çizgi',
   polyline: 'Çoklu çizgi — Enter, sağ tık veya çift tık bitirir',
   connect: 'Bağlantı — iki nokta, WIRE katmanında dik kablo, mevcut hatta değdiği yere nokta',
+  pin: 'Bağlantı noktası — kablonun bu sembole oturduğu yer ve o terminalin adı',
   xlsxImport: 'Excel',
   xlsxImportTip: 'Tabloyu TABLE katmanında çizim üzerine tablo olarak çizer',
   xlsxUpdate: 'Güncelle',
   xlsxUpdateTip: 'Aynı dosyayı yeniden okur ve bu tabloyu yerinde yeniden çizer',
   xlsxEmpty: 'Bu tabloda çizilecek satır yok.',
+  dxfImport: 'DXF',
+  dxfImportTip: 'Bu bilgisayardan bir DXF okuyup bu sayfaya koy — geometrisi ve bildirdiği bağlantı noktaları',
+  dxfEmpty: 'O DXF içinde çizilecek bir şey bulunamadı.',
+  dxfUnreadable: 'Bu dosya DXF olarak okunamadı.',
+  dxfPlaced: (n, pins) => `${n} nesne kondu${
+    pins ? `, ${pins} tanesi bağlantı noktası` : ''} — seçili durumdalar, yerlerine sürükleyin`,
   xlsxUnreadable: 'Dosya okunamadı — .xlsx, .xls veya .csv olmalı.',
   xlsxGone: 'Dosya yeniden okunamadı — taşınmış veya adı değişmiş olabilir.',
   wireNumber: 'Kablo numarala',
@@ -745,7 +793,7 @@ const TR: Strings = {
   headerFitted: 'Çizim, çerçevenin içine sığması için %{n} oranına küçültüldü. Kendiniz taşımak isterseniz geri alın.',
   tabHome: 'Giriş', tabElectrical: 'Elektrik', tabOutput: 'Çıktı', tabView: 'Görünüm',
   panDraw: 'Çiz', panModify: 'Değiştir', panArrange: 'Diz', panProps: 'Özellikler',
-  panBlock: 'Blok', panAnnotate: 'Etiketle', panCheck: 'Denetle', panTable: 'Tablo',
+  panBlock: 'Blok', panAnnotate: 'Etiketle', panCheck: 'Denetle', panTable: 'İçe aktar',
   panSheet: 'Sayfa', panExport: 'Dışa aktar', panKeep: 'Sakla',
   panZoom: 'Yakınlaştır', panAids: 'Yardımcılar', panApp: 'Uygulama',
 
@@ -781,6 +829,11 @@ const TR: Strings = {
   libNewNote: 'Bu ofisin kendi kitaplığına bir sembol ekleyin — tarayıcıda değil, sunucuda saklanır',
   libEdit: 'Düzenle',
   libDelete: 'Sil',
+  libDraw: 'Çiz',
+  libDrawNote: 'Çizim sayfasında açılır — budama ve uzatma dahil bütün araçlar, terminaller için bağlantı noktası aracı',
+  libDrawDone: 'Sembole dön',
+  libDrawLose: 'Çizim sayfasından çıkılsın mı? Sembole henüz hiçbir şey kaydedilmedi, burada çizilen kaybolur. Önce kaydedin.',
+  libDrawTitle: 'Sembol',
   libFromSelection: 'Sayfada seçili olan',
   libFromSelectionNote: 'Geometriyi çizimde seçtiğiniz şeyden al',
   libNoSelection: 'Sayfada hiçbir şey seçili değil. Önce geometriyi seçin, sonra geri gelin.',
@@ -845,6 +898,7 @@ const TR: Strings = {
   hintDim: 'Önce nereden, sonra nereye, sonra ölçü çizgisinin yerine tıklayın',
   hintTrim: 'Çizginin atılacak parçasına tıklayın — kesiştiği yere kadar budanır',
   hintExtend: 'Çizginin ucuna tıklayın, önündeki ilk nesneye kadar uzasın',
+  hintPin: 'Kablonun oturacağı yere tıklayın · verdiğiniz adla PIN katmanına konur · adını değiştirmek için çift tıklayın',
   hintCornerFirst: 'İlk çizgiye, kalmasını istediğiniz taraftan tıklayın',
   hintCornerSecond: 'Şimdi ikinci çizgiye, kalmasını istediğiniz taraftan',
 
@@ -852,6 +906,8 @@ const TR: Strings = {
   noCrossing: 'Uzayacağı bir şey önünde yok',
   areParallel: 'Bu ikisi paralel — köşeleri olmaz',
 
+  promptPin: 'Bu bağlantı noktasının adı nedir? A1, 13, I0.0, 2 — terminalin üzerinde ne yazıyorsa',
+  promptPinName: 'Bağlantı noktasının bir adı olmalı.',
   promptText: 'Yazı', promptRotate: 'Kaç derece dönsün?',
   promptScale: 'Hangi katsayıyla ölçeklensin?',
   promptRadius: 'Köşe yarıçapı, çizim biriminde (keskin köşe için 0)',
@@ -870,6 +926,8 @@ const TR: Strings = {
       'Ölçü üç tıklamadır: nereden, nereye, sonra ölçü çizgisinin yeri. Değer milimetre yazılır.',
       'Mıknatıs çizilmiş nesnelerin uçlarını, ortalarını, merkezlerini ve köşelerini yakalar; yeni çizgi çizime gerçekten değer, yaklaşmakla kalmaz.',
       'Çizerken Shift basılıysa çizgi yatay, dikey ya da 45° kalır.',
+      'Bağlantı noktası aracı, kablonun nereye oturacağını ve o terminalin adını işaretler — A1, 13, I0.0. Bağlantı listesinin -K1:A1 diyebilmesi adlandırılmış noktalar sayesindedir; noktası olmayan sembol konur, görünür, ama hiç kablolanmaz. Adını değiştirmek için çift tıklayın.',
+      'İçe aktar bölümündeki DXF, dosyayı bu sayfaya okur: geometrisi ve bildirdiği bağlantı noktaları, baktığınız yere konur ve seçili gelir; sürükleyip yerine koyarsınız.',
     ],
     modify: [
       'Seçmek için nesneye tıklayın, Shift ile bir tane daha ekleyin ya da birkaçının etrafına kutu çizin.',

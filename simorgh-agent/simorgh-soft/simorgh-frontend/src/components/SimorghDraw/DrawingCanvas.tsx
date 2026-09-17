@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { connectionRun } from '../../utils/cad/connect';
-import { nearestTerminal, terminals } from '../../utils/cad/terminals';
+import { MARK_R, nearestTerminal, terminals } from '../../utils/cad/terminals';
 import { Drawing, Layer, Pen, Pt, Shape } from '../../utils/cad/shapes';
 import {
   Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip, withWholeBlocks,
@@ -43,11 +43,12 @@ export interface Viewport { x: number; y: number; w: number; h: number }
 export type Tool =
   | 'select' | 'pan'
   | 'line' | 'polyline' | 'connect' | 'rect' | 'circle' | 'ellipse' | 'arc' | 'text' | 'dim'
+  | 'pin'
   | 'trim' | 'extend' | 'corner';
 
 /** Tools that put something new on the sheet. */
 export const DRAWS: ReadonlySet<Tool> = new Set<Tool>(
-  ['line', 'polyline', 'connect', 'rect', 'circle', 'ellipse', 'arc', 'text', 'dim']);
+  ['line', 'polyline', 'connect', 'rect', 'circle', 'ellipse', 'arc', 'text', 'dim', 'pin']);
 
 /** Tools that operate on the shape they are clicked on. */
 export const PICKS: ReadonlySet<Tool> = new Set<Tool>(['trim', 'extend', 'corner']);
@@ -93,6 +94,13 @@ interface Props {
   onDraw: (shapes: Shape[]) => void;
   /** The text tool has a place and needs the words. */
   onPlaceText: (at: { x: number; y: number }) => void;
+  /**
+   * The connection-point tool has a place and needs the terminal's name.
+   *
+   * Same shape of thing as the text tool — a click is a position and nothing
+   * else, and what the point is called is the editor's question to ask.
+   */
+  onPlacePin: (at: { x: number; y: number }) => void;
   /** A command tool was used on the shape at `index`. */
   onPick: (index: number, at: Pt) => void;
   /**
@@ -165,7 +173,7 @@ const REACT_PROP: Record<string, string> = {
 export const DrawingCanvas: React.FC<Props> = ({
   drawing, shapes, selection, hidden, locked, view, grid, showGrid, tool,
   pen, textSize, objectSnap, mmPerUnit, theme: themeId = 'light',
-  onView, onSelection, onMove, onCursor, onEditText, onDraw, onPlaceText,
+  onView, onSelection, onMove, onCursor, onEditText, onDraw, onPlaceText, onPlacePin,
   onPick, onGrip, onDrafting, onCancelTool,
 }) => {
   const theme: Theme = THEMES[themeId] ?? THEMES.light;
@@ -454,6 +462,7 @@ export const DrawingCanvas: React.FC<Props> = ({
       const { point } = resolve(e.clientX, e.clientY, e.shiftKey, from);
 
       if (tool === 'text') { onPlaceText({ x: point[0], y: point[1] }); return; }
+      if (tool === 'pin') { onPlacePin({ x: point[0], y: point[1] }); return; }
 
       const pts = draft && draft.tool === tool ? [...draft.pts, point] : [point];
       const needed = NEEDS[tool];
@@ -695,7 +704,10 @@ export const DrawingCanvas: React.FC<Props> = ({
         if (draft?.tool === 'polyline') { finishDraft(draft.pts, 'polyline'); return; }
         const p = toDrawing(e.clientX, e.clientY);
         const hit = hitTest(shapes, p.x, p.y, unitsPerPixel() * 6, offLimits);
-        if (hit !== null && shapes[hit].t === 'text') onEditText(hit);
+        // A connection point is renamed the same way a label is: double
+        // click it and type. Its name is the whole of what it carries, so
+        // there is nothing else a double click on one could mean.
+        if (hit !== null && (shapes[hit].t === 'text' || shapes[hit].pin)) onEditText(hit);
       }}
     >
       <defs>
@@ -846,6 +858,17 @@ export const DrawingCanvas: React.FC<Props> = ({
           <rect x={snapped[0] - stroke * 5} y={snapped[1] - stroke * 5}
                 width={stroke * 10} height={stroke * 10}
                 fill="none" stroke={theme.accent} strokeWidth={stroke * 1.5} />
+        </g>
+      )}
+
+      {/* Where a connection point would land: the ring it will be drawn as,
+          at the size it will be drawn, so a terminal is placed on the end of a
+          line rather than near it. */}
+      {tool === 'pin' && draft === null && cursorHint && (
+        <g pointerEvents="none">
+          <circle cx={cursorHint.x} cy={cursorHint.y} r={MARK_R}
+                  fill="none" stroke={SELECTED} strokeWidth={stroke} />
+          <circle cx={cursorHint.x} cy={cursorHint.y} r={stroke} fill={SELECTED} />
         </g>
       )}
 
