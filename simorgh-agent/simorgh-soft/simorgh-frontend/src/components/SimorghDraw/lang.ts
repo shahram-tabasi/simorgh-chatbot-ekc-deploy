@@ -56,6 +56,15 @@ export interface Strings {
   layerOf: string; widthOf: string; lineTypeOf: string; textHeightOf: string;
   connect: string;
   pin: string;
+
+  // The page set, from inside the drawing
+  tabPage: string; panPage: string; panPageThis: string;
+  pageNew: string; pageRename: string; pageDuplicate: string; pageDelete: string;
+  pagePrev: string; pageNext: string; pageTree: string; pageLastOne: string;
+  pageRenameAsk: string; pageNoteAsk: string;
+  pageAdded: (name: string) => string;
+  pageDeleteAsk: (name: string) => string;
+  pageOf: (at: number, of: number) => string;
   xlsxImport: string; xlsxImportTip: string;
   xlsxUpdate: string; xlsxUpdateTip: string;
   xlsxEmpty: string; xlsxUnreadable: string; xlsxGone: string;
@@ -173,6 +182,20 @@ const EN: Strings = {
   polyline: 'Polyline — Enter, right-click or double-click ends it',
   connect: 'Connect — two points, wired square on the WIRE layer, with a dot where it taps an existing run',
   pin: 'Connection point — where a wire may land on this symbol, and what that terminal is called',
+
+  tabPage: 'Page', panPage: 'New page', panPageThis: 'This page',
+  pageNew: 'New',
+  pageRename: 'Rename — what this page is called, and the line under the name',
+  pageDuplicate: 'Duplicate — a copy of this page, drawing and all',
+  pageDelete: 'Delete — this page and everything drawn on it',
+  pagePrev: 'Previous page', pageNext: 'Next page',
+  pageTree: 'Page tree — the whole set: groups, the reports, and pages drawn from an I/O list',
+  pageLastOne: 'The last page of a set cannot be deleted — make another one first.',
+  pageRenameAsk: 'What is this page called?',
+  pageNoteAsk: 'What is this page for? (the line under the name)',
+  pageAdded: name => `${name} added — it is open, and what you had drawn is kept`,
+  pageDeleteAsk: name => `Delete ${name}? Everything drawn on it goes with it.`,
+  pageOf: (at, of) => `Page ${at} of ${of}`,
   xlsxImport: 'Excel',
   xlsxImportTip: 'Draw a spreadsheet on the sheet as a table, on the TABLE layer',
   xlsxUpdate: 'Update',
@@ -435,6 +458,20 @@ const FA: Strings = {
   polyline: 'چندخطی — با Enter، راست‌کلیک یا دابل‌کلیک تمام می‌شود',
   connect: 'اتصال — دو نقطه، سیم گوشه‌دار روی لایهٔ WIRE، با نقطهٔ اتصال هرجا به سیم موجود بخورد',
   pin: 'نقطهٔ اتصال — جایی که سیم روی این سمبل می‌نشیند و نام همان ترمینال',
+
+  tabPage: 'صفحه', panPage: 'صفحهٔ جدید', panPageThis: 'همین صفحه',
+  pageNew: 'جدید',
+  pageRename: 'تغییر نام — نام این صفحه و توضیح زیر آن',
+  pageDuplicate: 'تکثیر — یک کپی از این صفحه با هرچه رویش کشیده شده',
+  pageDelete: 'حذف — این صفحه و هرچه رویش کشیده شده',
+  pagePrev: 'صفحهٔ قبل', pageNext: 'صفحهٔ بعد',
+  pageTree: 'درخت صفحه‌ها — کل مجموعه: گروه‌ها، گزارش‌ها، و صفحه‌سازی از لیست I/O',
+  pageLastOne: 'آخرین صفحهٔ یک مجموعه حذف نمی‌شود — اول یکی دیگر بسازید.',
+  pageRenameAsk: 'نام این صفحه چیست؟',
+  pageNoteAsk: 'این صفحه برای چیست؟ (خط زیر نام)',
+  pageAdded: name => `${name} اضافه شد — باز است و آنچه کشیده بودید نگه داشته شد`,
+  pageDeleteAsk: name => `${name} حذف شود؟ هرچه رویش کشیده شده با آن می‌رود.`,
+  pageOf: (at, of) => `صفحهٔ ${at} از ${of}`,
   xlsxImport: 'اکسل',
   xlsxImportTip: 'اکسل را به‌صورت جدول روی نقشه و روی لایهٔ TABLE رسم می‌کند',
   xlsxUpdate: 'به‌روزرسانی',
@@ -697,6 +734,20 @@ const TR: Strings = {
   polyline: 'Çoklu çizgi — Enter, sağ tık veya çift tık bitirir',
   connect: 'Bağlantı — iki nokta, WIRE katmanında dik kablo, mevcut hatta değdiği yere nokta',
   pin: 'Bağlantı noktası — kablonun bu sembole oturduğu yer ve o terminalin adı',
+
+  tabPage: 'Sayfa', panPage: 'Yeni sayfa', panPageThis: 'Bu sayfa',
+  pageNew: 'Yeni',
+  pageRename: 'Yeniden adlandır — sayfanın adı ve altındaki satır',
+  pageDuplicate: 'Çoğalt — bu sayfanın, üzerindeki çizimle birlikte bir kopyası',
+  pageDelete: 'Sil — bu sayfa ve üzerindeki her şey',
+  pagePrev: 'Önceki sayfa', pageNext: 'Sonraki sayfa',
+  pageTree: 'Sayfa ağacı — bütün takım: gruplar, raporlar ve I/O listesinden çizilen sayfalar',
+  pageLastOne: 'Bir takımın son sayfası silinemez — önce bir tane daha açın.',
+  pageRenameAsk: 'Bu sayfanın adı nedir?',
+  pageNoteAsk: 'Bu sayfa ne için? (adın altındaki satır)',
+  pageAdded: name => `${name} eklendi — açık, ve çizdikleriniz duruyor`,
+  pageDeleteAsk: name => `${name} silinsin mi? Üzerine çizilen her şey onunla gider.`,
+  pageOf: (at, of) => `Sayfa ${at} / ${of}`,
   xlsxImport: 'Excel',
   xlsxImportTip: 'Tabloyu TABLE katmanında çizim üzerine tablo olarak çizer',
   xlsxUpdate: 'Güncelle',

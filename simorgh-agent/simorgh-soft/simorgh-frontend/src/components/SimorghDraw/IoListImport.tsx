@@ -90,7 +90,7 @@ export const IoListImport: React.FC<Props> = ({ pages, edits, onDone, onClose })
   const pageCount = points.length === 0 ? 0 : buildIoPages(points, { perPage }).length;
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[220]" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[320]" onClick={onClose}>
       <div
         className="bg-white rounded-lg shadow-2xl w-[900px] max-w-[95vw] max-h-[92vh] flex flex-col overflow-hidden"
         onClick={e => e.stopPropagation()}

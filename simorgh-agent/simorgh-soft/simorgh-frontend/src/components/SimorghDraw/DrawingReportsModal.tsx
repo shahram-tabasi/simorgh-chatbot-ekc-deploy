@@ -46,7 +46,7 @@ export const DrawingReportsModal: React.FC<Props> = ({ pages, fileBase, onClose 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[220]" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[320]" onClick={onClose}>
       <div
         className="bg-white rounded-lg shadow-2xl w-[1000px] max-w-[96vw] max-h-[92vh] flex flex-col overflow-hidden"
         onClick={e => e.stopPropagation()}

@@ -591,6 +591,12 @@ export const EplanixTab: React.FC = () => {
           savedEdits={projectData.drawingEdits}
           canEdit={isCurrentRevisionEditable}
           onSaveEdits={next => patchProjectData(() => ({ drawingEdits: next }))}
+          // The set itself, so the Page tab inside the editor can add to it.
+          // A drawing is worked one page at a time and the next page is wanted
+          // from inside the drawing, not by closing it first.
+          pages={drawPages}
+          pageGroups={drawGroups}
+          onPages={setPages}
           titleBlock={[
             drawPages.find(p => p.id === openPage)?.name ?? 'DRAWING',
             [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]

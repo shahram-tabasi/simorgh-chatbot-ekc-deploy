@@ -285,8 +285,10 @@ export const SymbolMaker: React.FC<Props> = ({
 
   const groups = libraryOf(kind).groups;
 
+  // 330: over the library that opened it, which is itself over the editor in
+  // full screen. See the note on the library's own portal.
   return createPortal(
-    <div className="fixed inset-0 z-[260] bg-black/50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[330] bg-black/50 flex items-center justify-center p-4">
       <div
         data-sd-theme={theme}
         dir={dirOf(lang)}
@@ -506,7 +508,7 @@ export const SymbolMaker: React.FC<Props> = ({
           reason EPLAN ships a separate application to do it. Here it is the
           same canvas, so anything learnt on a sheet is already known here. */}
       {drawing && (
-        <div className="fixed inset-0 z-[300] bg-slate-900/70 flex flex-col p-3">
+        <div className="fixed inset-0 z-[340] bg-slate-900/70 flex flex-col p-3">
           <div className="flex items-center gap-3 px-4 py-2 bg-slate-800 text-white rounded-t-lg">
             <PencilRulerIcon className="w-4 h-4 shrink-0" />
             <span className="text-sm font-semibold truncate">

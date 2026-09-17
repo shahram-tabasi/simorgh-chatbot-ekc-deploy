@@ -70,7 +70,7 @@ export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose 
     () => readGroups(projectData.drawingGroups), [projectData.drawingGroups]);
 
   const pages = useMemo(
-    () => (program ? renderProgram(program) : []), [program]);
+    () => (program ? renderProgram(program, { explain: true }) : []), [program]);
   const sheet = pages[Math.min(page, Math.max(0, pages.length - 1))];
 
   const download = (what: 'dxf' | 'pdf') => {

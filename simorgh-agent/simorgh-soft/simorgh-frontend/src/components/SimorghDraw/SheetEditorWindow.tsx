@@ -2,6 +2,7 @@ import React from 'react';
 import { XIcon } from 'lucide-react';
 import { DrawingEdits } from '../../types/project';
 import { PaperChoice } from '../../utils/cad/paper';
+import { DrawingGroups, DrawingPage } from '../../utils/cad/pages';
 import { DrawingEditor, EditorSheet } from './DrawingEditor';
 
 // The sheets of a switchgear, opened for editing.
@@ -23,6 +24,10 @@ interface Props {
   savedEdits?: DrawingEdits;
   onSaveEdits?: (next: DrawingEdits) => void;
   canEdit?: boolean;
+  /** The page set these sheets are, when they are one — see the editor. */
+  pages?: DrawingPage[];
+  pageGroups?: DrawingGroups;
+  onPages?: (pages: DrawingPage[], edits: DrawingEdits, groups: DrawingGroups) => void;
   /** Extra buttons in the header, before Close — e.g. "Send to EPLAN" on the
    *  single-line editor. Generic on purpose: this window opens for symbol and
    *  template graphics too, which have nothing to send. */
@@ -32,7 +37,7 @@ interface Props {
 
 export const SheetEditorWindow: React.FC<Props> = ({
   title, note, sheets, startAt, fileBase, titleBlock, paper, savedEdits, onSaveEdits,
-  canEdit = true, headerActions, onClose,
+  canEdit = true, pages, pageGroups, onPages, headerActions, onClose,
 }) => (
   <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]" onClick={onClose}>
     <div
@@ -62,6 +67,9 @@ export const SheetEditorWindow: React.FC<Props> = ({
           savedEdits={savedEdits}
           onSaveEdits={onSaveEdits}
           canEdit={canEdit}
+          pages={pages}
+          pageGroups={pageGroups}
+          onPages={onPages}
         />
       </div>
     </div>

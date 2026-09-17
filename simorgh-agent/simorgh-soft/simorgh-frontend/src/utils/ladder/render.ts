@@ -298,6 +298,17 @@ export interface RenderOptions {
   height?: number;
   /** Room left at the bottom for the title block. */
   footer?: number;
+  /**
+   * Write the model's own explanation under the circuit.
+   *
+   * The steps are already on the screen beside the drawing, and the screen is
+   * not what gets printed, filed or sent to the customer. A rung comment says
+   * what a rung does; it does not say why the overload holds the seal-in
+   * instead of dropping it, and that is the part somebody reads the page for
+   * six months later. So it goes on the page, under the rails, where it
+   * travels with the DXF and the PDF.
+   */
+  explain?: boolean;
 }
 
 export interface LadderPage {
@@ -315,6 +326,86 @@ export interface LadderPage {
    * this instead. The sheet is not changed — only what is looked at.
    */
   used: number;
+}
+
+/** Height of one line of explanation, and the size it is written at. */
+const NOTE = 3.1;
+const NOTE_LINE = NOTE * 1.7;
+
+/**
+ * `s` broken into lines that fit `width`, at `size`.
+ *
+ * By the usual width guess rather than by measuring — there is no canvas here
+ * and the shape model carries no font metrics. 0.55 of the size per character
+ * is wide enough for the sans the sheet is drawn in, which means a line is
+ * more often a little short than a little long: text that runs past the rail
+ * is a fault, text that stops early is a margin.
+ *
+ * A word longer than the whole width is not broken — an address or a tag name
+ * is worth more whole and slightly over than cut in half.
+ */
+function wrapText(s: string, width: number, size: number): string[] {
+  const perChar = size * 0.55;
+  const fits = Math.max(8, Math.floor(width / perChar));
+  const lines: string[] = [];
+  for (const paragraph of s.split(/\n+/)) {
+    let line = '';
+    for (const word of paragraph.trim().split(/\s+/).filter(Boolean)) {
+      const next = line ? `${line} ${word}` : word;
+      if (next.length <= fits) { line = next; continue; }
+      if (line) lines.push(line);
+      line = word;
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+/**
+ * The explanation for the rungs on this page, written under them.
+ *
+ * Only the steps that touch a rung on this page: a note about rung 9 under a
+ * page that stops at rung 6 is a note in the wrong place. Each is headed by
+ * the step's own title and cites its rungs, so the paragraph can be matched to
+ * the circuit above it without counting.
+ *
+ * It stops at the footer rather than running into the title block. What does
+ * not fit is left out — the whole of it is in Simorgh Logic, and half a
+ * sentence overprinted on a drawing frame helps nobody.
+ */
+function drawNotes(
+  program: LadderProgram, here: number[], from: number,
+  left: number, right: number, floor: number, shapes: Shape[],
+): number {
+  const steps = (program.steps ?? []).filter(
+    s => s.explain && (s.rungs.length === 0 || s.rungs.some(n => here.includes(n))));
+  if (steps.length === 0) return from;
+
+  const width = right - left;
+  let y = from + NOTE_LINE * 2;
+  if (y + NOTE_LINE > floor) return from;
+
+  shapes.push(line(left, from + NOTE_LINE, right, from + NOTE_LINE, 'TEXT', 0.4));
+
+  for (const step of steps) {
+    const head = step.rungs.length
+      ? `${step.title}  (${step.rungs.map(n => `#${n}`).join(' ')})`
+      : step.title;
+    const lines: { words: string; heading: boolean }[] = [
+      ...wrapText(head, width, NOTE).map(words => ({ words, heading: true })),
+      ...wrapText(step.explain, width, NOTE).map(words => ({ words, heading: false })),
+    ];
+    for (const { words, heading } of lines) {
+      const size = heading ? NOTE * 1.15 : NOTE;
+      if (y + size * 1.7 > floor) return y;
+      shapes.push(text(left, y, words, size, 'TEXT', 'start'));
+      y += size * 1.7;
+    }
+    // A blank line between one note and the next, so two paragraphs do not
+    // read as one.
+    y += NOTE_LINE * 0.6;
+  }
+  return y;
 }
 
 /**
@@ -365,6 +456,13 @@ export function renderProgram(
     shapes.unshift(line(RAIL_LEFT, top - 6, RAIL_LEFT, foot, 'BUS', 1.6));
     shapes.unshift(line(right, top - 6, right, foot, 'BUS', 1.6));
 
+    // Under the rails, never between them: the explanation is about the
+    // circuit, it is not part of it.
+    const end = options.explain
+      ? drawNotes(program, rungs.map(r => r.number), foot, RAIL_LEFT, right,
+          height - footer, shapes)
+      : y;
+
     const d = new Drawing(width, height, `${program.title} ${i + 1}`);
     for (const s of shapes) d.add(s);
     return {
@@ -373,7 +471,7 @@ export function renderProgram(
       drawing: d,
       rungs: rungs.map(r => r.number),
       // A little past the last rung, so the rails do not end flush with the edge.
-      used: Math.min(height, y + 8),
+      used: Math.min(height, Math.max(y, end) + 8),
     };
   });
 }

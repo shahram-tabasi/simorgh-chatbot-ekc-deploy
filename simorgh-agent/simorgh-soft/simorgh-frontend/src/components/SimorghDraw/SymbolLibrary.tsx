@@ -315,8 +315,16 @@ export const SymbolLibrary: React.FC<Props> = ({
   // Through a portal, like the cell editor: the editor can be inside a window
   // that is itself positioned, and `fixed` inside a positioned ancestor is not
   // fixed to the viewport at all. Drawn on the body it always fills the screen.
+  // Above the editor in full screen.
+  //
+  // The editor takes the whole window at z-300 when it is full screen, and
+  // this opens over it. At 250 it opened *behind* that sheet: the button
+  // worked, the panel mounted, and nothing appeared — which is what "in full
+  // screen it will not bring up a symbol" was. The order above 300 is: the
+  // panels the editor opens (320), the symbol maker the library opens (330),
+  // the drawing page the maker opens (340).
   return createPortal(
-    <div className="fixed inset-0 z-[250] bg-black/50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[320] bg-black/50 flex items-center justify-center p-4">
       <div
         data-sd-theme={theme}
         dir={dirOf(lang)}

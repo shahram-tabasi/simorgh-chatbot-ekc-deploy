@@ -20,6 +20,7 @@ import {
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
   LanguagesIcon, CircleHelpIcon, LibraryBigIcon, GroupIcon, UngroupIcon,
   SunIcon, MoonIcon, CableIcon, FrameIcon, FileInputIcon,
+  FilePlusIcon, FilesIcon, PencilIcon, ChevronLeftIcon, ChevronRightIcon,
   PanelLeftIcon, PanelRightIcon, PictureInPicture2Icon } from 'lucide-react';
 import logoMark from '../../assets/logo-mark.png';
 import { DrawingEdits } from '../../types/project';
@@ -49,6 +50,11 @@ import { LibraryKind } from '../../utils/cad/symbolLibraries';
 import { CpuIcon, PencilRulerIcon } from 'lucide-react';
 import { LadderAsk, LadderAskResult } from '../SimorghLogic/LadderAsk';
 import { renderProgram } from '../../utils/ladder/render';
+import {
+  DrawingGroups, DrawingPage, PageType, copyOfPage, newPage, pageKey,
+} from '../../utils/cad/pages';
+import { SYMBOL_LIBRARIES } from '../../utils/cad/symbolLibraries';
+import { PageNavigator } from './PageNavigator';
 import {
   SymPlacement, expandSymbols, libraryItems, symbolCatalogue,
 } from '../../utils/cad/symbolSource';
@@ -96,6 +102,25 @@ interface Props {
   onSaveEdits?: (next: DrawingEdits) => void;
   /** False on a revision that is view-only. */
   canEdit?: boolean;
+  /**
+   * The page set these sheets are, when the editor was opened on one.
+   *
+   * Sheet `i` is page `i` — the caller builds one from the other in order.
+   * Absent on a generated single line or a blank sheet, and the Page tab is
+   * then not offered: there is no set to add to.
+   */
+  pages?: DrawingPage[];
+  pageGroups?: DrawingGroups;
+  /**
+   * A changed page set, with the edits that go with it.
+   *
+   * The two travel together and never separately. Changing the set replaces
+   * the `sheets` array, which re-seeds this editor from what the project
+   * holds — so anything drawn since the last Save has to be handed over in
+   * the same call or it is gone. That is why every page command here goes
+   * through `pendingEdits()`.
+   */
+  onPages?: (pages: DrawingPage[], edits: DrawingEdits, groups: DrawingGroups) => void;
 }
 
 const SNAPS = [0, 1, 5, 10, 25];
@@ -181,9 +206,17 @@ const ALIGNS: { to: AlignTo; name: keyof Strings; Icon: React.FC<{ className?: s
  * screen looks. Save, undo, the sheet list and the model sit above the tabs,
  * because those are wanted whichever tab is open.
  */
-type RibbonTab = 'home' | 'elec' | 'out' | 'view';
-const TABS: { id: RibbonTab; name: 'tabHome' | 'tabElectrical' | 'tabOutput' | 'tabView' }[] = [
+type RibbonTab = 'home' | 'page' | 'elec' | 'out' | 'view';
+const TABS: {
+  id: RibbonTab;
+  name: 'tabHome' | 'tabPage' | 'tabElectrical' | 'tabOutput' | 'tabView';
+}[] = [
   { id: 'home', name: 'tabHome' },
+  // Second, and only when the editor was opened on a page set. A drawing set
+  // is worked one page at a time and the next page is wanted from inside the
+  // drawing, not by closing it and going back to the project — which is how a
+  // finished sheet turned into "now what".
+  { id: 'page', name: 'tabPage' },
   { id: 'elec', name: 'tabElectrical' },
   { id: 'out', name: 'tabOutput' },
   { id: 'view', name: 'tabView' },
@@ -473,7 +506,7 @@ const AskPanel: React.FC<{
 
 export const DrawingEditor: React.FC<Props> = ({
   sheets, startAt = 0, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
-  savedEdits, onSaveEdits, canEdit = true,
+  savedEdits, onSaveEdits, canEdit = true, pages, pageGroups = [], onPages,
 }) => {
   const [index, setIndex] = useState(startAt);
   const sheet = sheets[Math.min(index, Math.max(0, sheets.length - 1))];
@@ -939,6 +972,8 @@ export const DrawingEditor: React.FC<Props> = ({
   // which is the point. It is a first draft to correct, not an answer.
   const [askOpen, setAskOpen] = useState(false);
   const [ribbon, setRibbon] = useState<RibbonTab>('home');
+  /** The whole set, over the drawing — groups, reports, pages from a list. */
+  const [tree, setTree] = useState(false);
   const [askDock, setAskDock] = useState<Dock>(loadDock);
   const chooseDock = (d: Dock) => { setAskDock(d); saveDock(d); };
   // Where a floating panel has been dragged to, in pixels from the canvas's
@@ -967,6 +1002,11 @@ export const DrawingEditor: React.FC<Props> = ({
     const rendered = renderProgram(result.program, {
       width: sheet.drawing.width,
       height: sheet.drawing.height,
+      // The explanation goes on the page, under the rails. The panel beside
+      // the drawing is not what gets printed or sent to the customer, and
+      // "why the overload holds the seal-in" is the part somebody reads the
+      // page for six months later.
+      explain: true,
     });
     const first = rendered[0];
     if (!first || first.drawing.shapes.length === 0) {
@@ -1291,9 +1331,17 @@ export const DrawingEditor: React.FC<Props> = ({
     forceRender(n => n + 1);
   };
 
-  /** Hand every sheet's edits to the project, and drop the ones undone away. */
-  const keep = () => {
-    if (!onSaveEdits) return;
+  /**
+   * Every sheet's edits, merged onto what the project already holds.
+   *
+   * Used by Save and by every page command, which is the point of it being a
+   * function: adding a page swaps the whole `sheets` array and re-seeds this
+   * editor from the project, so a page command that did not carry the edits
+   * across would silently throw away whatever had been drawn since the last
+   * Save. The bug it prevents is the worst kind — it looks like the drawing
+   * was never there.
+   */
+  const pendingEdits = (): DrawingEdits => {
     const next: DrawingEdits = { ...(saved.current ?? {}) };
     const now = new Date().toISOString();
     sheets.forEach((sheet, i) => {
@@ -1305,8 +1353,71 @@ export const DrawingEditor: React.FC<Props> = ({
       if (!current || current === sheet.drawing.shapes) delete next[sheet.key];
       else next[sheet.key] = { shapes: current, drawnAs: sheet.drawnAs, editedAt: now };
     });
-    onSaveEdits(next);
+    return next;
+  };
+
+  /** Hand every sheet's edits to the project, and drop the ones undone away. */
+  const keep = () => {
+    if (!onSaveEdits) return;
+    onSaveEdits(pendingEdits());
     setTouched(new Set());
+  };
+
+  // ── The page set, from inside the drawing ───────────────────────────────
+  //
+  // Everything here writes the set and the edits in one call and then clears
+  // `touched`: the parent has taken the drawings, and the new `sheets` array
+  // is about to re-seed this editor from them.
+
+  const page = pages?.[index];
+
+  /** A page of this kind, in the group the current page is filed under. */
+  const addPage = (type: PageType) => {
+    if (!pages || !onPages) return;
+    const made = newPage(pages, type, '', page?.path ?? []);
+    onPages([...pages, made], pendingEdits(), pageGroups);
+    setTouched(new Set());
+    setIndex(pages.length);
+    setNotice(T.pageAdded(made.name));
+  };
+
+  const renamePage = () => {
+    if (!pages || !onPages || !page) return;
+    const name = window.prompt(T.pageRenameAsk, page.name);
+    if (name == null) return;
+    const note = window.prompt(T.pageNoteAsk, page.description ?? '');
+    if (note == null) return;
+    onPages(
+      pages.map(p => (p.id === page.id
+        ? { ...p, name: name.trim() || p.name, description: note.trim() }
+        : p)),
+      pendingEdits(), pageGroups,
+    );
+    setTouched(new Set());
+  };
+
+  const duplicatePage = () => {
+    if (!pages || !onPages || !page) return;
+    const copy = copyOfPage(pages, page);
+    const next = pendingEdits();
+    const kept = next[pageKey(page.id)];
+    // A copy of the page, not a new page with the same name.
+    if (kept) next[pageKey(copy.id)] = { ...kept, editedAt: new Date().toISOString() };
+    onPages([...pages.slice(0, index + 1), copy, ...pages.slice(index + 1)], next, pageGroups);
+    setTouched(new Set());
+    setIndex(index + 1);
+    setNotice(T.pageAdded(copy.name));
+  };
+
+  const deletePage = () => {
+    if (!pages || !onPages || !page) return;
+    if (pages.length < 2) { setNotice(T.pageLastOne); return; }
+    if (!window.confirm(T.pageDeleteAsk(page.name))) return;
+    const next = pendingEdits();
+    delete next[pageKey(page.id)];
+    onPages(pages.filter(p => p.id !== page.id), next, pageGroups);
+    setTouched(new Set());
+    setIndex(Math.max(0, index - 1));
   };
 
   /** Put every sheet back to as drawn, in the project as well as on screen. */
@@ -1514,7 +1625,7 @@ export const DrawingEditor: React.FC<Props> = ({
             sheet, the model, undo, save, the way out of full screen. Wanted on
             every tab, so they belong to none of them. */}
         <div className="flex items-end gap-1 px-2 pt-1">
-          {TABS.map(t => (
+          {TABS.filter(t => t.id !== 'page' || pages).map(t => (
             <button
               key={t.id}
               data-ribbon={t.id}
@@ -1787,6 +1898,65 @@ export const DrawingEditor: React.FC<Props> = ({
                     <UngroupIcon className="w-4 h-4" />
                   </Tool>
                 </Stack>
+              </RibbonPanel>
+            </>
+          )}
+
+          {ribbon === 'page' && pages && (
+            <>
+              <RibbonPanel name={T.panPage}>
+                {SYMBOL_LIBRARIES.map(lib => (
+                  <Tool
+                    key={lib.kind}
+                    label
+                    title={`${T.pageNew} ${lib.code} — ${lib.note}`}
+                    disabled={!onPages || !canEdit}
+                    on={() => addPage(lib.kind)}
+                  >
+                    <FilePlusIcon className="w-5 h-5" />
+                  </Tool>
+                ))}
+              </RibbonPanel>
+
+              <RibbonPanel name={T.panPageThis}>
+                <Tool label title={T.pageRename} disabled={!onPages || !canEdit} on={renamePage}>
+                  <PencilIcon className="w-5 h-5" />
+                </Tool>
+                <Tool label title={T.pageDuplicate} disabled={!onPages || !canEdit} on={duplicatePage}>
+                  <CopyIcon className="w-5 h-5" />
+                </Tool>
+                <Tool label title={T.pageDelete} disabled={!onPages || !canEdit} on={deletePage}>
+                  <Trash2Icon className="w-5 h-5" />
+                </Tool>
+                <Stack>
+                  <Tool
+                    title={T.pagePrev}
+                    disabled={index <= 0}
+                    on={() => setIndex(i => Math.max(0, i - 1))}
+                  >
+                    <ChevronLeftIcon className="w-4 h-4" />
+                  </Tool>
+                  <Tool
+                    title={T.pageNext}
+                    disabled={index >= sheets.length - 1}
+                    on={() => setIndex(i => Math.min(sheets.length - 1, i + 1))}
+                  >
+                    <ChevronRightIcon className="w-4 h-4" />
+                  </Tool>
+                </Stack>
+                <span className="flex items-center px-2 text-[11px] text-gray-500">
+                  {T.pageOf(index + 1, sheets.length)}
+                </span>
+              </RibbonPanel>
+
+              {/* The tree itself, over the drawing. Everything the project's
+                  own Pages tab can do — groups, the four reports, a set of
+                  wiring pages read off an I/O list — without closing the
+                  drawing to get at it. */}
+              <RibbonPanel name={T.panSheet}>
+                <Tool label title={T.pageTree} on={() => setTree(true)}>
+                  <FilesIcon className="w-5 h-5" />
+                </Tool>
               </RibbonPanel>
             </>
           )}
@@ -2381,6 +2551,52 @@ export const DrawingEditor: React.FC<Props> = ({
           </div>
         </aside>
       </div>
+
+      {/* ── The whole set, over the drawing ──────────────────────────────
+          The same navigator the project's Pages tab shows, opened here so the
+          set can be re-ordered, grouped, reported on or grown from an I/O list
+          without closing the drawing. z-320 for the same reason the symbol
+          library is: in full screen this editor owns z-300. */}
+      {tree && pages && (
+        <div
+          className="fixed inset-0 z-[320] bg-black/50 flex items-start justify-center p-4 overflow-auto"
+          onClick={() => setTree(false)}
+        >
+          <div
+            dir={dir}
+            className="bg-white rounded-lg shadow-2xl w-[1100px] max-w-full my-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-700 text-white rounded-t-lg">
+              <FilesIcon className="w-4 h-4 shrink-0" />
+              <h3 className="text-sm font-semibold truncate">{T.pageTree.split(' — ')[0]}</h3>
+              <button
+                onClick={() => setTree(false)}
+                className="ms-auto p-1 rounded hover:bg-white/20"
+                title={T.closeHelp}
+              >
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
+            <PageNavigator
+              pages={pages}
+              groups={pageGroups}
+              edits={pendingEdits()}
+              canEdit={canEdit && Boolean(onPages)}
+              fileBase={fileBase}
+              onChange={(next, nextEdits, nextGroups) => {
+                onPages?.(next, nextEdits, nextGroups);
+                setTouched(new Set());
+              }}
+              onOpen={id => {
+                const at = pages.findIndex(p => p.id === id);
+                if (at >= 0) setIndex(at);
+                setTree(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ── Status bar ─────────────────────────────────────────────────── */}
       <div className="flex items-center gap-4 px-3 py-1.5 border-t bg-gray-50 text-[11px] text-gray-500 tabular-nums">

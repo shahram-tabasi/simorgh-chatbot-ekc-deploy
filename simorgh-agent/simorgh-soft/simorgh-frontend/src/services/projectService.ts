@@ -313,9 +313,17 @@ export const ladderService = {
       }
       return said as LadderAnswer;
     } catch (err) {
+      // The browser's own words here are "Failed to fetch", which says nothing
+      // to the person reading it and looks like the app broke. It means the
+      // request never came back: the model is busy, or the gateway in front of
+      // it timed out. Both are worth waiting out, and neither costs the
+      // drawing — so say that, and keep the raw text for whoever wants it.
       return {
         success: false,
-        error: err instanceof Error ? err.message : 'The assistant could not be reached.',
+        error: 'The assistant could not be reached — the request came back with no answer. '
+          + 'The model may be busy or out of reach. Wait a moment and ask again; '
+          + 'nothing already drawn is lost.',
+        raw: err instanceof Error ? err.message : String(err),
       };
     }
   },
