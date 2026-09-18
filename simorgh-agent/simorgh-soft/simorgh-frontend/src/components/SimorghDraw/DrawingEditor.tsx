@@ -346,17 +346,63 @@ const Stack: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 export type Dock = 'left' | 'right' | 'float';
 
 const DOCK_KEY = 'simorgh-draw-ask-dock';
+/** The page tree docks like the model's panel, and remembers its own side. */
+const PAGES_DOCK_KEY = 'simorgh-draw-pages-dock';
 
-const loadDock = (): Dock => {
+const loadDock = (key: string, fallback: Dock = 'right'): Dock => {
   try {
-    const kept = window.localStorage.getItem(DOCK_KEY);
+    const kept = window.localStorage.getItem(key);
     if (kept === 'left' || kept === 'right' || kept === 'float') return kept;
   } catch { /* a browser that keeps nothing is not an error */ }
-  return 'right';
+  return fallback;
 };
 
-const saveDock = (d: Dock) => {
-  try { window.localStorage.setItem(DOCK_KEY, d); } catch { /* nothing to do */ }
+const saveDock = (key: string, d: Dock) => {
+  try { window.localStorage.setItem(key, d); } catch { /* nothing to do */ }
+};
+
+/**
+ * The three buttons every dockable panel carries: left, loose, right.
+ *
+ * One component rather than one per panel, so a second panel docks the way
+ * the first one does — a desk where two panels park differently is a desk you
+ * have to learn twice.
+ */
+const DockButtons: React.FC<{
+  t: Strings; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
+  /** Dark chrome, for a panel whose title bar is not white. */
+  dark?: boolean;
+}> = ({ t, dock, onDock, onClose, dark }) => {
+  const on = dark ? 'bg-white/25' : 'bg-gray-200';
+  const hover = dark ? 'hover:bg-white/20' : 'hover:bg-gray-100';
+  return (
+    <span className="flex items-center gap-0.5">
+      {/* Left, right, or loose. Three buttons rather than a drag-to-the-edge
+          gesture: the gesture is charming until the one time it does not
+          catch, and then the panel is somewhere you did not put it. */}
+      <button
+        className={`p-1 rounded ${hover} ${dock === 'left' ? on : ''}`}
+        title={t.dockLeft} aria-label={t.dockLeft} onClick={() => onDock('left')}
+      >
+        <PanelLeftIcon className="w-3.5 h-3.5" />
+      </button>
+      <button
+        className={`p-1 rounded ${hover} ${dock === 'float' ? on : ''}`}
+        title={t.undock} aria-label={t.undock} onClick={() => onDock('float')}
+      >
+        <PictureInPicture2Icon className="w-3.5 h-3.5" />
+      </button>
+      <button
+        className={`p-1 rounded ${hover} ${dock === 'right' ? on : ''}`}
+        title={t.dockRight} aria-label={t.dockRight} onClick={() => onDock('right')}
+      >
+        <PanelRightIcon className="w-3.5 h-3.5" />
+      </button>
+      <button className={`p-1 rounded ${hover} ms-1`} title={t.closeHelp} onClick={onClose}>
+        <XIcon className="w-4 h-4" />
+      </button>
+    </span>
+  );
 };
 
 /**
@@ -411,32 +457,7 @@ const AskPanel: React.FC<{
         <img src={logoMark} alt="" aria-hidden data-theme-invert className="w-4 h-4 object-contain" />
         {t.ask}
       </p>
-      <span className="flex items-center gap-0.5">
-        {/* Left, right, or loose. Three buttons rather than a drag-to-the-edge
-            gesture: the gesture is charming until the one time it does not
-            catch, and then the panel is somewhere you did not put it. */}
-        <button
-          className={`p-1 rounded hover:bg-gray-100 ${dock === 'left' ? 'bg-gray-200' : ''}`}
-          title={t.dockLeft} aria-label={t.dockLeft} onClick={() => onDock('left')}
-        >
-          <PanelLeftIcon className="w-3.5 h-3.5" />
-        </button>
-        <button
-          className={`p-1 rounded hover:bg-gray-100 ${dock === 'float' ? 'bg-gray-200' : ''}`}
-          title={t.undock} aria-label={t.undock} onClick={() => onDock('float')}
-        >
-          <PictureInPicture2Icon className="w-3.5 h-3.5" />
-        </button>
-        <button
-          className={`p-1 rounded hover:bg-gray-100 ${dock === 'right' ? 'bg-gray-200' : ''}`}
-          title={t.dockRight} aria-label={t.dockRight} onClick={() => onDock('right')}
-        >
-          <PanelRightIcon className="w-3.5 h-3.5" />
-        </button>
-        <button className="p-1 rounded hover:bg-gray-100 ms-1" title={t.closeHelp} onClick={onClose}>
-          <XIcon className="w-4 h-4" />
-        </button>
-      </span>
+      <DockButtons t={t} dock={dock} onDock={onDock} onClose={onClose} />
     </div>
     {/* Two tabs, the way the two environments are two icons in the corner. */}
     <div className="flex items-stretch border-b border-gray-200 bg-gray-50">
@@ -994,11 +1015,17 @@ export const DrawingEditor: React.FC<Props> = ({
    */
   const [placing, setPlacing] = useState<
     { at: number; variants: { name: string; shapes: Shape[] }[] } | null>(null);
-  const [askDock, setAskDock] = useState<Dock>(loadDock);
-  const chooseDock = (d: Dock) => { setAskDock(d); saveDock(d); };
+  const [askDock, setAskDock] = useState<Dock>(() => loadDock(DOCK_KEY));
+  const chooseDock = (d: Dock) => { setAskDock(d); saveDock(DOCK_KEY, d); };
   // Where a floating panel has been dragged to, in pixels from the canvas's
   // top-left. Null until somebody moves it, so it opens where it always did.
   const [askAt, setAskAt] = useState<{ x: number; y: number } | null>(null);
+  // The page tree docks on the left, on the right or floats, the same way and
+  // with the same buttons — it is read while drawing, so covering the sheet
+  // with it is the one thing it must not do.
+  const [treeDock, setTreeDock] = useState<Dock>(() => loadDock(PAGES_DOCK_KEY));
+  const chooseTreeDock = (d: Dock) => { setTreeDock(d); saveDock(PAGES_DOCK_KEY, d); };
+  const [treeAt, setTreeAt] = useState<{ x: number; y: number } | null>(null);
   // What the model said when what it said could not be drawn.
   const [askRaw, setAskRaw] = useState<{ error: string; text: string; model: string } | null>(null);
   const [askText, setAskText] = useState('');
@@ -1135,28 +1162,32 @@ export const DrawingEditor: React.FC<Props> = ({
    * survives the cursor outrunning it — a panel that drops the moment the
    * mouse leaves it is worse than one that cannot be moved at all.
    */
-  const dragAsk = useCallback((e: React.MouseEvent) => {
-    const canvas = e.currentTarget.parentElement?.parentElement;
-    const box = canvas?.getBoundingClientRect();
-    if (!box) return;
-    const panel = (e.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
-    const grab = { x: e.clientX - panel.left, y: e.clientY - panel.top };
-    e.preventDefault();
-    const move = (ev: MouseEvent) => {
-      setAskAt({
-        // Kept on the canvas: a panel dragged off the edge is a panel that
-        // cannot be dragged back.
-        x: Math.max(0, Math.min(box.width - 80, ev.clientX - box.left - grab.x)),
-        y: Math.max(0, Math.min(box.height - 32, ev.clientY - box.top - grab.y)),
-      });
-    };
-    const up = () => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
-    };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
-  }, []);
+  const dragPanel = useCallback(
+    (set: (at: { x: number; y: number }) => void) => (e: React.MouseEvent) => {
+      const canvas = e.currentTarget.parentElement?.parentElement;
+      const box = canvas?.getBoundingClientRect();
+      if (!box) return;
+      const panel = (e.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
+      const grab = { x: e.clientX - panel.left, y: e.clientY - panel.top };
+      e.preventDefault();
+      const move = (ev: MouseEvent) => {
+        set({
+          // Kept on the canvas: a panel dragged off the edge is a panel that
+          // cannot be dragged back.
+          x: Math.max(0, Math.min(box.width - 80, ev.clientX - box.left - grab.x)),
+          y: Math.max(0, Math.min(box.height - 32, ev.clientY - box.top - grab.y)),
+        });
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    }, []);
+
+  const dragAsk = useMemo(() => dragPanel(setAskAt), [dragPanel]);
+  const dragTree = useMemo(() => dragPanel(setTreeAt), [dragPanel]);
 
   /** The text tool has a place; the words come from here. */
   const placeText = useCallback((at: { x: number; y: number }) => {
@@ -1685,6 +1716,54 @@ export const DrawingEditor: React.FC<Props> = ({
   // the same ones from render to render instead of rebuilding the whole bar.
   const Tool = ToolBtn;
 
+  /**
+   * The page tree as a panel: title bar, the three dock buttons, the tree.
+   *
+   * The same markup wherever it is parked, so docking it is a matter of which
+   * frame it is put in and nothing else. It was a modal over the drawing until
+   * now, which meant every look at the set hid the sheet the set is for and
+   * had to be shut again before a line could be drawn.
+   */
+  const treePanel = (dock: Dock) => (
+    <>
+      <div
+        className={`flex items-center justify-between px-3 py-2 bg-slate-700 text-white ${
+          dock === 'float' ? 'cursor-move' : ''}`}
+        onMouseDown={dock === 'float' ? dragTree : undefined}
+      >
+        <p className="text-sm font-semibold flex items-center gap-1.5 min-w-0">
+          <FilesIcon className="w-4 h-4 shrink-0" />
+          <span className="truncate">{T.pageTree.split(' — ')[0]}</span>
+        </p>
+        <DockButtons
+          t={T} dock={dock} dark onDock={chooseTreeDock} onClose={() => setTree(false)}
+        />
+      </div>
+      {pages && (
+        <PageNavigator
+          compact
+          dir={dir}
+          pages={pages}
+          groups={pageGroups}
+          edits={pendingEdits()}
+          canEdit={canEdit && Boolean(onPages)}
+          currentId={page?.id}
+          fileBase={fileBase}
+          onChange={(next, nextEdits, nextGroups) => {
+            onPages?.(next, nextEdits, nextGroups);
+            setTouched(new Set());
+          }}
+          onOpen={id => {
+            // The panel stays open. That is what docking it is for: page
+            // through the set with the sheet beside it, not one look per trip.
+            const at = pages.findIndex(p => p.id === id);
+            if (at >= 0) setIndex(at);
+          }}
+        />
+      )}
+    </>
+  );
+
   return (
     <div
       ref={frame}
@@ -2040,12 +2119,12 @@ export const DrawingEditor: React.FC<Props> = ({
                 </span>
               </RibbonPanel>
 
-              {/* The tree itself, over the drawing. Everything the project's
+              {/* The tree itself, beside the drawing. Everything the project's
                   own Pages tab can do — groups, the four reports, a set of
-                  wiring pages read off an I/O list — without closing the
-                  drawing to get at it. */}
+                  wiring pages read off an I/O list — in a column that stays
+                  open while you draw. The button turns it off again. */}
               <RibbonPanel name={T.panSheet}>
-                <Tool label title={T.pageTree} on={() => setTree(true)}>
+                <Tool label title={T.pageTree} active={tree} on={() => setTree(v => !v)}>
                   <FilesIcon className="w-5 h-5" />
                 </Tool>
               </RibbonPanel>
@@ -2315,6 +2394,14 @@ export const DrawingEditor: React.FC<Props> = ({
 
       {/* ── Canvas and panels ──────────────────────────────────────────── */}
       <div className={fullscreen ? 'flex flex-1 min-h-0' : 'flex'} style={fullscreen ? undefined : { height: 620 }}>
+        {/* The set, docked left — outermost, so the tree reads as the frame
+            the drawing sits in rather than as one more panel beside it. */}
+        {tree && pages && treeDock === 'left' && (
+          <aside className="w-[24rem] shrink-0 flex flex-col min-h-0 border-e border-gray-200 bg-white">
+            {treePanel('left')}
+          </aside>
+        )}
+
         {/* Docked left: a column of its own, so it takes room from the canvas
             instead of covering the sheet it is drawing on. */}
         {askOpen && askDock === 'left' && (
@@ -2404,6 +2491,18 @@ export const DrawingEditor: React.FC<Props> = ({
             </div>
           )}
 
+          {/* The set, floating. Dragged by its title bar, kept on the canvas,
+              and above the sheet rather than over the whole app: a set you are
+              paging through while you draw is a panel, not a dialog. */}
+          {tree && pages && treeDock === 'float' && (
+            <div
+              className="absolute z-30 w-[24rem] max-h-[80%] flex flex-col rounded-lg border border-slate-400 bg-white shadow-xl overflow-hidden"
+              style={treeAt ? { left: treeAt.x, top: treeAt.y } : { left: 8, top: 8 }}
+            >
+              {treePanel('float')}
+            </div>
+          )}
+
           {showChecks && (
             <div className="absolute top-2 right-2 z-30 w-[22rem] max-h-[70%] flex flex-col rounded-lg border border-gray-300 bg-white shadow-xl">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">
@@ -2478,6 +2577,14 @@ export const DrawingEditor: React.FC<Props> = ({
             />
           )}
         </div>
+
+        {/* The set, docked right — past the model's panel, so the two keep
+            the same order whichever side they are parked on. */}
+        {tree && pages && treeDock === 'right' && (
+          <aside className="w-[24rem] shrink-0 flex flex-col min-h-0 border-s border-gray-200 bg-white order-last">
+            {treePanel('right')}
+          </aside>
+        )}
 
         {/* Docked right: between the sheet and the layer list, which is where
             a second panel goes on every CAD desk this office has used. */}
@@ -2651,52 +2758,6 @@ export const DrawingEditor: React.FC<Props> = ({
           </div>
         </aside>
       </div>
-
-      {/* ── The whole set, over the drawing ──────────────────────────────
-          The same navigator the project's Pages tab shows, opened here so the
-          set can be re-ordered, grouped, reported on or grown from an I/O list
-          without closing the drawing. z-320 for the same reason the symbol
-          library is: in full screen this editor owns z-300. */}
-      {tree && pages && (
-        <div
-          className="fixed inset-0 z-[320] bg-black/50 flex items-start justify-center p-4 overflow-auto"
-          onClick={() => setTree(false)}
-        >
-          <div
-            dir={dir}
-            className="bg-white rounded-lg shadow-2xl w-[1100px] max-w-full my-auto"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-700 text-white rounded-t-lg">
-              <FilesIcon className="w-4 h-4 shrink-0" />
-              <h3 className="text-sm font-semibold truncate">{T.pageTree.split(' — ')[0]}</h3>
-              <button
-                onClick={() => setTree(false)}
-                className="ms-auto p-1 rounded hover:bg-white/20"
-                title={T.closeHelp}
-              >
-                <XIcon className="w-4 h-4" />
-              </button>
-            </div>
-            <PageNavigator
-              pages={pages}
-              groups={pageGroups}
-              edits={pendingEdits()}
-              canEdit={canEdit && Boolean(onPages)}
-              fileBase={fileBase}
-              onChange={(next, nextEdits, nextGroups) => {
-                onPages?.(next, nextEdits, nextGroups);
-                setTouched(new Set());
-              }}
-              onOpen={id => {
-                const at = pages.findIndex(p => p.id === id);
-                if (at >= 0) setIndex(at);
-                setTree(false);
-              }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* ── Status bar ─────────────────────────────────────────────────── */}
       <div className="flex items-center gap-4 px-3 py-1.5 border-t bg-gray-50 text-[11px] text-gray-500 tabular-nums">
