@@ -734,23 +734,43 @@ export function librarySymbol(id: SymbolId): {
   };
 }
 
-/** One symbol, drawn with the branch line through it. */
+/**
+ * One symbol, drawn where the branch line meets it.
+ *
+ * **Nothing is drawn through a symbol.** A device's two terminals are joined
+ * inside it only if the device itself joins them, and most of what is on a
+ * feeder does not: a breaker, a disconnector, a contactor, a switch is drawn
+ * *open* — that is the whole meaning of the symbol, the state it sits in until
+ * something operates it. A line run from the top terminal to the bottom one
+ * past the open blade says the opposite, and says it in the one drawing the
+ * rest of the job is read from.
+ *
+ * That line used to be drawn under every overriding symbol — so a breaker the
+ * office redrew for a project, or replaced from its own DXF pack, came back
+ * shorted while the library's own copy of it stayed right. Redrawing a symbol
+ * must not change what it means.
+ *
+ * Geometry brings its own conductor: the art is a drawing of the device, leads
+ * and gap and all, scaled to exactly the box it declares, so there is nothing
+ * left for this to add. A picture is the one case that still needs a lead —
+ * see below.
+ */
 export function drawIecSymbol(id: SymbolId, x: number, y: number): string {
   const o = symbolOverride(id);
   if (o) {
     const { w, h, dx } = overrideBox(o);
-    // The line is drawn through the cell first: a symbol trimmed to its own
-    // ink leaves the conductor short at the top and the bottom otherwise.
-    const conductor =
-      `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${S}" stroke-width="1"/>`;
     if (o.art) {
-      // Geometry, placed by the same box the picture would have used, so the
-      // conductor runs through the symbol's own connection point.
+      // Geometry, placed by the box it declares, so the symbol's own conductor
+      // lands on the branch — and its own gap stays a gap.
       const k = h / (o.height && o.height > 0 ? o.height : 1);
-      return conductor +
-        `<g transform="translate(${x + dx} ${y}) scale(${k})">${o.art}</g>`;
+      return `<g transform="translate(${x + dx} ${y}) scale(${k})">${o.art}</g>`;
     }
-    return conductor +
+    // A picture, and only a picture. `xMidYMid meet` letterboxes it inside the
+    // cell, so its ink can stop short of both ends with nothing to say where —
+    // which leaves a lead the only way to put it on the branch at all. An
+    // office that wants its switches drawn open sends geometry (a DXF on the
+    // CONN layer, or a redraw on the symbol page), not a picture.
+    return `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${S}" stroke-width="1"/>` +
       `<image href="${esc(o.url)}" x="${x + dx}" y="${y}" width="${w}" height="${h}" ` +
       `preserveAspectRatio="xMidYMid meet">` +
       `<title>${esc(o.title || IEC_SYMBOLS[id]?.title || id)}</title></image>`;
