@@ -48,7 +48,7 @@ export const TemplateGraphicEditor: React.FC<Props> = ({
   return (
     <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]" onClick={onClose}>
       <div
-        className="bg-white rounded-lg shadow-2xl w-[1220px] max-w-[96vw] max-h-[94vh] flex flex-col overflow-hidden"
+        className="bg-white rounded-lg shadow-2xl w-[1220px] max-w-[96vw] h-[94vh] flex flex-col overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         <div className="bg-slate-700 text-white px-5 py-3 flex items-center justify-between">
@@ -64,8 +64,9 @@ export const TemplateGraphicEditor: React.FC<Props> = ({
           </button>
         </div>
 
-        <div className="flex-1 overflow-auto p-3 bg-gray-100">
+        <div className="flex-1 min-h-0 bg-gray-100">
           <DrawingEditor
+            embedded
             sheets={sheets}
             fileBase={`template_${template.name || template.id}`}
             titleBlock={[template.name || 'Template', `Simorgh Draw — ${tier} template`]}

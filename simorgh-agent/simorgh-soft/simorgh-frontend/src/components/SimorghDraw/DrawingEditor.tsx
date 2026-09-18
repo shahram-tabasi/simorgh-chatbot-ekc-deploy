@@ -46,6 +46,10 @@ import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
 import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang';
 import { DrawingHelp } from './DrawingHelp';
 import { SymbolLibrary } from './SymbolLibrary';
+import { symbolDrawing } from '../../utils/cad/symbolArt';
+import { countInstances, replaceSymbolInstances } from '../../utils/cad/replaceSymbol';
+import { IEC_SYMBOLS, SymbolId, packSymbolOverride } from '../../utils/iecSymbols';
+import { SymbolArtOverride } from '../../types/project';
 import { LibraryKind } from '../../utils/cad/symbolLibraries';
 import { CpuIcon, PencilRulerIcon } from 'lucide-react';
 import { LadderAsk, LadderAskResult } from '../SimorghLogic/LadderAsk';
@@ -121,6 +125,35 @@ interface Props {
    * through `pendingEdits()`.
    */
   onPages?: (pages: DrawingPage[], edits: DrawingEdits, groups: DrawingGroups) => void;
+  /**
+   * Drawn inside another panel — a symbol being redrawn, a template's art.
+   *
+   * The canvas is 620 pixels tall whatever it is given, which in a panel 300
+   * pixels high is a drawing with its lower half below the window: the half
+   * you cannot reach to draw on, and the Save button below that. An embedded
+   * editor fills the box it is put in instead, top to bottom.
+   */
+  embedded?: boolean;
+  /**
+   * The host owns full screen and the symbol library, so this editor does not
+   * offer them.
+   *
+   * For an editor opened *from* the symbol library: a symbol library reached
+   * from inside the panel that a symbol is being redrawn in is the library
+   * inside itself, and a second full screen inside a panel that is already one
+   * is a way of losing the panel.
+   */
+  lean?: boolean;
+  /**
+   * Told when there is something to save, and handed the way to save it.
+   *
+   * A host that frames this editor — the symbol panel — puts Save where the
+   * person is looking rather than leaving it as a disc in a nested ribbon.
+   * `saveHandle.current` is the editor's own Save, and `onDirty` says whether
+   * pressing it would do anything.
+   */
+  saveHandle?: React.MutableRefObject<(() => void) | null>;
+  onDirty?: (dirty: boolean) => void;
 }
 
 const SNAPS = [0, 1, 5, 10, 25];
@@ -267,12 +300,15 @@ const ToolBtn: React.FC<{
   tag?: string;
   /** Put the command's name under its picture, ribbon-style. */
   label?: boolean;
+  /** Not this one here — a command the host owns while the editor is embedded. */
+  hide?: boolean;
   tone?: keyof typeof TONES;
   children: React.ReactNode;
-}> = ({ on, active, disabled, title, keyHint, tag, label, tone = 'plain', children }) => {
+}> = ({ on, active, disabled, title, keyHint, tag, label, hide, tone = 'plain', children }) => {
   // The phrases are written as "Name — what it does"; the dash is the split.
   const [name, ...rest] = title.split(' — ');
   const detail = rest.join(' — ');
+  if (hide) return null;
   return (
     <span className="relative group/tip inline-flex">
       <button
@@ -533,6 +569,7 @@ const AskPanel: React.FC<{
 export const DrawingEditor: React.FC<Props> = ({
   sheets, startAt = 0, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
   savedEdits, onSaveEdits, canEdit = true, pages, pageGroups = [], onPages,
+  embedded = false, lean = false, saveHandle, onDirty,
 }) => {
   const [index, setIndex] = useState(startAt);
   const sheet = sheets[Math.min(index, Math.max(0, sheets.length - 1))];
@@ -545,6 +582,8 @@ export const DrawingEditor: React.FC<Props> = ({
   // without anyone having looked at it.
   const [touched, setTouched] = useState<ReadonlySet<number>>(new Set());
   const dirty = touched.size > 0;
+  // Said out to the host, so its own Save button can go grey with this one.
+  useEffect(() => { onDirty?.(dirty); }, [dirty, onDirty]);
   const touch = (i: number) => setTouched(prev => new Set(prev).add(i));
 
   // Read at the moment a set of sheets is seeded rather than followed, so
@@ -1014,7 +1053,7 @@ export const DrawingEditor: React.FC<Props> = ({
    * EPLAN's own gesture for exactly this.
    */
   const [placing, setPlacing] = useState<
-    { at: number; variants: { name: string; shapes: Shape[] }[] } | null>(null);
+    { at: number; variants: { name: string; shapes: Shape[]; id?: string }[] } | null>(null);
   const [askDock, setAskDock] = useState<Dock>(() => loadDock(DOCK_KEY));
   const chooseDock = (d: Dock) => { setAskDock(d); saveDock(DOCK_KEY, d); };
   // Where a floating panel has been dragged to, in pixels from the canvas's
@@ -1324,6 +1363,85 @@ export const DrawingEditor: React.FC<Props> = ({
   };
 
   /**
+   * A symbol redrawn for this project, onto the sheets it is already on.
+   *
+   * Saving a redrawn symbol used to change only what would be drawn next: the
+   * pages already drawn hold the old picture as geometry, so the breaker on
+   * sheet 3 kept the drawing the office had just replaced. That is the whole
+   * of "I edit the symbol and it is not applied in the project".
+   *
+   * Every sheet this editor holds is looked through — not only the one on
+   * screen — and every instance found is swapped for the new drawing, on its
+   * own wire and at its own height (see cad/replaceSymbol). It is asked for
+   * first, because rewriting a drawing somebody has already corrected by hand
+   * is not a thing to do quietly, and because an instance that was turned or
+   * mirrored after it was placed comes back the way the library draws it.
+   */
+  const applyRedrawnSymbol = (
+    symbolId: SymbolId,
+    before: SymbolArtOverride | undefined,
+    after: SymbolArtOverride | undefined,
+  ) => {
+    const title = IEC_SYMBOLS[symbolId]?.title ?? symbolId;
+    // Both drawings are worked out from what was handed in rather than read
+    // back out of the symbol module: the project has only just been told about
+    // the new one and the module learns of it a render later, so reading it
+    // here would replace the old drawing with the old drawing.
+    //
+    // With no project drawing on either side, what the page holds — and what
+    // it goes back to — is the office pack's symbol where there is one, and
+    // the library's own where there is not.
+    const fromPack = ((): SymbolArtOverride | undefined => {
+      const o = packSymbolOverride(symbolId);
+      if (!o?.art) return undefined;
+      const w = o.width && o.width > 0 ? o.width : 1;
+      return {
+        art: o.art, width: w, height: o.height && o.height > 0 ? o.height : 1,
+        pinX: o.pinX ?? w / 2, cells: o.cells ?? 1, editedAt: '',
+      };
+    })();
+    const was = symbolDrawing(symbolId, before ?? fromPack, true);
+    const now = symbolDrawing(symbolId, after ?? fromPack, true);
+
+    const counts = sheets.map((sheet, i) =>
+      countInstances(edits[i] ?? sheet.drawing.shapes, symbolId, title));
+    const places = counts.reduce((n, c) => n + c, 0);
+    if (places === 0) {
+      setNotice(T.symbolRedrawnNone(title));
+      return;
+    }
+    const pageCount = counts.filter(c => c > 0).length;
+    if (!window.confirm(T.symbolRedrawnAsk(title, places, pageCount))) {
+      setNotice(T.symbolRedrawnKept(title));
+      return;
+    }
+
+    const next: Record<number, Shape[]> = { ...edits };
+    const changed = new Set<number>(touched);
+    let done = 0;
+    sheets.forEach((sheet, i) => {
+      const current = edits[i] ?? sheet.drawing.shapes;
+      const swap = replaceSymbolInstances(
+        current, symbolId, title,
+        { shapes: was.drawing.shapes, pinX: was.pinX },
+        { shapes: now.drawing.shapes, pinX: now.pinX },
+      );
+      if (swap.count === 0) return;
+      historyFor(i).push(current);
+      next[i] = swap.shapes;
+      changed.add(i);
+      done += swap.count;
+    });
+    if (done === 0) { setNotice(T.symbolRedrawnNone(title)); return; }
+
+    setEdits(next);
+    setTouched(changed);
+    setSelection(new Set());
+    forceRender(n => n + 1);
+    setNotice(T.symbolRedrawnDone(title, done, pageCount));
+  };
+
+  /**
    * A symbol chosen in the library: onto the cursor, not onto the sheet.
    *
    * Nothing is committed here. The library closes, the symbol follows the
@@ -1332,7 +1450,8 @@ export const DrawingEditor: React.FC<Props> = ({
    * rather than when a panel was closed.
    */
   const importSymbol = (
-    run: Shape[], name: string, variants?: { name: string; shapes: Shape[] }[],
+    run: Shape[], name: string,
+    variants?: { name: string; shapes: Shape[]; id?: string }[],
   ) => {
     if (run.length === 0) return;
     const family = variants?.length ? variants : [{ name, shapes: run }];
@@ -1357,7 +1476,7 @@ export const DrawingEditor: React.FC<Props> = ({
     if (!placing) return;
     const face = placing.variants[placing.at];
     if (!face) return;
-    const placed = placeAsBlock(face.shapes, at, face.name);
+    const placed = placeAsBlock(face.shapes, at, face.name, 1, face.id);
     if (placed.length === 0) return;
     historyFor(index).push(shapes);
     const next = [...shapes, ...placed];
@@ -1462,6 +1581,10 @@ export const DrawingEditor: React.FC<Props> = ({
     onSaveEdits(pendingEdits());
     setTouched(new Set());
   };
+
+  // A host framing this editor gets its Save, so the command can be put where
+  // the person is looking instead of only in the ribbon.
+  if (saveHandle) saveHandle.current = keep;
 
   // ── The page set, from inside the drawing ───────────────────────────────
   //
@@ -1768,8 +1891,11 @@ export const DrawingEditor: React.FC<Props> = ({
     <div
       ref={frame}
       data-sd-theme={themeId}
-      className={`border border-gray-200 rounded-lg overflow-hidden bg-white select-none ${
-        fullscreen ? 'fixed inset-0 z-[300] rounded-none flex flex-col' : ''}`}
+      className={`overflow-hidden bg-white select-none ${
+        embedded
+          ? 'h-full min-h-0 flex flex-col'
+          : 'border border-gray-200 rounded-lg'} ${
+        fullscreen ? 'fixed inset-0 z-[300] rounded-none border-0 flex flex-col' : ''}`}
     >
       {/* ── Ribbon ─────────────────────────────────────────────────────── */}
       {/*
@@ -1866,6 +1992,7 @@ export const DrawingEditor: React.FC<Props> = ({
               tag="fullscreen"
               title={fullscreen ? T.leaveFullscreen : T.fullscreen}
               on={toggleFullscreen}
+              hide={lean}
             >
               {fullscreen ? <Minimize2Icon className="w-4 h-4" /> : <Maximize2Icon className="w-4 h-4" />}
             </Tool>
@@ -2055,7 +2182,7 @@ export const DrawingEditor: React.FC<Props> = ({
                   into one. The library sits with the commands that act on
                   blocks. */}
               <RibbonPanel name={T.panBlock}>
-                <Tool tag="library" label title={T.openLibrary} on={() => setShowLibrary(true)}>
+                <Tool tag="library" label title={T.openLibrary} hide={lean} on={() => setShowLibrary(true)}>
                   <LibraryBigIcon className="w-5 h-5" />
                 </Tool>
                 <Stack>
@@ -2189,7 +2316,7 @@ export const DrawingEditor: React.FC<Props> = ({
               </RibbonPanel>
 
               <RibbonPanel name={T.panBlock}>
-                <Tool tag="library" label title={T.openLibrary} on={() => setShowLibrary(true)}>
+                <Tool tag="library" label title={T.openLibrary} hide={lean} on={() => setShowLibrary(true)}>
                   <LibraryBigIcon className="w-5 h-5" />
                 </Tool>
               </RibbonPanel>
@@ -2393,7 +2520,10 @@ export const DrawingEditor: React.FC<Props> = ({
       </div>
 
       {/* ── Canvas and panels ──────────────────────────────────────────── */}
-      <div className={fullscreen ? 'flex flex-1 min-h-0' : 'flex'} style={fullscreen ? undefined : { height: 620 }}>
+      <div
+        className={fullscreen || embedded ? 'flex flex-1 min-h-0' : 'flex'}
+        style={fullscreen || embedded ? undefined : { height: 620 }}
+      >
         {/* The set, docked left — outermost, so the tree reads as the frame
             the drawing sits in rather than as one more panel beside it. */}
         {tree && pages && treeDock === 'left' && (
@@ -2573,6 +2703,7 @@ export const DrawingEditor: React.FC<Props> = ({
               kind={sheet?.kind}
               selection={picked}
               onImport={importSymbol}
+              onRedrawn={applyRedrawnSymbol}
               onClose={() => setShowLibrary(false)}
             />
           )}

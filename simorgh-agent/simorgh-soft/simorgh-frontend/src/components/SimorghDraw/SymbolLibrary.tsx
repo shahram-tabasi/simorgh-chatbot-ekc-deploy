@@ -4,6 +4,7 @@ import {
   XIcon, SearchIcon, UploadIcon, Maximize2Icon, Minimize2Icon, PlusIcon,
   ChevronDownIcon, ChevronRightIcon, PencilIcon, Trash2Icon, FilePlusIcon,
   DownloadIcon, LibraryIcon, CopyPlusIcon, PackageIcon, PaintbrushIcon,
+  ArrowLeftIcon, MoreHorizontalIcon,
 } from 'lucide-react';
 
 import { Shape } from '../../utils/cad/shapes';
@@ -29,9 +30,11 @@ import { DxfSymbolPack } from './DxfSymbolPack';
 import { SymbolGraphicEditor } from './SymbolGraphicEditor';
 import { DxfSymbol, loadDxfSymbols, saveDxfSymbols } from '../../utils/cad/dxfSymbols';
 import { SymbolId, setProjectSymbolOverrides } from '../../utils/iecSymbols';
+import { SymbolArtOverride } from '../../types/project';
 import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
 import { useProject } from '../../context/ProjectContext';
 import { Strings, dirOf, Lang } from './lang';
+import { useOverlayHost } from './overlayHost';
 import { ThemeId } from './theme';
 
 // The symbol library, and everything that can come into a drawing through it.
@@ -68,7 +71,20 @@ interface Props {
    */
   onImport: (
     shapes: Shape[], name: string,
-    variants?: { name: string; shapes: Shape[] }[],
+    variants?: { name: string; shapes: Shape[]; id?: string }[],
+  ) => void;
+  /**
+   * A built-in symbol this project has just redrawn, and its new geometry.
+   *
+   * The override alone only changes what is drawn *next*. The editor holds the
+   * sheets, so it is the one that can put the new drawing in the place of the
+   * ones already on them — which is what "apply it to the whole project" means
+   * to the person who redrew it.
+   */
+  onRedrawn?: (
+    symbolId: SymbolId,
+    before: SymbolArtOverride | undefined,
+    after: SymbolArtOverride | undefined,
   ) => void;
   onClose: () => void;
   /**
@@ -106,7 +122,7 @@ function heaviestStroke(art: string): number {
 }
 
 export const SymbolLibrary: React.FC<Props> = ({
-  t, lang, theme, onImport, onClose, kind: openOn, selection,
+  t, lang, theme, onImport, onClose, kind: openOn, selection, onRedrawn,
 }) => {
   const [query, setQuery] = useState('');
   const [big, setBig] = useState(false);
@@ -138,6 +154,41 @@ export const SymbolLibrary: React.FC<Props> = ({
   const [pack, setPack] = useState<DxfSymbol[]>(loadDxfSymbols);
   const [redrawing, setRedrawing] = useState<SymbolId | null>(null);
   const { projectData, patchProjectData } = useProject();
+  // Where this panel has to be drawn to be seen. The editor's full screen is
+  // the browser's own, and only the element it was asked for is painted — see
+  // overlayHost.
+  const host = useOverlayHost();
+  /**
+   * How wide this panel actually is, and not how wide the window is.
+   *
+   * The panel is 1100 points until somebody maximises it, at which point it is
+   * the screen; inside the editor's own full screen it is neither. Media
+   * queries answer a question nobody asked. What decides whether the toolbar
+   * fits is the panel, so the panel is what is measured.
+   */
+  const panel = useRef<HTMLDivElement>(null);
+  const [panelWidth, setPanelWidth] = useState(1100);
+  useEffect(() => {
+    const el = panel.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const watch = new ResizeObserver(([entry]) => {
+      setPanelWidth(entry.contentRect.width);
+    });
+    watch.observe(el);
+    setPanelWidth(el.getBoundingClientRect().width);
+    return () => watch.disconnect();
+  }, [host]);
+  /** Below this the four secondary commands fold into one button. */
+  const narrow = panelWidth < 1060;
+  /** And below this even the line under the title is taking the search box's
+   *  room, which is a worse trade than saying nothing. */
+  const roomy = panelWidth >= 1280;
+  /** Below this the list and the symbol cannot both be on screen. */
+  const tight = panelWidth < 760;
+  /** Which of the two the tight layout is showing. */
+  const [pane, setPane] = useState<'list' | 'symbol'>('list');
+  /** The secondary commands, folded away on a narrow panel. */
+  const [more, setMore] = useState(false);
 
   // A symbol redrawn for this project replaces the library's everywhere the
   // project draws — so the override map is pushed into the symbol module
@@ -189,6 +240,12 @@ export const SymbolLibrary: React.FC<Props> = ({
       return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
     });
   }, [items, query, kind]);
+
+  /** A symbol is being drawn rather than looked at — the panel is its page. */
+  const onDrawingPage = making || Boolean(redrawing);
+
+  /** Picking one: on a tight panel that also means turning to it. */
+  const pick = (key: string) => { setPicked(key); setPane('symbol'); };
 
   const chosen = items.find(i => i.key === picked) ?? null;
   /** The family of whatever is picked: itself, and every other face of it. */
@@ -250,8 +307,57 @@ export const SymbolLibrary: React.FC<Props> = ({
 
   /** Every face of one symbol, each with its geometry, for the cursor. */
   const family = (item: LibraryItem) => variantsOf(item, items)
-    .map(v => ({ name: v.name, shapes: v.shapes ?? shapesOf(v) }))
+    .map(v => ({ name: v.name, shapes: v.shapes ?? shapesOf(v), id: v.id }))
     .filter(v => v.shapes.length > 0);
+
+  /** The whole office library, to a file on this computer. */
+  const exportLibrary = async () => {
+    setBusy(true);
+    try {
+      const written = await symbolLibraryService.exportAll();
+      downloadText(
+        `simorgh-library-${new Date().toISOString().slice(0, 10)}.json`,
+        JSON.stringify(written, null, 2),
+        'application/json',
+      );
+      setNote(t.libExported(written.symbols.length));
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * The commands that are not about the symbol in front of you.
+   *
+   * One list, drawn as four buttons where the panel is wide enough and as one
+   * menu where it is not, so a narrow panel loses their width and not the
+   * commands themselves.
+   */
+  const secondary: {
+    label: string; note: string; icon: typeof PackageIcon;
+    on: () => void; disabled?: boolean;
+  }[] = [
+    {
+      label: t.libPack,
+      note: 'The DXF symbols loaded into this browser, and sending one to the server pack',
+      icon: PackageIcon,
+      on: () => setShowPack(true),
+    },
+    {
+      label: t.libFromFile, note: t.libFromFileNote, icon: UploadIcon,
+      on: () => file.current?.click(),
+    },
+    {
+      label: t.libExport, note: t.libExportNote, icon: DownloadIcon,
+      on: exportLibrary, disabled: busy,
+    },
+    {
+      label: t.libImportFile, note: t.libImportNote, icon: LibraryIcon,
+      on: () => libraryFile.current?.click(), disabled: busy,
+    },
+  ];
 
   const place = (item: LibraryItem) => {
     const shapes = item.shapes ?? shapesOf(item);
@@ -381,138 +487,135 @@ export const SymbolLibrary: React.FC<Props> = ({
       symbolId={redrawing}
       override={projectData.symbolOverrides?.[redrawing]}
       onSave={art => {
+        const before = projectData.symbolOverrides?.[redrawing];
         patchProjectData(prev => {
           const next = { ...(prev.symbolOverrides ?? {}) };
           next[redrawing] = art;
           return { symbolOverrides: next };
         });
-      setRedrawing(null);
-    }}
+        // What is drawn from now on has changed; the sheets already drawn are
+        // the editor's to bring up to date, and it asks before it does.
+        onRedrawn?.(redrawing, before, art);
+        setRedrawing(null);
+      }}
     onReset={() => {
+      const before = projectData.symbolOverrides?.[redrawing];
       patchProjectData(prev => {
         const next = { ...(prev.symbolOverrides ?? {}) };
         delete next[redrawing];
         return { symbolOverrides: next };
       });
+      // Going back to the library's own symbol is the same move the other way.
+      onRedrawn?.(redrawing, before, undefined);
       setRedrawing(null);
     }}
     onClose={() => setRedrawing(null)}
     />
   );
 
+  // One render with nothing on screen while the host is read; without it a
+  // panel opened during the switch into full screen would be parked on the
+  // body, where full screen does not paint it.
+  if (!host) return null;
+
   return createPortal(
     <div className="fixed inset-0 z-[320] bg-black/50 flex items-center justify-center p-4">
       <div
+        ref={panel}
         data-sd-theme={theme}
         dir={dirOf(lang)}
         data-symbol-library
         className={`relative bg-white rounded-lg shadow-2xl flex flex-col overflow-hidden ${
           big ? 'w-full h-full' : 'w-[1100px] max-w-full h-[80vh] max-h-full'}`}
       >
-        {/* ── Title bar ────────────────────────────────────────────────── */}
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-gray-50 border-b">
-          <h3 className="text-sm font-semibold text-gray-800">{t.libTitle}</h3>
-          <p className="text-[11px] text-gray-500 hidden sm:block">{t.libNote}</p>
+        {/* ── Title bar ──────────────────────────────────────────────────
+            A toolbar that has to hold: the panel is not always 1100 points
+            wide, and when it was not, this row simply ran on past the right
+            edge and took the close button with it. There is no way out of a
+            panel whose only way out is off the screen.
 
-          <div className="ms-auto flex items-center gap-2">
-            <div className="relative">
-              <SearchIcon className="w-3.5 h-3.5 absolute start-2 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                data-lib-search
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder={t.libSearch}
-                className="ps-7 pe-2 py-1.5 text-sm border border-gray-300 rounded w-56 bg-white"
-              />
+            So the row wraps, the close and the size buttons are pinned first
+            in their own group so they cannot be the ones pushed off, and on a
+            narrow panel the four commands that are not about symbols — the
+            pack, a file, and the two library files — fold into one button. */}
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-gray-50 border-b shrink-0">
+          <div className="min-w-0 me-1">
+            <h3 className="text-sm font-semibold text-gray-800 truncate">{t.libTitle}</h3>
+            {roomy && <p className="text-[11px] text-gray-500 truncate">{t.libNote}</p>}
+          </div>
+
+          <div className="relative flex-1 min-w-[7rem] max-w-[22rem]">
+            <SearchIcon className="w-3.5 h-3.5 absolute start-2 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              data-lib-search
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder={t.libSearch}
+              className="w-full ps-7 pe-2 py-1.5 text-sm border border-gray-300 rounded bg-white"
+            />
+          </div>
+
+          <button
+            onClick={() => { setEditing(null); setMaking(true); }}
+            data-lib-new
+            title={t.libNewNote}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-blue-600 text-sm text-white hover:bg-blue-700 shrink-0"
+          >
+            <FilePlusIcon className="w-4 h-4" />
+            <span className={narrow ? 'hidden' : ''}>{t.libNew}</span>
+          </button>
+
+          {/* The four that fold. Spelled out where there is room, and behind
+              one button where there is not — which is not the same as gone. */}
+          {narrow ? (
+            <div className="relative shrink-0">
+              <button
+                onClick={() => setMore(m => !m)}
+                data-lib-more
+                title={`${t.libPack} · ${t.libFromFile} · ${t.libExport} · ${t.libImportFile}`}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100 ${
+                  more ? 'bg-gray-200' : ''}`}
+              >
+                <MoreHorizontalIcon className="w-4 h-4" />
+              </button>
+              {more && (
+                <>
+                  <div className="fixed inset-0 z-[10]" onClick={() => setMore(false)} />
+                  <div className="absolute z-[11] end-0 mt-1 w-56 rounded-lg border border-gray-200 bg-white shadow-xl py-1">
+                    {secondary.map(item => (
+                      <button
+                        key={item.label}
+                        onClick={() => { setMore(false); item.on(); }}
+                        disabled={item.disabled}
+                        data-lib-more-item={item.label}
+                        className="w-full flex items-center gap-2.5 px-3 py-1.5 text-start text-sm text-gray-700 enabled:hover:bg-gray-100 disabled:opacity-40"
+                      >
+                        <item.icon className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
-            <button
-              onClick={() => { setEditing(null); setMaking(true); }}
-              data-lib-new
-              title={t.libNewNote}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-sm text-white hover:bg-blue-700"
-            >
-              <FilePlusIcon className="w-4 h-4" /> {t.libNew}
-            </button>
-            <button
-              onClick={() => setShowPack(true)}
-              data-lib-pack
-              title="The DXF symbols loaded into this browser, and sending one to the server pack"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100"
-            >
-              <PackageIcon className="w-4 h-4" /> DXF pack
-            </button>
-            <button
-              onClick={() => file.current?.click()}
-              data-lib-file
-              title={t.libFromFileNote}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100"
-            >
-              <UploadIcon className="w-4 h-4" /> {t.libFromFile}
-            </button>
-            <input
-              ref={file}
-              type="file"
-              accept=".dxf,.svg"
-              multiple
-              className="hidden"
-              onChange={e => readFiles(e.target.files)}
-            />
-            <button
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  const file = await symbolLibraryService.exportAll();
-                  downloadText(
-                    `simorgh-library-${new Date().toISOString().slice(0, 10)}.json`,
-                    JSON.stringify(file, null, 2),
-                    'application/json',
-                  );
-                  setNote(t.libExported(file.symbols.length));
-                } catch (err) {
-                  setNote(err instanceof Error ? err.message : String(err));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-              disabled={busy}
-              data-lib-export
-              title={t.libExportNote}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40"
-            >
-              <DownloadIcon className="w-4 h-4" /> {t.libExport}
-            </button>
-            <button
-              onClick={() => libraryFile.current?.click()}
-              disabled={busy}
-              data-lib-import-file
-              title={t.libImportNote}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40"
-            >
-              <LibraryIcon className="w-4 h-4" /> {t.libImportFile}
-            </button>
-            <input
-              ref={libraryFile}
-              type="file"
-              accept=".json"
-              className="hidden"
-              onChange={async e => {
-                const f = e.target.files?.[0];
-                e.target.value = '';
-                if (!f) return;
-                try {
-                  const read = JSON.parse(await f.text()) as LibraryFile;
-                  if (read?.format !== LIBRARY_FORMAT || !Array.isArray(read.symbols)) {
-                    setNote(t.libNotALibrary);
-                    return;
-                  }
-                  // Asked before anything happens, because one of the two
-                  // answers throws away the library that is here.
-                  setIncoming(read);
-                } catch {
-                  setNote(t.libNotALibrary);
-                }
-              }}
-            />
+          ) : (
+            secondary.map(item => (
+              <button
+                key={item.label}
+                onClick={item.on}
+                disabled={item.disabled}
+                data-lib-secondary={item.label}
+                title={item.note}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40 shrink-0"
+              >
+                <item.icon className="w-4 h-4" /> {item.label}
+              </button>
+            ))
+          )}
+
+          {/* Pinned, and first in their own group: whatever else this row
+              cannot fit, the way out of the panel is not it. */}
+          <span className="ms-auto flex items-center gap-1 shrink-0">
             <button
               onClick={() => setBig(b => !b)}
               data-lib-full
@@ -529,14 +632,50 @@ export const SymbolLibrary: React.FC<Props> = ({
             >
               <XIcon className="w-4 h-4" />
             </button>
-          </div>
+          </span>
+
+          <input
+            ref={file}
+            type="file"
+            accept=".dxf,.svg"
+            multiple
+            className="hidden"
+            onChange={e => readFiles(e.target.files)}
+          />
+          <input
+            ref={libraryFile}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={async e => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (!f) return;
+              try {
+                const read = JSON.parse(await f.text()) as LibraryFile;
+                if (read?.format !== LIBRARY_FORMAT || !Array.isArray(read.symbols)) {
+                  setNote(t.libNotALibrary);
+                  return;
+                }
+                // Asked before anything happens, because one of the two
+                // answers throws away the library that is here.
+                setIncoming(read);
+              } catch {
+                setNote(t.libNotALibrary);
+              }
+            }}
+          />
         </div>
 
         {/* ── The three libraries ──────────────────────────────────────────
             Tabs rather than one long list with headings: a symbol drawn for a
             wiring diagram is the wrong answer on a single line, so the two are
-            never on screen together and picking one is a deliberate act. */}
-        <div className="flex items-stretch gap-1 px-4 pt-2 border-b bg-gray-50">
+            never on screen together and picking one is a deliberate act.
+
+            Away while a symbol is on the drawing page: they would switch a
+            list that is not on screen, under a drawing that is. */}
+        <div className={`flex items-stretch gap-1 px-4 pt-2 border-b bg-gray-50 shrink-0 ${
+          onDrawingPage ? 'hidden' : ''}`}>
           {SYMBOL_LIBRARIES.map(lib => {
             const on = lib.kind === kind;
             return (
@@ -567,7 +706,11 @@ export const SymbolLibrary: React.FC<Props> = ({
             by the drawing, large, beside the name. A grid answers the second
             question at thumbnail size and the first not at all. */}
         <div className="flex-1 flex min-h-0">
-          <div className="w-[21rem] shrink-0 overflow-y-auto border-e bg-white">
+          <div
+            className={`shrink-0 overflow-y-auto border-e bg-white ${
+              tight ? 'w-full' : 'w-[21rem]'} ${
+              onDrawingPage || (tight && pane === 'symbol') ? 'hidden' : ''}`}
+          >
             {shown.length === 0 && (
               <div className="p-4 text-sm text-gray-500 space-y-1">
                 <p>{query.trim() ? t.libNoneFound : t.libEmptyLibrary}</p>
@@ -616,7 +759,7 @@ export const SymbolLibrary: React.FC<Props> = ({
                     <button
                       key={item.key}
                       data-lib-item={item.name}
-                      onClick={() => setPicked(item.key)}
+                      onClick={() => pick(item.key)}
                       onDoubleClick={() => place(item)}
                       title={`${item.name} — ${t.libDoubleClick}`}
                       className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-start border-s-2 ${
@@ -645,7 +788,20 @@ export const SymbolLibrary: React.FC<Props> = ({
             })}
           </div>
 
-          <aside className="flex-1 min-w-0 flex flex-col bg-gray-50">
+          <aside
+            className={`flex-1 min-w-0 flex flex-col bg-gray-50 ${
+              tight && pane === 'list' && !onDrawingPage ? 'hidden' : ''}`}
+          >
+            {/* On a panel too narrow for both, the list and the symbol take
+                turns and this is the way back to the list. */}
+            {tight && !onDrawingPage && (
+              <button
+                onClick={() => setPane('list')}
+                className="flex items-center gap-1.5 px-3 py-2 border-b bg-white text-sm text-gray-700 hover:bg-gray-50 shrink-0"
+              >
+                <ArrowLeftIcon className="w-4 h-4" /> {t.libTitle}
+              </button>
+            )}
             {making ? maker : redrawing ? redrawer : chosen ? (
               <>
                 {/* The white card wraps the drawing rather than filling the
@@ -672,7 +828,7 @@ export const SymbolLibrary: React.FC<Props> = ({
                     {kin.map(v => (
                       <button
                         key={v.key}
-                        onClick={() => setPicked(v.key)}
+                        onClick={() => pick(v.key)}
                         onDoubleClick={() => place(v)}
                         title={`${v.name} — ${t.libDoubleClick}`}
                         className={`flex items-center gap-2 ps-1.5 pe-2.5 py-1 rounded border text-[12px] ${
@@ -882,6 +1038,6 @@ export const SymbolLibrary: React.FC<Props> = ({
 
       </div>
     </div>,
-    document.body,
+    host,
   );
 };

@@ -938,7 +938,7 @@ export function blocksOf(shapes: Shape[]): { id: string; name: string; count: nu
  * top-left sits where it was dropped, and tag the lot.
  */
 export function placeAsBlock(
-  run: Shape[], at: Pt, name: string, scale = 1,
+  run: Shape[], at: Pt, name: string, scale = 1, symbol?: string,
 ): Shape[] {
   if (run.length === 0) return [];
   const b = boundsOfAll(run);
@@ -949,5 +949,9 @@ export function placeAsBlock(
   const box = boundsOfAll(sized);
   const dx = box ? at[0] - box.x : 0;
   const dy = box ? at[1] - box.y : 0;
-  return sized.map(s => ({ ...mapShape(s, translation(dx, dy)), block, blockName: name }));
+  // `symbol` is what it is in the library, kept on every shape so a symbol
+  // redrawn for the project can find the ones already on the sheets.
+  return sized.map(s => ({
+    ...mapShape(s, translation(dx, dy)), block, blockName: name, symbol,
+  }));
 }

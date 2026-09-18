@@ -61,6 +61,17 @@ export interface Strings {
   tabPage: string; panPage: string; panPageThis: string;
   pageNew: string; pageRename: string; pageDuplicate: string; pageDelete: string;
   pagePrev: string; pageNext: string; pageTree: string; pageLastOne: string;
+  /**
+   * A symbol redrawn for this project, and the sheets it is already on.
+   *
+   * Asked before anything is rewritten: a drawing somebody has corrected by
+   * hand is not something to change quietly, and an instance turned after it
+   * was placed comes back upright.
+   */
+  symbolRedrawnAsk: (name: string, places: number, pages: number) => string;
+  symbolRedrawnDone: (name: string, places: number, pages: number) => string;
+  symbolRedrawnNone: (name: string) => string;
+  symbolRedrawnKept: (name: string) => string;
   pageRenameAsk: string; pageNoteAsk: string;
   pageAdded: (name: string) => string;
   pageDeleteAsk: (name: string) => string;
@@ -199,6 +210,19 @@ const EN: Strings = {
   pagePrev: 'Previous page', pageNext: 'Next page',
   pageTree: 'Page tree — the whole set beside the drawing: dock it left or right, and right-click a page for what can be done to it',
   pageLastOne: 'The last page of a set cannot be deleted — make another one first.',
+  symbolRedrawnAsk: (name, places, pages) =>
+    `${name} is already drawn in ${places} place(s) on ${pages} page(s). `
+    + 'Put the new drawing in their place?\n\n'
+    + 'Each one keeps its wire and its height. One that was turned or mirrored '
+    + 'after it was placed comes back the way the library draws it. '
+    + 'Ctrl+Z takes it all back off.',
+  symbolRedrawnDone: (name, places, pages) =>
+    `${name} redrawn in ${places} place(s) on ${pages} page(s).`,
+  symbolRedrawnNone: name =>
+    `${name} is kept with the project. Nothing on these pages uses it yet, so `
+    + 'it is what will be drawn from now on.',
+  symbolRedrawnKept: name =>
+    `${name} is kept with the project. The pages already drawn were left as they are.`,
   pageRenameAsk: 'What is this page called?',
   pageNoteAsk: 'What is this page for? (the line under the name)',
   pageAdded: name => `${name} added — it is open, and what you had drawn is kept`,
@@ -488,6 +512,18 @@ const FA: Strings = {
   pagePrev: 'صفحهٔ قبل', pageNext: 'صفحهٔ بعد',
   pageTree: 'درخت صفحه‌ها — کل مجموعه، کنار نقشه: چپ یا راست داک می‌شود، و روی هر صفحه راست‌کلیک کنید',
   pageLastOne: 'آخرین صفحهٔ یک مجموعه حذف نمی‌شود — اول یکی دیگر بسازید.',
+  symbolRedrawnAsk: (name, places, pages) =>
+    `${name} هم‌اکنون در ${places} جا روی ${pages} صفحه کشیده شده است. `
+    + 'نقشهٔ تازه جای آن‌ها بنشیند؟\n\n'
+    + 'هرکدام روی سیم و با ارتفاع خودش می‌ماند. نمونه‌ای که پس از قرار گرفتن '
+    + 'چرخانده یا قرینه شده، به همان شکل کتابخانه برمی‌گردد. با Ctrl+Z همه‌اش برمی‌گردد.',
+  symbolRedrawnDone: (name, places, pages) =>
+    `${name} در ${places} جا روی ${pages} صفحه از نو کشیده شد.`,
+  symbolRedrawnNone: name =>
+    `${name} با پروژه نگه داشته شد. هنوز چیزی در این صفحه‌ها از آن استفاده نمی‌کند، `
+    + 'پس از این پس همین کشیده می‌شود.',
+  symbolRedrawnKept: name =>
+    `${name} با پروژه نگه داشته شد. صفحه‌هایی که پیش‌تر کشیده شده‌اند دست‌نخورده ماندند.`,
   pageRenameAsk: 'نام این صفحه چیست؟',
   pageNoteAsk: 'این صفحه برای چیست؟ (خط زیر نام)',
   pageAdded: name => `${name} اضافه شد — باز است و آنچه کشیده بودید نگه داشته شد`,
@@ -777,6 +813,19 @@ const TR: Strings = {
   pagePrev: 'Önceki sayfa', pageNext: 'Sonraki sayfa',
   pageTree: 'Sayfa ağacı — bütün takım, çizimin yanında: sola ya da sağa yerleşir, sayfaya sağ tıklayın',
   pageLastOne: 'Bir takımın son sayfası silinemez — önce bir tane daha açın.',
+  symbolRedrawnAsk: (name, places, pages) =>
+    `${name} şu anda ${pages} sayfada ${places} yerde çizili. `
+    + 'Yeni çizim onların yerine geçsin mi?\n\n'
+    + 'Her biri kendi kablosunda ve kendi yüksekliğinde kalır. Yerleştirildikten '
+    + 'sonra döndürülmüş ya da aynalanmış olan, kitaplıktaki hâliyle geri gelir. '
+    + 'Ctrl+Z hepsini geri alır.',
+  symbolRedrawnDone: (name, places, pages) =>
+    `${name} ${pages} sayfada ${places} yerde yeniden çizildi.`,
+  symbolRedrawnNone: name =>
+    `${name} projeyle birlikte saklandı. Bu sayfalarda henüz kullanan yok, `
+    + 'bundan sonra bu çizilecek.',
+  symbolRedrawnKept: name =>
+    `${name} projeyle birlikte saklandı. Önceden çizilmiş sayfalara dokunulmadı.`,
   pageRenameAsk: 'Bu sayfanın adı nedir?',
   pageNoteAsk: 'Bu sayfa ne için? (adın altındaki satır)',
   pageAdded: name => `${name} eklendi — açık, ve çizdikleriniz duruyor`,

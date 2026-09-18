@@ -1,6 +1,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { PencilRulerIcon, PlusIcon, Trash2Icon, UploadIcon, XIcon } from 'lucide-react';
+import {
+  ArrowLeftIcon, PencilRulerIcon, PlusIcon, Trash2Icon, UploadIcon, XIcon,
+} from 'lucide-react';
 
 import { Drawing, Shape } from '../../utils/cad/shapes';
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
@@ -16,6 +18,7 @@ import {
 } from '../../utils/cad/symbolLibraries';
 import { DrawingEditor, EditorSheet } from './DrawingEditor';
 import { Strings, dirOf, Lang } from './lang';
+import { useOverlayHost } from './overlayHost';
 import { ThemeId } from './theme';
 
 // Adding a symbol to the office's library.
@@ -150,6 +153,7 @@ export const SymbolMaker: React.FC<Props> = ({
   onSaved, onClose, inline,
 }) => {
   const file = useRef<HTMLInputElement>(null);
+  const host = useOverlayHost();
   const [name, setName] = useState(editing?.name ?? '');
   const [kind, setKind] = useState<LibraryKind>(editing?.kind ?? openOn);
   const [group, setGroup] = useState(
@@ -316,18 +320,33 @@ export const SymbolMaker: React.FC<Props> = ({
           ? 'bg-white flex-1 min-h-0 flex flex-col overflow-hidden'
           : 'bg-white rounded-lg shadow-2xl w-[1000px] max-w-full h-[82vh] max-h-full flex flex-col overflow-hidden'}
       >
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-gray-50 border-b">
-          <h3 className="text-sm font-semibold text-gray-800">
-            {editing ? `${t.libEdit} — ${editing.name}` : t.libNew}
-          </h3>
-          <p className="text-[11px] text-gray-500 hidden sm:block">{t.libNewNote}</p>
-          <button
-            onClick={onClose}
-            className="ms-auto p-1.5 rounded text-gray-500 hover:bg-gray-200"
-            title={t.closeHelp}
-          >
-            <XIcon className="w-4 h-4" />
-          </button>
+        <div className="flex items-center gap-3 px-3 py-2 bg-gray-50 border-b shrink-0">
+          {/* The way back first and in words. An X in the corner of a panel
+              inside a panel is a guess about which of the two it closes. */}
+          {inline && (
+            <button
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-gray-300 bg-white text-xs text-gray-700 hover:bg-gray-100 shrink-0"
+              title={t.libTitle}
+            >
+              <ArrowLeftIcon className="w-3.5 h-3.5" /> {t.libTitle}
+            </button>
+          )}
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-gray-800 truncate">
+              {editing ? `${t.libEdit} — ${editing.name}` : t.libNew}
+            </h3>
+            <p className="text-[11px] text-gray-500 truncate">{t.libNewNote}</p>
+          </div>
+          {!inline && (
+            <button
+              onClick={onClose}
+              className="ms-auto p-1.5 rounded text-gray-500 hover:bg-gray-200 shrink-0"
+              title={t.closeHelp}
+            >
+              <XIcon className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         <div className="flex-1 flex min-h-0">
@@ -403,8 +422,8 @@ export const SymbolMaker: React.FC<Props> = ({
           </div>
 
           {/* ── What it is called, and where wires land ─────────────────── */}
-          <aside className="w-[22rem] shrink-0 flex flex-col bg-white overflow-y-auto">
-            <div className="p-4 space-y-3 border-b">
+          <aside className="w-[22rem] shrink-0 flex flex-col min-h-0 bg-white">
+            <div className="p-4 space-y-3 border-b overflow-y-auto shrink-0">
               <label className="block">
                 <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{t.libName}</span>
                 <input
@@ -463,7 +482,7 @@ export const SymbolMaker: React.FC<Props> = ({
               </div>
             </div>
 
-            <div className="p-4 space-y-2 flex-1">
+            <div className="p-4 space-y-2 flex-1 min-h-0 overflow-y-auto">
               <div className="flex items-baseline gap-2">
                 <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
                   {t.libTerminalsTitle}
@@ -505,7 +524,7 @@ export const SymbolMaker: React.FC<Props> = ({
               )}
             </div>
 
-            <div className="p-4 border-t space-y-2">
+            <div className="p-4 border-t space-y-2 shrink-0 bg-white">
               {error && (
                 <p className="text-[12px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
                   {error}
@@ -556,6 +575,7 @@ export const SymbolMaker: React.FC<Props> = ({
           </div>
           <div className="flex-1 min-h-0 bg-white rounded-b-lg overflow-hidden">
             <DrawingEditor
+              embedded
               sheets={sheets}
               fileBase={`symbol_${name.trim() || 'new'}`}
               titleBlock={[name.trim() || t.libDrawTitle, t.libNew]}
@@ -584,17 +604,16 @@ export const SymbolMaker: React.FC<Props> = ({
   // top of it.
   // 330 otherwise: over the library that opened it, which is itself over the
   // editor in full screen. See the note on the library's own portal.
-  return inline ? (
-    <>
-      {box}
-      {drawingPage}
-    </>
-  ) : createPortal(
+  if (inline) return <>{box}{drawingPage}</>;
+  // Drawn into whatever the browser is showing — the body, or the editor's
+  // frame while it is full screen. See overlayHost.
+  if (!host) return null;
+  return createPortal(
     <div className="fixed inset-0 z-[330] bg-black/50 flex items-center justify-center p-4">
       {box}
       {drawingPage}
     </div>,
-    document.body,
+    host,
   );
 };
 

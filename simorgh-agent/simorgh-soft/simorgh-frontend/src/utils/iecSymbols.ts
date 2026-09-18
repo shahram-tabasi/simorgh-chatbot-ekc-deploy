@@ -664,6 +664,14 @@ export function symbolOverride(id: string): SymbolOverride | undefined {
 }
 
 /**
+ * Only the pack's — what the symbol falls back to when the project's own
+ * drawing of it is put away again.
+ */
+export function packSymbolOverride(id: string): SymbolOverride | undefined {
+  return OVERRIDES[id as SymbolId];
+}
+
+/**
  * The geometry an overriding symbol is drawn with.
  *
  * A symbol keeps its own proportions and takes as many cells down the line as
@@ -703,6 +711,27 @@ export function symbolRight(id: string): number {
 export function symbolLeft(id: string): number {
   const o = symbolOverride(id);
   return o ? Math.max(16, -overrideBox(o).dx) : 16;
+}
+
+/**
+ * The symbol as this library itself draws it, with nothing standing in for it.
+ *
+ * The accessors above all answer with whatever is currently overriding a
+ * symbol, which is what every drawing wants. Putting an overriding symbol back
+ * is the one job that wants the other answer: what the page has to be redrawn
+ * with is the library's own, and asking through the overrides would hand back
+ * the very drawing that is being taken away.
+ */
+export function librarySymbol(id: SymbolId): {
+  markup: string; left: number; width: number; height: number;
+} {
+  const left = 16;
+  return {
+    markup: (IEC_SYMBOLS[id] ?? IEC_SYMBOLS.link).draw(left, 0),
+    left,
+    width: left + (SYMBOL_RIGHT[id as SymbolId] ?? 16),
+    height: CELL,
+  };
 }
 
 /** One symbol, drawn with the branch line through it. */

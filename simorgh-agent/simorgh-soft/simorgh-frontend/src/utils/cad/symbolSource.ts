@@ -303,8 +303,13 @@ export function placeSymbolAt(
   const k = span && span > 0 && pin.span > 0 ? span / pin.span : 1;
   const scaled = k === 1 ? run : run.map(s => mapShape(s, scaling(pin.x, pin.y, k)));
   const moved = scaled.map(s => mapShape(s, translation(at.x - pin.x, at.y - pin.y)));
+  // `symbol` is the library's own id for it, carried on every shape so a
+  // symbol redrawn for the project can be put in the place of the ones the
+  // assistant has already drawn — see cad/replaceSymbol.
   return block
-    ? moved.map(s => ({ ...s, block, blockName: item.name.slice(0, 64) }))
+    ? moved.map(s => ({
+      ...s, block, blockName: item.name.slice(0, 64), symbol: item.id,
+    }))
     : moved;
 }
 

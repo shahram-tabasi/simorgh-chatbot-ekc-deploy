@@ -111,6 +111,20 @@ export interface Pen {
   /** What the block is called, for the DXF block table and the layer list. */
   blockName?: string;
   /**
+   * The library symbol this shape was placed from — `vcb`, `contactor`.
+   *
+   * A name says what a block is called; this says what it *is*. It is what
+   * lets a symbol redrawn for the project be put in the place of the ones
+   * already on the sheets: without it a page holds a dozen lines that were a
+   * breaker once and nothing can tell which breaker, so redrawing a symbol
+   * could only ever change what was placed next.
+   *
+   * Absent on anything drawn by hand, and on blocks placed before it existed —
+   * those are still found by their name, which is the best that can be done
+   * for them.
+   */
+  symbol?: string;
+  /**
    * This shape is a connection point of its block, and this is what that point
    * is called — `A1`, `13`, `I0.0`, `2`.
    *
