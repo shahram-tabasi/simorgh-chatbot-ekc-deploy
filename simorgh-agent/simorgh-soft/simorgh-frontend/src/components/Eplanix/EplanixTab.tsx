@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import {
-  DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, PencilRulerIcon, FileIcon } from 'lucide-react';
+  DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, PencilRulerIcon } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { ProjectData, Equipment } from '../../types/project';
 import { sheetName } from '../../utils/bpmsExport';
@@ -129,7 +129,6 @@ export const EplanixTab: React.FC = () => {
   // a generated single line, which is most of the work but not all of it —
   // a sketch for the workshop, a detail to send with an order, a cover sheet.
   // Those need somewhere to start from that is not a switchgear.
-  const [blank, setBlank] = useState(false);
   // The page the editor is opened on, or null when it is not open on a page.
   const [openPage, setOpenPage] = useState<string | null>(null);
   const [selected, setSelected] = useState<string>('');   // equipment id, '' = all
@@ -300,24 +299,6 @@ export const EplanixTab: React.FC = () => {
   // The drawn sheets read back as geometry, which is what the editor edits and
   // what DXF and PDF are written from. Only built while the window is open —
   // the parse is quick, but there is no reason to do it while nobody is editing.
-  /** An empty sheet at the chosen paper size, drawn on like any other. */
-  const blankSheets = useMemo<EditorSheet[]>(() => {
-    if (!blank) return [];
-    // A3 landscape in millimetres — the size most of this office's drawings
-    // are issued at, and the paper box in the editor can change it after.
-    const width = 420, height = 297;
-    return [{
-      name: 'Blank sheet',
-      // Drawing is a builder, not a bag of fields — the editor calls methods on
-      // it, so it has to be a real one even when there is nothing on it yet.
-      drawing: new Drawing(width, height, 'Blank sheet'),
-      // Keyed apart from any switchgear's sheets, so edits to a free drawing
-      // are never confused with edits to a generated one.
-      key: 'blank#1',
-      drawnAs: 'blank',
-    }];
-  }, [blank]);
-
   // ── The page set ──────────────────────────────────────────────────────
   // Read rather than taken: a project saved before pages existed has none, and
   // a project edited by hand could have anything.
@@ -349,7 +330,6 @@ export const EplanixTab: React.FC = () => {
       setPages([first], { ...(projectData.drawingEdits ?? {}) }, drawGroups);
       setOpenPage(first.id);
     }
-    setBlank(false);
     setEditing(true);
   };
 
@@ -433,9 +413,12 @@ export const EplanixTab: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center flex-wrap gap-2">
-          {/* The way into the drawing set. It was a tab; a tab meant leaving
-              the sheet to reach the next page, and the page tree now lives on
-              the editor's own ribbon where it is wanted. */}
+          {/* The way into the drawing set, and it says so by name.
+              It was a tab, and then a button called Pages; both undersold it.
+              What is behind it is the drawing environment — the set, the
+              canvas, the symbol library, the assistant — and that is what
+              this office calls Simorgh Draw. A button named after the part
+              of the screen it opens is a button nobody presses twice. */}
           <button
             onClick={openPages}
             disabled={!isCurrentRevisionEditable && drawPages.length === 0}
@@ -443,7 +426,7 @@ export const EplanixTab: React.FC = () => {
             className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40"
           >
             <PencilRulerIcon className="w-4 h-4" />
-            Pages
+            Simorgh Draw
             <span className="text-[11px] font-normal text-amber-100">
               {drawPages.length || 'new'}
             </span>
@@ -503,16 +486,9 @@ export const EplanixTab: React.FC = () => {
                 {/* Two to a sheet is what an A4 holds and stays readable. */}
                 {[2, 3, 4, 6, 8, 10, 12].map(n => <option key={n} value={n}>{n} feeders / sheet</option>)}
               </select>
-              <button
-                onClick={() => { setBlank(true); setEditing(true); }}
-                title="Open an empty sheet — draw anything from scratch and write DXF / PDF / SVG"
-                className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap border border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
-              >
-                <FileIcon className="w-4 h-4" /> Blank sheet
-              </button>
               {/* Editing starts from the sheet itself. */}
               <button
-                onClick={() => { setBlank(false); setEditing(true); }}
+                onClick={() => setEditing(true)}
                 disabled={!preview}
                 title={preview
                   ? 'Open this single line in Simorgh Draw — move, retype, draw lines and text, and write DXF / PDF / SVG'
@@ -633,30 +609,8 @@ export const EplanixTab: React.FC = () => {
         />
       )}
 
-      {/* ── An empty sheet, opened from Blank sheet ─────────────────── */}
-      {editing && blank && !openPage && (
-        <SheetEditorWindow
-          title="Blank sheet"
-          note="An empty sheet — draw anything, and write DXF / PDF / SVG"
-          sheets={blankSheets}
-          fileBase={`${projectData.projectName || 'project'}_drawing`}
-          paper={paper}
-          savedEdits={projectData.drawingEdits}
-          canEdit={isCurrentRevisionEditable}
-          onSaveEdits={next => patchProjectData(() => ({ drawingEdits: next }))}
-          titleBlock={[
-            'DRAWING',
-            [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]
-              .filter(Boolean).join('   ·   '),
-            '',
-            new Date().toLocaleDateString(),
-          ].filter(Boolean)}
-          onClose={() => { setEditing(false); setBlank(false); }}
-        />
-      )}
-
       {/* ── The drawing editor, opened from the single line ─────────── */}
-      {editing && !blank && !openPage && (
+      {editing && !openPage && (
         editorSheets.length > 0 && preview ? (
           <SheetEditorWindow
             title={`Edit drawing — ${preview.name}`}
