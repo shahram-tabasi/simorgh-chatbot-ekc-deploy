@@ -30,7 +30,9 @@ import { MenuBox } from '../shared/MenuBox';
 import { Strings } from './lang';
 import { Block, Coil, Contact, Element, Rung } from '../../utils/ladder/model';
 import { PlcBlock, PlcNetwork, PlcProject, allTags, newNetwork } from '../../utils/plc/model';
-import { Instruction, instructionById, instructionByName } from '../../utils/plc/instructions';
+import {
+  Instruction, helpOf, instructionById, instructionByName, titleOf,
+} from '../../utils/plc/instructions';
 import {
   ElementPatch, LadderCursor, LadderPos, addOutput, addParallelBranch, patchElement,
   patchOutput, patchPin, placeInstruction, removeBranch, removeElement, removeOutput, samePos,
@@ -1016,7 +1018,9 @@ const BoxView: React.FC<{
             readOnly={readOnly}
             spellCheck={false}
             dir="ltr"
-            title={instr ? `${instr.title} — ${instr.help}` : t.boxTypeTip}
+            title={instr
+              ? `${titleOf(instr, t.lang === 'fa')} — ${helpOf(instr, t.lang === 'fa')}`
+              : t.boxTypeTip}
             onChange={e => {
               const typed = e.target.value.toUpperCase();
               const found = instructionByName(typed);

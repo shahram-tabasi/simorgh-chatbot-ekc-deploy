@@ -28,15 +28,24 @@ import React, { useEffect, useRef, useState } from 'react';
 import type * as Monaco from 'monaco-editor';
 import { MonacoApi, keywordItems, loadMonaco, statementSnippets } from './monacoSetup';
 import { SCL_LANGUAGE_ID, STL_LANGUAGE_ID } from '../../utils/plc/sclLanguage';
-import { ALL_INSTRUCTIONS, instructionByName } from '../../utils/plc/instructions';
+import { ALL_INSTRUCTIONS, helpOf, instructionByName, titleOf } from '../../utils/plc/instructions';
 import { PlcBlock, PlcProject, PlcVar, allTags } from '../../utils/plc/model';
 import { Problem } from '../../utils/plc/analyze';
 import { dataTypeInfo } from '../../utils/plc/dataTypes';
+import { Strings } from './lang';
 
 /** What the editor is allowed to know about, for completion and hover. */
 interface EditorContext {
   project: PlcProject;
   block: PlcBlock;
+  /**
+   * The language the page is being read in.
+   *
+   * It travels in the context rather than in a prop because the providers are
+   * registered once for the whole page and are handed a model, not a
+   * component — the same reason the project and the block do.
+   */
+  t: Strings;
 }
 
 /**
@@ -146,8 +155,8 @@ function registerProviders(monaco: MonacoApi): void {
           items.push({
             label: x.name,
             kind: K.Function,
-            detail: x.title,
-            documentation: { value: instructionMarkdown(x.name) },
+            detail: titleOf(x, ctx?.t.lang === 'fa'),
+            documentation: { value: instructionMarkdown(x.name, ctx?.t) },
             insertText: x.scl,
             insertTextRules: asSnippet,
             sortText: `2${x.name}`,
@@ -214,25 +223,26 @@ function registerProviders(monaco: MonacoApi): void {
         }
       }
 
-      const md = instructionMarkdown(word.word);
+      const md = instructionMarkdown(word.word, ctx?.t);
       return md ? { contents: [{ value: md }] } : null;
     },
   });
 }
 
 /** An instruction's help, as the hover shows it. */
-function instructionMarkdown(name: string): string {
+function instructionMarkdown(name: string, t?: Strings): string {
   const x = instructionByName(name);
   if (!x) return '';
-  const out = [`**${x.name}** — ${x.title}`];
+  const fa = t?.lang === 'fa';
+  const out = [`**${x.name}** — ${titleOf(x, fa)}`];
   if (x.pins?.length) {
     const ins = x.pins.filter(p => !p.out).map(p => `\`${p.name}: ${p.type}\``).join(' ');
     const outs = x.pins.filter(p => p.out).map(p => `\`${p.name}: ${p.type}\``).join(' ');
     if (ins) out.push(`**in** ${ins}`);
     if (outs) out.push(`**out** ${outs}`);
   }
-  if (x.instance) out.push('_Keeps its own state — it needs an instance._');
-  out.push(x.help);
+  if (x.instance) out.push(`_${t ? t.needsInstance : 'Keeps its own state — it needs an instance of its own.'}_`);
+  out.push(helpOf(x, fa));
   return out.join('\n\n');
 }
 
@@ -266,6 +276,8 @@ interface Props {
   project: PlcProject;
   block: PlcBlock;
   problems: Problem[];
+  /** The page's own words — for the hover and the completion detail. */
+  t: Strings;
   readOnly?: boolean;
   dark?: boolean;
   onChange: (next: string) => void;
@@ -278,7 +290,7 @@ interface Props {
 }
 
 export const CodeEditor: React.FC<Props> = ({
-  documentId, value, language, project, block, problems,
+  documentId, value, language, project, block, problems, t,
   readOnly, dark, onChange, onSave, onCursor, actionsRef,
 }) => {
   const host = useRef<HTMLDivElement>(null);
@@ -432,8 +444,8 @@ export const CodeEditor: React.FC<Props> = ({
   useEffect(() => {
     const model = editorRef.current?.getModel();
     if (!model) return;
-    contexts.set(model.uri.toString(), { project, block });
-  }, [project, block, ready, documentId]);
+    contexts.set(model.uri.toString(), { project, block, t });
+  }, [project, block, t, ready, documentId]);
 
   // ── The underlines ───────────────────────────────────────────────────────
   useEffect(() => {

@@ -563,6 +563,7 @@ export const PlcTab: React.FC = () => {
                     project={project}
                     block={block}
                     problems={blockProblems}
+                    t={t}
                     readOnly={readOnly}
                     dark={theme === 'dark'}
                     onChange={setCode}

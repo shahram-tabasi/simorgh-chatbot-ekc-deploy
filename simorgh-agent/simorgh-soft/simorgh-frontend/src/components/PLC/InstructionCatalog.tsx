@@ -26,7 +26,8 @@ import {
   ChevronDownIcon, ChevronRightIcon, SearchIcon, StarIcon, XIcon, BookOpenIcon,
 } from 'lucide-react';
 import {
-  INSTRUCTION_SECTIONS, Instruction, groupLabelOf, searchInstructions, sectionLabelOf, titleOf,
+  INSTRUCTION_SECTIONS, Instruction, groupLabelOf, helpOf, searchInstructions, sectionLabelOf,
+  titleOf,
 } from '../../utils/plc/instructions';
 import { Lang, Strings } from './lang';
 
@@ -265,7 +266,7 @@ export const InstructionCatalog: React.FC<Props> = ({
             <div className="min-w-0 flex-1">
               <p className="font-semibold">{help.name} — {titleOf(help, fa)}</p>
               {help.pins && help.pins.length > 0 && (
-                <p className="mt-1 text-[11px] font-mono text-gray-600">
+                <p dir="ltr" className="mt-1 text-[11px] font-mono text-gray-600 text-start">
                   {help.pins.filter(p => !p.out).map(p => `${p.name}: ${p.type}`).join('   ')}
                   {help.pins.some(p => p.out) && '  ⇒  '}
                   {help.pins.filter(p => p.out).map(p => `${p.name}: ${p.type}`).join('   ')}
@@ -277,10 +278,10 @@ export const InstructionCatalog: React.FC<Props> = ({
                 </p>
               )}
               <p className="mt-1.5 text-[11.5px] leading-relaxed text-gray-700">
-                {help.help}
+                {helpOf(help, fa)}
               </p>
               {help.scl && (
-                <pre className="mt-2 p-2 rounded bg-white border
+                <pre dir="ltr" className="mt-2 p-2 rounded bg-white border text-start
                   text-[11px] font-mono whitespace-pre-wrap">
                   {help.scl.replace(/\$\{\d+:?([^}]*)\}/g, '$1')}
                 </pre>
@@ -317,11 +318,14 @@ const Row: React.FC<{
     className={`group flex items-center gap-2 ps-8 pe-1.5 py-1 cursor-pointer
       ${armed ? 'bg-blue-100' : 'hover:bg-blue-50'}
       ${why ? 'opacity-50' : ''}`}
-    title={why ?? `${titleOf(instr, fa)}\n\n${instr.help}`}
+    title={why ?? `${titleOf(instr, fa)}\n\n${helpOf(instr, fa)}`}
     onClick={() => !readOnly && !why && onArm(armed ? null : instr)}
     onDoubleClick={() => !readOnly && !why && onInsert(instr)}
   >
-    <span className="font-mono text-[11px] w-[86px] shrink-0 truncate text-slate-700">
+    <span
+      dir="ltr"
+      className="font-mono text-[11px] w-[86px] shrink-0 truncate text-slate-700 text-start"
+    >
       {instr.glyph ?? instr.name}
     </span>
     <span className="flex-1 min-w-0 truncate text-gray-600 text-[11.5px]">

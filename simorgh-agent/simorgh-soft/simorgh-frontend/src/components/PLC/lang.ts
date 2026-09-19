@@ -34,6 +34,16 @@ export const LANGS: { id: Lang; label: string; dir: 'ltr' | 'rtl' }[] = [
 export const dirOf = (l: Lang): 'ltr' | 'rtl' => (l === 'fa' ? 'rtl' : 'ltr');
 
 export interface Strings {
+  /**
+   * Which language this bag is.
+   *
+   * For the handful of places that hold a `Strings` and still have to ask —
+   * the instruction help, which lives in the catalogue rather than here, and
+   * Monaco's providers, which are registered once for the page and are handed
+   * a model rather than a prop.
+   */
+  lang: Lang;
+
   // ── The page ──
   pageTitle: string;
   startTitle: string; startWhat: string; startButton: string; startNote: string;
@@ -146,6 +156,8 @@ export interface Strings {
 }
 
 const EN: Strings = {
+  lang: 'en',
+
   pageTitle: 'PLC',
   startTitle: 'No controller in this project yet',
   startWhat: 'This page holds the PLC program for the panel: the organisation, function and '
@@ -417,6 +429,8 @@ const EN: Strings = {
 };
 
 const FA: Strings = {
+  lang: 'fa',
+
   pageTitle: 'PLC',
   startTitle: 'هنوز کنترلری در این پروژه نیست',
   startWhat: 'این صفحه برنامهٔ PLC تابلو را نگه می‌دارد: بلاک‌های سازمانی، فانکشن و دیتا، جدول '

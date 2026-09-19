@@ -171,7 +171,17 @@ centre; it is invisible in a screenshot and obvious on a drawing.
 operand input; the page and its running text turn, the toolbar and the rung do
 not. `components/PLC/lang.ts` holds the two languages, `utils/plc/checkLang.ts`
 holds what the checker says, and the instruction **names** never turn — only
-the description beside them (`titleOf`).
+the description beside them (`titleOf`) and the long help (`helpOf`).
+
+**`TITLE_FA` and `HELP_FA` cover every instruction, and have to stay that way.**
+They are lookups at the foot of `utils/plc/instructions.ts`, keyed by id. An id
+in one and not the other is an entry that is half in each language, which reads
+worse than being in neither — so a new instruction gets both lines in the same
+commit. Inside the Persian, the numbers, the pin names, the addresses and the
+SCL stay in the form they are typed in. Code columns beside Persian text carry
+`dir="ltr"`: the glyph column, the pin line and the SCL block in the catalogue's
+help panel all would be drawn backwards without it, because `-| |-` and `-(S)-`
+are neutral characters that take the paragraph's direction.
 
 **Nothing here talks to a controller.** The page writes, checks and exports;
 it does not claim to produce a file TIA will import unchanged and it does not
