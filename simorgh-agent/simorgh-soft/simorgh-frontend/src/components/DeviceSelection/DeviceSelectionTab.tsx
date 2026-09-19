@@ -1,7 +1,7 @@
 import React, { useReducer, useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx-js-style';
-import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon, RefreshCwIcon, Undo2Icon, Redo2Icon } from 'lucide-react';
+import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ScissorsIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon, RefreshCwIcon, Undo2Icon, Redo2Icon } from 'lucide-react';
 import { PanelFrame } from '../shared/PanelFrame';
 import { usePanel } from '../../context/PanelsContext';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
@@ -24,6 +24,46 @@ interface ExcelMemory {
   readAt: Date | null;
   note: string | null;
 }
+
+/**
+ * A menu at the pointer that stays on the screen.
+ *
+ * Every one of these used to be placed at the click and left there: right-click
+ * a row near the bottom of a long table and the menu ran off the bottom edge,
+ * so "3 rows selected" was the last thing visible and the list of templates
+ * under it could not be reached at all. The commands were there and there was
+ * no way to press them — which reads exactly like a command that does nothing.
+ *
+ * Measured after it is laid out and before it is painted, so it moves up or
+ * left to fit and never jumps.
+ */
+const MenuBox: React.FC<{
+  x: number; y: number; className: string; children: React.ReactNode;
+}> = ({ x, y, className, children }) => {
+  const box = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ left: number; top: number }>({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const el = box.current;
+    const w = el?.offsetWidth ?? 0;
+    const h = el?.offsetHeight ?? 0;
+    setAt({
+      left: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
+      top: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
+    });
+  }, [x, y, children]);
+
+  return (
+    <div
+      ref={box}
+      className={`fixed ${className}`}
+      style={{ left: at.left, top: at.top }}
+      onClick={e => e.stopPropagation()}
+    >
+      {children}
+    </div>
+  );
+};
 
 const NO_EXCEL: ExcelMemory = { file: null, readAt: null, note: null };
 
@@ -949,12 +989,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // Filter dropdowns are portals with their own click-catcher — no global
   // listener needed here.
 
+  /** Rows numbered by where they sit, which is the only thing # ever means. */
+  const renumber = (list: DeviceTableRow[]): DeviceTableRow[] =>
+    list.map((row, index) => (row.rowNumber === index + 1 ? row : { ...row, rowNumber: index + 1 }));
+
   const reorderRows = (newRows: DeviceTableRow[]) => {
-    const reordered = newRows.map((row, index) => ({
-      ...row,
-      rowNumber: index + 1
-    }));
-    setRows(reordered);
+    setRows(renumber(newRows));
   };
 
   const handleMoveRows = (direction: 'up' | 'down') => {
@@ -974,6 +1014,102 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       });
       reorderRows(newRows);
     }
+    handleCloseContextMenu();
+  };
+
+  /**
+   * The row commands the right button was missing.
+   *
+   * A table of feeders is edited the way a spreadsheet is — a row put in
+   * between two others, a row taken out, a few rows copied and dropped
+   * somewhere else — and all of that was either absent or only on the toolbar,
+   * where it could act on the end of the table and nowhere else. Add Row
+   * appended; Paste appended; nothing deleted a row at all. So the work was
+   * "add at the bottom, then move it up eleven times".
+   *
+   * Everything here acts where the pointer is and on what is selected, which
+   * is what a right-click means.
+   */
+
+  /** A blank row, with the fields a row of this table always has. */
+  const blankRow = (index: number): DeviceTableRow => ({
+    id: `device-${Date.now()}-${index}-${Math.floor(Math.random() * 1e6)}`,
+    rowNumber: index + 1,
+    templateId: '', templateName: '',
+    busSection: '', feederNo: '', wiringType: '', ratingPower: '', flc: '',
+    tag: '', description: '', cableSize: '',
+    equipmentId: selectedEquipment?.id ?? '',
+  });
+
+  /** Where the pointer was, as an index into the rows as stored. */
+  const clickedIndex = (): number => {
+    const id = contextMenu?.cellRowId ?? [...selectedRows][0];
+    const at = id ? rows.findIndex(r => r.id === id) : -1;
+    return at >= 0 ? at : rows.length - 1;
+  };
+
+  /** An empty row above or below the row the menu was opened on. */
+  const handleInsertRow = (where: 'above' | 'below') => {
+    const at = clickedIndex();
+    const put = where === 'above' ? Math.max(0, at) : at + 1;
+    const made = blankRow(put);
+    setRows(prev => renumber([...prev.slice(0, put), made, ...prev.slice(put)]));
+    setSelectedRows(new Set([made.id]));
+    handleCloseContextMenu();
+  };
+
+  /** The selected rows again, immediately under themselves. */
+  const handleDuplicateRows = () => {
+    const chosen = rows.filter(r => selectedRows.has(r.id));
+    if (chosen.length === 0) return;
+    const now = Date.now();
+    const copies = chosen.map((r, i) => ({
+      ...r, id: `device-${now}-${i}-${Math.floor(Math.random() * 1e6)}`,
+    }));
+    const last = Math.max(...chosen.map(r => rows.findIndex(x => x.id === r.id)));
+    setRows(prev => renumber([...prev.slice(0, last + 1), ...copies, ...prev.slice(last + 1)]));
+    setSelectedRows(new Set(copies.map(r => r.id)));
+    handleCloseContextMenu();
+  };
+
+  /** The selected rows, gone — asked for first, because it cannot be seen
+   *  afterwards that they were ever there. Ctrl+Z brings them back. */
+  const handleDeleteRows = () => {
+    const chosen = rows.filter(r => selectedRows.has(r.id));
+    if (chosen.length === 0) return;
+    const what = chosen.length === 1
+      ? `row ${rows.findIndex(r => r.id === chosen[0].id) + 1}`
+      + (chosen[0].feederNo ? ` (feeder ${chosen[0].feederNo})` : '')
+      : `${chosen.length} rows`;
+    if (!window.confirm(`Delete ${what}?\n\nCtrl+Z puts them back.`)) return;
+    setRows(prev => renumber(prev.filter(r => !selectedRows.has(r.id))));
+    setSelectedRows(new Set());
+    handleCloseContextMenu();
+  };
+
+  /** The clipboard, put down here rather than at the end of the table. */
+  const handlePasteRows = (where: 'above' | 'below') => {
+    if (clipboardRows.length === 0) return;
+    const at = clickedIndex();
+    const put = where === 'above' ? Math.max(0, at) : at + 1;
+    const now = Date.now();
+    const pasted = clipboardRows.map((r, i) => ({
+      ...r,
+      id: `device-${now}-${i}-${Math.floor(Math.random() * 1e6)}`,
+      equipmentId: selectedEquipment?.id ?? r.equipmentId,
+    }));
+    setRows(prev => renumber([...prev.slice(0, put), ...pasted, ...prev.slice(put)]));
+    setSelectedRows(new Set(pasted.map(r => r.id)));
+    handleCloseContextMenu();
+  };
+
+  /** Copy and then delete, in one move. */
+  const handleCutRows = () => {
+    const chosen = rows.filter(r => selectedRows.has(r.id));
+    if (chosen.length === 0) return;
+    onCopyRows(chosen);
+    setRows(prev => renumber(prev.filter(r => !selectedRows.has(r.id))));
+    setSelectedRows(new Set());
     handleCloseContextMenu();
   };
 
@@ -1051,8 +1187,19 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       return;
     }
 
+    // Every selected row, when the one clicked is one of them.
+    //
+    // The Template cell says "Drop here or right-click", so right-clicking it
+    // is what anybody does — and it used to set the template on that one row
+    // and quietly ignore the dozen rows that were selected. Selecting rows and
+    // then picking a template from the menu the cell itself invites is the
+    // plainest way to say "all of these", and it now means that.
+    const targets = selectedRows.has(selectedCellRowId)
+      ? selectedRows
+      : new Set([selectedCellRowId]);
+
     setRows(rows.map(row =>
-      row.id === selectedCellRowId ? { ...row, templateId, templateName } : row
+      targets.has(row.id) ? { ...row, templateId, templateName } : row
     ));
 
     handleCloseContextMenu();
@@ -2044,7 +2191,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                           style={cellStyle}
                           onDragOver={handleDragOver}
                           onDrop={e => handleDrop(e, row.id)}
-                          onContextMenu={(e) => handleContextMenu(e, 'cell', row.id)}
+                          onContextMenu={(e) => {
+                            // A row right-clicked outside the selection
+                            // becomes the selection; one inside it leaves the
+                            // selection alone, so the menu can act on all of
+                            // them.
+                            if (!selectedRows.has(row.id)) setSelectedRows(new Set([row.id]));
+                            handleContextMenu(e, 'cell', row.id);
+                          }}
                         >
                           <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
                             {row.templateName || 'Drop here or right-click'}
@@ -2139,10 +2293,10 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       )}
 
       {contextMenu?.visible && contextMenu.type === 'row' && selectedEquipment && (
-        <div
-          className="fixed z-50 w-72 bg-white border shadow-lg rounded py-1 max-h-[80vh] overflow-y-auto"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onClick={(e) => e.stopPropagation()}
+        <MenuBox
+          className="z-50 w-72 bg-white border shadow-lg rounded py-1 max-h-[80vh] overflow-y-auto"
+          x={contextMenu.x}
+          y={contextMenu.y}
         >
           <div className="px-4 py-1.5 bg-gray-50 border-b text-xs font-semibold text-gray-500">
             {selectedRows.size} row{selectedRows.size !== 1 ? 's' : ''} selected
@@ -2239,6 +2393,37 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             </div>
           )}
 
+          {/* Rows: put one in, take one out, and the clipboard — all of it
+              where the pointer is rather than at the end of the table. */}
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
+            onClick={() => handleInsertRow('above')}
+          >
+            <PlusIcon className="w-4 h-4 inline mr-2" /> Insert Row Above
+          </button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
+            onClick={() => handleInsertRow('below')}
+          >
+            <PlusIcon className="w-4 h-4 inline mr-2" /> Insert Row Below
+          </button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-40"
+            disabled={selectedRows.size === 0}
+            onClick={handleDuplicateRows}
+          >
+            <CopyIcon className="w-4 h-4 inline mr-2" /> Duplicate ({selectedRows.size})
+          </button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-40"
+            disabled={selectedRows.size === 0}
+            onClick={handleDeleteRows}
+          >
+            <TrashIcon className="w-4 h-4 inline mr-2" /> Delete {
+              selectedRows.size > 1 ? `${selectedRows.size} Rows` : 'Row'}
+          </button>
+          <div className="border-t my-1" />
+
           <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100" onClick={() => handleMoveRows('up')}>
             <ArrowUpIcon className="w-4 h-4 inline mr-2" /> Move Up
           </button>
@@ -2247,10 +2432,32 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           </button>
           <div className="border-t my-1" />
           <button
-            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-40"
+            disabled={selectedRows.size === 0}
             onClick={() => { onCopyRows(rows.filter(r => selectedRows.has(r.id))); handleCloseContextMenu(); }}
           >
-            <CopyIcon className="w-4 h-4 inline mr-2" /> Copy Selected Rows ({selectedRows.size})
+            <CopyIcon className="w-4 h-4 inline mr-2" /> Copy ({selectedRows.size})
+          </button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-40"
+            disabled={selectedRows.size === 0}
+            onClick={handleCutRows}
+          >
+            <ScissorsIcon className="w-4 h-4 inline mr-2" /> Cut ({selectedRows.size})
+          </button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-40"
+            disabled={clipboardRows.length === 0}
+            onClick={() => handlePasteRows('above')}
+          >
+            <ClipboardIcon className="w-4 h-4 inline mr-2" /> Paste Above ({clipboardRows.length})
+          </button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-40"
+            disabled={clipboardRows.length === 0}
+            onClick={() => handlePasteRows('below')}
+          >
+            <ClipboardIcon className="w-4 h-4 inline mr-2" /> Paste Below ({clipboardRows.length})
           </button>
           <div className="border-t my-1" />
           <div className="px-4 py-2">
@@ -2270,14 +2477,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 text-gray-600" onClick={handleCloseContextMenu}>
             Cancel
           </button>
-        </div>
+        </MenuBox>
       )}
 
       {contextMenu?.visible && contextMenu.type === 'cell' && selectedEquipment && (
-        <div
-          className="fixed z-50 w-64 bg-white border shadow-lg rounded py-1 max-h-96 overflow-y-auto"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onClick={(e) => e.stopPropagation()}
+        <MenuBox
+          className="z-50 w-64 bg-white border shadow-lg rounded py-1 max-h-96 overflow-y-auto"
+          x={contextMenu.x}
+          y={contextMenu.y}
         >
           {/* Properties option at top */}
           <button
@@ -2295,7 +2502,11 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           </button>
           <div className="border-t my-1"></div>
           <div className="px-4 py-2 border-b bg-gray-50">
-            <p className="text-xs font-semibold text-gray-600">Add Template ({selectedEquipment.type})</p>
+            <p className="text-xs font-semibold text-gray-600">
+              {contextMenu.cellRowId && selectedRows.has(contextMenu.cellRowId) && selectedRows.size > 1
+                ? `Set the template on ${selectedRows.size} selected rows`
+                : `Add Template (${selectedEquipment.type})`}
+            </p>
           </div>
           {projectData.templates[selectedEquipment.type].length > 0 ? (
             projectData.templates[selectedEquipment.type].map(template => (
@@ -2324,7 +2535,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           >
             Cancel
           </button>
-        </div>
+        </MenuBox>
       )}
     </div>
   );
@@ -2610,10 +2821,10 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
       </div>
 
       {contextMenu.visible && contextMenu.equipment && (
-        <div
-          className="fixed z-50 w-48 bg-white border shadow-lg rounded py-1"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onClick={(e) => e.stopPropagation()}
+        <MenuBox
+          className="z-50 w-48 bg-white border shadow-lg rounded py-1"
+          x={contextMenu.x}
+          y={contextMenu.y}
         >
           <button
             className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
@@ -2644,7 +2855,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
             <XIcon className="w-4 h-4 inline mr-2" />
             Cancel
           </button>
-        </div>
+        </MenuBox>
       )}
 
       {/* ── Delete equipment from the project arrangement ── */}
@@ -3074,10 +3285,10 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
   const overlays = (
     <>
       {templateContextMenu.visible && (
-        <div
-          className="fixed z-50 w-48 bg-white border shadow-lg rounded py-1"
-          style={{ top: templateContextMenu.y, left: templateContextMenu.x }}
-          onClick={(e) => e.stopPropagation()}
+        <MenuBox
+          className="z-50 w-48 bg-white border shadow-lg rounded py-1"
+          x={templateContextMenu.x}
+          y={templateContextMenu.y}
         >
           <button
             className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
@@ -3093,7 +3304,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
           >
             Cancel
           </button>
-        </div>
+        </MenuBox>
       )}
 
       {propertiesModal.visible && propertiesTemplate && (
