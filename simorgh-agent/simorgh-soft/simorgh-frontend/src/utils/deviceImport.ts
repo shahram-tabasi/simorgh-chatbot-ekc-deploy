@@ -120,6 +120,66 @@ const colLetter = (c: number): string => {
  * sheet this app wrote would read as having no colour if only the written
  * shape were looked for.
  */
+/**
+ * The legacy indexed palette, which Excel still writes for some fills.
+ *
+ * Index 10 is red, and a cell filled with it carries no rgb at all — so
+ * without this table a red cell reads as no colour, the row stops being one
+ * colour, and the cell comes back showing whatever the rest of the row was.
+ * That is "I coloured a cell red in Excel and it came back yellow".
+ */
+const INDEXED = [
+  '000000', 'ffffff', 'ff0000', '00ff00', '0000ff', 'ffff00', 'ff00ff', '00ffff',
+  '000000', 'ffffff', 'ff0000', '00ff00', '0000ff', 'ffff00', 'ff00ff', '00ffff',
+  '800000', '008000', '000080', '808000', '800080', '008080', 'c0c0c0', '808080',
+  '9999ff', '993366', 'ffffcc', 'ccffff', '660066', 'ff8080', '0066cc', 'ccccff',
+  '000080', 'ff00ff', 'ffff00', '00ffff', '800080', '800000', '008080', '0000ff',
+  '00ccff', 'ccffff', 'ccffcc', 'ffff99', '99ccff', 'ff99cc', 'cc99ff', 'ffcc99',
+  '3366ff', '33cccc', '99cc00', 'ffcc00', 'ff9900', 'ff6600', '666699', '969696',
+  '003366', '339966', '003300', '333300', '993300', '993366', '333399', '333333',
+];
+
+/** The default Office theme, in the order the style records number it. */
+const THEME = [
+  'ffffff', '000000', 'e7e6e6', '44546a',
+  '4472c4', 'ed7d31', 'a5a5a5', 'ffc000', '5b9bd5', '70ad47',
+  '0563c1', '954f72',
+];
+
+/** A theme colour lightened or darkened the way the file asks. */
+function tinted(hex: string, tint: number): string {
+  if (!tint) return hex;
+  const parts = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const shift = (v: number) => {
+    const out = tint < 0 ? v * (1 + tint) : v * (1 - tint) + 255 * tint;
+    return Math.max(0, Math.min(255, Math.round(out)));
+  };
+  return parts.map(v => shift(v).toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * One colour record as six hex digits, in whichever way it was written.
+ *
+ * Excel writes a fill's colour three different ways — an outright rgb for the
+ * standard colours, a theme index and a tint for the theme row of the picker,
+ * and a palette index for anything that came through an older file. Reading
+ * only the first left the other two looking like no colour at all.
+ */
+interface XlsxColor { rgb?: string; theme?: number; tint?: number; indexed?: number }
+
+function colorHex(color: XlsxColor | undefined): string {
+  if (!color) return '';
+  const rgb = String(color.rgb ?? '');
+  if (/^[0-9A-Fa-f]{6,8}$/.test(rgb)) return rgb.slice(-6).toLowerCase();
+  if (typeof color.theme === 'number' && THEME[color.theme]) {
+    return tinted(THEME[color.theme], Number(color.tint) || 0);
+  }
+  if (typeof color.indexed === 'number' && INDEXED[color.indexed]) {
+    return INDEXED[color.indexed];
+  }
+  return '';
+}
+
 export function readFills(sheet: any, rows: number, cols: number): SheetFills {
   const out: SheetFills = [];
   for (let r = 0; r < rows; r++) {
@@ -127,8 +187,12 @@ export function readFills(sheet: any, rows: number, cols: number): SheetFills {
     for (let c = 0; c < cols; c++) {
       const cell = sheet?.[`${colLetter(c)}${r + 1}`];
       const fill = cell?.s?.fill ?? cell?.s;
-      const rgb = String(fill?.fgColor?.rgb ?? '');
-      const hex = /^[0-9A-Fa-f]{6,8}$/.test(rgb) ? rgb.slice(-6).toLowerCase() : '';
+      // fgColor is where a solid fill keeps its colour; bgColor is where some
+      // writers put it instead, and index 64 there is "no colour" rather than
+      // a colour of its own.
+      const hex = colorHex(fill?.fgColor as XlsxColor | undefined)
+        || (fill?.bgColor?.indexed === 64
+          ? '' : colorHex(fill?.bgColor as XlsxColor | undefined));
       line.push(hex && hex !== 'ffffff' ? `#${hex}` : '');
     }
     out.push(line);

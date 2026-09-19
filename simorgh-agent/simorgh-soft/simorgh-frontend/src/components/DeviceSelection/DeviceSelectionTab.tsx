@@ -684,6 +684,34 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // The exact rows array last loaded from an equipment, so the write-back
   // effect below can tell "freshly loaded" from "edited by the user".
   const loadedRowsRef = useRef<DeviceTableRow[] | null>(null);
+  /**
+   * The switchgear's own array that load came *from*, before folding.
+   *
+   * `withCodeCaseAll` returns a different array whenever it finds a code to
+   * fold, which is every project saved before that rule existed. Asking "is
+   * this the array I loaded?" of the folded copy is then answered no for ever:
+   * the table reloads, the reload writes back, the write-back hands the
+   * project a new switchgear object, and the new object asks again.
+   */
+  const loadedFromRef = useRef<DeviceTableRow[] | null>(null);
+  /**
+   * Which load the rows on screen belong to.
+   *
+   * Identity alone could not settle this. A reload runs in one commit and its
+   * rows arrive in the next, so the write-back that fires in between carries
+   * the rows from *before* the load — an array belonging to a switchgear the
+   * table is no longer showing, written straight back over what was just
+   * loaded. That kept the loop turning: the table re-rendered nearly three
+   * hundred times a second, rows were replaced faster than a click could land
+   * on one (which is what "I select rows to give them a template and it falls
+   * apart" was), and React eventually gave up and took the page down — the
+   * white screen.
+   *
+   * A counter says plainly what identity could not: rows older than the
+   * current load are never written back, whatever array they are.
+   */
+  const loadSeq = useRef(0);
+  const savedSeq = useRef(-1);
 
   /**
    * Ctrl+Z and Ctrl+Y, on the table.
@@ -717,6 +745,9 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     const restored = !switched
       && selectedEquipment != null
       && selectedEquipment !== prevEquipmentRef.current
+      // Against the array this table was handed as well as the folded copy it
+      // made of it — see loadedFromRef.
+      && selectedEquipment.devices !== loadedFromRef.current
       && selectedEquipment.devices !== loadedRowsRef.current;
 
     if (switched || restored) {
@@ -726,6 +757,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       // bypass the read-only gate so viewing an old revision still works.
       // Folded on the way in as well, so a project saved before this rule
       // existed reads the same as one saved after it.
+      loadedFromRef.current = selectedEquipment?.devices ?? null;
+      loadSeq.current += 1;
       const loaded = withCodeCaseAll(selectedEquipment?.devices || []);
       loadedRowsRef.current = loaded;
       setRowsRaw(loaded);
@@ -744,9 +777,11 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   }, [selectedEquipment]);
 
   useEffect(() => {
-    // Skip the write-back right after loading an equipment's rows: `rows` is
-    // still the very array we got from it, so there is nothing to persist.
-    if (!selectedEquipment || rows === loadedRowsRef.current) return;
+    if (!selectedEquipment) return;
+    // Rows from before the current load are not this switchgear's to save.
+    if (savedSeq.current !== loadSeq.current) { savedSeq.current = loadSeq.current; return; }
+    // And the rows a load produced are what the project already holds.
+    if (rows === loadedRowsRef.current || rows === selectedEquipment.devices) return;
     updateEquipment(selectedEquipment.id, { devices: rows });
   }, [rows]);
 
@@ -801,7 +836,24 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const colHeaderRefs = useRef<(HTMLTableCellElement | null)[]>([]);
   const [stickyLefts, setStickyLefts] = useState<number[]>([]);
 
+  // Measured, and only written back when a column has actually moved.
+  //
+  // This is a loop if it is written back every time: the observer watches the
+  // header cells, a new array is a new state, the render re-lays the table out,
+  // the cells are measured again and the observer fires again. It runs until
+  // React gives up with "Maximum update depth exceeded" and takes the page
+  // down with it — the white screen, and before that a table whose rows are
+  // being replaced faster than a click can land on one, which is why assigning
+  // a template to a few selected rows "did not work".
+  //
+  // Returning the previous array when nothing moved makes React bail out of
+  // the re-render, and the loop has nothing to feed on. Nothing is observed at
+  // all when no column is frozen, which is the usual case.
   useLayoutEffect(() => {
+    if (freezeCount <= 0) {
+      setStickyLefts(prev => (prev.length === 0 ? prev : []));
+      return;
+    }
     const recompute = () => {
       const lefts: number[] = [];
       let acc = 0;
@@ -809,7 +861,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         lefts[i] = acc;
         acc += colHeaderRefs.current[i]?.offsetWidth || 0;
       }
-      setStickyLefts(lefts);
+      setStickyLefts(prev =>
+        (prev.length === lefts.length && prev.every((v, i) => v === lefts[i]) ? prev : lefts));
     };
     recompute();
     const observer = new ResizeObserver(recompute);
@@ -2960,27 +3013,28 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
     </PanelFrame>
   );
 
-  if (isFullscreen) {
-    return (
-      // `right` leaves room for the chatbot column (var set by Chatbot.tsx;
-      // falls back to 48px when the chatbot is not mounted). This way the
-      // assistant stays visible and usable while the device table is maximised.
-      <div
-        className="fixed top-0 left-0 bottom-0 bg-white z-40 overflow-auto shadow-xl"
-        style={{ right: 'var(--simorgh-chat-w, 0px)' }}
-      >
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold">Device Specifications — Fullscreen</h2>
-            <button
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 flex items-center"
-              onClick={handleToggleFullscreen}
-            >
-              <MinimizeIcon className="w-4 h-4 mr-2" />
-              Exit Fullscreen
-            </button>
-          </div>
+  // ── The screen, once ─────────────────────────────────────────────────────
+  //
+  // Full screen used to be a second, smaller screen: it rendered the device
+  // table and nothing else, so the templates to drop on a row and the tree to
+  // change switchgear with were both gone exactly when the table was at its
+  // biggest. Maximising a table is not a reason to take the two panels that
+  // feed it away.
+  //
+  // So there is one workspace and two frames around it. Anything added here is
+  // in both by construction — which is the only way the two stay the same.
+  const workspace = (
+    <div
+      className="grid grid-cols-1 gap-3 items-start"
+      style={{ gridTemplateColumns: columns }}
+    >
+      {renderTemplateLeftPanel()}
 
+      <div className="border rounded min-w-0">
+        <div className="bg-gray-50 px-4 py-2 border-b">
+          <h3 className="font-medium">Device Specifications</h3>
+        </div>
+        <div className="p-3">
           <DeviceTable
             selectedEquipment={currentEquipment}
             updateEquipment={updateEquipment}
@@ -2992,98 +3046,33 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
             onCopyRows={setClipboardRows}
           />
         </div>
-
-        {/* Template context menu (also in fullscreen) */}
-        {templateContextMenu.visible && (
-          <div
-            className="fixed z-50 w-48 bg-white border shadow-lg rounded py-1"
-            style={{ top: templateContextMenu.y, left: templateContextMenu.x }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
-              onClick={handleShowProperties}
-            >
-              <InfoIcon className="w-4 h-4 mr-2" />
-              Properties
-            </button>
-            <div className="border-t my-1"></div>
-            <button
-              className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 text-gray-600"
-              onClick={() => setTemplateContextMenu({ visible: false, x: 0, y: 0, templateId: null })}
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
-        {/* Properties modal */}
-        {propertiesModal.visible && propertiesTemplate && (
-          <TemplatePropertiesModal
-            template={propertiesTemplate}
-            onClose={() => setPropertiesModal({ visible: false, templateId: null })}
-            onEdit={handleEditTemplate}
-          />
-        )}
       </div>
-    );
-  }
 
-  return (
-    <div>
-      <h2 className="text-xl font-semibold mb-4">Device Selection - {projectData.projectName}</h2>
-
-      {/* Templates and Equipment Tree get just enough fixed width for their
-          content (names/tree labels); Device Specifications takes all the
-          remaining space so the wide device table isn't squeezed into a
-          fixed 50% column.
-          The columns are built from which panels are open: a closed one leaves
-          no track behind it, so its width becomes table rather than a gap. */}
-      <div
-        className="grid grid-cols-1 gap-3 items-start"
-        style={{ gridTemplateColumns: columns }}
+      <PanelFrame
+        id="ds-equipment-tree"
+        title="Equipment Tree"
+        group="Device Selection"
+        note="The switchgears of this project, by voltage level"
+        side="right"
+        className="w-[260px]"
       >
-        {renderTemplateLeftPanel()}
+        <EquipmentTree
+          projectData={projectData}
+          addEquipment={addEquipment}
+          deleteEquipment={deleteEquipment}
+          copyEquipment={copyEquipment}
+          selectedEquipment={selectedEquipment}
+          setSelectedEquipment={setSelectedEquipment}
+          onNavigateToDeviceLibrary={onNavigateToDeviceLibrary ?? ((_id?: string) => {})}
+        />
+      </PanelFrame>
+    </div>
+  );
 
-        <div className="border rounded min-w-0">
-          <div className="bg-gray-50 px-4 py-2 border-b">
-            <h3 className="font-medium">Device Specifications</h3>
-          </div>
-          <div className="p-3">
-            <DeviceTable
-              selectedEquipment={currentEquipment}
-              updateEquipment={updateEquipment}
-              projectData={projectData}
-              isFullscreen={isFullscreen}
-              onToggleFullscreen={handleToggleFullscreen}
-              onShowTemplateProperties={(templateId) => setPropertiesModal({ visible: true, templateId })}
-              clipboardRows={clipboardRows}
-              onCopyRows={setClipboardRows}
-            />
-          </div>
-        </div>
-
-        <PanelFrame
-          id="ds-equipment-tree"
-          title="Equipment Tree"
-          group="Device Selection"
-          note="The switchgears of this project, by voltage level"
-          side="right"
-          className="w-[260px]"
-        >
-          <EquipmentTree
-            projectData={projectData}
-            addEquipment={addEquipment}
-            deleteEquipment={deleteEquipment}
-            copyEquipment={copyEquipment}
-            selectedEquipment={selectedEquipment}
-            setSelectedEquipment={setSelectedEquipment}
-            onNavigateToDeviceLibrary={onNavigateToDeviceLibrary ?? ((_id?: string) => {})}
-          />
-        </PanelFrame>
-      </div>
-
-      {/* Template right-click context menu */}
+  /** The menus and dialogs the workspace opens — in both frames, for the same
+   *  reason the panels are. */
+  const overlays = (
+    <>
       {templateContextMenu.visible && (
         <div
           className="fixed z-50 w-48 bg-white border shadow-lg rounded py-1"
@@ -3107,7 +3096,6 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
         </div>
       )}
 
-      {/* Template Properties Modal */}
       {propertiesModal.visible && propertiesTemplate && (
         <TemplatePropertiesModal
           template={propertiesTemplate}
@@ -3115,6 +3103,53 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
           onEdit={handleEditTemplate}
         />
       )}
+    </>
+  );
+
+  if (isFullscreen) {
+    return (
+      // `right` leaves room for the chatbot column (var set by Chatbot.tsx;
+      // falls back to 0 when the chatbot is not mounted). This way the
+      // assistant stays visible and usable while the device table is maximised.
+      <div
+        className="fixed top-0 left-0 bottom-0 bg-white z-40 overflow-auto shadow-xl"
+        style={{ right: 'var(--simorgh-chat-w, 0px)' }}
+      >
+        <div className="p-4">
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-xl font-semibold">
+              Device Selection — {projectData.projectName}
+            </h2>
+            <button
+              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 flex items-center"
+              onClick={handleToggleFullscreen}
+            >
+              <MinimizeIcon className="w-4 h-4 mr-2" />
+              Exit Fullscreen
+            </button>
+          </div>
+
+          {workspace}
+        </div>
+
+        {overlays}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h2 className="text-xl font-semibold mb-4">Device Selection - {projectData.projectName}</h2>
+
+      {/* Templates and Equipment Tree get just enough fixed width for their
+          content (names/tree labels); Device Specifications takes all the
+          remaining space so the wide device table isn't squeezed into a
+          fixed 50% column.
+          The columns are built from which panels are open: a closed one leaves
+          no track behind it, so its width becomes table rather than a gap. */}
+      {workspace}
+
+      {overlays}
 
       <div className="flex justify-end mt-6">
         <button
