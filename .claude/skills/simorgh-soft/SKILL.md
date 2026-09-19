@@ -21,6 +21,8 @@ Everything is under `simorgh-agent/simorgh-soft/`:
 | `simorgh-frontend/src/utils/cad/` | geometry, shapes, DXF/SVG/PDF back-ends, pages, symbol sources |
 | `simorgh-frontend/src/utils/iecSymbols.ts` | the built-in single-line library |
 | `simorgh-frontend/src/utils/cad/wdSymbols.ts` | the wiring-diagram library |
+| `simorgh-frontend/src/components/PLC/` | the PLC page — tree, editors, instruction catalogue, assistant |
+| `simorgh-frontend/src/utils/plc/` | the program model, the instruction catalogue, the checker, the SCL exporter |
 | `simorgh-backend/` | Express + Mongo: projects, the office symbol library, EPLAN bridges |
 
 `simorgh-agent/frontend` is a **different app** (the chatbot). Don't edit it for
@@ -116,6 +118,48 @@ project can replace the ones already on the sheets (`utils/cad/replaceSymbol.ts`
 Keep stamping it when adding a new way to place a symbol.
 
 Comments here explain *why*, in prose, and are worth keeping — match that.
+
+## The PLC page
+
+A TIA-Portal-shaped programming environment, kept with the project under
+`projectData.plc`. Tree on the left, block in the middle, instruction
+catalogue or assistant on the right, problems underneath.
+
+**A rung is a tree, never geometry.** LAD and FBD are the ladder model this
+app already had (`utils/ladder/model.ts`): groups in series, branches in
+parallel, elements in series inside a branch. That is what lets the same
+network be drawn, checked, compiled to SCL and handed to a model. A graphical
+language stored as free geometry can be none of those. Every edit goes
+through `utils/plc/ladderEdit.ts`, whose functions each return a rung that is
+still legal — nothing splices a group's branches by hand.
+
+**The reader keeps a half-typed row.** Every edit goes out through the project
+and back in through `readPlcProject`, so a row dropped for having no name yet
+is a row that cannot be added at all: press Add, get nothing, every time. The
+checker says a row is unfinished; the reader does not throw it away.
+
+**Monaco is loaded on demand.** Three megabytes, on one page. `PlcTab` is
+`React.lazy` and the editor itself is imported inside `monacoSetup.ts`, so the
+main bundle is the size it was. The ESM deep paths (`editor.all`,
+`editor.api`) are used rather than the package root, which leaves out eighty
+languages and the TypeScript service. Providers are registered **once** — they
+are per language, not per editor, and registering them on mount stacks a copy
+per block opened.
+
+**Light utilities only, as everywhere else here.** Tailwind's `dark:` variant
+is not configured; `theme.css` remaps the light classes under
+`[data-theme="dark"]`. Use the tints it names (`bg-blue-50`, `bg-amber-50/60`)
+— a slashed tint it does not name stays near-white on a dark page.
+
+**A panel that appears must not move what is under the pointer.** The armed-
+instruction strip in the catalogue used to appear only when something was
+picked, which pushed the list down between the two clicks of a double click:
+picking TON gave a Set coil. It is always on screen now.
+
+**Nothing here talks to a controller.** The page writes, checks and exports;
+it does not claim to produce a file TIA will import unchanged and it does not
+download to a rack. The assistant's answers are drafts for an engineer to
+read, and the panel says so where the work is handed over.
 
 ## Shipping
 

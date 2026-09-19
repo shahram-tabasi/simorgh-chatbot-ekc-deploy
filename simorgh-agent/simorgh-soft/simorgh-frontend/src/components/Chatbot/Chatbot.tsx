@@ -53,7 +53,8 @@ import { ProposalCard } from './ProposalCard';
 
 // Tab labels used both in the context snapshot we send to the model and in
 // the local tool runner that resolves `set_active_tab`.
-const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types', 'Simorgh Draw'] as const;
+const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types',
+  'Simorgh Draw', 'PLC', 'Documents', 'Send to EPLAN'] as const;
 
 // What each tab owns, in the words the model is given. Sent with every turn
 // so an unqualified instruction ("set the temperature to 50") is read against
@@ -72,6 +73,12 @@ const TAB_SCOPE: Record<number, string> = {
   3: 'Output Types — the export formats. No editing tools; answer questions.',
   4: 'Simorgh Draw — single line, panel layout, mechanical items, CAD export and Send to EPLAN. '
    + 'Read-only here; the data comes from the other tabs.',
+  5: 'PLC — the controller program: organisation, function and data blocks, the PLC tag table '
+   + 'that names the wiring, and the instruction catalogue. The page has its own assistant for '
+   + 'writing and checking blocks; there are no chat tools for it, so answer questions and send '
+   + 'the user to the page.',
+  6: 'Documents — the files kept with the project. No editing tools; answer questions.',
+  7: 'Send to EPLAN — the handover. No editing tools; answer questions.',
 };
 
 type Mode = 'local' | 'online';

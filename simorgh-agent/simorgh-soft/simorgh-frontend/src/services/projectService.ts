@@ -339,6 +339,70 @@ export const ladderService = {
   },
 };
 
+/**
+ * Asking the model to work on the PLC program.
+ *
+ * The same shape as `ladderService` and for the same reason: a refusal is an
+ * answer and belongs on screen in the model's own words, so this never throws
+ * except where the request never came back at all.
+ *
+ * What makes it different from the ladder one is the snapshot. The program as
+ * it is now goes with every request — the blocks, the tags, the instruction
+ * vocabulary and what the checker says is wrong — because a model that cannot
+ * see the project names tags that nearly exist, and "nearly" is what costs an
+ * hour.
+ */
+export interface PlcRequest {
+  task: string;
+  /** The program written down — see `utils/plc/aiContext.ts`. */
+  snapshot: string;
+  /** The instruction catalogue, where the task needs it. */
+  vocabulary?: string;
+  language?: string;
+  style?: 'teach' | 'brief';
+  answers?: { ask: string; chose: string }[];
+}
+
+export interface PlcAnswer {
+  success: boolean;
+  /** Blocks and tags as they arrived — validated in the browser, not here. */
+  generated?: unknown;
+  questions?: LadderQuestion[];
+  model?: string;
+  error?: string;
+  raw?: string;
+}
+
+export const plcService = {
+  async generate(request: PlcRequest): Promise<PlcAnswer> {
+    try {
+      const r = await fetch(`${API_BASE_URL}/plc/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      const said = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return {
+          success: false,
+          error: said.error || `The assistant answered ${r.status}.`,
+          raw: said.raw,
+          model: said.model,
+        };
+      }
+      return said as PlcAnswer;
+    } catch (err) {
+      return {
+        success: false,
+        error: 'The assistant could not be reached — the request came back with no answer. '
+          + 'The model may be busy or out of reach. Wait a moment and ask again; nothing '
+          + 'already written is lost.',
+        raw: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
 export const eplanSymbolService = {
   async schema(): Promise<any> {
     const r = await fetch(`${API_BASE_URL}/eplan-symbols/schema`);

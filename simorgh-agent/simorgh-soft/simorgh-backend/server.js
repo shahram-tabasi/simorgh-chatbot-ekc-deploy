@@ -18,6 +18,7 @@ import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 import { registerEplanRoutes } from './eplanSend.js';
 import { registerDrawAssistRoutes } from './drawAssist.js';
 import { registerLadderAssistRoutes } from './ladderAssist.js';
+import { registerPlcAssistRoutes } from './plcAssist.js';
 import { registerDocumentRoutes } from './documents.js';
 import { registerPlotframeFieldRoutes } from './plotframeFields.js';
 import { registerSymbolLibraryRoutes } from './symbolLibrary.js';
@@ -509,6 +510,12 @@ registerDrawAssistRoutes(app, callLocalModel);
 // schematic. Its own endpoint because the two ask for entirely different
 // answers and neither prompt should have to mention the other.
 registerLadderAssistRoutes(app, callLocalModel);
+
+// The PLC page: the same model again, this time working on a program that
+// already exists rather than writing one from a sentence. It is handed a
+// written-down copy of the blocks, the tags and the current problems, which is
+// what stops it inventing names that nearly match the real ones.
+registerPlcAssistRoutes(app, callLocalModel);
 
 // Project documents — the Documents tab. A getter, not `db` itself: this
 // registration runs before connectToDatabase() resolves (see startServer

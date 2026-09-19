@@ -25,6 +25,16 @@ import { TpmsImportModal } from './components/TpmsImport/TpmsImportModal';
 import { EplanixTab } from './components/Eplanix/EplanixTab';
 import { DocumentsTab } from './components/Documents/DocumentsTab';
 import { SendToEplanTab } from './components/SendToEplan/SendToEplanTab';
+
+/**
+ * The PLC page, fetched when it is first opened.
+ *
+ * It carries the code editor — three megabytes of it — and the whole
+ * instruction catalogue, and a project that never opens the page should not
+ * pay for either. Lazily is the only honest way to add something this size to
+ * a bundle that everything else in the suite is also waiting on.
+ */
+const PlcTab = React.lazy(() => import('./components/PLC/PlcTab'));
 import { findFeederDuplicates, DuplicateGroup } from './utils/feederDuplicates';
 import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
@@ -1138,11 +1148,29 @@ const MainApp: React.FC = () => {
     },
     {
       id: 5,
+      // The controller's program — blocks, tags and the instruction catalogue.
+      // Beside Simorgh Draw rather than inside it: a panel's logic and a
+      // panel's drawings are one job, and a program kept in a separate tool is
+      // the one that is a revision behind when the job ships.
+      title: `PLC`,
+      component: (
+        <React.Suspense fallback={
+          <div className="h-full flex items-center justify-center text-sm text-gray-500">
+            Opening the PLC page…
+          </div>
+        }
+        >
+          <PlcTab />
+        </React.Suspense>
+      )
+    },
+    {
+      id: 6,
       title: `Documents`,
       component: <DocumentsTab />
     },
     {
-      id: 6,
+      id: 7,
       title: `Send to EPLAN`,
       component: <SendToEplanTab />
     }

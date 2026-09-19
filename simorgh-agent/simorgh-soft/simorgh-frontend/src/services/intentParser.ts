@@ -180,7 +180,7 @@ function valueAfterTerm(p: string, end: number): string {
 // ── Navigation ──────────────────────────────────────────────────────────────
 const GO_RE = term('go to', 'open', 'switch to', 'برو', 'برو به', 'باز کن', 'تب');
 const TAB_PATTERN =
-  /(project[\s-]?(?:definition)?|create[\s-]?template|template|device[\s-]?selection|devices?|output[\s-]?types?|output|export|simorgh[\s-]?draw|draw|eplanix|پروژه|تمپلیت|دستگاه|خروجی)/i;
+  /(project[\s-]?(?:definition)?|create[\s-]?template|template|device[\s-]?selection|devices?|output[\s-]?types?|output|export|simorgh[\s-]?draw|draw|eplanix|plc|پروژه|تمپلیت|دستگاه|خروجی|پی ال سی)/i;
 const TAB_TO_NAME: Record<string, string> = {
   project: 'project', 'project definition': 'project', 'پروژه': 'project',
   template: 'template', 'create template': 'template', 'تمپلیت': 'template',
@@ -190,6 +190,7 @@ const TAB_TO_NAME: Record<string, string> = {
   'simorgh-draw': 'eplanix',
   draw: 'eplanix',
   eplanix: 'eplanix',
+  plc: 'plc', 'پی ال سی': 'plc',
 };
 
 // "row 3", "ردیف ۳" — a row is only a row when it is named as one. A bare

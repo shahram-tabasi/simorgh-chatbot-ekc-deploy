@@ -414,13 +414,14 @@ const TAB_NAMES: Record<string, number> = {
   'simorgh draw':       4, 'simorgh-draw': 4, 'draw': 4, 'cad': 4,
   // The tab was called Eplanix until it was named; both still resolve.
   'eplanix':            4, 'single-line': 4, 'single line': 4, 'layout': 4,
-  'documents':          5, 'document': 5, 'docs': 5,
-  'send to eplan':      6, 'send-to-eplan': 6, 'send_to_eplan': 6, 'eplan': 6,
+  'plc':                5, 'controller': 5, 'ladder': 5, 'scl': 5, 'program': 5,
+  'documents':          6, 'document': 6, 'docs': 6,
+  'send to eplan':      7, 'send-to-eplan': 7, 'send_to_eplan': 7, 'eplan': 7,
 };
 
 const set_active_tab: ChatTool = {
   name: 'set_active_tab',
-  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output", "draw", "documents" or "eplan" (case-insensitive; spaces/hyphens/underscores are OK).',
+  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output", "draw", "plc", "documents" or "eplan" (case-insensitive; spaces/hyphens/underscores are OK).',
   args: {
     tab: { type: 'string', description: 'project | template | devices | output | draw', required: true },
   },
@@ -429,7 +430,8 @@ const set_active_tab: ChatTool = {
     if (idx === undefined) return { ok: false, summary: `Unknown tab "${tab}".` };
     if (!ctx.setActiveTab) return { ok: false, summary: 'Tab navigation not wired into this context.' };
     ctx.setActiveTab(idx);
-    const label = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types', 'Simorgh Draw'][idx];
+    const label = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types',
+      'Simorgh Draw', 'PLC', 'Documents', 'Send to EPLAN'][idx];
     return { ok: true, summary: `Switched to "${label}" tab.` };
   },
 };

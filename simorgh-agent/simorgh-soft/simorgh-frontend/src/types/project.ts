@@ -177,6 +177,19 @@ export interface ProjectData {
    * named and being used, so those live here until a page joins them.
    */
   drawingGroups?: DrawingGroups;
+  /**
+   * The controller's program — see `utils/plc/model.ts`.
+   *
+   * It lives with the project rather than in a file beside it for the same
+   * reason the drawings do: a panel's logic and a panel's wiring are one
+   * document in every way that matters, and a program kept somewhere else is
+   * the one that is a revision behind when the job ships. Kept here it is
+   * carried by the backup, the history and the revision like everything else.
+   *
+   * Optional, because every project that existed before this page did has no
+   * program and must still open.
+   */
+  plc?: unknown;
 }
 
 // ── Redrawn symbols ──────────────────────────────────────────────────────────
