@@ -23,10 +23,14 @@ import {
 } from 'lucide-react';
 import { PlcProject, PlcTag, PlcTagTable, newId } from '../../utils/plc/model';
 import { DATA_TYPE_NAMES, addressProblem, dataTypeInfo } from '../../utils/plc/dataTypes';
+import { Lang, Strings } from './lang';
+import { CHECK_STRINGS, CheckStrings } from '../../utils/plc/checkLang';
 
 interface Props {
   project: PlcProject;
   readOnly?: boolean;
+  t: Strings;
+  lang: Lang;
   /** Which table is open. Kept by the page so it survives a tab change. */
   tableId: string | null;
   onTableId: (id: string) => void;
@@ -40,35 +44,36 @@ const input = (extra = '') =>
   + extra;
 
 /** What is wrong with one tag, or null. */
-function tagProblem(tag: PlcTag, all: PlcTag[]): string | null {
-  if (!tag.name.trim()) return 'This tag has no name.';
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tag.name)) {
-    return 'A tag name is letters, digits and underscores, and does not start with a digit.';
+function tagProblem(tag: PlcTag, all: PlcTag[], t: Strings, say: CheckStrings): string | null {
+  if (!tag.name.trim()) return t.giveItAName;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tag.name)) return t.nameRules;
+  if (all.filter(other => other.name.toLowerCase() === tag.name.toLowerCase()).length > 1) {
+    return t.nameAlreadyUsed;
   }
-  if (all.filter(t => t.name.toLowerCase() === tag.name.toLowerCase()).length > 1) {
-    return 'Two tags with this name. The program cannot say which it means.';
-  }
-  const address = addressProblem(tag.address);
+  const address = addressProblem(tag.address, say);
   if (address) return address;
-  if (tag.address
-    && all.filter(t => t.address.toUpperCase() === tag.address.toUpperCase()).length > 1) {
-    return `${tag.address} is named by more than one tag. Two names for one terminal is how a `
-      + 'change gets made in one place and not the other.';
+  const sameAddress = tag.address
+    ? all.filter(other => other.address.toUpperCase() === tag.address.toUpperCase())
+    : [];
+  if (sameAddress.length > 1) {
+    return say.duplicateAddress(tag.address, sameAddress.length,
+      sameAddress.map(other => other.name).join(', '));
   }
   const bit = /\.\d$/.test(tag.address);
   const info = dataTypeInfo(tag.dataType);
   if (tag.address && bit && info && info.bits !== 1) {
-    return `${tag.address} is one bit, but this tag is declared ${tag.dataType}.`;
+    return say.tagTypeWidthBit(tag.name, tag.address, tag.dataType);
   }
   if (tag.address && !bit && info?.bits === 1 && /^%[IQM]\d/i.test(tag.address)) {
-    return `Declared Bool, but ${tag.address} has no bit number.`;
+    return say.tagTypeWidthBool(tag.name, tag.address);
   }
   return null;
 }
 
 export const TagTable: React.FC<Props> = ({
-  project, readOnly, tableId, onTableId, onChange,
+  project, readOnly, tableId, onTableId, onChange, t, lang,
 }) => {
+  const say = CHECK_STRINGS[lang];
   const [filter, setFilter] = useState('');
   const tables = project.tagTables;
   const open = tables.find(t => t.id === tableId) ?? tables[0];
@@ -115,7 +120,7 @@ export const TagTable: React.FC<Props> = ({
     patchTable(open.id, { tags: open.tags.filter(t => t.id !== id) });
 
   const addTable = () => {
-    const name = window.prompt('What is this table called?', `Tag table ${tables.length + 1}`);
+    const name = window.prompt(t.tableNameAsk, `${t.tagTable} ${tables.length + 1}`);
     if (!name?.trim()) return;
     const table: PlcTagTable = { id: newId('tt'), name: name.trim(), tags: [] };
     onChange([...tables, table]);
@@ -126,11 +131,11 @@ export const TagTable: React.FC<Props> = ({
     const table = tables.find(t => t.id === id);
     if (!table) return;
     if (table.isDefault) {
-      window.alert('The default table is where new tags land — it cannot be removed.');
+      window.alert(t.defaultTableKept);
       return;
     }
     if (table.tags.length > 0
-      && !window.confirm(`"${table.name}" holds ${table.tags.length} tags. Delete it and them?`)) {
+      && !window.confirm(`"${table.name}" — ${table.tags.length} — ${t.deleteTableAsk}`)) {
       return;
     }
     onChange(tables.filter(t => t.id !== id));
@@ -163,25 +168,25 @@ export const TagTable: React.FC<Props> = ({
     <div className="flex flex-col h-full min-h-0">
       {/* The tables, as tabs. */}
       <div className="flex items-center gap-1 px-2 py-1.5 border-b bg-gray-50 shrink-0 overflow-x-auto">
-        {tables.map(t => (
+        {tables.map(table => (
           <button
-            key={t.id}
-            onClick={() => onTableId(t.id)}
+            key={table.id}
+            onClick={() => onTableId(table.id)}
             className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] whitespace-nowrap
-              ${t.id === open.id
+              ${table.id === open.id
               ? 'bg-white shadow-sm font-semibold'
               : 'hover:bg-white/60 text-gray-600'}`}
           >
             <TableIcon className="w-3.5 h-3.5" />
-            {t.name}
-            <span className="text-gray-400">{t.tags.length}</span>
-            {!readOnly && !t.isDefault && (
+            {table.name}
+            <span className="text-gray-400">{table.tags.length}</span>
+            {!readOnly && !table.isDefault && (
               <span
                 role="button"
                 tabIndex={-1}
                 className="opacity-0 group-hover:opacity-100 hover:text-red-600"
-                title="Delete this table"
-                onClick={e => { e.stopPropagation(); removeTable(t.id); }}
+                title={t.deleteTable}
+                onClick={e => { e.stopPropagation(); removeTable(table.id); }}
               >
                 <XIcon className="w-3 h-3" />
               </span>
@@ -192,7 +197,7 @@ export const TagTable: React.FC<Props> = ({
           <button
             onClick={addTable}
             className="px-2 py-1 rounded text-[12px] text-blue-700 hover:bg-blue-50"
-            title="Another tag table — for grouping a panel's own tags"
+            title={t.anotherTable}
           >
             <PlusIcon className="w-3.5 h-3.5" />
           </button>
@@ -202,14 +207,14 @@ export const TagTable: React.FC<Props> = ({
           <input
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            placeholder="Filter…"
+            placeholder={t.filter}
             className="px-2 py-1 text-[12px] rounded border border-gray-300 w-40"
           />
           {!readOnly && (
             <button
               onClick={sortByAddress}
               className="p-1.5 rounded hover:bg-gray-200"
-              title="Sort by address — the order the terminals are in"
+              title={t.sortByAddress}
             >
               <ArrowDownAZIcon className="w-4 h-4" />
             </button>
@@ -222,19 +227,19 @@ export const TagTable: React.FC<Props> = ({
           <thead className="bg-gray-50 sticky top-0 z-10">
             <tr>
               <th className={`${HEAD} w-8`} />
-              <th className={`${HEAD} min-w-[160px]`}>Name</th>
-              <th className={`${HEAD} w-40`}>Data type</th>
-              <th className={`${HEAD} w-32`}>Address</th>
-              <th className={`${HEAD} w-16 text-center`}>Retain</th>
-              <th className={`${HEAD} w-20 text-center`}>Visible</th>
-              <th className={`${HEAD} w-20 text-center`}>Writable</th>
-              <th className={HEAD}>Comment</th>
+              <th className={`${HEAD} min-w-[160px]`}>{t.colName}</th>
+              <th className={`${HEAD} w-40`}>{t.colType}</th>
+              <th className={`${HEAD} w-32`}>{t.colAddress}</th>
+              <th className={`${HEAD} w-16 text-center`}>{t.colRetain}</th>
+              <th className={`${HEAD} w-20 text-center`}>{t.colVisible}</th>
+              <th className={`${HEAD} w-20 text-center`}>{t.colWritable}</th>
+              <th className={HEAD}>{t.colComment}</th>
               <th className={`${HEAD} w-10`} />
             </tr>
           </thead>
           <tbody>
             {shown.map(tag => {
-              const problem = tagProblem(tag, everyTag);
+              const problem = tagProblem(tag, everyTag, t, say);
               return (
                 <tr
                   key={tag.id}
@@ -251,13 +256,14 @@ export const TagTable: React.FC<Props> = ({
                       value={tag.name}
                       readOnly={readOnly}
                       title={problem ?? undefined}
-                      placeholder="Start_PB"
+                      placeholder={t.tagNamePlaceholder}
                       onChange={e => patchTag(tag.id, { name: e.target.value })}
                     />
                   </td>
                   <td className="px-1 py-0.5">
                     <input
                       className={input()}
+                      dir="ltr"
                       value={tag.dataType}
                       readOnly={readOnly}
                       list="plc-tag-types"
@@ -268,6 +274,7 @@ export const TagTable: React.FC<Props> = ({
                   <td className="px-1 py-0.5">
                     <input
                       className={input('font-mono')}
+                      dir="ltr"
                       value={tag.address}
                       readOnly={readOnly}
                       placeholder="%I0.0"
@@ -277,7 +284,7 @@ export const TagTable: React.FC<Props> = ({
                   <td className="text-center">
                     <input
                       type="checkbox" checked={!!tag.retain} disabled={readOnly}
-                      title="Kept through a power cycle"
+                      title={t.retainTip}
                       onChange={e => patchTag(tag.id, { retain: e.target.checked })}
                     />
                   </td>
@@ -298,7 +305,7 @@ export const TagTable: React.FC<Props> = ({
                       className={input('text-gray-600')}
                       value={tag.comment ?? ''}
                       readOnly={readOnly}
-                      placeholder="what the wire is for"
+                      placeholder={t.tagCommentPlaceholder}
                       onChange={e => patchTag(tag.id, { comment: e.target.value })}
                     />
                   </td>
@@ -306,7 +313,7 @@ export const TagTable: React.FC<Props> = ({
                     {!readOnly && (
                       <button
                         className="p-1 rounded hover:bg-red-100 text-gray-400 hover:text-red-600"
-                        title="Delete this tag"
+                        title={t.deleteRow}
                         onClick={() => removeTag(tag.id)}
                       >
                         <TrashIcon className="w-3.5 h-3.5" />
@@ -320,10 +327,7 @@ export const TagTable: React.FC<Props> = ({
             {shown.length === 0 && (
               <tr>
                 <td colSpan={9} className="px-3 py-6 text-center text-[11px] text-gray-500 italic">
-                  {filter.trim()
-                    ? 'No tag in this table matches that.'
-                    : 'No tags yet. Name the terminals before writing the program against them — '
-                      + 'it is the difference between a program that can be read and one that cannot.'}
+                  {filter.trim() ? t.noTagMatches : t.noTags}
                 </td>
               </tr>
             )}
@@ -341,11 +345,10 @@ export const TagTable: React.FC<Props> = ({
             onClick={addTag}
             className="inline-flex items-center gap-1 px-2 py-1 text-[12px] rounded text-blue-700 hover:bg-blue-50"
           >
-            <PlusIcon className="w-3.5 h-3.5" /> Add tag
+            <PlusIcon className="w-3.5 h-3.5" /> {t.addTag}
           </button>
           <span className="ms-3 text-[11px] text-gray-500">
-            The address of the last input tag is carried on, so a row of terminals is entered by
-            typing names.
+            {t.addTagNote}
           </span>
         </div>
       )}

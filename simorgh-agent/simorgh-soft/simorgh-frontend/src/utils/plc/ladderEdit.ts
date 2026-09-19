@@ -75,7 +75,10 @@ export function elementFor(instr: Instruction, operand = ''): Element | null {
   if (instr.form === 'box' || (instr.form === 'contact' && !instr.contactKind)) {
     const block: Block = {
       k: 'block',
-      type: instr.name,
+      // The empty box goes on as `???` and not as the words "Empty box": it is
+      // a box waiting to be named, and that is what a box waiting to be named
+      // says on every ladder ever drawn.
+      type: instr.id === 'gen.box' ? '???' : instr.name,
       name: instr.instance ? '' : undefined,
       pins: (instr.pins ?? []).map(p => ({ name: p.name, value: '', out: p.out })),
       label: instr.title,
@@ -353,6 +356,33 @@ export function placeInstruction(
     return replace(addParallelBranch(net.rung, pos.group), {
       netId, pos: { group: pos.group, branch: branches, slot: 0 },
     });
+  }
+  /**
+   * Close branch: leave the parallel path and carry on after it.
+   *
+   * In a rung stored as a grid a branch is never *left* open — the group knows
+   * its branches and closes them itself — so there is nothing to draw and
+   * nothing to repair. What the command means to the person pressing it is
+   * "I have finished this parallel path", and the useful answer is to put the
+   * cursor after the group so the next thing lands in series with it rather
+   * than inside the branch they have just finished.
+   */
+  if (instr.id === 'gen.branch.close') {
+    return { networks, cursor: { netId, pos: { group: pos.group + 1, branch: 0, slot: 0 } } };
+  }
+  if (instr.id === 'gen.network') return null;
+  if (instr.id === 'gen.input') {
+    // Another input on a box that takes a variable number of them.
+    const branch0 = net.rung.groups[pos.group]?.branches[pos.branch];
+    const el = branch0?.elements[pos.slot];
+    if (!el || el.k !== 'block') return null;
+    const ins = el.pins.filter(p => !p.out);
+    const numbered = /^IN(\d+)$/.exec(ins[ins.length - 1]?.name ?? '');
+    const next = numbered ? `IN${Number(numbered[1]) + 1}` : `IN${ins.length + 1}`;
+    return replace(
+      patchElement(net.rung, pos, { pins: [...el.pins, { name: next, value: '' }] }),
+      cursor,
+    );
   }
   if (instr.form === 'editor') return null;
 

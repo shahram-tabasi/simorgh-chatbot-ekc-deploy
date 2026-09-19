@@ -156,6 +156,23 @@ instruction strip in the catalogue used to appear only when something was
 picked, which pushed the list down between the two clicks of a double click:
 picking TON gave a Set coil. It is always on screen now.
 
+**A rung is laid out on one grid, and the numbers must match the markup.**
+Every branch of every group shares one set of rows, worked out across the whole
+rung — each group stacking its own branches drew the second pair of parallel
+contacts at a different height from the first. And every height the layout
+states (`LABEL_H`, `BOX_HEAD`, `BOX_BORDER`) has to be a height the markup
+states outright: an operand box that came out three pixels shorter than
+`LABEL_H` said left every wire meeting every contact three pixels high. There
+is a Playwright check for this — measure the wire's centre against the glyph's
+centre; it is invisible in a screenshot and obvious on a drawing.
+
+**The ladder stays left to right in Persian.** Current leaves the left rail.
+`dir="ltr"` on the ladder, on the code editor and on every address, type and
+operand input; the page and its running text turn, the toolbar and the rung do
+not. `components/PLC/lang.ts` holds the two languages, `utils/plc/checkLang.ts`
+holds what the checker says, and the instruction **names** never turn — only
+the description beside them (`titleOf`).
+
 **Nothing here talks to a controller.** The page writes, checks and exports;
 it does not claim to produce a file TIA will import unchanged and it does not
 download to a rack. The assistant's answers are drafts for an engineer to

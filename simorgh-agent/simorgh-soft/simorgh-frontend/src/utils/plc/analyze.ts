@@ -25,6 +25,7 @@ import {
 } from './dataTypes';
 import { instructionByName } from './instructions';
 import { SCL_CONTROL, SCL_DECL, SCL_LITERALS, SCL_OPERATORS, SCL_TYPES } from './sclLanguage';
+import { CHECK_STRINGS, CheckStrings } from './checkLang';
 
 export type Severity = 'error' | 'warning' | 'info';
 
@@ -180,7 +181,9 @@ interface Open { word: string; line: number; column: number; }
  * line the `IF` was on — which is the one piece of information that turns
  * "something is unbalanced" into a fix.
  */
-function checkStructure(code: string, add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void): void {
+function checkStructure(
+  code: string, say: CheckStrings, add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
+): void {
   const stack: Open[] = [];
   const opens = new Set(['IF', 'CASE', 'FOR', 'WHILE', 'REPEAT', 'REGION', 'STRUCT']);
   const closeOf: Record<string, string> = {
@@ -202,7 +205,7 @@ function checkStructure(code: string, add: (p: Omit<Problem, 'blockId' | 'blockN
     if (!top) {
       add({
         severity: 'error', code: 'scl.unopened',
-        message: `${upper} with no ${wants} open before it.`,
+        message: say.unopened(upper, wants),
         line: w.line, column: w.column, endColumn: w.column + w.text.length,
       });
       continue;
@@ -210,7 +213,7 @@ function checkStructure(code: string, add: (p: Omit<Problem, 'blockId' | 'blockN
     if (top.word !== wants) {
       add({
         severity: 'error', code: 'scl.mismatch',
-        message: `${upper} closes ${wants}, but what is open is ${top.word} from line ${top.line}.`,
+        message: say.mismatch(upper, wants, top.word, top.line),
         line: w.line, column: w.column, endColumn: w.column + w.text.length,
       });
       // Popped anyway: carrying a wrong pairing forward turns one real problem
@@ -224,7 +227,7 @@ function checkStructure(code: string, add: (p: Omit<Problem, 'blockId' | 'blockN
   for (const open of stack) {
     add({
       severity: 'error', code: 'scl.unclosed',
-      message: `${open.word} on line ${open.line} is never closed — add END_${open.word}.`,
+      message: say.unclosed(open.word, open.line),
       line: open.line, column: open.column, endColumn: open.column + open.word.length,
     });
   }
@@ -232,7 +235,8 @@ function checkStructure(code: string, add: (p: Omit<Problem, 'blockId' | 'blockN
 
 /** Names used in the code that nothing in the project answers to. */
 function checkNames(
-  code: string, scope: Scope, add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
+  code: string, scope: Scope, say: CheckStrings,
+  add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
 ): void {
   const lines = code.split('\n');
 
@@ -243,8 +247,7 @@ function checkNames(
       if (scope.locals.has(name.toLowerCase())) continue;
       add({
         severity: 'error', code: 'scl.undeclared',
-        message: `#${name} is not declared in this block. Add it to the interface above, `
-          + 'or correct the spelling.',
+        message: say.undeclared(name),
         line: li + 1, column: (m.index ?? 0) + 1, endColumn: (m.index ?? 0) + 2 + name.length,
       });
     }
@@ -258,8 +261,7 @@ function checkNames(
       if (scope.blocks.has(low) || scope.tags.has(low)) continue;
       add({
         severity: 'warning', code: 'scl.unknown-name',
-        message: `"${name}" is not a block, a PLC data type or a tag in this project. `
-          + 'It will not compile until it exists.',
+        message: say.unknownName(name),
         line: li + 1, column: (m.index ?? 0) + 1, endColumn: (m.index ?? 0) + 2 + raw.length,
       });
     }
@@ -268,7 +270,8 @@ function checkNames(
 
 /** Calls to something with a name no instruction and no block has. */
 function checkCalls(
-  code: string, scope: Scope, add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
+  code: string, scope: Scope, say: CheckStrings,
+  add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
 ): void {
   const lines = code.split('\n');
   lines.forEach((text, li) => {
@@ -283,8 +286,7 @@ function checkCalls(
       if (scope.blocks.has(name.toLowerCase())) continue;
       add({
         severity: 'warning', code: 'scl.unknown-call',
-        message: `${name} is not an instruction this controller has and not a block in `
-          + 'this project. Check the spelling against the instruction catalogue.',
+        message: say.unknownCall(name),
         line: li + 1, column: (m.index ?? 0) + 1, endColumn: (m.index ?? 0) + 1 + name.length,
       });
     }
@@ -293,7 +295,8 @@ function checkCalls(
 
 /** Writing to something that may not be written. */
 function checkWrites(
-  code: string, scope: Scope, add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
+  code: string, scope: Scope, say: CheckStrings,
+  add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
 ): void {
   const lines = code.split('\n');
   lines.forEach((text, li) => {
@@ -306,15 +309,14 @@ function checkWrites(
     if (v.section === 'Input') {
       add({
         severity: 'error', code: 'scl.write-input',
-        message: `#${v.name} is an Input — it is given by the caller and cannot be written `
-          + 'here. Use an InOut if the caller should see the change.',
+        message: say.writeInput(v.name),
         line: li + 1, column: (m.index ?? 0) + 1, endColumn: text.length + 1,
       });
     }
     if (v.section === 'Constant') {
       add({
         severity: 'error', code: 'scl.write-constant',
-        message: `#${v.name} is a Constant and cannot be written.`,
+        message: say.writeConstant(v.name),
         line: li + 1, column: 1, endColumn: text.length + 1,
       });
     }
@@ -323,7 +325,8 @@ function checkWrites(
 
 /** The two arithmetic traps that are always worth saying out loud. */
 function checkArithmetic(
-  code: string, scope: Scope, add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
+  code: string, scope: Scope, say: CheckStrings,
+  add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
 ): void {
   const lines = code.split('\n');
   lines.forEach((text, li) => {
@@ -331,8 +334,7 @@ function checkArithmetic(
     for (const m of text.matchAll(/\/\s*0(?![.\d])/g)) {
       add({
         severity: 'error', code: 'scl.div-zero',
-        message: 'Division by zero. On an integer this faults the CPU rather than '
-          + 'returning anything.',
+        message: say.divZero(),
         line: li + 1, column: (m.index ?? 0) + 1, endColumn: (m.index ?? 0) + 2,
       });
     }
@@ -347,8 +349,7 @@ function checkArithmetic(
       if (dataTypeInfo(b.dataType)?.group !== 'real') continue;
       add({
         severity: 'warning', code: 'scl.real-equality',
-        message: 'Two floating-point numbers compared for equality. They are almost never '
-          + 'exactly equal — compare ABS(a - b) against a tolerance instead.',
+        message: say.realEquality(),
         line: li + 1, column: (m.index ?? 0) + 1, endColumn: (m.index ?? 0) + 1 + m[0].length,
       });
     }
@@ -358,7 +359,8 @@ function checkArithmetic(
 // ── The checks on a graphical block ─────────────────────────────────────────
 
 function checkNetwork(
-  net: PlcNetwork, scope: Scope, add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
+  net: PlcNetwork, scope: Scope, say: CheckStrings,
+  add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
 ): void {
   const at = { networkId: net.id, networkNumber: net.rung.number };
   const known = (operand: string): boolean => {
@@ -381,8 +383,7 @@ function checkNetwork(
     if (group.branches.length > 1 && group.branches.some(b => b.elements.length === 0)) {
       add({
         severity: 'warning', code: 'lad.empty-branch', ...at,
-        message: `Network ${net.rung.number}: column ${gi + 1} has a parallel path with nothing `
-          + 'in it, which is a wire straight through — everything beside it is bypassed.',
+        message: say.ladEmptyBranch(net.rung.number, gi + 1),
       });
     }
     for (const branch of group.branches) {
@@ -392,16 +393,14 @@ function checkNetwork(
           if (el.type && el.type !== '???' && !instructionByName(el.type) && !scope.blocks.has(el.type.toLowerCase())) {
             add({
               severity: 'warning', code: 'lad.unknown-block', ...at,
-              message: `Network ${net.rung.number}: ${el.type} is not an instruction and not a `
-                + 'block in this project.',
+              message: say.ladUnknownBlock(net.rung.number, el.type),
             });
           }
           const needsInstance = el.type ? instructionByName(el.type)?.instance : false;
           if (needsInstance && !el.name) {
             add({
               severity: 'error', code: 'lad.no-instance', ...at,
-              message: `Network ${net.rung.number}: ${el.type} keeps its state somewhere and has `
-                + 'no instance. Give it one, or two calls will share a memory and interfere.',
+              message: say.ladNoInstance(net.rung.number, el.type ?? '?'),
             });
           }
           continue;
@@ -409,13 +408,12 @@ function checkNetwork(
         if (!el.at) {
           add({
             severity: 'error', code: 'lad.no-operand', ...at,
-            message: `Network ${net.rung.number}: a contact with no operand. It tests nothing.`,
+            message: say.ladNoOperand(net.rung.number),
           });
         } else if (!known(el.at)) {
           add({
             severity: 'warning', code: 'lad.unknown-operand', ...at,
-            message: `Network ${net.rung.number}: ${el.at} is not a tag or a variable this block `
-              + 'can see.',
+            message: say.ladUnknownOperand(net.rung.number, el.at),
           });
         }
       }
@@ -426,13 +424,12 @@ function checkNetwork(
     if (!out.at) {
       add({
         severity: 'error', code: 'lad.no-coil-operand', ...at,
-        message: `Network ${net.rung.number}: a coil with no operand. It drives nothing.`,
+        message: say.ladNoCoilOperand(net.rung.number),
       });
     } else if (!known(out.at)) {
       add({
         severity: 'warning', code: 'lad.unknown-operand', ...at,
-        message: `Network ${net.rung.number}: ${out.at} is not a tag or a variable this block `
-          + 'can see.',
+        message: say.ladUnknownOperand(net.rung.number, out.at),
       });
     }
   }
@@ -440,22 +437,19 @@ function checkNetwork(
   if (elements > 0 && net.rung.outputs.length === 0) {
     add({
       severity: 'warning', code: 'lad.no-output', ...at,
-      message: `Network ${net.rung.number} works out a condition and does nothing with it — `
-        + 'there is no coil or box at the end.',
+      message: say.ladNoOutput(net.rung.number),
     });
   }
   if (elements === 0 && net.rung.outputs.length > 0) {
     add({
       severity: 'info', code: 'lad.always-on', ...at,
-      message: `Network ${net.rung.number} has nothing in the condition, so its output is on `
-        + 'every scan. Intended for an enable; worth a look otherwise.',
+      message: say.ladAlwaysOn(net.rung.number),
     });
   }
   if (!net.title.trim() && !net.comment?.trim() && elements + net.rung.outputs.length > 0) {
     add({
       severity: 'info', code: 'lad.no-title', ...at,
-      message: `Network ${net.rung.number} has no title. A program is read far more often than `
-        + 'it is written.',
+      message: say.ladNoTitle(net.rung.number),
     });
   }
 }
@@ -475,7 +469,7 @@ function instanceType(written: string): boolean {
 }
 
 function checkInterface(
-  block: PlcBlock, project: PlcProject,
+  block: PlcBlock, project: PlcProject, say: CheckStrings,
   add: (p: Omit<Problem, 'blockId' | 'blockName'>) => void,
 ): void {
   const allowed = new Set(sectionsFor(block.kind));
@@ -485,30 +479,27 @@ function checkInterface(
 
   for (const v of block.interface) {
     if (!v.name.trim()) {
-      add({ severity: 'error', code: 'iface.no-name', message: 'A declared row with no name.' });
+      add({ severity: 'error', code: 'iface.no-name', message: say.ifaceNoName() });
       continue;
     }
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(v.name)) {
       add({
         severity: 'error', code: 'iface.bad-name',
-        message: `"${v.name}" is not a name a controller will take — letters, digits and `
-          + 'underscores, starting with a letter or an underscore.',
+        message: say.ifaceBadName(v.name),
       });
     }
     const low = v.name.toLowerCase();
     if (seen.has(low)) {
       add({
         severity: 'error', code: 'iface.duplicate',
-        message: `${v.name} is declared twice. Whichever the compiler picks, one of the two `
-          + 'uses in the code is not the one that was meant.',
+        message: say.ifaceDuplicate(v.name),
       });
     } else seen.set(low, v);
 
     if (!allowed.has(v.section)) {
       add({
         severity: 'error', code: 'iface.bad-section',
-        message: `${v.name} is in ${v.section}, which a ${block.kind} does not have. `
-          + `A ${block.kind} declares ${sectionsFor(block.kind).join(', ')}.`,
+        message: say.ifaceBadSection(v.name, v.section, block.kind, sectionsFor(block.kind).join(', ')),
       });
     }
 
@@ -517,30 +508,26 @@ function checkInterface(
       if (!typeNames.has(want)) {
         add({
           severity: 'warning', code: 'iface.unknown-type',
-          message: `${v.name} is declared as "${userTypeName(v.dataType)}", which is not a PLC `
-            + 'data type or a function block in this project.',
+          message: say.ifaceUnknownUserType(v.name, userTypeName(v.dataType)),
         });
       }
     } else if (!dataTypeInfo(v.dataType) && !instanceType(v.dataType)) {
       add({
         severity: 'warning', code: 'iface.unknown-type',
-        message: `${v.name} has the type "${v.dataType}", which is not one this controller `
-          + 'knows.',
+        message: say.ifaceUnknownType(v.name, v.dataType),
       });
     }
 
     if (v.section === 'Temp' && v.defaultValue) {
       add({
         severity: 'warning', code: 'iface.temp-default',
-        message: `${v.name} is Temp and has a start value. Temp is not initialised — it holds `
-          + 'whatever was in that memory last scan, and the start value is ignored.',
+        message: say.ifaceTempDefault(v.name),
       });
     }
     if (v.retain && v.section !== 'Static') {
       add({
         severity: 'warning', code: 'iface.retain',
-        message: `${v.name} is marked retentive but is not Static. Only Static survives a power `
-          + 'cycle.',
+        message: say.ifaceRetain(v.name),
       });
     }
   }
@@ -551,44 +538,55 @@ function checkInterface(
     && !new RegExp(`\\b${block.name}\\s*:=`, 'i').test(block.code)) {
     add({
       severity: 'warning', code: 'fc.no-return',
-      message: `${block.name} declares a return value (${ret.name}) and never assigns it. `
-        + 'The caller gets whatever was there.',
+      message: say.fcNoReturn(block.name, ret.name),
     });
   }
 }
 
 // ── Putting it together ─────────────────────────────────────────────────────
 
-/** Everything wrong with one block. */
-export function analyzeBlock(project: PlcProject, block: PlcBlock): Problem[] {
+/**
+ * Everything wrong with one block.
+ *
+ * `lang` is what the findings are written in. It is a parameter rather than
+ * something read from a module global because two of these can be running at
+ * once in different languages — the problems list, and the assistant working
+ * out what the program would look like after its answer is applied — and a
+ * global would hand one of them the other's.
+ */
+export function analyzeBlock(
+  project: PlcProject, block: PlcBlock, lang: 'en' | 'fa' = 'en',
+): Problem[] {
   const found: Problem[] = [];
+  const say = CHECK_STRINGS[lang];
   const add = (p: Omit<Problem, 'blockId' | 'blockName'>) =>
     found.push({ ...p, blockId: block.id, blockName: block.name });
 
-  checkInterface(block, project, add);
+  checkInterface(block, project, say, add);
 
   const scope = scopeOf(project, block);
 
   if (block.code !== undefined && block.code.trim()) {
     const code = stripNonCode(block.code);
-    checkStructure(code, add);
-    checkNames(code, scope, add);
-    checkCalls(code, scope, add);
-    checkWrites(code, scope, add);
-    checkArithmetic(code, scope, add);
+    checkStructure(code, say, add);
+    checkNames(code, scope, say, add);
+    checkCalls(code, scope, say, add);
+    checkWrites(code, scope, say, add);
+    checkArithmetic(code, scope, say, add);
   }
 
   for (const net of block.networks ?? []) {
     if (net.disabled) continue;
-    checkNetwork(net, scope, add);
+    checkNetwork(net, scope, say, add);
   }
 
   return found;
 }
 
 /** Everything wrong with the project — blocks, then the tag tables. */
-export function analyzeProject(project: PlcProject): Problem[] {
-  const found: Problem[] = project.blocks.flatMap(b => analyzeBlock(project, b));
+export function analyzeProject(project: PlcProject, lang: 'en' | 'fa' = 'en'): Problem[] {
+  const say = CHECK_STRINGS[lang];
+  const found: Problem[] = project.blocks.flatMap(b => analyzeBlock(project, b, lang));
 
   // Two blocks with one name, and two tags on one address. Both are found here
   // rather than per block, because neither is visible from inside one.
@@ -601,8 +599,7 @@ export function analyzeProject(project: PlcProject): Problem[] {
     if (names.length < 2) continue;
     found.push({
       severity: 'error', code: 'project.duplicate-block',
-      message: `${names[0]} is the name of ${names.length} blocks. A call by that name cannot `
-        + 'be resolved.',
+      message: say.duplicateBlock(names[0], names.length),
       blockId: '', blockName: names[0],
     });
   }
@@ -610,11 +607,11 @@ export function analyzeProject(project: PlcProject): Problem[] {
   const byAddress = new Map<string, string[]>();
   for (const table of project.tagTables) {
     for (const tag of table.tags) {
-      const problem = addressProblem(tag.address);
+      const problem = addressProblem(tag.address, say);
       if (problem) {
         found.push({
           severity: 'error', code: 'tag.bad-address',
-          message: `${tag.name}: ${problem}`, blockId: '', blockName: table.name,
+          message: say.badAddress(tag.name, problem), blockId: '', blockName: table.name,
         });
       }
       if (!tag.address) continue;
@@ -626,8 +623,7 @@ export function analyzeProject(project: PlcProject): Problem[] {
     if (names.length < 2) continue;
     found.push({
       severity: 'warning', code: 'tag.duplicate-address',
-      message: `${address} is named by ${names.length} tags (${names.join(', ')}). Two names for `
-        + 'one terminal is how a change gets made in one place and not the other.',
+      message: say.duplicateAddress(address, names.length, names.join(', ')),
       blockId: '', blockName: 'PLC tags',
     });
   }
@@ -642,15 +638,14 @@ export function analyzeProject(project: PlcProject): Problem[] {
       if (bit && info && info.bits !== 1) {
         found.push({
           severity: 'error', code: 'tag.type-width',
-          message: `${tag.name} is at ${tag.address}, which is one bit, but is declared `
-            + `${tag.dataType}.`,
+          message: say.tagTypeWidthBit(tag.name, tag.address, tag.dataType),
           blockId: '', blockName: table.name,
         });
       }
       if (!bit && info && info.bits === 1 && /^%[IQM]\d/.test(tag.address)) {
         found.push({
           severity: 'error', code: 'tag.type-width',
-          message: `${tag.name} is declared Bool but ${tag.address} has no bit number.`,
+          message: say.tagTypeWidthBool(tag.name, tag.address),
           blockId: '', blockName: table.name,
         });
       }

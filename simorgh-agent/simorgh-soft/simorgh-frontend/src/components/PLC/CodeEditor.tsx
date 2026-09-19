@@ -464,7 +464,7 @@ export const CodeEditor: React.FC<Props> = ({
 
   if (failed) {
     return (
-      <div className="h-full flex flex-col">
+      <div dir="ltr" className="h-full flex flex-col">
         <div className="px-3 py-2 text-xs bg-amber-50 border-b border-amber-200 text-amber-900">
           The code editor could not be loaded ({failed}). The block is still here and still
           editable in the plain box below — nothing has been lost.
@@ -481,7 +481,7 @@ export const CodeEditor: React.FC<Props> = ({
   }
 
   return (
-    <div className="relative h-full w-full">
+    <div dir="ltr" className="relative h-full w-full">
       <div ref={host} className="absolute inset-0" />
       {!ready && (
         <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 bg-gray-50">

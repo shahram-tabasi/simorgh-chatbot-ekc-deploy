@@ -1256,7 +1256,10 @@ export function searchInstructions(query: string, limit = 60): Instruction[] {
   const help: Instruction[] = [];
   for (const x of ALL_INSTRUCTIONS) {
     if (x.name.toLowerCase().includes(q)) name.push(x);
-    else if (x.title.toLowerCase().includes(q)) title.push(x);
+    // The Persian description is searched whatever language is on screen:
+    // somebody who thinks of it as «تایمر» and somebody who types TON are
+    // looking for the same box, and neither should have to switch first.
+    else if (x.title.toLowerCase().includes(q) || (TITLE_FA[x.id] ?? '').includes(q)) title.push(x);
     else if (x.help.toLowerCase().includes(q)) help.push(x);
   }
   return [...name, ...title, ...help].slice(0, limit);
@@ -1289,3 +1292,201 @@ export function briefing(sections: string[] = ['basic']): string {
   }
   return out.join('\n');
 }
+
+// ── Persian ─────────────────────────────────────────────────────────────────
+//
+// The description column, in Persian. Kept as a lookup beside the table rather
+// than as a second field on every entry, so the catalogue above stays one
+// readable list and adding a language does not mean editing two hundred object
+// literals.
+//
+// **The names do not turn.** `TON` is TON, `-| |-` is `-| |-` and `SCALE_X` is
+// SCALE_X in either language — they are the vocabulary of the software the
+// program is finally typed into, and an engineer who cannot search for the
+// name they will see in TIA has been helped into a corner. What turns is the
+// sentence beside it, which is the part that has to be understood rather than
+// matched.
+//
+// The long help is not translated. It is a paragraph an entry, it is where the
+// real warnings live, and a paragraph translated loosely is worse than one
+// read slowly — so it stays in the words it was written in until somebody who
+// does this work every day goes through it.
+
+const TITLE_FA: Record<string, string> = {
+  // General
+  'gen.network': 'درج شبکه',
+  'gen.box': 'باکس خالی [F8]',
+  'gen.branch.open': 'باز کردن شاخه [Shift+F8]',
+  'gen.branch.close': 'بستن شاخه [Shift+F9]',
+  'gen.input': 'درج ورودی',
+
+  // Bit logic
+  'bit.no': 'کنتاکت باز در حالت عادی',
+  'bit.nc': 'کنتاکت بسته در حالت عادی',
+  'bit.not': 'معکوس کردن نتیجهٔ منطق',
+  'bit.coil': 'انتساب [Shift+F7]',
+  'bit.coil.neg': 'انتساب معکوس',
+  'bit.reset': 'ریست خروجی',
+  'bit.set': 'ست خروجی',
+  'bit.set_bf': 'ست کردن میدان بیت',
+  'bit.reset_bf': 'ریست کردن میدان بیت',
+  'bit.sr': 'فلیپ‌فلاپ ست/ریست',
+  'bit.rs': 'فلیپ‌فلاپ ریست/ست',
+  'bit.p.contact': 'خواندن لبهٔ بالارونده روی عملوند',
+  'bit.n.contact': 'خواندن لبهٔ پایین‌رونده روی عملوند',
+  'bit.p.coil': 'ست کردن عملوند روی لبهٔ بالارونده',
+  'bit.n.coil': 'ست کردن عملوند روی لبهٔ پایین‌رونده',
+  'bit.p_trig': 'خواندن لبهٔ بالارونده روی نتیجهٔ منطق',
+  'bit.n_trig': 'خواندن لبهٔ پایین‌رونده روی نتیجهٔ منطق',
+  'bit.r_trig': 'تشخیص لبهٔ بالارونده',
+  'bit.f_trig': 'تشخیص لبهٔ پایین‌رونده',
+
+  // Timers
+  'tmr.tp': 'تولید پالس',
+  'tmr.ton': 'تأخیر در وصل',
+  'tmr.tof': 'تأخیر در قطع',
+  'tmr.tonr': 'تایمر انباشتی',
+  'tmr.tp.coil': 'شروع تایمر پالس',
+  'tmr.ton.coil': 'شروع تایمر تأخیر در وصل',
+  'tmr.tof.coil': 'شروع تایمر تأخیر در قطع',
+  'tmr.tonr.coil': 'تایمر انباشتی',
+  'tmr.rt': 'ریست تایمر',
+  'tmr.pt': 'بارگذاری مدت زمان',
+
+  // Counters
+  'cnt.ctu': 'شمارش بالا',
+  'cnt.ctd': 'شمارش پایین',
+  'cnt.ctud': 'شمارش بالا و پایین',
+
+  // Comparators
+  'cmp.eq': 'مساوی',
+  'cmp.ne': 'نامساوی',
+  'cmp.ge': 'بزرگ‌تر یا مساوی',
+  'cmp.le': 'کوچک‌تر یا مساوی',
+  'cmp.gt': 'بزرگ‌تر از',
+  'cmp.lt': 'کوچک‌تر از',
+  'cmp.in_range': 'مقدار داخل بازه',
+  'cmp.out_range': 'مقدار خارج بازه',
+  'cmp.ok': 'بررسی معتبر بودن',
+  'cmp.not_ok': 'بررسی نامعتبر بودن',
+
+  // Math
+  'math.calculate': 'محاسبهٔ یک عبارت',
+  'math.add': 'جمع',
+  'math.sub': 'تفریق',
+  'math.mul': 'ضرب',
+  'math.div': 'تقسیم',
+  'math.mod': 'باقی‌ماندهٔ تقسیم',
+  'math.neg': 'منفی کردن',
+  'math.inc': 'یکی اضافه کردن',
+  'math.dec': 'یکی کم کردن',
+  'math.abs': 'قدر مطلق',
+  'math.min': 'کمترین',
+  'math.max': 'بیشترین',
+  'math.limit': 'محدود کردن به بازه',
+  'math.sqr': 'مجذور',
+  'math.sqrt': 'جذر',
+  'math.ln': 'لگاریتم طبیعی',
+  'math.exp': 'تابع نمایی',
+  'math.sin': 'سینوس',
+  'math.cos': 'کسینوس',
+  'math.tan': 'تانژانت',
+  'math.asin': 'آرک‌سینوس',
+  'math.acos': 'آرک‌کسینوس',
+  'math.atan': 'آرک‌تانژانت',
+  'math.frac': 'بخش اعشاری',
+  'math.expt': 'به توان رساندن',
+
+  // Move
+  'mov.move': 'انتقال مقدار',
+  'mov.blk': 'انتقال بلوک',
+  'mov.ublk': 'انتقال بلوک بدون وقفه',
+  'mov.blk_variant': 'انتقال بلوک (Variant)',
+  'mov.fill': 'پر کردن بلوک',
+  'mov.ufill': 'پر کردن بلوک بدون وقفه',
+  'mov.swap': 'جابه‌جایی ترتیب بایت‌ها',
+  'mov.serialize': 'تبدیل ساختار به آرایهٔ بایت',
+  'mov.deserialize': 'تبدیل آرایهٔ بایت به ساختار',
+
+  // Conversion
+  'cnv.convert': 'تبدیل نوع مقدار',
+  'cnv.round': 'گرد کردن',
+  'cnv.ceil': 'گرد کردن به بالا',
+  'cnv.floor': 'گرد کردن به پایین',
+  'cnv.trunc': 'حذف بخش اعشاری',
+  'cnv.scale_x': 'مقیاس‌دهی به واحد مهندسی',
+  'cnv.norm_x': 'نرمال‌سازی به کسر ۰ تا ۱',
+
+  // Program control
+  'ctl.jmp': 'پرش اگر نتیجهٔ منطق ۱ باشد',
+  'ctl.jmpn': 'پرش اگر نتیجهٔ منطق ۰ باشد',
+  'ctl.label': 'برچسب پرش',
+  'ctl.jmp_list': 'تعریف فهرست پرش',
+  'ctl.switch': 'توزیع‌کنندهٔ پرش',
+  'ctl.ret': 'بازگشت از بلاک',
+  'ctl.re_trigr': 'شروع دوبارهٔ زمان نظارت بر سیکل',
+  'ctl.stp': 'خروج از برنامه (STOP)',
+  'ctl.get_error': 'گرفتن خطای محلی',
+  'ctl.get_err_id': 'گرفتن شناسهٔ خطای محلی',
+  'ctl.endis_pw': 'محدود کردن و فعال کردن رمز',
+
+  // Word logic
+  'wl.and': 'AND بیت‌به‌بیت',
+  'wl.or': 'OR بیت‌به‌بیت',
+  'wl.xor': 'XOR بیت‌به‌بیت',
+  'wl.invert': 'مکمل یک (معکوس کردن بیت‌ها)',
+  'wl.deco': 'رمزگشایی — عدد به بیت',
+  'wl.enco': 'رمزگذاری — بیت به عدد',
+  'wl.sel': 'انتخاب یکی از دو',
+  'wl.mux': 'انتخاب یکی از چند (مالتی‌پلکس)',
+  'wl.demux': 'توزیع به یکی از چند خروجی',
+
+  // Shift and rotate
+  'sr.shr': 'شیفت به راست',
+  'sr.shl': 'شیفت به چپ',
+  'sr.ror': 'چرخش به راست',
+  'sr.rol': 'چرخش به چپ',
+};
+
+const GROUP_LABEL_FA: Record<string, string> = {
+  general: 'عمومی',
+  bit: 'عملیات منطق بیتی',
+  timer: 'عملیات تایمر',
+  counter: 'عملیات شمارنده',
+  compare: 'عملیات مقایسه',
+  math: 'توابع ریاضی',
+  move: 'عملیات انتقال',
+  convert: 'عملیات تبدیل',
+  control: 'عملیات کنترل برنامه',
+  word: 'عملیات منطق کلمه‌ای',
+  shift: 'شیفت و چرخش',
+  datetime: 'تاریخ و ساعت',
+  string: 'رشته و کاراکتر',
+  pimage: 'تصویر فرایند',
+  interrupt: 'وقفه‌ها',
+  diag: 'عیب‌یابی',
+  pid: 'کنترل PID',
+  motion: 'کنترل حرکت',
+  'open-comm': 'ارتباط باز کاربر',
+  modbus: 'MODBUS TCP',
+  's7-comm': 'ارتباط S7',
+};
+
+const SECTION_LABEL_FA: Record<string, string> = {
+  basic: 'دستورهای پایه',
+  extended: 'دستورهای گسترده',
+  technology: 'تکنولوژی',
+  communication: 'ارتباطات',
+};
+
+/** The one-line description, in the language being read. */
+export const titleOf = (x: Instruction, fa: boolean): string =>
+  (fa && TITLE_FA[x.id]) || x.title;
+
+/** A group heading, in the language being read. */
+export const groupLabelOf = (g: InstrGroup, fa: boolean): string =>
+  (fa && GROUP_LABEL_FA[g.id]) || g.label;
+
+/** A section heading, in the language being read. */
+export const sectionLabelOf = (s: InstrSection, fa: boolean): string =>
+  (fa && SECTION_LABEL_FA[s.id]) || s.label;

@@ -29,14 +29,16 @@ import {
 } from 'lucide-react';
 import { MenuBox } from '../shared/MenuBox';
 import {
-  PlcBlock, PlcProject, PlcSection, PlcVar, SECTIONS, newVar, sectionsFor,
+  PlcBlock, PlcProject, PlcSection, PlcVar, newVar, sectionsFor,
 } from '../../utils/plc/model';
 import { DATA_TYPE_NAMES, dataTypeInfo, isUserType, userTypeName } from '../../utils/plc/dataTypes';
+import { Strings } from './lang';
 
 interface Props {
   project: PlcProject;
   block: PlcBlock;
   readOnly?: boolean;
+  t: Strings;
   onChange: (next: PlcVar[]) => void;
   /** Start with the sections closed — used where the code is the point. */
   startCollapsed?: boolean;
@@ -65,6 +67,31 @@ function rowProblem(v: PlcVar, all: PlcVar[], typeNames: Set<string>): string | 
   return null;
 }
 
+/** A section's heading and its note, in the language being read. */
+function sectionLabel(t: Strings, section: PlcSection): string {
+  switch (section) {
+    case 'Input': return t.secInput;
+    case 'Output': return t.secOutput;
+    case 'InOut': return t.secInOut;
+    case 'Static': return t.secStatic;
+    case 'Temp': return t.secTemp;
+    case 'Constant': return t.secConstant;
+    case 'Return': return t.secReturn;
+  }
+}
+
+function sectionNote(t: Strings, section: PlcSection): string {
+  switch (section) {
+    case 'Input': return t.secInputNote;
+    case 'Output': return t.secOutputNote;
+    case 'InOut': return t.secInOutNote;
+    case 'Static': return t.secStaticNote;
+    case 'Temp': return t.secTempNote;
+    case 'Constant': return t.secConstantNote;
+    case 'Return': return t.secReturnNote;
+  }
+}
+
 const HEAD = 'px-2 py-1 text-left font-semibold text-[11px] uppercase tracking-wide text-gray-500';
 const CELL = 'px-1 py-0.5 align-top';
 
@@ -74,7 +101,7 @@ const input = (extra = '') =>
   + extra;
 
 export const InterfaceTable: React.FC<Props> = ({
-  project, block, readOnly, onChange, startCollapsed,
+  project, block, readOnly, onChange, startCollapsed, t,
 }) => {
   const sections = sectionsFor(block.kind);
   const [closed, setClosed] = useState<Set<string>>(
@@ -153,13 +180,13 @@ export const InterfaceTable: React.FC<Props> = ({
         <thead className="bg-gray-50 sticky top-0 z-10">
           <tr>
             <th className={`${HEAD} w-8`} />
-            <th className={`${HEAD} min-w-[160px]`}>Name</th>
-            <th className={`${HEAD} min-w-[150px]`}>Data type</th>
-            <th className={`${HEAD} w-32`}>Default value</th>
-            {showRetain && <th className={`${HEAD} w-16 text-center`}>Retain</th>}
-            {showHmi && <th className={`${HEAD} w-20 text-center`}>Visible</th>}
-            {showHmi && <th className={`${HEAD} w-20 text-center`}>Writable</th>}
-            <th className={HEAD}>Comment</th>
+            <th className={`${HEAD} min-w-[160px]`}>{t.colName}</th>
+            <th className={`${HEAD} min-w-[150px]`}>{t.colType}</th>
+            <th className={`${HEAD} w-32`}>{t.colDefault}</th>
+            {showRetain && <th className={`${HEAD} w-16 text-center`}>{t.colRetain}</th>}
+            {showHmi && <th className={`${HEAD} w-20 text-center`}>{t.colVisible}</th>}
+            {showHmi && <th className={`${HEAD} w-20 text-center`}>{t.colWritable}</th>}
+            <th className={HEAD}>{t.colComment}</th>
             <th className={`${HEAD} w-10`} />
           </tr>
         </thead>
@@ -168,7 +195,6 @@ export const InterfaceTable: React.FC<Props> = ({
           {sections.map(section => {
             const rows = block.interface.filter(v => v.section === section);
             const isClosed = closed.has(section);
-            const meta = SECTIONS.find(s => s.id === section);
             return (
               <React.Fragment key={section}>
                 <tr
@@ -181,11 +207,11 @@ export const InterfaceTable: React.FC<Props> = ({
                       : <ChevronDownIcon className="w-3.5 h-3.5 text-gray-500" />}
                   </td>
                   <td className="px-2 py-1 font-semibold text-blue-900" colSpan={2}>
-                    {meta?.label ?? section}
+                    {sectionLabel(t, section)}
                     <span className="ms-2 font-normal text-gray-500">{rows.length}</span>
                   </td>
                   <td className="px-2 py-1 text-[11px] text-gray-500 italic" colSpan={9}>
-                    {meta?.note}
+                    {sectionNote(t, section)}
                   </td>
                 </tr>
 
@@ -215,7 +241,7 @@ export const InterfaceTable: React.FC<Props> = ({
                           value={v.name}
                           readOnly={readOnly}
                           title={problem ?? undefined}
-                          placeholder="name"
+                          placeholder={t.namePlaceholder}
                           autoFocus={freshRef.current === v.id}
                           onChange={e => patch(v.id, { name: e.target.value })}
                         />
@@ -223,6 +249,7 @@ export const InterfaceTable: React.FC<Props> = ({
                       <td className={CELL}>
                         <input
                           className={input()}
+                          dir="ltr"
                           value={v.dataType}
                           readOnly={readOnly}
                           list="plc-data-types"
@@ -234,6 +261,7 @@ export const InterfaceTable: React.FC<Props> = ({
                       <td className={CELL}>
                         <input
                           className={input('font-mono')}
+                          dir="ltr"
                           value={v.defaultValue ?? ''}
                           readOnly={readOnly}
                           placeholder={dataTypeInfo(v.dataType)?.initial ?? ''}
@@ -246,9 +274,7 @@ export const InterfaceTable: React.FC<Props> = ({
                             type="checkbox"
                             checked={!!v.retain}
                             disabled={readOnly || v.section !== 'Static'}
-                            title={v.section === 'Static'
-                              ? 'Kept through a power cycle'
-                              : 'Only Static survives a power cycle'}
+                            title={v.section === 'Static' ? t.retainTip : t.retainOnlyStatic}
                             onChange={e => patch(v.id, { retain: e.target.checked })}
                           />
                         </td>
@@ -259,7 +285,7 @@ export const InterfaceTable: React.FC<Props> = ({
                             type="checkbox"
                             checked={v.visible !== false}
                             disabled={readOnly}
-                            title="Reachable from the HMI and from OPC UA"
+                            title={t.visibleTip}
                             onChange={e => patch(v.id, { visible: e.target.checked })}
                           />
                         </td>
@@ -270,7 +296,7 @@ export const InterfaceTable: React.FC<Props> = ({
                             type="checkbox"
                             checked={v.writable !== false}
                             disabled={readOnly}
-                            title="Writable from the HMI"
+                            title={t.writableTip}
                             onChange={e => patch(v.id, { writable: e.target.checked })}
                           />
                         </td>
@@ -280,7 +306,7 @@ export const InterfaceTable: React.FC<Props> = ({
                           className={input('text-gray-600')}
                           value={v.comment ?? ''}
                           readOnly={readOnly}
-                          placeholder="what it is for"
+                          placeholder={t.commentPlaceholder}
                           onChange={e => patch(v.id, { comment: e.target.value })}
                         />
                       </td>
@@ -288,7 +314,7 @@ export const InterfaceTable: React.FC<Props> = ({
                         {!readOnly && (
                           <button
                             className="p-1 rounded hover:bg-red-100 text-gray-400 hover:text-red-600"
-                            title="Delete this row"
+                            title={t.deleteRow}
                             onClick={() => remove(v.id)}
                           >
                             <TrashIcon className="w-3.5 h-3.5" />
@@ -308,7 +334,7 @@ export const InterfaceTable: React.FC<Props> = ({
                           text-blue-700 hover:bg-blue-50"
                         onClick={() => addRow(section)}
                       >
-                        <PlusIcon className="w-3 h-3" /> Add to {meta?.label ?? section}
+                        <PlusIcon className="w-3 h-3" /> {t.addTo} {sectionLabel(t, section)}
                       </button>
                     </td>
                   </tr>
@@ -328,17 +354,10 @@ export const InterfaceTable: React.FC<Props> = ({
 
       {block.interface.length === 0 && (
         <p className="px-3 py-4 text-[11px] text-gray-500 italic">
-          {block.kind === 'DB'
-            ? 'No values yet. A data block is its rows — add what the program has to keep.'
-            : block.kind === 'UDT'
-              ? 'No members yet. A PLC data type is declared once here and used as a type '
-                + 'wherever that shape is needed, so changing it changes every one of them.'
-              : block.kind === 'OB'
-                ? 'Nothing declared yet. An OB is called by the controller, so what it is '
-                  + 'handed is fixed; Temp and Constant are yours.'
-                : 'Nothing declared yet. A block that takes its inputs as parameters can be '
-                  + 'used for every motor on the panel; the same logic written against global '
-                  + 'tags can be used once.'}
+          {block.kind === 'DB' ? t.nothingDeclaredDb
+            : block.kind === 'UDT' ? t.nothingDeclaredUdt
+              : block.kind === 'OB' ? t.nothingDeclaredOb
+                : t.nothingDeclaredFb}
         </p>
       )}
 
@@ -346,7 +365,7 @@ export const InterfaceTable: React.FC<Props> = ({
         <MenuBox x={menu.x} y={menu.y} className="z-[140] w-56 bg-white border border-gray-200 shadow-lg rounded-md py-1">
           <MenuItem
             icon={<PlusIcon className="w-3.5 h-3.5" />}
-            label="Insert row below"
+            label={t.insertRowBelow}
             onClick={() => {
               const v = block.interface.find(x => x.id === menu.varId);
               if (v) addRow(v.section, v.id);
@@ -355,18 +374,18 @@ export const InterfaceTable: React.FC<Props> = ({
           />
           <MenuItem
             icon={<ArrowUpIcon className="w-3.5 h-3.5" />}
-            label="Move up"
+            label={t.moveUp}
             onClick={() => { move(menu.varId, -1); setMenu(null); }}
           />
           <MenuItem
             icon={<ArrowDownIcon className="w-3.5 h-3.5" />}
-            label="Move down"
+            label={t.moveDown}
             onClick={() => { move(menu.varId, 1); setMenu(null); }}
           />
           <div className="border-t border-gray-100 my-1" />
           <MenuItem
             icon={<TrashIcon className="w-3.5 h-3.5" />}
-            label="Delete row"
+            label={t.deleteRow}
             danger
             onClick={() => { remove(menu.varId); setMenu(null); }}
           />

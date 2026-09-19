@@ -21,9 +21,21 @@ import {
   XIcon, FileCodeIcon, BoxIcon, DatabaseIcon, LayersIcon, CpuIcon, CheckIcon,
 } from 'lucide-react';
 import {
-  BLOCK_KINDS, PLC_LANGUAGES, PlcBlock, PlcBlockKind, PlcLanguage, PlcProject,
+  PLC_LANGUAGES, PlcBlock, PlcBlockKind, PlcLanguage, PlcProject,
   isGraphical, newBlock, newNetwork, nextNumber,
 } from '../../utils/plc/model';
+import { Strings } from './lang';
+
+/** What each kind of block is called and what it is, in the language read. */
+function kindMetaOf(t: Strings): { id: PlcBlockKind; label: string; note: string }[] {
+  return [
+    { id: 'OB', label: t.kindOb, note: t.kindObNote },
+    { id: 'FB', label: t.kindFb, note: t.kindFbNote },
+    { id: 'FC', label: t.kindFc, note: t.kindFcNote },
+    { id: 'DB', label: t.kindDb, note: t.kindDbNote },
+    { id: 'UDT', label: t.kindUdt, note: t.kindUdtNote },
+  ];
+}
 
 /**
 * The organisation blocks, with what calls each one.
@@ -47,6 +59,7 @@ interface Props {
   project: PlcProject;
   /** Pre-chosen from the tree — "Add new block" under Program blocks. */
   initialKind?: PlcBlockKind;
+  t: Strings;
   onCancel: () => void;
   onCreate: (block: PlcBlock) => void;
 }
@@ -60,8 +73,9 @@ const KIND_ICON: Record<PlcBlockKind, React.ReactNode> = {
 };
 
 export const NewBlockDialog: React.FC<Props> = ({
-  project, initialKind = 'FB', onCancel, onCreate,
+  project, initialKind = 'FB', t, onCancel, onCreate,
 }) => {
+  const kinds = kindMetaOf(t);
   const [kind, setKind] = useState<PlcBlockKind>(initialKind);
   const [name, setName] = useState('');
   const [language, setLanguage] = useState<PlcLanguage>('LAD');
@@ -89,14 +103,14 @@ export const NewBlockDialog: React.FC<Props> = ({
   const numberTaken = number !== undefined && project.blocks
     .some(b => b.kind === kind && b.number === number);
 
-  const nameProblem = !name.trim() ? 'Give it a name.'
+  const nameProblem = !name.trim() ? t.giveItAName
     : !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim())
-      ? 'Letters, digits and underscores, starting with a letter or an underscore.'
-      : nameTaken ? 'Something in this project is already called that.'
+      ? t.nameRules
+      : nameTaken ? t.nameAlreadyUsed
         : null;
 
   const instanceProblem = kind === 'DB' && dbKind === 'instance' && !instanceOf
-    ? 'An instance data block belongs to one function block — say which.'
+    ? t.instanceNeedsFb
     : null;
 
   const canCreate = !nameProblem && !instanceProblem;
@@ -126,7 +140,7 @@ export const NewBlockDialog: React.FC<Props> = ({
     onCreate(block);
   };
 
-  const kindMeta = BLOCK_KINDS.find(k => k.id === kind);
+  const kindMeta = kinds.find(k => k.id === kind);
 
   return (
     <div className="fixed inset-0 z-[220] bg-black/40 flex items-center justify-center p-4" onClick={onCancel}>
@@ -135,7 +149,7 @@ export const NewBlockDialog: React.FC<Props> = ({
         onClick={e => e.stopPropagation()}
       >
         <div className="bg-gradient-to-r from-slate-700 to-slate-800 text-white px-5 py-3 flex items-center justify-between shrink-0">
-          <h2 className="text-base font-semibold">Add new block</h2>
+          <h2 className="text-base font-semibold">{t.newBlockTitle}</h2>
           <button onClick={onCancel} className="p-1 rounded hover:bg-white/20">
             <XIcon className="w-4 h-4" />
           </button>
@@ -144,9 +158,9 @@ export const NewBlockDialog: React.FC<Props> = ({
         <div className="flex-1 min-h-0 overflow-auto p-5 space-y-5 text-[13px]">
           {/* What kind */}
           <div>
-            <p className="font-semibold mb-2">What kind of block?</p>
+            <p className="font-semibold mb-2">{t.whatKind}</p>
             <div className="grid grid-cols-5 gap-2">
-              {BLOCK_KINDS.map(k => (
+              {kinds.map(k => (
                 <button
                   key={k.id}
                   onClick={() => {
@@ -171,7 +185,7 @@ export const NewBlockDialog: React.FC<Props> = ({
           {/* The OB's event */}
           {kind === 'OB' && (
             <div>
-              <p className="font-semibold mb-2">What calls it?</p>
+              <p className="font-semibold mb-2">{t.whatCalls}</p>
               <div className="space-y-1 max-h-48 overflow-auto rounded border">
                 {OB_EVENTS.map(e => (
                   <button
@@ -193,17 +207,15 @@ export const NewBlockDialog: React.FC<Props> = ({
           {/* Global or instance */}
           {kind === 'DB' && (
             <div>
-              <p className="font-semibold mb-2">What is it for?</p>
+              <p className="font-semibold mb-2">{t.whatFor}</p>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => setDbKind('global')}
                   className={`p-3 rounded border text-left ${dbKind === 'global'
                     ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}
                 >
-                  <span className="font-semibold">Global</span>
-                  <span className="block text-[11px] text-gray-600">
-                    Values anybody may read and write — recipes, setpoints, counters.
-                  </span>
+                  <span className="font-semibold">{t.globalDb}</span>
+                  <span className="block text-[11px] text-gray-600">{t.globalDbNote}</span>
                 </button>
                 <button
                   onClick={() => setDbKind('instance')}
@@ -211,11 +223,9 @@ export const NewBlockDialog: React.FC<Props> = ({
                   className={`p-3 rounded border text-left disabled:opacity-40 ${dbKind === 'instance'
                     ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}
                 >
-                  <span className="font-semibold">Instance</span>
+                  <span className="font-semibold">{t.instanceDb}</span>
                   <span className="block text-[11px] text-gray-600">
-                    {functionBlocks.length === 0
-                      ? 'There is no function block to be an instance of yet.'
-                      : 'The memory of one call of one function block.'}
+                    {functionBlocks.length === 0 ? t.noFbYet : t.instanceDbNote}
                   </span>
                 </button>
               </div>
@@ -229,7 +239,7 @@ export const NewBlockDialog: React.FC<Props> = ({
                     if (fb && !name.trim()) setName(`${fb.name}_DB`);
                   }}
                 >
-                  <option value="">Which function block?</option>
+                  <option value="">{t.whichFb}</option>
                   {functionBlocks.map(b => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
@@ -241,7 +251,7 @@ export const NewBlockDialog: React.FC<Props> = ({
           {/* Language */}
           {kind !== 'DB' && kind !== 'UDT' && (
             <div>
-              <p className="font-semibold mb-2">Written in</p>
+              <p className="font-semibold mb-2">{t.writtenIn}</p>
               <div className="flex flex-wrap gap-2">
                 {PLC_LANGUAGES.map(l => (
                   <button
@@ -265,7 +275,7 @@ export const NewBlockDialog: React.FC<Props> = ({
           {/* Name and number */}
           <div className="grid grid-cols-[1fr_120px] gap-3">
             <label className="block">
-              <span className="block font-semibold mb-1">Name</span>
+              <span className="block font-semibold mb-1">{t.name}</span>
               <input
                 className={`w-full px-2 py-1.5 rounded border
                   ${nameProblem && name ? 'border-amber-400' : 'border-gray-300'}`}
@@ -278,7 +288,7 @@ export const NewBlockDialog: React.FC<Props> = ({
             </label>
             {kind !== 'UDT' && (
               <label className="block">
-                <span className="block font-semibold mb-1">Number</span>
+                <span className="block font-semibold mb-1">{t.number}</span>
                 <input
                   className={`w-full px-2 py-1.5 rounded border font-mono
                     ${numberTaken ? 'border-amber-400' : 'border-gray-300'}`}
@@ -291,7 +301,7 @@ export const NewBlockDialog: React.FC<Props> = ({
           </div>
 
           <label className="block">
-            <span className="block font-semibold mb-1">Comment</span>
+            <span className="block font-semibold mb-1">{t.comment}</span>
             <textarea
               className="w-full px-2 py-1.5 rounded border border-gray-300 h-16 resize-none"
               value={comment}
@@ -304,8 +314,7 @@ export const NewBlockDialog: React.FC<Props> = ({
             <ul className="text-[12px] text-amber-700 space-y-1">
               {nameProblem && name.trim() && <li>{nameProblem}</li>}
               {instanceProblem && <li>{instanceProblem}</li>}
-              {numberTaken && <li>{kind}{number} is already taken. It will still be created; two blocks
-                with one number cannot both be downloaded.</li>}
+              {numberTaken && <li>{kind}{number} {t.numberTaken}</li>}
             </ul>
           )}
         </div>
@@ -320,14 +329,14 @@ export const NewBlockDialog: React.FC<Props> = ({
             onClick={onCancel}
             className="ms-auto px-4 py-2 text-[13px] border border-gray-300 rounded hover:bg-white"
           >
-            Cancel
+            {t.cancel}
           </button>
           <button
             onClick={create}
             disabled={!canCreate}
             className="px-4 py-2 text-[13px] bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
           >
-            Add block
+            {t.addBlock}
           </button>
         </div>
       </div>

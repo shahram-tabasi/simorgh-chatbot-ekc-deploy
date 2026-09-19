@@ -26,8 +26,9 @@ import {
   ChevronDownIcon, ChevronRightIcon, SearchIcon, StarIcon, XIcon, BookOpenIcon,
 } from 'lucide-react';
 import {
-  INSTRUCTION_SECTIONS, Instruction, searchInstructions,
+  INSTRUCTION_SECTIONS, Instruction, groupLabelOf, searchInstructions, sectionLabelOf, titleOf,
 } from '../../utils/plc/instructions';
+import { Lang, Strings } from './lang';
 
 interface Props {
   /** What is armed now, so the row can be shown as picked. */
@@ -38,6 +39,8 @@ interface Props {
   /** What the open block is written in, so rows that cannot go in are dimmed. */
   language: 'LAD' | 'FBD' | 'SCL' | 'STL' | 'GRAPH';
   readOnly?: boolean;
+  t: Strings;
+  lang: Lang;
 }
 
 const FAVOURITES_KEY = 'simorgh-plc-favourites';
@@ -64,8 +67,9 @@ const DEFAULT_FAVOURITES = [
 ];
 
 export const InstructionCatalog: React.FC<Props> = ({
-  armed, onArm, onInsert, language, readOnly,
+  armed, onArm, onInsert, language, readOnly, t, lang,
 }) => {
+  const fa = lang === 'fa';
   const [query, setQuery] = useState('');
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(['basic']));
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(['bit']));
@@ -107,8 +111,8 @@ export const InstructionCatalog: React.FC<Props> = ({
    */
   const usable = (x: Instruction): string | null => {
     const graphical = language === 'LAD' || language === 'FBD';
-    if (x.form === 'editor' && !graphical) return 'An editor command, for a drawn network.';
-    if (!graphical && !x.scl) return 'Drawn only — there is no text form of this one.';
+    if (x.form === 'editor' && !graphical) return t.editorCommand;
+    if (!graphical && !x.scl) return t.drawnOnly;
     return null;
   };
 
@@ -121,7 +125,7 @@ export const InstructionCatalog: React.FC<Props> = ({
           <input
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search instructions…"
+            placeholder={t.searchInstructions}
             className="w-full ps-7 pe-7 py-1.5 rounded border border-gray-300 focus:border-blue-400 focus:outline-none"
           />
           {query && (
@@ -147,19 +151,19 @@ export const InstructionCatalog: React.FC<Props> = ({
             <>
               <span className="font-mono font-semibold">{armed.name}</span>
               <span className="text-[11px] text-blue-800 truncate">
-                — click where it goes
+                {t.clickThenPlace}
               </span>
               <button
                 className="ms-auto p-0.5 rounded hover:bg-blue-100"
                 onClick={() => onArm(null)}
-                title="Put it back"
+                title={t.putItBack}
               >
                 <XIcon className="w-3.5 h-3.5" />
               </button>
             </>
           ) : (
             <span className="text-[11px] text-gray-500 truncate">
-              Click an instruction, then click where it goes.
+              {t.clickThenPick}
             </span>
           )}
         </div>
@@ -169,19 +173,18 @@ export const InstructionCatalog: React.FC<Props> = ({
         {query.trim() ? (
           <div>
             <div className="px-2 py-1.5 bg-gray-50 text-[11px] font-semibold text-gray-500">
-              {results.length} match{results.length === 1 ? '' : 'es'}
+              {results.length} {t.matches}
             </div>
             {results.map(x => (
               <Row
                 key={x.id} instr={x} armed={armed?.id === x.id} readOnly={readOnly}
-                why={usable(x)} favourite={favourites.includes(x.id)}
+                why={usable(x)} favourite={favourites.includes(x.id)} t={t} fa={fa}
                 onArm={onArm} onInsert={onInsert} onFavourite={toggleFavourite} onHelp={setHelp}
               />
             ))}
             {results.length === 0 && (
               <p className="px-3 py-6 text-center text-[11px] text-gray-500 italic">
-                Nothing in the catalogue matches that. The search looks at the name, the
-                description and the help.
+                {t.noMatches}
               </p>
             )}
           </div>
@@ -195,18 +198,18 @@ export const InstructionCatalog: React.FC<Props> = ({
             >
               {showFavourites ? <ChevronDownIcon className="w-3.5 h-3.5" /> : <ChevronRightIcon className="w-3.5 h-3.5" />}
               <StarIcon className="w-3.5 h-3.5 text-amber-500" />
-              Favorites
+              {t.favorites}
             </button>
             {showFavourites && favouriteItems.map(x => (
               <Row
                 key={`fav-${x.id}`} instr={x} armed={armed?.id === x.id} readOnly={readOnly}
-                why={usable(x)} favourite
+                why={usable(x)} favourite t={t} fa={fa}
                 onArm={onArm} onInsert={onInsert} onFavourite={toggleFavourite} onHelp={setHelp}
               />
             ))}
             {showFavourites && favouriteItems.length === 0 && (
               <p className="px-6 py-2 text-[11px] text-gray-500 italic">
-                Nothing here. The star on a row puts it in.
+                {t.favoritesEmpty}
               </p>
             )}
 
@@ -220,7 +223,7 @@ export const InstructionCatalog: React.FC<Props> = ({
                   {openSections.has(section.id)
                     ? <ChevronDownIcon className="w-3.5 h-3.5" />
                     : <ChevronRightIcon className="w-3.5 h-3.5" />}
-                  {section.label}
+                  {sectionLabelOf(section, fa)}
                 </button>
 
                 {openSections.has(section.id) && section.groups.map(group => (
@@ -234,14 +237,14 @@ export const InstructionCatalog: React.FC<Props> = ({
                       {openGroups.has(group.id)
                         ? <ChevronDownIcon className="w-3 h-3 text-gray-400" />
                         : <ChevronRightIcon className="w-3 h-3 text-gray-400" />}
-                      <span className="text-gray-700">{group.label}</span>
+                      <span className="text-gray-700">{groupLabelOf(group, fa)}</span>
                       <span className="ms-auto text-[10px] text-gray-400">{group.items.length}</span>
                     </button>
 
                     {openGroups.has(group.id) && group.items.map(x => (
                       <Row
                         key={x.id} instr={x} armed={armed?.id === x.id} readOnly={readOnly}
-                        why={usable(x)} favourite={favourites.includes(x.id)}
+                        why={usable(x)} favourite={favourites.includes(x.id)} t={t} fa={fa}
                         onArm={onArm} onInsert={onInsert} onFavourite={toggleFavourite} onHelp={setHelp}
                       />
                     ))}
@@ -260,7 +263,7 @@ export const InstructionCatalog: React.FC<Props> = ({
           <div className="flex items-start gap-2 px-3 py-2">
             <BookOpenIcon className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="min-w-0 flex-1">
-              <p className="font-semibold">{help.name} — {help.title}</p>
+              <p className="font-semibold">{help.name} — {titleOf(help, fa)}</p>
               {help.pins && help.pins.length > 0 && (
                 <p className="mt-1 text-[11px] font-mono text-gray-600">
                   {help.pins.filter(p => !p.out).map(p => `${p.name}: ${p.type}`).join('   ')}
@@ -270,7 +273,7 @@ export const InstructionCatalog: React.FC<Props> = ({
               )}
               {help.instance && (
                 <p className="mt-1 text-[11px] text-amber-800">
-                  Keeps its own state — it needs an instance of its own.
+                  {t.needsInstance}
                 </p>
               )}
               <p className="mt-1.5 text-[11.5px] leading-relaxed text-gray-700">
@@ -301,18 +304,20 @@ const Row: React.FC<{
   armed: boolean;
   favourite: boolean;
   readOnly?: boolean;
+  t: Strings;
+  fa: boolean;
   /** Why it cannot go into the open block, or null. */
   why: string | null;
   onArm: (x: Instruction | null) => void;
   onInsert: (x: Instruction) => void;
   onFavourite: (id: string) => void;
   onHelp: (x: Instruction) => void;
-}> = ({ instr, armed, favourite, readOnly, why, onArm, onInsert, onFavourite, onHelp }) => (
+}> = ({ instr, armed, favourite, readOnly, why, t, fa, onArm, onInsert, onFavourite, onHelp }) => (
   <div
     className={`group flex items-center gap-2 ps-8 pe-1.5 py-1 cursor-pointer
       ${armed ? 'bg-blue-100' : 'hover:bg-blue-50'}
       ${why ? 'opacity-50' : ''}`}
-    title={why ?? `${instr.title}\n\n${instr.help}`}
+    title={why ?? `${titleOf(instr, fa)}\n\n${instr.help}`}
     onClick={() => !readOnly && !why && onArm(armed ? null : instr)}
     onDoubleClick={() => !readOnly && !why && onInsert(instr)}
   >
@@ -320,11 +325,11 @@ const Row: React.FC<{
       {instr.glyph ?? instr.name}
     </span>
     <span className="flex-1 min-w-0 truncate text-gray-600 text-[11.5px]">
-      {instr.title}
+      {titleOf(instr, fa)}
     </span>
     <button
       className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-amber-100"
-      title="What it does, and what goes wrong with it"
+      title={t.whatItDoes}
       onClick={e => { e.stopPropagation(); onHelp(instr); }}
     >
       <BookOpenIcon className="w-3.5 h-3.5 text-gray-400" />
@@ -332,7 +337,7 @@ const Row: React.FC<{
     <button
       className={`p-0.5 rounded hover:bg-amber-100
         ${favourite ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-      title={favourite ? 'Take it out of Favorites' : 'Put it in Favorites'}
+      title={favourite ? t.removeFavorite : t.addFavorite}
       onClick={e => { e.stopPropagation(); onFavourite(instr.id); }}
     >
       <StarIcon className={`w-3.5 h-3.5 ${favourite ? 'text-amber-500 fill-amber-400' : 'text-gray-400'}`} />

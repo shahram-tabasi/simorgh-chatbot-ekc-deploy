@@ -40,6 +40,7 @@ import {
 } from '../../utils/plc/aiContext';
 import { briefing } from '../../utils/plc/instructions';
 import { blockToScl } from '../../utils/plc/sclExport';
+import { Lang, Strings } from './lang';
 
 interface Props {
   project: PlcProject;
@@ -47,33 +48,46 @@ interface Props {
   block: PlcBlock | null;
   problems: Problem[];
   readOnly?: boolean;
+  t: Strings;
+  lang: Lang;
   onApply: (next: PlcProject) => void;
 }
 
 type Stage = 'ask' | 'working' | 'questions' | 'review' | 'failed';
 
-/** The three things somebody actually asks for, as one click each. */
-const STARTERS: { label: string; task: (b: PlcBlock | null) => string }[] = [
+/**
+ * The three things somebody actually asks for, as one click each.
+ *
+ * The button turns; the task it fills in does not. What goes to the model
+ * stays in English on purpose — the prompt, the instruction vocabulary and
+ * the worked example it is given are all written in English, and a request
+ * in one language against a briefing in another is how a model starts
+ * answering in the wrong one.
+ */
+function starters(t: Strings): { label: string; task: (b: PlcBlock | null) => string }[] {
+  return [
   {
-    label: 'Write a motor start/stop block',
+    label: t.starterMotor,
     task: () => 'Write a function block for a motor: start, stop, a seal-in, an overload input '
       + 'that stops it and needs a reset, and a run-on timer for the fan.',
   },
   {
-    label: 'Explain this block',
+    label: t.starterExplain,
     task: b => `Explain what ${b ? `"${b.name}"` : 'the open block'} does, network by network, `
       + 'and say what you would change. Answer in "notes" only — do not rewrite it.',
   },
   {
-    label: 'Fix what the checker found',
+    label: t.starterFix,
     task: () => 'Fix the problems the checker listed. Change only what is needed to clear them '
       + 'and say in the notes what you changed.',
   },
-];
+  ];
+}
 
 export const PlcAssistant: React.FC<Props> = ({
-  project, block, problems, readOnly, onApply,
+  project, block, problems, readOnly, t, lang, onApply,
 }) => {
+  const STARTERS = starters(t);
   const [task, setTask] = useState('');
   const [stage, setStage] = useState<Stage>('ask');
   const [style, setStyle] = useState<'teach' | 'brief'>('brief');
@@ -103,8 +117,8 @@ export const PlcAssistant: React.FC<Props> = ({
   const wouldBe = useMemo(() => {
     if (!generated) return null;
     const next = applyGenerated(project, generated, { takeTags });
-    return analyzeProject(next);
-  }, [project, generated, takeTags]);
+    return analyzeProject(next, lang);
+  }, [project, generated, takeTags, lang]);
 
   const allAnswered = questions
     ? questions.every((_, i) => (picked[i] ?? []).length > 0)
@@ -132,7 +146,7 @@ export const PlcAssistant: React.FC<Props> = ({
     setModel(answer.model ?? '');
 
     if (!answer.success) {
-      setError(answer.error ?? 'The assistant did not answer.');
+      setError(answer.error ?? t.whatItSaid);
       setRaw(answer.raw ?? null);
       setStage('failed');
       return;
@@ -184,8 +198,7 @@ export const PlcAssistant: React.FC<Props> = ({
     });
     try {
       await navigator.clipboard.writeText(text);
-      window.alert('The program is on the clipboard — blocks, tags, problems and the '
-        + 'instruction vocabulary. Paste it into whatever you are asking.');
+      window.alert(t.copyContextDone);
     } catch {
       window.alert('The clipboard could not be written to. Use "Export SCL" on the toolbar '
         + 'instead.');
@@ -196,11 +209,11 @@ export const PlcAssistant: React.FC<Props> = ({
     <div className="h-full flex flex-col bg-white text-[12px]">
       <div className="px-3 py-2 border-b flex items-center gap-2 shrink-0">
         <SparklesIcon className="w-4 h-4 text-violet-600" />
-        <span className="font-semibold">Assistant</span>
+        <span className="font-semibold">{t.assistantTitle}</span>
         {model && <span className="text-[10px] text-gray-400 truncate">{model}</span>}
         <button
           className="ms-auto p-1 rounded hover:bg-gray-100"
-          title="Copy the whole program as text, for pasting into another tool"
+          title={t.copyContextTip}
           onClick={copyContext}
         >
           <ClipboardCopyIcon className="w-4 h-4 text-gray-500" />
@@ -215,10 +228,7 @@ export const PlcAssistant: React.FC<Props> = ({
               className="w-full h-28 px-2 py-2 rounded border border-gray-300 resize-none focus:border-violet-400 focus:outline-none"
               value={task}
               readOnly={stage === 'working'}
-              placeholder={block
-                ? `What should happen in "${block.name}"? For example: add an interlock so the pump `
-                  + 'cannot run with the valve closed.'
-                : 'What should the program do?'}
+              placeholder={block ? `${t.askPlaceholder} — "${block.name}"` : t.askPlaceholder}
               onChange={e => setTask(e.target.value)}
             />
 
@@ -241,11 +251,11 @@ export const PlcAssistant: React.FC<Props> = ({
                   type="radio" checked={scope === 'block'} onChange={() => setScope('block')}
                   disabled={!block}
                 />
-                Only the open block{block ? ` ("${block.name}")` : ' — none is open'}
+                {t.onlyThisBlock}{block ? ` ("${block.name}")` : ` — ${t.noBlockOpen}`}
               </label>
               <label className="flex items-center gap-2">
                 <input type="radio" checked={scope === 'project'} onChange={() => setScope('project')} />
-                The whole program
+                {t.wholeProgram}
               </label>
               <label className="flex items-start gap-2">
                 <input
@@ -253,10 +263,8 @@ export const PlcAssistant: React.FC<Props> = ({
                   onChange={e => setWithVocabulary(e.target.checked)}
                 />
                 <span>
-                  Send the instruction catalogue
-                  <span className="block text-gray-400">
-                    Stops it inventing block names this controller has never heard of.
-                  </span>
+                  {t.sendCatalogue}
+                  <span className="block text-gray-400">{t.sendCatalogueNote}</span>
                 </span>
               </label>
               <label className="flex items-center gap-2">
@@ -264,7 +272,7 @@ export const PlcAssistant: React.FC<Props> = ({
                   type="checkbox" checked={style === 'teach'}
                   onChange={e => setStyle(e.target.checked ? 'teach' : 'brief')}
                 />
-                Explain from further back
+                {t.explainMore}
               </label>
             </div>
 
@@ -275,13 +283,13 @@ export const PlcAssistant: React.FC<Props> = ({
               onClick={() => ask()}
             >
               {stage === 'working'
-                ? <>Working…</>
-                : <><SendIcon className="w-4 h-4" /> Ask</>}
+                ? <>{t.working}</>
+                : <><SendIcon className="w-4 h-4" /> {t.ask}</>}
             </button>
 
             {readOnly && (
               <p className="text-[11px] text-amber-700">
-                This revision is read-only, so nothing can be written into it.
+                {t.startReadOnly}
               </p>
             )}
 
@@ -291,7 +299,7 @@ export const PlcAssistant: React.FC<Props> = ({
                 {raw && (
                   <details className="mt-1">
                     <summary className="cursor-pointer text-[11px] text-red-700">
-                      What it said
+                      {t.whatItSaid}
                     </summary>
                     <pre className="mt-1 text-[10.5px] whitespace-pre-wrap max-h-40 overflow-auto">{raw}</pre>
                   </details>
@@ -305,7 +313,7 @@ export const PlcAssistant: React.FC<Props> = ({
         {stage === 'questions' && questions && (
           <div className="space-y-3">
             <p className="text-[11px] text-gray-600">
-              It will not guess at these — each one changes the program.
+              {t.questionsIntro}
             </p>
             {questions.map((q, qi) => (
               <div key={qi} className="rounded border border-purple-200 p-2">
@@ -346,13 +354,13 @@ export const PlcAssistant: React.FC<Props> = ({
                 disabled={!allAnswered}
                 onClick={answerQuestions}
               >
-                Answer and carry on
+                {t.answerAndGo}
               </button>
               <button
                 className="px-3 py-2 rounded border border-gray-300"
                 onClick={reset}
               >
-                Start again
+                {t.startAgain}
               </button>
             </div>
           </div>
@@ -367,29 +375,27 @@ export const PlcAssistant: React.FC<Props> = ({
 
             <div className="rounded border divide-y">
               <Line
-                label="New blocks"
+                label={t.newBlocks}
                 value={plan.added.length}
                 detail={plan.added.map(b => `${b.kind} ${b.name}`).join(', ')}
               />
               <Line
-                label="Blocks replaced"
+                label={t.replacedBlocks}
                 value={plan.replaced.length}
                 detail={plan.replaced.map(r => r.existing.name).join(', ')}
                 warn={plan.replaced.length > 0}
-                note={plan.replaced.length > 0
-                  ? 'What is in the project under that name is overwritten.' : undefined}
+                note={plan.replaced.length > 0 ? t.replacedNote : undefined}
               />
-              <Line label="New tags" value={plan.newTags.length}
+              <Line label={t.newTags} value={plan.newTags.length}
                 detail={plan.newTags.map(t => `${t.name} ${t.address}`).join(', ')} />
               <Line
-                label="Tags whose address differs"
+                label={t.changedTags}
                 value={plan.changedTags.length}
                 detail={plan.changedTags
                   .map(c => `${c.incoming.name}: ${c.existingAddress} → ${c.incoming.address}`)
                   .join(', ')}
                 warn={plan.changedTags.length > 0}
-                note={plan.changedTags.length > 0
-                  ? 'Left as they are — the wiring is not the assistant\'s to change.' : undefined}
+                note={plan.changedTags.length > 0 ? t.changedTagsNote : undefined}
               />
             </div>
 
@@ -397,17 +403,16 @@ export const PlcAssistant: React.FC<Props> = ({
               <p className={`text-[11.5px] ${wouldBe.filter(p => p.severity === 'error').length > 0
                 ? 'text-red-700' : 'text-emerald-700'}`}
               >
-                After applying, the checker would find{' '}
-                {wouldBe.filter(p => p.severity === 'error').length} error(s) and{' '}
-                {wouldBe.filter(p => p.severity === 'warning').length} warning(s) in the whole
-                program.
+                {t.afterApply}{' '}
+                {wouldBe.filter(p => p.severity === 'error').length} {t.errors} ·{' '}
+                {wouldBe.filter(p => p.severity === 'warning').length} {t.warnings}
               </p>
             )}
 
             {generated.dropped.length > 0 && (
               <div className="p-2 rounded bg-amber-50 border border-amber-200">
                 <p className="flex items-center gap-1.5 font-medium text-amber-900">
-                  <AlertTriangleIcon className="w-3.5 h-3.5" /> What could not be used as it arrived
+                  <AlertTriangleIcon className="w-3.5 h-3.5" /> {t.couldNotUse}
                 </p>
                 <ul className="mt-1 space-y-0.5 text-[11px] text-amber-900 list-disc ps-5">
                   {generated.dropped.map((d, i) => <li key={i}>{d}</li>)}
@@ -417,7 +422,7 @@ export const PlcAssistant: React.FC<Props> = ({
 
             {generated.notes.length > 0 && (
               <div className="p-2 rounded bg-blue-50 border border-blue-200">
-                <p className="font-medium text-blue-900">Read before using this</p>
+                <p className="font-medium text-blue-900">{t.readBefore}</p>
                 <ul className="mt-1 space-y-0.5 text-[11px] text-blue-900 list-disc ps-5">
                   {generated.notes.map((n, i) => <li key={i}>{n}</li>)}
                 </ul>
@@ -443,7 +448,7 @@ export const PlcAssistant: React.FC<Props> = ({
             {plan.newTags.length > 0 && (
               <label className="flex items-center gap-2 text-[11.5px]">
                 <input type="checkbox" checked={takeTags} onChange={e => setTakeTags(e.target.checked)} />
-                Add the {plan.newTags.length} new tag(s) to the default table
+                {t.addTheseTags} ({plan.newTags.length})
               </label>
             )}
 
@@ -455,11 +460,11 @@ export const PlcAssistant: React.FC<Props> = ({
                   && (!takeTags || plan.newTags.length === 0))}
                 onClick={apply}
               >
-                <CheckIcon className="w-4 h-4" /> Put it in the project
+                <CheckIcon className="w-4 h-4" /> {t.putInProject}
               </button>
               <button
                 className="px-3 py-2 rounded border border-gray-300"
-                title="Throw this away and ask again"
+                title={t.throwAway}
                 onClick={reset}
               >
                 <RotateCcwIcon className="w-4 h-4" />
@@ -477,9 +482,7 @@ export const PlcAssistant: React.FC<Props> = ({
 
       <div className="px-3 py-2 border-t bg-amber-50 shrink-0">
         <p className="text-[10.5px] leading-snug text-amber-900">
-          What comes back is a <strong>draft for an engineer to read</strong>. Nothing here has
-          been checked against a controller, and a language model is not the right thing to trust
-          with an interlock. Read it, test it, and do not download it because it looked right.
+          {t.assistantCaveat}
         </p>
       </div>
     </div>

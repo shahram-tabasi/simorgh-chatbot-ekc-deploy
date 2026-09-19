@@ -27,7 +27,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   PlayIcon, DownloadIcon, MaximizeIcon, MinimizeIcon, SparklesIcon, ListIcon,
   AlertCircleIcon, AlertTriangleIcon, InfoIcon, XIcon, WandSparklesIcon,
-  SearchIcon, ReplaceIcon, CpuIcon, SaveIcon, TerminalIcon, PanelLeftIcon,
+  SearchIcon, ReplaceIcon, CpuIcon, SaveIcon, TerminalIcon, PanelLeftIcon, LanguagesIcon,
 } from 'lucide-react';
 import { useTheme } from '../../useTheme';
 import { useProject } from '../../context/ProjectContext';
@@ -49,6 +49,7 @@ import { Problem, analyzeBlock, analyzeProject, countBySeverity } from '../../ut
 import { blockToScl, projectToScl, tagsToCsv } from '../../utils/plc/sclExport';
 import { LadderCursor, placeInstruction } from '../../utils/plc/ladderEdit';
 import { downloadText, fileSafe } from '../../utils/download';
+import { LANGS, Lang, STRINGS, dirOf, loadLang, saveLang } from './lang';
 
 /**
  * A pane the engineer can drag bigger.
@@ -128,6 +129,12 @@ export const PlcTab: React.FC = () => {
   // catalogue inserts too, and an instruction double-clicked there belongs
   // where the engineer last clicked on the rung.
   const [ladderCursor, setLadderCursor] = useState<LadderCursor | null>(null);
+  // Which language the person at the keyboard reads. Theirs, not the
+  // project's, so it is remembered in the browser and not in the file.
+  const [lang, setLang] = useState<Lang>(loadLang);
+  const t = STRINGS[lang];
+  const dir = dirOf(lang);
+  const chooseLang = (next: Lang) => { setLang(next); saveLang(next); };
 
   const frame = useRef<HTMLDivElement>(null);
   const editorActions = useRef<EditorActions | null>(null);
@@ -162,9 +169,11 @@ export const PlcTab: React.FC = () => {
     if (first) setSelection({ what: 'block', id: first.id });
   }, [project.blocks, selection]);
 
-  const problems = useMemo(() => analyzeProject(project), [project]);
+  // The findings are written in whichever language is on screen, so the list
+  // is rebuilt when that changes as well as when the program does.
+  const problems = useMemo(() => analyzeProject(project, lang), [project, lang]);
   const blockProblems = useMemo(
-    () => (block ? analyzeBlock(project, block) : []), [project, block]);
+    () => (block ? analyzeBlock(project, block, lang) : []), [project, block, lang]);
   const counts = useMemo(() => countBySeverity(problems), [problems]);
 
   // ── Full screen ──────────────────────────────────────────────────────────
@@ -233,12 +242,12 @@ export const PlcTab: React.FC = () => {
   // ── Checking and exporting ───────────────────────────────────────────────
 
   const compile = () => {
-    const found = analyzeProject(project);
+    const found = analyzeProject(project, lang);
     const by = countBySeverity(found);
     const lines: string[] = [
-      `── Check run at ${new Date().toLocaleTimeString()} ─────────────`,
-      `${project.blocks.length} block(s), `
-      + `${project.tagTables.reduce((n, t) => n + t.tags.length, 0)} tag(s).`,
+      `── ${t.checkRunAt} ${new Date().toLocaleTimeString()} ─────────────`,
+      `${project.blocks.length} ${t.blocksCount} · `
+      + `${project.tagTables.reduce((n, table) => n + table.tags.length, 0)} ${t.plcTags}`,
       '',
     ];
     for (const p of found) {
@@ -248,11 +257,10 @@ export const PlcTab: React.FC = () => {
     }
     lines.push('');
     lines.push(by.error === 0
-      ? `No errors. ${by.warning} warning(s), ${by.info} note(s).`
-      : `${by.error} error(s), ${by.warning} warning(s).`);
+      ? `${t.checkSummaryClean} ${by.warning} ${t.warnings} · ${by.info} ${t.notes}`
+      : `${by.error} ${t.checkSummaryBad} ${by.warning} ${t.warnings}`);
     lines.push('');
-    lines.push('This is what this app can check by reading the program: names, structure, '
-      + 'types, addresses. It does not say the logic is right, and no checker can.');
+    lines.push(t.checkCaveat);
     setOutput(lines);
     setBottomPanel('output');
   };
@@ -275,30 +283,20 @@ export const PlcTab: React.FC = () => {
       <div className="h-full flex items-center justify-center p-8">
         <div className="max-w-xl text-center">
           <CpuIcon className="w-12 h-12 mx-auto text-emerald-600" />
-          <h2 className="mt-4 text-xl font-semibold">No controller in this project yet</h2>
-          <p className="mt-2 text-sm text-gray-600 leading-relaxed">
-            This page holds the PLC program for the panel: the organisation, function and data
-            blocks, the tag table that names the wiring, and the instruction catalogue to write
-            them with. It is kept with the project, so the logic and the drawings travel
-            together and the backup carries both.
-          </p>
+          <h2 className="mt-4 text-xl font-semibold">{t.startTitle}</h2>
+          <p className="mt-2 text-sm text-gray-600 leading-relaxed">{t.startWhat}</p>
           <button
             onClick={start}
             disabled={!editable}
             className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded bg-emerald-600 text-white
                        font-medium hover:bg-emerald-700 disabled:opacity-40"
           >
-            <PlayIcon className="w-4 h-4" /> Start a controller
+            <PlayIcon className="w-4 h-4" /> {t.startButton}
           </button>
           {!editable && (
-            <p className="mt-3 text-xs text-amber-700">
-              This revision is read-only. Open an editable revision to start one.
-            </p>
+            <p className="mt-3 text-xs text-amber-700">{t.startReadOnly}</p>
           )}
-          <p className="mt-4 text-[11px] text-gray-500">
-            It starts as an S7-1500 with OB1 and three tags. The CPU, the tags and everything
-            else can be changed afterwards.
-          </p>
+          <p className="mt-4 text-[11px] text-gray-500">{t.startNote}</p>
         </div>
       </div>
     );
@@ -309,13 +307,17 @@ export const PlcTab: React.FC = () => {
   const readOnly = !editable;
 
   return (
-    <div ref={frame} className="h-full flex flex-col bg-gray-100 text-gray-900">
-      {/* ── Toolbar ──────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-1.5 px-2 py-1.5 bg-white border-b border-gray-200 shrink-0">
+    <div ref={frame} dir={dir} className="h-full flex flex-col bg-gray-100 text-gray-900">
+      {/* ── Toolbar ──────────────────────────────────────────────────────
+          Left to right in either language. A toolbar is a row of pictures and
+          not a sentence, and every package a controls engineer here has used
+          runs it the same way round — see the drawing editor, which settled
+          this argument first. */}
+      <div dir="ltr" className="flex items-center gap-1.5 px-2 py-1.5 bg-white border-b border-gray-200 shrink-0">
         <button
           onClick={() => setShowTree(v => !v)}
           className={`p-1.5 rounded shrink-0 ${showTree ? 'hover:bg-gray-100' : 'bg-blue-100 text-blue-800'}`}
-          title={showTree ? 'Put the project tree away' : 'Bring the project tree back'}
+          title={showTree ? t.hideTree : t.showTree}
         >
           <PanelLeftIcon className="w-4 h-4" />
         </button>
@@ -325,7 +327,7 @@ export const PlcTab: React.FC = () => {
                      hover:border-gray-300 focus:border-blue-400 focus:outline-none"
           value={project.device.name}
           readOnly={readOnly}
-          title="What this controller is called in the project"
+          title={t.deviceName}
           onChange={e => setProject(prev => ({
             ...prev, device: { ...prev.device, name: e.target.value },
           }))}
@@ -335,7 +337,7 @@ export const PlcTab: React.FC = () => {
                      hover:border-gray-300 focus:border-blue-400 focus:outline-none text-gray-600"
           value={project.device.cpu}
           readOnly={readOnly}
-          title="The CPU — free text, because the catalogue is the customer's"
+          title={t.deviceCpu}
           onChange={e => setProject(prev => ({
             ...prev, device: { ...prev.device, cpu: e.target.value },
           }))}
@@ -343,49 +345,65 @@ export const PlcTab: React.FC = () => {
 
         <div className="w-px h-5 bg-gray-200 mx-1" />
 
-        <ToolButton icon={<PlayIcon className="w-4 h-4" />} label="Check" onClick={compile}
-          title="Read the whole program and list what is wrong with it" />
-        <ToolButton icon={<DownloadIcon className="w-4 h-4" />} label="Export SCL" onClick={exportAll}
-          title="The whole program as an external source file" />
-        <ToolButton icon={<SaveIcon className="w-4 h-4" />} label="Tags CSV" onClick={exportTags}
-          title="The tag table, as the CSV Siemens reads" />
+        <ToolButton icon={<PlayIcon className="w-4 h-4" />} label={t.check} onClick={compile}
+          title={t.checkTip} />
+        <ToolButton icon={<DownloadIcon className="w-4 h-4" />} label={t.exportScl} onClick={exportAll}
+          title={t.exportSclTip} />
+        <ToolButton icon={<SaveIcon className="w-4 h-4" />} label={t.exportTags} onClick={exportTags}
+          title={t.exportTagsTip} />
 
         <div className="w-px h-5 bg-gray-200 mx-1" />
 
         {block && !isGraphical(block.language) && (
           <>
             <ToolButton icon={<SearchIcon className="w-4 h-4" />} label=""
-              title="Find (Ctrl+F)" onClick={() => editorActions.current?.find()} />
+              title={t.find} onClick={() => editorActions.current?.find()} />
             <ToolButton icon={<ReplaceIcon className="w-4 h-4" />} label=""
-              title="Find and replace (Ctrl+H)" onClick={() => editorActions.current?.replace()} />
+              title={t.replace} onClick={() => editorActions.current?.replace()} />
             <ToolButton icon={<WandSparklesIcon className="w-4 h-4" />} label=""
-              title="Re-indent the block (Shift+Alt+F)" onClick={() => editorActions.current?.format()} />
+              title={t.format} onClick={() => editorActions.current?.format()} />
             <ToolButton icon={<TerminalIcon className="w-4 h-4" />} label=""
-              title="Command palette (F1)" onClick={() => editorActions.current?.commands()} />
+              title={t.commands} onClick={() => editorActions.current?.commands()} />
           </>
         )}
 
         <div className="ms-auto flex items-center gap-1.5">
           <button
             onClick={() => setRightPanel(p => (p === 'instructions' ? null : 'instructions'))}
-            title={rightPanel === 'instructions' ? 'Put the catalogue away' : 'The instruction catalogue'}
+            title={rightPanel === 'instructions' ? t.hideCatalogue : t.instructions}
             className={`px-2 py-1 rounded text-[12px] inline-flex items-center gap-1.5
               ${rightPanel === 'instructions' ? 'bg-blue-100 text-blue-800' : 'hover:bg-gray-100'}`}
           >
-            <ListIcon className="w-3.5 h-3.5" /> Instructions
+            <ListIcon className="w-3.5 h-3.5" /> {t.instructions}
           </button>
           <button
             onClick={() => setRightPanel(p => (p === 'assistant' ? null : 'assistant'))}
-            title={rightPanel === 'assistant' ? 'Put the assistant away' : 'The assistant'}
+            title={rightPanel === 'assistant' ? t.hideAssistant : t.assistant}
             className={`px-2 py-1 rounded text-[12px] inline-flex items-center gap-1.5
               ${rightPanel === 'assistant' ? 'bg-purple-100 text-purple-800' : 'hover:bg-gray-100'}`}
           >
-            <SparklesIcon className="w-3.5 h-3.5" /> Assistant
+            <SparklesIcon className="w-3.5 h-3.5" /> {t.assistant}
           </button>
+          {/* The language, as the two words themselves.
+              A flag would be wrong twice over — Persian is not one country's,
+              and the toolbar is a row of pictures whose order does not turn. */}
+          <div className="flex items-center rounded border border-gray-200 overflow-hidden" title={t.language}>
+            <LanguagesIcon className="w-3.5 h-3.5 mx-1 text-gray-500" />
+            {LANGS.map(l => (
+              <button
+                key={l.id}
+                onClick={() => chooseLang(l.id)}
+                className={`px-1.5 py-1 text-[11px] ${lang === l.id
+                  ? 'bg-blue-100 text-blue-800 font-semibold' : 'hover:bg-gray-100 text-gray-600'}`}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
           <button
             onClick={toggleFullscreen}
             className="p-1.5 rounded hover:bg-gray-100"
-            title={fullscreen ? 'Leave full screen' : 'Full screen'}
+            title={fullscreen ? t.leaveFullscreen : t.fullscreen}
           >
             {fullscreen ? <MinimizeIcon className="w-4 h-4" /> : <MaximizeIcon className="w-4 h-4" />}
           </button>
@@ -408,6 +426,7 @@ export const PlcTab: React.FC = () => {
             onAddBlock={kind => setAdding(kind)}
             onChange={setProject}
             onExportBlock={exportBlock}
+            t={t}
           />
         </aside>
         )}
@@ -423,6 +442,8 @@ export const PlcTab: React.FC = () => {
               tableId={tagTableId}
               onTableId={setTagTableId}
               onChange={setTagTables}
+              t={t}
+              lang={lang}
             />
           )}
 
@@ -440,16 +461,14 @@ export const PlcTab: React.FC = () => {
                   className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 bg-white"
                   value={block.language}
                   disabled={readOnly}
-                  title="What the body is written in. Changing it does not translate what is there."
+                  title={t.languageOf}
                   onChange={e => {
                     const next = e.target.value as PlcBlock['language'];
                     const wasGraphical = isGraphical(block.language);
                     const willBeGraphical = isGraphical(next);
                     if (wasGraphical !== willBeGraphical
                       && !window.confirm(
-                        `"${block.name}" is written in ${block.language} and ${next} is a `
-                        + `${willBeGraphical ? 'drawn' : 'written'} language. What is in the block `
-                        + 'now cannot be carried across — it will be kept but not shown. Change it?')) {
+                        `"${block.name}": ${block.language} → ${next}\n\n${t.changeLanguageAsk}`)) {
                       return;
                     }
                     patchBlock(block.id, {
@@ -469,15 +488,15 @@ export const PlcTab: React.FC = () => {
                              hover:border-gray-300 focus:border-blue-400 focus:outline-none text-gray-600"
                   value={block.comment ?? ''}
                   readOnly={readOnly}
-                  placeholder="What this block is for"
+                  placeholder={t.blockComment}
                   onChange={e => patchBlock(block.id, { comment: e.target.value })}
                 />
                 <button
                   className="text-[11px] px-2 py-0.5 rounded hover:bg-gray-200 shrink-0"
                   onClick={() => setInterfaceOpen(v => !v)}
-                  title="Show or hide the declarations"
+                  title={interfaceOpen ? t.hideInterface : t.showInterface}
                 >
-                  {interfaceOpen ? 'Hide interface' : 'Show interface'}
+                  {interfaceOpen ? t.hideInterface : t.showInterface}
                 </button>
               </div>
 
@@ -499,6 +518,7 @@ export const PlcTab: React.FC = () => {
                       block={block}
                       readOnly={readOnly}
                       onChange={setInterface}
+                      t={t}
                     />
                   )}
                 </div>
@@ -516,9 +536,7 @@ export const PlcTab: React.FC = () => {
                 {block.kind === 'DB' || block.kind === 'UDT' ? (
                   <div className="h-full overflow-auto p-4 text-[12px] text-gray-600">
                     <p>
-                      {block.kind === 'DB'
-                        ? 'A data block is values and no code. The rows above are the block.'
-                        : 'A PLC data type is a structure and no code. The rows above are the type.'}
+                      {block.kind === 'DB' ? t.dbIsValues : t.udtIsStruct}
                     </p>
                     <pre className="mt-3 p-3 rounded bg-gray-50 border border-gray-200 font-mono
                                     text-[11px] whitespace-pre-wrap overflow-auto">
@@ -535,6 +553,7 @@ export const PlcTab: React.FC = () => {
                     cursor={ladderCursor}
                     onCursor={setLadderCursor}
                     onChange={setNetworks}
+                    t={t}
                   />
                 ) : (
                   <CodeEditor
@@ -558,7 +577,7 @@ export const PlcTab: React.FC = () => {
 
           {selection.what === 'device' && !block && (
             <div className="flex-1 flex items-center justify-center text-[12px] text-gray-500">
-              Pick a block on the left, or add one.
+              {t.pickABlock}
             </div>
           )}
 
@@ -574,7 +593,7 @@ export const PlcTab: React.FC = () => {
                     ? 'bg-white shadow-sm font-semibold' : 'hover:bg-gray-200'}`}
                   onClick={() => setBottomPanel('problems')}
                 >
-                  Problems
+                  {t.problems}
                   {counts.error > 0 && <span className="ms-1.5 text-red-600 font-semibold">{counts.error}</span>}
                   {counts.warning > 0 && <span className="ms-1.5 text-amber-600">{counts.warning}</span>}
                 </button>
@@ -583,12 +602,12 @@ export const PlcTab: React.FC = () => {
                     ? 'bg-white shadow-sm font-semibold' : 'hover:bg-gray-200'}`}
                   onClick={() => setBottomPanel('output')}
                 >
-                  Output
+                  {t.output}
                 </button>
                 <button
                   className="ms-auto p-1 rounded hover:bg-gray-200"
                   onClick={() => setBottomPanel(null)}
-                  title="Close this strip"
+                  title={t.closeStrip}
                 >
                   <XIcon className="w-3.5 h-3.5" />
                 </button>
@@ -598,7 +617,7 @@ export const PlcTab: React.FC = () => {
                 {bottomPanel === 'problems' && (
                   problems.length === 0 ? (
                     <p className="px-3 py-4 text-[12px] text-emerald-700">
-                      Nothing the checker can see. That is not the same as the logic being right.
+                      {t.nothingWrong}
                     </p>
                   ) : (
                     <table className="w-full text-[11.5px] min-w-[620px]">
@@ -639,7 +658,7 @@ export const PlcTab: React.FC = () => {
                 {bottomPanel === 'output' && (
                   <pre className="px-3 py-2 text-[11px] font-mono whitespace-pre-wrap">
                     {output.length === 0
-                      ? 'Nothing yet. Press Check.'
+                      ? t.pressCheck
                       : output.join('\n')}
                   </pre>
                 )}
@@ -660,6 +679,8 @@ export const PlcTab: React.FC = () => {
               onInsert={insertInstruction}
               language={block?.language ?? 'SCL'}
               readOnly={readOnly || !block}
+              t={t}
+              lang={lang}
             />
           ) : (
             <PlcAssistant
@@ -668,6 +689,8 @@ export const PlcTab: React.FC = () => {
               problems={problems}
               readOnly={readOnly}
               onApply={setProject}
+              t={t}
+              lang={lang}
             />
           )}
         </aside>
@@ -687,7 +710,7 @@ export const PlcTab: React.FC = () => {
         </span>
         {!bottomPanel && (
           <button className="underline hover:text-blue-700" onClick={() => setBottomPanel('problems')}>
-            show
+            {t.show}
           </button>
         )}
         <span className="ms-auto" />
@@ -695,14 +718,15 @@ export const PlcTab: React.FC = () => {
           <span className="font-mono">Ln {cursor.line}, Col {cursor.column}</span>
         )}
         {block && block.kind !== 'DB' && block.kind !== 'UDT' && <span>{block.language}</span>}
-        <span>{project.blocks.length} blocks</span>
-        {readOnly && <span className="text-amber-700 font-medium">read-only revision</span>}
+        <span>{project.blocks.length} {t.blocksCount}</span>
+        {readOnly && <span className="text-amber-700 font-medium">{t.readOnlyRevision}</span>}
       </div>
 
       {adding && (
         <NewBlockDialog
           project={project}
           initialKind={adding}
+          t={t}
           onCancel={() => setAdding(null)}
           onCreate={b => {
             setProject(prev => ({ ...prev, blocks: [...prev.blocks, b] }));

@@ -183,6 +183,31 @@ export function assignable(from: string, to: string): boolean {
 export const DATA_TYPE_NAMES: string[] = DATA_TYPES.map(t => t.name);
 
 /**
+ * The six things an address can be wrong about, in words.
+ *
+ * Taken as an argument so the tag table can say them in Persian, and defaulted
+ * so the parts of this file that only want a yes or a no — an importer, a
+ * test — do not have to carry a language around with them.
+ */
+export interface AddressWords {
+  addrNoPercent: () => string;
+  addrNeedsBit: () => string;
+  addrDbNeedsBit: () => string;
+  addrNotS7: () => string;
+  addrOnlyBitHasBit: () => string;
+  addrBitRange: () => string;
+}
+
+const DEFAULT_ADDRESS_WORDS: AddressWords = {
+  addrNoPercent: () => 'An address starts with % — %I0.0, %QW64, %MD100.',
+  addrNeedsBit: () => 'A bit address needs a bit number — %I0.0, not %I0.',
+  addrDbNeedsBit: () => 'A bit in a DB needs a bit number — %DB1.DBX0.0.',
+  addrNotS7: () => 'That is not an S7 address. Try %I0.0, %QW64 or %MD100.',
+  addrOnlyBitHasBit: () => 'Only a bit address has a bit number — %IW64, not %IW64.0.',
+  addrBitRange: () => 'A bit number is 0 to 7.',
+};
+
+/**
  * Whether an address is written the way S7 writes one.
  *
  * `%I0.0`, `%Q0.1`, `%M10.7`, `%IW64`, `%QD100`, `%MB20`, `%DB1.DBX0.0`.
@@ -190,26 +215,23 @@ export const DATA_TYPE_NAMES: string[] = DATA_TYPES.map(t => t.name);
  * helps nobody and "a bit address needs a bit number — %I0.0, not %I0" is the
  * whole correction.
  */
-export function addressProblem(address: string): string | null {
+export function addressProblem(address: string, say?: AddressWords): string | null {
+  const w = say ?? DEFAULT_ADDRESS_WORDS;
   const a = (address ?? '').trim();
   if (!a) return null;                  // a tag with no address is allowed
-  if (!a.startsWith('%')) return 'An address starts with % — %I0.0, %QW64, %MD100.';
+  if (!a.startsWith('%')) return w.addrNoPercent();
   const body = a.slice(1).toUpperCase();
 
   // Data block: %DB1.DBX0.0 / .DBW2 / .DBD4
   if (/^DB\d+\.DB[XBWD]\d+(\.\d)?$/.test(body)) {
-    if (/DBX\d+$/.test(body)) return 'A bit in a DB needs a bit number — %DB1.DBX0.0.';
+    if (/DBX\d+$/.test(body)) return w.addrDbNeedsBit();
     return null;
   }
   const m = /^([IQM])([XBWD]?)(\d+)(?:\.(\d))?$/.exec(body);
-  if (!m) return 'That is not an S7 address. Try %I0.0, %QW64 or %MD100.';
+  if (!m) return w.addrNotS7();
   const [, , size, , bit] = m;
-  if ((size === '' || size === 'X') && bit === undefined) {
-    return 'A bit address needs a bit number — %I0.0, not %I0.';
-  }
-  if (size !== '' && size !== 'X' && bit !== undefined) {
-    return 'Only a bit address has a bit number — %IW64, not %IW64.0.';
-  }
-  if (bit !== undefined && Number(bit) > 7) return 'A bit number is 0 to 7.';
+  if ((size === '' || size === 'X') && bit === undefined) return w.addrNeedsBit();
+  if (size !== '' && size !== 'X' && bit !== undefined) return w.addrOnlyBitHasBit();
+  if (bit !== undefined && Number(bit) > 7) return w.addrBitRange();
   return null;
 }

@@ -29,6 +29,7 @@ import {
   PlcBlock, PlcBlockKind, PlcProject, absoluteName, freeName, newId, nextNumber,
 } from '../../utils/plc/model';
 import { Problem } from '../../utils/plc/analyze';
+import { Strings } from './lang';
 
 export type TreeSelection =
   | { what: 'block'; id: string }
@@ -40,6 +41,7 @@ interface Props {
   selection: TreeSelection;
   problems: Problem[];
   readOnly?: boolean;
+  t: Strings;
   onSelect: (s: TreeSelection) => void;
   onAddBlock: (kind: PlcBlockKind) => void;
   onChange: (next: PlcProject) => void;
@@ -48,13 +50,16 @@ interface Props {
 
 const KIND_ORDER: PlcBlockKind[] = ['OB', 'FB', 'FC', 'DB', 'UDT'];
 
-const KIND_LABEL: Record<PlcBlockKind, string> = {
-  OB: 'Organization blocks',
-  FB: 'Function blocks',
-  FC: 'Functions',
-  DB: 'Data blocks',
-  UDT: 'PLC data types',
-};
+/** The folder each kind of block is filed under, in the language being read. */
+function kindLabel(t: Strings, kind: PlcBlockKind): string {
+  switch (kind) {
+    case 'OB': return t.obFolder;
+    case 'FB': return t.fbFolder;
+    case 'FC': return t.fcFolder;
+    case 'DB': return t.dbFolder;
+    case 'UDT': return t.udtFolder;
+  }
+}
 
 function kindIcon(kind: PlcBlockKind, className: string): React.ReactNode {
   switch (kind) {
@@ -67,7 +72,7 @@ function kindIcon(kind: PlcBlockKind, className: string): React.ReactNode {
 }
 
 export const PlcProjectTree: React.FC<Props> = ({
-  project, selection, problems, readOnly, onSelect, onAddBlock, onChange, onExportBlock,
+  project, selection, problems, readOnly, onSelect, onAddBlock, onChange, onExportBlock, t,
 }) => {
   const [open, setOpen] = useState<Set<string>>(
     () => new Set(['device', 'blocks', 'tags', 'types', 'OB', 'FB', 'FC', 'DB']));
@@ -111,14 +116,14 @@ export const PlcProjectTree: React.FC<Props> = ({
   // ── Things done to a block ────────────────────────────────────────────────
 
   const rename = (block: PlcBlock) => {
-    const next = window.prompt('What should this block be called?', block.name);
+    const next = window.prompt(t.renameAsk, block.name);
     if (!next?.trim() || next.trim() === block.name) return;
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(next.trim())) {
-      window.alert('A block name is letters, digits and underscores, starting with a letter.');
+      window.alert(t.renameBadName);
       return;
     }
     if (project.blocks.some(b => b.id !== block.id && b.name.toLowerCase() === next.trim().toLowerCase())) {
-      window.alert('Something in this project is already called that.');
+      window.alert(t.renameTaken);
       return;
     }
     // Every call of it, renamed with it. A rename that leaves ten calls
@@ -171,18 +176,18 @@ export const PlcProjectTree: React.FC<Props> = ({
 
     const warnings: string[] = [];
     if (instances.length > 0) {
-      warnings.push(`${instances.length} instance data block${instances.length > 1 ? 's' : ''} `
-        + `(${instances.map(b => b.name).join(', ')}) would be the memory of nothing.`);
+      warnings.push(`${instances.length} ${t.deleteInstances} `
+        + `${instances.map(b => b.name).join(', ')}`);
     }
     if (callers.length > 0) {
-      warnings.push(`${callers.length} block${callers.length > 1 ? 's' : ''} `
-        + `(${callers.map(b => b.name).join(', ')}) call it by name and would stop compiling.`);
+      warnings.push(`${callers.length} ${t.deleteCallers} `
+        + `${callers.map(b => b.name).join(', ')}`);
     }
 
     const ok = window.confirm(
-      `Delete ${block.kind} "${block.name}"?\n\n`
+      `${t.deleteAsk} ${block.kind} "${block.name}"\n\n`
       + (warnings.length > 0 ? `${warnings.join('\n')}\n\n` : '')
-      + 'This cannot be undone from here.',
+      + t.deleteCannotUndo,
     );
     if (!ok) return;
     onChange({ ...project, blocks: project.blocks.filter(b => b.id !== block.id) });
@@ -224,7 +229,7 @@ export const PlcProjectTree: React.FC<Props> = ({
           <input
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            placeholder="Search in project"
+            placeholder={t.searchProject}
             className="w-full ps-7 pe-2 py-1.5 rounded border border-gray-300 focus:border-blue-400 focus:outline-none"
           />
         </div>
@@ -242,7 +247,7 @@ export const PlcProjectTree: React.FC<Props> = ({
             id="blocks"
             depth={1}
             icon={<FolderIcon className="w-4 h-4 text-amber-500 shrink-0" />}
-            label="Program blocks"
+            label={t.programBlocks}
             count={project.blocks.filter(b => b.kind !== 'UDT').length}
             onContextMenu={e => {
               if (readOnly) return;
@@ -257,7 +262,7 @@ export const PlcProjectTree: React.FC<Props> = ({
                 onClick={() => onAddBlock('FB')}
               >
                 <PlusIcon className="w-3.5 h-3.5 shrink-0" />
-                Add new block
+                {t.addNewBlock}
               </button>
             )}
 
@@ -270,7 +275,7 @@ export const PlcProjectTree: React.FC<Props> = ({
                   id={kind}
                   depth={2}
                   icon={kindIcon(kind, 'w-3.5 h-3.5 text-gray-400 shrink-0')}
-                  label={KIND_LABEL[kind]}
+                  label={kindLabel(t, kind)}
                   count={blocks.length}
                   onContextMenu={e => {
                     if (readOnly) return;
@@ -323,7 +328,7 @@ export const PlcProjectTree: React.FC<Props> = ({
             id="tags"
             depth={1}
             icon={<TagsIcon className="w-4 h-4 text-sky-500 shrink-0" />}
-            label="PLC tags"
+            label={t.plcTags}
             count={project.tagTables.reduce((n, t) => n + t.tags.length, 0)}
           >
             <button
@@ -334,7 +339,7 @@ export const PlcProjectTree: React.FC<Props> = ({
               onClick={() => onSelect({ what: 'tags', tableId: null })}
             >
               <TableIcon className="w-3.5 h-3.5 shrink-0 text-gray-400" />
-              Show all tags
+              {t.showAllTags}
             </button>
             {project.tagTables.map(t => (
               <button
@@ -357,7 +362,7 @@ export const PlcProjectTree: React.FC<Props> = ({
             id="types"
             depth={1}
             icon={<LayersIcon className="w-4 h-4 text-purple-500 shrink-0" />}
-            label="PLC data types"
+            label={t.plcDataTypes}
             count={(byKind.get('UDT') ?? []).length}
           >
             {!readOnly && (
@@ -366,7 +371,7 @@ export const PlcProjectTree: React.FC<Props> = ({
                 style={{ paddingInlineStart: 2 * 14 + 4 }}
                 onClick={() => onAddBlock('UDT')}
               >
-                <PlusIcon className="w-3.5 h-3.5 shrink-0" /> Add new data type
+                <PlusIcon className="w-3.5 h-3.5 shrink-0" /> {t.addNewDataType}
               </button>
             )}
             {(byKind.get('UDT') ?? []).map(b => (
@@ -398,7 +403,7 @@ export const PlcProjectTree: React.FC<Props> = ({
           {menu.folder && (
             <Item
               icon={<PlusIcon className="w-3.5 h-3.5" />}
-              label="Add new block…"
+              label={t.addNewBlock}
               onClick={() => { onAddBlock(menu.folder as PlcBlockKind); setMenu(null); }}
             />
           )}
@@ -409,24 +414,24 @@ export const PlcProjectTree: React.FC<Props> = ({
               <>
                 <Item
                   icon={<PencilIcon className="w-3.5 h-3.5" />}
-                  label="Rename…"
-                  hint="Every call of it is renamed too"
+                  label={t.rename}
+                  hint={t.renameTip}
                   onClick={() => { rename(block); setMenu(null); }}
                 />
                 <Item
                   icon={<CopyIcon className="w-3.5 h-3.5" />}
-                  label="Duplicate"
+                  label={t.duplicate}
                   onClick={() => { duplicate(block); setMenu(null); }}
                 />
                 <Item
                   icon={<DownloadIcon className="w-3.5 h-3.5" />}
-                  label="Export as SCL source"
+                  label={t.exportBlock}
                   onClick={() => { onExportBlock(block); setMenu(null); }}
                 />
                 <div className="border-t border-gray-100 my-1" />
                 <Item
                   icon={<TrashIcon className="w-3.5 h-3.5" />}
-                  label="Delete"
+                  label={t.del}
                   danger
                   onClick={() => { remove(block); setMenu(null); }}
                 />
