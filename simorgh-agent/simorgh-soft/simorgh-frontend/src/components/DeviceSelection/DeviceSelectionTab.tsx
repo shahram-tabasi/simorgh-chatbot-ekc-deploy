@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx-js-style';
 import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ScissorsIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon, RefreshCwIcon, Undo2Icon, Redo2Icon } from 'lucide-react';
 import { PanelFrame } from '../shared/PanelFrame';
+import { MenuBox } from '../shared/MenuBox';
 import { usePanel } from '../../context/PanelsContext';
 import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../types/project';
 import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';
@@ -24,46 +25,6 @@ interface ExcelMemory {
   readAt: Date | null;
   note: string | null;
 }
-
-/**
- * A menu at the pointer that stays on the screen.
- *
- * Every one of these used to be placed at the click and left there: right-click
- * a row near the bottom of a long table and the menu ran off the bottom edge,
- * so "3 rows selected" was the last thing visible and the list of templates
- * under it could not be reached at all. The commands were there and there was
- * no way to press them — which reads exactly like a command that does nothing.
- *
- * Measured after it is laid out and before it is painted, so it moves up or
- * left to fit and never jumps.
- */
-const MenuBox: React.FC<{
-  x: number; y: number; className: string; children: React.ReactNode;
-}> = ({ x, y, className, children }) => {
-  const box = useRef<HTMLDivElement>(null);
-  const [at, setAt] = useState<{ left: number; top: number }>({ left: x, top: y });
-
-  useLayoutEffect(() => {
-    const el = box.current;
-    const w = el?.offsetWidth ?? 0;
-    const h = el?.offsetHeight ?? 0;
-    setAt({
-      left: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
-      top: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
-    });
-  }, [x, y, children]);
-
-  return (
-    <div
-      ref={box}
-      className={`fixed ${className}`}
-      style={{ left: at.left, top: at.top }}
-      onClick={e => e.stopPropagation()}
-    >
-      {children}
-    </div>
-  );
-};
 
 const NO_EXCEL: ExcelMemory = { file: null, readAt: null, note: null };
 

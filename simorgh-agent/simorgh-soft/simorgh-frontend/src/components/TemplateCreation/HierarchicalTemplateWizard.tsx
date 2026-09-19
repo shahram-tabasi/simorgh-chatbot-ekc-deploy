@@ -206,8 +206,17 @@ interface Props {
    * refused where it is offered, not here.
    */
   startFrom?: TemplateItem | null;
-  /** `move` re-files the template that was cut; `copy` makes a new one. */
-  pasteMode?: 'copy' | 'move';
+  /**
+   * `move` re-files the template that was cut; `copy` makes a new one;
+   * `edit` changes the template that is already there and keeps its id.
+   *
+   * Editing is what the path, the leaf and the parameters were missing: they
+   * could be chosen once, when the template was made, and after that the only
+   * way to correct a wrong Root or a rated power typed with a digit missing
+   * was to delete the template and build it again — losing its parts and its
+   * place in the tree with it.
+   */
+  pasteMode?: 'copy' | 'move' | 'edit';
   onCancel: () => void;
   /** `copyFromId` populated when the user picked an existing template
    *  as the starting point. */
@@ -249,14 +258,27 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     (startFrom?.hierarchy?.leafKind as TemplateLeafKind | undefined) ?? null);
   const [kw, setKw] = useState(startFrom?.hierarchy?.params?.kw ?? '');
   const [currentA, setCurrentA] = useState(startFrom?.hierarchy?.params?.currentA ?? '');
-  // A move keeps the name it had; a copy says it is one, so the tree does not
-  // show two rows that read the same.
+  // A move and an edit keep the name they had; a copy says it is one, so the
+  // tree does not show two rows that read the same.
   const [name, setName] = useState(
-    startFrom ? (pasteMode === 'move' ? startFrom.name : `${startFrom.name} copy`) : '');
+    startFrom ? (pasteMode === 'copy' ? `${startFrom.name} copy` : startFrom.name) : '');
   // Either way the equipment draws — this only decides whether the extra
   // per-equipment questions (a separate, later piece of work) get asked.
-  const [useSimorghDraw, setUseSimorghDraw] = useState<boolean | null>(
-    startFrom?.useSimorghDraw ?? null);
+  /**
+   * Answered Yes to begin with, and never in the way.
+   *
+   * It used to start unanswered and Create was disabled until it was — with
+   * nothing on screen saying so, because every step above it showed a tick and
+   * the button's own tooltip said "pick a path and enter a name first", both
+   * of which had been done. A template could not be made and the screen would
+   * not say why.
+   *
+   * Either way the equipment draws: this only decides whether the extra
+   * per-equipment questions get asked later, and this office draws with
+   * Simorgh Draw. So it is a default to change, not a gate to pass.
+   */
+  const [useSimorghDraw, setUseSimorghDraw] = useState<boolean>(
+    startFrom?.useSimorghDraw ?? true);
   // The mechanical answers. Never required: a template with none behaves
   // exactly as one made before this step existed, because every fact it
   // would have overruled is read from the columns instead.
@@ -299,8 +321,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
 
   // Which step are we on? The first step missing a value is the active one.
   type Step = 'family' | 'root' | 'switch' | 'group' | 'feeder'
-    | 'cellType' | 'cellSub' | 'kind' | 'params' | 'mechanical'
-    | 'simorghDraw' | 'name';
+    | 'cellType' | 'cellSub' | 'kind' | 'params' | 'mechanical' | 'name';
   const activeStep: Step = (() => {
     if (tier === 'LV') {
       if (!family) return 'family';
@@ -318,8 +339,9 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     // Mechanical is optional, so it holds the cursor only while nothing has
     // been answered and nothing after it has been either — answering the next
     // step is how it is skipped, rather than a step that has to be dismissed.
-    if (Object.keys(mechanical).length === 0 && useSimorghDraw === null) return 'mechanical';
-    if (useSimorghDraw === null) return 'simorghDraw';
+    // Mechanical and the Draw question are both optional, so neither holds
+    // the cursor: once the parameters are in, the name is what is left.
+    if (Object.keys(mechanical).length === 0) return 'mechanical';
     return 'name';
   })();
 
@@ -432,10 +454,12 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     setFamily(f);
     setRoot(null); setSwitch(null); setGroup(null); setFeeder(null); setLeafKind(null);
   };
-  const pickRoot = (r: string) => {
-    setRoot(r);
-    setSwitch(null); setGroup(null); setFeeder(null); setLeafKind(null);
-  };
+  // The root is the only step nothing below it depends on: S8 and 8PT offer
+  // the same switches, the same groups and the same feeders. So changing it
+  // keeps what has already been chosen instead of emptying the path — which
+  // on a template being edited was the difference between correcting one
+  // answer and re-entering all of them.
+  const pickRoot = (r: string) => setRoot(r);
   // Picking MOTOR or FEEDER here *is* the leaf kind — the step it replaced is
   // the one that used to ask for it — so it is recorded as one. Everything
   // downstream that ranks or describes a template by its leaf kind goes on
@@ -455,7 +479,11 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     setLeafKind(cellType === 'Feeder Truck' && s === 'Contactor Fuse Combination' ? 'motor' : null);
   };
 
-  const canCreate = name.trim().length > 0 && useSimorghDraw !== null && structuralPathComplete;
+  const canCreate = name.trim().length > 0 && structuralPathComplete;
+  /** What is still missing, so a disabled button can say so rather than guess. */
+  const missing = !structuralPathComplete
+    ? 'Pick the rest of the path above'
+    : !name.trim() ? 'Give it a name' : '';
 
   const handleCreate = (copyFromId?: string) => {
     if (!canCreate) return;
@@ -489,7 +517,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             <SparklesIcon className="w-5 h-5" />
             <h2 className="text-base font-semibold">
               {startFrom
-                ? `${pasteMode === 'move' ? 'Move' : 'Paste'} ${tier} Template${section ? ` — ${section.label}` : ''}`
+                ? `${pasteMode === 'edit' ? 'Edit' : pasteMode === 'move' ? 'Move' : 'Paste'} ${tier} Template${section ? ` — ${section.label}` : ''}`
                 : `New ${tier} Template${section ? ` — ${section.label}` : ''}`}
             </h2>
           </div>
@@ -508,8 +536,11 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             and are the one thing the steps below never show. */}
         {startFrom && (
           <div className="px-5 py-2 border-b bg-indigo-50/70 text-[11px] text-indigo-900">
-            {pasteMode === 'move' ? 'Moving' : 'Copying'} <span className="font-semibold">{startFrom.name}</span>
-            {' — its parts, parameters and mechanical answers come with it.'}
+            {pasteMode === 'edit' ? 'Editing' : pasteMode === 'move' ? 'Moving' : 'Copying'}{' '}
+            <span className="font-semibold">{startFrom.name}</span>
+            {pasteMode === 'edit'
+              ? ' — its parts stay as they are; the path, the leaf and the parameters below are what is being changed.'
+              : ' — its parts, parameters and mechanical answers come with it.'}
             {tier === 'LV' && !seed.root && (
               <span className="block text-indigo-700">
                 Its path is not one this section files, so pick the new one below.
@@ -654,8 +685,10 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Suggestions (live as path narrows) */}
-          {suggestions.length > 0 && (
+          {/* Suggestions (live as path narrows). Not while editing: "use this
+              one as a starting point" makes a new template, which is the one
+              thing an edit must not do. */}
+          {pasteMode !== 'edit' && suggestions.length > 0 && (
             <div className="rounded border border-amber-200 bg-amber-50/60">
               <div className="px-3 py-2 border-b border-amber-200 flex items-center gap-2">
                 <SparklesIcon className="w-4 h-4 text-amber-600" />
@@ -738,13 +771,19 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             <StepHeader
               n={stepNumber('simorghDraw')}
               label="Use Simorgh Draw?"
-              active={activeStep === 'simorghDraw'}
-              done={useSimorghDraw !== null}
+              /* Never the active step: it is answered from the start and
+                 nothing waits on it, so it is shown done and the cursor
+                 moves past it. */
+              done
             />
             <div className="mt-2 flex flex-wrap gap-2">
-              <Chip value="Yes" selected={useSimorghDraw === true} onClick={() => setUseSimorghDraw(true)} />
-              <Chip value="No" selected={useSimorghDraw === false} onClick={() => setUseSimorghDraw(false)} />
+              <Chip value="Yes" selected={useSimorghDraw} onClick={() => setUseSimorghDraw(true)} />
+              <Chip value="No" selected={!useSimorghDraw} onClick={() => setUseSimorghDraw(false)} />
             </div>
+            <p className="mt-1 text-[11px] text-gray-500">
+              Answered Yes already — change it if this template's equipment is not drawn here.
+              Nothing waits on it.
+            </p>
           </div>
 
           {/* Step — Name + create */}
@@ -762,6 +801,9 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
 
         {/* Footer */}
         <div className="px-5 py-3 border-t bg-gray-50 flex items-center justify-end gap-2">
+          {!canCreate && (
+            <p className="me-auto text-[12px] text-amber-700">{missing}</p>
+          )}
           <button
             onClick={onCancel}
             className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-white"
@@ -773,14 +815,18 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             disabled={!canCreate}
             className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
             title={canCreate
-              ? (startFrom
-                  ? (pasteMode === 'move' ? 'File this template here' : 'Paste a copy of it here')
-                  : 'Create a fresh template at this path')
-              : 'Pick a path and enter a name first'}
+              ? (pasteMode === 'edit'
+                  ? 'Keep these changes on this template'
+                  : startFrom
+                    ? (pasteMode === 'move' ? 'File this template here' : 'Paste a copy of it here')
+                    : 'Create a fresh template at this path')
+              : missing}
           >
-            {startFrom
-              ? (pasteMode === 'move' ? 'Move here' : 'Paste a copy here')
-              : 'Create empty template'}
+            {pasteMode === 'edit'
+              ? 'Save changes'
+              : startFrom
+                ? (pasteMode === 'move' ? 'Move here' : 'Paste a copy here')
+                : 'Create empty template'}
           </button>
         </div>
       </div>

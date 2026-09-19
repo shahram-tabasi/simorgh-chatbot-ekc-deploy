@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { templateMeta } from '../../utils/templateMeta';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ClipboardPasteIcon, BanIcon, ChevronDownIcon, ChevronRightIcon, WrenchIcon, XIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ClipboardPasteIcon, BanIcon, ChevronDownIcon, ChevronRightIcon, WrenchIcon, XIcon, PencilIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
 import { findTemplateUsage, UsageReport } from '../../utils/cascadeDelete';
-import { TEMPLATE_FAMILIES, groupByFamily, hasFamilies } from '../../utils/templateFamilies';
+import { TEMPLATE_FAMILIES, familyOf, groupByFamily, hasFamilies } from '../../utils/templateFamilies';
 import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
+import { MenuBox } from '../shared/MenuBox';
 import { MechanicalQuestions } from './MechanicalQuestions';
 import { TemplateItem, TemplateMechanical } from '../../types/project';
 
@@ -85,9 +86,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   const [wizard, setWizard] = useState<{
     tier: 'LV' | 'MV' | 'HV';
     family: string | null;
-    /** Set when the wizard was opened by a paste rather than by Create. */
+    /** Set when the wizard was opened by a paste, or to edit what is there. */
     startFrom?: TemplateItem | null;
-    pasteMode?: 'copy' | 'move';
+    pasteMode?: 'copy' | 'move' | 'edit';
   } | null>(null);
 
   // What was copied or cut, kept until it is pasted or replaced.
@@ -201,6 +202,30 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
       family,
       startFrom: clip.template,
       pasteMode: clip.mode === 'cut' ? 'move' : 'copy',
+    });
+  };
+
+  /**
+   * Open the wizard on a template that already exists, to change it.
+   *
+   * The same steps it was made with — Root, Switch, the leaf and the rated
+   * power and full-load current — reopened on the template itself. It keeps
+   * its id, so its parts and the device rows built on it stay attached; only
+   * the path, the leaf, the parameters and the name change. Before this the
+   * only way to correct any of them was to delete the template and build it
+   * again.
+   */
+  const handleEditTemplate = () => {
+    const template = templateById(contextMenu.templateId);
+    setContextMenu({ ...contextMenu, visible: false });
+    if (!template) return;
+    setWizard({
+      tier: template.type,
+      // Its own section, so the wizard opens on the steps that section asks
+      // and carries the path the template already has.
+      family: familyOf(template.type, template.hierarchy)?.id ?? contextMenu.family,
+      startFrom: template,
+      pasteMode: 'edit',
     });
   };
 
@@ -390,12 +415,10 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
       </ul>
 
       {contextMenu.visible && (
-        <div 
-          className="fixed z-10 w-48 bg-white border border-gray-200 shadow-lg rounded-md py-1" 
-          style={{
-            top: contextMenu.y,
-            left: contextMenu.x
-          }}
+        <MenuBox
+          x={contextMenu.x}
+          y={contextMenu.y}
+          className="z-[120] w-56 bg-white border border-gray-200 shadow-lg rounded-md py-1"
         >
           {/* On a tier that has sections, the tier's own menu names them
               rather than asking afterwards which one was meant. */}
@@ -461,6 +484,14 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
             <>
               <button
                 className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                onClick={handleEditTemplate}
+                title="Change its Root, Switch, equipment kind, rated power and full-load current — the template keeps its parts and its id"
+              >
+                <PencilIcon className="w-4 h-4 mr-2" />
+                Edit path &amp; parameters…
+              </button>
+              <button
+                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
                 onClick={handleEditMechanical}
               >
                 <WrenchIcon className="w-4 h-4 mr-2" />
@@ -490,7 +521,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               </button>
             </>
           )}
-        </div>
+        </MenuBox>
       )}
 
       {templateDeleteTarget && (
@@ -516,12 +547,15 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           pasteMode={wizard.pasteMode ?? 'copy'}
           onCancel={() => setWizard(null)}
           onSubmit={({ name, hierarchy, useSimorghDraw, mechanical, copyFromId }) => {
-            if (wizard.pasteMode === 'move' && wizard.startFrom) {
-              // A move is the same template, filed elsewhere — not a new one.
+            if ((wizard.pasteMode === 'move' || wizard.pasteMode === 'edit') && wizard.startFrom) {
+              // A move is the same template filed elsewhere, and an edit is the
+              // same template with its path and parameters changed. Neither
+              // makes a new one, so both keep the id the device rows point at.
               moveTemplate(wizard.startFrom.id, hierarchy, name, useSimorghDraw);
               // Answers edited on the way through are the template's now.
               setTemplateMechanical(wizard.startFrom.id, mechanical);
-              setClip(null);
+              // Only a move consumes what was cut; an edit never touched it.
+              if (wizard.pasteMode === 'move') setClip(null);
             } else {
               addTemplate(wizard.tier, name, hierarchy, copyFromId, useSimorghDraw, mechanical);
             }

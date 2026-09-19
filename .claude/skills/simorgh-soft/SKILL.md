@@ -130,3 +130,13 @@ That pulls the one image and recreates the one container — no build, nothing
 else restarted. It prints the running commit from `build.json`; check it matches
 what was pushed. **Say to hard-refresh (Ctrl+Shift+R)**: the change is in the
 frontend bundle, and a cached bundle looks exactly like a failed deploy.
+
+**A menu goes in `MenuBox`.** `src/components/shared/MenuBox.tsx` measures the
+menu and moves it up or left to fit. Placing one at the click and leaving it
+there puts the commands off the bottom edge of the screen, which reads to
+somebody using it exactly like a command that does nothing.
+
+**A template keeps its id.** Its path, its leaf, its parameters and its name
+are all edited in place — `moveTemplate` — because the device rows in Device
+Selection point at that id. Rebuilding a template to correct one answer
+detaches every row built on it.
