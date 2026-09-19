@@ -363,10 +363,29 @@ export function planImport(
 ): ImportPlan {
   const { rows, matched, unknown, colored } = parseSheet(grid, columns, fills);
 
-  const byFeeder = new Map<string, DeviceTableRow>();
+  /**
+   * The table's rows by feeder number — **every** row, in order, not the first.
+   *
+   * A feeder number is not unique in a real sheet: a busbar section can carry
+   * seventeen rows all numbered 2, and this office's files do. Keeping one row
+   * per number meant all seventeen sheet rows matched that same row, and
+   * `applyPlan` writes matches into a map keyed by row id — so sixteen of them
+   * were overwritten by the seventeenth and vanished. A sheet of 34 rows
+   * imported as 18, and a file exported from this very table and brought
+   * straight back came in with 16 rows missing and them listed as "deleted in
+   * Excel", which nobody had done.
+   *
+   * So the rows queue up under their number and each is claimed once: the
+   * first sheet row on feeder 2 takes the first table row on feeder 2, the
+   * second takes the second. When the queue runs out the sheet row is a new
+   * row, which is what a row the table does not have is.
+   */
+  const byFeeder = new Map<string, DeviceTableRow[]>();
   for (const row of current) {
     const key = codeCase(row.feederNo);
-    if (key && !byFeeder.has(key)) byFeeder.set(key, row);
+    if (!key) continue;
+    const queue = byFeeder.get(key);
+    if (queue) queue.push(row); else byFeeder.set(key, [row]);
   }
 
   const used = new Set<string>();
@@ -374,8 +393,19 @@ export function planImport(
 
   rows.forEach((parsed, i) => {
     const feederNo = codeCase(parsed.values.feederNo ?? '');
-    let existing = feederNo ? byFeeder.get(feederNo) : undefined;
-    let matchedBy: RowPlan['matchedBy'] = existing ? 'feeder' : 'new';
+    let existing: DeviceTableRow | undefined;
+    let matchedBy: RowPlan['matchedBy'] = 'new';
+    if (feederNo) {
+      const queue = byFeeder.get(feederNo);
+      // Past any row a position match got to first.
+      while (queue && queue.length > 0) {
+        const candidate = queue.shift() as DeviceTableRow;
+        if (used.has(candidate.id)) continue;
+        existing = candidate;
+        matchedBy = 'feeder';
+        break;
+      }
+    }
     // No feeder number to go on: fall back to the row in the same place, but
     // only if it has not already been claimed by a feeder match.
     if (!existing && !feederNo && current[i] && !used.has(current[i].id)) {

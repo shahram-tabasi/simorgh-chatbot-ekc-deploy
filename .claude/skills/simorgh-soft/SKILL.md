@@ -104,6 +104,13 @@ unless `embedded` is set; inside a shorter panel that puts half the drawing and
 the Save button below the window. Pass `embedded`; pass `lean` as well when the
 host owns full screen and the symbol library.
 
+**A feeder number is not unique.** A busbar section carries many rows under
+one number, and this office's sheets do. Anything matching Excel rows to table
+rows queues them per number and claims each table row once — one table row per
+sheet row, and a number the table does not have is a new row. Matching on a
+number as if it were a key silently threw sixteen rows away and called them
+deleted.
+
 **A placed symbol carries its id** (`Pen.symbol`), so a symbol redrawn for the
 project can replace the ones already on the sheets (`utils/cad/replaceSymbol.ts`).
 Keep stamping it when adding a new way to place a symbol.
