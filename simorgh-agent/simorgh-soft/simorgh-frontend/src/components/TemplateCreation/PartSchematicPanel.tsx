@@ -73,7 +73,7 @@ export const PartSchematicPanel: React.FC<Props> = ({
   // changes — on any screen. Without it the previews here kept whatever the
   // library held when the panel first rendered, which is the half of "it is
   // not in sync" that showed up in the template tab.
-  useSymbolVersion();
+  const symbolVersion = useSymbolVersion();
   // What EPLAN says these parts are. Without it the symbol still comes out —
   // from the description, then the row — which is exactly what the drawing
   // falls back to when the parts database is out of reach.
@@ -98,8 +98,14 @@ export const PartSchematicPanel: React.FC<Props> = ({
     return () => { cancelled = true; };
   }, [codes]);
 
+  // The version is in here as well as read above, and it has to be: being
+  // drawn again does not rebuild a memo, and this one *is* the symbols —
+  // `buildTemplateSvg` draws every device on the cell from the library. Left
+  // out, the panel redrew itself and handed back the markup it had built
+  // before the symbol was redrawn.
   const cell = useMemo(
-    () => buildTemplateSvg(template, tier, symbols), [template, tier, symbols]);
+    () => buildTemplateSvg(template, tier, symbols),
+    [template, tier, symbols, symbolVersion]);
 
   const resolved = useMemo(
     () => new Map(parts.map(ref =>

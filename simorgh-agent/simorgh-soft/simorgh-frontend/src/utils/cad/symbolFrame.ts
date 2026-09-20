@@ -271,6 +271,13 @@ export function conductorIn(run: Shape[]): number | null {
  *
  * `margin` leaves a little of the frame clear so a symbol that just touches its
  * own box does not read as one that overflows it.
+ *
+ * Connection points the file declared are passed **in with the ink**, not
+ * fitted afterwards. They are part of what the file says the symbol is —
+ * where a wire lands on it — so they are measured, scaled and moved by the
+ * same sum, and they come inside the cell with the drawing. Fitted in a
+ * second call they were scaled by a box of their own and landed beside the
+ * device, which is a wire joined to nothing.
  */
 export function fitIntoFrame(
   run: Shape[], f: SymbolFrame, margin = 0.06,

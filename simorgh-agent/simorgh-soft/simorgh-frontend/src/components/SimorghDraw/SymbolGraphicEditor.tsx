@@ -257,22 +257,27 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
       }
       if (run.length === 0) { setNote(t.symImportEmpty(f.name)); return; }
 
-      const fitted = fitIntoFrame(inkOf(run), frame);
-      // A DXF that declared a CONN layer has already said where a wire lands on
-      // this device. That is the file's own answer and it beats both the two
-      // this page starts with and whatever is on the canvas — but it has to
-      // come through the same fit as the ink, or the points land where the
-      // drawing used to be.
-      const kept = found.length
-        ? (() => {
-          const all = fitIntoFrame([...inkOf(run), ...terminalMarks(
-            found.map(([x, y], i) => ({ x, y, name: String(i + 1) })))], frame);
-          return pinsOf(all.shapes).map(p => ({ ...p, dir: p.dir }));
-        })()
+      // A DXF that declared a CONN layer has already said where a wire lands
+      // on this device. That is the file's own answer and it beats both the
+      // two this page starts with and whatever is on the canvas — but it is
+      // only still an answer if it is fitted **with** the ink, in one sum.
+      // It used to be fitted in a second call, over a different set of
+      // shapes: the drawing was scaled about its own box and the points about
+      // a box that included them, so the two came out at different scales and
+      // different offsets, and the points landed beside the device instead of
+      // on it. A wire drawn to one of those joins nothing, and nothing on the
+      // screen says so.
+      const ink = inkOf(run);
+      const declared = found.map(([x, y], i) => ({
+        x, y, name: String(i + 1), dir: 'down' as PinDir,
+      }));
+      const fitted = fitIntoFrame([...ink, ...terminalMarks(declared)], frame);
+      const kept = declared.length
+        ? pinsOf(fitted.shapes)
         : pins.length ? pins : defaultPins(frame);
 
       replace(
-        [...fitted.shapes, ...terminalMarks(kept)],
+        [...inkOf(fitted.shapes), ...terminalMarks(kept)],
         t.symImported(f.name, Math.round(fitted.scale * 100), kept.length,
           fitted.onAxis),
       );

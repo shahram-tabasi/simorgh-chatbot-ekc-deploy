@@ -106,11 +106,19 @@ interface Props {
 }
 
 /**
- * The thickest line in a piece of symbol art, in the symbol's own units.
+ * The thickest line in a piece of symbol art, as it is actually drawn.
  *
  * Read out of the markup because that is where it is: these symbols come from
  * three sources and nothing else records how heavily they are drawn. One unit
  * when nothing says otherwise, which is what the wiring-diagram set uses.
+ *
+ * The scale counts. A symbol redrawn for the project is placed by a
+ * `transform` that fits its own box to the cell (`drawIecSymbol`), and a
+ * transform scales the ink with everything else — so a drawing issued at half
+ * the cell's height is drawn at twice its stated weight. Read without it, the
+ * magnification below was worked out from a line weight nothing on the screen
+ * had, and the symbol came back as a row of black blobs: which is the one
+ * thing that arithmetic exists to prevent.
  */
 function heaviestStroke(art: string): number {
   let most = 0;
@@ -118,7 +126,12 @@ function heaviestStroke(art: string): number {
     const w = Number(m[1]);
     if (Number.isFinite(w) && w > most) most = w;
   }
-  return most > 0 ? most : 1;
+  // Only the wrapper this file's own art comes in — `<g transform="… scale(k)">`
+  // round the whole fragment. A scale deeper inside somebody's DXF belongs to
+  // one shape in it and says nothing about the rest.
+  const scale = /^\s*<g[^>]*\bscale\(([\d.]+)/.exec(art);
+  const k = scale && Number(scale[1]) > 0 ? Number(scale[1]) : 1;
+  return (most > 0 ? most : 1) * k;
 }
 
 export const SymbolLibrary: React.FC<Props> = ({
@@ -194,7 +207,17 @@ export const SymbolLibrary: React.FC<Props> = ({
   // project draws. Pushing the map into the symbol module is the app's job now
   // (`useSymbolLibrary`, mounted at the top) — this panel only has to be drawn
   // again when it lands, which reading the version does.
-  useSymbolVersion();
+  //
+  // **And the list has to be built again with it**, which is what the number
+  // is for below. Being re-rendered is not enough: `iecItems()` reads the
+  // symbol module once and hands back markup and terminals, so a list
+  // memoised without the version went on serving the drawing the symbols had
+  // when the panel opened. The panel whose job is redrawing a symbol showed
+  // the old one back — every save looked like it had produced the drawing
+  // before it, with the old line weights and the old connection points, and
+  // the only way to see what had been saved was to close the library and open
+  // it again.
+  const symbolVersion = useSymbolVersion();
 
   // The office's library comes off the server, so it arrives after the first
   // draw. `beat` is what says "it is here now" — without it the list would be
@@ -208,7 +231,7 @@ export const SymbolLibrary: React.FC<Props> = ({
 
   const items = useMemo(
     () => [...iecItems(), ...wdItems(), ...officeItems(), ...packItems(loadDxfSymbols()), ...fromFile],
-    [fromFile, beat]);
+    [fromFile, beat, symbolVersion]);
 
   /** How many symbols each library holds, for the tab that opens it. */
   const counts = useMemo(() => {
