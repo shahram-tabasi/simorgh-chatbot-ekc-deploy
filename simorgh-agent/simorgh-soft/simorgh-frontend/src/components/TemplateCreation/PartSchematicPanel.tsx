@@ -103,8 +103,8 @@ export const PartSchematicPanel: React.FC<Props> = ({
 
   const resolved = useMemo(
     () => new Map(parts.map(ref =>
-      [`${ref.slot}#${ref.index}`, symbolForPart(ref.part, ref.slot, symbols)])),
-    [parts, symbols]);
+      [`${ref.slot}#${ref.index}`, symbolForPart(ref.part, ref.slot, symbols, tier)])),
+    [parts, symbols, tier]);
 
   const keyOf = (ref: PartRef) => `${ref.slot}#${ref.index}`;
   const current = selected ? resolved.get(keyOf(selected)) : undefined;
@@ -182,7 +182,7 @@ export const PartSchematicPanel: React.FC<Props> = ({
                 >
                   <option value="">
                     automatic — {IEC_SYMBOLS[symbolForPart({ ...selected.part, symbolId: undefined },
-                      selected.slot, symbols).id]?.title ?? '—'}
+                      selected.slot, symbols, tier).id]?.title ?? '—'}
                   </option>
                   {SYMBOL_GROUPS.map(group => (
                     <optgroup key={group} label={group}>

@@ -634,14 +634,57 @@ export const DrawingEditor: React.FC<Props> = ({
 
   useEffect(() => {
     const seeded: Record<number, Shape[]> = {};
+    const refreshed = new Set<number>();
+    let places = 0;
+
+    // Every symbol this project draws its own way, and the library's own
+    // drawing of it — worked out once, and only when there is one.
+    const work = redrawnSymbolIds().map(id => ({
+      id,
+      title: IEC_SYMBOLS[id]?.title ?? id,
+      was: symbolDrawing(id, undefined, true),
+      now: symbolDrawing(id, undefined, false),
+    }));
+
     sheets.forEach((sheet, i) => {
       const kept = saved.current?.[sheet.key];
-      if (kept?.shapes) seeded[i] = kept.shapes;
+      if (!kept?.shapes) return;
+      seeded[i] = kept.shapes;
+
+      // **A sheet nobody hand-edited redraws itself; one that was edited is
+      // frozen geometry and does not.** That is the whole of why a symbol
+      // corrected in the library stayed wrong on the drawings: the sheet was
+      // kept as shapes the day somebody moved a label on it, and shapes do not
+      // know that the breaker they were is drawn differently now. Pressing a
+      // command to put it right is not a way of working — the office redraws
+      // one symbol, not a project's worth of pages.
+      //
+      // So it happens here, where the kept geometry meets the drawing it was
+      // made against. `drawnAs` no longer matching means the project has moved
+      // on underneath this edit; the symbols on it are brought up to the
+      // library and everything else the engineer drew is left exactly as
+      // drawn. It is said out loud afterwards, because a drawing that changes
+      // on its own without saying so is worse than one that did not change.
+      if (work.length === 0 || kept.drawnAs === sheet.drawnAs) return;
+      let run = kept.shapes;
+      for (const w of work) {
+        const swap = replaceSymbolInstances(run, w.id, w.title, art(w.was), art(w.now));
+        if (swap.count === 0) continue;
+        run = swap.shapes;
+        places += swap.count;
+      }
+      if (run === kept.shapes) return;
+      seeded[i] = run;
+      refreshed.add(i);
     });
+
     setEdits(seeded);
-    setTouched(new Set());
+    // The refreshed ones are changes this editor made, so Save writes them and
+    // the sheet stops being out of date with the library for good.
+    setTouched(refreshed);
     histories.current.clear();
-  }, [sheets]);
+    if (places > 0) setNotice(T.symbolsCaughtUp(places, refreshed.size));
+  }, [sheets]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Sheets whose edits were made against a drawing that has since changed. */
   const stale = useMemo(

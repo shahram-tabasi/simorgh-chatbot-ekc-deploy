@@ -78,6 +78,7 @@ export interface Strings {
   redrawAllDone: (places: number, pages: number) => string;
   redrawAllNone: string;
   redrawAllNothingRedrawn: string;
+  symbolsCaughtUp: (places: number, pages: number) => string;
   pageRenameAsk: string; pageNoteAsk: string;
   pageAdded: (name: string) => string;
   pageDeleteAsk: (name: string) => string;
@@ -262,6 +263,9 @@ const EN: Strings = {
     `Redrawn in ${places} place(s) on ${pages} page(s).`,
   redrawAllNone: 'Nothing on these pages uses a symbol this project has redrawn — they are already drawn the way the library draws them now.',
   redrawAllNothingRedrawn: 'This project has not redrawn any symbol yet, so the pages already draw what the library draws.',
+  symbolsCaughtUp: (places, pages) =>
+    `${places} symbol(s) on ${pages} edited page(s) were brought up to the library. `
+    + 'Everything else on them is as it was drawn. Save keeps it.',
   pageRenameAsk: 'What is this page called?',
   pageNoteAsk: 'What is this page for? (the line under the name)',
   pageAdded: name => `${name} added — it is open, and what you had drawn is kept`,
@@ -612,6 +616,9 @@ const FA: Strings = {
     `در ${places} جا روی ${pages} صفحه از نو کشیده شد.`,
   redrawAllNone: 'هیچ‌چیز در این صفحه‌ها از سیمبلی که این پروژه بازکشیده استفاده نمی‌کند — همین حالا هم همان‌طورند که کتابخانه می‌کشد.',
   redrawAllNothingRedrawn: 'این پروژه هنوز هیچ سیمبلی را بازنکشیده، پس صفحه‌ها همان را می‌کشند که کتابخانه می‌کشد.',
+  symbolsCaughtUp: (places, pages) =>
+    `${places} سیمبل روی ${pages} صفحهٔ ویرایش‌شده با کتابخانه به‌روز شد. `
+    + 'بقیهٔ آن صفحه‌ها همان‌طور که کشیده شده مانده. با ذخیره ثبت می‌شود.',
   pageRenameAsk: 'نام این صفحه چیست؟',
   pageNoteAsk: 'این صفحه برای چیست؟ (خط زیر نام)',
   pageAdded: name => `${name} اضافه شد — باز است و آنچه کشیده بودید نگه داشته شد`,
@@ -963,6 +970,9 @@ const TR: Strings = {
     `${pages} sayfada ${places} yerde yeniden çizildi.`,
   redrawAllNone: 'Bu sayfalarda bu projenin yeniden çizdiği bir sembol kullanılmıyor — zaten kitaplığın şu anki çizimindeler.',
   redrawAllNothingRedrawn: 'Bu proje henüz hiçbir sembolü yeniden çizmedi, bu yüzden sayfalar kitaplığın çizdiğini çiziyor.',
+  symbolsCaughtUp: (places, pages) =>
+    `${pages} düzenlenmiş sayfadaki ${places} sembol kitaplığa güncellendi. `
+    + 'Sayfalardaki diğer her şey çizildiği gibi. Kaydetmek bunu saklar.',
   pageRenameAsk: 'Bu sayfanın adı nedir?',
   pageNoteAsk: 'Bu sayfa ne için? (adın altındaki satır)',
   pageAdded: name => `${name} eklendi — açık, ve çizdikleriniz duruyor`,

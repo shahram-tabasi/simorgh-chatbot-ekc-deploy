@@ -290,10 +290,43 @@ export type SymbolSource = 'chosen' | 'eplan' | 'description' | 'slot' | 'access
  * The single line and the template screen both go through here, so the symbol
  * previewed beside a part is the symbol the drawing puts on the line.
  */
+/**
+ * Symbols that only exist on medium voltage, and what they are on low.
+ *
+ * A vacuum circuit breaker is drawn with the withdrawable isolating contacts
+ * of a medium-voltage cell — two filled bars with their contact arcs, above
+ * and below the blade. On a low-voltage board that device does not exist, and
+ * at sheet scale those filled bars are the heaviest mark on the drawing: a
+ * board whose every feeder was resolved to one is a column of black blocks
+ * where the switchgear should be. It is also simply wrong, which is the part
+ * that matters when the drawing is issued.
+ *
+ * The automatic reading is what gets constrained here, because the automatic
+ * reading is what goes wrong: a part described "1250A VCB panel" on an LV
+ * board matches `vcb` on its description and nothing downstream questions it.
+ * A symbol an engineer picked by hand is left exactly as picked — they were
+ * looking at the device and the software was not.
+ */
+const LV_INSTEAD: Partial<Record<SymbolId, SymbolId>> = {
+  vcb: 'circuit-breaker',
+  'vcb-racking': 'withdrawable-cb',
+  'vacuum-contactor-fuse': 'contactor',
+  // The medium-voltage voltage indicator is a capacitive divider; on LV the
+  // indication is a lamp.
+  'capacitive-divider': 'lamp',
+  // A limiter is the medium-voltage form of the same protection.
+  'surge-limiter': 'surge-arrester',
+};
+
+/** The symbol as this tier draws it. */
+const forTier = (id: SymbolId, tier?: 'LV' | 'MV' | 'HV'): SymbolId =>
+  (tier === 'LV' ? LV_INSTEAD[id] ?? id : id);
+
 export function symbolForPart(
   part: any,
   slot: string,
   symbols?: EplanSymbolMap,
+  tier?: 'LV' | 'MV' | 'HV',
 ): { id: SymbolId; from: SymbolSource; eplan?: EplanSymbolInfo } {
   const eplan = lookupSymbol(part, symbols);
   const chosen = String(part?.symbolId ?? '').trim();
@@ -302,7 +335,7 @@ export function symbolForPart(
   }
 
   const fromFunction = kindFromFunction(eplan?.functionDefinition);
-  if (fromFunction) return { id: fromFunction, from: 'eplan', eplan };
+  if (fromFunction) return { id: forTier(fromFunction, tier), from: 'eplan', eplan };
 
   const described = partDescription(part);
   // The accessory test comes before the description: "auxiliary switch for
@@ -312,9 +345,9 @@ export function symbolForPart(
   }
 
   const fromDescription = kindFromFunction(described);
-  if (fromDescription) return { id: fromDescription, from: 'description', eplan };
+  if (fromDescription) return { id: forTier(fromDescription, tier), from: 'description', eplan };
 
-  return { id: SLOT_SYMBOL[slot] ?? 'accessory', from: 'slot', eplan };
+  return { id: forTier(SLOT_SYMBOL[slot] ?? 'accessory', tier), from: 'slot', eplan };
 }
 
 const esc = (s: string) => String(s ?? '')
@@ -347,9 +380,10 @@ function chainFor(
   order: string[],
   page: number,
   symbols?: EplanSymbolMap,
+  tier?: 'LV' | 'MV' | 'HV',
 ): ChainItem[] {
   const template = line.templateId ? templates.get(line.templateId) : undefined;
-  return chainOfTemplate(template, order, page, symbols);
+  return chainOfTemplate(template, order, page, symbols, tier);
 }
 
 /**
@@ -364,6 +398,7 @@ function chainOfTemplate(
   order: string[],
   page: number,
   symbols?: EplanSymbolMap,
+  tier?: 'LV' | 'MV' | 'HV',
 ): ChainItem[] {
   const parts = template ? templateParts(template) : {};
   const slots = [
@@ -379,7 +414,7 @@ function chainOfTemplate(
     // The device of this slot is its first part; anything after it is an
     // accessory of that device, not a device of its own.
     const primary = inSlot[0];
-    const { id, eplan } = symbolForPart(primary, slot, symbols);
+    const { id, eplan } = symbolForPart(primary, slot, symbols, tier);
 
     const label = stripLocaleTags(primary?.label) || SLOT_LETTER[slot] || 'A';
     counters[label] = (counters[label] ?? 0) + 1;
@@ -569,17 +604,45 @@ function labelOffset(item: ChainItem): number {
 // feeder, on every feeder, which is the sort of thing that reads as sloppiness
 // long before anybody can say what is wrong with it.
 const TEXT = {
+  /**
+   * How big the writing is, against the cell a symbol is drawn in.
+   *
+   * A drawing office sizes its lettering against the symbols, not against the
+   * sheet: on an A3 single line the symbols come out about 10 mm and the
+   * device tags about 3 mm, so a tag is a bit over a quarter of a cell. These
+   * were 9 against a 40-unit cell — under a quarter — and on a sheet three
+   * times wider than it is tall that reads as a row of marks with captions too
+   * small to be meant for reading. A quarter of a cell for the tag, a shade
+   * under for the code, less again for the accessories: the same order a
+   * reader expects, at a size they can hold.
+   */
+  tag: 10.5,
+  codeSize: 9,
+  accessorySize: 8,
   /** The tag, below the top of the cell. Less when the cell is fed midway. */
   top: 14,
   topWhenFed: 2,
   /** The part code, under the tag. */
-  code: 11,
+  code: 12,
   /** The first accessory line, and the step between them. */
-  firstAccessory: 21,
-  accessoryStep: 9,
+  firstAccessory: 23,
+  accessoryStep: 10,
   /** Clear of the bottom line, before the next device may start. */
   gap: 6,
 };
+
+/**
+ * How wide a run of text comes out, near enough to lay a sheet out by.
+ *
+ * Half the type size a character is close enough for a sans face at these
+ * sizes, and the only thing it is used for is leaving room — a column set from
+ * a guess that is a little generous is right, and one set from no guess at all
+ * is the flat 200 units this sheet used to use whatever was written on it.
+ */
+const textWidth = (chars: number, size: number): number => chars * size * 0.52;
+
+/** How much of a part code is written beside a device before it is cut. */
+const CODE_CHARS = 15;
 
 /** How tall the text beside a device is, from the top of its cell. */
 function textRoom(item: ChainItem): number {
@@ -845,17 +908,17 @@ const earth = (x: number, y: number) => [
 function deviceText(item: ChainItem, tx: number, y: number, codeChars = 17, anchor = 'start'): string {
   const a = anchor === 'start' ? '' : ` text-anchor="${anchor}"`;
   const out = [
-    `<text x="${tx}" y="${y}" font-size="9" font-weight="600" fill="#111"${a}>${esc(item.tag)}</text>`,
-    `<text x="${tx}" y="${y + TEXT.code}" font-size="8.5" fill="#1d4ed8"${a}><title>${esc(item.code)}</title>${
+    `<text x="${tx}" y="${y}" font-size="${TEXT.tag}" font-weight="600" fill="#111"${a}>${esc(item.tag)}</text>`,
+    `<text x="${tx}" y="${y + TEXT.code}" font-size="${TEXT.codeSize}" fill="#1d4ed8"${a}><title>${esc(item.code)}</title>${
       esc(clip(item.code, codeChars))}</text>`,
   ];
   const line = (n: number) => y + TEXT.firstAccessory + n * TEXT.accessoryStep;
   item.accessories.slice(0, 2).forEach((ac, ai) => {
-    out.push(`<text x="${tx}" y="${line(ai)}" font-size="7.5" fill="#6b7280"${a}><title>${
+    out.push(`<text x="${tx}" y="${line(ai)}" font-size="${TEXT.accessorySize}" fill="#6b7280"${a}><title>${
       esc(ac)}</title>+ ${esc(clip(ac, codeChars))}</text>`);
   });
   if (item.accessories.length > 2) {
-    out.push(`<text x="${tx}" y="${line(2)}" font-size="7.5" fill="#6b7280"${a}>+ ${
+    out.push(`<text x="${tx}" y="${line(2)}" font-size="${TEXT.accessorySize}" fill="#6b7280"${a}>+ ${
       item.accessories.length - 2} more</text>`);
   }
   return out.join('');
@@ -903,7 +966,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   branch.series.forEach((item, index) => {
     out.push(drawDevice(item, x, ys[index]));
     out.push(deviceText(
-      item, labelX, ys[index] + (feeds.has(index) ? TEXT.topWhenFed : TEXT.top), 15));
+      item, labelX, ys[index] + (feeds.has(index) ? TEXT.topWhenFed : TEXT.top), CODE_CHARS));
   });
 
   // The shunts: beside the line, down to earth. The magnet is the exception —
@@ -991,9 +1054,10 @@ function drawSheet(o: {
   const { margin, cardRowHeight } = GEOM;
 
   const branches = o.lines.map((line_, i) =>
-    splitBranch(chainFor(line_, o.templates, o.order, o.firstIndex + i + 1, o.symbols)));
+    splitBranch(chainFor(
+      line_, o.templates, o.order, o.firstIndex + i + 1, o.symbols, o.equipment.type)));
   const supplyAll = o.supply
-    ? splitBranch(chainFor(o.supply, o.templates, o.order, 0, o.symbols))
+    ? splitBranch(chainFor(o.supply, o.templates, o.order, 0, o.symbols, o.equipment.type))
     : null;
   // The incoming column shows the head of its chain; the whole of it belongs
   // to the incomer's own sheet, not to this one.
@@ -1019,7 +1083,26 @@ function drawSheet(o: {
   const reach = Math.max(...all.flatMap(b =>
     [...b.series, ...b.instruments].map(i => symbolLeft(i.id))), 16);
   const branchDx = Math.max(hasShunt ? 130 : 34, reach + 10);
-  const colWidth = Math.max(200, hasShunt || wide ? branchDx + INSTR_DX + 104 : 0);
+
+  /**
+   * How wide a feeder column has to be.
+   *
+   * Worked out from what is written in it rather than declared: the conductor
+   * is `branchDx` in from the left, the text starts clear of the widest symbol
+   * on the branch, and the part code is clipped to `CODE_CHARS`. A flat 200
+   * units — which is what this was — is right for a cell with instruments
+   * beside it and half empty for a plain outgoing feeder, and eight half-empty
+   * columns is a sheet three times wider than it is tall with the drawing
+   * strung out thin across it. That is most of what makes these sheets look
+   * like a row of marks rather than a drawing.
+   */
+  const labelReach = Math.max(24, ...all.flatMap(
+    b => b.series.map(i => labelOffset(i))));
+  const forText = branchDx + labelReach + textWidth(CODE_CHARS, TEXT.codeSize) + 18;
+  const colWidth = Math.max(
+    forText,
+    hasShunt || wide ? branchDx + INSTR_DX + 104 : 0,
+  );
 
   const supplyWidth = o.supply ? colWidth : 90;
   const bodyLeft = margin + supplyWidth;
@@ -1072,7 +1155,10 @@ function drawSheet(o: {
   // Written above the bar and clear of the incoming column, so the label never
   // runs across the supply drop.
   out.push(`<text x="${bodyLeft + 4}" y="${busY - 9}" font-size="9.5" font-weight="600" fill="#111">${esc(busLabel)}</text>`);
-  out.push(`<line x1="${margin}" y1="${busY}" x2="${contentRight}" y2="${busY}" stroke="#111" stroke-width="4.5"/>`);
+  // The busbar says outright which layer it is. It used to be recognised by
+  // being drawn heavier than 4 units, which made its weight a thing the reader
+  // depended on rather than a thing the draughtsman could choose.
+  out.push(`<line data-layer="BUS" x1="${margin}" y1="${busY}" x2="${contentRight}" y2="${busY}" stroke="#111" stroke-width="3.2"/>`);
 
   // ── The incoming column ───────────────────────────────────────────────
   if (o.supply && supplyBranch) {
@@ -1103,15 +1189,18 @@ function drawSheet(o: {
 
   // ── The block under the drawing ───────────────────────────────────────
   out.push(`<rect x="${margin}" y="${tableTop}" width="${contentRight - margin}" height="${tableHeight}" fill="none" stroke="#111" stroke-width="1"/>`);
+  const tableChars = Math.max(8, Math.floor((colWidth - 12) / (9 * 0.52)));
   TABLE_ROWS.forEach((row, r) => {
     const ry = tableTop + r * cardRowHeight;
     if (r > 0) out.push(`<line x1="${margin}" y1="${ry}" x2="${contentRight}" y2="${ry}" stroke="#c9ced6" stroke-width="0.7"/>`);
-    out.push(`<text x="${margin + 6}" y="${ry + 11}" font-size="8.5" font-weight="600" fill="#111">${esc(row.label)} :</text>`);
+    out.push(`<text x="${margin + 6}" y="${ry + 11}" font-size="9" font-weight="600" fill="#111">${esc(row.label)} :</text>`);
     o.lines.forEach((line_, i) => {
       const cx = bodyLeft + i * colWidth + colWidth / 2;
       const value = row.value(line_);
-      out.push(`<text x="${cx}" y="${ry + 11}" font-size="8.5" text-anchor="middle" fill="#111">` +
-        `<title>${esc(value)}</title>${esc(clip(value, 30))}</text>`);
+      // Cut to the column it is written in. Thirty characters was right for a
+      // 200-unit column and would run into its neighbours in a narrower one.
+      out.push(`<text x="${cx}" y="${ry + 11}" font-size="9" text-anchor="middle" fill="#111">` +
+        `<title>${esc(value)}</title>${esc(clip(value, tableChars))}</text>`);
     });
   });
   // The column rules: the label column ends where the first feeder column
@@ -1159,7 +1248,7 @@ export function buildTemplateSvg(
 ): { svg: string; width: number; height: number; devices: number } {
   const { margin } = GEOM;
   const order = propertyOrder(tier);
-  const chain = chainOfTemplate(template, order, 1, symbols);
+  const chain = chainOfTemplate(template, order, 1, symbols, tier);
   const branch = splitBranch(chain);
 
   // Room for whatever reaches out sideways, the same way a sheet works out how

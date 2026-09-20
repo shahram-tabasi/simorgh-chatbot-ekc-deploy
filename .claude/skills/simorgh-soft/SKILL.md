@@ -174,6 +174,36 @@ library's own drawing as `from` with what is drawn now as `to`, which is what a
 page holds; a page carrying an *older override* is the one case it cannot place
 exactly, because the conductor is worked out from a drawing nobody kept.
 
+**A low-voltage board never gets a medium-voltage symbol.** `symbolForPart`
+takes the tier and folds MV-only symbols onto their LV equivalents (`vcb` →
+`circuit-breaker`, `vacuum-contactor-fuse` → `contactor`). Only the *automatic*
+reading is constrained — a symbol an engineer picked by hand is left as picked.
+Without it a part described "1250A VCB panel" on an LV board matched `vcb` on
+its description, and the withdrawable isolating contacts of an MV cell — two
+filled bars — became the heaviest mark on every feeder.
+
+**An accessory is not a device on the branch.** A slot nothing can identify
+used to fall back to the `accessory` symbol, an empty dashed square on the
+conductor: the software writing "I don't know what this is" into a customer's
+drawing, sixteen times on an eight-way board. Those parts are written against
+the branch's first device instead, tag and all.
+
+**The sheet's numbers come from what is on it.** The column width is derived
+from `branchDx + the widest symbol's reach + the clipped code`, not a flat 200
+that was right for a cell with instruments and half empty for a plain feeder.
+Text is sized against the cell (a tag is about a quarter of `CELL`), and
+`TEXT` states every offset once because `deviceText` writes them and `stepFor`
+spaces by them — when they disagreed, a device's last accessory line sat
+exactly on the next device's symbol.
+
+**A redrawn symbol reaches the sheets by itself.** A sheet nobody hand-edited
+regenerates; one that was edited is frozen geometry and kept the old symbol
+forever. `DrawingEditor`'s seeding effect now catches those up: where the kept
+edit's `drawnAs` no longer matches the sheet it was made against, every redrawn
+symbol on it is replaced, everything else drawn on it is left alone, and it
+says so. The manual "Redraw from the library" stays for sheets that are not
+stale but hold an older drawing.
+
 **A terminal says which way its wire leaves** (`Pen.pinDir`, set on the symbol
 page). `routeBetween` obeys it; without one it falls back to the old longest-
 axis guess. Carry `dir` wherever terminals are carried — `SymbolArtOverride`,
